@@ -2,6 +2,9 @@ from firedrake import *
 from mpi4py import MPI
 import math, numpy, scipy.special
 
+logging.set_log_level(1)
+logging.set_level(1)
+
 #########################################################################################################
 ################################## Some important constants etc...: #####################################
 #########################################################################################################
@@ -68,6 +71,7 @@ stokes_solver_parameters = {
         'pc_python_type': 'firedrake.AssembledPC',
         'assembled_pc_type' : 'hypre',
         'ksp_rtol': '1e-5',
+        'ksp_monitor': None,
     },
     'fieldsplit_1': {
         'ksp_type': 'fgmres',
@@ -77,6 +81,7 @@ stokes_solver_parameters = {
         'Mp_ksp_type': 'cg',
         'Mp_pc_type': 'sor',
         'ksp_rtol': '1e-3',
+        'ksp_converged_reason': None,
     }
 }
 
@@ -92,6 +97,8 @@ temperature_solver_parameters = {
 #########################################################################################################
 ################################## Geometry and Spatial Discretization: #################################
 #########################################################################################################
+
+print('Num of vertices', mesh.num_vertices())
 
 # Set up function spaces - currently using the P2P1 element pair :
 V    = VectorFunctionSpace(mesh, "CG", 2) # Velocity function space (vector)
