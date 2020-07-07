@@ -1,0 +1,203 @@
+nohup: ignoring input
+    Linear firedrake_0_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 4
+    Linear firedrake_2_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 6
+    Linear firedrake_4_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 4
+    Linear firedrake_6_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 4
+    Linear firedrake_8_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 4
+    Linear firedrake_10_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 4
+    Linear firedrake_12_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 4
+    Linear firedrake_14_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 4
+    Linear firedrake_16_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 4
+    Linear firedrake_18_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_20_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_22_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_24_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_26_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_28_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_30_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_32_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_34_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_36_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_38_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_40_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_42_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_44_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_46_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_48_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_50_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_52_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_54_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_56_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_58_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_60_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_62_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 5
+    Linear firedrake_64_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 6
+Timestep Number:  0  Timestep:  0.05
+RMS Velocity:  0.2568561136089795
+T_prime:  0.31151092111522577
+Nu (base, top, cons):  0.9998680358110349 -1.0003873606809832 0.0005193248699483233
+Maxchange: 0.019877002920827305  Targetting: 1e-07
+Timestep Number:  1  Timestep:  0.05
+RMS Velocity:  0.5449320830435713
+T_prime:  0.3115181969833688
+Nu (base, top, cons):  1.0022566513512354 -1.0021644408323218 9.221051891361576e-05
+Maxchange: 0.04117603411809551  Targetting: 1e-07
+Timestep Number:  2  Timestep:  0.02370565445622632
+RMS Velocity:  1.1579094972212385
+T_prime:  0.31153883682648437
+Nu (base, top, cons):  1.0070209590033556 -1.0059001521533755 0.0011208068499801715
+Maxchange: 0.048222631749927476  Targetting: 1e-07
+Timestep Number:  3  Timestep:  0.011025509423270172
+RMS Velocity:  1.8760200733043388
+T_prime:  0.3115618426172961
+Nu (base, top, cons):  1.0129103915948108 -1.0100725728099953 0.0028378187848154823
+Maxchange: 0.03948411284159982  Targetting: 1e-07
+Timestep Number:  4  Timestep:  0.006739801588056884
+RMS Velocity:  2.461420816894687
+T_prime:  0.3115861582494819
+Nu (base, top, cons):  1.0189635398365973 -1.0144017765318305 0.004561763304766764
+Maxchange: 0.03265223277172442  Targetting: 1e-07
+Timestep Number:  5  Timestep:  0.005108096119233155
+RMS Velocity:  2.9438264176782862
+T_prime:  0.3116127244665363
+Nu (base, top, cons):  1.0255026281372013 -1.0190609423990875 0.006441685738113767
+Maxchange: 0.029990759638519483  Targetting: 1e-07
+Timestep Number:  6  Timestep:  0.004260886152108242
+RMS Velocity:  3.3854905175335643
+T_prime:  0.3116420168008984
+Nu (base, top, cons):  1.0325946649446232 -1.024240243964591 0.00835442098003214
+Maxchange: 0.02901698305682606  Targetting: 1e-07
+Timestep Number:  7  Timestep:  0.0037037036732225363
+RMS Velocity:  3.8114172657255065
+T_prime:  0.31167392338891076
+Nu (base, top, cons):  1.0403509314292603 -1.0299631425579716 0.010387788871288661
+Maxchange: 0.028605469160986042  Targetting: 1e-07
+Timestep Number:  8  Timestep:  0.003284705480157269
+RMS Velocity:  4.229791391320332
+T_prime:  0.31170810182267206
+Nu (base, top, cons):  1.0486957589310015 -1.0362738706994319 0.012421888231569644
+Maxchange: 0.028356099794351247  Targetting: 1e-07
+Timestep Number:  9  Timestep:  0.0029599745970648704
+RMS Velocity:  4.642801405620407
+T_prime:  0.3117442682168178
+Nu (base, top, cons):  1.0576665128031697 -1.0431834608289814 0.01448305197418831
+Maxchange: 0.028243948651837956  Targetting: 1e-07
+Timestep Number:  10  Timestep:  0.0027008214664756523
+RMS Velocity:  5.052173424685381
+T_prime:  0.31178207911383643
+Nu (base, top, cons):  1.067220966212807 -1.050743765539391 0.01647720067341596
+Maxchange: 0.028238795552901475  Targetting: 1e-07
+Timestep Number:  11  Timestep:  0.0024896196068644157
+RMS Velocity:  5.459080550049492
+T_prime:  0.3118212021194259
+Nu (base, top, cons):  1.0773853358163858 -1.058988417417793 0.01839691839859281
+Maxchange: 0.028317112070836932  Targetting: 1e-07
+Timestep Number:  12  Timestep:  0.002302968200647899
+RMS Velocity:  5.864240969561391
+T_prime:  0.3118610804843843
+Nu (base, top, cons):  1.0880783266602974 -1.0679298660514052 0.020148460608892194
+Maxchange: 0.02832112518312659  Targetting: 1e-07
+Timestep Number:  13  Timestep:  0.0021379172567274293
+RMS Velocity:  6.266013654286978
+T_prime:  0.311901166316377
+Nu (base, top, cons):  1.099267839758767 -1.07756713671319 0.02170070304557692
+Maxchange: 0.028261018827708286  Targetting: 1e-07
+Timestep Number:  14  Timestep:  0.0019978562305197406
+RMS Velocity:  6.66286358612083
+T_prime:  0.31194105676538014
+Nu (base, top, cons):  1.1109219323585269 -1.0879461909797326 0.022975741378794323
+Maxchange: 0.02822763577210551  Targetting: 1e-07
+Timestep Number:  15  Timestep:  0.001878320182206032
+RMS Velocity:  7.054497692890123
+T_prime:  0.31198034042774275
+Nu (base, top, cons):  1.1230456146855954 -1.099108809617861 0.023936805067734435
+Maxchange: 0.0282160965165642  Targetting: 1e-07
+Timestep Number:  16  Timestep:  0.0017754804632219585
+RMS Velocity:  7.440501045123503
+T_prime:  0.3120185909051133
+Nu (base, top, cons):  1.1356168789847747 -1.111107508597956 0.024509370386818663
+Maxchange: 0.0282155020450639  Targetting: 1e-07
+Timestep Number:  17  Timestep:  0.0016863977492636193
+RMS Velocity:  7.82027312222027
+T_prime:  0.3120553566088753
+Nu (base, top, cons):  1.1486385660040606 -1.123989828487883 0.024648737516177466
+Maxchange: 0.028215859394854412  Targetting: 1e-07
+Timestep Number:  18  Timestep:  0.0016087949370963324
+RMS Velocity:  8.193066952379569
+T_prime:  0.31209016262343753
+Nu (base, top, cons):  1.1620932147162701 -1.1378091476805197 0.02428406703575048
+Maxchange: 0.028208409061650397  Targetting: 1e-07
+Timestep Number:  19  Timestep:  0.001540879960171686
+RMS Velocity:  8.558034200377305
+T_prime:  0.3121225099609132
+Nu (base, top, cons):  1.1759808837296752 -1.152613001990611 0.023367881739064345
+Maxchange: 0.028185584152924374  Targetting: 1e-07
+Timestep Number:  20  Timestep:  0.001473966488281154
+RMS Velocity:  8.914269893851927
+T_prime:  0.3121517387006963
+Nu (base, top, cons):  1.190215481531784 -1.1683693861440059 0.021846095387778153
+Maxchange: 0.02800608092776471  Targetting: 1e-07
+Timestep Number:  21  Timestep:  0.0014097902204943862
+RMS Velocity:  9.259212766757713
+T_prime:  0.31217727391768785
+Nu (base, top, cons):  1.2047364409413366 -1.1850410154681825 0.01969542547315406
+Maxchange: 0.027702380730860333  Targetting: 1e-07
+Timestep Number:  22  Timestep:  0.0013536836415970915
+RMS Velocity:  9.590964940079823
+T_prime:  0.31219868403070383
+Nu (base, top, cons):  1.2195299776527717 -1.202649261875277 0.016880715777494615
+Maxchange: 0.027387828704861533  Targetting: 1e-07
+Timestep Number:  23  Timestep:  0.0013047149433648218
+RMS Velocity:  9.909191338980762
+T_prime:  0.3122155390046141
+Nu (base, top, cons):  1.2345950078692014 -1.2212089288379273 0.01338607903127409
+Maxchange: 0.027064935065783547  Targetting: 1e-07
+Timestep Number:  24  Timestep:  0.0012618912469472283
+RMS Velocity:  10.213693115628905
+T_prime:  0.31222740769010215
+Nu (base, top, cons):  1.2499216695392463 -1.24072922090231 0.009192448636936357
+Maxchange: 0.02673200728420975  Targetting: 1e-07
+Timestep Number:  25  Timestep:  0.0012243879242985827
+RMS Velocity:  10.504352438158872
+T_prime:  0.3122338593665572
+Nu (base, top, cons):  1.2655077981111085 -1.2612082656997823 0.00429953241132619
+Maxchange: 0.02638796541608189  Targetting: 1e-07
+Timestep Number:  26  Timestep:  0.0011915200336362949
+RMS Velocity:  10.781138234335373
+T_prime:  0.3122344697257332
+Nu (base, top, cons):  1.2813440440229897 -1.28263591764361 0.0012918736206202208
+Maxchange: 0.026032458698555888  Targetting: 1e-07
+Timestep Number:  27  Timestep:  0.0011627154227280433
+RMS Velocity:  11.044103055806369
+T_prime:  0.3122288238349599
+Nu (base, top, cons):  1.2974266203187224 -1.3049898475732444 0.007563227254522076
+Maxchange: 0.02566577212919254  Targetting: 1e-07
+Timestep Number:  28  Timestep:  0.0011374923188312495
+RMS Velocity:  11.293382240302032
+T_prime:  0.3122165219786221
+Nu (base, top, cons):  1.313745874033981 -1.3282379744064536 0.014492100372472727
+Maxchange: 0.02528874404411619  Targetting: 1e-07
+Timestep Number:  29  Timestep:  0.00111544255615295
+RMS Velocity:  11.52918725908423
+T_prime:  0.3121971859162349
+Nu (base, top, cons):  1.3302957333399323 -1.3523360370124446 0.022040303672512307
+Maxchange: 0.02490268751443265  Targetting: 1e-07
+Timestep Number:  30  Timestep:  0.001096218057383917
+RMS Velocity:  11.751797467296136
+T_prime:  0.3121704591091865
+Nu (base, top, cons):  1.3470660786893296 -1.3772297909117903 0.030163712222460726
+Maxchange: 0.024509273315698573  Targetting: 1e-07
+Timestep Number:  31  Timestep:  0.0010795205505208802
+RMS Velocity:  11.96155003206712
+T_prime:  0.3121360161903628
+Nu (base, top, cons):  1.3640483535984893 -1.4028540671856964 0.03880571358720708
+Maxchange: 0.024110496875910575  Targetting: 1e-07
+Timestep Number:  32  Timestep:  0.0010650928954450052
+RMS Velocity:  12.158862796097592
+T_prime:  0.312093561790268
+Nu (base, top, cons):  1.3812302214575294 -1.4291348770405958 0.04790465558306645
+Maxchange: 0.02370829087394675  Targetting:    Linear firedrake_66_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 6
+    Linear firedrake_68_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 6
+    Linear firedrake_70_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 6
+    Linear firedrake_72_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 6
+    Linear firedrake_74_fieldsplit_1_ solve converged due to CONVERGED_RTOL iterations 6
