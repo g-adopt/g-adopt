@@ -9,6 +9,9 @@ logging.set_level(1)
 ################################## Some important constants etc...: #####################################
 #########################################################################################################
 
+logging.set_log_level(1)
+logging.set_level(1)
+
 # Geometric Constants:
 rmax                   = 2.22
 rmin                   = 1.22
