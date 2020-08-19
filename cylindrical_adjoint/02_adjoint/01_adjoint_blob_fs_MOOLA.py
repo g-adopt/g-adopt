@@ -4,9 +4,9 @@ import math
 from firedrake.petsc import PETSc
 from firedrake_adjoint import *
 #from pyadjoint.optimization.optimization import minimize
-from pyadjoint import MinimizationProblem, ROLSolver
 import numpy as np
-
+import pyadjoint
+import moola
 
 #### Print function to ensure log output is only written on processor zero (if running in parallel) ####
 def log(*args):
@@ -378,65 +378,19 @@ reduced_functional = ReducedFunctional(functional, control, eval_cb_pre=eval_cb_
 #log(minconv)
 #import sys; sys.exit(0)
 
-# Set up bounds, which will later be used to enforce boundary conditions in inversion:
-T_lb     = Function(Q, name="LB_Temperature")
-T_ub     = Function(Q, name="UB_Temperature")
-T_lb.assign(0.0)
-T_ub.assign(1.0)
+v_ic = moola.FiredrakePrimalVector(T_ic)
+prob = pyadjoint.MoolaOptimizationProblem(reduced_functional, memoize=0)
+solver = moola.BFGS(prob, v_ic, options={
+        "jtol": 0,
+        "rjtol": 1e-8,
+        "gtol": 1e-12,
+        "maxiter": 1000,
+        "display": 3,
+        "Hinit": "default",
+})
+optimal_sol = solver.solve()
+optimal_ic = optimal_sol["control"].data
 
-
-### Optimise using ROL - note when doing Taylor test this can be turned off:
-minp = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
-
-# Orginial parameters by Steph
-params = {
-        'General': {
-            'Secant': {'Type': 'Limited-Memory BFGS', 'Maximum Storage': 1000}},
-        #'Step': {
-        #    'Type': 'Augmented Lagrangian',
-        #    'Line Search': {
-        #        'Descent Method': { 
-	     #         'Type': 'Quasi-Newton Step'
-        #        }
-        #    },
-        #    'Augmented Lagrangian': { 
-        #        'Subproblem Step Type': 'Line Search',
-        #        'Subproblem Iteration Limit': 10 
-        #    }
-        #},
-        'Status Test': {
-            'Gradient Tolerance': 1e-12,
-            'Iteration Limit': 20,
-        }
-    }
-
-#params = {
-#        'General': {'Print Verbosity':1},
-#        'Step': {
-#            'Type': 'Line Search',
-#            'Line Search': {
-#                'Descent Method': { 
-#	              'Type': 'Nonlinear CG'
-#                }
-#            },
-#        #    'Augmented Lagrangian': { 
-#        #        'Subproblem Step Type': 'Line Search',
-#        #        'Subproblem Iteration Limit': 10 
-#        #    }
-#        },
-#        'Status Test': {
-#            'Gradient Tolerance': 1e-12,
-#            'Iteration Limit': 50,
-#        }
-#    }
-
-
-rol_solver = ROLSolver(minp, params)
-optimal_ic = rol_solver.solve()
-
-#### Optimise - note when doing Taylor test this can be turned off:
-#optimal_ic = minimize(reduced_functional, bounds=(T_lb,T_ub), method= 'L-BFGS-B',\
-#                      options={'disp': True, 'maxiter': 200, 'gtol': 1e-10 , 'ftol': 2e-10})
 
 ### Write optimal initial condition
 optimal_ic_file = File('optimal_ic.pvd')
