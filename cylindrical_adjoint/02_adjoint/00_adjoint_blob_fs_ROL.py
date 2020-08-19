@@ -25,7 +25,7 @@ left_id, right_id       = 314, 313 # When using Gmsh generated mesh
 
 # Global Constants:
 steady_state_tolerance  = 1e-7
-simu_time               = 5e5
+simu_time               = 9e6
 
 # mesh related
 X                       = SpatialCoordinate(mesh)
