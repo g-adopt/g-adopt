@@ -330,8 +330,8 @@ for timestep in range(0, max_timesteps):
                f"{energy_conservation} {average_temperature} "
                f"{min_viscosity} {max_viscosity} ")
 
-    # Leave if steady-state has been achieved:
-    time_myr = time * (2890e3**2 / 1.0e-6) / 31536000000000.0  # Scaling factor missing! / 2
+    # Leave if simulation has finished:
+    time_myr = time * (2890e3**2 / 1.0e-6) / 31536000000000.0 / libgplates.plate_scaling_factor
     if time_myr > 230:
         log("Reached present-day. End of simulation")
         break
