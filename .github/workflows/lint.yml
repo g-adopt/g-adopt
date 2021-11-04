@@ -1,0 +1,24 @@
+name: Run lint
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  linter:
+    name: "Run linter"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+      - name: Install linter
+        run: |
+          pip install flake8 pylint
+      - name: Lint
+        run: |
+          make lint
