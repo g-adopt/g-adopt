@@ -73,6 +73,7 @@ def model(disc_n):
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
+    n = FacetNormal(mesh)
     r = sqrt(X[0]**2 + X[1]**2)
     rhat = as_vector((X[0], X[1])) / r
     phi = atan_2(X[1], X[0])
