@@ -90,7 +90,6 @@ stokes_solver_parameters = {
     "fieldsplit_0": {
         "ksp_type": "cg",
         "ksp_rtol": 1e-5,
-        "ksp_converged_reason": None,
         "pc_type": "python",
         "pc_python_type": "firedrake.AssembledPC",
         "assembled_pc_type": "gamg",
@@ -100,7 +99,6 @@ stokes_solver_parameters = {
     "fieldsplit_1": {
         "ksp_type": "fgmres",
         "ksp_rtol": 1e-4,
-        "ksp_converged_reason": None,
         "pc_type": "python",
         "pc_python_type": "firedrake.MassInvPC",
         "Mp_ksp_rtol": 1e-5,
@@ -115,7 +113,6 @@ energy_solver_parameters = {
     "snes_type": "ksponly",
     "ksp_type": "gmres",
     "ksp_rtol": 1e-5,
-    "ksp_converged_reason": None,
     "pc_type": "sor",
 }
 
@@ -175,6 +172,7 @@ dump_period = 50
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 f = open("params.log", "w")
+log_params(f, "timestep time dt maxchange u_rms u_rms_surf ux_max nu_base nu_top energy avg_t")
 
 # Setup problem and solver objects so we can reuse (cache) solver setup
 stokes_problem = NonlinearVariationalProblem(F_stokes, z, bcs=[bcvbt, bcvfb, bcvlr])
