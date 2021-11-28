@@ -86,8 +86,6 @@ stokes_solver_parameters = {
     "snes_max_it": 100,
     "snes_atol": 1e-10,
     "snes_rtol": 1e-5,
-    "snes_monitor": None,
-    "snes_converged_reason": None,
     "ksp_type": "preonly",
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
@@ -151,6 +149,8 @@ dump_period = 50
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 f = open("params.log", "w")
+log_params(f, "timestep time dt maxchange u_rms u_rms_surf ux_max nu_base nu_top energy avg_t "
+           "visc_min visc_max work dissipation energy_2")
 
 # Setup problem and solver objects so we can reuse (cache) solver setup
 stokes_problem = NonlinearVariationalProblem(F_stokes, z, bcs=[bcvx, bcvy])

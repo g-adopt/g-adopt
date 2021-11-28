@@ -142,6 +142,8 @@ dump_period = 50
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 f = open("params.log", "w")
+log_params(f, "timestep time dt maxchange u_rms u_rms_surf ux_max nu_base nu_top energy avg_t "
+           "work dissipation energy_2")
 
 # Setup problem and solver objects so we can reuse (cache) solver setup
 stokes_problem = NonlinearVariationalProblem(F_stokes, z, bcs=[bcvx, bcvy])
