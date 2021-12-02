@@ -53,7 +53,7 @@ Tnew.assign(Told)
 Ttheta = 0.5 * Tnew + (1-0.5) * Told
 
 # Define time stepping parameters:
-steady_state_tolerance = 1e-7 # Note set to 1e-9 for simulations in paper - reduced for CI testing.
+steady_state_tolerance = 1e-7  # Set to 1e-9 for simulations in paper.
 max_timesteps = 50000
 target_cfl_no = 1.0
 maximum_timestep = 0.1
