@@ -4,9 +4,9 @@ from firedrake import *
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
 
 # Function spaces:
-V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+V = VectorFunctionSpace(mesh, family="CG", degree=2)  # Velocity function space (vector)
+W = FunctionSpace(mesh, family="CG", degree=1)  # Pressure function space (scalar)
+Q = FunctionSpace(mesh, family="CG", degree=2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space
 
 # Test functions and functions to hold solutions:
@@ -37,8 +37,8 @@ F_stokes += dot(grad(w), u) * dx  # Continuity equation
 F_energy = q * (Tnew - Told) / delta_t * dx + q * dot(u, grad(Ttheta)) * dx + dot(grad(q), kappa * grad(Ttheta)) * dx
 
 # Set up boundary conditions and deal with nullspaces:
-bcvx, bcvy = DirichletBC(Z.sub(0).sub(0), 0, (1, 2)), DirichletBC(Z.sub(0).sub(1), 0, (3, 4))
-bctb, bctt = DirichletBC(Q, 1.0, 3), DirichletBC(Q, 0.0, 4)
+bcvx, bcvy = DirichletBC(Z.sub(0).sub(0), 0, sub_domain=(1, 2)), DirichletBC(Z.sub(0).sub(1), 0, sub_domain=(3, 4))
+bctb, bctt = DirichletBC(Q, 1.0, sub_domain=3), DirichletBC(Q, 0.0, sub_domain=4)
 p_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), VectorSpaceBasis(constant=True)])
 
 # Initialise output:
