@@ -109,7 +109,7 @@ def model(ref_level, radial_layers):
     # Setup UFL, incorporating Nitsche boundary conditions:
     stress = 2 * mu * sym(grad(u))
     F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * rhop * dot(v, rhat) * dx
-    F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb # Continuity equation
+    F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
     # nitsche free slip BCs
     F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb

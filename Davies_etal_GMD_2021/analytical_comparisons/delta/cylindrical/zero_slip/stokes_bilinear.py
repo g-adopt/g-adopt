@@ -4,18 +4,17 @@ from mpi4py import MPI  # noqa: F401
 import sys
 import assess
 import math
-
-# Quadrature degree:
-dx = dx(degree=6)
+PETSc.Sys.popErrorHandler()
 
 # Set up geometry and key parameters:
 rmin, rmax = 1.22, 2.22
-k = Constant(int(sys.argv[1]))  # radial degree
-nn = Constant(int(sys.argv[2]))  # wave number (n is already used for FacetNormal)
-level = int(sys.argv[3])  # refinement level
-
+nn = Constant(int(sys.argv[1]))  # wave number (n is already used for FacetNormal)
+level = int(sys.argv[2])  # refinement level
+rp = (rmax + rmin) / 2.0  # radius of delta_function
 
 # Define logging convenience functions:
+
+
 def log(*args):
     """Log output to stdout from root processor only"""
     PETSc.Sys.Print(*args)
@@ -78,13 +77,14 @@ def model(disc_n):
     X = SpatialCoordinate(mesh)
     n = FacetNormal(mesh)
     r = sqrt(X[0]**2 + X[1]**2)
-    rhat = as_vector((X[0], X[1])) / r
     phi = atan_2(X[1], X[0])
 
-    # Set up function spaces - currently using the P2P1 element pair :
+    # Set up function spaces - currently using the Q2Q1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # pressure function space (scalar)
-    Wvec = VectorFunctionSpace(mesh, "CG", 1)  # vector version of W, used for coordinates in anal. pressure solution
+    P0 = FunctionSpace(mesh, "DQ", 0)
+    Q1DG = FunctionSpace(mesh, "DQ", 1)
+    Q1DGvec = VectorFunctionSpace(mesh, "DQ", 1)
 
     # Set up mixed function space and associated test functions:
     Z = MixedFunctionSpace([V, W])
@@ -98,39 +98,34 @@ def model(disc_n):
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
     g = Constant(1.0)
-    C_ip = Constant(100.0)  # The fudge factor for interior penalty term used in weak imposition of BCs
-    p_ip = 2  # maximum polynomial degree of the _gradient_ of velocity
 
-    rhop = r**k/rmax**k*cos(nn*phi)  # RHS
+    marker = Function(P0)
+    marker.interpolate(conditional(r < rp, 1, 0))
 
-    # Setup UFL, incorporating Nitsche boundary conditions:
+    # Setup UFL:
     stress = 2 * mu * sym(grad(u))
-    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * rhop * dot(v, rhat) * dx
+    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * cos(nn*phi) * dot(jump(marker, n), avg(v)) * dS_h
     F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
-    # nitsche free slip BCs
-    F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb
-    F_stokes += -dot(u, n) * dot(dot(n, 2 * mu * sym(grad(v))), n) * ds_tb
-    F_stokes += C_ip * mu * (p_ip + 1)**2 * FacetArea(mesh) / CellVolume(mesh) * dot(u, n) * dot(v, n) * ds_tb
-
-    # Nullspaces and near-nullspaces:
-    xy_rot = Function(V).interpolate(as_vector((-X[1], X[0])))  # rotation interpolated as vector function in V
-    u_nullspace = VectorSpaceBasis([xy_rot])
-    u_nullspace.orthonormalize()
-    p_nullspace = VectorSpaceBasis(constant=True)  # constant nullspace for pressure
-    Z_nullspace = MixedVectorSpaceBasis(Z, [u_nullspace, p_nullspace])  # combined mixed nullspace
+    # Constant nullspace for pressure
+    Z_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), VectorSpaceBasis(constant=True)])
 
     # Generating near_nullspaces for GAMG:
     nns_x = Function(V).interpolate(Constant([1., 0.]))
     nns_y = Function(V).interpolate(Constant([0., 1.]))
+    xy_rot = Function(V).interpolate(as_vector((-X[1], X[0])))  # rotation interpolated as vector function in V
     u_near_nullspace = VectorSpaceBasis([nns_x, nns_y, xy_rot])
     u_near_nullspace.orthonormalize()
     Z_near_nullspace = MixedVectorSpaceBasis(Z, [u_near_nullspace, Z.sub(1)])
+
+    # Zero slip boundary conditions:
+    bcs = DirichletBC(Z.sub(0), Constant((0.0, 0.0)), ["top", "bottom"])
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
     # and the RHS == 0.
     solve(
         F_stokes == 0, z,
+        bcs=[bcs],
         solver_parameters=stokes_solver_parameters,
         appctx={"mu": mu},
         nullspace=Z_nullspace,
@@ -138,35 +133,39 @@ def model(disc_n):
         near_nullspace=Z_near_nullspace
     )
 
-    # take out null modes through L2 projection from velocity and pressure
-    # removing rotation from velocity:
-    rot = as_vector((-X[1], X[0]))
-    coef = assemble(dot(rot, u_)*dx) / assemble(dot(rot, rot)*dx)
-    u_.project(u_ - rot*coef, solver_parameters=project_solver_parameters)
-
     # removing constant nullspace from pressure
     coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=project_solver_parameters)
 
-    solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
+    solution_upper = assess.CylindricalStokesSolutionDeltaZeroSlip(float(nn), +1, nu=float(mu))
+    solution_lower = assess.CylindricalStokesSolutionDeltaZeroSlip(float(nn), -1, nu=float(mu))
 
     # compute u analytical and error
     uxy = interpolate(as_vector((X[0], X[1])), V)
+    u_anal_upper = Function(V, name="AnalyticalVelocityUpper")
+    u_anal_lower = Function(V, name="AnalyticalVelocityLower")
     u_anal = Function(V, name="AnalyticalVelocity")
-    u_anal.dat.data[:] = [solution.velocity_cartesian(xyi) for xyi in uxy.dat.data]
+    u_anal_upper.dat.data[:] = [solution_upper.velocity_cartesian(xyi) for xyi in uxy.dat.data]
+    u_anal_lower.dat.data[:] = [solution_lower.velocity_cartesian(xyi) for xyi in uxy.dat.data]
+    u_anal.interpolate(marker*u_anal_lower + (1-marker)*u_anal_upper)
     u_error = Function(V, name="VelocityError").assign(u_-u_anal)
 
     # compute p analytical and error
-    pxy = interpolate(as_vector((X[0], X[1])), Wvec)
-    p_anal = Function(W, name="AnalyticalPressure")
-    p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
-    p_error = Function(W, name="PressureError").assign(p_-p_anal)
+    pxy = interpolate(as_vector((X[0], X[1])), Q1DGvec)
+    pdg = interpolate(p, Q1DG)
+    p_anal_upper = Function(Q1DG, name="AnalyticalPressureUpper")
+    p_anal_lower = Function(Q1DG, name="AnalyticalPressureLower")
+    p_anal = Function(Q1DG, name="AnalyticalPressure")
+    p_anal_upper.dat.data[:] = [solution_upper.pressure_cartesian(xyi) for xyi in pxy.dat.data]
+    p_anal_lower.dat.data[:] = [solution_lower.pressure_cartesian(xyi) for xyi in pxy.dat.data]
+    p_anal.interpolate(marker*p_anal_lower + (1-marker)*p_anal_upper)
+    p_error = Function(Q1DG, name="PressureError").assign(pdg-p_anal)
 
     # Write output files in VTK format:
     u_.rename("Velocity")
     p_.rename("Pressure")
-    u_file = File("fs_velocity_{}.pvd".format(disc_n))
-    p_file = File("fs_pressure_{}.pvd".format(disc_n))
+    u_file = File("zs_velocity_{}.pvd".format(disc_n))
+    p_file = File("zs_pressure_{}.pvd".format(disc_n))
 
     # Write output:
     u_file.write(u_, u_anal, u_error)
