@@ -5,6 +5,9 @@ import sys
 import assess
 import math
 
+# Quadrature degree:
+dx = dx(degree=6)
+
 # Set up geometry and key parameters:
 rmin, rmax = 1.22, 2.22
 k = Constant(int(sys.argv[1]))  # radial degree
@@ -99,8 +102,8 @@ def model(disc_n):
 
     # Setup UFL:
     stress = 2 * mu * sym(grad(u))
-    F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx + g * rhop * dot(v, rhat) * dx
-    F_stokes += dot(grad(w), u) * dx  # continuity equation
+    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * rhop * dot(v, rhat) * dx
+    F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb # Continuity equation
 
     # Constant nullspace for pressure
     Z_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), VectorSpaceBasis(constant=True)])
