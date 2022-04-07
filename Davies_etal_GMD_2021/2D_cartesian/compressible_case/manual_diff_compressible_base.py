@@ -15,8 +15,8 @@ FullT = Function(Q, name="FullTemperature").assign(Tnew+Tbar)
 # Equations in UFL:
 I = Identity(2)
 stress = 2 * mu * sym(grad(u)) - 2./3.*I*mu*div(u)
-F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx - (dot(v,k) * (Ra * Ttheta * rhobar * alphabar - (Di/gruneisen) * (cpr/cvr)*rhobar*chibar*p) * dx)
-F_stokes += dot(grad(w), rhobar*u) * dx # Mass conservation
+F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx - (dot(v, k) * (Ra * Ttheta * rhobar * alphabar - (Di/gruneisen) * (cpr/cvr)*rhobar*chibar*p) * dx)
+F_stokes += -w * div(rhobar*u) * dx  # Mass conservation
 F_energy = q * rhobar * cpbar * ((Tnew - Told) / delta_t) * dx + q * rhobar * cpbar * dot(u, grad(Ttheta)) * dx + dot(grad(q), tcond * grad(Tbar + Ttheta)) * dx + q * (alphabar * rhobar * Di * u[1] * Ttheta) * dx  - q * ( (Di/Ra) * inner(stress, grad(u)) ) * dx
 
 ---------------------------------------------------------------------------------------------

@@ -72,3 +72,6 @@ stokes_solver = NonlinearVariationalSolver(stokes_problem, solver_parameters=sto
 energy_problem = NonlinearVariationalProblem(F_energy, Tnew, bcs=[bctb, bctt])
 energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=energy_solver_parameters)
 
+---------------------------------------------------------------------------------------------
+# Updated diagnostics:
+nusselt_number_top = -1. * assemble(dot(grad(Tnew), n) * ds_t) * (1./assemble(Tnew * ds_b))

@@ -2,6 +2,7 @@ from firedrake import *
 
 # Mesh - use a built in meshing function:
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
+left, right, bottom, top = 1, 2, 3, 4  # Boundary IDs
 
 # Function spaces:
 V = VectorFunctionSpace(mesh, family="CG", degree=2)  # Velocity function space (vector)
@@ -23,22 +24,19 @@ Told.interpolate(1.0 - X[1] + 0.05 * cos(pi * X[0]) * sin(pi * X[1]))
 Tnew.assign(Told)
 
 # Important constants:
-Ra = Constant(1e4)  # Rayleigh number
-mu = Constant(1.0)  # Viscosity - constant for this isoviscous case
-kappa = Constant(1.0)  # Thermal diffusivity
-delta_t = Constant(1e-4)  # Time-step
+Ra, mu, kappa, delta_t = Constant(1e4), Constant(1.0), Constant(1.0), Constant(1e-4)
 k = Constant((0, 1))  # Unit vector (in direction opposite to gravity)
 
 # Stokes equations in UFL form:
 stress = 2 * mu * sym(grad(u))
-F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx - (dot(v, k) * Ra * Ttheta) * dx
-F_stokes += dot(grad(w), u) * dx  # Continuity equation
+F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx - (dot(v, k) * Ra * Ttheta) * dx
+F_stokes += -w * div(u) * dx  # Continuity equation
 # Energy equation in UFL form:
 F_energy = q * (Tnew - Told) / delta_t * dx + q * dot(u, grad(Ttheta)) * dx + dot(grad(q), kappa * grad(Ttheta)) * dx
 
 # Set up boundary conditions and deal with nullspaces:
-bcvx, bcvy = DirichletBC(Z.sub(0).sub(0), 0, sub_domain=(1, 2)), DirichletBC(Z.sub(0).sub(1), 0, sub_domain=(3, 4))
-bctb, bctt = DirichletBC(Q, 1.0, sub_domain=3), DirichletBC(Q, 0.0, sub_domain=4)
+bcvx, bcvy = DirichletBC(Z.sub(0).sub(0), 0, sub_domain=(left, right)), DirichletBC(Z.sub(0).sub(1), 0, sub_domain=(bottom, top))
+bctb, bctt = DirichletBC(Q, 1.0, sub_domain=bottom), DirichletBC(Q, 0.0, sub_domain=top)
 p_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), VectorSpaceBasis(constant=True)])
 
 # Initialise output:
@@ -61,9 +59,22 @@ stokes_solver = NonlinearVariationalSolver(stokes_problem, solver_parameters=sol
 energy_problem = NonlinearVariationalProblem(F_energy, Tnew, bcs=[bctb, bctt])
 energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=solver_parameters)
 
-for timestep in range(0, 1000):  # Perform time loop for 1000 steps
+# Timestepping aspects
+no_timesteps, target_cfl_no = 2000, 1.0
+delta_t = Constant(1e-6)  # Initial time-step
+ref_u = Function(V, name="Reference_Velocity")
+def compute_timestep(u, current_delta_t): # Return timestep, using CFL criterion
+    tstep = (1. / ref_u.interpolate(dot(JacobianInverse(mesh), u)).dat.data.max()) * target_cfl_no
+    return tstep
+
+for timestep in range(0, no_timesteps):  # Perform time loop
+    current_delta_t = delta_t
+    if timestep != 0:
+        delta_t.assign(compute_timestep(u, current_delta_t))  # Compute adaptive time-step
     if timestep % 10 == 0:
         output_file.write(u, p, Tnew)
     stokes_solver.solve()
     energy_solver.solve()
+    vrms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./assemble(1.*dx(domain=mesh)))
+    nu_top = -1. * assemble(dot(grad(Tnew), FacetNormal(mesh)) * ds(top))
     Told.assign(Tnew)

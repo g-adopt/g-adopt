@@ -2,6 +2,9 @@ from firedrake import *
 from firedrake.petsc import PETSc
 from mpi4py import MPI
 
+# Quadrature degree:
+dx = dx(degree=6)
+
 # Set up geometry:
 nx, ny = 40, 40
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
@@ -87,7 +90,7 @@ solver_parameters = {
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e4)  # Rayleigh number
 mu = Constant(1.0)  # Viscosity
-k = Constant((0, 1))  # Radial unit vector (in direction opposite to gravity).
+k = Constant((0, 1))  # Unit vector (in direction opposite to gravity).
 
 # Temperature equation related constants:
 delta_t = Constant(1e-6)  # Initial time-step
@@ -95,8 +98,8 @@ kappa = Constant(1.0)  # Thermal diffusivity
 
 # Stokes equations in UFL form:
 stress = 2 * mu * sym(grad(u))
-F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx - (dot(v, k) * Ra * Ttheta) * dx
-F_stokes += dot(grad(w), u) * dx  # Continuity equation
+F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx - (dot(v, k) * Ra * Ttheta) * dx
+F_stokes += -w * div(u) * dx  # Continuity equation
 # Energy equation in UFL form:
 F_energy = q * (Tnew - Told) / delta_t * dx + q * dot(u, grad(Ttheta)) * dx + dot(grad(q), kappa * grad(Ttheta)) * dx
 
