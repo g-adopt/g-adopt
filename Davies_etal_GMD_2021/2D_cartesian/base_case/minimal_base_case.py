@@ -63,10 +63,12 @@ energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=sol
 no_timesteps, target_cfl_no = 2000, 1.0
 ref_u = Function(V, name="Reference_Velocity")
 
+
 def compute_timestep(u):
     """Return the timestep, using CFL criterion"""
     tstep = (1. / ref_u.interpolate(dot(JacobianInverse(mesh), u)).dat.data.max()) * target_cfl_no
     return tstep
+
 
 for timestep in range(0, no_timesteps):
     if timestep > 0:
