@@ -24,7 +24,7 @@ Told.interpolate(1.0 - X[1] + 0.05 * cos(pi * X[0]) * sin(pi * X[1]))
 Tnew.assign(Told)
 
 # Important constants:
-Ra, mu, kappa, delta_t = Constant(1e4), Constant(1.0), Constant(1.0), Constant(1e-4)
+Ra, mu, kappa, delta_t = Constant(1e4), Constant(1.0), Constant(1.0), Constant(1e-6)
 k = Constant((0, 1))  # Unit vector (in direction opposite to gravity)
 
 # Stokes equations in UFL form:
@@ -61,16 +61,16 @@ energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=sol
 
 # Timestepping aspects
 no_timesteps, target_cfl_no = 2000, 1.0
-delta_t = Constant(1e-6)  # Initial time-step
 ref_u = Function(V, name="Reference_Velocity")
-def compute_timestep(u, current_delta_t): # Return timestep, using CFL criterion
+
+def compute_timestep(u):
+    """Return the timestep, using CFL criterion"""
     tstep = (1. / ref_u.interpolate(dot(JacobianInverse(mesh), u)).dat.data.max()) * target_cfl_no
     return tstep
 
-for timestep in range(0, no_timesteps):  # Perform time loop
-    current_delta_t = delta_t
-    if timestep != 0:
-        delta_t.assign(compute_timestep(u, current_delta_t))  # Compute adaptive time-step
+for timestep in range(0, no_timesteps):
+    if timestep > 0:
+        delta_t.assign(compute_timestep(u))
     if timestep % 10 == 0:
         output_file.write(u, p, Tnew)
     stokes_solver.solve()

@@ -28,7 +28,7 @@ def log_params(f, str):
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "DPC", 1)  # Pressure function space (scalar) 
+W = FunctionSpace(mesh, "DPC", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # Test functions and functions to hold solutions:
@@ -90,7 +90,7 @@ solver_parameters = {
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e4)  # Rayleigh number
 mu = Constant(1.0)  # Viscosity
-k = Constant((0, 1))  # Radial unit vector (in direction opposite to gravity).
+k = Constant((0, 1))  # Unit vector (in direction opposite to gravity).
 
 # Temperature equation related constants:
 delta_t = Constant(1e-6)  # Initial time-step
