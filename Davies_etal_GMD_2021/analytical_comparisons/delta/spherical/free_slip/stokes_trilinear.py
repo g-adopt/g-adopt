@@ -11,8 +11,10 @@ dx = dx(degree=6)
 
 # Set up geometry and key parameters:
 rmin, rmax = 1.22, 2.22
-nn = Constant(int(sys.argv[1]))  # wave number (n is already used for FacetNormal)
-level = int(sys.argv[2])  # refinement level
+l = int(sys.argv[1])  # spherical harmonic degree
+m = int(sys.argv[2])  # spherical harmonic order
+nlevels = int(sys.argv[3])  # levels of refinement of cubed sphere mesh
+nlayers = int(sys.argv[4])  # vertical layers
 rp = (rmax + rmin) / 2.0  # radius of delta_function
 
 # Define logging convenience functions:
@@ -44,7 +46,7 @@ stokes_solver_parameters = {
         "assembled_pc_type": "gamg",
         "assembled_pc_gamg_threshold": 0.01,
         "assembled_pc_gamg_square_graph": 100,
-        "ksp_rtol": 1e-14,
+        "ksp_rtol": 1e-10,
         "ksp_converged_reason": None,
     },
     "fieldsplit_1": {
@@ -54,7 +56,7 @@ stokes_solver_parameters = {
         "pc_python_type": "firedrake.MassInvPC",
         "Mp_ksp_type": "cg",
         "Mp_pc_type": "sor",
-        "ksp_rtol": 1e-12,
+        "ksp_rtol": 1e-9,
     }
 }
 
@@ -68,19 +70,15 @@ project_solver_parameters = {
 }
 
 
-def model(disc_n):
-    ncells = disc_n*256
-    nlayers = disc_n*16
-
-    # Construct a circle mesh and then extrude into a cylinder:
-    mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
-    mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
+def model(ref_level, radial_layers):
+    # Mesh and associated physical boundary IDs:
+    mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
+    mesh = ExtrudedMesh(mesh2d, radial_layers, (rmax-rmin)/radial_layers, extrusion_type="radial")
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
     n = FacetNormal(mesh)
-    r = sqrt(X[0]**2 + X[1]**2)
-    phi = atan_2(X[1], X[0])
+    r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 
     # Set up function spaces - currently using the Q2Q1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
@@ -101,34 +99,43 @@ def model(disc_n):
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
     g = Constant(1.0)
+    C_ip = Constant(100.0)  # The fudge factor for interior penalty term used in weak imposition of BCs
+    p_ip = 2  # maximum polynomial degree of the _gradient_ of velocity
 
     marker = Function(P0)
     marker.interpolate(conditional(r < rp, 1, 0))
 
-    # Setup UFL:
+    # Setup UFL, incorporating Nitsche boundary conditions:
     stress = 2 * mu * sym(grad(u))
     F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * cos(nn*phi) * dot(jump(marker, n), avg(v)) * dS_h
     F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
-    # Constant nullspace for pressure
-    Z_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), VectorSpaceBasis(constant=True)])
+    # nitsche free slip BCs
+    F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb
+    F_stokes += -dot(u, n) * dot(dot(n, 2 * mu * sym(grad(v))), n) * ds_tb
+    F_stokes += C_ip * mu * (p_ip + 1)**2 * FacetArea(mesh) / CellVolume(mesh) * dot(u, n) * dot(v, n) * ds_tb
+
+    # Nullspaces and near-nullspaces:
+    x_rotV = Function(V).interpolate(as_vector((0, X[2], -X[1])))
+    y_rotV = Function(V).interpolate(as_vector((-X[2], 0, X[0])))
+    z_rotV = Function(V).interpolate(as_vector((-X[1], X[0], 0)))
+    u_nullspace = VectorSpaceBasis([x_rotV, y_rotV, z_rotV])
+    u_nullspace.orthonormalize()
+    p_nullspace = VectorSpaceBasis(constant=True)  # constant nullspace for pressure
+    Z_nullspace = MixedVectorSpaceBasis(Z, [u_nullspace, p_nullspace])  # combined mixed nullspace
 
     # Generating near_nullspaces for GAMG:
-    nns_x = Function(V).interpolate(Constant([1., 0.]))
-    nns_y = Function(V).interpolate(Constant([0., 1.]))
-    xy_rot = Function(V).interpolate(as_vector((-X[1], X[0])))  # rotation interpolated as vector function in V
-    u_near_nullspace = VectorSpaceBasis([nns_x, nns_y, xy_rot])
+    nns_x = Function(V).interpolate(Constant([1., 0., 0.]))
+    nns_y = Function(V).interpolate(Constant([0., 1., 0.]))
+    nns_z = Function(V).interpolate(Constant([0., 0., 1.]))
+    u_near_nullspace = VectorSpaceBasis([nns_x, nns_y, nns_z, x_rotV, y_rotV, z_rotV])
     u_near_nullspace.orthonormalize()
     Z_near_nullspace = MixedVectorSpaceBasis(Z, [u_near_nullspace, Z.sub(1)])
-
-    # Zero slip boundary conditions:
-    bcs = DirichletBC(Z.sub(0), Constant((0.0, 0.0)), ["top", "bottom"])
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
     # and the RHS == 0.
     solve(
         F_stokes == 0, z,
-        bcs=[bcs],
         solver_parameters=stokes_solver_parameters,
         appctx={"mu": mu},
         nullspace=Z_nullspace,
@@ -136,25 +143,34 @@ def model(disc_n):
         near_nullspace=Z_near_nullspace
     )
 
-    # removing constant nullspace from pressure
-    coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
-    p_.project(p_ - coef, solver_parameters=project_solver_parameters)
+    # take out null modes through L2 projection from velocity and pressure
+    # removing rotations around x, y, and z axes from velocity:
+    x_coef = assemble(dot(x_rotV, u_) * dx) / assemble(dot(x_rotV, x_rotV) * dx)
+    u_.project(u_ - x_rotV*x_coef, solver_parameters=project_solver_parameters)
+    y_coef = assemble(dot(y_rotV, u_) * dx) / assemble(dot(y_rotV, y_rotV) * dx)
+    u_.project(u_ - y_rotV*y_coef, solver_parameters=project_solver_parameters)
+    z_coef = assemble(dot(z_rotV, u_) * dx) / assemble(dot(z_rotV, z_rotV) * dx)
+    u_.project(u_ - z_rotV*z_coef, solver_parameters=project_solver_parameters)
 
-    solution_upper = assess.CylindricalStokesSolutionDeltaZeroSlip(float(nn), +1, nu=float(mu))
-    solution_lower = assess.CylindricalStokesSolutionDeltaZeroSlip(float(nn), -1, nu=float(mu))
+    # removing constant nullspace from pressure
+    p_coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
+    p_.project(p_ - p_coef, solver_parameters=project_solver_parameters)
+
+    solution_upper = assess.SphericalStokesSolutionDeltaFreeSlip(float(nn), +1, nu=float(mu))
+    solution_lower = assess.SphericalStokesSolutionDeltaFreeSlip(float(nn), -1, nu=float(mu))
 
     # compute u analytical and error
-    uxy = interpolate(as_vector((X[0], X[1])), V)
+    u_xyz = interpolate(X, V)
     u_anal_upper = Function(V, name="AnalyticalVelocityUpper")
     u_anal_lower = Function(V, name="AnalyticalVelocityLower")
     u_anal = Function(V, name="AnalyticalVelocity")
-    u_anal_upper.dat.data[:] = [solution_upper.velocity_cartesian(xyi) for xyi in uxy.dat.data]
-    u_anal_lower.dat.data[:] = [solution_lower.velocity_cartesian(xyi) for xyi in uxy.dat.data]
+    u_anal_upper.dat.data[:] = [solution_upper.velocity_cartesian(xyi) for xyi in u_xyz.dat.data]
+    u_anal_lower.dat.data[:] = [solution_lower.velocity_cartesian(xyi) for xyi in u_xyz.dat.data]
     u_anal.interpolate(marker*u_anal_lower + (1-marker)*u_anal_upper)
     u_error = Function(V, name="VelocityError").assign(u_-u_anal)
 
     # compute p analytical and error
-    pxy = interpolate(as_vector((X[0], X[1])), Q1DGvec)
+    pxy = interpolate(X, Q1DGvec)
     pdg = interpolate(p, Q1DG)
     p_anal_upper = Function(Q1DG, name="AnalyticalPressureUpper")
     p_anal_lower = Function(Q1DG, name="AnalyticalPressureLower")
@@ -167,8 +183,8 @@ def model(disc_n):
     # Write output files in VTK format:
     u_.rename("Velocity")
     p_.rename("Pressure")
-    u_file = File("zs_velocity_{}.pvd".format(disc_n))
-    p_file = File("zs_pressure_{}.pvd".format(disc_n))
+    u_file = File("fs_velocity.pvd")
+    p_file = File("fs_pressure.pvd")
 
     # Write output:
     u_file.write(u_, u_anal, u_error)
@@ -184,6 +200,6 @@ def model(disc_n):
 
 # Run model at different levels:
 f = open('errors.log', 'w')
-l2error_u, l2error_p, l2anal_u, l2anal_p = model(level)
+l2error_u, l2error_p, l2anal_u, l2anal_p = model(nlevels, nlayers)
 log_params(f, f"{l2error_u} {l2error_p} {l2anal_u} {l2anal_p}")
 f.close()
