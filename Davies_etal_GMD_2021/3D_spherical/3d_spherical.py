@@ -4,6 +4,9 @@ from mpi4py import MPI
 import scipy.special
 import math
 
+# Quadrature degree:
+dx = dx(degree=6)
+
 # Set up geometry:
 rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 8
 
@@ -12,7 +15,7 @@ mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
 bottom_id, top_id = "bottom", "top"
 n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
-domain_volume = assemble(1.*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
+domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
 
 
 # Define logging convenience functions:
@@ -69,7 +72,7 @@ Told.interpolate(conductive_term +
 Tnew.assign(Told)
 
 # Temporal discretisation - Using a Crank-Nicholson scheme where theta = 0.5:
-Ttheta = 0.5 * Tnew + (1-0.5) * Told
+Ttheta = 0.5*Tnew + (1 - 0.5)*Told
 
 # helper function to compute horizontal layer averages
 Tlayer = Function(Qlayer, name='LayerTemp')  # stores values of temp in one layer
@@ -106,9 +109,9 @@ def compute_timestep(u, current_delta_t):
     ref_vel.interpolate(dot(JacobianInverse(mesh), u))
     ts_min = 1. / mesh.comm.allreduce(ref_vel.dat.data.max(), MPI.MAX)
     # Grab (smallest) maximum permitted on all cores:
-    ts_max = min(float(current_delta_t)*increase_tolerance, maximum_timestep)
+    ts_max = min(float(current_delta_t) * increase_tolerance, maximum_timestep)
     # Compute timestep:
-    tstep = min(ts_min*target_cfl_no, ts_max)
+    tstep = min(ts_min * target_cfl_no, ts_max)
     return tstep
 
 
@@ -152,6 +155,7 @@ energy_solver_parameters = {
     "pc_type": "sor",
 }
 
+
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(7e3)  # Rayleigh number
 mu = Constant(1.0)  # Viscosity
@@ -165,8 +169,8 @@ kappa = Constant(1.0)  # Thermal diffusivity
 
 # Stokes equations in UFL form:
 stress = 2 * mu * sym(grad(u))
-F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx - (dot(v, k) * Ra * Ttheta) * dx
-F_stokes += dot(grad(w), u) * dx  # Continuity equation
+F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb - (dot(v, k) * Ra * Ttheta) * dx
+F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
 # nitsche free-slip BCs
 F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb

@@ -83,6 +83,7 @@ def model(ref_level, radial_layers):
     # Set up function spaces - currently using the Q2Q1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # pressure function space (scalar)
+    Wvec = VectorFunctionSpace(mesh, "CG", 1)
     P0 = FunctionSpace(mesh, "DQ", 0)
     Q1DG = FunctionSpace(mesh, "DQ", 1)
     Q1DGvec = VectorFunctionSpace(mesh, "DQ", 1)
@@ -105,9 +106,14 @@ def model(ref_level, radial_layers):
     marker = Function(P0)
     marker.interpolate(conditional(r < rp, 1, 0))
 
+    # spherical harmonic function interpolated to W function
+    Ylm = Function(W)
+    wxy = interpolate(X, Wvec)
+    Ylm.dat.data[:] = [assess.Y_cartesian(l, m, xyi) for xyi in wxy.dat.data]
+
     # Setup UFL, incorporating Nitsche boundary conditions:
     stress = 2 * mu * sym(grad(u))
-    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * cos(nn*phi) * dot(jump(marker, n), avg(v)) * dS_h
+    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * avg(Ylm) * dot(jump(marker, n), avg(v)) * dS_h
     F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
     # nitsche free slip BCs
@@ -156,8 +162,8 @@ def model(ref_level, radial_layers):
     p_coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - p_coef, solver_parameters=project_solver_parameters)
 
-    solution_upper = assess.SphericalStokesSolutionDeltaFreeSlip(float(nn), +1, nu=float(mu))
-    solution_lower = assess.SphericalStokesSolutionDeltaFreeSlip(float(nn), -1, nu=float(mu))
+    solution_upper = assess.SphericalStokesSolutionDeltaFreeSlip(l, m, +1, nu=float(mu), rp=rp)
+    solution_lower = assess.SphericalStokesSolutionDeltaFreeSlip(l, m, -1, nu=float(mu), rp=rp)
 
     # compute u analytical and error
     u_xyz = interpolate(X, V)
