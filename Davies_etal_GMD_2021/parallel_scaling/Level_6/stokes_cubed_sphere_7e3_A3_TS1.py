@@ -4,6 +4,9 @@ from mpi4py import MPI  # noqa: F401
 import scipy.special
 import math
 
+# Quadrature degree:
+dx = dx(degree=6)
+
 # Set up geometry:
 rmin, rmax, ref_level, nlayers = 1.22, 2.22, 6, 32
 
@@ -130,8 +133,8 @@ kappa = Constant(1.0)  # Thermal diffusivity
 
 # Stokes equations in UFL form:
 stress = 2 * mu * sym(grad(u))
-F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx - (dot(v, k) * Ra * Ttheta) * dx
-F_stokes += dot(grad(w), u) * dx  # Continuity equation
+F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb - (dot(v, k) * Ra * Ttheta) * dx
+F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
 # nitsche free-slip BCs
 F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb
