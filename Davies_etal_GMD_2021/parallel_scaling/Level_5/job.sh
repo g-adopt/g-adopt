@@ -10,7 +10,7 @@
 #PBS -l wd
 #### Load relevant modules:
 module use /g/data/xd2/modulefiles
-module load firedrake/firedrake-20210820
+module load firedrake/firedrake-20220301
 export OMP_NUM_THREADS=1
 export PETSC_OPTIONS="-log_view"
 #### Now run
