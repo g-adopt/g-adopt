@@ -75,6 +75,7 @@ def model(ref_level, radial_layers):
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
+    n = FacetNormal(mesh)
     r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
     rhat = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
 

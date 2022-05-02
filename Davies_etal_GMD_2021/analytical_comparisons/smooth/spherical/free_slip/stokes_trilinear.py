@@ -24,7 +24,7 @@ def log(*args):
 
 
 def log_params(f, str):
-    """Log diagnostic parameters"""
+    """Log diagnostic paramters on root processor only"""
     f.write(str + "\n")
     f.flush()
 
