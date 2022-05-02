@@ -6,6 +6,9 @@ import assess
 import math
 PETSc.Sys.popErrorHandler()
 
+# Quadrature degree:
+dx = dx(degree=6)
+
 # Set up geometry and key parameters:
 rmin, rmax = 1.22, 2.22
 nn = Constant(int(sys.argv[1]))  # wave number (n is already used for FacetNormal)
