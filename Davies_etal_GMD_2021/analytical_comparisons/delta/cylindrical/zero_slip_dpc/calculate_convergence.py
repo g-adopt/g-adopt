@@ -21,9 +21,9 @@ def log_params(f, str):
 # Range:
 ns = numpy.array([2, 4, 8])
 resolutions = ["A", "B", "C", "D"]
-levels = [2, 3, 4]
-expected_velocity_convergence = 1.5
-expected_pressure_convergence = 0.5
+levels = [2, 3, 4, 5]
+expected_velocity_convergence = 3.5
+expected_pressure_convergence = 2.0
 symbols = ["o", "*", "s"]
 
 # Loop over output and store convergence order:
@@ -66,7 +66,7 @@ for nindex, n in enumerate(ns):
 # First velocity:
 for nindex, n in enumerate(ns):
     pylab.semilogy(levels, errors_u[nindex, :], 'k', ls="none", marker=symbols[nindex], markersize=10, alpha=0.7, label=rf"n = {n}")
-pylab.semilogy((levels[0], levels[-1]), theoretical_velocity_convergence[-2, :], "k--", label=r"$\mathcal{O} (\Delta x^{4.0}$)")
+pylab.semilogy((levels[0], levels[-1]), theoretical_velocity_convergence[-2, :], "k--", label=r"$\mathcal{O} (\Delta x^{3.5}$)")
 pylab.xlabel("Level of Refinement")
 pylab.xlim(levels[0]-0.5, levels[-1]+0.5)
 pylab.xticks(levels)

@@ -21,7 +21,7 @@ def log_params(f, str):
 # Range:
 ns = numpy.array([2, 4, 8])
 resolutions = ["A", "B", "C", "D"]
-levels = [2, 3, 4]
+levels = [2, 3, 4, 5]
 expected_velocity_convergence = 1.5
 expected_pressure_convergence = 0.5
 symbols = ["o", "*", "s"]
@@ -66,10 +66,11 @@ for nindex, n in enumerate(ns):
 # First velocity:
 for nindex, n in enumerate(ns):
     pylab.semilogy(levels, errors_u[nindex, :], 'k', ls="none", marker=symbols[nindex], markersize=10, alpha=0.7, label=rf"n = {n}")
-pylab.semilogy((levels[0], levels[-1]), theoretical_velocity_convergence[-2, :], "k--", label=r"$\mathcal{O} (\Delta x^{4.0}$)")
+pylab.semilogy((levels[0], levels[-1]), theoretical_velocity_convergence[-2, :], "k--", label=r"$\mathcal{O} (\Delta x^{1.5}$)")
 pylab.xlabel("Level of Refinement")
 pylab.xlim(levels[0]-0.5, levels[-1]+0.5)
 pylab.xticks(levels)
+pylab.ylim(10**-4, 10**-2)
 pylab.ylabel(r"Error, $|| \mathbf{u} - \mathbf{u}^{*} ||_{2} \; / \;  || \mathbf{u}^{*} ||_{2}$")
 pylab.grid()
 pylab.legend(numpoints=1)
@@ -80,10 +81,11 @@ pylab.close()
 # Now pressure:
 for nindex, n in enumerate(ns):
     pylab.semilogy(levels, errors_p[nindex, :], 'k', ls="none", marker=symbols[nindex], markersize=10, alpha=0.7, label=rf"n = {n}")
-pylab.semilogy((levels[0], levels[-1]), theoretical_pressure_convergence[-2, :], "k--", label=r"$\mathcal{O} (\Delta x^{2.0}$)")
+pylab.semilogy((levels[0], levels[-1]), theoretical_pressure_convergence[-2, :], "k--", label=r"$\mathcal{O} (\Delta x^{0.5}$)")
 pylab.xlabel("Level of Refinement")
 pylab.xlim(levels[0]-0.5, levels[-1]+0.5)
 pylab.xticks(levels)
+pylab.ylim(1e-2, 1)
 pylab.ylabel(r"Error, $|| p - p^{*} ||_{2} \; / \; || p^{*} ||_{2}$")
 pylab.grid()
 pylab.legend(numpoints=1)
