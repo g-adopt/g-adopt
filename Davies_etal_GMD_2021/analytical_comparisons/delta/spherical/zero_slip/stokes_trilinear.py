@@ -114,24 +114,29 @@ def model(ref_level, radial_layers):
     F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * avg(Ylm) * dot(jump(marker, n), avg(v)) * dS_h
     F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
-    # Constant nullspace for pressure
-    Z_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), VectorSpaceBasis(constant=True)])
+    # Nullspaces and near-nullspaces:
+    p_nullspace = VectorSpaceBasis(constant=True)  # constant nullspace for pressure
+    Z_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), p_nullspace])  # combined mixed nullspace
 
     # Generating near_nullspaces for GAMG:
-    nns_x = Function(V).interpolate(Constant([1., 0., 0.]))
-    nns_y = Function(V).interpolate(Constant([0., 1., 0.]))
-    nns_z = Function(V).interpolate(Constant([0., 0., 1.]))
     x_rotV = Function(V).interpolate(as_vector((0, X[2], -X[1])))
     y_rotV = Function(V).interpolate(as_vector((-X[2], 0, X[0])))
     z_rotV = Function(V).interpolate(as_vector((-X[1], X[0], 0)))
+    nns_x = Function(V).interpolate(Constant([1., 0., 0.]))
+    nns_y = Function(V).interpolate(Constant([0., 1., 0.]))
+    nns_z = Function(V).interpolate(Constant([0., 0., 1.]))
     u_near_nullspace = VectorSpaceBasis([nns_x, nns_y, nns_z, x_rotV, y_rotV, z_rotV])
     u_near_nullspace.orthonormalize()
     Z_near_nullspace = MixedVectorSpaceBasis(Z, [u_near_nullspace, Z.sub(1)])
+
+    # Zero slip boundary conditions:
+    bcs = DirichletBC(Z.sub(0), Constant((0.0, 0.0, 0.0)), ["top", "bottom"])
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
     # and the RHS == 0.
     solve(
         F_stokes == 0, z,
+        bcs=[bcs],
         solver_parameters=stokes_solver_parameters,
         appctx={"mu": mu},
         nullspace=Z_nullspace,

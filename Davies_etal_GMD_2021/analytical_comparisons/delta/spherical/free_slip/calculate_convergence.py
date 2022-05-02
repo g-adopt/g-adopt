@@ -16,8 +16,8 @@ rcParams['legend.fontsize'] = 11
 ls = numpy.array([2, 4, 8])
 resolutions = ["A", "B", "C", "D"]
 levels = [3, 4, 5, 6]
-expected_velocity_convergence = 4.0
-expected_pressure_convergence = 2.0
+expected_velocity_convergence = 1.5
+expected_pressure_convergence = 0.5
 symbols = ["o", ".", "s", "*", "^", ">"]
 colours = ["r", "b", "r", "b", "r", "b"]
 
@@ -68,10 +68,11 @@ for lindex, l in enumerate(ls):
     for mindex, m in enumerate(ms):
         pylab.semilogy(levels, errors_u[lindex, mindex, :], ls="none", marker=symbols[increment], color=colours[increment], markersize=10, alpha=0.7, label=rf"l{l}_m{m}")
         increment += 1
-pylab.semilogy((levels[0], levels[-1]), theoretical_velocity_convergence[1, -1, :], "k--", label=r"$\mathcal{O} (\Delta x^{4.0}$)")
+pylab.semilogy((levels[0], levels[-1]), theoretical_velocity_convergence[1, -1, :], "k--", label=r"$\mathcal{O} (\Delta x^{1.5}$)")
 pylab.xlabel("Level of Refinement")
 pylab.xlim(levels[0]-0.5, levels[-1]+0.5)
 pylab.xticks(levels)
+pylab.ylim(10**-3,1)
 pylab.ylabel(r"Error, $|| \mathbf{u} - \mathbf{u}^{*} ||_{2} \; / \;  || \mathbf{u}^{*} ||_{2}$")
 pylab.grid()
 pylab.legend(numpoints=1)
@@ -86,10 +87,11 @@ for lindex, l in enumerate(ls):
     for mindex, m in enumerate(ms):
         pylab.semilogy(levels, errors_p[lindex, mindex, :], ls="none", marker=symbols[increment], color=colours[increment], markersize=10, alpha=0.7, label=rf"l{l}_m{m}")
         increment += 1
-pylab.semilogy((levels[0], levels[-1]), theoretical_pressure_convergence[1, -1, :], "k--", label=r"$\mathcal{O} (\Delta x^{2.0}$)")
+pylab.semilogy((levels[0], levels[-1]), theoretical_pressure_convergence[1, -1, :], "k--", label=r"$\mathcal{O} (\Delta x^{0.5}$)")
 pylab.xlabel("Level of Refinement")
 pylab.xlim(levels[0]-0.5, levels[-1]+0.5)
 pylab.xticks(levels)
+pylab.ylim(1e-2,1)
 pylab.ylabel(r"Error, $|| p - p^{*} ||_{2} \; / \; || p^{*} ||_{2}$")
 pylab.grid()
 pylab.legend(numpoints=1)

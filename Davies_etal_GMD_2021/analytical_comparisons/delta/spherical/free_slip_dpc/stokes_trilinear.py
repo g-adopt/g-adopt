@@ -83,7 +83,7 @@ def model(ref_level, radial_layers):
     # Set up function spaces - currently using the Q2Q1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
     W = FunctionSpace(mesh, "DPC", 1)  # pressure function space (scalar)
-    Wvec = VectorFunctionSpace(mesh, "CG", 1)
+    Wvec = VectorFunctionSpace(mesh, "DPC", 1)
     P0 = FunctionSpace(mesh, "DQ", 0)
     Q1DG = FunctionSpace(mesh, "DQ", 1)
     Q1DGvec = VectorFunctionSpace(mesh, "DQ", 1)
