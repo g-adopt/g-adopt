@@ -30,7 +30,6 @@ def log_params(f, str):
         f.write(str + "\n")
         f.flush()
 
-
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
