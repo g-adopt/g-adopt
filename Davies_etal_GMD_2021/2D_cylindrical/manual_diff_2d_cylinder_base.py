@@ -2,7 +2,6 @@
 rmin, rmax, ncells, nlayers = 1.22, 2.22, 256, 64
 mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
 mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
-bottom_id, top_id = "bottom", "top"
 
 ---------------------------------------------------------------------------------------------
 # Constants, unit vector, initial condition
@@ -18,8 +17,8 @@ p_ip = 2 # Maximum polynomial degree of the _gradient_ of velocity
 
 # Stokes equations in UFL form:
 stress = 2 * mu * sym(grad(u))
-F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx - (dot(v, k) * Ra * Ttheta) * dx
-F_stokes += dot(grad(w), u) * dx  # Continuity equation
+F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb - (dot(v, k) * Ra * Ttheta) * dx
+F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
 # nitsche free-slip BCs
 F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb
