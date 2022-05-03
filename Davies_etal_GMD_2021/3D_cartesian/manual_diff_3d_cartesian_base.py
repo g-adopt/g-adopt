@@ -48,10 +48,10 @@ energy_solver_parameters = {
 
 ---------------------------------------------------------------------------------------------
 # Set up boundary conditions:
-bcvfb = DirichletBC(Z.sub(0).sub(1), 0, (front_id, back_id))
-bcvlr = DirichletBC(Z.sub(0).sub(0), 0, (left_id, right_id))
-bcvbt = DirichletBC(Z.sub(0), 0, (bot_id,top_id))
-bctb, bctt = DirichletBC(Q, 1.0, bot_id), DirichletBC(Q, 0.0, top_id)
+bcvfb = DirichletBC(Z.sub(0).sub(1), 0, (front, back))
+bcvlr = DirichletBC(Z.sub(0).sub(0), 0, (left, right))
+bcvbt = DirichletBC(Z.sub(0), 0, (bot,top))
+bctb, bctt = DirichletBC(Q, 1.0, bot), DirichletBC(Q, 0.0, top)
 
 ---------------------------------------------------------------------------------------------
 # Generating near_nullspaces for GAMG:
