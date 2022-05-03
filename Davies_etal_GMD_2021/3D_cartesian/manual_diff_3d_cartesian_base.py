@@ -2,7 +2,7 @@
 a, b, c, nx, ny, nz = 1.0079, 0.6283, 1.0, 20, int(0.6283/1.0 * 20), 20
 mesh2d = RectangleMesh(nx, ny, a, b, quadrilateral=True) # Rectangular 2D mesh 
 mesh = ExtrudedMesh(mesh2d, nz)
-bottom_id, top_id, left_id, right_id, front_id, back_id = "bottom", "top", 1, 2, 3, 4
+bottom, top, left, right, front, back = "bottom", "top", 1, 2, 3, 4
 
 ---------------------------------------------------------------------------------------------
 # Initial condition and constants:
