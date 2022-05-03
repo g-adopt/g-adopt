@@ -2,7 +2,7 @@
 TEMPLATENAME
 #PBS -P xd2
 TEMPLATEQUEUE
-#PBS -l walltime=05:00:00 
+#PBS -l walltime=01:00:00 
 TEMPLATEMEM
 TEMPLATECPUS
 #PBS -l jobfs=10GB
@@ -13,4 +13,4 @@ module use /g/data/xd2/modulefiles
 module load firedrake/firedrake-20220301
 export OMP_NUM_THREADS=1
 #### Now run:
-mpirun -np $PBS_NCPUS python stokes_trilinear.py KTEMPLATE LTEMPLATE MTEMPLATE TEMPLATELEVELS TEMPLATELAYERS &> output.dat
+mpirun -np $PBS_NCPUS python stokes_bilinear.py NTEMPLATE TEMPLATELEVELS &> output.dat

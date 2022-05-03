@@ -21,7 +21,7 @@ F_energy = q * rhobar * cpbar * ((Tnew - Told) / delta_t) * dx + q * rhobar * cp
 
 ---------------------------------------------------------------------------------------------
 # Temperature boundary conditions:
-bctb, bctt = DirichletBC(Q, 1.0 - (T0*exp(Di) - T0), bottom_id), DirichletBC(Q, 0.0, top_id)
+bctb, bctt = DirichletBC(Q, 1.0 - (T0*exp(Di) - T0), bottom), DirichletBC(Q, 0.0, top)
 
 ---------------------------------------------------------------------------------------------
 # Pressure nullspace:

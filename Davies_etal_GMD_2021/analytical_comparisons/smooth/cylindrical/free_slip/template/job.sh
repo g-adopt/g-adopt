@@ -10,7 +10,7 @@ TEMPLATECPUS
 #PBS -l wd
 #### Load relevant modules:
 module use /g/data/xd2/modulefiles
-module load firedrake
+module load firedrake/firedrake-20220301
 export OMP_NUM_THREADS=1
 #### Now run:
 mpirun -np $PBS_NCPUS python stokes_bilinear.py KTEMPLATE NTEMPLATE TEMPLATELEVELS &> output.dat

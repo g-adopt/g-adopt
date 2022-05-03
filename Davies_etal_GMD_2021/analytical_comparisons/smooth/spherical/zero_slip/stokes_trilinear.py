@@ -5,6 +5,9 @@ import sys
 import assess
 import math
 
+# Quadrature degree:
+dx = dx(degree=6)
+
 # Set up geometry and key parameters:
 rmin, rmax = 1.22, 2.22
 k = int(sys.argv[1])  # radial degree
@@ -72,6 +75,7 @@ def model(ref_level, radial_layers):
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
+    n = FacetNormal(mesh)
     r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
     rhat = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
 
@@ -102,8 +106,8 @@ def model(ref_level, radial_layers):
 
     # Setup UFL:
     stress = 2 * mu * sym(grad(u))
-    F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx + g * rhop * dot(v, rhat) * dx
-    F_stokes += dot(grad(w), u) * dx  # continuity equation
+    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * rhop * dot(v, rhat) * dx
+    F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
     # Nullspaces and near-nullspaces:
     p_nullspace = VectorSpaceBasis(constant=True)  # constant nullspace for pressure

@@ -4,18 +4,20 @@ from mpi4py import MPI  # noqa: F401
 import sys
 import assess
 import math
+PETSc.Sys.popErrorHandler()
 
 # Quadrature degree:
 dx = dx(degree=6)
 
 # Set up geometry and key parameters:
 rmin, rmax = 1.22, 2.22
-k = Constant(int(sys.argv[1]))  # radial degree
-nn = Constant(int(sys.argv[2]))  # wave number (n is already used for FacetNormal)
-level = int(sys.argv[3])  # refinement level
-
+nn = Constant(int(sys.argv[1]))  # wave number (n is already used for FacetNormal)
+level = int(sys.argv[2])  # refinement level
+rp = (rmax + rmin) / 2.0  # radius of delta_function
 
 # Define logging convenience functions:
+
+
 def log(*args):
     """Log output to stdout from root processor only"""
     PETSc.Sys.Print(*args)
@@ -78,13 +80,14 @@ def model(disc_n):
     X = SpatialCoordinate(mesh)
     n = FacetNormal(mesh)
     r = sqrt(X[0]**2 + X[1]**2)
-    rhat = as_vector((X[0], X[1])) / r
     phi = atan_2(X[1], X[0])
 
-    # Set up function spaces - currently using the P2P1 element pair :
+    # Set up function spaces - currently using the Q2Q1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
-    W = FunctionSpace(mesh, "CG", 1)  # pressure function space (scalar)
-    Wvec = VectorFunctionSpace(mesh, "CG", 1)  # vector version of W, used for coordinates in anal. pressure solution
+    W = FunctionSpace(mesh, "DPC", 1)  # pressure function space (scalar)
+    P0 = FunctionSpace(mesh, "DQ", 0)
+    Q1DG = FunctionSpace(mesh, "DQ", 1)
+    Q1DGvec = VectorFunctionSpace(mesh, "DQ", 1)
 
     # Set up mixed function space and associated test functions:
     Z = MixedFunctionSpace([V, W])
@@ -99,11 +102,12 @@ def model(disc_n):
     mu = Constant(1.0)  # Constant viscosity
     g = Constant(1.0)
 
-    rhop = r**k/rmax**k*cos(nn*phi)  # RHS
+    marker = Function(P0)
+    marker.interpolate(conditional(r < rp, 1, 0))
 
     # Setup UFL:
     stress = 2 * mu * sym(grad(u))
-    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * rhop * dot(v, rhat) * dx
+    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * cos(nn*phi) * dot(jump(marker, n), avg(v)) * dS_h
     F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
     # Constant nullspace for pressure
@@ -132,23 +136,33 @@ def model(disc_n):
         near_nullspace=Z_near_nullspace
     )
 
-    # Projection for pressure:
-    coef = assemble(p_*dx)/assemble(Constant(1.0)*dx(domain=mesh))
+    # removing constant nullspace from pressure
+    coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=project_solver_parameters)
 
-    solution = assess.CylindricalStokesSolutionSmoothZeroSlip(int(float(nn)), int(float(k)), nu=float(mu))
+    solution_upper = assess.CylindricalStokesSolutionDeltaZeroSlip(float(nn), +1, nu=float(mu))
+    solution_lower = assess.CylindricalStokesSolutionDeltaZeroSlip(float(nn), -1, nu=float(mu))
 
     # compute u analytical and error
     uxy = interpolate(as_vector((X[0], X[1])), V)
+    u_anal_upper = Function(V, name="AnalyticalVelocityUpper")
+    u_anal_lower = Function(V, name="AnalyticalVelocityLower")
     u_anal = Function(V, name="AnalyticalVelocity")
-    u_anal.dat.data[:] = [solution.velocity_cartesian(xyi) for xyi in uxy.dat.data]
+    u_anal_upper.dat.data[:] = [solution_upper.velocity_cartesian(xyi) for xyi in uxy.dat.data]
+    u_anal_lower.dat.data[:] = [solution_lower.velocity_cartesian(xyi) for xyi in uxy.dat.data]
+    u_anal.interpolate(marker*u_anal_lower + (1-marker)*u_anal_upper)
     u_error = Function(V, name="VelocityError").assign(u_-u_anal)
 
     # compute p analytical and error
-    pxy = interpolate(as_vector((X[0], X[1])), Wvec)
-    p_anal = Function(W, name="AnalyticalPressure")
-    p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
-    p_error = Function(W, name="PressureError").assign(p_-p_anal)
+    pxy = interpolate(as_vector((X[0], X[1])), Q1DGvec)
+    pdg = interpolate(p, Q1DG)
+    p_anal_upper = Function(Q1DG, name="AnalyticalPressureUpper")
+    p_anal_lower = Function(Q1DG, name="AnalyticalPressureLower")
+    p_anal = Function(Q1DG, name="AnalyticalPressure")
+    p_anal_upper.dat.data[:] = [solution_upper.pressure_cartesian(xyi) for xyi in pxy.dat.data]
+    p_anal_lower.dat.data[:] = [solution_lower.pressure_cartesian(xyi) for xyi in pxy.dat.data]
+    p_anal.interpolate(marker*p_anal_lower + (1-marker)*p_anal_upper)
+    p_error = Function(Q1DG, name="PressureError").assign(pdg-p_anal)
 
     # Write output files in VTK format:
     u_.rename("Velocity")
