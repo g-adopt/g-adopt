@@ -3,6 +3,8 @@ from firedrake import *
 # Mesh - use a built in meshing function:
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
 left, right, bottom, top = 1, 2, 3, 4  # Boundary IDs
+n = FacetNormal(mesh)  # Normals, required for Nusselt number
+domain_volume = assemble(1.*dx(domain=mesh))  # Required for RMS velocity
 
 # Function spaces:
 V = VectorFunctionSpace(mesh, family="CG", degree=2)  # Velocity function space (vector)
@@ -41,8 +43,8 @@ p_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), VectorSpaceBasis(constant=True
 
 # Initialise output:
 output_file = File('output.pvd')  # Create output file
-u, p = z.split()
-u.rename("Velocity"), p.rename("Pressure")
+u_, p_ = z.split()
+u_.rename("Velocity"), p_.rename("Pressure")
 
 # Solver dictionary:
 solver_parameters = {
@@ -50,8 +52,7 @@ solver_parameters = {
     "snes_type": "ksponly",
     "ksp_type": "preonly",
     "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-}
+    "pc_factor_mat_solver_type": "mumps"}
 
 # Setup problem and solver objects so we can reuse (cache) solver setup
 stokes_problem = NonlinearVariationalProblem(F_stokes, z, bcs=[bcvx, bcvy])
@@ -74,9 +75,9 @@ for timestep in range(0, no_timesteps):
     if timestep > 0:
         delta_t.assign(compute_timestep(u))
     if timestep % 10 == 0:
-        output_file.write(u, p, Tnew)
+        output_file.write(u_, p_, Tnew)
     stokes_solver.solve()
     energy_solver.solve()
-    vrms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./assemble(1.*dx(domain=mesh)))
-    nu_top = -1. * assemble(dot(grad(Tnew), FacetNormal(mesh)) * ds(top))
+    vrms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
+    nu_top = -1. * assemble(dot(grad(Tnew), n) * ds(top))
     Told.assign(Tnew)
