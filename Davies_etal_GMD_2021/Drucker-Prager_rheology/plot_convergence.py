@@ -1,4 +1,4 @@
-# converge plots as in Fraters et al. (2019) for Spiegelman et al. (2019) case
+# convergence plots as in Fraters et al. (2019) for Spiegelman et al. (2019) case
 # run with a variable number of initial Picard iterations and with or without Jacobian stabilisation
 import os.path
 import matplotlib.pyplot as plt
