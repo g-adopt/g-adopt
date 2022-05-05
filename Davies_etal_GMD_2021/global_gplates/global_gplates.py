@@ -2,31 +2,30 @@ from firedrake import *
 from firedrake.petsc import PETSc
 from mpi4py import MPI
 import libgplates
+import numpy as np
+
+# Quadrature degree:
+dx = dx(degree=6)
 
 # Set up geometry:
 rmin, rmax, ref_level, nlayers = 1.22, 2.22, 6, 32
 
-# Varible radial resolution
-# Initiating layer heights with 1
-resolution_func = np.ones((nlayers,))
+# Initiating layer heights with 1.
+resolution_func = np.ones((nlayers))
 
 
+# A gaussian shaped function to enable variable radial resolution
 def gaussian(center, c, a):
-    "Return a Gaussian for params center, c, and a."
-
+    """Gaussian shaped function to enable variable radial resolution"""
     return a*np.exp(-(np.linspace(rmin, rmax, nlayers)-center)**2/(2*c**2))
 
 
 # building the resolution function
 for idx, r_0 in enumerate([rmin, rmax, rmax - 660/6370]):
-    # gaussian radius
-    c = 0.14
+    # Gaussian radius
+    c = 0.15
     # how different is the high res area from low res
     res_amplifier = 5.
-    # the resolution improvement around 660 km is different
-    if idx == 2:
-        res_amplifier = 2.
-        c = 0.005
     resolution_func *= 1 / (1 + gaussian(center=r_0, c=c, a=res_amplifier))
 
 # Construct a CubedSphere mesh and then extrude into a sphere - note that unlike cylindrical case, popping is done internally here:
@@ -37,7 +36,7 @@ mesh = ExtrudedMesh(
     layer_height=(rmax-rmin)*resolution_func/np.sum(resolution_func),
     extrusion_type="radial"
 )
-bottom_id, top_id = "bottom", "top"
+bottom, top = "bottom", "top"
 n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
 domain_volume = assemble(1.*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
 
@@ -81,15 +80,16 @@ theta = atan_2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
 phi = atan_2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol to Zhong)
 k = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
 Told, Tnew, Tdev = Function(Q, name="OldTemp"), Function(Q, name="NewTemp"), Function(Q, name="DeltaT")
+T0 = Constant(0.091)  # Non-dimensional surface temperature
 
 # Initialise from checkpoint:
-tic_dc = DumbCheckpoint("Temperature_State_220", mode=FILE_READ)
+tic_dc = DumbCheckpoint("Temperature_State_100", mode=FILE_READ)
 tic_dc.load(Told, name="Temperature")
 tic_dc.close()
 Tnew.assign(Told)
 
 # Initial condition for Stokes:
-uic_dc = DumbCheckpoint("Stokes_State_220", mode=FILE_READ)
+uic_dc = DumbCheckpoint("Stokes_State_100", mode=FILE_READ)
 uic_dc.load(z, name="Stokes")
 uic_dc.close()
 
@@ -103,6 +103,7 @@ Rmin_area = assemble(Constant(1.0, domain=mesh2d)*dx)  # area of CMB
 
 
 def layer_average(T):
+    """ Compute layer average temperature """
     vnodes = nlayers*2 + 1  # n/o Q2 nodes in the vertical
     hnodes = Qlayer.dim()  # n/o Q2 nodes in each horizontal layer
     assert hnodes*vnodes == Q.dim()
@@ -113,12 +114,10 @@ def layer_average(T):
     return Tavg
 
 
-# Define time stepping parameters:
-steady_state_tolerance = 1e-9
-max_timesteps = 20000
-target_cfl_no = 0.5
-maximum_timestep = 5e-6
-increase_tolerance = 1.5
+max_timesteps = 500
+target_cfl_no = 2.5
+maximum_timestep = 1e-4
+increase_tolerance = 1.25
 time = 0.0
 
 # Timestepping - CFL related stuff:
@@ -143,24 +142,28 @@ def compute_timestep(u, current_delta_t):
 # Stokes Equation Solver Parameters:
 stokes_solver_parameters = {
     "mat_type": "matfree",
-    "snes_type": "ksponly",
+    "snes_type": "newtonls",
+    "snes_linesearch_type": "l2",
+    "snes_max_it": 100,
+    "snes_atol": 1e-10,
+    "snes_rtol": 1e-2,
+    "snes_monitor": None,
+    "snes_converged_reason": None,
     "ksp_type": "preonly",
     "pc_type": "fieldsplit",
     "pc_fieldsplit_type": "schur",
     "pc_fieldsplit_schur_type": "full",
     "fieldsplit_0": {
         "ksp_type": "cg",
-        "ksp_rtol": 1e-3,
+        "ksp_rtol": 1e-4,
         "ksp_converged_reason": None,
         "pc_type": "python",
         "pc_python_type": "firedrake.AssembledPC",
         "assembled_pc_type": "gamg",
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
     },
     "fieldsplit_1": {
         "ksp_type": "fgmres",
-        "ksp_rtol": 1e-2,
+        "ksp_rtol": 1e-3,
         "ksp_converged_reason": None,
         "pc_type": "python",
         "pc_python_type": "firedrake.MassInvPC",
@@ -185,30 +188,58 @@ X_val = interpolate(X, V)
 # set up a Function for gplate velocities
 gplates_velocities = Function(V, name='SurfaceVelocity')
 
-# Stokes related constants (note that since these are included in UFL, they are wraped inside Constant):
-Ra = Constant(2e7)  # Rayleigh number
-delta_mu_660, delta_mu_r, delta_mu_T = Constant(40.), Constant(1.99), Constant(1000.)
-mu = (delta_mu_660 - (delta_mu_660-1)/2. - (delta_mu_660-1)*tanh((r-delta_mu_r)*10)/2.)*exp(ln(delta_mu_T)*(0.5-Tnew))
+# Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
+Ra = Constant(1.5e7)  # Rayleigh number
+Di = Constant(0.5)  # Dissipation number.
+mulinf = Function(W, name="Viscosity_Lin")
+muplastf = Function(W, name="Viscosity_Plast")
+muminf = Function(W, name="Viscosity_Min")
+delta_mu_660, delta_mu_r, delta_mu_T = Constant(40.), Constant(1.99), Constant(500.)
+mu_lin = (delta_mu_660 - (delta_mu_660-1)/2. - (delta_mu_660-1)*tanh((r-delta_mu_r)*10)/2.)*exp(-ln(delta_mu_T) * Tnew)
+mu_star, sigma_y = Constant(0.5), 1e4 + 2.4e5*(rmax-r)
+epsilon = sym(grad(u))  # strain-rate
+epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
+mu_plast = mu_star + (sigma_y / epsii)
+mu_min = conditional(le(mu_plast, mu_lin), 1.0, 0.0)
+mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
+
 C_ip = Constant(100.0)  # Fudge factor for interior penalty term used in weak imposition of BCs
 p_ip = 2  # Maximum polynomial degree of the _gradient_ of velocity
 
 # Temperature equation related constants:
-delta_t = Constant(1e-7)  # Initial time-step
-kappa = Constant(1.0)  # Thermal diffusivity
+delta_t = Constant(1e-6)  # Initial time-step
+tcond = Constant(1.0)  # Thermal conductivity
 H_int = Constant(10.0)  # Internal heating
 
-# Stokes equations in UFL form:
-stress = 2 * mu * sym(grad(u))
-F_stokes = inner(grad(v), stress) * dx + dot(v, grad(p)) * dx - (dot(v, k) * Ra * Ttheta) * dx
-F_stokes += dot(grad(w), u) * dx  # Continuity equation
+# Compressible reference state:
+rho_0, alpha, cpr, cvr, gruneisen = 1.0, 1.0, 1.0, 1.0, 1.0
+weight = r-rmin
+rhobar = Function(Q, name="CompRefDensity").interpolate(rho_0 * exp(((1.0 - weight) * Di) / alpha))
+Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - weight) * Di) - T0)
+alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)
+cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
+chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
+FullT = Function(Q, name="FullTemperature").assign(Tnew+Tbar)
 
-# nitsche free-slip BC for the bottom surface
-F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_b
-F_stokes += -dot(u, n) * dot(dot(n, 2 * mu * sym(grad(v))), n) * ds_b
+# Stokes equations in UFL form:
+I = Identity(3)
+
+
+def stress(u):
+    """ Return the stress tensor """
+    return 2 * mu * sym(grad(u)) - 2./3. * I * mu * div(u)
+
+
+F_stokes = inner(grad(v), stress(u)) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb - (dot(v, k) * (Ra * Ttheta * rhobar * alphabar - (Di/gruneisen) * (cpr/cvr)*rhobar*chibar*p) * dx)
+F_stokes += -w * div(rhobar*u) * dx + w * dot(n, rhobar*u) * ds_tb
+
+# Nitsche free-slip BCs
+F_stokes += -dot(v, n) * dot(dot(n, stress(u)), n) * ds_b
+F_stokes += -dot(u, n) * dot(dot(n, stress(v)), n) * ds_b
 F_stokes += C_ip * mu * (p_ip + 1)**2 * FacetArea(mesh) / CellVolume(mesh) * dot(u, n) * dot(v, n) * ds_b
 
 # No-Slip (prescribed) boundary condition for the top surface
-bc_gplates = DirichletBC(Z.sub(0), gplates_velocities, (top_id))
+bc_gplates = DirichletBC(Z.sub(0), gplates_velocities, (top))
 boundary_X = X_val.dat.data_ro_with_halos[bc_gplates.nodes]
 
 # Get initial surface velocities:
@@ -217,17 +248,17 @@ gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.
 
 
 def absv(u):
-    """Component-wise absolute value of vector"""
+    """Component-wise absolute value of vector for SU stabilisation"""
     return as_vector([abs(ui) for ui in u])
 
 
 def beta(Pe):
-    """Component-wise beta formula Donea and Huerta (2.47a)"""
+    """Component-wise beta formula Donea and Huerta (2.47a) for SU stabilisation"""
     return as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
 
 
 # SU(PG) ala Donea & Huerta:
-# columns of Jacobian J are the vectors that span the quad/hex
+# Columns of Jacobian J are the vectors that span the quad/hex
 # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
 # thus u^T J is (dx * u , dy * v)
 # and following (2.44c) Pe = u^T J / 2 (as nu=diffusivity=1)
@@ -236,17 +267,13 @@ def beta(Pe):
 J = Function(TensorFunctionSpace(mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(mesh))
 Pe = absv(dot(u, J)) / 2
 nubar = dot(Pe, beta(Pe))
-q_SUPG = q + nubar / dot(u, u) * dot(u, grad(q))
+q_SU = q + nubar / dot(u, u) * dot(u, grad(q))
 
 # Energy equation in UFL form:
-# F_energy = q * (Tnew - Told) / delta_t * dx + q * dot(u, grad(Ttheta)) * dx + dot(grad(q), kappa * grad(Ttheta)) * dx
-
-# SU/SUPG version with internal heating:
-F_energy = q * (Tnew - Told) / delta_t * dx + q_SUPG * dot(u, grad(Ttheta)) * dx + dot(grad(q), kappa * grad(Ttheta)) * dx - q * H_int * dx
-# F_energy = q * (Tnew - Told) / delta_t * dx + q_SUPG * dot(u, grad(Ttheta)) * dx + dot(grad(q), kappa * grad(Ttheta)) * dx
+F_energy = q * rhobar * cpbar * ((Tnew - Told) / delta_t) * dx + q_SU * rhobar * cpbar * dot(u, grad(Ttheta)) * dx + dot(grad(q), tcond * grad(Tbar + Ttheta)) * dx + q * (alphabar * rhobar * Di * dot(u, k) * Ttheta) * dx - q * ((Di/Ra) * inner(stress(u), grad(u))) * dx - q * rhobar * H_int * dx
 
 # Temperature boundary conditions
-bctb, bctt = DirichletBC(Q, 1.0, bottom_id), DirichletBC(Q, 0.0, top_id)
+bctb, bctt = DirichletBC(Q, 1.0 - (T0 * exp(Di) - T0), bottom), DirichletBC(Q, 0.0, top)
 
 # Nullspaces and near-nullspaces:
 p_nullspace = VectorSpaceBasis(constant=True)  # Constant nullspace for pressure
@@ -278,7 +305,7 @@ f = open("params.log", "w")
 
 # Setup problem and solver objects so we can reuse (cache) solver setup
 stokes_problem = NonlinearVariationalProblem(F_stokes, z, bcs=[bc_gplates])  # velocity BC for the bottom surface is handled through Nitsche, top surface through gplates_velocities
-stokes_solver = NonlinearVariationalSolver(stokes_problem, solver_parameters=stokes_solver_parameters, appctx={"mu": mu}, nullspace=Z_nullspace, transpose_nullspace=Z_nullspace, near_nullspace=Z_near_nullspace)
+stokes_solver = NonlinearVariationalSolver(stokes_problem, solver_parameters=stokes_solver_parameters, appctx={"mu": mu}, transpose_nullspace=Z_nullspace, near_nullspace=Z_near_nullspace)
 energy_problem = NonlinearVariationalProblem(F_energy, Tnew, bcs=[bctb, bctt])
 energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=energy_solver_parameters)
 
@@ -288,12 +315,15 @@ for timestep in range(0, max_timesteps):
     # Write output:
     if timestep == 0 or timestep % dump_period == 0:
         # compute radial temperature
-        Tavg = layer_average(Tnew)
+        Tavg = layer_average(FullT)
         # compute deviation from layer average
-        Tdev.assign(Tnew-Tavg)
+        Tdev.assign(FullT-Tavg)
         # Write output:
         muf.interpolate(mu)
-        output_file.write(u, p, Tnew, Tdev, muf)
+        mulinf.interpolate(mu_lin)
+        muplastf.interpolate(mu_plast)
+        muminf.interpolate(mu_min)
+        output_file.write(u, p, Tnew, Tdev, FullT, muf, mulinf, muplastf, muminf)
 
     current_delta_t = delta_t
     if timestep != 0:
@@ -312,10 +342,13 @@ for timestep in range(0, max_timesteps):
 
     # Compute diagnostics:
     u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
-    nusselt_number_top = (assemble(dot(grad(Tnew), n) * ds_t) / assemble(Constant(1.0, domain=mesh)*ds_t)) * (rmax*(rmax-rmin)/rmin)
-    nusselt_number_base = (assemble(dot(grad(Tnew), n) * ds_b) / assemble(Constant(1.0, domain=mesh)*ds_b)) * (rmin*(rmax-rmin)/rmax)
+    nusselt_number_top = (assemble(dot(grad(FullT), n) * ds_t) / assemble(Constant(1.0, domain=mesh)*ds_t)) * (rmax*(rmax-rmin)/rmin)
+    nusselt_number_base = (assemble(dot(grad(FullT), n) * ds_b) / assemble(Constant(1.0, domain=mesh)*ds_b)) * (rmin*(rmax-rmin)/rmax)
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
-    average_temperature = assemble(Tnew * dx) / domain_volume
+    average_temperature = assemble(FullT * dx) / domain_volume
+    rate_work_against_gravity = assemble(rhobar * alphabar * Di.values()[0] * Tnew * u[1] * dx) / domain_volume
+    rate_viscous_dissipation = (assemble(inner(stress(u), grad(u)) * dx) / domain_volume) * Di.values()[0]/Ra.values()[0]
+    energy_conservation_2 = abs(rate_work_against_gravity - rate_viscous_dissipation)
     max_viscosity = muf.dat.data.max()
     max_viscosity = muf.comm.allreduce(max_viscosity, MPI.MAX)
     min_viscosity = muf.dat.data.min()
@@ -328,16 +361,12 @@ for timestep in range(0, max_timesteps):
     log_params(f, f"{timestep} {time} {float(delta_t)} {maxchange} {u_rms} "
                f"{nusselt_number_base} {nusselt_number_top} "
                f"{energy_conservation} {average_temperature} "
-               f"{min_viscosity} {max_viscosity} ")
+               f"{rate_work_against_gravity} {rate_viscous_dissipation} "
+               f"{energy_conservation_2} {min_viscosity} {max_viscosity} ")
 
-    # Leave if simulation has finished:
-    time_myr = time * (2890e3**2 / 1.0e-6) / 31536000000000.0 / libgplates.plate_scaling_factor
-    if time_myr > 230:
-        log("Reached present-day. End of simulation")
-        break
-
-    # Set Told = Tnew - assign the values of Tnew to Told
+    # Set Told = Tnew - assign the values of Tnew to Told and calculated Full T
     Told.assign(Tnew)
+    FullT.assign(Tnew + Tbar)
 
     # Checkpointing:
     if timestep % checkpoint_period == 0:
@@ -357,8 +386,7 @@ Tavg = layer_average(Tnew)
 # compute deviation from layer average
 Tdev.assign(Tnew-Tavg)
 # Write output:
-muf.interpolate(mu)
-output_file.write(u, p, Tnew, Tdev, muf)
+output_file.write(u, p, Tnew, Tdev, FullT, muf, mulinf, muplastf, muminf)
 
 # Write final state:
 final_checkpoint_data = DumbCheckpoint("Final_Temperature_State", mode=FILE_CREATE)

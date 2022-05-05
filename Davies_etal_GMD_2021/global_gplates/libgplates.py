@@ -30,7 +30,7 @@ if False in [os.path.isfile(fi) for fi in topology_filenames + rotation_filename
 # Factor to scale plate velocities to RMS velocity of model,
 # Notice: I use the definition (RMS_Earth / RMS_Model)
 # This is specially used in low-Rayleigh-number simulations
-plate_scaling_factor = 1.25
+plate_scaling_factor = 1.0
 # Factor to non-dimensionalise gplates velocities: d/kappa
 velocity_non_dim_factor = 2890e3/1.0e-6
 # Factor to dimensionalise model time: d^2/kappa
