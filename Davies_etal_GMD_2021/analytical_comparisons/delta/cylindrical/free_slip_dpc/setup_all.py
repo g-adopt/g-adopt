@@ -24,7 +24,7 @@ for n in ns:
     for resolution in resolutions:
         os.mkdir(resolution)
         shutil.copy2("../template/job.sh", resolution)
-        shutil.copy2("../stokes_bilinear.py", resolution)
+        shutil.copy2("../stokes.py", resolution)
     os.chdir(retval)
 
 # Now make job submission scripts:

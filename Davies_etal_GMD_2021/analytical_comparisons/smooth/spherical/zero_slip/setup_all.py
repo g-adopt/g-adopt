@@ -30,7 +30,7 @@ for l in ls:
             for resolution in resolutions:
                 os.mkdir(resolution)
                 shutil.copy2("../template/job.sh", resolution)
-                shutil.copy2("../stokes_trilinear.py", resolution)
+                shutil.copy2("../stokes.py", resolution)
             os.chdir(retval)
 
 # Now make job submission scripts:
