@@ -1,4 +1,5 @@
-cases := 2D_cartesian 2D_cylindrical 3D_cartesian 3D_spherical
+#cases := 2D_cartesian 2D_cylindrical 3D_cartesian 3D_spherical
+cases := 2D_cartesian 2D_cylindrical
 
 .PHONY: all $(cases) clean generate
 

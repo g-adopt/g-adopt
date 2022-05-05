@@ -1,0 +1,29 @@
+name: Run regression tests
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Benchmark regression test
+    runs-on: self-hosted
+    container:
+      image: firedrakeproject/firedrake:latest
+
+    env:
+      OMP_NUM_THREADS: 1
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run test
+        run: |
+          . /home/firedrake/firedrake/bin/activate
+          python -m pip install -r requirements.txt
+          make -j6 test
+          python -m pytest -k 2D
