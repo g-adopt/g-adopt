@@ -5,10 +5,18 @@ from test_all import cases, get_convergence
 
 if __name__ == "__main__":
     if sys.argv[1:]:
-        cases = set(cases).intersection(sys.argv[1:])
+        requested_cases = set(sys.argv[1:])
+        cases = [
+            case for case in cases if
+            (case[0] if isinstance(case, tuple) else case) in requested_cases
+        ]
 
     for case in cases:
-        b = Path(__file__).parent.resolve() / case
-        df = get_convergence(b)[["u_rms", "nu_top"]]
+        prefix = ""
+        if isinstance(case, tuple):
+            case, prefix = case
 
-        df.to_pickle(b / "expected.pkl")
+        b = Path(__file__).parent.resolve() / case
+        df = get_convergence(b, prefix)[["u_rms", "nu_top"]]
+
+        df.to_pickle(b / f"{prefix}expected.pkl")
