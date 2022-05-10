@@ -7,4 +7,4 @@ minimal_params.log: minimal_base_case_test.py
 	mpiexec -np $(nthreads) python $<
 
 clean:
-	rm -f *.vtu *.pvtu *.h5 params.log minimal_params.log
+	rm -f *.pvd *.vtu *.pvtu *.h5 params.log minimal_params.log
