@@ -17,7 +17,13 @@ def get_convergence(base, prefix=""):
     return pd.read_csv(base / f"{prefix}params.log", sep="\\s+", header=0).iloc[-1]
 
 
-@pytest.mark.parametrize("benchmark", cases)
+def namefn(case):
+    if isinstance(case, tuple):
+        return "/".join(case)
+    return case
+
+
+@pytest.mark.parametrize("benchmark", cases, ids=namefn)
 def test_benchmark(benchmark):
     # multiple cases in one directory, give a prefix to the files
     prefix = ""
