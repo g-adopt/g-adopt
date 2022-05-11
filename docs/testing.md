@@ -19,10 +19,9 @@ Generating expected results
 
 Once a benchmark has been run, it should be validated by hand to
 ensure it is suitable for recording as a reference result. The
-`test_all.py` script contains [pytest](https://pytest.org) functions
-for actually running the tests, however if it is run standalone, it
-will use record `u_rms` and `nu_top` fields from the last timestep in
-`params.log` as the reference result.
+`generate_expected_out.py` can be run to record `u_rms` and `nu_top`
+fields from the last timestep in `params.log` as the reference result,
+for later use in the test suite.
 
 Running the test suite
 ----------------------
