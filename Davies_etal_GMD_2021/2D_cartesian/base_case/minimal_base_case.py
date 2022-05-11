@@ -1,4 +1,5 @@
 from firedrake import *
+import numpy as np
 
 # Mesh - use a built in meshing function:
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
@@ -67,7 +68,7 @@ ref_u = Function(V, name="Reference_Velocity")
 
 def compute_timestep(u):
     """Return the timestep, using CFL criterion"""
-    tstep = (1. / ref_u.interpolate(dot(JacobianInverse(mesh), u)).dat.data.max()) * target_cfl_no
+    tstep = (1. / np.abs(ref_u.interpolate(dot(JacobianInverse(mesh), u)).dat.data).max()) * target_cfl_no
     return tstep
 
 

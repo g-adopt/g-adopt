@@ -1,6 +1,7 @@
 from firedrake import *
 from firedrake.petsc import PETSc
 from mpi4py import MPI
+import numpy as np
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -73,7 +74,7 @@ def compute_timestep(u, current_delta_t):
     """Return the timestep, based upon the CFL criterion"""
 
     ref_vel.interpolate(dot(JacobianInverse(mesh), u))
-    ts_min = 1. / mesh.comm.allreduce(ref_vel.dat.data.max(), MPI.MAX)
+    ts_min = 1. / mesh.comm.allreduce(np.abs(ref_vel.dat.data).max(), MPI.MAX)
     # Grab (smallest) maximum permitted on all cores:
     ts_max = min(float(current_delta_t) * increase_tolerance, maximum_timestep)
     # Compute timestep:
