@@ -4,7 +4,7 @@ from .utility import is_continuous, ensure_constant
 
 
 class EnergySolver:
-    def __init__(self, T, u, delta_t, timestepper, kappa=1, bcs=None):
+    def __init__(self, T, u, delta_t, timestepper, kappa=1, bcs=None, solver_parameters=None):
         self.Q = T.function_space()
         self.eq = EnergyEquation(self.Q, self.Q)
         self.fields = {
@@ -28,7 +28,8 @@ class EnergySolver:
                     weak_bc[type] = value
             self.weak_bcs[id] = weak_bc
 
-        self.ts = timestepper(self.eq, T, self.fields, delta_t, self.weak_bcs, strong_bcs=self.strong_bcs)
+        self.ts = timestepper(self.eq, T, self.fields, delta_t, self.weak_bcs, strong_bcs=self.strong_bcs,
+                solver_parameters=solver_parameters)
         self.T_old = self.ts.solution_old
 
     def solve(self):

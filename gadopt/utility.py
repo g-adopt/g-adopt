@@ -62,7 +62,7 @@ def upward_normal(mesh, cartesian):
         return as_vector([0]*(n-1) + [1])
     else:
         X = SpatialCoordinate(mesh)
-        r = sum(X**2)
+        r = sqrt(dot(X, X))
         return X/r
 
 

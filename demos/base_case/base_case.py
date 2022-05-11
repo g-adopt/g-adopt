@@ -6,10 +6,6 @@ nx, ny = 40, 40
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
-
-# Define logging convenience functions:
-
-
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
@@ -31,6 +27,9 @@ X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
 T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 
+delta_t = Constant(1e-6)  # Initial time-step
+t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
+
 # Solver dictionary:
 solver_parameters = {
     "mat_type": "aij",
@@ -43,13 +42,6 @@ solver_parameters = {
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e4)  # Rayleigh number
-mu = Constant(1.0)  # Viscosity
-k = Constant((0, 1))  # Unit vector (in direction opposite to gravity).
-
-# Temperature equation related constants:
-delta_t = Constant(1e-6)  # Initial time-step
-
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 time = 0.0
 steady_state_tolerance = 1e-9
@@ -90,7 +82,8 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, delta_t, CrankNicolsonRK, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, delta_t, bcs=stokes_bcs, Ra=Ra)
+stokes_solver = StokesSolver(z, T, delta_t, bcs=stokes_bcs, Ra=Ra,
+        nullspace=p_nullspace, transpose_nullspace=p_nullspace)
 
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
