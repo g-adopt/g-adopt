@@ -129,7 +129,7 @@ def compute_timestep(u, current_delta_t):
     """Return the timestep, based upon the CFL criterion"""
 
     ref_vel.interpolate(dot(JacobianInverse(mesh), u))
-    velmax = mesh.comm.allreduce(ref_vel.dat.data.max(), MPI.MAX)
+    velmax = mesh.comm.allreduce(np.abs(ref_vel.dat.data).max(), MPI.MAX)
     ts_min = 1./velmax
     # Grab (smallest) maximum permitted on all cores:
     ts_max = min(float(current_delta_t)*increase_tolerance, maximum_timestep)
