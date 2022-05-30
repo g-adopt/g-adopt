@@ -1,6 +1,6 @@
 from firedrake import *
 from .time_stepper import CrankNicolsonRK
-from thwaites.limiter import VertexBasedP1DGLimiter
+from .limiter import VertexBasedP1DGLimiter
 from .utility import log, ParameterLog, TimestepAdaptor
 from .diagnostics import GeodynamicalDiagnostics
 from .momentum_equation import StokesEquations
