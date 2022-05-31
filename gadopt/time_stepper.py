@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod, abstractproperty
 import firedrake
 import operator
 import numpy as np
+from .utility import ensure_constant
 
 """
 Timestepper code, this is mostly copied from Thetis. At the moment explicit RK methods only.
@@ -59,7 +60,7 @@ class TimeIntegrator(TimeIntegratorBase):
         self.solution = solution
         self.fields = fields
         self.dt = dt
-        self.dt_const = firedrake.Constant(dt)
+        self.dt_const = ensure_constant(dt)
 
         # unique identifier used in solver
         self.name = '-'.join([self.__class__.__name__,
