@@ -27,7 +27,7 @@ class StokesSolver:
             'velocity': u,
             'pressure': p,
             'viscosity': self.mu,
-            'interior_penalty': firedrake.Constant(12.5),
+            'interior_penalty': firedrake.Constant(6.25),  # matches C_ip=100. in "old" code for Q2Q1 in 2d
             'source': self.Ra * self.g * T * self.k,
         }
 
