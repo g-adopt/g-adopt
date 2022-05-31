@@ -1,5 +1,5 @@
 from firedrake import *
-from .time_stepper import CrankNicolsonRK
+from .time_stepper import CrankNicolsonRK, ImplicitMidpoint
 from .limiter import VertexBasedP1DGLimiter
 from .utility import log, ParameterLog, TimestepAdaptor
 from .diagnostics import GeodynamicalDiagnostics

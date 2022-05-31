@@ -1,5 +1,4 @@
 from gadopt import *
-from mpi4py import MPI
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -13,7 +12,6 @@ mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')
 bottom_id, top_id = "bottom", "top"
 n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
 domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
-
 
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
@@ -52,6 +50,7 @@ time = 0.0
 stokes_solver_parameters = {
     "mat_type": "matfree",
     "snes_type": "ksponly",
+    "snes_monitor": None,
     "ksp_type": "preonly",
     "pc_type": "fieldsplit",
     "pc_fieldsplit_type": "schur",
@@ -124,12 +123,15 @@ stokes_bcs = {
     top_id: {'un': 0},
 }
 
-stokes_solver = StokesSolver(z, T, delta_t, bcs=stokes_bcs, Ra=Ra,
-        cartesian=False,
-        solver_parameters=stokes_solver_parameters,
-        nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace)
-energy_solver = EnergySolver(T, u, delta_t, CrankNicolsonRK, bcs=temp_bcs, solver_parameters=energy_solver_parameters)
+energy_solver = EnergySolver(T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs, solver_parameters=energy_solver_parameters)
+Told = energy_solver.T_old
+Ttheta = 0.5*T + 0.5*Told
+Told.assign(T)
+stokes_solver = StokesSolver(z, Ttheta, delta_t, bcs=stokes_bcs, Ra=Ra,
+                             cartesian=False,
+                             solver_parameters=stokes_solver_parameters,
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                             near_nullspace=Z_near_nullspace)
 
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
@@ -138,7 +140,10 @@ for timestep in range(0, max_timesteps):
     if timestep % dump_period == 0:
         output_file.write(u, p, T)
 
-    dt = t_adapt.update_timestep(u)
+    if timestep != 0:
+        dt = t_adapt.update_timestep(u)
+    else:
+        dt = float(delta_t)
     time += dt
 
     # Solve Stokes sytem:
@@ -181,7 +186,7 @@ for timestep in range(0, max_timesteps):
         checkpoint_data.store(z, name="Stokes")
         checkpoint_data.close()
 
-f.close()
+plog.close()
 
 # Write final state:
 final_checkpoint_data = DumbCheckpoint("Final_Temperature_State", mode=FILE_CREATE)
