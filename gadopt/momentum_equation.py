@@ -169,7 +169,7 @@ class DivergenceTerm(BaseTerm):
             elif 'un' in bc:
                 F += psi*(bc['un'] - dot(n, u))*self.ds(id)
 
-        return -F
+        return F
 
 
 class MomentumSourceTerm(BaseTerm):
