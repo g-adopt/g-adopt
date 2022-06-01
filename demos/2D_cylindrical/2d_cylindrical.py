@@ -46,60 +46,9 @@ steady_state_tolerance = 1e-9
 max_timesteps = 20000
 time = 0.0
 
-# Stokes Equation Solver Parameters:
-stokes_solver_parameters = {
-    "mat_type": "matfree",
-    "snes_type": "ksponly",
-    "snes_monitor": None,
-    "ksp_type": "preonly",
-    "pc_type": "fieldsplit",
-    "pc_fieldsplit_type": "schur",
-    "pc_fieldsplit_schur_type": "full",
-    "fieldsplit_0": {
-        "ksp_type": "cg",
-        "ksp_rtol": 1e-5,
-        "ksp_converged_reason": None,
-        "pc_type": "python",
-        "pc_python_type": "firedrake.AssembledPC",
-        "assembled_pc_type": "gamg",
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
-    },
-    "fieldsplit_1": {
-        "ksp_type": "fgmres",
-        "ksp_rtol": 1e-4,
-        "ksp_converged_reason": None,
-        "pc_type": "python",
-        "pc_python_type": "firedrake.MassInvPC",
-        "Mp_ksp_rtol": 1e-5,
-        "Mp_ksp_type": "cg",
-        "Mp_pc_type": "sor",
-    }
-}
-
-# Energy Equation Solver Parameters:
-energy_solver_parameters = {
-    "mat_type": "aij",
-    "snes_type": "ksponly",
-    "ksp_type": "gmres",
-    "ksp_rtol": 1e-5,
-    "ksp_converged_reason": None,
-    "pc_type": "sor",
-}
-
 # Nullspaces and near-nullspaces:
-x_rotV = Function(V).interpolate(as_vector((-X[1], X[0])))
-V_nullspace = VectorSpaceBasis([x_rotV])
-V_nullspace.orthonormalize()
-p_nullspace = VectorSpaceBasis(constant=True)  # Constant nullspace for pressure n
-Z_nullspace = MixedVectorSpaceBasis(Z, [V_nullspace, p_nullspace])  # Setting mixed nullspace
-
-# Generating near_nullspaces for GAMG:
-nns_x = Function(V).interpolate(Constant([1., 0.]))
-nns_y = Function(V).interpolate(Constant([0., 1.]))
-V_near_nullspace = VectorSpaceBasis([nns_x, nns_y, x_rotV])
-V_near_nullspace.orthonormalize()
-Z_near_nullspace = MixedVectorSpaceBasis(Z, [V_near_nullspace, Z.sub(1)])
+Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
+Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0,1])
 
 # Write output files in VTK format:
 u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
@@ -123,13 +72,12 @@ stokes_bcs = {
     top_id: {'un': 0},
 }
 
-energy_solver = EnergySolver(T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs, solver_parameters=energy_solver_parameters)
+energy_solver = EnergySolver(T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
 stokes_solver = StokesSolver(z, Ttheta, delta_t, bcs=stokes_bcs, Ra=Ra,
                              cartesian=False,
-                             solver_parameters=stokes_solver_parameters,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 

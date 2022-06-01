@@ -8,7 +8,11 @@ import ufl
 from firedrake.petsc import PETSc
 from mpi4py import MPI
 import numpy as np
+from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL
 
+
+# TBD: do we want our own set_log_level and use logging module with handlers?
+log_level = INFO
 
 def log(*args):
     """Log output to stdout from root processor only"""
