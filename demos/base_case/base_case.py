@@ -30,16 +30,6 @@ T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 delta_t = Constant(1e-6)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
-# Solver dictionary:
-solver_parameters = {
-    "mat_type": "aij",
-    "snes_type": "ksponly",
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-}
-
-
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e4)  # Rayleigh number
 
@@ -48,9 +38,8 @@ steady_state_tolerance = 1e-9
 max_timesteps = 20000
 kappa = Constant(1.0)  # Thermal diffusivity
 
-
-# Pressure nullspace
-p_nullspace = MixedVectorSpaceBasis(Z, [Z.sub(0), VectorSpaceBasis(constant=True)])
+# Nullspaces and near-nullspaces:
+Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # Write output files in VTK format:
 u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
@@ -81,9 +70,13 @@ stokes_bcs = {
     right_id: {'ux': 0},
 }
 
-energy_solver = EnergySolver(T, u, delta_t, CrankNicolsonRK, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, delta_t, bcs=stokes_bcs, Ra=Ra,
-        nullspace=p_nullspace, transpose_nullspace=p_nullspace)
+energy_solver = EnergySolver(T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+Told = energy_solver.T_old
+Ttheta = 0.5*T + 0.5*Told
+Told.assign(T)
+stokes_solver = StokesSolver(z, Ttheta, delta_t, bcs=stokes_bcs, Ra=Ra,
+                             cartesian=False,
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
