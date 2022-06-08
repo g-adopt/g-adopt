@@ -31,7 +31,14 @@ delta_t = Constant(1e-6)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-Ra = Constant(1e4)  # Rayleigh number
+Ra = Constant(100)  # Rayleigh number
+gamma_T, gamma_Z = Constant(ln(10**5)), Constant(ln(10))
+mu_star, sigma_y = Constant(0.001), Constant(1.0)
+epsilon = sym(grad(u))  # Strain-rate
+epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
+mu_lin = exp(-gamma_T*T + gamma_Z*(1 - X[1]))
+mu_plast = mu_star + (sigma_y / epsii)
+mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
 
 time = 0.0
 steady_state_tolerance = 1e-9
@@ -40,6 +47,21 @@ kappa = Constant(1.0)  # Thermal diffusivity
 
 # Nullspaces and near-nullspaces:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
+
+# Stokes solver dictionary:
+stokes_solver_parameters = {
+    "mat_type": "aij",
+    "snes_type": "newtonls",
+    "snes_linesearch_type": "l2",
+    "snes_max_it": 100,
+    "snes_atol": 1e-10,
+    "snes_rtol": 1e-5,
+    "snes_monitor": None,
+    "snes_converged_reason": None,
+    "ksp_type": "preonly",
+    "pc_type": "lu",
+    "pc_factor_mat_solver_type": "mumps",
+}
 
 # Write output files in VTK format:
 u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
@@ -74,8 +96,8 @@ energy_solver = EnergySolver(T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
-stokes_solver = StokesSolver(z, Ttheta, delta_t, bcs=stokes_bcs, Ra=Ra,
-                             cartesian=True,
+stokes_solver = StokesSolver(z, Ttheta, delta_t, bcs=stokes_bcs, Ra=Ra, mu=mu,
+                             cartesian=True, solver_parameters=stokes_solver_parameters,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 
 # Now perform the time loop:
