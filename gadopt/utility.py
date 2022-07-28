@@ -5,14 +5,16 @@ from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, Ja
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant
 import ufl
+from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
 from mpi4py import MPI
 import numpy as np
-from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL
+from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = INFO
+
 
 def log(*args):
     """Log output to stdout from root processor only"""
@@ -125,6 +127,11 @@ def is_continuous(expr):
         return all(is_continuous(e) for e in elem._elements)
     else:
         raise NotImplementedError("Unknown finite element family")
+
+
+def depends_on(ufl_expr, terminal):
+    """Does ufl_expr depend on terminal (Function/Constant/...)?"""
+    return terminal in traverse_unique_terminals(ufl_expr)
 
 
 def normal_is_continuous(expr):

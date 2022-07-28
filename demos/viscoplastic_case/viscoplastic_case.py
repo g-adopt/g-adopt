@@ -48,21 +48,6 @@ kappa = Constant(1.0)  # Thermal diffusivity
 # Nullspaces and near-nullspaces:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
-# Stokes solver dictionary:
-stokes_solver_parameters = {
-    "mat_type": "aij",
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-10,
-    "snes_rtol": 1e-5,
-    "snes_monitor": None,
-    "snes_converged_reason": None,
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-}
-
 # Write output files in VTK format:
 u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
 # Next rename for output:
@@ -97,7 +82,7 @@ Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
 stokes_solver = StokesSolver(z, Ttheta, delta_t, bcs=stokes_bcs, Ra=Ra, mu=mu,
-                             cartesian=True, solver_parameters=stokes_solver_parameters,
+                             cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 
 # Now perform the time loop:

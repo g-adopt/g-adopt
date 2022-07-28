@@ -1,7 +1,6 @@
-from .time_stepper import TimeIntegratorBase
 from .momentum_equation import StokesEquations
 from .utility import upward_normal, ensure_constant
-from .utility import log_level, INFO, DEBUG
+from .utility import log_level, INFO, DEBUG, depends_on
 import firedrake as fd
 
 iterative_stokes_solver_parameters = {
@@ -44,6 +43,7 @@ newton_stokes_solver_parameters = {
     "snes_atol": 1e-10,
     "snes_rtol": 1e-5,
 }
+
 
 def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None):
     X = fd.SpatialCoordinate(Z.mesh())
@@ -99,7 +99,7 @@ class StokesSolver:
         self.g = ensure_constant(g)
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
-        self.linear = True
+        self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
         u, p = fd.split(self.solution)
@@ -153,10 +153,10 @@ class StokesSolver:
 
         self.problem = fd.NonlinearVariationalProblem(self.F, self.solution, bcs=self.strong_bcs)
         self.solver = fd.NonlinearVariationalSolver(self.problem,
-                                                           solver_parameters=self.solver_parameters,
-                                                           options_prefix=self.name,
-                                                           appctx={"mu": self.mu},
-                                                           **self.solver_kwargs)
+                                                    solver_parameters=self.solver_parameters,
+                                                    options_prefix=self.name,
+                                                    appctx={"mu": self.mu},
+                                                    **self.solver_kwargs)
         self._initialized = True
 
     def solve(self):
