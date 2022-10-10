@@ -111,7 +111,18 @@ def _get_element(ufl_or_element):
 
 
 def is_continuous(expr):
-    elem = _get_element(expr)
+    if isinstance(expr, ufl.tensors.ListTensor):
+        return all(is_continuous(x) for x in expr.ufl_operands)
+
+    if isinstance(expr, ufl.indexed.Indexed):
+        elem = expr.ufl_operands[0].ufl_element()
+        if isinstance(elem, ufl.MixedElement):
+            # the second operand is a MultiIndex
+            assert(len(expr.ufl_operands[1]) == 1)
+            sub_element_index, _ = elem.extract_subelement_component(int(expr.ufl_operands[1][0]))
+            elem = elem.sub_elements()[sub_element_index]
+    else:
+        elem = _get_element(expr)
 
     family = elem.family()
     if family == 'Lagrange' or family == 'Q':
@@ -135,6 +146,11 @@ def depends_on(ufl_expr, terminal):
 
 
 def normal_is_continuous(expr):
+    # if we get some list expression, we can't guarantee its normal is continuous
+    # unless all components are
+    if isinstance(expr, ufl.tensors.ListTensor):
+        return is_continuous(expr)
+
     elem = _get_element(expr)
 
     family = elem.family()

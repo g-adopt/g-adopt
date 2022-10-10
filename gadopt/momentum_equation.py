@@ -1,7 +1,7 @@
 from .equations import BaseTerm, BaseEquation
-from firedrake import dot, inner, outer, transpose, grad, nabla_grad
+from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
 from firedrake import avg, sym
-from .utility import is_continuous, tensor_jump, cell_edge_integral_ratio
+from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
 from firedrake import FacetArea, CellVolume
 r"""
 This module contains the classes for the momentum equation and its terms.
@@ -131,15 +131,12 @@ class PressureGradientTerm(BaseTerm):
         n = self.n
         p = fields['pressure']
 
-        # NOTE: we assume p is continuous
+        assert normal_is_continuous(phi)
+        F = -dot(div(phi), p)*self.dx
 
-        F = dot(phi, grad(p))*self.dx
-
-        # do nothing should be zero (normal) stress:
-        F += -dot(phi, n)*p*self.ds
-
-        # for those boundaries where the normal component of u is specified
-        # we take it out again
+        # integration by parts gives natural condition on pressure
+        # (as part of a normal stress condition), for boundaries where
+        # the normal component of u is specified, we remove that condition
         for id, bc in bcs.items():
             if 'u' in bc or 'un' in bc:
                 F += dot(phi, n)*p*self.ds(id)
@@ -153,21 +150,15 @@ class DivergenceTerm(BaseTerm):
         n = self.n
         u = fields['velocity']
 
-        # NOTE: we assume psi is continuous
-        # assert is_continuous(psi)
-        F = -dot(grad(psi), u)*self.dx
+        assert normal_is_continuous(u)
+        F = dot(psi, div(u))*self.dx
 
-        # do nothing should be zero (normal) stress, which means no (Dirichlet condition)
-        # should be imposed on the normal component
-        F += psi*dot(n, u)*self.ds
-
-        # for those boundaries where the normal component of u is specified
-        # we take it out again and replace with the specified un
+        # add boundary integral for bcs that specify normal u-component
         for id, bc in bcs.items():
             if 'u' in bc:
-                F += psi*dot(n, bc['u']-u)*self.ds(id)
+                F += psi * dot(n, bc['u']-u) * self.ds(id)
             elif 'un' in bc:
-                F += psi*(bc['un'] - dot(n, u))*self.ds(id)
+                F += psi * (bc['un'] - dot(n, u)) * self.ds(id)
 
         return F
 
