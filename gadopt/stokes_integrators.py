@@ -1,6 +1,7 @@
 from .momentum_equation import StokesEquations
 from .utility import upward_normal, ensure_constant
 from .utility import log_level, INFO, DEBUG, depends_on
+from .approximations import BoussinesqApproximation
 import firedrake as fd
 
 iterative_stokes_solver_parameters = {
@@ -86,18 +87,18 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
 class StokesSolver:
     name = 'Stokes'
 
-    def __init__(self, z, T, delta_t, bcs=None, Ra=1, g=1, mu=1,
+    def __init__(self, z, T, approximation, delta_t, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False,
                  **kwargs):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
-        self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree)
+        self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
+                compressible=approximation.compressible)
         self.solution = z
         self.delta_t = ensure_constant(delta_t)
-        self.Ra = ensure_constant(Ra)
-        self.g = ensure_constant(g)
+        self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
         self.linear = not depends_on(self.mu, self.solution)
@@ -110,7 +111,7 @@ class StokesSolver:
             'pressure': p,
             'viscosity': self.mu,
             'interior_penalty': fd.Constant(6.25),  # matches C_ip=100. in "old" code for Q2Q1 in 2d
-            'source': self.Ra * self.g * T * self.k,
+            'source': self.approximation.buoyancy(p, T) * self.k,
         }
 
         self.weak_bcs = {}

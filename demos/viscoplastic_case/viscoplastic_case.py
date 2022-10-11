@@ -32,6 +32,8 @@ t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(100)  # Rayleigh number
+approximation = BoussinesqApproximation(Ra)
+# Rheology:
 gamma_T, gamma_Z = Constant(ln(10**5)), Constant(ln(10))
 mu_star, sigma_y = Constant(0.001), Constant(1.0)
 epsilon = sym(grad(u))  # Strain-rate
@@ -77,11 +79,11 @@ stokes_bcs = {
     right_id: {'ux': 0},
 }
 
-energy_solver = EnergySolver(T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
-stokes_solver = StokesSolver(z, Ttheta, delta_t, bcs=stokes_bcs, Ra=Ra, mu=mu,
+stokes_solver = StokesSolver(z, Ttheta, approximation, delta_t, bcs=stokes_bcs, mu=mu,
                              cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 

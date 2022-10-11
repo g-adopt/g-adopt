@@ -20,14 +20,20 @@ direct_energy_solver_parameters = {
 }
 
 class EnergySolver:
-    def __init__(self, T, u, delta_t, timestepper, kappa=1, bcs=None, solver_parameters=None):
+    def __init__(self, T, u, approximation,
+            delta_t, timestepper, bcs=None, solver_parameters=None):
         self.Q = T.function_space()
         self.mesh = self.Q.mesh()
-        self.eq = EnergyEquation(self.Q, self.Q)
+        rhocp = approximation.rhocp()
+        self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp)
         self.fields = {
-            'diffusivity': ensure_constant(kappa),
-            'velocity': u,
+            'diffusivity': ensure_constant(approximation.kappa()),
+            'source': approximation.energy_source(),
+            'velocity': rhocp * u,
         }
+        sink = approximation.linearized_energy_sink()
+        if sink:
+            self.fields['absorption_coefficient'] = sink
 
         if solver_parameters is None:
             if self.mesh.topological_dimension() == 2:

@@ -198,5 +198,13 @@ class ScalarAdvectionDiffusionEquation(BaseEquation):
     terms = [ScalarAdvectionTerm, ScalarDiffusionTerm, ScalarSourceTerm, ScalarAbsorptionTerm]
 
 
-# for now EnergyEquation is just the same as a ScalarAdvectionDiffusion Equation
-EnergyEquation = ScalarAdvectionDiffusionEquation
+class EnergyEquation(ScalarAdvectionDiffusionEquation):
+    def __init__(self, test_space, trial_space, rhocp=None, quad_degree=None):
+        self.rhocp = rhocp
+        super().__init__(test_space, trial_space, quad_degree=quad_degree)
+
+    def mass_term(self, test, trial):
+        if self.rhocp:
+            return self.rhocp * super().mass_term(test, trial)
+        else:
+            return super().mass_term(test, trial)

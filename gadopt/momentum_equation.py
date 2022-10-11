@@ -51,9 +51,12 @@ class ViscosityTerm(BaseTerm):
         n = self.n
         u = trial
         u_lagged = trial_lagged
+        compressible = self.term_kwargs['compressible']
 
         grad_test = nabla_grad(phi)
         stress = 2 * mu * sym(grad(u))
+        if compressible:
+            stress -= 2/3 * mu * Identity(self.dim) * div(u)
 
         F = 0
         F += inner(grad_test, stress)*self.dx
@@ -82,6 +85,8 @@ class ViscosityTerm(BaseTerm):
 
         if not is_continuous(self.trial_space):
             u_tensor_jump = tensor_jump(n, u) + tensor_jump(u, n)
+            if compressible:
+                u_tensor_jump -= 2/3 * Identity(self.dim) * dot(n, u)
             F += sigma*inner(tensor_jump(n, phi), avg(mu) * u_tensor_jump)*self.dS
             F += -inner(avg(mu * nabla_grad(phi)), u_tensor_jump)*self.dS
             F += -inner(tensor_jump(n, phi), avg(stress))*self.dS
@@ -90,8 +95,12 @@ class ViscosityTerm(BaseTerm):
             if 'u' in bc or 'un' in bc:
                 if 'u' in bc:
                     u_tensor_jump = outer(n, u-bc['u'])
+                    if compressible:
+                        u_tensor_jump -= 2/3 * Identity(self.dim) * dot(n, u - dot(n, bc['u']))
                 else:
                     u_tensor_jump = outer(n, n)*(dot(n, u)-bc['un'])
+                    if compressible:
+                        u_tensor_jump -= 2/3 * Identity(self.dim) * dot(n, u - bc['un'])
                 u_tensor_jump += transpose(u_tensor_jump)
                 # this corresponds to the same 3 terms as the dS integrals for DG above:
                 F += 2*sigma*inner(outer(n, phi), mu * u_tensor_jump)*self.ds(id)
@@ -149,16 +158,17 @@ class DivergenceTerm(BaseTerm):
         psi = test
         n = self.n
         u = fields['velocity']
+        rho = fields.get('rho_continuity', 1)
 
         assert normal_is_continuous(u)
-        F = dot(psi, div(u))*self.dx
+        F = dot(psi, div(rho * u))*self.dx
 
         # add boundary integral for bcs that specify normal u-component
         for id, bc in bcs.items():
             if 'u' in bc:
-                F += psi * dot(n, bc['u']-u) * self.ds(id)
+                F += psi * rho * dot(n, bc['u']-u) * self.ds(id)
             elif 'un' in bc:
-                F += psi * (bc['un'] - dot(n, u)) * self.ds(id)
+                F += psi * rho * (bc['un'] - dot(n, u)) * self.ds(id)
 
         return F
 
@@ -193,7 +203,7 @@ class ContinuityEquation(BaseEquation):
     terms = [DivergenceTerm]
 
 
-def StokesEquations(test_space, trial_space, quad_degree=None):
-    mom_eq = MomentumEquation(test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree)
-    cty_eq = ContinuityEquation(test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree)
+def StokesEquations(test_space, trial_space, quad_degree=None, **kwargs):
+    mom_eq = MomentumEquation(test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs)
+    cty_eq = ContinuityEquation(test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs)
     return [mom_eq, cty_eq]
