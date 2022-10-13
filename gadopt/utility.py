@@ -72,6 +72,14 @@ def upward_normal(mesh, cartesian):
         return X/r
 
 
+def vertical_component(u, cartesian):
+    if cartesian:
+        return u[u.ufl_shape[0]-1]
+    else:
+        n = upward_normal(u.ufl_domain(), cartesian)
+        return dot(n, u)
+
+
 def ensure_constant(f):
     if isinstance(f, float) or isinstance(f, int):
         return Constant(f)

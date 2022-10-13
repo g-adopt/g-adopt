@@ -113,6 +113,7 @@ class StokesSolver:
             'viscosity': self.mu,
             'interior_penalty': fd.Constant(6.25),  # matches C_ip=100. in "old" code for Q2Q1 in 2d
             'source': self.approximation.buoyancy(p, T) * self.k,
+            'rho_continuity': self.approximation.rho_continuity(),
         }
 
         self.weak_bcs = {}

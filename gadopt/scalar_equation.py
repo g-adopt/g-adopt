@@ -28,6 +28,9 @@ class ScalarAdvectionTerm(BaseTerm):
         phi = test
         n = self.n
         q = trial
+        continuous_u_normal = normal_is_continuous(u)
+        if 'advective_velocity_scaling' in fields:
+            u = fields['advective_velocity_scaling'] * u
 
         F = -q*div(phi*u)*self.dx
 
@@ -40,7 +43,7 @@ class ScalarAdvectionTerm(BaseTerm):
                 # on incoming boundaries, dot(u,n)<0, replace q with bc['q']
                 F += phi*min_value(dot(u, n), 0)*(bc['q']-q) * self.ds(id)
 
-        if not (is_continuous(self.trial_space) and normal_is_continuous(u)):
+        if not (is_continuous(self.trial_space) and continuous_u_normal):
             # s=0: u.n(-)<0  =>  flow goes from '+' to '-' => '+' is upwind
             # s=1: u.n(-)>0  =>  flow goes from '-' to '+' => '-' is upwind
             s = 0.5*(sign(dot(avg(u), n('-'))) + 1.0)
@@ -76,25 +79,17 @@ class ScalarDiffusionTerm(BaseTerm):
     """
     def residual(self, test, trial, trial_lagged, fields, bcs):
 
-        if 'background_diffusivity' in fields:
-            assert('grid_resolution' in fields)
-            u = fields['velocity']
-            kappa_background = fields['background_diffusivity']
-            grid_dx = fields['grid_resolution'][0]
-            grid_dz = fields['grid_resolution'][1]
-            kappa_h = 0.5*abs(u[0]) * grid_dx + kappa_background
-            kappa_v = 0.5*abs(u[1]) * grid_dz + kappa_background
-            diff_tensor = as_tensor([[kappa_h, 0], [0, kappa_v]])
+        kappa = fields['diffusivity']
+        if len(kappa.ufl_shape) == 2:
+            diff_tensor = kappa
         else:
-            kappa = fields['diffusivity']
-            if len(kappa.ufl_shape) == 2:
-                diff_tensor = kappa
-            else:
-                diff_tensor = kappa * Identity(self.dim)
+            diff_tensor = kappa * Identity(self.dim)
 
         phi = test
         n = self.n
         q = trial
+        if 'reference_for_diffusion' in fields:
+            q += fields['reference_for_diffusion']
 
         grad_test = grad(phi)
         diff_flux = dot(diff_tensor, grad(q))
@@ -169,11 +164,11 @@ class ScalarAbsorptionTerm(BaseTerm):
         """
 
     def residual(self, test, trial, trial_lagged, fields, bcs):
-        if 'absorption coefficient' not in fields:
+        if 'absorption_coefficient' not in fields:
             return 0
 
         phi = test
-        alpha = fields['absorption coefficient']
+        alpha = fields['absorption_coefficient']
 
         # NOTE, here absorption term F is already on the RHS
         # implement absorption term implicitly at current time step.
@@ -205,6 +200,6 @@ class EnergyEquation(ScalarAdvectionDiffusionEquation):
 
     def mass_term(self, test, trial):
         if self.rhocp:
-            return self.rhocp * super().mass_term(test, trial)
+            return self.rhocp * dot(test, trial) * self.dx
         else:
             return super().mass_term(test, trial)

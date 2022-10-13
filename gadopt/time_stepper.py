@@ -119,7 +119,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         :kwarg dict bnd_conditions: Dictionary of boundary conditions passed to the equation
         :kwarg dict solver_parameters: PETSc solver options
         """
-        super(ERKGeneric, self).__init__(equation, solution, fields, dt, solver_parameters)
+        super(ERKGeneric, self).__init__(equation, solution, fields, dt, solver_parameters, strong_bcs)
         self._initialized = False
         V = solution.function_space()
         assert V == equation.trial_space
@@ -151,7 +151,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         if self._nontrivial:
             self.solver = []
             for i in range(self.n_stages):
-                prob = firedrake.LinearVariationalProblem(self.a_rk, self.l_rk, self.tendency[i])
+                prob = firedrake.LinearVariationalProblem(self.a_rk, self.l_rk, self.tendency[i], bcs=self.hom_bcs)
                 solver = firedrake.LinearVariationalSolver(prob, options_prefix=self.name + '_k{:}'.format(i),
                                                            solver_parameters=self.solver_parameters)
                 self.solver.append(solver)

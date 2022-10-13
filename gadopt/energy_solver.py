@@ -28,10 +28,12 @@ class EnergySolver:
         self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp)
         self.fields = {
             'diffusivity': ensure_constant(approximation.kappa()),
-            'source': approximation.energy_source(),
-            'velocity': rhocp * u,
+            'reference_for_diffusion': approximation.Tbar,
+            'source': approximation.energy_source(u),
+            'velocity': u,
+            'advective_velocity_scaling': rhocp
         }
-        sink = approximation.linearized_energy_sink()
+        sink = approximation.linearized_energy_sink(u)
         if sink:
             self.fields['absorption_coefficient'] = sink
 
