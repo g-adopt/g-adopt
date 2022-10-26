@@ -1,6 +1,7 @@
 import pytest
 from pathlib import Path
 import pandas as pd
+import warnings
 
 cases = [
     "2D_cartesian/base_case",
@@ -34,4 +35,7 @@ def test_benchmark(benchmark):
     df = get_convergence(b, prefix)
     expected = pd.read_pickle(b / f"{prefix}expected.pkl")
 
-    pd.testing.assert_series_equal(df[["u_rms", "nu_top"]], expected)
+    pd.testing.assert_series_equal(df[["u_rms", "nu_top"]], expected, check_names=False)
+
+    if df.name != expected.name:
+        warnings.warn(f"Convergence changed: expected {expected.name}, got {df.name}")
