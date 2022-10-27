@@ -26,7 +26,8 @@ log("Number of Temperature DOF:", Q.dim())
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
 T0 = Constant(0.091)  # Non-dimensional surface temperature
-T.interpolate((1.0-T0) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
+Di = Constant(0.5)  # Dissipation number.
+T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
 
 delta_t = Constant(1e-6)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
@@ -37,9 +38,8 @@ mu = Constant(1.0)  # Viscosity
 Di = Constant(0.5)  # Dissipation number.
 
 # Compressible reference state:
-# SHOULD THIS BE /gruneisen (gamma0) instead of /alpha ?!?!
-alpha = 1
-rhobar = Function(Q, name="CompRefDensity").interpolate(exp(((1.0 - X[1]) * Di) / alpha))
+gruneisen = 1.0
+rhobar = Function(Q, name="CompRefDensity").interpolate(exp(((1.0 - X[1]) * Di) / gruneisen))
 Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)
 # why do we have these as functions?
 alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)
@@ -67,7 +67,7 @@ p.rename("Pressure")
 # Create output file and select output_frequency:
 output_file = File("output.pvd")
 ref_file = File('reference_state.pvd')
-dump_period = 1
+dump_period = 100
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4
 
@@ -137,6 +137,9 @@ for timestep in range(0, max_timesteps):
                  f"{energy_conservation} {average_temperature} "
                  f"{rate_work_against_gravity} {rate_viscous_dissipation} "
                  f"{energy_conservation_2}")
+
+    # Calculate Full T:
+    FullT.assign(T+Tbar)
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
