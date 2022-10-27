@@ -37,13 +37,13 @@ Ra = Constant(3e4)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
 
 time = 0.0
-steady_state_tolerance = 1e-7 # Set to 1e-9 for simulations in GMD paper.
+steady_state_tolerance = 1e-7  # Set to 1e-9 for simulations in GMD paper.
 max_timesteps = 50000
 kappa = Constant(1.0)  # Thermal diffusivity
 
 # Nullspaces and near-nullspaces:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
-Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0,1])
+Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
 # Write output files in VTK format:
 u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
@@ -59,7 +59,7 @@ checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
 
-#gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+# gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
 
 
 temp_bcs = {
@@ -69,13 +69,13 @@ temp_bcs = {
 
 stokes_bcs = {
     bottom_id: {'ux': 0},
-    bottom_id: {'uy': 0},    
+    bottom_id: {'uy': 0},
     top_id: {'ux': 0},
-    top_id: {'uy': 0},    
+    top_id: {'uy': 0},
     left_id: {'ux': 0},
     right_id: {'ux': 0},
     front_id: {'uy': 0},
-    back_id: {'uy': 0},    
+    back_id: {'uy': 0},
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
