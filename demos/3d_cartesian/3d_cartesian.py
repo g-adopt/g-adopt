@@ -43,7 +43,7 @@ kappa = Constant(1.0)  # Thermal diffusivity
 
 # Nullspaces and near-nullspaces:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
-Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
+Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
 # Write output files in VTK format:
 u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
@@ -59,7 +59,7 @@ checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
 
-# gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
 
 
 temp_bcs = {
@@ -68,10 +68,8 @@ temp_bcs = {
 }
 
 stokes_bcs = {
-    bottom_id: {'ux': 0},
-    bottom_id: {'uy': 0},
-    top_id: {'ux': 0},
-    top_id: {'uy': 0},
+    bottom_id: {'u': 0},
+    top_id: {'u': 0},
     left_id: {'ux': 0},
     right_id: {'ux': 0},
     front_id: {'uy': 0},
@@ -107,8 +105,8 @@ for timestep in range(0, max_timesteps):
     bcu = DirichletBC(u.function_space(), 0, top_id)
     ux_max = u.dat.data_ro_with_halos[bcu.nodes, 0].max(initial=0)
     ux_max = u.comm.allreduce(ux_max, MPI.MAX)  # Maximum Vx at surface
-#    nusselt_number_top = gd.Nu_top()
-#    nusselt_number_base = gd.Nu_bottom()
+    nusselt_number_top = gd.Nu_top()
+    nusselt_number_base = gd.Nu_bottom()
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
     # Calculate L2-norm of change in temperature:

@@ -49,6 +49,13 @@ newton_stokes_solver_parameters = {
 
 
 def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None):
+    """
+    Create nullspace for the mixed Stokes system.
+
+    :arg closed: if closed include constant pressure nullspace
+    :arg rotational: if rotational include all rotational modes
+    :translations: list of dimensions (0 to dim-1) corresponding to translations to include
+    """
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
     V, W = Z.split()
