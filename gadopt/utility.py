@@ -140,8 +140,7 @@ def is_continuous(expr):
     elif isinstance(elem, ufl.HCurlElement) or isinstance(elem, ufl.HDivElement):
         return False
     elif family == 'TensorProductElement':
-        elem_h, elem_v = elem.sub_elements()
-        return is_continuous(elem_h) and is_continuous(elem_v)
+        return all(is_continuous(sele) for sele in elem.sub_elements())
     elif family == 'EnrichedElement':
         return all(is_continuous(e) for e in elem._elements)
     else:
@@ -171,8 +170,7 @@ def normal_is_continuous(expr):
     elif isinstance(elem, ufl.HDivElement):
         return True
     elif family == 'TensorProductElement':
-        elem_h, elem_v = elem.sub_elements()
-        return normal_is_continuous(elem_h) and normal_is_continuous(elem_v)
+        return all(is_continuous(sele) for sele in elem.sub_elements())
     elif family == 'EnrichedElement':
         return all(normal_is_continuous(e) for e in elem._elements)
     else:
