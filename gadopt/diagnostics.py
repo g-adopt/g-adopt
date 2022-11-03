@@ -1,9 +1,10 @@
-from firedrake import assemble, Constant, dx, ds, sqrt, dot, grad, FacetNormal
+import firedrake
+from firedrake import assemble, Constant, sqrt, dot, grad, FacetNormal
 from .utility import CombinedSurfaceMeasure
 
 
 def domain_volume(mesh):
-    return assemble(Constant(1)*dx(domain=mesh))
+    return assemble(Constant(1)*firedrake.dx(domain=mesh))
 
 
 class GeodynamicalDiagnostics:
@@ -14,8 +15,11 @@ class GeodynamicalDiagnostics:
         self.u = u
         self.p = p
         self.T = T
-        self.dx = dx(degree=degree)
-        ds = CombinedSurfaceMeasure(mesh, degree)
+        self.dx = firedrake.dx(degree=degree)
+        if T.function_space().extruded:
+            ds = CombinedSurfaceMeasure(mesh, degree)
+        else:
+            ds = firedrake.ds
         self.ds_t = ds(top_id)
         self.ds_b = ds(bottom_id)
         self.n = FacetNormal(mesh)
