@@ -33,7 +33,8 @@ class ParameterLog:
             self.f.flush()
 
     def close(self):
-        self.f.close()
+        if self.comm.rank == 0:
+            self.f.close()
 
 
 class TimestepAdaptor:
