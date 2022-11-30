@@ -83,7 +83,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
-stokes_solver = StokesSolver(z, Ttheta, approximation, delta_t, bcs=stokes_bcs, mu=mu,
+stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs, mu=mu,
                              cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 

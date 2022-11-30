@@ -59,13 +59,14 @@ def model(disc_n):
     # Construct a circle mesh and then extrude into a cylinder:
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
+    bottom_id, top_id = "bottom", "top"
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
-    n = FacetNormal(mesh)
+    #n = FacetNormal(mesh)
     r = sqrt(X[0]**2 + X[1]**2)
-    rhat = as_vector((X[0], X[1])) / r
     phi = atan_2(X[1], X[0])
+    #rhat = as_vector((X[0], X[1])) / r
 
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
@@ -81,34 +82,34 @@ def model(disc_n):
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
-    g = Constant(1.0)
-    C_ip = Constant(100.0)  # The fudge factor for interior penalty term used in weak imposition of BCs
-    p_ip = 2  # maximum polynomial degree of the _gradient_ of velocity
+#    g = Constant(1.0)
+#    C_ip = Constant(100.0)  # The fudge factor for interior penalty term used in weak imposition of BCs
+#    p_ip = 2  # maximum polynomial degree of the _gradient_ of velocity
 
-    rhop = r**k/rmax**k*cos(nn*phi)  # RHS
+    T = r**k/rmax**k*cos(nn*phi)  # RHS
 
-    # Setup UFL, incorporating Nitsche boundary conditions:
-    stress = 2 * mu * sym(grad(u))
-    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * rhop * dot(v, rhat) * dx
-    F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
+#    # Setup UFL, incorporating Nitsche boundary conditions:
+#    stress = 2 * mu * sym(grad(u))
+#    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * rhop * dot(v, rhat) * dx
+#    F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
 
-    # nitsche free slip BCs
-    F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb
-    F_stokes += -dot(u, n) * dot(dot(n, 2 * mu * sym(grad(v))), n) * ds_tb
-    F_stokes += C_ip * mu * (p_ip + 1)**2 * FacetArea(mesh) / CellVolume(mesh) * dot(u, n) * dot(v, n) * ds_tb
+#    # nitsche free slip BCs
+#    F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb
+#    F_stokes += -dot(u, n) * dot(dot(n, 2 * mu * sym(grad(v))), n) * ds_tb
+#    F_stokes += C_ip * mu * (p_ip + 1)**2 * FacetArea(mesh) / CellVolume(mesh) * dot(u, n) * dot(v, n) * ds_tb
 
-#R    approximation = BoussinesqApproximation(Ra)
-    
-#R    stokes_bcs = {
-#R        bottom_id: {'un': 0},
-#R        top_id: {'un': 0},
-#R    }
-    
+    approximation = BoussinesqApproximation(1)
+
+    stokes_bcs = {
+        bottom_id: {'un': 0},
+        top_id: {'un': 0},
+    }
+
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
-    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0,1])    
+    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0,1])
 
-    stokes_solver = StokesSolver(0, z, Ttheta, approximation, delta_t, bcs=stokes_bcs,
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                                  cartesian=False,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)

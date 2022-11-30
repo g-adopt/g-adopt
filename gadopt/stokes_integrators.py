@@ -95,7 +95,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
 class StokesSolver:
     name = 'Stokes'
 
-    def __init__(self, z, T, approximation, delta_t, bcs=None, mu=1,
+    def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False,
                  **kwargs):
@@ -105,7 +105,6 @@ class StokesSolver:
         self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
                 compressible=approximation.compressible)
         self.solution = z
-        self.delta_t = ensure_constant(delta_t)
         self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
