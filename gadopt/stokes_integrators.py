@@ -161,14 +161,20 @@ class StokesSolver:
                     self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
                 elif INFO >= log_level:
                     self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+        # solver is setup only last minute
+        # so people can overwrite parameters we've setup here
+        self._solver_setup = False
 
+    def setup_solver(self):
         self.problem = fd.NonlinearVariationalProblem(self.F, self.solution, bcs=self.strong_bcs)
         self.solver = fd.NonlinearVariationalSolver(self.problem,
                                                     solver_parameters=self.solver_parameters,
                                                     options_prefix=self.name,
                                                     appctx={"mu": self.mu},
                                                     **self.solver_kwargs)
-        self._initialized = True
+        self._solver_setup = True
 
     def solve(self):
+        if not self._solver_setup:
+            self.setup_solver()
         self.solver.solve()

@@ -12,6 +12,7 @@ k = Constant(int(sys.argv[1]))  # radial degree
 nn = Constant(int(sys.argv[2]))  # wave number (n is already used for FacetNormal)
 level = int(sys.argv[3])  # refinement level
 
+# SCK: should be able to get rid off:
 # Stokes Equation Solver Parameters:
 stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -107,22 +108,27 @@ def model(disc_n):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0,1])    
 
-#R    stokes_solver = StokesSolver(0, z, solver_parameters=stokes_solver_parameters, Ttheta, approximation, delta_t, bcs=stokes_bcs,
-#R                                 cartesian=False,
-#R                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-#R                                 near_nullspace=Z_near_nullspace)
+    stokes_solver = StokesSolver(0, z, Ttheta, approximation, delta_t, bcs=stokes_bcs,
+                                 cartesian=False,
+                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                                 near_nullspace=Z_near_nullspace)
+    # use tighter tolerances than default to ensure convergence:
+    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-14
+    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-12
+
     
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
-    # and the RHS == 0.    
-    solve(
-        F_stokes == 0, z,
-        solver_parameters=stokes_solver_parameters,
-        appctx={"mu": mu},
-        nullspace=Z_nullspace,
-        transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace
-    )
+    # and the RHS == 0. 
+    stokes_solver.solve()
+    #solve(
+    #    F_stokes == 0, z,
+    #    solver_parameters=stokes_solver_parameters,
+    #    appctx={"mu": mu},
+    #    nullspace=Z_nullspace,
+    #    transpose_nullspace=Z_nullspace,
+    #    near_nullspace=Z_near_nullspace
+    #)
 
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
