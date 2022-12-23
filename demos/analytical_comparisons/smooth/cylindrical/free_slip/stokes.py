@@ -63,10 +63,8 @@ def model(disc_n):
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
-    #n = FacetNormal(mesh)
     r = sqrt(X[0]**2 + X[1]**2)
     phi = atan_2(X[1], X[0])
-    #rhat = as_vector((X[0], X[1])) / r
 
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
@@ -107,7 +105,7 @@ def model(disc_n):
 
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
-    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0,1])
+    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                                  cartesian=False,
@@ -117,19 +115,9 @@ def model(disc_n):
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-14
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-12
 
-    
-
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
-    # and the RHS == 0. 
+    # and the RHS == 0.
     stokes_solver.solve()
-    #solve(
-    #    F_stokes == 0, z,
-    #    solver_parameters=stokes_solver_parameters,
-    #    appctx={"mu": mu},
-    #    nullspace=Z_nullspace,
-    #    transpose_nullspace=Z_nullspace,
-    #    near_nullspace=Z_near_nullspace
-    #)
 
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
@@ -178,4 +166,3 @@ f = open('errors.log', 'w')
 l2error_u, l2error_p, l2anal_u, l2anal_p = model(level)
 f.write(f"{l2error_u} {l2error_p} {l2anal_u} {l2anal_p}")
 f.close()
-

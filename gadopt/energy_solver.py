@@ -19,9 +19,10 @@ direct_energy_solver_parameters = {
     "pc_type": "sor",
 }
 
+
 class EnergySolver:
     def __init__(self, T, u, approximation,
-            delta_t, timestepper, bcs=None, solver_parameters=None):
+                 delta_t, timestepper, bcs=None, solver_parameters=None):
         self.Q = T.function_space()
         self.mesh = self.Q.mesh()
         rhocp = approximation.rhocp()
@@ -68,7 +69,7 @@ class EnergySolver:
             self.weak_bcs[id] = weak_bc
 
         self.ts = timestepper(self.eq, T, self.fields, delta_t, self.weak_bcs, strong_bcs=self.strong_bcs,
-                solver_parameters=self.solver_parameters)
+                              solver_parameters=self.solver_parameters)
         self.T_old = self.ts.solution_old
 
     def solve(self):

@@ -242,8 +242,8 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                         u = self.solution_old + self.a[i][j]*self.dt_const*self.k[j]
                     else:
                         u += self.a[i][j]*self.dt_const*self.k[j]
-                self.F.append(self.equation.mass_term(self.test, self.k[i])
-                              - self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
+                self.F.append(self.equation.mass_term(self.test, self.k[i]) -
+                              self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
         else:
             # solution must be split before computing sum
             # pass components to equation in a list
@@ -256,8 +256,8 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                     else:
                         for l, k in enumerate(firedrake.split(self.k[j])):
                             u[l] += self.a[i][j]*self.dt_const*k
-                self.F.append(self.equation.mass_term(self.test, self.k[i])
-                              - self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
+                self.F.append(self.equation.mass_term(self.test, self.k[i]) -
+                              self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
         self.update_solver()
 
         # construct expressions for stage solutions

@@ -3,7 +3,7 @@ Slope limiters for discontinuous fields
 """
 from __future__ import absolute_import
 from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
-from firedrake import Function, dS_v, ds_v, conditional, avg, max_value, min_value, Constant
+from firedrake import max_value, min_value
 from firedrake import TensorProductElement
 import numpy as np
 import ufl
@@ -65,6 +65,7 @@ def get_extruded_base_element(ufl_element):
         ufl_element = ufl_element._elements[0]
     return ufl_element
 
+
 def get_facet_mask(function_space, facet='bottom'):
     """
     Returns the top/bottom nodes of extruded 3D elements.
@@ -112,7 +113,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         :arg p1dg_space: P1DG function space
         """
 
-        assert_function_space(p1dg_space, ['Discontinuous Lagrange', 'DQ'], 1)        
+        assert_function_space(p1dg_space, ['Discontinuous Lagrange', 'DQ'], 1)
         self.is_vector = p1dg_space.value_size > 1
         if self.is_vector:
             p1dg_scalar_space = FunctionSpace(p1dg_space.mesh(), 'DG', 1)
