@@ -1,7 +1,6 @@
 from .momentum_equation import StokesEquations
 from .utility import upward_normal, ensure_constant
 from .utility import log_level, INFO, DEBUG, depends_on
-from .approximations import BoussinesqApproximation
 import firedrake as fd
 
 iterative_stokes_solver_parameters = {
@@ -103,7 +102,7 @@ class StokesSolver:
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
         self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
-                compressible=approximation.compressible)
+                                         compressible=approximation.compressible)
         self.solution = z
         self.approximation = approximation
         self.mu = ensure_constant(mu)

@@ -127,7 +127,7 @@ def is_continuous(expr):
         elem = expr.ufl_operands[0].ufl_element()
         if isinstance(elem, ufl.MixedElement):
             # the second operand is a MultiIndex
-            assert(len(expr.ufl_operands[1]) == 1)
+            assert len(expr.ufl_operands[1]) == 1
             sub_element_index, _ = elem.extract_subelement_component(int(expr.ufl_operands[1][0]))
             elem = elem.sub_elements()[sub_element_index]
     else:

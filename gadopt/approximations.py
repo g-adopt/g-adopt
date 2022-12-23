@@ -160,9 +160,9 @@ class AnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     compressible = True
 
     def __init__(self, Ra, Di,
-            Tbar=0, chi=1, cp=1,
-            gamma0=1, cp0=1, cv0=1,
-            **kwargs):
+                 Tbar=0, chi=1, cp=1,
+                 gamma0=1, cp0=1, cv0=1,
+                 **kwargs):
         """
         :arg Ra:   Rayleigh number
         :arg Di:   Dissipation number
@@ -184,11 +184,11 @@ class AnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         # Equation of State:
         self.chi = chi
         self.cp = cp
-        assert not 'g' in kwargs
+        assert 'g' not in kwargs
         self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
     def buoyancy(self, p, T):
-        pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 *self.g * self.rho * self.chi * p
+        pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
 

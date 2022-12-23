@@ -7,6 +7,7 @@ cases = [
     "base_case",
 ]
 
+
 def get_convergence(base):
     return pd.read_csv(base / "params.log", sep="\\s+", header=0).iloc[-1]
 
