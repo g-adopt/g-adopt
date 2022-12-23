@@ -9,11 +9,13 @@ from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
 from mpi4py import MPI
 import numpy as np
+import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
+import os
 
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
-log_level = INFO
+log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
 
 
 def log(*args):
