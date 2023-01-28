@@ -3,7 +3,7 @@ Slope limiters for discontinuous fields
 """
 from __future__ import absolute_import
 from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
-from firedrake import Function, dS_v, ds_v, conditional, avg, Max, Min, Constant
+from firedrake import Function, dS_v, ds_v, conditional, avg, max_value, min_value, Constant
 from firedrake import TensorProductElement
 import numpy as np
 import ufl
@@ -232,9 +232,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                          iteration_region=op2.ON_TOP)
 
         if self.clip_min is not None:
-            self.min_field.assign(Max(self.min_field, self.clip_min))
+            self.min_field.assign(max_value(self.min_field, self.clip_min))
         if self.clip_max is not None:
-            self.max_field.assign(Min(self.max_field, self.clip_max))
+            self.max_field.assign(min_value(self.max_field, self.clip_max))
 
     def apply(self, field):
         """
