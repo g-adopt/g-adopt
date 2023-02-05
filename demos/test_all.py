@@ -5,6 +5,9 @@ import warnings
 
 cases = [
     "base_case",
+    "2d_compressible",
+    "viscoplastic_case",
+    "2d_cylindrical",
 ]
 
 

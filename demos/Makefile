@@ -1,4 +1,4 @@
-cases := base_case
+cases := base_case 2d_compressible viscoplastic_case 2d_cylindrical
 
 .PHONY: all $(cases) clean generate
 

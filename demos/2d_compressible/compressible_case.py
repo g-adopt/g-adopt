@@ -73,6 +73,10 @@ checkpoint_period = dump_period * 4
 
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
+plog.log_str(
+    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_base "
+    "nu_top energy avg_t rate_work_g rate_viscous energy_2"
+)
 
 gd = GeodynamicalDiagnostics(u, p, FullT, bottom_id, top_id)
 
