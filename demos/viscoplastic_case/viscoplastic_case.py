@@ -88,6 +88,9 @@ stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs, mu=mu,
                              cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 
+checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
+checkpoint_file.save_mesh(mesh)
+
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
 
@@ -127,22 +130,13 @@ for timestep in range(0, max_timesteps):
 
     # Checkpointing:
     if timestep % checkpoint_period == 0:
-        # Checkpointing during simulation:
-        checkpoint_data = DumbCheckpoint(f"Temperature_State_{timestep}", mode=FILE_CREATE)
-        checkpoint_data.store(T, name="Temperature")
-        checkpoint_data.close()
-
-        checkpoint_data = DumbCheckpoint(f"Stokes_State_{timestep}", mode=FILE_CREATE)
-        checkpoint_data.store(z, name="Stokes")
-        checkpoint_data.close()
+        checkpoint_file.save_function(T, name="Temperature", idx=timestep)
+        checkpoint_file.save_function(z, name="Stokes", idx=timestep)
 
 plog.close()
+checkpoint_file.close()
 
-# Write final state:
-final_checkpoint_data = DumbCheckpoint("Final_Temperature_State", mode=FILE_CREATE)
-final_checkpoint_data.store(T, name="Temperature")
-final_checkpoint_data.close()
-
-final_checkpoint_data = DumbCheckpoint("Final_Stokes_State", mode=FILE_CREATE)
-final_checkpoint_data.store(z, name="Stokes")
-final_checkpoint_data.close()
+with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
+    final_checkpoint.save_mesh(mesh)
+    final_checkpoint.save_function(T, name="Temperature")
+    final_checkpoint.save_function(z, name="Stokes")
