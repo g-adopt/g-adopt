@@ -24,7 +24,7 @@ jobs:
           . /home/firedrake/firedrake/bin/activate
           python3 -m pip install -r requirements.txt
           python3 -m pip install .
-          make -j6 test > test_output.log 2>&1
+          make -j6 test > test_output.log
           python -m pytest
         env:
           GADOPT_LOGLEVEL: INFO
