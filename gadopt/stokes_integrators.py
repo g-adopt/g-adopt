@@ -57,7 +57,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
     """
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
-    V, W = Z.split()
+    V, W = Z.subfunctions
     if rotational:
         if dim == 2:
             rotV = fd.Function(V).interpolate(fd.as_vector((-X[1], X[0])))

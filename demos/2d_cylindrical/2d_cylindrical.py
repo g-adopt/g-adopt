@@ -52,7 +52,7 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
 # Write output files in VTK format:
-u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
+u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
 # Next rename for output:
 u.rename("Velocity")
 p.rename("Pressure")

@@ -43,7 +43,7 @@ kappa = Constant(1.0)  # Thermal diffusivity
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # Write output files in VTK format:
-u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
+u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
 # Next rename for output:
 u.rename("Velocity")
 p.rename("Pressure")
