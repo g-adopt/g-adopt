@@ -12,36 +12,6 @@ k = Constant(int(sys.argv[1]))  # radial degree
 nn = Constant(int(sys.argv[2]))  # wave number (n is already used for FacetNormal)
 level = int(sys.argv[3])  # refinement level
 
-# SCK: should be able to get rid off:
-# Stokes Equation Solver Parameters:
-stokes_solver_parameters = {
-    "mat_type": "matfree",
-    "snes_type": "ksponly",
-    "ksp_type": "preonly",
-    "pc_type": "fieldsplit",
-    "pc_fieldsplit_type": "schur",
-    "pc_fieldsplit_schur_type": "full",
-    "fieldsplit_0": {
-        "ksp_type": "cg",
-        "pc_type": "python",
-        "pc_python_type": "firedrake.AssembledPC",
-        "assembled_pc_type": "gamg",
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
-        "ksp_rtol": 1e-14,
-        "ksp_converged_reason": None,
-    },
-    "fieldsplit_1": {
-        "ksp_type": "fgmres",
-        "ksp_converged_reason": None,
-        "pc_type": "python",
-        "pc_python_type": "firedrake.MassInvPC",
-        "Mp_ksp_type": "cg",
-        "Mp_pc_type": "sor",
-        "ksp_rtol": 1e-12,
-    }
-}
-
 # Projection solver parameters for nullspaces:
 project_solver_parameters = {
     "snes_type": "ksponly",
@@ -80,24 +50,10 @@ def model(disc_n):
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
-#    g = Constant(1.0)
-#    C_ip = Constant(100.0)  # The fudge factor for interior penalty term used in weak imposition of BCs
-#    p_ip = 2  # maximum polynomial degree of the _gradient_ of velocity
 
-    T = r**k/rmax**k*cos(nn*phi)  # RHS
-
-#    # Setup UFL, incorporating Nitsche boundary conditions:
-#    stress = 2 * mu * sym(grad(u))
-#    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx + dot(n, v) * p * ds_tb + g * rhop * dot(v, rhat) * dx
-#    F_stokes += -w * div(u) * dx + w * dot(n, u) * ds_tb  # Continuity equation
-
-#    # nitsche free slip BCs
-#    F_stokes += -dot(v, n) * dot(dot(n, stress), n) * ds_tb
-#    F_stokes += -dot(u, n) * dot(dot(n, 2 * mu * sym(grad(v))), n) * ds_tb
-#    F_stokes += C_ip * mu * (p_ip + 1)**2 * FacetArea(mesh) / CellVolume(mesh) * dot(u, n) * dot(v, n) * ds_tb
+    T = -r**k/rmax**k*cos(nn*phi)  # RHS
 
     approximation = BoussinesqApproximation(1)
-
     stokes_bcs = {
         bottom_id: {'un': 0},
         top_id: {'un': 0},

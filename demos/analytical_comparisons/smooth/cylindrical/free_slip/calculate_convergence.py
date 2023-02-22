@@ -19,9 +19,9 @@ def log_params(f, str):
 
 
 # Range:
-ks = numpy.array([2, 4])
-resolutions = ["A", "B", "C", "D"]
-levels = [2, 3, 4, 5]
+ks = numpy.array([2, 4, 8])
+resolutions = ["A", "B", "C"]
+levels = [2, 3, 4]
 expected_velocity_convergence = 4.0
 expected_pressure_convergence = 2.0
 symbols = ["o", "*", "s"]

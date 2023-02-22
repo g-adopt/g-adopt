@@ -5,12 +5,12 @@ import shutil
 import numpy
 
 # Range:
-ks = numpy.array([2, 4])
-levels = [2, 3, 4, 5]
-resolutions = ["A", "B", "C", "D"]
-cores = ["4", "14", "28", "112"]
-mem = ["50", "100", "250", "500"]
-queue = ["normalbw", "normalbw", "normalbw", "normalbw"]
+ks = numpy.array([2, 4, 8])
+levels = [2, 3, 4]
+resolutions = ["A", "B", "C"]
+cores = ["4", "14", "28"]
+mem = ["50", "100", "250"]
+queue = ["normalbw", "normalbw", "normalbw"]
 
 # Make directories:
 print("****** Making Directories *******")
