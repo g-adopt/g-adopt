@@ -1,19 +1,12 @@
 from gadopt import *
-import sys
 import numpy
 import assess
 
 # Quadrature degree:
-dx = dx(degree=6)
-
-# Set up geometry and key parameters:
-rmin, rmax = 1.22, 2.22
-k = Constant(int(sys.argv[1]))  # radial degree
-nn = Constant(int(sys.argv[2]))  # wave number (n is already used for FacetNormal)
-level = int(sys.argv[3])  # refinement level
+_dx = dx(degree=6)
 
 # Projection solver parameters for nullspaces:
-project_solver_parameters = {
+_project_solver_parameters = {
     "snes_type": "ksponly",
     "ksp_type": "gmres",
     "pc_type": "sor",
@@ -22,9 +15,24 @@ project_solver_parameters = {
 }
 
 
-def model(disc_n):
-    ncells = disc_n*256
-    nlayers = disc_n*16
+def model(level, k, nn, do_write=False):
+    """The smooth initial condition, cylindrical domain, free-slip boundary condition model.
+
+    Args:
+        level: refinement level
+        k: radial degree
+        nn: wave number per radial degree
+        do_write: whether to output the velocity/pressure fields
+    """
+
+    rmin, rmax = 1.22, 2.22
+    nn = k * nn
+
+    k = Constant(k)
+    nn = Constant(nn)
+
+    ncells = level * 256
+    nlayers = level * 16
 
     # Construct a circle mesh and then extrude into a cylinder:
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
@@ -78,12 +86,12 @@ def model(disc_n):
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
     rot = as_vector((-X[1], X[0]))
-    coef = assemble(dot(rot, u_)*dx) / assemble(dot(rot, rot)*dx)
-    u_.project(u_ - rot*coef, solver_parameters=project_solver_parameters)
+    coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
+    u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
 
     # removing constant nullspace from pressure
-    coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
-    p_.project(p_ - coef, solver_parameters=project_solver_parameters)
+    coef = assemble(p_ * _dx)/assemble(Constant(1.0)*_dx(domain=mesh))
+    p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
     solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
 
@@ -99,26 +107,20 @@ def model(disc_n):
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
     p_error = Function(W, name="PressureError").assign(p_-p_anal)
 
-    # Write output files in VTK format:
-    u_.rename("Velocity")
-    p_.rename("Pressure")
-    u_file = File("fs_velocity_{}.pvd".format(disc_n))
-    p_file = File("fs_pressure_{}.pvd".format(disc_n))
+    if do_write:
+        # Write output files in VTK format:
+        u_.rename("Velocity")
+        p_.rename("Pressure")
+        u_file = File("fs_velocity_{}.pvd".format(level))
+        p_file = File("fs_pressure_{}.pvd".format(level))
 
-    # Write output:
-    u_file.write(u_, u_anal, u_error)
-    p_file.write(p_, p_anal, p_error)
+        # Write output:
+        u_file.write(u_, u_anal, u_error)
+        p_file.write(p_, p_anal, p_error)
 
-    l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*dx))
-    l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*dx))
-    l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*dx))
-    l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*dx))
+    l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*_dx))
+    l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*_dx))
+    l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*_dx))
+    l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*_dx))
 
     return l2error_u, l2error_p, l2anal_u, l2anal_p
-
-
-# Run model at different levels:
-f = open('errors.log', 'w')
-l2error_u, l2error_p, l2anal_u, l2anal_p = model(level)
-f.write(f"{l2error_u} {l2error_p} {l2anal_u} {l2anal_p}")
-f.close()
