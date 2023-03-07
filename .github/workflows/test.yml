@@ -18,13 +18,18 @@ jobs:
       OMP_NUM_THREADS: 1
 
     steps:
+      - name: Install prerequisites
+        run: |
+          sudo apt update
+          sudo apt install -y task-spooler
+          tsp -S 32
       - uses: actions/checkout@v3
       - name: Run test
         run: |
           . /home/firedrake/firedrake/bin/activate
           python3 -m pip install -r requirements.txt
           python3 -m pip install .
-          make -j6 test > test_output.log
+          make -j test > test_output.log
           python -m pytest
         env:
           GADOPT_LOGLEVEL: INFO
