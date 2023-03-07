@@ -54,7 +54,7 @@ def model(level, k, nn, do_write=False):
     # Set up fields on these function spaces - split into each component so that they are easily accessible:
     z = Function(Z)  # a field over the mixed function space Z.
     u, p = split(z)
-    u_, p_ = z.split()
+    u_, p_ = z.subfunctions
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
