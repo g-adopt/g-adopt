@@ -71,15 +71,6 @@ time = 0.0
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
-# Write output files in VTK format:
-u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
-# Next rename for output:
-u.rename("Velocity")
-p.rename("Pressure")
-# Create output file and select output_frequency:
-output_file = File("output.pvd")
-dump_period = 1
-
 temp_bcs = {
     bottom_id: {'T': 1.0},
     top_id: {'T': 0.0},
@@ -108,14 +99,7 @@ stokes_solver.solver_parameters['fieldsplit_1']['ksp_view'] = None
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
 
-    # Write output:
-    if timestep % dump_period == 0:
-        output_file.write(u, p, T)
-
-    if timestep != 0:
-        dt = t_adapt.update_timestep(u)
-    else:
-        dt = float(delta_t)
+    dt = float(delta_t)
     time += dt
 
     # Solve Stokes sytem:
