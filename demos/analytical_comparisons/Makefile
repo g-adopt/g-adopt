@@ -1,4 +1,4 @@
-cases := smooth/cylindrical/free_slip
+cases := smooth/cylindrical/free_slip delta/cylindrical/free_slip
 
 .PHONY: all $(cases)
 

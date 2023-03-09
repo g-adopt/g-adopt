@@ -5,15 +5,16 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-enabled_cases = [
-    "smooth/cylindrical/free_slip",
-]
+enabled_cases = {
+    "smooth/cylindrical/free_slip": (4.0, 2.0),
+    "delta/cylindrical/free_slip": (1.5, 0.5),
+}
 
 params = {
     f"{l1}/{l2}/{l3}": v3 for l1, v1 in analytical.cases.items()
     for l2, v2 in v1.items()
     for l3, v3 in v2.items()
-    if f"{l1}/{l2}/{l3}" in enabled_cases
+    if f"{l1}/{l2}/{l3}" in enabled_cases.keys()
 }
 
 configs = []
@@ -24,7 +25,7 @@ for name, conf in params.items():
     conf.pop("levels")
 
     for combination in itertools.product(*conf.values()):
-        configs.append((name, dict(zip(conf.keys(), combination))))
+        configs.append((name, enabled_cases[name], dict(zip(conf.keys(), combination))))
 
 
 def idfn(val):
@@ -32,8 +33,8 @@ def idfn(val):
         return "-".join([f"{k}{v}" for k, v in val.items()])
 
 
-@pytest.mark.parametrize("name,config", configs, ids=idfn)
-def test_analytical(name, config):
+@pytest.mark.parametrize("name,expected,config", configs, ids=idfn)
+def test_analytical(name, expected, config):
     levels = analytical.get_case(analytical.cases, name)["levels"]
 
     b = Path(__file__).parent.resolve()
@@ -58,6 +59,6 @@ def test_analytical(name, config):
     errs = errs.reset_index(drop=True)  # drop resolution label
 
     convergence = np.log2(errs.shift() / errs).drop(index=0)
-    expected = pd.Series([4.0, 2.0], index=["l2error_u", "l2error_p"])
+    expected = pd.Series(expected, index=["l2error_u", "l2error_p"])
 
     assert np.allclose(convergence, expected, rtol=1e-2)

@@ -35,8 +35,9 @@ cases = {
     "delta": {
         "cylindrical": {
             "free_slip": {
+                "cores": [4, 16, 24],
+                "levels": [2**i for i in [2, 3, 4]],
                 "n": [2, 4, 8],
-                "levels": [2, 3, 4, 5],
             },
             "free_slip_dpc": {
                 "n": [2, 4, 8],
@@ -65,14 +66,15 @@ def get_case(cases, config):
 
 def run_subcommand(args):
     from mpi4py import MPI
-    import smooth_cylindrical_freeslip
 
-    models = {
-        "smooth/cylindrical/free_slip": smooth_cylindrical_freeslip.model,
-    }
-    print("run: {}".format(args))
+    if args.case == "smooth/cylindrical/free_slip":
+        from smooth_cylindrical_freeslip import model
+    elif args.case == "delta/cylindrical/free_slip":
+        from delta_cylindrical_freeslip import model
+    else:
+        raise ValueError(f"unknown case {args.case}")
 
-    errors = models[args.case](*args.params)
+    errors = model(*args.params)
     if MPI.COMM_WORLD.rank == 0:
         config = get_case(cases, args.case)
         config.pop("cores")
