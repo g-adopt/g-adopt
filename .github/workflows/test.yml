@@ -13,6 +13,7 @@ jobs:
     runs-on: self-hosted
     container:
       image: firedrakeproject/firedrake:latest
+      options: --shm-size 2g
 
     env:
       OMP_NUM_THREADS: 1
@@ -22,7 +23,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y task-spooler
-          tsp -S 32
+          tsp -S 48
       - uses: actions/checkout@v3
       - name: Run test
         run: |
