@@ -78,13 +78,13 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
             basis.append(fd.Function(V).interpolate(fd.as_vector(vec)))
 
     if basis:
-        V_nullspace = fd.VectorSpaceBasis(basis)
+        V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
         V_nullspace.orthonormalize()
     else:
         V_nullspace = V
 
     if closed:
-        p_nullspace = fd.VectorSpaceBasis(constant=True)
+        p_nullspace = fd.VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
     else:
         p_nullspace = W
 
