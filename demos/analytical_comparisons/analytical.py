@@ -21,16 +21,18 @@ cases = {
         },
         "spherical": {
             "free_slip": {
-                "l": [2, 4, 8],
-                "k": [3, 5, 9],
-                "levels": [3, 4, 5, 6],
-                "layers": [8, 16, 32, 64],
+                "cores": [24, 48, 192],
+                "levels": [3, 4, 5],
+                "l": [2, 8],
+                "m": [2, 1],
+                "k": [3, 9],
             },
             "zero_slip": {
-                "l": [2, 4, 8],
-                "k": [3, 5, 9],
-                "levels": [3, 4, 5, 6],
-                "layers": [8, 16, 32, 64],
+                "cores": [24, 48, 192],
+                "levels": [3, 4, 5],
+                "l": [2, 8],
+                "m": [2, 1],
+                "k": [3, 9],
             },
         },
     },
@@ -84,6 +86,10 @@ def run_subcommand(args):
         from delta_cylindrical_freeslip_dpc import model
     elif args.case == "delta/cylindrical/zero_slip_dpc":
         from delta_cylindrical_zeroslip_dpc import model
+    elif args.case == "smooth/spherical/free_slip":
+        from smooth_spherical_freeslip import model
+    elif args.case == "smooth/spherical/zero_slip":
+        from smooth_spherical_zeroslip import model
     else:
         raise ValueError(f"unknown case {args.case}")
 
