@@ -6,8 +6,12 @@ import pandas as pd
 from pathlib import Path
 
 enabled_cases = {
-    "smooth/cylindrical/free_slip": (4.0, 2.0),
-    "delta/cylindrical/free_slip": (1.5, 0.5),
+    "smooth/cylindrical/free_slip": {"convergence": (4.0, 2.0)},
+    "smooth/cylindrical/zero_slip": {"convergence": (4.0, 2.0)},
+    "delta/cylindrical/free_slip": {"convergence": (1.5, 0.5)},
+    "delta/cylindrical/zero_slip": {"convergence": (1.5, 0.5)},
+    "delta/cylindrical/free_slip_dpc": {"convergence": (3.5, 2.0), "rtol": 1e-1},
+    "delta/cylindrical/zero_slip_dpc": {"convergence": (3.5, 2.0), "rtol": 2e-1},
 }
 
 params = {
@@ -59,6 +63,6 @@ def test_analytical(name, expected, config):
     errs = errs.reset_index(drop=True)  # drop resolution label
 
     convergence = np.log2(errs.shift() / errs).drop(index=0)
-    expected = pd.Series(expected, index=["l2error_u", "l2error_p"])
+    expected_convergence = pd.Series(expected["convergence"], index=["l2error_u", "l2error_p"])
 
-    assert np.allclose(convergence, expected, rtol=1e-2)
+    assert np.allclose(convergence, expected_convergence, rtol=expected.get("rtol", 1e-2))

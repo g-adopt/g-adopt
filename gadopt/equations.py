@@ -24,19 +24,25 @@ class BaseEquation(ABC):
 
         p = trial_space.ufl_element().degree()
         if isinstance(p, int):
-            # isotropic mesh
+            # isotropic element
             if quad_degree is None:
                 quad_degree = 2*p + 1
-            self.ds = firedrake.ds(domain=self.mesh, degree=quad_degree)
-            self.dS = firedrake.dS(domain=self.mesh, degree=quad_degree)
         else:
-            # extruded mesh
+            # tensorproduct element
             p_h, p_v = p
             if quad_degree is None:
                 quad_degree = 2*max(p_h, p_v) + 1
 
+        if trial_space.extruded:
+            # extruded mesh: create surface measures that treat the bottom and top boundaries the same as lateral boundaries
+            # so that ds or dS integrates over both horizontal and vertical boundaries
+            # and we can also use "bottom" and "top" as surface ids, e.g. ds("top")
             self.ds = CombinedSurfaceMeasure(self.mesh, quad_degree)
             self.dS = firedrake.dS_v(domain=self.mesh, degree=quad_degree) + firedrake.dS_h(domain=self.mesh, degree=quad_degree)
+        else:
+            self.ds = firedrake.ds(domain=self.mesh, degree=quad_degree)
+            self.dS = firedrake.dS(domain=self.mesh, degree=quad_degree)
+
         self.dx = firedrake.dx(domain=self.mesh, degree=quad_degree)
 
         # self._terms stores the actual instances of the BaseTerm-classes in self.terms

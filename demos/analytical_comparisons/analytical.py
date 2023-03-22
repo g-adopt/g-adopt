@@ -9,12 +9,14 @@ cases = {
             "free_slip": {
                 "cores": [4, 16, 24],
                 "levels": [2**i for i in [2, 3, 4]],
-                "k": [2, 4, 8],
-                "n": [1, 2, 4],
+                "k": [2, 8],
+                "n": [1, 4],
             },
             "zero_slip": {
-                "k": [2, 4],
-                "levels": [2, 3, 4, 5],
+                "cores": [4, 16, 24],
+                "levels": [2**i for i in [2, 3, 4]],
+                "k": [2, 8],
+                "n": [1, 4],
             },
         },
         "spherical": {
@@ -37,19 +39,22 @@ cases = {
             "free_slip": {
                 "cores": [4, 16, 24],
                 "levels": [2**i for i in [2, 3, 4]],
-                "n": [2, 4, 8],
+                "n": [2, 8],
             },
             "free_slip_dpc": {
-                "n": [2, 4, 8],
-                "levels": [2, 3, 4, 5],
+                "cores": [4, 16, 24],
+                "levels": [2**i for i in [2, 3, 4]],
+                "n": [2, 8],
             },
             "zero_slip": {
-                "n": [2, 4, 8],
-                "levels": [2, 3, 4, 5],
+                "cores": [4, 16, 24],
+                "levels": [2**i for i in [2, 3, 4]],
+                "n": [2, 8],
             },
             "zero_slip_dpc": {
-                "n": [2, 4, 8],
-                "levels": [2, 3, 4, 5],
+                "cores": [4, 16, 24],
+                "levels": [2**i for i in [2, 3, 4]],
+                "n": [2, 8],
             },
         },
     },
@@ -69,8 +74,16 @@ def run_subcommand(args):
 
     if args.case == "smooth/cylindrical/free_slip":
         from smooth_cylindrical_freeslip import model
+    elif args.case == "smooth/cylindrical/zero_slip":
+        from smooth_cylindrical_zeroslip import model
     elif args.case == "delta/cylindrical/free_slip":
         from delta_cylindrical_freeslip import model
+    elif args.case == "delta/cylindrical/zero_slip":
+        from delta_cylindrical_zeroslip import model
+    elif args.case == "delta/cylindrical/free_slip_dpc":
+        from delta_cylindrical_freeslip_dpc import model
+    elif args.case == "delta/cylindrical/zero_slip_dpc":
+        from delta_cylindrical_zeroslip_dpc import model
     else:
         raise ValueError(f"unknown case {args.case}")
 
