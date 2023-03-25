@@ -96,7 +96,7 @@ class StokesSolver:
 
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False,
+                 closed=True, rotational=False, J=None,
                  **kwargs):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
@@ -107,6 +107,7 @@ class StokesSolver:
         self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
+        self.J = J
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
@@ -164,7 +165,8 @@ class StokesSolver:
         self._solver_setup = False
 
     def setup_solver(self):
-        self.problem = fd.NonlinearVariationalProblem(self.F, self.solution, bcs=self.strong_bcs)
+        self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
+                                                      bcs=self.strong_bcs, J=self.J)
         self.solver = fd.NonlinearVariationalSolver(self.problem,
                                                     solver_parameters=self.solver_parameters,
                                                     options_prefix=self.name,
