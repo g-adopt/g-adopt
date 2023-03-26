@@ -41,8 +41,11 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     v, w = TestFunctions(Z)
     z = Function(Z)  # a field over the mixed function space Z.
     u, p = split(z)  # Returns symbolic UFL expression for u and p
+
+    # Functions to interpolate expression into for output:
     mu_f = Function(W, name="Viscosity")
     epsii_f = Function(W, name="StrainRateSecondInvariant")
+    alpha_SPD_f = Function(W, name="alpha_SPD")
 
     # z_nl is used in the Picard linearisation
     z_nl = Function(Z)
@@ -148,58 +151,34 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
 
     # write viscosity as function of epsii, so we can reuse it in
     # the Jacobian "stabilisation" term
-    def eta(epsii):
-        mu_plast = (A + B*(plith + alpha*p_nl))/(2*epsii)
+    def eta(epsii, p):
+        mu_plast = (A + B*(plith + alpha*p))/(2*epsii)
         mu1_eff = 1/(1/mu1 + 1/mu_plast)
         mu1_eff = conditional(switch > 0.5, mu1*mu_plast/(mu1+mu_plast), mu1)
         mu1_eff = max_value(mu1_eff, mu2)
         return conditional(d < interface_depth, mu1_eff, mu2)
 
-    # note that mu is written as a function of u_nl and p_nl, so that F_stokes remains
-    # linear in (u, p) - it's this linearisation we use in the Picard iteration
-    # whereas in the Newton solves we simply substitute u_nl,p_nl with u,p again:
-    eps = sym(grad(u_nl))
+    # viscosity expression in terms of u and p
+    eps = sym(grad(u))
     epsii = sqrt(0.5*inner(eps, eps))
-    mu = eta(epsii)
+    mu = eta(epsii, p)
 
-    # Stokes equations in UFL form:
-    stress = 2 * mu * sym(grad(u))
-    F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx
-    F_stokes += -w * div(u) * dx  # Continuity equation
-
-    # Set up boundary conditions for Stokes: We first extract the velocity
-    # field from the mixed function space Z. This is done using
-    # Z.sub(0). We subsequently extract the x and y components of
-    # velocity. This is done using an additional .sub(0) and .sub(1),
-    # respectively. Note that the final arguments here are the physical
-    # boundary ID's.
-    bcv_left = DirichletBC(Z.sub(0).sub(0), 1, left_id)  # u=U0=1 in non-dimensional units
-    bcv_right = DirichletBC(Z.sub(0).sub(0), -1, right_id)  # u=-U0=-1
-    bcv_bottom = DirichletBC(Z.sub(0).sub(1), 0, bottom_id)
+    # same expression in terms of u_nl and p_nl used in Picard solve
+    eps_nl = sym(grad(u_nl))
+    epsii_nl = sqrt(0.5*inner(eps_nl, eps_nl))
+    mu_nl = eta(epsii_nl, p_nl)
 
     # Write output files in VTK format:
-    u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
+    u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
     # Next rename for output:
-    u.rename("Velocity")
-    p.rename("Pressure")
+    u_.rename("Velocity")
+    p_.rename("Pressure")
     # Create output file and select output_frequency:
     output_file = File(os.path.join(output_dir, "output.pvd"))
+    picard_file = File(os.path.join(output_dir, 'picard.pvd'))
 
-    # Setup problem and solver objects so we can reuse (cache) solver setup
-    bcs = [bcv_left, bcv_right, bcv_bottom]
-    # problem and solver used in Picard iteration
-    picard_problem = NonlinearVariationalProblem(F_stokes, z, bcs=bcs)
-    picard_solver = NonlinearVariationalSolver(picard_problem, solver_parameters=picard_solver_parameters, appctx={'mu': mu})
-
-    # F_stokes is defined above using a separate function z_nl=(u_nl, p_nl) used in the viscosity
-    # thus F_stokes is *linear* in z=(u,p) and by updating z_nl every Picard iteration
-    # we converge the actual nonlinear problem. To obtain the UFL for the full nonlinear problem
-    # we simply replace z_nl with z - it is this nonlinear form F_stokes_nl that we use in the Newton solve
-    F_stokes_nl = replace(F_stokes, {z_nl: z})
-
-    # construct the Jacobian stabilisation form as in Fraters '19
-    # need a trial function to express the Jacobian as a UFL 2-form
-    u_trial, p_trial = TrialFunctions(Z)
+    # Construct the Jacobian stabilisation form as in Fraters '19
+    #
     # we don't actually use eps2 as a function, but use it as a symbolic coefficient
     # so that we can express the derivative of eta(eps2) wrt eps2
     eps2 = Function(W)
@@ -211,89 +190,61 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     #    derivative with respect to, and then substitute eps2=epsii
     # depsii/deps = eps/(2*epsii)
     # the Constant(1) is the perturbation: derivative computes a Gateaux derivative for a given perturbation
-    b = replace(derivative(eta(eps2), eps2, Constant(1)) * eps / (2*eps2), {eps2: epsii})
+    b = replace(derivative(eta(eps2, p), eps2, Constant(1)) * eps / (2*eps2), {eps2: epsii})
     abnorm = sqrt(inner(a, a)*inner(b, b))
     beta = (1-inner(b, a)/abnorm)**2*abnorm
     c_safety = Constant(1.0)
     alpha_SPD = conditional(beta < c_safety*2*mu, 1, c_safety*2*mu/beta)
-    # the normal full Jacobian used in the Newton iteration is derivative(F_stokes_nl, z)
-    # which returns a UFL 2-form where the perturbation is a trial function in Z
-    # This already contains the deta/du = deta/deps deps/du term which we want to be able to switch off using alpha_nl:
-    #    alpha_nl=0   deta/du not included
-    #    alpha_nl=1   full deta/du term included
-    # Thus we simply subtract (1-alpha_nl) times that term
-    # The term itself is inner(grad(v), 2 deta/du * sym(grad(u)))
-    # for deta/du we reuse mu (which is expressed in terms of u_nl), so we can simply
-    # take the derivative wrt u_nl (to be substituted in the next line)
-    # Note that we also need to provide the trial function u_trial for the perturbation to obtain the correct 2-form
-    jac = derivative(F_stokes_nl, z) - (1-alpha_SPD) * inner(grad(v), 2*derivative(mu, u_nl, u_trial)*sym(grad(u))) * dx
-    # we have used z_nl above just so that we could reuse epsii, eps and mu from their original definition,
-    # but actually we want to use z everywhere:
-    jac = replace(jac, {z_nl: z})
 
     # SCK:
-    z2 = Function(Z)
-    z2_nl = Function(Z)
-    u2, p2 = z2.split()
-    u2.rename("Velocity2")
-    p2.rename("Pressure2")
     T = 0
     approximation = BoussinesqApproximation(0)
-    mu_2 = replace(mu, {z: z2_nl, z_nl: z2_nl})
-    bcs2 = {left_id: {'ux': 1}, right_id: {'ux': -1}, bottom_id: {'uy': 0}}
-    picard_solver2 = StokesSolver(z2, T, approximation, mu=mu_2,
-                                  bcs=bcs2, solver_parameters=initial_picard_solver_parameters)
-    newton_solver_parameters2 = newton_solver_parameters.copy()
-    newton_solver_parameters2["snes_monitor"] = ":"+os.path.join(output_dir, "newton2.txt")
-    mu_2 = replace(mu, {z: z2, z_nl: z2})
-    newton_solver2 = StokesSolver(z2, T, approximation, mu=mu_2,
-                                  bcs=bcs2, solver_parameters=newton_solver_parameters2)
+    bcs = {left_id: {'ux': 1}, right_id: {'ux': -1}, bottom_id: {'uy': 0}}
+    picard_solver = StokesSolver(z, T, approximation, mu=mu_nl,
+                                 bcs=bcs, solver_parameters=initial_picard_solver_parameters)
+    newton_solver = StokesSolver(z, T, approximation, mu=mu,
+                                 bcs=bcs, solver_parameters=newton_solver_parameters)
 
     if stabilisation:
-        alpha_SPD2 = replace(alpha_SPD, {z: z2, z_nl: z2})
-        u2_, p2_ = split(z2)
-        jac2 = derivative(newton_solver2.F, z2) - (1-alpha_SPD2) * inner(grad(v), 2*derivative(mu_2, u2_, u_trial)*sym(grad(u2_))) * dx
-        newton_solver2.J = jac2
+        # need a trial function to express the Jacobian as a UFL 2-form:
+        u_trial, p_trial = TrialFunctions(Z)
+        # the normal full Jacobian used in the Newton iteration is derivative(F_stokes_nl, z)
+        # which returns a UFL 2-form where the perturbation is a trial function in Z
+        # This already contains the deta/du = deta/deps deps/du term which we want to be able to switch off using alpha_SPD:
+        #    alpha_SPD=0   deta/du not included
+        #    alpha_SPD=1   full deta/du term included
+        # Thus we simply subtract (1-alpha_SPD) times that term
+        jac = derivative(newton_solver.F, z) - (1-alpha_SPD) * inner(grad(v), 2*derivative(mu, u, u_trial)*sym(grad(u))) * dx
+        newton_solver.J = jac
 
-    if stabilisation:
-        # use the modified Jacobian defined above
-        newton_problem = NonlinearVariationalProblem(F_stokes_nl, z, bcs=bcs, J=jac)
-    else:
-        # use the exact Jacobian
-        newton_problem = NonlinearVariationalProblem(F_stokes_nl, z, bcs=bcs)
-    newton_solver = NonlinearVariationalSolver(newton_problem,
-                                               solver_parameters=newton_solver_parameters,
-                                               appctx={'mu': mu})
-
-    picard_file = File(os.path.join(output_dir, 'picard.pvd'))
-
-    # switch off viscoplasticity as we start from u=0
+    # switch off viscoplasticity in initial Picard solve as we start from u=0
     switch.assign(0.)
-    # seperate solve as we like to use seperate solver parameters here
-    solve(F_stokes == 0, z, bcs=bcs, solver_parameters=initial_picard_solver_parameters, appctx={'mu': mu})
-    z_nl.assign(z)
-    mu_f.interpolate(mu)
 
-    picard_solver2.solve()
-    z2_nl.assign(z2)
-    picard_solver2.solver_parameters = picard_solver_parameters
-    picard_solver2.setup_solver()
+    picard_solver.solve()
+    z_nl.assign(z)
 
     # this defines Picard iteration 0
-    picard_file.write(u, p, mu_f, epsii_f, u2, p2)
+    mu_f.interpolate(mu)
+    epsii_f.interpolate(epsii)
+    picard_file.write(u_, p_, mu_f, epsii_f)
 
     # output file with Picard residuals
     f_picard = open(os.path.join(output_dir, 'picard.txt'), 'w')
     # switch full viscoplastic rheology back on
     switch.assign(1.)
+
+    # initial solve is done iteratively with extra tight tolerance
+    # subsequent iterative solves are done with direct solvers
+    picard_solver.solver_parameters = picard_solver_parameters
+    picard_solver.setup_solver()
+
     for i in range(picard_iterations):
-        f_picard.write(f"{i:02}: {assemble(F_stokes_nl, bcs=bcs, zero_bc_nodes=True).dat.norm}\n")
+        f_picard.write(f"{i:02}: {assemble(picard_solver.F, bcs=picard_solver.strong_bcs, zero_bc_nodes=True).dat.norm}\n")
         picard_solver.solve()
-        picard_solver2.solve()
         z_nl.assign(z)
-        z2_nl.assign(z2)
         mu_f.interpolate(mu)
-        picard_file.write(u, p, mu_f, epsii_f, u2, p2)
+        epsii_f.interpolate(epsii)
+        picard_file.write(u_, p_, mu_f, epsii_f)
     f_picard.close()
 
     try:
@@ -304,20 +255,10 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         # very tight tolerances, so we always perform the max. n/o iterations
         pass
 
-    try:
-        newton_solver2.solve()
-    except firedrake.exceptions.ConvergenceError:
-        # ignore_solver failures, so we still get final output
-        # Most of the cases will not actually converge to the specified
-        # very tight tolerances, so we always perform the max. n/o iterations
-        pass
-
-    z_nl.assign(z)  # ensure `mu` and `epsii` expressions in output are up-to-date
     mu_f.interpolate(mu)
     epsii_f.interpolate(epsii)
-    alpha_SPD_f = Function(W, name="alpha_SPD")
     alpha_SPD_f.interpolate(alpha_SPD)
-    output_file.write(u, p, mu_f, epsii_f, alpha_SPD_f, u2, p2)
+    output_file.write(u_, p_, mu_f, epsii_f, alpha_SPD_f)
 
 
 for ui, mui in zip([2.5e-3, 5e-3, 12.5e-3], [1e23, 1e24, 5e24]):
