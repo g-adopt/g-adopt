@@ -2,6 +2,7 @@
 # at specified nx, ny resolution with variable number of initial Picard iterations and with or without
 # stabilisation of the Jacobian as advocated in Fraters et al. (2019)
 from firedrake import *
+import firedrake
 from firedrake.petsc import PETSc
 import os.path
 PETSc.Sys.popErrorHandler()
@@ -151,7 +152,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         mu_plast = (A + B*(plith + alpha*p_nl))/(2*epsii)
         mu1_eff = 1/(1/mu1 + 1/mu_plast)
         mu1_eff = conditional(switch > 0.5, mu1*mu_plast/(mu1+mu_plast), mu1)
-        mu1_eff = Max(mu1_eff, mu2)
+        mu1_eff = max_value(mu1_eff, mu2)
         return conditional(d < interface_depth, mu1_eff, mu2)
 
     # note that mu is written as a function of u_nl and p_nl, so that F_stokes remains
@@ -256,7 +257,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     # switch full viscoplastic rheology back on
     switch.assign(1.)
     for i in range(picard_iterations):
-        f_picard.write(f"{i:02}: {assemble(F_stokes_nl, bcs=bcs, assembly_type='residual').dat.norm}\n")
+        f_picard.write(f"{i:02}: {assemble(F_stokes_nl, bcs=bcs, zero_bc_nodes=True).dat.norm}\n")
         picard_solver.solve()
         z_nl.assign(z)
         mu_f.interpolate(mu)
