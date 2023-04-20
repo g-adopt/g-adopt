@@ -29,8 +29,8 @@ def log_params(f, str):
 
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
-V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+V = FunctionSpace(mesh, "BDM", 2)  # Velocity function space (vector)
+W = FunctionSpace(mesh, "DG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # Test functions and functions to hold solutions:
@@ -127,9 +127,29 @@ delta_t = Constant(1e-6)  # Initial time-step
 kappa = Constant(1.0)  # Thermal diffusivity
 
 # Stokes equations in UFL form:
-stress = 2 * mu * sym(grad(u))
-F_stokes = inner(grad(v), stress) * dx - div(v) * p * dx - (dot(v, k) * Ra * Ttheta) * dx + gamma * inner(div(v), div(u))*dx
-F_stokes += -w * div(u) * dx  # Continuity equation
+sigma = Constant(10) * (V.ufl_element().degree() + 1) * V.ufl_element().degree()  # SIPG penalty parameter
+h = CellDiameter(mesh)
+n = FacetNormal(mesh)
+F_stokes = (
+             inner(2 * mu * sym(grad(u)), grad(v)) * dx
+           - inner(avg(2 * mu * sym(grad(u))), 2 * avg(outer(v, n))) * dS
+           - inner(avg(2 * mu * sym(grad(v))), 2 * avg(outer(u, n))) * dS
+           + sigma/avg(h) * inner(2 * mu * avg(outer(u,n)), 2 * avg(outer(v,n))) * dS
+           - div(v) * p * dx
+           - (dot(v, k) * Ra * Ttheta) * dx
+           + gamma * inner(div(v), div(u))*dx
+           - w * div(u) * dx
+           # Would need more terms for weak enforcement of Dirichlet BCs on tangential components,
+           # but this problem doesn't have any.
+           # If you do, see line 685 of branch fw/hdiv of alfi/solver.py in alfi---the code would be
+           # - inner(outer(v,n),2*mu*sym(grad(u)))*ds(bid)
+           # - inner(outer(u-g,n),2*mu*sym(grad(v)))*ds(bid)
+           # + mu*(sigma/h)*inner(v,u-g)*ds(bid)
+           # where bid = the boundary id where you want to impose the condition, and
+           #       g = Dirichlet data
+           )
+
+
 # Energy equation in UFL form:
 F_energy = q * (Tnew - Told) / delta_t * dx + q * dot(u, grad(Ttheta)) * dx + dot(grad(q), kappa * grad(Ttheta)) * dx
 
@@ -139,7 +159,13 @@ F_energy = q * (Tnew - Told) / delta_t * dx + q * dot(u, grad(Ttheta)) * dx + do
 # velocity. This is done using an additional .sub(0) and .sub(1),
 # respectively. Note that the final arguments here are the physical
 # boundary ID's.
-bcvx, bcvy = DirichletBC(Z.sub(0).sub(0), 0, (left_id, right_id)), DirichletBC(Z.sub(0).sub(1), 0, (bottom_id, top_id))
+if V.ufl_element().family() == "Lagrange":
+    bcvx, bcvy = DirichletBC(Z.sub(0).sub(0), 0, (left_id, right_id)), DirichletBC(Z.sub(0).sub(1), 0, (bottom_id, top_id))
+elif V.ufl_element().family() == "Brezzi-Douglas-Marini":
+    bcvx = DirichletBC(Z.sub(0), 0, (left_id, right_id))  # only normal component will be enforced
+    bcvy = DirichletBC(Z.sub(0), 0, (bottom_id, top_id))  # same
+
+
 class FixAtPointBC(DirichletBC):
     def __init__(self, V, g, bc_point):
         super().__init__(V, g, "on_boundary")
@@ -193,7 +219,7 @@ log_params(f, "timestep time dt maxchange u_rms u_rms_surf ux_max nu_base nu_top
 
 # Setup problem and solver objects so we can reuse (cache) solver setup
 stokes_problem = NonlinearVariationalProblem(F_stokes, z, bcs=[bcvx, bcvy, bcp])
-stokes_solver = NonlinearVariationalSolver(stokes_problem, solver_parameters=solver_parameters_allu, nullspace=p_nullspace, transpose_nullspace=p_nullspace)
+stokes_solver = NonlinearVariationalSolver(stokes_problem, solver_parameters=solver_parameters_lu, nullspace=p_nullspace, transpose_nullspace=p_nullspace)
 energy_problem = NonlinearVariationalProblem(F_energy, Tnew, bcs=[bctb, bctt])
 energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=solver_parameters_lu)
 
@@ -219,7 +245,8 @@ for timestep in range(0, max_timesteps):
     u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)  # RMS velocity
     u_rms_surf = sqrt(assemble(u[0] ** 2 * ds(top_id)))  # RMS velocity at surface
     bcu = DirichletBC(u.function_space(), 0, top_id)
-    ux_max = u.dat.data_ro_with_halos[bcu.nodes, 0].max(initial=0)
+    #ux_max = u.dat.data_ro_with_halos[bcu.nodes, 0].max(initial=0)
+    ux_max = 0
     ux_max = u.comm.allreduce(ux_max, MPI.MAX)  # Maximum Vx at surface
     nusselt_number_top = -1 * assemble(dot(grad(Tnew), n) * ds(top_id))
     nusselt_number_base = assemble(dot(grad(Tnew), n) * ds(bottom_id))
