@@ -1,10 +1,10 @@
 from gadopt import *
 from mpi4py import MPI
-from pyroteus import recover_hessian, hessian_metric
+from pyroteus import recover_hessian, hessian_metric, compute_eigendecomposition
 from firedrake.meshadapt import adapt, RiemannianMetric
 
 # Set up initial mesh
-nx, ny = 40, 40
+nx, ny = 100, 100
 mesh = UnitSquareMesh(nx, ny, quadrilateral=False)  # Square mesh generated via firedrake
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
@@ -15,13 +15,18 @@ timestep = 0
 output_file = File("output.pvd", adaptive=True)
 dump_period = 10
 
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+# Open file for logging diagnostic output:
+plog = ParameterLog('params.log', mesh)
+plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
+
+
+Q = FunctionSpace(mesh, "CG", 1)  # Temperature function space (scalar)
 T_init = Function(Q)
 X = SpatialCoordinate(mesh)
 T_init.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 
 # Frequency of checkpoint files:
-checkpoint_period = dump_period * 4
+checkpoint_period = dump_period * 10
 
 def run_interval(mesh, Nt, T_init):
     global timestep, mesh_cnt
@@ -29,7 +34,7 @@ def run_interval(mesh, Nt, T_init):
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-    Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+    Q = FunctionSpace(mesh, "CG", 1)  # Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
     # Function to store the solutions:
@@ -50,7 +55,7 @@ def run_interval(mesh, Nt, T_init):
     t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-    Ra = Constant(1e5)  # Rayleigh number
+    Ra = Constant(1e6)  # Rayleigh number
     approximation = BoussinesqApproximation(Ra)
 
     time = 0.0
@@ -67,12 +72,7 @@ def run_interval(mesh, Nt, T_init):
     u.rename("Velocity")
     p.rename("Pressure")
 
-    # Open file for logging diagnostic output:
-    plog = ParameterLog('params.log', mesh)
-    plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
-
     gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
-
 
     temp_bcs = {
         bottom_id: {'T': 1.0},
@@ -140,7 +140,6 @@ def run_interval(mesh, Nt, T_init):
             checkpoint_file.save_function(T, name="Temperature", idx=timestep)
             checkpoint_file.save_function(z, name="Stokes", idx=timestep)
 
-    plog.close()
     checkpoint_file.close()
     mesh_cnt += 1
 
@@ -161,12 +160,19 @@ for _ in range(1000):
     metric.rename("metric")
     import numpy as np
     metric.set_parameters(
-            {'dm_plex_metric_target_complexity': 5000,
+            {'dm_plex_metric_target_complexity': 10000,
              'dm_plex_metric_p': np.inf,
+             #'dm_plex_metric_verbosity': 10,
+             'dm_plex_gradation_factor': 1.5,
              'dm_plex_metric_a_max': 10,
-             'dm_plex_metric_h_min': 1e-4,
-             'dm_plex_metric_h_max': 1})
+             'dm_plex_metric_h_min': 1e-5,
+             'dm_plex_metric_h_max': .1})
     metric.intersect(*metrics)
     metric.normalise()
-    metric_file.write(metric)
+    evecs, evals = compute_eigendecomposition(metric)
+    evecs.rename("Eigenvectors")
+    evals.rename("Eigenvalues")
+    metric_file.write(metric, evecs, evals)
     mesh = adapt(mesh, metric)
+
+plog.close()
