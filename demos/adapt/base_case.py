@@ -4,16 +4,19 @@ from pyroteus import recover_hessian, hessian_metric, compute_eigendecomposition
 from firedrake.meshadapt import adapt, RiemannianMetric
 
 # Set up initial mesh
-nx, ny = 100, 100
+nx, ny = 10, 10
 mesh = UnitSquareMesh(nx, ny, quadrilateral=False)  # Square mesh generated via firedrake
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 mesh_cnt = 0
 timestep = 0
 
+timesteps_per_adapt = 10
+
 # Create output file and select output_frequency:
 output_file = File("output.pvd", adaptive=True)
-dump_period = 10
+dump_period = 1
+
 
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
@@ -21,14 +24,27 @@ plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base 
 
 
 Q = FunctionSpace(mesh, "CG", 1)  # Temperature function space (scalar)
-T_init = Function(Q)
+T_init = Function(Q, name="InitialTemperature")
 X = SpatialCoordinate(mesh)
 T_init.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
+u_init = Function(VectorFunctionSpace(mesh, "CG", 1), name="InitialVelocity")
 
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 10
 
-def run_interval(mesh, Nt, T_init):
+def interpolate_between(source, target):
+    from firedrake.mg.utils import physical_node_locations
+    target_fs = target.function_space()
+    target_locations = physical_node_locations(target_fs).dat.data[:]
+    vom = VertexOnlyMesh(source.function_space().mesh(), target_locations, redundant=False)
+    if isinstance(target_fs.ufl_element(), VectorElement):
+        vom_space = VectorFunctionSpace(vom, "DG", 0)
+    else:
+        vom_space = FunctionSpace(vom, "DG", 0)
+    target_vom_f = interpolate(source, vom_space)
+    target.dat.data[:] = target_vom_f.dat.data
+
+def run_interval(mesh, Nt, T_init, u_init):
     global timestep, mesh_cnt
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
@@ -49,7 +65,9 @@ def run_interval(mesh, Nt, T_init):
 
     # Set up temperature field and initialise:
     T = Function(Q, name="Temperature")
-    T.project(T_init)
+    interpolate_between(T_init, T)
+    u_, p_ = z.subfunctions
+    interpolate_between(u_init, u_)
 
     delta_t = Constant(1e-6)  # Initial time-step
     t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
@@ -86,7 +104,7 @@ def run_interval(mesh, Nt, T_init):
         right_id: {'ux': 0},
     }
 
-    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+    energy_solver = EnergySolver(T, u, approximation, delta_t, BackwardEuler, bcs=temp_bcs)
     Told = energy_solver.T_old
     Ttheta = 0.5*T + 0.5*Told
     Told.assign(T)
@@ -96,6 +114,7 @@ def run_interval(mesh, Nt, T_init):
 
     checkpoint_file = CheckpointFile(f"Checkpoint_State_{mesh_cnt}.h5", "w")
     checkpoint_file.save_mesh(mesh)
+    checkpoint_idx = 0
 
     # Now perform the time loop:
     for timestep in range(timestep, timestep+Nt):
@@ -137,8 +156,9 @@ def run_interval(mesh, Nt, T_init):
 
         # Checkpointing:
         if timestep % checkpoint_period == 0:
-            checkpoint_file.save_function(T, name="Temperature", idx=timestep)
-            checkpoint_file.save_function(z, name="Stokes", idx=timestep)
+            checkpoint_file.save_function(T, name="Temperature", idx=checkpoint_idx)
+            checkpoint_file.save_function(z, name="Stokes", idx=checkpoint_idx)
+            checkpoint_idx += 1
 
     checkpoint_file.close()
     mesh_cnt += 1
@@ -148,19 +168,21 @@ def run_interval(mesh, Nt, T_init):
 metric_file = File('metric.pvd', adaptive=True)
 
 T = T_init
+u = u_init
 for _ in range(1000):
-    T, u, p, steady_state_reached = run_interval(mesh, 10, T)
+    T, u, p, steady_state_reached = run_interval(mesh, timesteps_per_adapt, T, u)
     if steady_state_reached:
         break
 
     Hs = [recover_hessian(u.sub(i), method='L2') for i in range(2)]
+    Hs.append(recover_hessian(T, method='L2'))
     metrics = [RiemannianMetric(hessian_metric(H)) for H in Hs]
 
     metric = RiemannianMetric(mesh)
     metric.rename("metric")
     import numpy as np
     metric.set_parameters(
-            {'dm_plex_metric_target_complexity': 10000,
+            {'dm_plex_metric_target_complexity': 1000,
              'dm_plex_metric_p': np.inf,
              #'dm_plex_metric_verbosity': 10,
              'dm_plex_gradation_factor': 1.5,
