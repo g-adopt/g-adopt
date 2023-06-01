@@ -30,7 +30,13 @@ for name, conf in params.items():
     conf.pop("cores")
     conf.pop("levels")
 
-    for combination in itertools.product(*conf.values()):
+    permutate = conf.pop("permutate", True)
+    if permutate:
+        param_gen = itertools.product(*conf.values())
+    else:
+        param_gen = zip(*conf.values())
+
+    for combination in param_gen:
         configs.append((name, enabled_cases[name], dict(zip(conf.keys(), combination))))
 
 

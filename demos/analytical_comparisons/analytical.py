@@ -21,18 +21,20 @@ cases = {
         },
         "spherical": {
             "free_slip": {
-                "cores": [24, 48, 192],
-                "levels": [3, 4, 5],
+                "cores": [24, 48, 96, 192],  # cascade lake
+                "levels": [3, 4, 5, 6],
                 "l": [2, 8],
-                "m": [2, 1],
+                "m": [2, 1],  # divide l by this value to get actual m
                 "k": [3, 9],
+                "permutate": False,
             },
             "zero_slip": {
-                "cores": [24, 48, 192],
-                "levels": [3, 4, 5],
+                "cores": [24, 48, 96, 192],
+                "levels": [3, 4, 5, 6],
                 "l": [2, 8],
                 "m": [2, 1],
                 "k": [3, 9],
+                "permutate": False,
             },
         },
     },
@@ -110,10 +112,17 @@ def submit_subcommand(args):
     config = get_case(cases, args.case)
     procs = {}
 
+    permutate = config.pop("permutate", True)
+
     for level, cores in zip(config.pop("levels"), config.pop("cores")):
-        for params in itertools.product(*config.values()):
-            command = args.template.format(cores=cores)
+        if permutate:
+            param_gen = itertools.product(*config.values())
+        else:
+            param_gen = zip(*config.values())
+
+        for params in param_gen:
             paramstr = "-".join([str(v) for v in params])
+            command = args.template.format(cores=cores, mem=4*cores, params=paramstr)
 
             procs[paramstr] = subprocess.Popen(
                 [
