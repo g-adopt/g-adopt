@@ -1,4 +1,4 @@
-from firedrake import DirichletBC
+from firedrake import DirichletBC, Function
 from .scalar_equation import EnergyEquation
 from .utility import is_continuous, ensure_constant
 from .utility import log_level, INFO, DEBUG
@@ -23,8 +23,10 @@ direct_energy_solver_parameters = {
 class EnergySolver:
     def __init__(self, T, u, approximation,
                  delta_t, timestepper, bcs=None, solver_parameters=None):
+        self.T = T
         self.Q = T.function_space()
         self.mesh = self.Q.mesh()
+        self.delta_t = delta_t
         rhocp = approximation.rhocp()
         self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp)
         self.fields = {
@@ -68,10 +70,22 @@ class EnergySolver:
                     weak_bc[type] = value
             self.weak_bcs[id] = weak_bc
 
-        self.ts = timestepper(self.eq, T, self.fields, delta_t, self.weak_bcs, strong_bcs=self.strong_bcs,
-                              solver_parameters=self.solver_parameters)
-        self.T_old = self.ts.solution_old
+        self.timestepper = timestepper
+        self.T_old = Function(self.Q)
+        # solver is setup only last minute
+        # so people can overwrite parameters we've setup here
+        self._solver_setup = False
+
+    def setup_solver(self):
+        """Setup timestepper and associated solver"""
+        self.ts = self.timestepper(self.eq, self.T, self.fields, self.delta_t,
+                                   bnd_conditions=self.weak_bcs, solution_old=self.T_old,
+                                   strong_bcs=self.strong_bcs,
+                                   solver_parameters=self.solver_parameters)
+        self._solver_setup = True
 
     def solve(self):
+        if not self._solver_setup:
+            self.setup_solver()
         t = 0  # not used atm
         self.ts.advance(t)
