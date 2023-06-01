@@ -43,7 +43,8 @@ class TimeIntegrator(TimeIntegratorBase):
     """
     Base class for all time integrator objects that march a single equation
     """
-    def __init__(self, equation, solution, fields, dt, solver_parameters={}, strong_bcs=None):
+    def __init__(self, equation, solution, fields, dt, solution_old=None,
+                 solver_parameters=None, strong_bcs=None):
         """
         :arg equation: the equation to solve
         :type equation: :class:`BaseEquation` object
@@ -51,7 +52,10 @@ class TimeIntegrator(TimeIntegratorBase):
         :arg fields: Dictionary of fields that are passed to the equation
         :type fields: dict of :class:`Function` or :class:`Constant` objects
         :arg float dt: time step in seconds
+        :kwarg solution_old: :class:`Function` where solution at previous timestep
+                             is stored. New one will be created if not provided.
         :kwarg dict solver_parameters: PETSc solver options
+        :kwarg list strong_bcs: list of DirichletsBCs
         """
         super(TimeIntegrator, self).__init__()
 
@@ -61,13 +65,15 @@ class TimeIntegrator(TimeIntegratorBase):
         self.fields = fields
         self.dt = dt
         self.dt_const = ensure_constant(dt)
+        self.solution_old = solution_old or firedrake.Function(solution, name='Old'+solution.name())
 
         # unique identifier used in solver
         self.name = '-'.join([self.__class__.__name__,
                               self.equation.__class__.__name__])
 
         self.solver_parameters = {}
-        self.solver_parameters.update(solver_parameters)
+        if solver_parameters:
+            self.solver_parameters.update(solver_parameters)
 
         self.strong_bcs = strong_bcs or []
         self.hom_bcs = [firedrake.DirichletBC(bci.function_space(), 0, bci.sub_domain) for bci in strong_bcs]
@@ -107,7 +113,8 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
 
     Implements the Butcher form. All terms in the equation are treated explicitly.
     """
-    def __init__(self, equation, solution, fields, dt, bnd_conditions=None,
+    def __init__(self, equation, solution, fields, dt,
+                 solution_old=None, bnd_conditions=None,
                  solver_parameters={}, strong_bcs=None):
         """
         :arg equation: the equation to solve
@@ -116,14 +123,17 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         :arg fields: Dictionary of fields that are passed to the equation
         :type fields: dict of :class:`Function` or :class:`Constant` objects
         :arg float dt: time step in seconds
+        :kwarg solution_old: :class:`Function` where solution at previous timestep
+                             is stored. New one will be created if not provided.
         :kwarg dict bnd_conditions: Dictionary of boundary conditions passed to the equation
         :kwarg dict solver_parameters: PETSc solver options
+        :kwarg list strong_bcs: list of DirichletsBCs
         """
-        super(ERKGeneric, self).__init__(equation, solution, fields, dt, solver_parameters, strong_bcs)
+        super(ERKGeneric, self).__init__(equation, solution, fields, dt,
+                                         solution_old, solver_parameters, strong_bcs)
         self._initialized = False
         V = solution.function_space()
         assert V == equation.trial_space
-        self.solution_old = firedrake.Function(V, name='old solution')
 
         self.tendency = []
         for i in range(self.n_stages):
@@ -203,7 +213,8 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
     :attr:`b`, :attr:`c`.
     """
     def __init__(self, equation, solution, fields, dt,
-                 bnd_conditions=None, solver_parameters={}, strong_bcs=None, terms_to_add='all'):
+                 solution_old=None, bnd_conditions=None,
+                 solver_parameters={}, strong_bcs=None, terms_to_add='all'):
         """
         :arg equation: the equation to solve
         :type equation: :class:`Equation` object
@@ -211,19 +222,22 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         :arg fields: Dictionary of fields that are passed to the equation
         :type fields: dict of :class:`Function` or :class:`Constant` objects
         :arg float dt: time step in seconds
+        :kwarg solution_old: :class:`Function` where solution at previous timestep
+                             is stored. New one will be created if not provided.
         :kwarg dict bnd_conditions: Dictionary of boundary conditions passed to the equation
         :kwarg dict solver_parameters: PETSc solver options
+        :kwarg list strong_bcs: list of DirichletsBCs
         :kwarg terms_to_add: Defines which terms of the equation are to be
             added to this solver. Default 'all' implies ['implicit', 'explicit', 'source'].
         :type terms_to_add: 'all' or list of 'implicit', 'explicit', 'source'.
         """
-        super(DIRKGeneric, self).__init__(equation, solution, fields, dt, solver_parameters, strong_bcs)
+        super(DIRKGeneric, self).__init__(equation, solution, fields, dt,
+                                          solution_old, solver_parameters, strong_bcs)
         self.solver_parameters.setdefault('snes_type', 'newtonls')
         self._initialized = False
 
         fs = solution.function_space()
         assert fs == equation.trial_space
-        self.solution_old = firedrake.Function(fs, name='old solution')
 
         mixed_space = len(fs) > 1
 
