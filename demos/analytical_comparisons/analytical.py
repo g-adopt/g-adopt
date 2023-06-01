@@ -133,6 +133,18 @@ def submit_subcommand(args):
         sys.exit(1)
 
 
+def count_subcommand(args):
+    config = get_case(cases, args.case)
+    permutate = config.pop("permutate", True)
+    levels = zip(config.pop("levels"), config.pop("cores"))
+    if permutate:
+        params = itertools.product(*config.values())
+    else:
+        params = zip(*config.values())
+
+    print(len(list(levels)) * len(list(params)))
+
+
 # two modes, submit and run
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -149,6 +161,9 @@ if __name__ == "__main__":
     parser_submit.add_argument("-t", "--template", default="mpiexec -np {cores}", help="template command for running commands under MPI")
     parser_submit.add_argument("case")
     parser_submit.set_defaults(func=submit_subcommand)
+    parser_count = subparsers.add_parser("count", help="return the number of jobs to run for a specific case")
+    parser_count.add_argument("case")
+    parser_count.set_defaults(func=count_subcommand)
 
     args = parser.parse_args()
     args.func(args)
