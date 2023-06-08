@@ -43,28 +43,18 @@ r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 theta = atan_2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
 phi = atan_2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol to Zhong)
 k = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
-
 T0 = Constant(0.091)  # Non-dimensional surface temperature
-# Initialise from checkpoint:
-tic_dc = DumbCheckpoint("Temperature_State_100", mode=FILE_READ)
-tic_dc.load(T, name="Temperature")
-tic_dc.close()
+Di = Constant(0.5)  # Dissipation number.
+T.interpolate((1.0 - (T0*exp(Di) - T0)) * (2.22-r) )
+H_int = Constant(10.0)  # Internal heating
 
-# Initial condition for Stokes:
-uic_dc = DumbCheckpoint("Stokes_State_100", mode=FILE_READ)
-uic_dc.load(z, name="Stokes")
-uic_dc.close()
-
+# Set up a Function for gplate velocities:
 X_val = interpolate(X, V)
-
-# set up a Function for gplate velocities
 gplates_velocities = Function(V, name='SurfaceVelocity')
 
+# Important constants and physical parameters
 Ra = Constant(1.5e7)  # Rayleigh number
-Di = Constant(0.5)  # Dissipation number.
-mulinf = Function(W, name="Viscosity_Lin")
-muplastf = Function(W, name="Viscosity_Plast")
-muminf = Function(W, name="Viscosity_Min")
+# Rheological parameters
 delta_mu_660, delta_mu_r, delta_mu_T = Constant(40.), Constant(1.99), Constant(500.)
 mu_lin = (delta_mu_660 - (delta_mu_660-1)/2. - (delta_mu_660-1)*tanh((r-delta_mu_r)*10)/2.)*exp(-ln(delta_mu_T) * Tnew)
 mu_star, sigma_y = Constant(0.5), 1e4 + 2.4e5*(rmax-r)
@@ -74,11 +64,8 @@ mu_plast = mu_star + (sigma_y / epsii)
 mu_min = conditional(le(mu_plast, mu_lin), 1.0, 0.0)
 mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
 
-tcond = Constant(1.0)  # Thermal conductivity
-H_int = Constant(10.0)  # Internal heating
-
 # Compressible reference state:
-rho_0, alpha, cpr, cvr, gruneisen = 1.0, 1.0, 1.0, 1.0, 1.0
+rho_0, alpha, gruneisen = 1.0, 1.0, 1.0
 weight = r-rmin
 rhobar = Function(Q, name="CompRefDensity").interpolate(rho_0 * exp(((1.0 - weight) * Di) / alpha))
 Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - weight) * Di) - T0)
@@ -87,11 +74,13 @@ cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
 chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
 FullT = Function(Q, name="FullTemperature").assign(Tnew+Tbar)
 
-Ra = Constant(7e3)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
 
 delta_t = Constant(1e-6)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=1.0e-4, increase_tolerance=1.25)
+steady_state_tolerance = 1e-6
+max_timesteps = 500
+time = 0.0
 
 # helper function to compute horizontal layer averages
 Tlayer = Function(Qlayer, name='LayerTemp')  # stores values of temp in one layer
@@ -110,11 +99,6 @@ def layer_average(T):
     return Tavg
 
 
-# Define time stepping parameters:
-steady_state_tolerance = 1e-6
-max_timesteps = 500
-time = 0.0
-
 # Nullspaces and near-nullspaces:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
@@ -126,15 +110,16 @@ u.rename("Velocity")
 p.rename("Pressure")
 # Create output file and select output_frequency:
 output_file = File("output.pvd")
-dump_period = 1
+ref_file = File('reference_state.pvd')
+dump_period = 10
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
 
 temp_bcs = {
-    bottom_id: {'T': 1.0},
-    top_id: {'T': 0.0},
+    bottom_id: {'T': 1.0 - (T0*exp(Di) - T0)},
+    top_id: {'T': 0.0},    
 }
 stokes_bcs = {
     bottom_id: {'un': 0},
@@ -145,7 +130,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
-stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs,
+stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs, mu=mu,
                              cartesian=False,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
@@ -156,10 +141,14 @@ for timestep in range(0, max_timesteps):
     # Write output:
     if timestep % dump_period == 0:
         # compute radial temperature
-        Tavg = layer_average(T)
+        Tavg = layer_average(FullT)
         # compute deviation from layer average
-        T_dev.assign(T-Tavg)
-        output_file.write(u, p, T, T_dev)
+        T_dev.assign(FullT-Tavg)
+        # interpolate viscosity
+        muf.interpolate(mu)
+        # write
+        output_file.write(u, p, FullT, T_dev, muf)
+        ref_file.write(rhobar, Tbar, alphabar, cpbar, chibar)        
 
     if timestep != 0:
         dt = t_adapt.update_timestep(u)
@@ -175,10 +164,14 @@ for timestep in range(0, max_timesteps):
 
     # Compute diagnostics:
     u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
-    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0, domain=mesh)*ds_t)) * (rmax*(rmax-rmin)/rmin)
-    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0, domain=mesh)*ds_b)) * (rmin*(rmax-rmin)/rmax)
+    nusselt_number_top = (assemble(dot(grad(FullT), n) * ds_t) / assemble(Constant(1.0, domain=mesh)*ds_t)) * (rmax*(rmax-rmin)/rmin)
+    nusselt_number_base = (assemble(dot(grad(FullT), n) * ds_b) / assemble(Constant(1.0, domain=mesh)*ds_b)) * (rmin*(rmax-rmin)/rmax)
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
     average_temperature = assemble(T * dx) / domain_volume
+    max_viscosity = muf.dat.data.max()
+    max_viscosity = muf.comm.allreduce(max_viscosity, MPI.MAX)
+    min_viscosity = muf.dat.data.min()
+    min_viscosity = muf.comm.allreduce(min_viscosity, MPI.MIN)    
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
@@ -186,7 +179,8 @@ for timestep in range(0, max_timesteps):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {u_rms} "
                  f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {average_temperature} ")
+                 f"{energy_conservation} {average_temperature} "
+                 f"{min_viscosity} {max_viscosity} ")    
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
