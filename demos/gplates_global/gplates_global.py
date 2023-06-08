@@ -45,7 +45,7 @@ phi = atan_2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol
 k = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
 T0 = Constant(0.091)  # Non-dimensional surface temperature
 Di = Constant(0.5)  # Dissipation number.
-T.interpolate((1.0 - (T0*exp(Di) - T0)) * (2.22-r) )
+T.interpolate((1.0 - (T0*exp(Di) - T0)) * (2.22-r))
 H_int = Constant(10.0)  # Internal heating
 
 # Set up a Function for gplate velocities:
@@ -119,7 +119,7 @@ plog = ParameterLog('params.log', mesh)
 
 temp_bcs = {
     bottom_id: {'T': 1.0 - (T0*exp(Di) - T0)},
-    top_id: {'T': 0.0},    
+    top_id: {'T': 0.0},
 }
 stokes_bcs = {
     bottom_id: {'un': 0},
@@ -148,7 +148,7 @@ for timestep in range(0, max_timesteps):
         muf.interpolate(mu)
         # write
         output_file.write(u, p, FullT, T_dev, muf)
-        ref_file.write(rhobar, Tbar, alphabar, cpbar, chibar)        
+        ref_file.write(rhobar, Tbar, alphabar, cpbar, chibar)
 
     if timestep != 0:
         dt = t_adapt.update_timestep(u)
@@ -171,7 +171,7 @@ for timestep in range(0, max_timesteps):
     max_viscosity = muf.dat.data.max()
     max_viscosity = muf.comm.allreduce(max_viscosity, MPI.MAX)
     min_viscosity = muf.dat.data.min()
-    min_viscosity = muf.comm.allreduce(min_viscosity, MPI.MIN)    
+    min_viscosity = muf.comm.allreduce(min_viscosity, MPI.MIN)
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
@@ -180,7 +180,7 @@ for timestep in range(0, max_timesteps):
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {u_rms} "
                  f"{nusselt_number_base} {nusselt_number_top} "
                  f"{energy_conservation} {average_temperature} "
-                 f"{min_viscosity} {max_viscosity} ")    
+                 f"{min_viscosity} {max_viscosity} ")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
