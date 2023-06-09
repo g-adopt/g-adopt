@@ -16,7 +16,7 @@ def param_sets(config):
 
 
 def residual(ui, mui, nx, ny, picard_iterations, stabilisation):
-    output_dir = Path(f"spiegelman_{ui}_{mui}_{nx}_{ny}_{picard_iterations}_{stabilisation}")
+    output_dir = Path(__file__).parent.resolve() / f"spiegelman_{ui}_{mui}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
 
     with open(output_dir / "picard.txt", "r") as f:
         picard_residuals = np.array([float(line.split()[1]) for line in f])
