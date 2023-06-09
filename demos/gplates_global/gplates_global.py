@@ -1,13 +1,14 @@
 from gadopt import *
 import scipy.special
 import math
-import libgplates
+# import libgplates
 
 # Quadrature degree:
 dx = dx(degree=6)
 
 # Set up geometry:
 rmin, rmax, ref_level, nlayers = 1.22, 2.22, 6, 32
+rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 8
 
 # Construct a CubedSphere mesh and then extrude into a sphere:
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
@@ -45,18 +46,30 @@ phi = atan_2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol
 k = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
 T0 = Constant(0.091)  # Non-dimensional surface temperature
 Di = Constant(0.5)  # Dissipation number.
-T.interpolate((1.0 - (T0*exp(Di) - T0)) * (2.22-r))
 H_int = Constant(10.0)  # Internal heating
 
+conductive_term = ((1.0 - (T0*exp(Di) - T0)) * (2.22-r))
+# evaluate P_lm node-wise using scipy lpmv
+l, m, eps_c, eps_s = 6, 4, 0.02, 0.02
+Plm = Function(Q, name="P_lm")
+cos_phi = interpolate(cos(phi), Q)
+Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
+Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
+if m == 0:
+    Plm.assign(Plm/math.sqrt(2))
+T.interpolate(conductive_term +
+              (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
+
+
 # Set up a Function for gplate velocities:
-X_val = interpolate(X, V)
-gplates_velocities = Function(V, name='SurfaceVelocity')
+# X_val = interpolate(X, V)
+# gplates_velocities = Function(V, name='SurfaceVelocity')
 
 # Important constants and physical parameters
 Ra = Constant(1.5e7)  # Rayleigh number
 # Rheological parameters
 delta_mu_660, delta_mu_r, delta_mu_T = Constant(40.), Constant(1.99), Constant(500.)
-mu_lin = (delta_mu_660 - (delta_mu_660-1)/2. - (delta_mu_660-1)*tanh((r-delta_mu_r)*10)/2.)*exp(-ln(delta_mu_T) * Tnew)
+mu_lin = (delta_mu_660 - (delta_mu_660-1)/2. - (delta_mu_660-1)*tanh((r-delta_mu_r)*10)/2.)*exp(-ln(delta_mu_T) * T)
 mu_star, sigma_y = Constant(0.5), 1e4 + 2.4e5*(rmax-r)
 epsilon = sym(grad(u))  # strain-rate
 epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
@@ -72,14 +85,14 @@ Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - weight
 alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)
 cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
 chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
-FullT = Function(Q, name="FullTemperature").assign(Tnew+Tbar)
+FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 
+# approximation = BoussinesqApproximation(Ra)
 approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
 
 delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=1.0e-4, increase_tolerance=1.25)
-steady_state_tolerance = 1e-6
-max_timesteps = 500
+t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=1e-4, increase_tolerance=1.25)
+max_timesteps = 10
 time = 0.0
 
 # helper function to compute horizontal layer averages
@@ -181,11 +194,6 @@ for timestep in range(0, max_timesteps):
                  f"{nusselt_number_base} {nusselt_number_top} "
                  f"{energy_conservation} {average_temperature} "
                  f"{min_viscosity} {max_viscosity} ")
-
-    # Leave if steady-state has been achieved:
-    if maxchange < steady_state_tolerance:
-        log("Steady-state achieved -- exiting time-step loop")
-        break
 
     # Checkpointing:
     if timestep % checkpoint_period == 0:
