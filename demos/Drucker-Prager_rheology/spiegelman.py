@@ -5,6 +5,7 @@ from gadopt import *
 from firedrake.petsc import PETSc
 import firedrake
 import os.path
+import sys
 PETSc.Sys.popErrorHandler()
 
 # Quadrature degree:
@@ -261,10 +262,23 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     output_file.write(u_, p_, mu_f, epsii_f, alpha_SPD_f)
 
 
-for ui, mui in zip([2.5e-3, 5e-3, 12.5e-3], [1e23, 1e24, 5e24]):
-    # 50 initial Picard iterations is used in the graph (which cuts off after 50 iterations)
-    # to obtain the converge of a pure Picard solve, i.e. the subsequent Newton solve is
-    # ignored in that case
-    for picard_iterations in [50, 0, 5, 15, 25]:
-        for stab in [False, True]:
-            spiegelman(Constant(ui/year), Constant(mui/mu0), nx, ny, picard_iterations, stabilisation=stab)
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        ui, mui, nx, ny, picard_iterations, stab = sys.argv[1].split("_")
+        spiegelman(
+            Constant(float(ui) / year),
+            Constant(float(mui) / mu0),
+            int(nx),
+            int(ny),
+            int(picard_iterations),
+            stabilisation=stab == "True",
+        )
+
+    else:
+        for ui, mui in zip([2.5e-3, 5e-3, 12.5e-3], [1e23, 1e24, 5e24]):
+            # 50 initial Picard iterations is used in the graph (which cuts off after 50 iterations)
+            # to obtain the converge of a pure Picard solve, i.e. the subsequent Newton solve is
+            # ignored in that case
+            for picard_iterations in [50, 0, 5, 15, 25]:
+                for stab in [False, True]:
+                    spiegelman(Constant(ui/year), Constant(mui/mu0), nx, ny, picard_iterations, stabilisation=stab)
