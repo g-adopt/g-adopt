@@ -1,6 +1,6 @@
 from .equations import BaseTerm, BaseEquation
 from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
-from firedrake import avg, sym, Identity
+from firedrake import avg, sym, Identity, jump
 from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
 from firedrake import FacetArea, CellVolume
 r"""
@@ -86,7 +86,7 @@ class ViscosityTerm(BaseTerm):
         if not is_continuous(self.trial_space):
             u_tensor_jump = tensor_jump(n, u) + tensor_jump(u, n)
             if compressible:
-                u_tensor_jump -= 2/3 * Identity(self.dim) * dot(n, u)
+                u_tensor_jump -= 2/3 * Identity(self.dim) * jump(u, n)
             F += sigma*inner(tensor_jump(n, phi), avg(mu) * u_tensor_jump)*self.dS
             F += -inner(avg(mu * nabla_grad(phi)), u_tensor_jump)*self.dS
             F += -inner(tensor_jump(n, phi), avg(stress))*self.dS
@@ -96,11 +96,11 @@ class ViscosityTerm(BaseTerm):
                 if 'u' in bc:
                     u_tensor_jump = outer(n, u-bc['u'])
                     if compressible:
-                        u_tensor_jump -= 2/3 * Identity(self.dim) * dot(n, u - dot(n, bc['u']))
+                        u_tensor_jump -= 2/3 * Identity(self.dim) * (dot(n, u) - dot(n, bc['u']))
                 else:
                     u_tensor_jump = outer(n, n)*(dot(n, u)-bc['un'])
                     if compressible:
-                        u_tensor_jump -= 2/3 * Identity(self.dim) * dot(n, u - bc['un'])
+                        u_tensor_jump -= 2/3 * Identity(self.dim) * (dot(n, u) - bc['un'])
                 u_tensor_jump += transpose(u_tensor_jump)
                 # this corresponds to the same 3 terms as the dS integrals for DG above:
                 F += 2*sigma*inner(outer(n, phi), mu * u_tensor_jump)*self.ds(id)
