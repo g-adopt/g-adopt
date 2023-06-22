@@ -14,9 +14,9 @@ iterative_energy_solver_parameters = {
 direct_energy_solver_parameters = {
     "mat_type": "aij",
     "snes_type": "ksponly",
-    "ksp_type": "gmres",
-    "ksp_rtol": 1e-5,
-    "pc_type": "sor",
+    "ksp_type": "preonly",
+    "pc_type": "lu",
+    "pc_factor_mat_solver_type": "mumps",
 }
 
 
