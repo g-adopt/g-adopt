@@ -1,4 +1,5 @@
 from gadopt import *
+from mpi4py import MPI
 import scipy.special
 import math
 # import libgplates
@@ -46,7 +47,7 @@ phi = atan_2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol
 k = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
 T0 = Constant(0.091)  # Non-dimensional surface temperature
 Di = Constant(0.5)  # Dissipation number.
-H_int = Constant(0.0)  # Internal heating
+H_int = Constant(10.0)  # Internal heating
 
 conductive_term = ((1.0 - (T0*exp(Di) - T0)) * (2.22-r))
 # evaluate P_lm node-wise using scipy lpmv
@@ -66,7 +67,7 @@ T.interpolate(conductive_term +
 # gplates_velocities = Function(V, name='SurfaceVelocity')
 
 # Important constants and physical parameters
-Ra = Constant(1.5e7)  # Rayleigh number
+Ra = Constant(1.0e7)  # Rayleigh number
 # Rheological parameters
 delta_mu_660, delta_mu_r, delta_mu_T = Constant(40.), Constant(1.99), Constant(500.)
 mu_lin = (delta_mu_660 - (delta_mu_660-1)/2. - (delta_mu_660-1)*tanh((r-delta_mu_r)*10)/2.)*exp(-ln(delta_mu_T) * T)
