@@ -7,7 +7,7 @@ import math
 dx = dx(degree=6)
 
 # Set up geometry:
-rmin, rmax, ref_level, nlayers = 1.22, 2.22, 6, 32
+# rmin, rmax, ref_level, nlayers = 1.22, 2.22, 6, 32
 rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 8
 
 # Construct a CubedSphere mesh and then extrude into a sphere:
@@ -46,7 +46,7 @@ phi = atan_2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol
 k = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
 T0 = Constant(0.091)  # Non-dimensional surface temperature
 Di = Constant(0.5)  # Dissipation number.
-H_int = Constant(10.0)  # Internal heating
+H_int = Constant(0.0)  # Internal heating
 
 conductive_term = ((1.0 - (T0*exp(Di) - T0)) * (2.22-r))
 # evaluate P_lm node-wise using scipy lpmv
@@ -90,9 +90,9 @@ FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 # approximation = BoussinesqApproximation(Ra)
 approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
 
-delta_t = Constant(1e-6)  # Initial time-step
+delta_t = Constant(1e-5)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=1e-4, increase_tolerance=1.25)
-max_timesteps = 10
+max_timesteps = 5
 time = 0.0
 
 # helper function to compute horizontal layer averages
@@ -140,6 +140,7 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver.fields['source'] = rhobar * H_int
 Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
