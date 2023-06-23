@@ -110,8 +110,8 @@ for timestep in range(0, max_timesteps):
     f_ratio = rmin/rmax
     top_scaling = -1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
     bot_scaling = -0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
-    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0, domain=mesh)*ds_t)) * top_scaling
-    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0, domain=mesh)*ds_b)) * bot_scaling
+    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0) * ds_t(domain=mesh))) * top_scaling
+    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0) * ds_b(domain=mesh))) * bot_scaling
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
     average_temperature = assemble(T * dx) / domain_volume
 

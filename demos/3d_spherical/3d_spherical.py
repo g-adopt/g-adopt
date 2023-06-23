@@ -63,7 +63,7 @@ t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1
 # helper function to compute horizontal layer averages
 Tlayer = Function(Qlayer, name='LayerTemp')  # stores values of temp in one layer
 Tavg = Function(Q, name='LayerAveragedTemp')  # averaged temp function returned by function
-Rmin_area = assemble(Constant(1.0, domain=mesh2d)*dx)  # area of CMB
+Rmin_area = assemble(Constant(1.0) * dx(domain=mesh2d))  # area of CMB
 
 
 def layer_average(T):
@@ -142,8 +142,8 @@ for timestep in range(0, max_timesteps):
 
     # Compute diagnostics:
     u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
-    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0, domain=mesh)*ds_t)) * (rmax*(rmax-rmin)/rmin)
-    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0, domain=mesh)*ds_b)) * (rmin*(rmax-rmin)/rmax)
+    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0) * ds_t(domain=mesh))) * (rmax*(rmax-rmin)/rmin)
+    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0) * ds_b(domain=mesh))) * (rmin*(rmax-rmin)/rmax)
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
     average_temperature = assemble(T * dx) / domain_volume
 
