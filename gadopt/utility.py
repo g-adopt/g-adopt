@@ -665,3 +665,20 @@ def initialise_background_field(
             conditional(vertical_component(X) + shift > radii[i+1],
                         conditional(vertical_component(X) + shift <= radii[i],
                                     background_values[i], f), f))
+def _before(dm, i):
+    for p in range(*dm.getHeightStratum(1)):
+        dm.setLabelValue("prolongation", p, i+1)
+
+
+def _after(dm, i):
+    for p in range(*dm.getHeightStratum(1)):
+        dm.setLabelValue("prolongation", p, i+2)
+
+
+def LabeledMeshHierarchy(base_mesh, refinement_levels, **kwargs):
+    """Variant of firedrake's MeshHierachy that labels all facets with 'prolongation'
+
+    As require by alfi's TransferManagers"""
+    assert 'callbacks' not in kwargs
+    kwargs['callbacks'] = (_before, _after)
+    return MeshHierarchy(base_mesh, refinement_levels, **kwargs)

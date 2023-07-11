@@ -163,6 +163,13 @@ def divergence_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
     return F
 
+def grad_div_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
+    if not hasattr(eq, "gamma"):
+        return 0
+
+    F = eq.gamma * inner(cell_avg(div(eq.test)), div(trial)) * eq.dx(metadata={"mode": "vanilla"})
+    return -F
+
 
 def momentum_source_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     return -dot(eq.test, eq.source) * eq.dx
@@ -201,12 +208,14 @@ pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
 divergence_term.required_attrs = {"u", "rho_continuity"}
 divergence_term.optional_attrs = set()
+grad_div_term.required_attrs = set()
+grad_div_term.optional_attrs = {"gamma"}
 momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
 hydrostatic_prestress_advection_and_buoyancy_term.required_attrs = set()
 hydrostatic_prestress_advection_and_buoyancy_term.optional_attrs = set()
 
-momentum_terms = [momentum_source_term, pressure_gradient_term, viscosity_term]
+momentum_terms = [momentum_source_term, pressure_gradient_term, viscosity_term, grad_div_term]
 mass_terms = divergence_term
 stokes_terms = [momentum_terms, mass_terms]
 

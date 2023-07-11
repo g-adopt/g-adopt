@@ -30,6 +30,7 @@ from .utility import (
     INFO,
     InteriorBC,
     depends_on,
+    ensure_constant,
     is_cartesian,
     is_continuous,
     log_level,
@@ -95,6 +96,67 @@ Note:
   and values to extend the default ones.
   .
 """
+
+p2p0_stokes_solver_parameters = {
+    'mat_type': 'nest',
+    'ksp_atol': 1e-10,
+    'ksp_converged_reason': None,
+    'ksp_max_it': 500,
+    'ksp_monitor_true_residual': None,
+    'ksp_rtol': 1e-09,
+    'ksp_type': 'fgmres',
+    'pc_fieldsplit_schur_factorization_type': 'full',
+    'pc_fieldsplit_schur_precondition': 'user',
+    'pc_fieldsplit_type': 'schur',
+    'pc_type': 'fieldsplit',
+    'fieldsplit_0': {
+        'ksp_convergence_test': 'skip',
+        'ksp_max_it': 1,
+        'ksp_norm_type': 'unpreconditioned',
+        'ksp_richardson_self_scale': False,
+        'ksp_type': 'richardson',
+        'mg_coarse_assembled': {
+            'mat_type': 'aij',
+            'pc_telescope_reduction_factor': 1,
+            'pc_telescope_subcomm_type': 'contiguous',
+            'pc_type': 'telescope',
+            'telescope_pc_factor_mat_solver_type': 'superlu_dist',
+            'telescope_pc_type': 'lu'
+        },
+        'mg_coarse_pc_python_type': 'firedrake.AssembledPC',
+        'mg_coarse_pc_type': 'python',
+        'mg_levels': {
+            'ksp_convergence_test': 'skip',
+            'ksp_max_it': 6,
+            'ksp_norm_type': 'unpreconditioned',
+            'ksp_type': 'fgmres',
+            'patch_pc_patch_construct_dim': 0,
+            'patch_pc_patch_construct_type': 'star',
+            'patch_pc_patch_dense_inverse': True,
+            'patch_pc_patch_local_type': 'additive',
+            'patch_pc_patch_partition_of_unity': False,
+            'patch_pc_patch_precompute_element_tensors': True,
+            'patch_pc_patch_save_operators': True,
+            'patch_pc_patch_statistics': False,
+            'patch_pc_patch_sub_mat_type': 'seqdense',
+            'patch_pc_patch_symmetrise_sweep': False,
+            'patch_sub_ksp_type': 'preonly',
+            'patch_sub_pc_factor_mat_solver_type': 'petsc',
+            'patch_sub_pc_type': 'lu',
+            'pc_python_type': 'firedrake.PatchPC',
+            'pc_type': 'python'
+        },
+        'pc_mg_log': None,
+        'pc_mg_type': 'full',
+        'pc_type': 'mg'
+    },
+    'fieldsplit_1': {
+        'ksp_type': 'preonly',
+        'pc_python_type': 'gadopt.P0MassInvPC',
+        'pc_type': 'python'
+    }
+}
+"""Default iterative solver parameters for the P2P0 FEM pair with Stokes."""
 
 direct_stokes_solver_parameters = {
     "mat_type": "aij",
@@ -253,6 +315,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
         J: fd.Function | None = None,
+        gamma: float | None = None,
         constant_jacobian: bool = False,
         nullspace: fd.MixedVectorSpaceBasis | None = None,
         transpose_nullspace: fd.MixedVectorSpaceBasis | None = None,
@@ -266,6 +329,10 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.bcs = bcs
         self.quad_degree = quad_degree
         self.J = J
+        if gamma is None:
+            self.gamma = None
+        else:
+            self.gamma = ensure_constant(gamma)
         self.constant_jacobian = constant_jacobian
         self.nullspace = nullspace
         self.transpose_nullspace = transpose_nullspace
@@ -381,6 +448,8 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         """Sets PETSc solver options."""
         # Application context for the inverse mass matrix preconditioner
         self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
+        if self.gamma is not None:
+            self.appctx['gamma'] = self.gamma
 
         if isinstance(solver_preset, Mapping):
             self.add_to_solver_config(solver_preset)
@@ -401,9 +470,18 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 case "direct":
                     self.add_to_solver_config(direct_stokes_solver_parameters)
                 case "iterative":
-                    self.add_to_solver_config(iterative_stokes_solver_parameters)
+                    if self.gamma is None:
+                        self.add_to_solver_config(iterative_stokes_solver_parameters)
+                    else:
+                        self.add_to_solver_config(p2p0_stokes_solver_parameters)
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
+        elif self.gamma is not None:
+            # Augmented Lagrangian only implemted for P2-P0 at the moment
+            assert self.solution_space.sub(0).ufl_element().degree() == 2
+            assert self.solution_space.sub(1).ufl_element().degree() == 0
+
+            self.add_to_solver_config(p2p0_stokes_solver_parameters)
         elif self.mesh.topological_dimension == 2:
             self.add_to_solver_config(direct_stokes_solver_parameters)
         else:
@@ -465,6 +543,21 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 appctx=self.appctx,
                 options_prefix=self.name,
             )
+
+        if self.gamma is not None:
+            from .mg_transfers import VariablePkP0SchoeberlTransfer, NullTransfer
+            V = self.solution_space.sub(0)
+            Q = self.solution_space.sub(1)
+            tdim = self.mesh.topological_dimension()
+            hierarchy = "uniform"
+            restriction = False
+            vtransfer = VariablePkP0SchoeberlTransfer(tdim, hierarchy)
+            qtransfer = NullTransfer()
+            transfers = {V.ufl_element(): (vtransfer.prolong, vtransfer.restrict if restriction else fd.restrict, fd.inject),
+                         Q.ufl_element(): (fd.prolong, fd.restrict, qtransfer.inject)}
+            transfermanager = fd.TransferManager(native_transfers=transfers)
+            self.solver.set_transfer_manager(transfermanager)
+
 
     def solve(self) -> None:
         """Solves the system."""
@@ -557,6 +650,8 @@ class StokesSolver(StokesSolverBase):
             {"p": p, "stress": stress, "source": source},
             {"u": u, "rho_continuity": self.rho_continuity},
         ]
+        if self.gamma is not None:
+            eqs_attrs[0]['gamma'] = self.gamma
 
         for i in range(len(stokes_terms)):
             self.equations.append(
