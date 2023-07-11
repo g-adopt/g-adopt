@@ -30,6 +30,66 @@ iterative_stokes_solver_parameters = {
         "Mp_pc_type": "sor",
     }
 }
+p2p0_stokes_solver_parameters = {
+    'mat_type': 'nest',
+    'ksp_atol': 1e-10,
+    'ksp_converged_reason': None,
+    'ksp_max_it': 500,
+    'ksp_monitor_true_residual': None,
+    'ksp_rtol': 1e-09,
+    'ksp_type': 'fgmres',
+    'pc_fieldsplit_schur_factorization_type': 'full',
+    'pc_fieldsplit_schur_precondition': 'user',
+    'pc_fieldsplit_type': 'schur',
+    'pc_type': 'fieldsplit',
+    'fieldsplit_0': {
+        'ksp_convergence_test': 'skip',
+        'ksp_max_it': 1,
+        'ksp_norm_type': 'unpreconditioned',
+        'ksp_richardson_self_scale': False,
+        'ksp_type': 'richardson',
+        'mg_coarse_assembled': {
+            'mat_type': 'aij',
+            'pc_telescope_reduction_factor': 1,
+            'pc_telescope_subcomm_type': 'contiguous',
+            'pc_type': 'telescope',
+            'telescope_pc_factor_mat_solver_type': 'superlu_dist',
+            'telescope_pc_type': 'lu'
+        },
+        'mg_coarse_pc_python_type': 'firedrake.AssembledPC',
+        'mg_coarse_pc_type': 'python',
+        'mg_levels': {
+            'ksp_convergence_test': 'skip',
+            'ksp_max_it': 6,
+            'ksp_norm_type': 'unpreconditioned',
+            'ksp_type': 'fgmres',
+            'patch_pc_patch_construct_dim': 0,
+            'patch_pc_patch_construct_type': 'star',
+            'patch_pc_patch_dense_inverse': True,
+            'patch_pc_patch_local_type': 'additive',
+            'patch_pc_patch_partition_of_unity': False,
+            'patch_pc_patch_precompute_element_tensors': True,
+            'patch_pc_patch_save_operators': True,
+            'patch_pc_patch_statistics': False,
+            'patch_pc_patch_sub_mat_type': 'seqdense',
+            'patch_pc_patch_symmetrise_sweep': False,
+            'patch_sub_ksp_type': 'preonly',
+            'patch_sub_pc_factor_mat_solver_type': 'petsc',
+            'patch_sub_pc_type': 'lu',
+            'pc_python_type': 'firedrake.PatchPC',
+            'pc_type': 'python'
+        },
+        'pc_mg_log': None,
+        'pc_mg_type': 'full',
+        'pc_type': 'mg'
+    },
+    'fieldsplit_1': {
+        'ksp_type': 'preonly',
+        'pc_python_type': 'gadopt.P0MassInv',
+        'pc_type': 'python'
+    }
+}
+
 
 direct_stokes_solver_parameters = {
     "mat_type": "aij",
@@ -97,6 +157,7 @@ class StokesSolver:
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False, J=None,
+                 gamma=None,
                  **kwargs):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
@@ -106,6 +167,7 @@ class StokesSolver:
         self.solution = z
         self.approximation = approximation
         self.mu = ensure_constant(mu)
+        self.gamma = ensure_constant(gamma)
         self.solver_parameters = solver_parameters
         self.J = J
         self.linear = not depends_on(self.mu, self.solution)
@@ -121,6 +183,10 @@ class StokesSolver:
             'source': self.approximation.buoyancy(p, T) * self.k,
             'rho_continuity': self.approximation.rho_continuity(),
         }
+        self.appctx = {"mu": self.mu}
+        if self.gamma is not None:
+            self.fields['gamma'] = self.gamma
+            self.appctx['gamma'] = self.gamma
 
         self.weak_bcs = {}
         self.strong_bcs = []
@@ -151,7 +217,14 @@ class StokesSolver:
             if INFO >= log_level:
                 self.solver_parameters['snes_monitor'] = None
 
-            if self.mesh.topological_dimension() == 2 and cartesian:
+            if self.gamma is not None:
+                # Augmented Lagrangian only implemted for P2-P0 at the moment
+                assert self.Z.sub(0).ufl_element().degree() == 2
+                assert self.Z.sub(1).ufl_element().degree() == 0
+                # only for isoviscous
+                assert isinstance(self.mu, fd.Constant)
+                self.solver_parameters.update(p2p0_stokes_solver_parameters)
+            elif self.mesh.topological_dimension() == 2 and cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
@@ -170,8 +243,22 @@ class StokesSolver:
         self.solver = fd.NonlinearVariationalSolver(self.problem,
                                                     solver_parameters=self.solver_parameters,
                                                     options_prefix=self.name,
-                                                    appctx={"mu": self.mu},
+                                                    appctx=self.appctx,
                                                     **self.solver_kwargs)
+        if self.gamma is not None:
+            from alfi.transfer import PkP0SchoeberlTransfer, NullTransfer
+            V = self.Z.sub(0)
+            Q = self.Z.sub(1)
+            tdim = self.mesh.topological_dimension()
+            hierarchy = "uniform"
+            restriction = False
+            vtransfer = PkP0SchoeberlTransfer((self.mu, self.gamma), tdim, hierarchy)
+            qtransfer = NullTransfer()
+            transfers = {V.ufl_element(): (vtransfer.prolong, vtransfer.restrict if restriction else fd.restrict, fd.inject),
+                         Q.ufl_element(): (fd.prolong, fd.restrict, qtransfer.inject)}
+            transfermanager = fd.TransferManager(native_transfers=transfers)
+            self.solver.set_transfer_manager(transfermanager)
+
         self._solver_setup = True
 
     def solve(self):
