@@ -43,7 +43,7 @@ delta_t = Constant(1e-7)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Define time stepping parameters:
-steady_state_tolerance = 1e-9
+steady_state_tolerance = 1e-7
 max_timesteps = 20000
 time = 0.0
 
