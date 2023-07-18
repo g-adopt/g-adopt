@@ -1,7 +1,6 @@
 import pytest
 from pathlib import Path
 import pandas as pd
-import warnings
 
 cases = [
     "base_case",
@@ -23,5 +22,4 @@ def test_benchmark(benchmark):
 
     pd.testing.assert_series_equal(df[["u_rms", "nu_top"]], expected, check_names=False)
 
-    if df.name != expected.name:
-        warnings.warn(f"Convergence changed: expected {expected.name}, got {df.name}")
+    assert abs(df.name - expected.name) <= 2
