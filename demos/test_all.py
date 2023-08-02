@@ -16,6 +16,22 @@ def get_convergence(base):
 
 @pytest.mark.parametrize("benchmark", cases)
 def test_benchmark(benchmark):
+    """Test a benchmark case against the expected convergence result.
+
+    We save the expected result (as a Pandas dataframe) pickled on
+    disk. Similarly, we load the diagnostic parameters from the run to
+    be tested into a dataframe. The dataframe then contains one row
+    per iteration, where the columns correspond to the diagnostic
+    values.
+
+    Perhaps confusingly, the row "names" are the iteration number. For
+    the first assertion, we only check the actual values, and not the
+    number of iterations for convergence. The second assertion is to
+    check that we take the same number of iterations to converge, with
+    a little bit of leeway.
+
+    """
+
     b = Path(__file__).parent.resolve() / benchmark
     df = get_convergence(b)
     expected = pd.read_pickle(b / "expected.pkl")
