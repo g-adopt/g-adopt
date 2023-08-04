@@ -36,7 +36,8 @@ def test_spiegelman_1e23():
     ui, mui = test_conf.pop("ui-mui")[0]
     del test_conf["picard"][0]  # drop picard-only
 
-    # test Picard-only goes below 1e-13 relative after 50 iterations
+    # test Picard-only relative residual goes below 5e-14 relative
+    # after 50 iterations
     picard_only = residual(ui, mui, test_conf["nx"][0], test_conf["ny"][0], 50, False)
 
     assert picard_only < 5e-14
