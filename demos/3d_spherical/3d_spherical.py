@@ -98,6 +98,7 @@ dump_period = 1
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
+plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t")
 
 temp_bcs = {
     bottom_id: {'T': 1.0},
