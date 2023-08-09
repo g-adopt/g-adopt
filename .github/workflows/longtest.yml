@@ -1,0 +1,45 @@
+name: Run long regression tests
+
+on:
+  workflow_dispatch:
+
+concurrency: longtest_environment
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Sync repository to Gadi
+        uses: up9cloud/action-rsync@v1.4
+        env:
+          HOST: gadi.nci.org.au
+          TARGET: ${{secrets.GADI_REPO_PATH}}
+          KEY: ${{secrets.GADI_TESTING_KEY}}
+          USER: ${{secrets.GADI_USER}}
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{secrets.GADI_TESTING_KEY}}" > ~/.ssh/gadi.key
+          chmod 600 ~/.ssh/gadi.key
+          echo "${{secrets.GADI_HOST_KEY}}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          cat >>~/.ssh/config <<EOF
+          Host gadi
+            Hostname gadi.nci.org.au
+            User ${{secrets.GADI_USER}}
+            IdentityFile ~/.ssh/gadi.key
+          EOF
+
+      - name: Test SSH
+        run: |
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && ls"
+
+# make sure PETSc build is up to date
+# maybe build on jobfs, then tarball (like fem-on-colab)? could get around transient gdata issues
+
+# make sure Firedrake build is up to date
+
+# run tests (copy .dat files back to runner?)
+
+# check tests
