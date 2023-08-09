@@ -98,7 +98,9 @@ dump_period = 1
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t")
+plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t")
+
+gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
 
 temp_bcs = {
     bottom_id: {'T': 1.0},
@@ -142,19 +144,17 @@ for timestep in range(0, max_timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
-    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0) * ds_t(domain=mesh))) * (rmax*(rmax-rmin)/rmin)
-    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0) * ds_b(domain=mesh))) * (rmin*(rmax-rmin)/rmax)
+    nusselt_number_top = gd.Nu_top() * (rmax*(rmax-rmin)/rmin)
+    nusselt_number_base = gd.Nu_bottom() * (rmin*(rmax-rmin)/rmax)
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
-    average_temperature = assemble(T * dx) / domain_volume
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {u_rms} "
-                 f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {average_temperature} ")
+    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
+                 f"{nusselt_number_top} {nusselt_number_base} "
+                 f"{energy_conservation} {gd.T_avg()} ")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
