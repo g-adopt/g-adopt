@@ -8,6 +8,7 @@ cases = [
     "viscoplastic_case",
     "2d_cylindrical",
     "3d_spherical",
+    "3d_cartesian",
 ]
 
 

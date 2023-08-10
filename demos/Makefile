@@ -1,4 +1,4 @@
-cases := base_case 2d_compressible viscoplastic_case 2d_cylindrical analytical_comparisons Drucker-Prager_rheology 3d_spherical
+cases := base_case 2d_compressible viscoplastic_case 2d_cylindrical analytical_comparisons Drucker-Prager_rheology 3d_spherical 3d_cartesian
 
 .PHONY: all $(cases) clean generate
 
