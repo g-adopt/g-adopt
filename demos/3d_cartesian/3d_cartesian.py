@@ -3,7 +3,7 @@ from mpi4py import MPI
 
 # Set up geometry:
 a, b, c = 1.0079, 0.6283, 1.0
-nx, ny, nz = 20, int(b/c * 20), 20
+nx, ny, nz = 10, int(b/c * 10), 10
 mesh2d = RectangleMesh(nx, ny, a, b, quadrilateral=True)  # Rectangular 2D mesh
 mesh = ExtrudedMesh(mesh2d, nz)
 bottom_id, top_id, left_id, right_id, front_id, back_id = "bottom", "top", 1, 2, 3, 4
@@ -81,6 +81,10 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
+
+# Change solver tolerances for CI - note not done for models shown in paper.
+stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-4
+stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-3
 
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
