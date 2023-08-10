@@ -3,7 +3,7 @@ A module with utitity functions for gadopt
 """
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import Interpolator, op2
 import ufl
 import time
@@ -461,3 +461,13 @@ def timer_decorator(func):
         log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
         return result
     return wrapper
+
+
+def absv(u):
+    """Component-wise absolute value of vector for SU stabilisation"""
+    return as_vector([abs(ui) for ui in u])
+
+
+def beta(Pe):
+    """Component-wise beta formula Donea and Huerta (2.47a) for SU stabilisation"""
+    return as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
