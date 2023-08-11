@@ -3,8 +3,10 @@ A module with utitity functions for gadopt
 """
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, exp
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
 import ufl
+import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
 from mpi4py import MPI
@@ -12,7 +14,7 @@ import numpy as np
 import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
-
+from scipy.linalg import solveh_banded
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -95,6 +97,7 @@ class CombinedSurfaceMeasure(ufl.Measure):
     A surface measure that combines ds_v, the integral over vertical boundary facets, and ds_t and ds_b,
     the integral over horizontal top and bottom facets. The vertical boundary facets are identified with
     the same surface ids as ds_v. The top and bottom surfaces are identified via the "top" and "bottom" ids."""
+
     def __init__(self, domain, degree):
         self.ds_v = ds_v(domain=domain, degree=degree)
         self.ds_t = ds_t(domain=domain, degree=degree)
@@ -257,6 +260,7 @@ class ExtrudedFunction(Function):
     The 3D function resides in V x R function space, where V is the function
     space of the source function. The 3D function shares the data of the 2D
     function."""
+
     def __init__(self, *args, mesh_3d=None, **kwargs):
         """
         Create a 2D :class:`Function` with a 3D view on extruded mesh.
@@ -306,3 +310,136 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
 
     constructor = VectorFunctionSpace if vector else FunctionSpace
     return constructor(mesh, elt, **kwargs)
+
+
+class LayerAveraging:
+    """
+    A manager for computing a vertical profile of horizontal layer averages.
+    """
+
+    def __init__(self, mesh, r1d, cartesian=True, quad_degree=None):
+        """
+        Create the :class:`LayerAveraging` manager.
+        :arg mesh: The mesh over which to compute averages.
+        :arg r1d: An array of either depth coordinates or radii, at which to compute layer averages.
+        :kwarg cartesian: Determines whether `r1d` represents depths or radii.
+        """
+
+        self.mesh = mesh
+        X, Y = SpatialCoordinate(mesh)
+
+        if cartesian:
+            self.r = Y
+        else:
+            self.r = sqrt(X**2 + Y**2)
+
+        self.dx = dx
+        if quad_degree is not None:
+            self.dx = dx(degree=quad_degree)
+
+        self.r1d = r1d
+
+        self.mass = np.zeros((2, len(r1d)))
+        self.rhs = np.zeros(len(r1d))
+        self._assemble_mass()
+
+    def _assemble_mass(self):
+        # main diagonal of mass matrix
+        r = self.r
+        rc = Constant(self.r1d[0])
+        rn = Constant(self.r1d[1])
+        rp = Constant(0.)
+
+        # radial P1 hat function in rp < r < rn with maximum at rc
+        phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
+
+        for i, rin in enumerate(self.r1d[1:]):
+            rn.assign(rin)
+            self.mass[0, i] = assemble(phi**2 * self.dx)
+
+            # shuffle coefficients for next iteration
+            rp.assign(rc)
+            rc.assign(rn)
+
+        phi = max_value(min_value(1, (r - rp) / (rn - rp)), 0)
+        self.mass[0, -1] = assemble(phi**2 * self.dx)
+
+        # compute off-diagonal (symmetric)
+        rp = Constant(self.r1d[0])
+        rn = Constant(self.r1d[1])
+
+        # overlapping product between two basis functions in rp < r < rn
+        overlap = max_value((rn - r) / (rn - rp), 0) * max_value((r - rp) / (rn - rp), 0) * self.dx
+
+        for i, rin in enumerate(self.r1d[1:]):
+            rn.assign(rin)
+            self.mass[1, i] = assemble(overlap)
+
+            # shuffle coefficients for next iteration
+            rp.assign(rn)
+
+    def _assemble_rhs(self, T):
+        r = self.r
+        rc = Constant(self.r1d[0])
+        rn = Constant(self.r1d[1])
+        rp = Constant(0.)
+
+        phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
+
+        for i, rin in enumerate(self.r1d[1:]):
+            rn.assign(rin)
+            self.rhs[i] = assemble(phi * T * self.dx)
+
+            rp.assign(rc)
+            rc.assign(rn)
+
+        phi = max_value(min_value(1, (r - rp) / (rn - rp)), 0)
+        self.rhs[-1] = assemble(phi * T * self.dx)
+
+    def get_layer_average(self, T):
+        """
+        Compute the layer averages of :class:`Function` T at the predefined depths.
+        Returns a numpy array containing the averages.
+        """
+
+        self._assemble_rhs(T)
+        return solveh_banded(self.mass, self.rhs, lower=True)
+
+    def extrapolate_layer_average(self, u, avg):
+        """
+        Given an array of layer averages avg, extrapolate to :class:`Function` u
+        """
+
+        r = self.r
+        rc = Constant(self.r1d[0])
+        rn = Constant(self.r1d[1])
+        rp = Constant(0.)
+
+        u.assign(0.0)
+
+        phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
+        val = Constant(0.)
+
+        for a, rin in zip(avg[:-1], self.r1d[1:]):
+            val.assign(a)
+            rn.assign(rin)
+            # reconstruct this layer according to the basis function
+            u.interpolate(u + val * phi)
+
+            rp.assign(rc)
+            rc.assign(rn)
+
+        phi = max_value(min_value(1, (r - rp) / (rn - rp)), 0)
+        val.assign(avg[-1])
+        u.interpolate(u + val * phi)
+
+
+def timer_decorator(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
+        return result
+    return wrapper
