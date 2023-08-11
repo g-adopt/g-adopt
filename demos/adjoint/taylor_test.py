@@ -1,17 +1,13 @@
 from gadopt import *
 from gadopt.inverse import *
+from mpi4py import MPI
 import numpy as np
+import sys
 
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
-
-def main():
-    for case in ["damping", "smoothing", "Tobs", "uobs"]:
-        try:
-            rectangle_taylor_test(case)
-        except Exception:
-            raise Exception(f"Taylor test for case {case} failed!")
+cases = ["damping", "smoothing", "Tobs", "uobs"]
 
 
 def rectangle_taylor_test(case):
@@ -33,7 +29,7 @@ def rectangle_taylor_test(case):
     with CheckpointFile("mesh.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
 
-    # enable_disk_checkpointing()
+    bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
 
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -73,14 +69,14 @@ def rectangle_taylor_test(case):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
     stokes_bcs = {
-        "top": {"uy": 0},
-        "bottom": {"uy": 0},
-        1: {"ux": 0},
-        2: {"ux": 0},
+        bottom_id: {"uy": 0},
+        top_id: {"uy": 0},
+        left_id: {"ux": 0},
+        right_id: {"ux": 0},
     }
     temp_bcs = {
-        "top": {"T": 0.0},
-        "bottom": {"T": 1.0},
+        bottom_id: {"T": 1.0},
+        top_id: {"T": 0.0},
     }
 
     energy_solver = EnergySolver(
@@ -110,7 +106,7 @@ def rectangle_taylor_test(case):
     # and impose the boundary conditions at the same time
     T.project(Tic, bcs=energy_solver.strong_bcs)
 
-    # If it is only for smoothing or damping, there is no need to do the time-steping
+    # If it is only for smoothing or damping, there is no need to do the time-stepping
     initial_timestep = 0 if case in ["Tobs", "uobs"] else max_timesteps - 1
 
     # Populate the tape by running the forward simulation
@@ -162,29 +158,27 @@ def rectangle_taylor_test(case):
     # Defining the object for pyadjoint
     reduced_functional = ReducedFunctional(objective, control)
 
-    # Applying timer decorator to fwd and derivative calls.
-    for func in [reduced_functional, reduced_functional.derivative]:
-        func = timer_decorator(func)
-
     Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
     Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
     minconv = taylor_test(reduced_functional, Tic, Delta_temp)
 
-    log(
-        (
-            "\n\nEnd of Taylor Test ****: "
-            f"case: {case} "
-            f"conversion: {minconv:.8e}\n\n\n"
-        )
-    )
     # If we're performing mulitple successive optimisations, we want
     # to ensure the annotations are switched back on for the next code
     # to use them
     continue_annotation()
 
-    # Making sure test results are satisfied
-    assert minconv > 1.9
+    return minconv
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 1:
+        for case_name in cases:
+            minconv = rectangle_taylor_test(case_name)
+            print(f"case: {case_name}, result: {minconv}")
+    else:
+        case_name = sys.argv[1]
+        minconv = rectangle_taylor_test(case_name)
+
+        if MPI.COMM_WORLD.Get_rank() == 0:
+            with open(f"{case_name}.conv", "w") as f:
+                f.write(f"{minconv}")
