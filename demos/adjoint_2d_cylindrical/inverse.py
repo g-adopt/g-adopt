@@ -207,10 +207,10 @@ def inverse(alpha_u, alpha_d, alpha_s):
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
     objective = (
-        t_misfit
-        + alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface)
-        + alpha_d * (norm_obs * damping / norm_damping)
-        + alpha_s * (norm_obs * smoothing / norm_smoothing)
+        t_misfit +
+        alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface) +
+        alpha_d * (norm_obs * damping / norm_damping) +
+        alpha_s * (norm_obs * smoothing / norm_smoothing)
     )
 
     # All done with the forward run, stop annotating anything else to the tape
