@@ -5,6 +5,8 @@ import numpy as np
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
+cases = ["damping", "smoothing", "Tobs", "uobs"]
+
 newton_stokes_solver_parameters = {
     "snes_type": "newtonls",
     "snes_linesearch_type": "l2",
@@ -23,14 +25,6 @@ newton_stokes_solver_parameters = {
         "ksp_converged_reason": None,
     },
 }
-
-
-def main():
-    for case in ["damping", "smoothing", "Tobs", "uobs"]:
-        try:
-            annulus_taylor_test(case)
-        except Exception:
-            raise Exception(f"Taylor test for case {case} failed!")
 
 
 def annulus_taylor_test(case):
@@ -233,21 +227,15 @@ def annulus_taylor_test(case):
     delta_temp.dat.data[:] = np.random.random(delta_temp.dat.data.shape)
     minconv = taylor_test(reduced_functional, Tic, delta_temp)
 
-    log(
-        (
-            "\n\nEnd of Taylor Test ****: "
-            f"case: {case} "
-            f"conversion: {minconv:.8e}\n\n\n"
-        )
-    )
     # If we're performing mulitple successive optimisations, we want
     # to ensure the annotations are switched back on for the next code
     # to use them
     continue_annotation()
 
-    # Making sure test results are satisfied
-    assert minconv > 1.9
+    return minconv
 
 
 if __name__ == "__main__":
-    main()
+    for case in ["damping", "smoothing", "Tobs", "uobs"]:
+        minconv = annulus_taylor_test(case)
+        print(f"case: {case}, result: {minconv}")
