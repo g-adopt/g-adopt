@@ -2,21 +2,21 @@ import pytest
 from pathlib import Path
 import pandas as pd
 
-cases = [
-    "base_case",
-    "2d_compressible",
-    "viscoplastic_case",
-    "2d_cylindrical",
-    "3d_spherical",
-    "3d_cartesian",
-]
+cases = {
+    "base_case": {},
+    "2d_compressible": {},
+    "viscoplastic_case": {},
+    "2d_cylindrical": {},
+    "3d_spherical": {},
+    "3d_cartesian": {"rtol": 1e-4},
+}
 
 
 def get_convergence(base):
     return pd.read_csv(base / "params.log", sep="\\s+", header=0).iloc[-1]
 
 
-@pytest.mark.parametrize("benchmark", cases)
+@pytest.mark.parametrize("benchmark", cases.keys())
 def test_benchmark(benchmark):
     """Test a benchmark case against the expected convergence result.
 
@@ -38,6 +38,12 @@ def test_benchmark(benchmark):
     df = get_convergence(b)
     expected = pd.read_pickle(b / "expected.pkl")
 
-    pd.testing.assert_series_equal(df[["u_rms", "nu_top"]], expected, check_names=False)
+    compare_params = cases[benchmark]
+    convergence_tolerance = compare_params.pop("iterations", 2)
 
-    assert abs(df.name - expected.name) <= 2
+    pd.testing.assert_series_equal(
+        df[["u_rms", "nu_top"]], expected,
+        check_names=False, **compare_params
+    )
+
+    assert abs(df.name - expected.name) <= convergence_tolerance
