@@ -28,6 +28,8 @@ def inverse(alpha_u, alpha_d, alpha_s):
     with CheckpointFile("mesh.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
 
+    bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
+
     enable_disk_checkpointing()
 
     # Set up function spaces for the Q2Q1 pair
@@ -68,14 +70,14 @@ def inverse(alpha_u, alpha_d, alpha_s):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
     stokes_bcs = {
-        "top": {"uy": 0},
-        "bottom": {"uy": 0},
-        1: {"ux": 0},
-        2: {"ux": 0},
+        bottom_id: {"uy": 0},
+        top_id: {"uy": 0},
+        left_id: {"ux": 0},
+        right_id: {"ux": 0},
     }
     temp_bcs = {
-        "top": {"T": 0.0},
-        "bottom": {"T": 1.0},
+        bottom_id: {"T": 1.0},
+        top_id: {"T": 0.0},
     }
 
     energy_solver = EnergySolver(
@@ -140,10 +142,10 @@ def inverse(alpha_u, alpha_d, alpha_s):
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
     objective = (
-        t_misfit
-        + alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface)
-        + alpha_d * (norm_obs * damping / norm_damping)
-        + alpha_s * (norm_obs * smoothing / norm_smoothing)
+        t_misfit +
+        alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface) +
+        alpha_d * (norm_obs * damping / norm_damping) +
+        alpha_s * (norm_obs * smoothing / norm_smoothing)
     )
 
     # All done with the forward run, stop annotating anything else to the tape
