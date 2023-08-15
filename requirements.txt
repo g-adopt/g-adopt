@@ -1,2 +1,3 @@
 assess
 pandas
+git+https://github.com/angus-g/pyrol@rol-2.0-checkpointing

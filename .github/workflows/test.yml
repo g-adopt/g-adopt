@@ -25,11 +25,14 @@ jobs:
           sudo apt install -y task-spooler
           tsp -S 48
       - uses: actions/checkout@v3
-      - name: Run test
+      - name: Install Python dependencies
         run: |
           . /home/firedrake/firedrake/bin/activate
           python3 -m pip install -r requirements.txt
           python3 -m pip install .
+      - name: Run test
+        run: |
+          . /home/firedrake/firedrake/bin/activate
           make -j test > test_output.log
           python -m pytest
         env:
