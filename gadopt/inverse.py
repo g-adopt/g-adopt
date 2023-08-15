@@ -1,12 +1,15 @@
 from firedrake import CheckpointFile
 import firedrake.utils
-from firedrake_adjoint import *  # noqa: F401
+from firedrake.adjoint import *  # noqa: F401
 from pathlib import Path
 from mpi4py import MPI
 from pyadjoint.optimization.optimization_solver import OptimizationSolver
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
 
+# emulate the previous behaviour of firedrake_adjoint by automatically
+# starting the tape
+continue_annotation()
 
 _vector_registry = []
 
