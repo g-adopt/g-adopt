@@ -25,11 +25,33 @@ jobs:
           sudo apt install -y task-spooler
           tsp -S 48
       - uses: actions/checkout@v3
+
+      - name: Load pyrol wheel from cache
+        uses: actions/cache/restore@v3
+        id: cache-pyrol
+        with:
+          path: /tmp/wheels
+          key: pyrol
+
+      - name: Build pyrol wheel
+        if: steps.cache-pyrol.outputs.cache-hit != 'true'
+        run: |
+          /home/firedrake/firedrake/bin/pip wheel -r requirements-git.txt -w /tmp/wheels
+
+      - name: Save pyrol to cache
+        if: steps.cache-pyrol.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: /tmp/wheels
+          key: pyrol
+
       - name: Install Python dependencies
         run: |
           . /home/firedrake/firedrake/bin/activate
+          python3 -m pip install --no-index -f /tmp/wheels pyroltrilinos
           python3 -m pip install -r requirements.txt
           python3 -m pip install .
+
       - name: Run test
         run: |
           . /home/firedrake/firedrake/bin/activate
