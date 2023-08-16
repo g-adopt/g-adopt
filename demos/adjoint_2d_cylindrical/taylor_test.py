@@ -1,6 +1,8 @@
 from gadopt import *
 from gadopt.inverse import *
+from mpi4py import MPI
 import numpy as np
+import sys
 
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
@@ -171,7 +173,7 @@ def annulus_taylor_test(case):
     # and impose the boundary conditions at the same time
     T.project(Tic, bcs=energy_solver.strong_bcs)
 
-    # If it is only for smoothing or damping, there is no need to do the time-steping
+    # If it is only for smoothing or damping, there is no need to do the time-stepping
     initial_timestep = 0 if case in ["Tobs", "uobs"] else max_timesteps
 
     # Populate the tape by running the forward simulation
@@ -203,7 +205,6 @@ def annulus_taylor_test(case):
     smoothing = assemble(dot(grad(Tic - Taverage), grad(Tic - Taverage)) * dx)
     norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
     norm_obs = assemble(Tobs**2 * dx)
-    norm_u_surface = assemble(dot(uobs, uobs) * ds_t)
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - Tobs) ** 2 * dx)
@@ -211,6 +212,7 @@ def annulus_taylor_test(case):
     if case == "Tobs":
         objective = t_misfit
     elif case == "uobs":
+        norm_u_surface = assemble(dot(uobs, uobs) * ds_t)
         objective = norm_obs * u_misfit / max_timesteps / norm_u_surface
     elif case == "damping":
         objective = norm_obs * damping / norm_damping
@@ -236,6 +238,14 @@ def annulus_taylor_test(case):
 
 
 if __name__ == "__main__":
-    for case in ["damping", "smoothing", "Tobs", "uobs"]:
-        minconv = annulus_taylor_test(case)
-        print(f"case: {case}, result: {minconv}")
+    if len(sys.argv) == 1:
+        for case_name in cases:
+            minconv = annulus_taylor_test(case_name)
+            print(f"case: {case_name}, result: {minconv}")
+    else:
+        case_name = sys.argv[1]
+        minconv = annulus_taylor_test(case_name)
+
+        if MPI.COMM_WORLD.Get_rank() == 0:
+            with open(f"{case_name}.conv", "w") as f:
+                f.write(f"{minconv}")
