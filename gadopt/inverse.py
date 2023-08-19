@@ -51,7 +51,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
             for i, func in enumerate(self.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def load(self, mesh, checkpoint_path):
+    def load(self, mesh):
         """Load the checkpointed data for this vector from disk.
 
         Called by the parent Optimiser after the ROL state has
@@ -72,9 +72,9 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
 
         # initialise C++ state
         super().__init__(state)
-        checkpoint_path, self.inner_product = state
+        self.checkpoint_path, self.inner_product = state
 
-        _vector_registry.append((self, checkpoint_path))
+        _vector_registry.append(self)
 
     def __getstate__(self):
         """Return a state tuple suitable for pickling"""
@@ -127,10 +127,10 @@ class LinMoreOptimiser:
         self.rol_parameters = ROL.ParameterList(parameters, "Parameters")
 
         try:
-            self.rol_secant = ROL.InitBFGS(parameters["General"]["Secant"]["Maximum Storage"])
+            self.rol_secant = ROL.lBFGS(parameters["General"]["Secant"]["Maximum Storage"])
         except KeyError:
             # Use the default storage value
-            self.rol_secant = ROL.InitBFGS()
+            self.rol_secant = ROL.lBFGS()
 
         self.rol_algorithm = ROL.LinMoreAlgorithm(self.rol_parameters, self.rol_secant)
         self.callbacks = []
@@ -153,7 +153,6 @@ class LinMoreOptimiser:
     def checkpoint(self):
         """Checkpoint the current ROL state to disk."""
 
-        ROL.serialise_secant(self.rol_secant, MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
         ROL.serialise_algorithm(self.rol_algorithm, MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
 
         checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
@@ -161,9 +160,10 @@ class LinMoreOptimiser:
             for i, func in enumerate(self.rol_solver.rolvector.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def restore(self):
-        ROL.load_secant(self.rol_secant, MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
-        ROL.load_algorithm(self.rol_algorithm, MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
+    def restore(self, iteration):
+        self.iteration = iteration
+        self.rol_algorithm = ROL.load_algorithm(MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
+        self._add_statustest()
 
         self.rol_solver.rolvector.checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
         self.rol_solver.rolvector.load(self._mesh)
@@ -172,10 +172,10 @@ class LinMoreOptimiser:
         # restore from the Firedrake checkpoint. They register themselves, so we can access
         # them through a flat list.
         vec = self.rol_solver.rolvector.dat
-        for v, path in _vector_registry:
+        for v in _vector_registry:
             x = [p.copy(deepcopy=True) for p in vec]
             v.dat = x
-            v.load(self._mesh, path)
+            v.load(self._mesh)
             v._optimiser = self
 
         _vector_registry.clear()
