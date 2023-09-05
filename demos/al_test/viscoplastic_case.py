@@ -16,7 +16,6 @@ stokes_solver_parameters = {
         "ksp_type": "cg",
         "ksp_rtol": 1e-7,
         "ksp_converged_reason": None,
-#        "ksp_view": None,        
         "pc_type": "python",
         "pc_python_type": "firedrake.AssembledPC",
         "assembled_pc_type": "gamg",
@@ -29,7 +28,6 @@ stokes_solver_parameters = {
         "ksp_type": "fgmres",
         "ksp_rtol": 1e-5,
         "ksp_converged_reason": None,
-#        "ksp_view": None,                
         "pc_type": "python",
         "pc_python_type": "firedrake.MassInvPC",
         "Mp_ksp_rtol": 1e-5,
@@ -121,7 +119,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
                              cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             solver_parameters = stokes_solver_parameters)
+                             solver_parameters=stokes_solver_parameters)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)
