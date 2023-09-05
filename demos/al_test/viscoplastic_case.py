@@ -2,11 +2,7 @@ from gadopt import *
 from mpi4py import MPI
 
 stokes_solver_parameters = {
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-10,
-    "snes_rtol": 5e-2,
+    "snes_type": "ksponly",
     "mat_type": "matfree",
     "ksp_type": "preonly",
     "pc_type": "fieldsplit",
@@ -66,7 +62,7 @@ delta_t = Constant(1e-6)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-Ra = Constant(500)  # Rayleigh number
+Ra = Constant(200)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
 # Rheology:
 gamma_T, gamma_Z = Constant(ln(10**6)), Constant(ln(10))
