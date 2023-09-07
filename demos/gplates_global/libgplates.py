@@ -8,12 +8,15 @@ from firedrake.petsc import PETSc
 data_root = 'gplates_files/'
 
 # List of dynamic plate boundaries
-topology_filenames = []
-topology_filenames.append(os.path.join(data_root, 'DynamicPolygons/Global_EarthByte_230-0Ma_GK07_AREPS_PlateBoundaries.gpml'))
+topology_filenames = [
+    os.path.join(data_root+'Zahirovic2022_PlateBoundaries.gpmlz'),
+    os.path.join(data_root+'Zahirovic2022_ActiveDeformation.gpmlz'),
+    os.path.join(data_root+'Zahirovic2022_InactiveDeformation.gpmlz'),
+]
 
-# List of rotation models
-rotation_filenames = []
-rotation_filenames.append(os.path.join(data_root, 'Rotations/Global_EarthByte_230-0Ma_GK07_AREPS.rot'))
+rotation_filenames = [
+    os.path.join(data_root+'Zahirovic2022_CombinedRotations_fixed_crossovers.rot')
+]
 
 # Make sure rotation & topology files exist
 if False in [os.path.isfile(fi) for fi in topology_filenames + rotation_filenames]:
@@ -97,7 +100,10 @@ class pygplate_runner(object):
         requested_reconstruction_time = self.geologic_zero - float(model_time) * time_dim_factor/myrs2sec/plate_scaling_factor
 
         if requested_reconstruction_time < 0:
-            raise ValueError('pyGplates: geologic time is being negative! Terminating the code!')
+            raise Exception(
+                ("pyGplates: geologic time is being negative!"
+                 f"maximum: {self.geologic_zero/(time_dim_factor/myrs2sec/plate_scaling_factor)}")
+            )
 
         PETSc.Sys.Print(f"pyGplates: Time {requested_reconstruction_time}.", flush=True)
 
@@ -232,7 +238,7 @@ class pygplate_runner(object):
 rec_model = pygplate_runner(
     rotation_filenames=rotation_filenames,
     topology_filenames=topology_filenames,
-    geologic_zero=230,
+    geologic_zero=409,
     nseeds=100000,
     nneighbours=4,
     delta_time=1.0
