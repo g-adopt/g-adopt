@@ -19,7 +19,7 @@ class GeodynamicalDiagnostics:
         if T.function_space().extruded:
             ds = CombinedSurfaceMeasure(mesh, degree)
         else:
-            ds = firedrake.ds
+            ds = firedrake.ds(mesh)
         self.ds_t = ds(top_id)
         self.ds_b = ds(bottom_id)
         self.n = FacetNormal(mesh)
@@ -31,10 +31,10 @@ class GeodynamicalDiagnostics:
         return sqrt(assemble(dot(self.u, self.u) * self.ds_t))
 
     def Nu_top(self):
-        return -1 * assemble(dot(grad(self.T), self.n) * self.ds_t) * (1./assemble(self.T * self.ds_b))
+        return -1 * assemble(dot(grad(self.T), self.n) * self.ds_t) * (1./assemble(Constant(1) * self.ds_t))
 
     def Nu_bottom(self):
-        return assemble(dot(grad(self.T), self.n) * self.ds_b) * (1./assemble(self.T * self.ds_b))
+        return assemble(dot(grad(self.T), self.n) * self.ds_b) * (1./assemble(Constant(1) * self.ds_b))
 
     def T_avg(self):
         return assemble(self.T * self.dx) / self.domain_volume

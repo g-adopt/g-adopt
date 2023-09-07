@@ -3,7 +3,7 @@ from mpi4py import MPI
 
 # Set up geometry:
 a, b, c = 1.0079, 0.6283, 1.0
-nx, ny, nz = 20, int(b/c * 20), 20
+nx, ny, nz = 10, int(b/c * 10), 10
 mesh2d = RectangleMesh(nx, ny, a, b, quadrilateral=True)  # Rectangular 2D mesh
 mesh = ExtrudedMesh(mesh2d, nz)
 bottom_id, top_id, left_id, right_id, front_id, back_id = "bottom", "top", 1, 2, 3, 4
@@ -46,7 +46,7 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
 # Write output files in VTK format:
-u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
+u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
 # Next rename for output:
 u.rename("Velocity")
 p.rename("Pressure")
@@ -58,9 +58,9 @@ checkpoint_period = dump_period * 4
 
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
+plog.log_str("timestep time dt maxchange u_rms u_rms_top ux_max nu_top nu_base energy avg_t")
 
 gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
-
 
 temp_bcs = {
     bottom_id: {'T': 1.0},
@@ -77,13 +77,17 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-Told = energy_solver.T_old
-Ttheta = 0.5*T + 0.5*Told
-Told.assign(T)
-stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs,
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
+
+# Change solver tolerances for CI - note not done for models shown in paper.
+stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-4
+stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-3
+
+checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
+checkpoint_file.save_mesh(mesh)
 
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
@@ -124,22 +128,13 @@ for timestep in range(0, max_timesteps):
 
     # Checkpointing:
     if timestep % checkpoint_period == 0:
-        # Checkpointing during simulation:
-        checkpoint_data = DumbCheckpoint(f"Temperature_State_{timestep}", mode=FILE_CREATE)
-        checkpoint_data.store(T, name="Temperature")
-        checkpoint_data.close()
-
-        checkpoint_data = DumbCheckpoint(f"Stokes_State_{timestep}", mode=FILE_CREATE)
-        checkpoint_data.store(z, name="Stokes")
-        checkpoint_data.close()
+        checkpoint_file.save_function(T, name="Temperature", idx=timestep)
+        checkpoint_file.save_function(z, name="Stokes", idx=timestep)
 
 plog.close()
+checkpoint_file.close()
 
-# Write final state:
-final_checkpoint_data = DumbCheckpoint("Final_Temperature_State", mode=FILE_CREATE)
-final_checkpoint_data.store(T, name="Temperature")
-final_checkpoint_data.close()
-
-final_checkpoint_data = DumbCheckpoint("Final_Stokes_State", mode=FILE_CREATE)
-final_checkpoint_data.store(z, name="Stokes")
-final_checkpoint_data.close()
+with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
+    final_checkpoint.save_mesh(mesh)
+    final_checkpoint.save_function(T, name="Temperature")
+    final_checkpoint.save_function(z, name="Stokes")

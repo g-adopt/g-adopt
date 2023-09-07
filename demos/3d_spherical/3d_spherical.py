@@ -63,7 +63,7 @@ t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1
 # helper function to compute horizontal layer averages
 Tlayer = Function(Qlayer, name='LayerTemp')  # stores values of temp in one layer
 Tavg = Function(Q, name='LayerAveragedTemp')  # averaged temp function returned by function
-Rmin_area = assemble(Constant(1.0, domain=mesh2d)*dx)  # area of CMB
+Rmin_area = assemble(Constant(1.0) * dx(domain=mesh2d))  # area of CMB
 
 
 def layer_average(T):
@@ -87,7 +87,7 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
 # Write output files in VTK format:
-u, p = z.split()  # Do this first to extract individual velocity and pressure fields.
+u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
 # Next rename for output:
 u.rename("Velocity")
 p.rename("Pressure")
@@ -98,6 +98,9 @@ dump_period = 1
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
+plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t")
+
+gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
 
 temp_bcs = {
     bottom_id: {'T': 1.0},
@@ -109,13 +112,13 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-Told = energy_solver.T_old
-Ttheta = 0.5*T + 0.5*Told
-Told.assign(T)
-stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs,
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              cartesian=False,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
+
+checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
+checkpoint_file.save_mesh(mesh)
 
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
@@ -141,19 +144,17 @@ for timestep in range(0, max_timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
-    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0, domain=mesh)*ds_t)) * (rmax*(rmax-rmin)/rmin)
-    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0, domain=mesh)*ds_b)) * (rmin*(rmax-rmin)/rmax)
+    nusselt_number_top = gd.Nu_top() * (rmax*(rmin-rmax)/rmin)
+    nusselt_number_base = gd.Nu_bottom() * (rmin*(rmax-rmin)/rmax)
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
-    average_temperature = assemble(T * dx) / domain_volume
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {u_rms} "
-                 f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {average_temperature} ")
+    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
+                 f"{nusselt_number_top} {nusselt_number_base} "
+                 f"{energy_conservation} {gd.T_avg()} ")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
@@ -162,22 +163,13 @@ for timestep in range(0, max_timesteps):
 
     # Checkpointing:
     if timestep % checkpoint_period == 0:
-        # Checkpointing during simulation:
-        checkpoint_data = DumbCheckpoint(f"Temperature_State_{timestep}", mode=FILE_CREATE)
-        checkpoint_data.store(T, name="Temperature")
-        checkpoint_data.close()
-
-        checkpoint_data = DumbCheckpoint(f"Stokes_State_{timestep}", mode=FILE_CREATE)
-        checkpoint_data.store(z, name="Stokes")
-        checkpoint_data.close()
+        checkpoint_file.save_function(T, name="Temperature", idx=timestep)
+        checkpoint_file.save_function(z, name="Stokes", idx=timestep)
 
 plog.close()
+checkpoint_file.close()
 
-# Write final state:
-final_checkpoint_data = DumbCheckpoint("Final_Temperature_State", mode=FILE_CREATE)
-final_checkpoint_data.store(T, name="Temperature")
-final_checkpoint_data.close()
-
-final_checkpoint_data = DumbCheckpoint("Final_Stokes_State", mode=FILE_CREATE)
-final_checkpoint_data.store(z, name="Stokes")
-final_checkpoint_data.close()
+with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
+    final_checkpoint.save_mesh(mesh)
+    final_checkpoint.save_function(T, name="Temperature")
+    final_checkpoint.save_function(z, name="Stokes")

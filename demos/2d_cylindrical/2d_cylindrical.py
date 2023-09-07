@@ -43,7 +43,7 @@ delta_t = Constant(1e-7)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Define time stepping parameters:
-steady_state_tolerance = 1e-9
+steady_state_tolerance = 1e-7
 max_timesteps = 20000
 time = 0.0
 
@@ -75,10 +75,7 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-Told = energy_solver.T_old
-Ttheta = 0.5*T + 0.5*Told
-Told.assign(T)
-stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs,
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              cartesian=False,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
@@ -110,8 +107,8 @@ for timestep in range(0, max_timesteps):
     f_ratio = rmin/rmax
     top_scaling = -1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
     bot_scaling = -0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
-    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0, domain=mesh)*ds_t)) * top_scaling
-    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0, domain=mesh)*ds_b)) * bot_scaling
+    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0) * ds_t(domain=mesh))) * top_scaling
+    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0) * ds_b(domain=mesh))) * bot_scaling
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
     average_temperature = assemble(T * dx) / domain_volume
 
