@@ -1,8 +1,10 @@
 from .equations import BaseTerm, BaseEquation
 from firedrake import dot, inner, div, grad, avg, jump, sign
 from firedrake import min_value, Identity, Function
-from firedrake import FacetArea, CellVolume, TensorFunctionSpace, Jacobian
+from firedrake import FacetArea, CellVolume, TensorFunctionSpace, Jacobian, as_vector
 from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio, absv, beta
+from numpy import ones
+
 r"""
 This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
 
@@ -43,11 +45,18 @@ class ScalarAdvectionTerm(BaseTerm):
             # then we get artifical viscosity nubar from (2.49)
 
             J = Function(TensorFunctionSpace(self.mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(self.mesh))
-            Pe = absv(dot(u, J)) / 2  # should this have the diffusivity here if the diffusivity is not 1/ nondimensionalised?
-            nubar = dot(Pe, beta(Pe))
-            phi_SU = phi + nubar / dot(u, u) * dot(u, grad(phi))
-            
-            F = phi_SU * dot(u, grad(q)) * self.dx  # The advection term is not integrated by parts so there are no boundary terms
+
+            if 'kappa' not in fields:
+                beta_pe = as_vector(ones(self.dim))  # beta(Pe) -> 1 as kappa -> 0
+                nubar = dot(absv(dot(u, J)), beta_pe)/2
+            else:
+                kappa = fields['kappa'] + 1e-12
+                Pe = absv(dot(u, J)) / (2*kappa)
+                nubar = dot(absv(dot(u, J)), beta(Pe))/2
+
+            phi = phi + nubar / dot(u, u) * dot(u, grad(phi))
+
+            F = phi * dot(u, grad(q)) * self.dx  # The advection term is not integrated by parts so there are no boundary terms
 
         else:
             F = -q*div(phi*u)*self.dx
@@ -55,18 +64,18 @@ class ScalarAdvectionTerm(BaseTerm):
             # integration by parts leads to boundary term
             F += q*dot(n, u)*phi*self.ds
 
-            # which is replaced at incoming Dirichlet 'q' boundaries:
-            for id, bc in bcs.items():
-                if 'q' in bc:
-                    # on incoming boundaries, dot(u,n)<0, replace q with bc['q']
-                    F += phi*min_value(dot(u, n), 0)*(bc['q']-q) * self.ds(id)
-
             if not (is_continuous(self.trial_space) and continuous_u_normal):
                 # s=0: u.n(-)<0  =>  flow goes from '+' to '-' => '+' is upwind
                 # s=1: u.n(-)>0  =>  flow goes from '-' to '+' => '-' is upwind
                 s = 0.5*(sign(dot(avg(u), n('-'))) + 1.0)
                 q_up = q('-')*s + q('+')*(1-s)
                 F += jump(phi*u, n) * q_up * self.dS
+
+        # replace boundary value on incoming Dirichlet 'q' boundaries:
+        for id, bc in bcs.items():
+            if 'q' in bc:
+                # on incoming boundaries, dot(u,n)<0, replace q with bc['q']
+                F += phi*min_value(dot(u, n), 0)*(bc['q']-q) * self.ds(id)
 
         return -F
 
