@@ -132,7 +132,7 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
 
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
-        if self.compressible:  # (used in AnelasticLiquidApproximation below)
+        if self.compressible:  # (used in AnelasticLiquidApproximations below)
             stress -= 2/3 * self.mu * div(u) * Identity(u.ufl_shape[0])
         phi = inner(stress, grad(u))
         return phi * self.Di / self.Ra
@@ -205,3 +205,57 @@ class AnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     def energy_source(self, u):
         source = super().energy_source(u)
         return source
+
+
+class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
+    """
+    Truncated Anelastic Liquid Approximation
+
+    Compressible approximation. Excludes linear dependence of density on pressure (chi)"""
+    compressible = True
+
+    def __init__(self, Ra, Di,
+                 Tbar=0, cp=1,
+                 gamma0=1, cp0=1, cv0=1,
+                 **kwargs):
+        """
+        :arg Ra:   Rayleigh number
+        :arg Di:   Dissipation number
+        Reference values that may be depth-dependent (default to 1 if not supplied):
+        :arg rho:  reference density
+        :arg alpha: reference thermal expansion coefficient
+        :arg Tbar: reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion) - default 0
+        :arg cp:   reference specific heat at constant pressure
+        :arg mu:   Viscosity used in viscous dissipation
+        :arg H:    Volumetric heat production - default 0
+        :arg cartesian:  True: gravity points in negative z-direction, False: gravity points radially inward
+        :arg kappa, g:  Diffusivity, gravitational acceleration
+        Constant coefficients in pressure dependent buoyancy term::w
+        :arg gamma0:   Gruneisen number
+        :arg cp0, cv0: specific heat at constant pressure and volume reference for entire Mantle (all references above may be depth-dependent)."""
+        super().__init__(Ra, Di, **kwargs)
+        self.Tbar = Tbar
+        # Equation of State:
+        self.cp = cp
+        assert 'g' not in kwargs
+        self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
+
+    def buoyancy(self, p, T):
+        temperature_part = super().buoyancy(p, T)
+        return pressure_part + temperature_part
+
+    def rho_continuity(self):
+        return self.rho
+
+    def rhocp(self):
+        return self.rho * self.cp
+
+    def linearized_energy_sink(self, u):
+        w = vertical_component(u, self.cartesian)
+        return self.Di * self.rho * self.alpha * w
+
+    def energy_source(self, u):
+        source = super().energy_source(u)
+        return source
+    
+    
