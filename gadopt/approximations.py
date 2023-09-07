@@ -242,7 +242,7 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
 
     def buoyancy(self, p, T):
         temperature_part = super().buoyancy(p, T)
-        return pressure_part + temperature_part
+        return temperature_part
 
     def rho_continuity(self):
         return self.rho
