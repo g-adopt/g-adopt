@@ -8,32 +8,29 @@ import libgplates
 dx = dx(degree=6)
 
 # Set up geometry:
-rmin, rmax, ref_level, nlayers = 1.22, 2.22, 7, 64
+rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 8
 
-################ Variable radial resolution ####################
-# Initiating layer heights with 1.
+# A gaussian shaped radial resolution function:
 resolution_func = np.ones((nlayers))
 
-# A gaussian shaped function 
+
 def gaussian(center, c, a):
     return a*np.exp(-(np.linspace(rmin, rmax, nlayers)-center)**2/(2*c**2))
 
-# building the resolution function
+
 for idx, r_0 in enumerate([rmin, rmax, rmax - 660/6370]):
-    # gaussian radius 
-    c= 0.15
+    # gaussian radius
+    c = 0.15
     # how different is the high res area from low res
     res_amplifier = 5.
-    resolution_func *=  1/(1+gaussian(center=r_0, c=c, a=res_amplifier))
-
-###############################################################
+    resolution_func *= 1/(1+gaussian(center=r_0, c=c, a=res_amplifier))
 
 # Construct a CubedSphere mesh and then extrude into a sphere - note that unlike cylindrical case, popping is done internally here:
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, layer_height=(rmax-rmin)*resolution_func/np.sum(resolution_func), extrusion_type='radial')
 bottom_id, top_id = "bottom", "top"
-n = FacetNormal(mesh) # Normals, required for Nusselt number calculation
-domain_volume = assemble(1.*dx(domain=mesh)) # Required for diagnostics (e.g. RMS velocity)
+n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
+domain_volume = assemble(1.*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -54,7 +51,7 @@ log("Number of Velocity and Pressure DOF:", V.dim() + W.dim())
 log("Number of Temperature DOF:", Q.dim())
 
 # GPlates requirements:
-X_val = interpolate(X,V)
+X_val = interpolate(X, V)
 gplates_velocities = Function(V, name="GPlates_Velocity")
 
 # Set up temperature field and initialise:
@@ -141,7 +138,7 @@ approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alph
 
 delta_t = Constant(1e-6)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=5e-6, increase_tolerance=1.25)
-max_timesteps = 50
+max_timesteps = 1
 time = 0.0
 
 # Compute layer average for initial stage:
@@ -177,12 +174,12 @@ stokes_bcs = {
 }
 
 # No-Slip (prescribed) boundary condition for the top surface
-#bc_gplates = DirichletBC(Z.sub(0), gplates_velocities, (top_id))
-#boundary_X = X_val.dat.data_ro_with_halos[bc_gplates.nodes]
+bc_gplates = DirichletBC(Z.sub(0), gplates_velocities, (top_id))
+boundary_X = X_val.dat.data_ro_with_halos[bc_gplates.nodes]
 
 # Get initial surface velocities:
-#libgplates.rec_model.set_time(model_time=time)
-#gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
+libgplates.rec_model.set_time(model_time=time)
+gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
 
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
@@ -232,8 +229,8 @@ for timestep in range(0, max_timesteps):
     energy_solver.solve()
 
     # Update gplates velocities
-#    libgplates.rec_model.set_time(model_time=time)
-#    gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)    
+    libgplates.rec_model.set_time(model_time=time)
+    gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
 
     # Compute diagnostics:
     u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
