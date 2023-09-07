@@ -8,8 +8,7 @@ import math
 dx = dx(degree=6)
 
 # Set up geometry:
-# rmin, rmax, ref_level, nlayers = 1.22, 2.22, 6, 32
-rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 8
+rmin, rmax, ref_level, nlayers = 1.22, 2.22, 7, 64
 
 # Construct a CubedSphere mesh and then extrude into a sphere:
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
@@ -67,11 +66,37 @@ T.interpolate(conductive_term +
 # gplates_velocities = Function(V, name='SurfaceVelocity')
 
 # Important constants and physical parameters
-Ra = Constant(1.0e7)  # Rayleigh number
+Ra = Constant(5.0e7)  # Rayleigh number
+
 # Rheological parameters
-delta_mu_660, delta_mu_r, delta_mu_T = Constant(40.), Constant(1.99), Constant(500.)
-mu_lin = (delta_mu_660 - (delta_mu_660-1)/2. - (delta_mu_660-1)*tanh((r-delta_mu_r)*10)/2.)*exp(-ln(delta_mu_T) * T)
-mu_star, sigma_y = Constant(0.5), 1e4 + 2.4e5*(rmax-r)
+mulinf = Function(W, name="Viscosity_Lin")
+muplastf = Function(W, name="Viscosity_Plast")
+muminf = Function(W, name="Viscosity_Min")
+mu_lin = 2.0
+
+
+def step_func(r, center, mag, increasing=True, sharpness=30):
+    """
+    A step function designed to control viscosity jumps:
+    input:                                                                                                                                                                                                                                                                              r: is the radius array                                                                                                                                                                                                                                                         center: radius of the jump                                                                                                                                                                                                                                                     increasing: if True, the jump happens towards lower r                                                                                                                                                                                                                                      otherwise jump happens at higher r                                                                                                                                                                                                                                 sharpness: how sharp should the jump should be (larger numbers = sharper).                                                                                                                                                                                             """
+    if increasing:
+        sign = 1
+    else:
+        sign = -1
+    return mag * (0.5 * (1 + tanh(sign*(r-center)*sharpness)))
+
+
+# Depth dependence: for the lower mantle increase we multiply the profile with a linear function
+for line, step in zip([5.*(rmax-r), 1., 1.],
+                      [step_func(r, 1.992, 30, False),
+                       step_func(r, 2.078, 10, False),
+                       step_func(r, 2.2, 10, True)]):
+    mu_lin += line*step
+
+# Adding temperature dependence:
+delta_mu_T = Constant(100.)
+mu_lin *= exp(-ln(delta_mu_T) * Tnew)
+mu_star, sigma_y = Constant(1.0), 5.0e5 + 2.5e6*(rmax-r)
 epsilon = sym(grad(u))  # strain-rate
 epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
 mu_plast = mu_star + (sigma_y / epsii)
@@ -91,9 +116,9 @@ FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 # approximation = BoussinesqApproximation(Ra)
 approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
 
-delta_t = Constant(1e-5)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=1e-4, increase_tolerance=1.25)
-max_timesteps = 5
+delta_t = Constant(1e-6)  # Initial time-step
+t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=5e-6, increase_tolerance=1.25)
+max_timesteps = 50
 time = 0.0
 
 # helper function to compute horizontal layer averages
@@ -127,7 +152,7 @@ output_file = File("output.pvd")
 ref_file = File('reference_state.pvd')
 dump_period = 10
 # Frequency of checkpoint files:
-checkpoint_period = dump_period * 4
+checkpoint_period = dump_period * 5
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
 
@@ -142,6 +167,8 @@ stokes_bcs = {
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 energy_solver.fields['source'] = rhobar * H_int
+energy_solver.solver_parameters['ksp_converged_reason'] = None
+energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
@@ -149,6 +176,13 @@ stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs, mu=mu,
                              cartesian=False,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
+stokes_solver.solver_parameters['snes_type'] = "ksponly"
+stokes_solver.solver_parameters['snes_rtol'] = 5e-2
+stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 5e-4
+stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 5e-3
+
 
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
