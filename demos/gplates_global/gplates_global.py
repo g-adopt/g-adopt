@@ -22,8 +22,8 @@ domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RM
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
-Qlayer = FunctionSpace(mesh2d, "CG", 2)  # used to compute layer average
 
 # Test functions and functions to hold solutions:
 z = Function(Z)  # a field over the mixed function space Z.
@@ -38,7 +38,8 @@ log("Number of Temperature DOF:", Q.dim())
 
 # Set up temperature field and initialise:
 T = Function(Q, name="Temperature")
-T_dev = Function(Q, name="Temperature_Deviation")
+Taverage = Function(Q1, name="Average Temperature")
+T_dev = Function(Q1, name="Temperature_Deviation")
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 theta = atan_2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
@@ -48,8 +49,9 @@ T0 = Constant(0.091)  # Non-dimensional surface temperature
 Di = Constant(0.5)  # Dissipation number.
 H_int = Constant(10.0)  # Internal heating
 
+# Initial condition for T:
 conductive_term = ((1.0 - (T0*exp(Di) - T0)) * (2.22-r))
-# evaluate P_lm node-wise using scipy lpmv
+# Evaluate P_lm node-wise using scipy lpmv
 l, m, eps_c, eps_s = 6, 4, 0.02, 0.02
 Plm = Function(Q, name="P_lm")
 cos_phi = interpolate(cos(phi), Q)
@@ -78,7 +80,12 @@ mu_lin = 2.0
 def step_func(r, center, mag, increasing=True, sharpness=30):
     """
     A step function designed to control viscosity jumps:
-    input:                                                                                                                                                                                                                                                                              r: is the radius array                                                                                                                                                                                                                                                         center: radius of the jump                                                                                                                                                                                                                                                     increasing: if True, the jump happens towards lower r                                                                                                                                                                                                                                      otherwise jump happens at higher r                                                                                                                                                                                                                                 sharpness: how sharp should the jump should be (larger numbers = sharper).                                                                                                                                                                                             """
+    input:
+      r: is the radius array
+      center: radius of the jump
+      increasing: if True, the jump happens towards lower r, otherwise jump happens at higher r
+      sharpness: how sharp should the jump should be (larger numbers = sharper).
+    """
     if increasing:
         sign = 1
     else:
@@ -121,22 +128,10 @@ t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=5e-6, increase_tolerance=
 max_timesteps = 50
 time = 0.0
 
-# helper function to compute horizontal layer averages
-Tlayer = Function(Qlayer, name='LayerTemp')  # stores values of temp in one layer
-Tavg = Function(Q, name='LayerAveragedTemp')  # averaged temp function returned by function
-Rmin_area = assemble(Constant(1.0, domain=mesh2d)*dx)  # area of CMB
-
-
-def layer_average(T):
-    vnodes = nlayers*2 + 1  # n/o Q2 nodes in the vertical
-    hnodes = Qlayer.dim()  # n/o Q2 nodes in each horizontal layer
-    assert hnodes*vnodes == Q.dim()
-    for i in range(vnodes):
-        Tlayer.dat.data[:] = T.dat.data_ro[i::vnodes]
-        # NOTE: this integral is performed on mesh2d, which always has r=Rmin, but we normalize
-        Tavg.dat.data[i::vnodes] = assemble(Tlayer*dx) / Rmin_area
-    return Tavg
-
+# Compute layer average for initial stage:
+averager = LayerAveraging(
+    mesh, np.linspace(rmin, rmax, nlayers * 2), cartesian=False, quad_degree=6)
+averager.extrapolate_layer_average(Taverage, averager.get_layer_average(FullT))
 
 # Nullspaces and near-nullspaces:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
@@ -190,9 +185,9 @@ for timestep in range(0, max_timesteps):
     # Write output:
     if timestep % dump_period == 0:
         # compute radial temperature
-        Tavg = layer_average(FullT)
+        averager.extrapolate_layer_average(Taverage, averager.get_layer_average(FullT))
         # compute deviation from layer average
-        T_dev.assign(FullT-Tavg)
+        T_dev.assign(FullT-Taverage)
         # interpolate viscosity
         muf.interpolate(mu)
         # write
