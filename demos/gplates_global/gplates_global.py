@@ -2,13 +2,14 @@ from gadopt import *
 from mpi4py import MPI
 import scipy.special
 import math
-import libgplates
+import numpy as np
+#import libgplates
 
 # Quadrature degree:
 dx = dx(degree=6)
 
 # Set up geometry:
-rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 8
+rmin, rmax, ref_level, nlayers = 1.22, 2.22, 5, 16
 
 # A gaussian shaped radial resolution function:
 resolution_func = np.ones((nlayers))
@@ -51,6 +52,7 @@ log("Number of Velocity and Pressure DOF:", V.dim() + W.dim())
 log("Number of Temperature DOF:", Q.dim())
 
 # GPlates requirements:
+X = SpatialCoordinate(mesh)
 X_val = interpolate(X, V)
 gplates_velocities = Function(V, name="GPlates_Velocity")
 
@@ -58,7 +60,6 @@ gplates_velocities = Function(V, name="GPlates_Velocity")
 T = Function(Q, name="Temperature")
 Taverage = Function(Q1, name="Average Temperature")
 T_dev = Function(Q1, name="Temperature_Deviation")
-X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 theta = atan_2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
 phi = atan_2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol to Zhong)
@@ -115,7 +116,7 @@ for line, step in zip([5.*(rmax-r), 1., 1.],
 
 # Adding temperature dependence:
 delta_mu_T = Constant(100.)
-mu_lin *= exp(-ln(delta_mu_T) * Tnew)
+mu_lin *= exp(-ln(delta_mu_T) * T)
 mu_star, sigma_y = Constant(1.0), 5.0e5 + 2.5e6*(rmax-r)
 epsilon = sym(grad(u))  # strain-rate
 epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
@@ -170,7 +171,8 @@ temp_bcs = {
 }
 stokes_bcs = {
     bottom_id: {'un': 0},
-    top_id: {'u': gplates_velocities},
+    top_id: {'un': 0},    
+#    top_id: {'u': gplates_velocities},
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
@@ -189,12 +191,12 @@ stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
 stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 5e-3
 
 # No-Slip (prescribed) boundary condition for the top surface
-bc_gplates = DirichletBC(Z.sub(0), 0, (top_id))
-boundary_X = X_val.dat.data_ro_with_halos[bc_gplates.nodes]
+#bc_gplates = DirichletBC(Z.sub(0), 0, (top_id))
+#boundary_X = X_val.dat.data_ro_with_halos[bc_gplates.nodes]
 
 # Get initial surface velocities:
-libgplates.rec_model.set_time(model_time=time)
-gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
+#libgplates.rec_model.set_time(model_time=time)
+#gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
 
 
 # Now perform the time loop:
@@ -224,9 +226,9 @@ for timestep in range(0, max_timesteps):
     # Temperature system:
     energy_solver.solve()
 
-    # Update gplates velocities
-    libgplates.rec_model.set_time(model_time=time)
-    gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
+    # Update surface velocities:
+#    libgplates.rec_model.set_time(model_time=time)
+#    gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
 
     # Compute diagnostics:
     u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
