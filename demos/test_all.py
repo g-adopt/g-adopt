@@ -4,7 +4,8 @@ import pandas as pd
 
 cases = {
     "base_case": {},
-    "2d_compressible": {},
+    "2d_compressible_TALA": {},
+    "2d_compressible_ALA": {},
     "viscoplastic_case": {},
     "2d_cylindrical": {},
     "3d_spherical": {},
