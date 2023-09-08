@@ -197,10 +197,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         w = vertical_component(u, self.cartesian)
         return self.Di * self.rho * self.alpha * w
 
-    def energy_source(self, u):
-        source = super().energy_source(u)
-        return source
-
 
 class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     """
