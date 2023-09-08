@@ -2,7 +2,7 @@ all: params.log
 
 ncpus := 4
 
-params.log: compressible_case.py
+params.log: compressible_case_TALA.py
 	echo "running $<" >&2
 	tsp -N $(ncpus) -nf mpiexec -np $(ncpus) python3 $<
 
