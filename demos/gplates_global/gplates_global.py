@@ -170,17 +170,8 @@ temp_bcs = {
 }
 stokes_bcs = {
     bottom_id: {'un': 0},
-    top_id: {'un': 0},
+    top_id: {'u': gplates_velocities},
 }
-
-# No-Slip (prescribed) boundary condition for the top surface
-bc_gplates = DirichletBC(Z.sub(0), gplates_velocities, (top_id))
-boundary_X = X_val.dat.data_ro_with_halos[bc_gplates.nodes]
-
-# Get initial surface velocities:
-libgplates.rec_model.set_time(model_time=time)
-gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
-
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 energy_solver.fields['source'] = rhobar * H_int
@@ -199,6 +190,14 @@ stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
 stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 5e-4
 stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
 stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 5e-3
+
+# No-Slip (prescribed) boundary condition for the top surface
+bc_gplates = DirichletBC(Z.sub(0), 0, (top_id))
+boundary_X = X_val.dat.data_ro_with_halos[bc_gplates.nodes]
+
+# Get initial surface velocities:
+libgplates.rec_model.set_time(model_time=time)
+gplates_velocities.dat.data_with_halos[bc_gplates.nodes] = libgplates.rec_model.get_velocities(boundary_X)
 
 
 # Now perform the time loop:
