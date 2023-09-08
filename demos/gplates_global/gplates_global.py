@@ -177,10 +177,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 energy_solver.fields['source'] = rhobar * H_int
 energy_solver.solver_parameters['ksp_converged_reason'] = None
 energy_solver.solver_parameters['ksp_rtol'] = 1e-4
-Told = energy_solver.T_old
-Ttheta = 0.5*T + 0.5*Told
-Told.assign(T)
-stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs, mu=mu,
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
                              cartesian=False,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
