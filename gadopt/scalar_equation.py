@@ -4,7 +4,6 @@ from firedrake import min_value, Identity, Function
 from firedrake import FacetArea, CellVolume, TensorFunctionSpace, Jacobian, as_vector
 from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio, absv, beta
 from numpy import ones
-
 r"""
 This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
 
@@ -46,15 +45,16 @@ class ScalarAdvectionTerm(BaseTerm):
 
             J = Function(TensorFunctionSpace(self.mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(self.mesh))
 
-            if 'kappa' not in fields:
+            if 'diffusivity' not in fields:
                 beta_pe = as_vector(ones(self.dim))  # beta(Pe) -> 1 as kappa -> 0
                 nubar = dot(absv(dot(u, J)), beta_pe)/2
             else:
-                kappa = fields['kappa'] + 1e-12
+                print("non zero diffusivity")
+                kappa = fields['diffusivity'] + 1e-12
                 Pe = absv(dot(u, J)) / (2*kappa)
                 nubar = dot(absv(dot(u, J)), beta(Pe))/2
 
-            phi = phi + nubar / dot(u, u) * dot(u, grad(phi))
+            phi = phi + nubar / (dot(u, u)+1e-12) * dot(u, grad(phi))
 
             F = phi * dot(u, grad(q)) * self.dx  # The advection term is not integrated by parts so there are no boundary terms
 
