@@ -3,7 +3,6 @@ import firedrake.utils
 from firedrake.adjoint import *  # noqa: F401
 from pathlib import Path
 from mpi4py import MPI
-from pyadjoint.optimization.optimization_solver import OptimizationSolver
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
 
@@ -11,22 +10,61 @@ import ROL
 # starting the tape
 continue_annotation()
 
+# As a part of ROL checkpointing, when a CheckpointedROLVector is encountered,
+# we leverage Firedrake's checkpoint functionality to write the underlying vector
+# to disk. Then we only need to serialise the filename for this checkpoint, and the
+# inner product type. The loading process is a bit more complicated, because
+# the vectors need to be loaded on a consistent mesh. Because of this, all
+# the vectors that are loaded from a checkpoint register themselves in this list,
+# where they can be processed to load the underlying data on the correct mesh.
 _vector_registry = []
 
 
 class ROLSolver(pyadjoint_rol.ROLSolver):
+    """A ROLSolver that may use a class other than ROLVector to hold its vectors.
+
+    In the non-checkpointing case, this reduces down to the original ROLSolver class. However,
+    if ROL checkpointing is enabled, every vector within the solver needs to be a
+    CheckpointedROLVector. We can achieve this by overwriting the base ~self.rolvector~
+    member.
+
+    Params:
+        problem (pyadjoint.MinimizationProblem): The minimisation problem to solve.
+        parameters (dict): A dictionary containing the parameters governing ROL.
+        inner_product (Optional[str]): The inner product to use for vector operations.
+        vector_class (Optional[Type[ROLVector]]): The underlying vector class.
+        vector_args (Optional[List[Any]]): Arguments for initialisation of the vector class.
+    """
+
     def __init__(self, problem, parameters, inner_product="L2", vector_class=pyadjoint_rol.ROLVector, vector_args=[]):
-        OptimizationSolver.__init__(self, problem, parameters)
-        self.rolobjective = pyadjoint_rol.ROLObjective(problem.reduced_functional)
+        super().__init__(problem, parameters)
+
         x = [p.tape_value() for p in self.problem.reduced_functional.controls]
         self.rolvector = vector_class(x, *vector_args, inner_product=inner_product)
-        self.params_dict = parameters
 
+        # we need to recompute these with the new rolvector instance
         self.bounds = self.__get_bounds()
         self.constraints = self.__get_constraints()
 
 
 class CheckpointedROLVector(pyadjoint_rol.ROLVector):
+    """An extension of ROLVector that supports checkpointing to disk.
+
+    The ROLVector itself is the Python-side implementation of the ROL.Vector
+    interface; it defines all the operations ROL may perform on vectors (e.g.,
+    scaling, addition), and links ROL to the underlying Firedrake vectors.
+
+    When the serialisation library hits a ROL.Vector on the C++ side, it will
+    pickle this object, so we provide implementations of ~__getstate__~
+    and ~__setstate__~ that will correctly participate in the serialisation
+    pipeline.
+
+    Params:
+        dat: The underlying Firedrake vector.
+        optimiser (LinMoreOptimiser): The managing optimiser for controlling
+            checkpointing paths.
+    """
+
     def __init__(self, dat, optimiser, inner_product="L2"):
         super().__init__(dat, inner_product)
 
@@ -98,7 +136,7 @@ class LinMoreOptimiser:
         a previous optimisation without having to refill the L-BFGS memory. The underlying
         objects will be configured for checkpointing if `checkpoint_dir` is specified,
         and optionally the automatic checkpointing each iteration can be disabled by the
-        `auto_checkpoint` paramater.
+        `auto_checkpoint` parameter.
 
         Params:
             problem (pyadjoint.MinimizationProblem): The actual problem to solve.
@@ -161,6 +199,8 @@ class LinMoreOptimiser:
                 f.save_function(func, name=f"dat_{i}")
 
     def restore(self, iteration):
+        """Restore the ROL state from a given iteration from disk."""
+
         self.iteration = iteration
         self.rol_algorithm = ROL.load_algorithm(MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
         self._add_statustest()
@@ -181,6 +221,11 @@ class LinMoreOptimiser:
         _vector_registry.clear()
 
     def run(self):
+        """Run the actual ROL optimisation.
+
+        This will continue until the status test flags the optimisation to complete.
+        """
+
         self.rol_algorithm.run(
             self.rol_solver.rolvector,
             self.rol_solver.rolobjective,
@@ -205,6 +250,8 @@ class LinMoreOptimiser:
         self.rol_algorithm.setStatusTest(StatusTest(self.rol_parameters), False)
 
     def add_callback(self, callback):
+        """Add a callback to run after every optimisation iteration."""
+
         self.callbacks.append(callback)
 
 
