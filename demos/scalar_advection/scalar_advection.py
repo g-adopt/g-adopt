@@ -6,8 +6,9 @@
 from gadopt import *
 from gadopt.scalar_equation import ScalarAdvectionEquation
 from gadopt.time_stepper import SSPRK33
-
+from gadopt.utility import su_nubar
 import math
+from numpy import ones
 
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
 
@@ -62,6 +63,15 @@ q = Function(V).assign(q_init)
 outfile = File("CG_SUadv.pvd")
 outfile.write(q)
 
+J = Function(TensorFunctionSpace(mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(mesh))
+beta_pe = as_vector(ones(2))  # beta(Pe) -> 1 as kappa -> 0
+nubar = Function(V).interpolate(su_nubar(u, J, beta_pe))
+
+nubar_outfile = File("CG_SUadv_nubar.pvd")
+nubar_outfile.write(nubar)
+
+u_outfile = File("SUadv_u.pvd")
+u_outfile.write(u)
 # We will run for time :math:`2\pi`, a full rotation.  We take 600 steps, giving
 # a timestep close to the CFL limit.  Finally, we define the inflow boundary
 # condition, :math:`q_\mathrm{in}`.  In general, this would be a ``Function``, but
@@ -71,8 +81,8 @@ T = 2*math.pi
 dt = T/600.0
 q_in = Constant(1.0)
 
-eq = ScalarAdvectionEquation(V, V)
-fields = {'velocity': u, 'SU_advection': None}
+eq = ScalarAdvectionEquation(V, V, su_advection=True)
+fields = {'velocity': u}
 bc_in = {'q': q_in}
 
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}

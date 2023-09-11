@@ -22,13 +22,13 @@ direct_energy_solver_parameters = {
 
 class EnergySolver:
     def __init__(self, T, u, approximation,
-                 delta_t, timestepper, bcs=None, solver_parameters=None):
+                 delta_t, timestepper, bcs=None, solver_parameters=None, su_advection=None):
         self.T = T
         self.Q = T.function_space()
         self.mesh = self.Q.mesh()
         self.delta_t = delta_t
         rhocp = approximation.rhocp()
-        self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp)
+        self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp, su_advection=su_advection)
         self.fields = {
             'diffusivity': ensure_constant(approximation.kappa()),
             'reference_for_diffusion': approximation.Tbar,

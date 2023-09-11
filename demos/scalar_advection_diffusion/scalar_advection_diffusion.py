@@ -2,10 +2,20 @@
 
 from gadopt import *
 from gadopt.scalar_equation import ScalarAdvectionDiffusionEquation
-from gadopt.time_stepper import DIRK33
+from gadopt.time_stepper import BackwardEuler
+from gadopt.utility import absv, beta, su_nubar
 from math import pi
 
-mesh = UnitSquareMesh(40, 40, quadrilateral=True)
+
+U = 0.25
+Pe = 333
+kappa = Constant(1.e-4)
+h = Constant(Pe * 2 * kappa / U)
+
+print("h", h.values()[0])
+
+n = 40  # round(1/h)
+mesh = UnitSquareMesh(n, n, quadrilateral=True)
 
 # We set up a function space of discontinous bilinear elements for :math:`q`, and
 # a vector-valued continuous function space for our velocity field. ::
@@ -20,8 +30,15 @@ velocity = as_vector(((0.5 - y)*sin(pi*x), (x - 0.5)*sin(pi*y)))
 u = Function(W).interpolate(velocity)
 File('u.pvd').write(u)
 
-# the diffusivity
-kappa = Constant(1e-5)
+# Calculate nu_bar for plotting
+J = Function(TensorFunctionSpace(mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(mesh))
+Pe_field = absv(dot(u, J)) / (2*kappa)
+beta_pe = beta(Pe_field)
+nubar = Function(V).interpolate(su_nubar(u, J, beta_pe))
+
+
+log("Number of Velocity DOF:", V.dim())
+
 
 bell_r0 = 0.15
 bell_x0 = 0.25
@@ -48,20 +65,27 @@ q = Function(V).interpolate(q_init)
 
 # We declare the output filename, and write out the initial condition. ::
 
-outfile = File("advdif_CG1_kappa1e-5_SU.pvd")
+outfile = File("advdiff_spiral_CG1_Pe"+str(Pe)+"_SU_nxny"+str(n)+"_U"+str(U)+"_BE_vel_strong_kappa1e-4.pvd")
 outfile.write(q)
+
+nubar_outfile = File("nubar.pvd")
+nubar_outfile.write(nubar)
 
 # time period and time step
 T = 10.
 dt = T/600.0
 
-eq = ScalarAdvectionDiffusionEquation(V, V)
-fields = {'velocity': u, 'diffusivity': kappa, 'SU_advection': None}
+eq = ScalarAdvectionDiffusionEquation(V, V, su_advection=True)
+fields = {'velocity': u, 'diffusivity': kappa}
 # weakly applied dirichlet bcs on top and bottom
 q_top = 1.0
 q_bottom = 0.0
 bcs = {3: {'q': q_bottom}, 4: {'q': q_top}}
-timestepper = DIRK33(eq, q, fields, dt, bnd_conditions=bcs)
+
+strong_qtop = DirichletBC(V, q_top, 4)
+strong_qbottom = DirichletBC(V, q_bottom, 3)
+strong_bcs = [strong_qtop, strong_qbottom]
+timestepper = BackwardEuler(eq, q, fields, dt, strong_bcs=strong_bcs)  # uncomment for weak bcs bnd_conditions=bcs)
 
 
 t = 0.0
@@ -73,6 +97,6 @@ while t < T - 0.5*dt:
     step += 1
     t += dt
 
-    if step % 20 == 0:
+    if step % 10 == 0:
         outfile.write(q)
         print("t=", t)

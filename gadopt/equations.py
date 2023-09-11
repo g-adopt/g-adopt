@@ -9,7 +9,7 @@ class BaseEquation(ABC):
     """This should be a list of BaseTerm sub-classes that form the terms of the equation."""
     terms = []
 
-    def __init__(self, test_space, trial_space, quad_degree=None, **kwargs):
+    def __init__(self, test_space, trial_space, quad_degree=None, su_advection=None, **kwargs):
         """
         :arg test_space: the test functionspace
         :arg trial_space: The trial functionspace
@@ -45,10 +45,12 @@ class BaseEquation(ABC):
 
         self.dx = firedrake.dx(domain=self.mesh, degree=quad_degree)
 
+        self.su_advection = su_advection
+
         # self._terms stores the actual instances of the BaseTerm-classes in self.terms
         self._terms = []
         for TermClass in self.terms:
-            self._terms.append(TermClass(test_space, trial_space, self.dx, self.ds, self.dS, **kwargs))
+            self._terms.append(TermClass(test_space, trial_space, self.dx, self.ds, self.dS, self.su_advection, **kwargs))
 
     def mass_term(self, test, trial):
         r"""Return the UFL for the mass term \int test * trial * dx typically used in the time term."""
@@ -71,7 +73,7 @@ class BaseEquation(ABC):
 
 class BaseTerm(ABC):
     """A term in an equation, that can produce the UFL expression for its contribution to the FEM residual."""
-    def __init__(self, test_space, trial_space, dx, ds, dS, **kwargs):
+    def __init__(self, test_space, trial_space, dx, ds, dS, su_advection, **kwargs):
         self.test_space = test_space
         self.trial_space = trial_space
         self.dx = dx
@@ -80,6 +82,7 @@ class BaseTerm(ABC):
         self.mesh = test_space.mesh()
         self.dim = self.mesh.geometric_dimension()
         self.n = firedrake.FacetNormal(self.mesh)
+        self.su_advection = su_advection
         self.term_kwargs = kwargs
 
     @abstractmethod
