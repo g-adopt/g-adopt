@@ -1,3 +1,9 @@
+"""
+This runs the optimisation portion of the adjoint test case. A forward run first sets up
+the tape with the adjoint information, then a misfit functional is constructed to be
+used as the goal condition for nonlinear optimisation using ROL.
+"""
+
 from gadopt import *
 from gadopt.inverse import *
 

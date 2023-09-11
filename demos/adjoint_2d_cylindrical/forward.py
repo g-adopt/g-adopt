@@ -1,3 +1,8 @@
+"""
+This runs the forward portion of the adjoint test case, to generate the reference
+final condition, and synthetic forcing (surface velocity observations).
+"""
+
 from gadopt import *
 import numpy as np
 
