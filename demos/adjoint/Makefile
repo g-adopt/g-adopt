@@ -1,6 +1,6 @@
 cases := damping smoothing Tobs uobs
 
-all: $(addsuffix .conv,$(cases)) checkpointing
+all: $(addsuffix .conv,$(cases))
 
 ncpus := 2
 
@@ -12,10 +12,5 @@ Checkpoint_State.h5: forward.py
 	echo "running forward adjoint case" >&2
 	tsp -N $(ncpus) -nf mpiexec -np $(ncpus) python3 $<
 
-checkpointing: helmholtz.py
-	echo "running helmholtz checkpointing" >&2
-	tsp -N 1 -nf python3 $<
-
 clean:
 	rm -f *.h5 *.conv *.dat
-	rm -rf optimisation_checkpoint
