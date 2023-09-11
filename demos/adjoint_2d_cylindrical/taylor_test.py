@@ -1,3 +1,8 @@
+"""
+This standalone script tests the robustness of the derivatives
+using the Taylor remainder convergence test.
+"""
+
 from gadopt import *
 from gadopt.inverse import *
 from mpi4py import MPI

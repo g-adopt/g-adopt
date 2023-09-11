@@ -1,3 +1,8 @@
+"""
+This standalone script tests the robustness of the derivatives
+using the Taylor remainder convergence test.
+"""
+
 from gadopt import *
 from gadopt.inverse import *
 from mpi4py import MPI
@@ -12,12 +17,12 @@ cases = ["damping", "smoothing", "Tobs", "uobs"]
 
 def rectangle_taylor_test(case):
     """
-    Perform a second-order taylor remainder convergence test
+    Perform a second-order Taylor remainder convergence test
     for one term in the objective functional for the rectangular case
     and asserts if convergence is above 1.9
 
     Args:
-        case (string): name of the objective functional term
+        case (str): name of the objective functional term
             either of "damping", "smooothing", "Tobs", "uobs"
     """
 
