@@ -132,7 +132,7 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
 
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
-        if self.compressible:  # (used in AnelasticLiquidApproximation below)
+        if self.compressible:  # (used in AnelasticLiquidApproximations below)
             stress -= 2/3 * self.mu * div(u) * Identity(u.ufl_shape[0])
         phi = inner(stress, grad(u))
         return phi * self.Di / self.Ra
@@ -152,11 +152,11 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
         return source
 
 
-class AnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
+class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     """
-    Anelastic Liquid Approximation
+    Truncated Anelastic Liquid Approximation
 
-    Compressible approximation. Includes linear dependence of density on pressure (chi)"""
+    Compressible approximation. Excludes linear dependence of density on pressure (chi)"""
     compressible = True
 
     def __init__(self, Ra, Di,
@@ -187,11 +187,6 @@ class AnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         assert 'g' not in kwargs
         self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
-    def buoyancy(self, p, T):
-        pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
-        temperature_part = super().buoyancy(p, T)
-        return pressure_part + temperature_part
-
     def rho_continuity(self):
         return self.rho
 
@@ -202,6 +197,14 @@ class AnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         w = vertical_component(u, self.cartesian)
         return self.Di * self.rho * self.alpha * w
 
-    def energy_source(self, u):
-        source = super().energy_source(u)
-        return source
+
+class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
+    """
+    Anelastic Liquid Approximation
+
+    Compressible approximation. Includes linear dependence of density on pressure (chi)"""
+
+    def buoyancy(self, p, T):
+        pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
+        temperature_part = super().buoyancy(p, T)
+        return pressure_part + temperature_part
