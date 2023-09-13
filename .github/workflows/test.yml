@@ -5,8 +5,6 @@ on:
     branches:
       - master
   pull_request:
-    branches:
-      - master
   workflow_dispatch:
 
 jobs:
@@ -15,15 +13,56 @@ jobs:
     runs-on: self-hosted
     container:
       image: firedrakeproject/firedrake:latest
+      options: --shm-size 2g
 
     env:
       OMP_NUM_THREADS: 1
 
     steps:
+      - name: Install prerequisites
+        run: |
+          sudo apt update
+          sudo apt install -y task-spooler
+          tsp -S 48
       - uses: actions/checkout@v3
+
+      - name: Load pyrol wheel from cache
+        uses: actions/cache/restore@v3
+        id: cache-pyrol
+        with:
+          path: /tmp/wheels
+          key: pyrol
+
+      - name: Build pyrol wheel
+        if: steps.cache-pyrol.outputs.cache-hit != 'true'
+        run: |
+          /home/firedrake/firedrake/bin/pip wheel -r requirements-git.txt -w /tmp/wheels
+
+      - name: Save pyrol to cache
+        if: steps.cache-pyrol.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: /tmp/wheels
+          key: pyrol
+
+      - name: Install Python dependencies
+        run: |
+          . /home/firedrake/firedrake/bin/activate
+          python3 -m pip install --no-index -f /tmp/wheels pyroltrilinos
+          python3 -m pip install -r requirements.txt
+          python3 -m pip install .
+
       - name: Run test
         run: |
           . /home/firedrake/firedrake/bin/activate
-          python -m pip install -r requirements.txt
-          make -j6 test
-          python -m pytest -k 2D
+          make -j test > test_output.log
+          python -m pytest
+        env:
+          GADOPT_LOGLEVEL: INFO
+
+      - name: Upload failed run log
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: run-log
+          path: test_output.log
