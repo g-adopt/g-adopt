@@ -1,4 +1,20 @@
 [build-system]
-requires = ["setuptools >= 40.6.0", "wheel"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "gadopt"
+version = "2.0.0"
+authors = [
+  { name = "G-ADOPT Contributors" }
+]
+description = "A computational platform for inverse geodynamics"
+readme = "README.md"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent"
+]
+
+[tool.setuptools]
 packages = ["gadopt"]
