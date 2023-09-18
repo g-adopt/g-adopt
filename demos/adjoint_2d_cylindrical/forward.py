@@ -51,13 +51,19 @@ def run_forward():
     z = Function(Z)  # a field over the mixed function space Z.
     u, p = split(z)  # Returns symbolic UFL expression for u and p
 
-    T = Function(Q, name="Temperature")
     X = SpatialCoordinate(mesh)
+    r = sqrt(X[0] ** 2 + X[1] ** 2)
+    Ra = Constant(1e7)  # Rayleigh number
+    approximation = BoussinesqApproximation(Ra)
+
+    # Define time stepping parameters:
+    max_timesteps = 200
+    delta_t = Constant(5e-6)  # Constant time step
+
     with CheckpointFile("Checkpoint230.h5", mode="r") as f:
         T = f.load_function(mesh, "Temperature")
 
     Taverage = Function(Q1, name="Average Temperature")
-    r = sqrt(X[0] ** 2 + X[1] ** 2)
 
     # A step function designed to design viscosity jumps
     # Build a step centred at "centre" with given magnitude
@@ -85,9 +91,11 @@ def run_forward():
     mu_lin *= exp(-ln(Constant(80)) * T)
 
     # Assemble the viscosity expression in terms of velocity u
-    eps = 0.5 * sym(grad(u))
-    epsii = sqrt(inner(eps, eps))
-    sigma_y = 1e4 + 2.0e5 * (rmax - r)
+    eps = sym(grad(u))
+    epsii = sqrt(inner(eps, eps) + 1e-10)
+    # yield stress and its depth dependence
+    # consistent with values used in Coltice et al. 2017
+    sigma_y = 2e4 + 4e5 * (rmax - r)
     mu_plast = 0.1 + (sigma_y / epsii)
     mu_eff = 2 * (mu_lin * mu_plast) / (mu_lin + mu_plast)
     mu = conditional(mu_eff > 0.4, mu_eff, 0.4)
@@ -104,12 +112,6 @@ def run_forward():
     checkpoint_file.save_mesh(mesh)
     checkpoint_file.save_function(Taverage, name="Average Temperature", idx=0)
     checkpoint_file.save_function(T, name="Temperature", idx=0)
-
-    Ra = Constant(1e7)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
-
-    delta_t = Constant(5e-6)  # Constant time step
-    max_timesteps = 200
 
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(
