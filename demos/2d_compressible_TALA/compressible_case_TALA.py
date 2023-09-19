@@ -35,7 +35,6 @@ t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e5)  # Rayleigh number
 mu = Constant(1.0)  # Viscosity
-Di = Constant(0.5)  # Dissipation number.
 
 # Compressible reference state:
 gruneisen = 1.0
