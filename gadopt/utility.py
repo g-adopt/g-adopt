@@ -330,7 +330,7 @@ class LayerAveraging:
         if cartesian:
             self.r = XYZ[-1]
         else:
-            self.r = sqrt(sum(XYZ**2))
+            self.r = sqrt(dot(XYZ, XYZ))
 
         self.dx = dx
         if quad_degree is not None:
