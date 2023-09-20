@@ -325,12 +325,12 @@ class LayerAveraging:
         """
 
         self.mesh = mesh
-        X, Y = SpatialCoordinate(mesh)
+        XYZ = SpatialCoordinate(mesh)
 
         if cartesian:
-            self.r = Y
+            self.r = XYZ[-1]
         else:
-            self.r = sqrt(X**2 + Y**2)
+            self.r = sqrt(sum(XYZ**2))
 
         self.dx = dx
         if quad_degree is not None:
