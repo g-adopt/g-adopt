@@ -18,7 +18,7 @@ domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RM
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar), also used for layer average T
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 Qlayer = FunctionSpace(mesh2d, "CG", 2)  # used to compute layer average
@@ -35,7 +35,6 @@ log("Number of Temperature DOF:", Q.dim())
 
 # Set up temperature field and initialise:
 T = Function(Q, name="Temperature")
-T_dev = Function(Q, name="Temperature_Deviation")
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 theta = atan_2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
@@ -60,22 +59,13 @@ approximation = BoussinesqApproximation(Ra)
 delta_t = Constant(1e-6)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
-# helper function to compute horizontal layer averages
-Tlayer = Function(Qlayer, name='LayerTemp')  # stores values of temp in one layer
-Tavg = Function(Q, name='LayerAveragedTemp')  # averaged temp function returned by function
-Rmin_area = assemble(Constant(1.0) * dx(domain=mesh2d))  # area of CMB
+# For computing layer averages
+T_avg = Function(W, name='Layer_Averaged_Temp')
+T_dev = Function(W, name='Temperature_Deviation')
 
-
-def layer_average(T):
-    vnodes = nlayers*2 + 1  # n/o Q2 nodes in the vertical
-    hnodes = Qlayer.dim()  # n/o Q2 nodes in each horizontal layer
-    assert hnodes*vnodes == Q.dim()
-    for i in range(vnodes):
-        Tlayer.dat.data[:] = T.dat.data_ro[i::vnodes]
-        # NOTE: this integral is performed on mesh2d, which always has r=Rmin, but we normalize
-        Tavg.dat.data[i::vnodes] = assemble(Tlayer*dx) / Rmin_area
-    return Tavg
-
+# Compute layer average for initial stage:
+averager = LayerAveraging(mesh, np.linspace(rmin, rmax, nlayers * 2), cartesian=False, quad_degree=6)
+averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
 # Define time stepping parameters:
 steady_state_tolerance = 1e-6
@@ -125,10 +115,10 @@ for timestep in range(0, max_timesteps):
 
     # Write output:
     if timestep % dump_period == 0:
-        # compute radial temperature
-        Tavg = layer_average(T)
+        # compute radially averaged temperature profile
+        averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
         # compute deviation from layer average
-        T_dev.assign(T-Tavg)
+        T_dev.project(T-T_avg)
         output_file.write(u, p, T, T_dev)
 
     if timestep != 0:
