@@ -4,13 +4,15 @@ from gadopt.time_stepper import DIRK33
 import numpy as np
 
 
-def model(n, do_write=False):
+def model(n, Pe=0.25, su_advection=True, do_write=False):
     """ Demo for scalar advection-diffusion based on Figure 2.7 in
     Chapter 2 Steady transport problems from Finite element Methods
     for Flow problems - Donea and Huerta, 2003
 
     Args:
         n: number of grid cells in x and y direction
+        Pe: grid peclet number
+        su_advection: Flag for turning su advection on or off
         do_write: whether to output the scalar/velocity field
     """
     mesh = UnitSquareMesh(n, n, quadrilateral=True)
@@ -32,7 +34,6 @@ def model(n, do_write=False):
         File('u.pvd').write(u)
 
     # the diffusivity
-    Pe = 0.25  # peclet number for coarsest grid
     h = 1/5  # coarsest grid size
     kappa = Constant(1*h/(2*Pe))
 
@@ -41,15 +42,15 @@ def model(n, do_write=False):
     q = Function(V).interpolate(q_init)
 
     # We declare the output filename, and write out the initial condition. ::
-
-    outfile = File("advdif_DH2.7_CG1_Pe"+str(Pe)+"_SU.pvd")
-    outfile.write(q)
+    if do_write:
+        outfile = File("advdif_DH2.7_CG1_Pe"+str(Pe)+"_SU.pvd")
+        outfile.write(q)
 
     # time period and time step
     T = 10.
     dt = 0.01
 
-    eq = ScalarAdvectionDiffusionEquation(V, V, su_advection=True)
+    eq = ScalarAdvectionDiffusionEquation(V, V, su_advection=su_advection)
     fields = {'velocity': u, 'diffusivity': kappa, 'source': 1.0}
     # weakly applied dirichlet bcs on top and bottom
     strong_bcs = DirichletBC(V, 0, [1, 2])
@@ -84,18 +85,27 @@ def model(n, do_write=False):
         q_anal = Function(V2)
         q_anal.interpolate((1/a) * (x[0] - (1 - exp(gamma*x[0]))/(1-exp(gamma))))
 
-        L2anal_q = norm(q)
         L2error_q = errornorm(q_anal, q, norm_type='L2')
+        L2anal_q = norm(q_anal)
+        L2q = norm(q)
 
         print("L2_anal_q", L2anal_q)
         print("L2_error_q", L2error_q)
 
-    return L2error_q
+    return L2error_q, L2anal_q, L2q
 
+
+# run cases for CI
+cases = {"su": [True, False],
+         "Pe": [0.25, 0.9, 50]
+         }
 
 nxs = [5*(2**i) for i in range(4)]  # number of grid cells
-errors = np.array([model(nx) for nx in nxs])
-conv = np.log(errors[:-1]/errors[1:])/np.log(2)
 
-print('time surface displacement errors: ', errors[:])
-print('time surface displacement conv: ', conv[:])
+for su in cases["su"]:
+    for pe in cases["Pe"]:
+        errors = np.array([model(nx, pe, su) for nx in nxs])
+        errfile_name = f"errors-su{su}_Pe{pe}.dat"
+        with open(errfile_name, "w") as f:
+            for x in errors:
+                f.write(str(x[0])+" "+str(x[1])+" "+str(x[2])+"\n")
