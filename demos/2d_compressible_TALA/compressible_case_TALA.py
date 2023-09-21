@@ -46,7 +46,7 @@ approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=T
 
 time = 0.0
 steady_state_tolerance = 1e-9
-max_timesteps = 200
+max_timesteps = 20000
 kappa = Constant(1.0)  # Thermal diffusivity
 
 FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
