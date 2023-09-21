@@ -100,7 +100,7 @@ plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t")
 
 gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
-t_adapt = TimestepAdaptor(delta_t, u, maximum_timestep=0.1, increase_tolerance=1.5)
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 temp_bcs = {
     bottom_id: {'T': 1.0},

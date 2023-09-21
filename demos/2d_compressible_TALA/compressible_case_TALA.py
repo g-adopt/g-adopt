@@ -68,7 +68,7 @@ dump_period = 100
 checkpoint_period = dump_period * 4
 
 delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, u, maximum_timestep=0.1, increase_tolerance=1.5)
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 
 # Open file for logging diagnostic output:

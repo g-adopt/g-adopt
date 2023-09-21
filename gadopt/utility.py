@@ -42,14 +42,24 @@ class ParameterLog:
 
 
 class TimestepAdaptor:
-    def __init__(self, dt_const, u, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
+    """
+    Computes timestep based on CFL condition for provided velocity field"""
+    def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
+        """
+        :arg dt_const:      Constant whose value will be updated by the timestep adaptor
+        :arg u:             Velocity to base CFL condition on
+        :arg V:             FunctionSpace for reference velocity, usually velocity space
+        :kwarg target_cfl:  CFL number to target with chosen timestep
+        :kwarg increase_tolerance: Maximum tolerance timestep is allowed to change by
+        :kwarg maximum_timestep:   Maximum allowable timestep"""
         self.dt_const = dt_const
         self.u = u
         self.target_cfl = target_cfl
         self.increase_tolerance = increase_tolerance
         self.maximum_timestep = maximum_timestep
-        self.mesh = u.function_space().mesh()
-        self.ref_vel = Function(self.u.function_space(), name="Reference_Velocity")
+        self.mesh = V.mesh()
+
+        self.ref_vel = Function(V, name="Reference_Velocity")
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
