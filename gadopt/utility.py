@@ -4,6 +4,7 @@ A module with utitity functions for gadopt
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
+from firedrake import interpolate
 import ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
@@ -316,11 +317,14 @@ class LayerAveraging:
     A manager for computing a vertical profile of horizontal layer averages.
     """
 
-    def __init__(self, mesh, r1d, cartesian=True, quad_degree=None):
+    def __init__(self, mesh, r1d=None, cartesian=True, quad_degree=None):
         """
         Create the :class:`LayerAveraging` manager.
         :arg mesh: The mesh over which to compute averages.
-        :arg r1d: An array of either depth coordinates or radii, at which to compute layer averages.
+        :kwarg r1d: An array of either depth coordinates or radii,
+             at which to compute layer averages. If not provided, and
+             mesh is extruded, it uses the same layer heights. If mesh
+             is not extruded, r1d is required.
         :kwarg cartesian: Determines whether `r1d` represents depths or radii.
         """
 
@@ -336,10 +340,19 @@ class LayerAveraging:
         if quad_degree is not None:
             self.dx = dx(degree=quad_degree)
 
-        self.r1d = r1d
+        if r1d:
+            self.r1d = r1d
+        else:
+            try:
+                nlayers = mesh.layers
+            except AttributeError:
+                raise ValueError("For non-extruded mesh need to specify depths array r1d.")
+            CG1 = FunctionSpace(mesh, "CG", 1)
+            r_func = interpolate(self.r, CG1)
+            self.r1d = r_func.dat.data[:nlayers]
 
-        self.mass = np.zeros((2, len(r1d)))
-        self.rhs = np.zeros(len(r1d))
+        self.mass = np.zeros((2, len(self.r1d)))
+        self.rhs = np.zeros(len(self.r1d))
         self._assemble_mass()
 
     def _assemble_mass(self):
