@@ -34,7 +34,7 @@ log("Number of Temperature DOF:", Q.dim())
 T = Function(Q, name="Temperature")
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2)
-T.interpolate(rmax - r + 0.02*cos(4*atan_2(X[1], X[0])) * sin((r - rmin) * pi))
+T.interpolate(rmax - r + 0.02*cos(4*atan2(X[1], X[0])) * sin((r - rmin) * pi))
 
 Ra = Constant(1e5)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
