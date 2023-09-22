@@ -1,37 +1,48 @@
-import pandas as pd
+import itertools
 import numpy as np
 import pytest
 
-# Su, grid Peclet number, expected convergence
-config = [(True, 0.25, [2.0, 2.0, 2.0]),
-          (False, 0.25, [2.0, 2.0, 2.0]),
-          (True, 0.9, None),
-          (False, 0.9, None),
-          (True, 50, [0.5, 0.5, 0.5]),  # don't actually test for this convergence as not sure if it is meangingul
-          (False, 50, None),
-          ]
+# Test each grid Peclet number with SU enabled and disabled
+conf = {
+    "Pe": [0.25, 0.9, 50.0],
+    "SU": [True, False],
+}
+
+# Only test the analytical convergence of the Pe=0.25 cases
+convergence = [2.0, 2.0, None, None, None, None]
+
+param_sets = zip(itertools.product(*conf.values()), convergence)
 
 
-@pytest.mark.parametrize("su,pe,expected_convergence", config)
-def test_scalar_advection_diffusion_DH27(su, pe, expected_convergence):
+@pytest.fixture
+def expected_errors():
+    return np.load("expected_errors.npz")
 
-    dat = pd.read_csv(f"errors-su{su}_Pe{pe}.dat", sep=" ", header=None)
-    dat.columns = ["l2error_q", "l2anal_q", "l2q"]
 
-    expected_dat = pd.read_csv(f"expected_errors-su{su}_Pe{pe}.dat", sep=" ", header=None)
-    expected_dat.columns = ["l2error_q", "l2anal_q", "l2q"]
+@pytest.mark.parametrize("params,expected_convergence", param_sets)
+def test_scalar_advection_diffusion_DH27(params, expected_convergence, expected_errors):
+    Pe, SU = params
+    param_str = "_".join(f"{p[0]}{p[1]}" for p in zip(conf.keys(), params))
+
+    expected_errors = expected_errors[param_str]
+    errors = np.loadtxt(f"errors-{param_str}.dat")
 
     # check that norm(q) is the same as previously run
-    assert np.allclose(dat["l2q"], expected_dat["l2q"], rtol=1e-6)
+    assert np.allclose(errors[:, 2], expected_errors[:, 2], rtol=1e-6)
 
     # use the highest resolution analytical solutions as the reference in scaling
-    ref = dat.iloc[-1][["l2anal_q"]].rename(index=lambda s: s.replace("anal", "error"))
-    errs = dat[["l2error_q"]] / ref
-    convergence = np.log2(errs.shift() / errs).drop(index=0)
+    ref = errors[-1, 1]
+    relative_errors = errors[:, 0] / ref
+    convergence = np.log2(relative_errors[:-1] / relative_errors[1:])
 
     # check second order convergence for Pe = 0.25 with and without SU (diffusion dominates
     # so in asymptotic limit for P1). For higher peclet numbers adding SU changes diffusivity
     # so not solving the same problem so probably don't expect to be in the asymptotic limit.
     # with Pe = 50 the convergence seems to be 1/2... see plot_convergence.py for a visual plot.
-    if pe == 0.25:
+    if expected_convergence is not None:
         assert np.allclose(convergence, expected_convergence, rtol=1e-2)
+
+
+if __name__ == "__main__":
+    for c in param_sets:
+        print("_".join([str(x) for x in c[0]]))

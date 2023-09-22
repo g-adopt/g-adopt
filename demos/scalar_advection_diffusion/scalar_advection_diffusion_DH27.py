@@ -2,6 +2,7 @@ from gadopt import *
 from gadopt.scalar_equation import ScalarAdvectionDiffusionEquation
 from gadopt.time_stepper import DIRK33
 import numpy as np
+import sys
 
 
 def model(n, Pe=0.25, su_advection=True, do_write=False):
@@ -95,17 +96,18 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     return L2error_q, L2anal_q, L2q
 
 
-# run cases for CI
-cases = {"su": [True, False],
-         "Pe": [0.25, 0.9, 50]
-         }
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        Pe, SU = sys.argv[1].split("_")
+        # parse params
+        Pe = float(Pe)
+        SU = SU == "True"
 
-nxs = [5*(2**i) for i in range(4)]  # number of grid cells
+        nxs = 5 * 2**np.arange(4)
 
-for su in cases["su"]:
-    for pe in cases["Pe"]:
-        errors = np.array([model(nx, pe, su) for nx in nxs])
-        errfile_name = f"errors-su{su}_Pe{pe}.dat"
-        with open(errfile_name, "w") as f:
-            for x in errors:
-                f.write(str(x[0])+" "+str(x[1])+" "+str(x[2])+"\n")
+        errors = np.array([model(nx, Pe, SU) for nx in nxs])
+        np.savetxt(f"errors-Pe{Pe}_SU{SU}.dat", errors)
+    else:
+        # default to a simple case if not running a specific
+        # case through CI
+        model(5, write=True)
