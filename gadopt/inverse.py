@@ -226,11 +226,12 @@ class LinMoreOptimiser:
         This will continue until the status test flags the optimisation to complete.
         """
 
-        self.rol_algorithm.run(
-            self.rol_solver.rolvector,
-            self.rol_solver.rolobjective,
-            self.rol_solver.bounds,
-        )
+        with stop_annotating():
+            self.rol_algorithm.run(
+                self.rol_solver.rolvector,
+                self.rol_solver.rolobjective,
+                self.rol_solver.bounds,
+            )
 
     def _add_statustest(self):
         class StatusTest(ROL.StatusTest):
