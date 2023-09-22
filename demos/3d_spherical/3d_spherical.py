@@ -1,6 +1,7 @@
 from gadopt import *
 import scipy.special
 import math
+import numpy as np
 
 # Quadrature degree:
 dx = dx(degree=6)
