@@ -222,7 +222,7 @@ class StokesSolver:
                 assert self.Z.sub(0).ufl_element().degree() == 2
                 assert self.Z.sub(1).ufl_element().degree() == 0
                 # only for isoviscous
-                assert isinstance(self.mu, fd.Constant)
+                # assert isinstance(self.mu, fd.Constant)
                 self.solver_parameters.update(p2p0_stokes_solver_parameters)
             elif self.mesh.topological_dimension() == 2 and cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
@@ -246,13 +246,13 @@ class StokesSolver:
                                                     appctx=self.appctx,
                                                     **self.solver_kwargs)
         if self.gamma is not None:
-            from alfi.transfer import PkP0SchoeberlTransfer, NullTransfer
+            from .mg_transfers import VariablePkP0SchoeberlTransfer, NullTransfer
             V = self.Z.sub(0)
             Q = self.Z.sub(1)
             tdim = self.mesh.topological_dimension()
             hierarchy = "uniform"
             restriction = False
-            vtransfer = PkP0SchoeberlTransfer((self.mu, self.gamma), tdim, hierarchy)
+            vtransfer = VariablePkP0SchoeberlTransfer(tdim, hierarchy)
             qtransfer = NullTransfer()
             transfers = {V.ufl_element(): (vtransfer.prolong, vtransfer.restrict if restriction else fd.restrict, fd.inject),
                          Q.ufl_element(): (fd.prolong, fd.restrict, qtransfer.inject)}

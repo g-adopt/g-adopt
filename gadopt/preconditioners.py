@@ -16,7 +16,7 @@ class P0MassInv(fd.PCBase):
         self.massinv = massinv.petscmat
         self.mu = appctx["mu"]
         self.gamma = appctx["gamma"]
-        assert isinstance(self.mu, fd.Constant)
+        #assert isinstance(self.mu, fd.Constant)
         assert isinstance(self.gamma, fd.Constant)
 
     def update(self, pc):
@@ -24,7 +24,7 @@ class P0MassInv(fd.PCBase):
 
     def apply(self, pc, x, y):
         self.massinv.mult(x, y)
-        scaling = float(self.mu) + float(self.gamma)
+        scaling = float(self.gamma)
         y.scale(-scaling)
 
     def applyTranspose(self, pc, x, y):
