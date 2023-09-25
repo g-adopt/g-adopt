@@ -1,7 +1,7 @@
 import firedrake as fd
 
 
-class P0MassInv(fd.PCBase):
+class P0MassInvPC(fd.PCBase):
     """Scaled inverse pressure mass preconditioner to be used with P0 pressure"""
 
     def initialize(self, pc):
@@ -16,7 +16,9 @@ class P0MassInv(fd.PCBase):
         self.massinv = massinv.petscmat
         self.mu = appctx["mu"]
         self.gamma = appctx["gamma"]
-        #assert isinstance(self.mu, fd.Constant)
+        if not isinstance(self.mu, fd.Constant):
+            self.scale_func = fd.Function(V)
+
         assert isinstance(self.gamma, fd.Constant)
 
     def update(self, pc):
@@ -24,8 +26,13 @@ class P0MassInv(fd.PCBase):
 
     def apply(self, pc, x, y):
         self.massinv.mult(x, y)
-        scaling = float(self.gamma)
-        y.scale(-scaling)
+        if isinstance(self.mu, fd.Constant):
+            scaling = float(self.mu) + float(self.gamma)
+            y.scale(-scaling)
+        else:
+            self.scale_func.project(-(self.mu + self.gamma))
+            with self.scale_func.dat.vec as scaling:
+                y.pointwiseMult(y, scaling)
 
     def applyTranspose(self, pc, x, y):
         raise NotImplementedError("Sorry!")

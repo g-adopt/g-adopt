@@ -85,7 +85,7 @@ p2p0_stokes_solver_parameters = {
     },
     'fieldsplit_1': {
         'ksp_type': 'preonly',
-        'pc_python_type': 'gadopt.P0MassInv',
+        'pc_python_type': 'gadopt.P0MassInvPC',
         'pc_type': 'python'
     }
 }
