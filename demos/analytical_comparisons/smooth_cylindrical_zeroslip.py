@@ -42,7 +42,7 @@ def model(level, k, nn, do_write=False):
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0]**2 + X[1]**2)
-    phi = atan_2(X[1], X[0])
+    phi = atan2(X[1], X[0])
 
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
