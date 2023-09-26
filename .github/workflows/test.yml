@@ -51,7 +51,6 @@ jobs:
           python3 -m pip install --no-index -f /tmp/wheels pyroltrilinos
           python3 -m pip install -r requirements.txt
           python3 -m pip install .
-          python3 -m pip install git+https://github.com/angus-g/pyadjoint@angus-g/rol-dualspace
 
       - name: Run test
         run: |
