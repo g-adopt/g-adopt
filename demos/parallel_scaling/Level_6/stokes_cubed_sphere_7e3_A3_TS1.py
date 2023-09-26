@@ -62,7 +62,6 @@ approximation = BoussinesqApproximation(Ra)
 mu = exp(4.605170185988092 * (0.5 - T))
 
 delta_t = Constant(2.5e-8)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 max_timesteps = 2
 time = 0.0

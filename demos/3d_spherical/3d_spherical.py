@@ -58,7 +58,6 @@ Ra = Constant(7e3)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
 
 delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # helper function to compute horizontal layer averages
 Tlayer = Function(Qlayer, name='LayerTemp')  # stores values of temp in one layer
@@ -101,6 +100,7 @@ plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t")
 
 gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 temp_bcs = {
     bottom_id: {'T': 1.0},
@@ -132,7 +132,7 @@ for timestep in range(0, max_timesteps):
         output_file.write(u, p, T, T_dev)
 
     if timestep != 0:
-        dt = t_adapt.update_timestep(u)
+        dt = t_adapt.update_timestep()
     else:
         dt = float(delta_t)
     time += dt
