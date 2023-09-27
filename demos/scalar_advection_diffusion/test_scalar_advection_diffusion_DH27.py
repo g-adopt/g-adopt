@@ -1,5 +1,6 @@
 import itertools
 import numpy as np
+from pathlib import Path
 import pytest
 
 # Test each grid Peclet number with SU enabled and disabled
@@ -13,10 +14,12 @@ convergence = [2.0, 2.0, None, None, None, None]
 
 param_sets = zip(itertools.product(*conf.values()), convergence)
 
+base = Path(__file__).parent.resolve()
+
 
 @pytest.fixture
 def expected_errors():
-    return np.load("expected_errors.npz")
+    return np.load(base / "expected_errors.npz")
 
 
 @pytest.mark.parametrize("params,expected_convergence", param_sets)
@@ -25,7 +28,7 @@ def test_scalar_advection_diffusion_DH27(params, expected_convergence, expected_
     param_str = "_".join(f"{p[0]}{p[1]}" for p in zip(conf.keys(), params))
 
     expected_errors = expected_errors[param_str]
-    errors = np.loadtxt(f"errors-{param_str}.dat")
+    errors = np.loadtxt(base / f"errors-{param_str}.dat")
 
     # check that norm(q) is the same as previously run
     assert np.allclose(errors[:, 2], expected_errors[:, 2], rtol=1e-6)
