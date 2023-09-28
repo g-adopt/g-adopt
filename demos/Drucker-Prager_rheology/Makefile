@@ -4,7 +4,7 @@ all: $(cases)
 
 $(cases): spiegelman.py
 	echo "running spiegelman $@" >&2
-	tsp -fn python3 $< $@
+	/usr/bin/time --format="spiegelman $@ finished in %E" tsp -f python3 $< $@
 
 clean:
 	rm -rf $(addprefix spiegelman_,$(cases))

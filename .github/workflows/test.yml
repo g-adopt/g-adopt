@@ -22,7 +22,7 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt update
-          sudo apt install -y task-spooler
+          sudo apt install -y task-spooler time
           tsp -S 48
       - uses: actions/checkout@v3
 
@@ -56,10 +56,27 @@ jobs:
       - name: Run test
         run: |
           . /home/firedrake/firedrake/bin/activate
-          make -j test > test_output.log
+          make -j test
           python -m pytest
         env:
           GADOPT_LOGLEVEL: INFO
+          TS_MAXFINISHED: 100
+
+      - name: Output timing information
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          for id in $(tsp | tail +2 | awk '{print $1}'); do
+            st="$(tsp -i $id)"
+            if [[ "$st" =~ "exit code 0" ]]; then
+              echo "$st" | awk '/^(Time|Command)/'
+            else
+              echo "$st" | awk '/^Command/ {print "Failed: " $0} /^Time/'
+              echo "$st" | grep '^Command' >> test_output.log
+              tsp -t $id | tail -n 10
+              tsp -t $id >> test_output.log
+            fi
+          done
 
       - name: Upload failed run log
         if: failure()

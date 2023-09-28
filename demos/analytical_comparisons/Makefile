@@ -6,4 +6,4 @@ all: $(cases)
 
 $(cases): analytical.py
 	echo "running analytical $@" >&2
-	python3 analytical.py submit -t "tsp -N {cores} -f mpiexec -np {cores}" $@
+	/usr/bin/time --format="analytical $@ finished in %E" python3 analytical.py submit -t "tsp -N {cores} -f mpiexec -np {cores}" $@
