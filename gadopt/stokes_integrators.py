@@ -16,7 +16,6 @@ iterative_stokes_solver_parameters = {
         "pc_python_type": "firedrake.AssembledPC",
         "assembled_pc_type": "gamg",
         "assembled_mg_levels_pc_type": "sor",
-        "assembled_mg_levels_pc_sor_diagonal_shift": 1e-100,
         "assembled_pc_gamg_threshold": 0.01,
         "assembled_pc_gamg_square_graph": 100,
     },
