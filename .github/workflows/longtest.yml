@@ -33,7 +33,7 @@ jobs:
 
       - name: Test SSH
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && ls"
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && cd demos/analytical_comparisons && make spherical_cases gadopt_checkout=${{secrets.GADI_REPO_PATH}}"
 
 # make sure PETSc build is up to date
 # maybe build on jobfs, then tarball (like fem-on-colab)? could get around transient gdata issues

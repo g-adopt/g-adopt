@@ -124,7 +124,7 @@ def submit_subcommand(args):
     for level, cores in zip(config.pop("levels"), config.pop("cores")):
         for params in param_sets(config, permutate):
             paramstr = "-".join([str(v) for v in params])
-            command = args.template.format(cores=cores, mem=4*cores, params=paramstr)
+            command = args.template.format(cores=cores, mem=4*cores, params=paramstr, level=level)
 
             procs[paramstr] = subprocess.Popen(
                 [
