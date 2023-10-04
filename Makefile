@@ -1,4 +1,4 @@
-.PHONY: lint test
+.PHONY: lint test longtest
 
 lint:
 	@echo "Linting module code"
@@ -8,3 +8,6 @@ lint:
 
 test:
 	$(MAKE) -C demos
+
+longtest:
+	$(MAKE) -C demos longtest

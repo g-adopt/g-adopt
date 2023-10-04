@@ -31,15 +31,10 @@ jobs:
             IdentityFile ~/.ssh/gadi.key
           EOF
 
-      - name: Test SSH
+      - name: Run test cases
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && cd demos/analytical_comparisons && make spherical_cases gadopt_checkout=${{secrets.GADI_REPO_PATH}}"
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && make longtest gadopt_checkout=${{secrets.GADI_REPO_PATH}} gadopt_prefix_image=${{secrets.GADI_PREFIX_IMAGE}} project=${{secrets.GADI_PROJECT}}"
 
-# make sure PETSc build is up to date
-# maybe build on jobfs, then tarball (like fem-on-colab)? could get around transient gdata issues
-
-# make sure Firedrake build is up to date
-
-# run tests (copy .dat files back to runner?)
+# copy test results back
 
 # check tests
