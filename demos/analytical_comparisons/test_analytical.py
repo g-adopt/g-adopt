@@ -1,6 +1,5 @@
 import pytest
 import analytical
-import itertools
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -29,14 +28,9 @@ for name, conf in params.items():
     conf = conf.copy()
     conf.pop("cores")
     conf.pop("levels")
-
     permutate = conf.pop("permutate", True)
-    if permutate:
-        param_gen = itertools.product(*conf.values())
-    else:
-        param_gen = zip(*conf.values())
 
-    for combination in param_gen:
+    for combination in analytical.param_sets(conf, permutate):
         configs.append((name, enabled_cases[name], dict(zip(conf.keys(), combination))))
 
 

@@ -73,6 +73,13 @@ def get_case(cases, config):
     return cases
 
 
+def param_sets(config, permutate=False):
+    if permutate:
+        return itertools.product(*config.values())
+
+    return zip(*config.values())
+
+
 def run_subcommand(args):
     from mpi4py import MPI
 
@@ -115,12 +122,7 @@ def submit_subcommand(args):
     permutate = config.pop("permutate", True)
 
     for level, cores in zip(config.pop("levels"), config.pop("cores")):
-        if permutate:
-            param_gen = itertools.product(*config.values())
-        else:
-            param_gen = zip(*config.values())
-
-        for params in param_gen:
+        for params in param_sets(config, permutate):
             paramstr = "-".join([str(v) for v in params])
             command = args.template.format(cores=cores, mem=4*cores, params=paramstr)
 
@@ -146,10 +148,7 @@ def count_subcommand(args):
     config = get_case(cases, args.case)
     permutate = config.pop("permutate", True)
     levels = zip(config.pop("levels"), config.pop("cores"))
-    if permutate:
-        params = itertools.product(*config.values())
-    else:
-        params = zip(*config.values())
+    params = param_sets(config, permutate)
 
     print(len(list(levels)) * len(list(params)))
 
