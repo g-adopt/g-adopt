@@ -12,6 +12,7 @@ iterative_stokes_solver_parameters = {
     "fieldsplit_0": {
         "ksp_type": "cg",
         "ksp_rtol": 1e-5,
+        "ksp_max_it": 1000,
         "pc_type": "python",
         "pc_python_type": "gadopt.SPDAssembledPC",
         "assembled_pc_type": "gamg",
@@ -24,6 +25,7 @@ iterative_stokes_solver_parameters = {
     "fieldsplit_1": {
         "ksp_type": "fgmres",
         "ksp_rtol": 1e-4,
+        "ksp_max_it": 200,
         "pc_type": "python",
         "pc_python_type": "gadopt.VariableMassInvPC",
         "Mp_ksp_rtol": 1e-5,
