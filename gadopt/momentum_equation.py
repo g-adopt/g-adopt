@@ -155,6 +155,7 @@ class PressureGradientTerm(BaseTerm):
 
 class DivGradTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
+        return 0
         gamma = fields.get('gamma')
         if not gamma:
             return 0

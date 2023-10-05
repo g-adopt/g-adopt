@@ -1,39 +1,8 @@
 from gadopt import *
 from mpi4py import MPI
 
-stokes_solver_parameters = {
-    "snes_type": "ksponly",
-    "mat_type": "matfree",
-    "ksp_type": "preonly",
-    "pc_type": "fieldsplit",
-    "pc_fieldsplit_type": "schur",
-    "pc_fieldsplit_schur_type": "full",
-    "fieldsplit_0": {
-        "ksp_type": "cg",
-        "ksp_rtol": 1e-7,
-        "ksp_converged_reason": None,
-        "pc_type": "python",
-        "pc_python_type": "firedrake.AssembledPC",
-        "assembled_pc_type": "gamg",
-        "assembled_mg_levels_pc_type": "sor",
-        "assembled_mg_levels_pc_sor_diagonal_shift": 1e-100,
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
-    },
-    "fieldsplit_1": {
-        "ksp_type": "fgmres",
-        "ksp_rtol": 1e-5,
-        "ksp_converged_reason": None,
-        "pc_type": "python",
-        "pc_python_type": "firedrake.MassInvPC",
-        "Mp_ksp_rtol": 1e-5,
-        "Mp_ksp_type": "cg",
-        "Mp_pc_type": "sor",
-    }
-}
-
 # Set up geometry:
-nx, ny = 60, 60
+nx, ny = 80, 80
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
@@ -114,8 +83,7 @@ stokes_bcs = {
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
                              cartesian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             solver_parameters=stokes_solver_parameters)
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)

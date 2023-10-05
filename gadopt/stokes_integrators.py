@@ -1,6 +1,7 @@
 from .momentum_equation import StokesEquations
 from .utility import upward_normal, ensure_constant
 from .utility import log_level, INFO, DEBUG, depends_on
+from .preconditioners import AugmentedLagrangianContext
 import firedrake as fd
 
 iterative_stokes_solver_parameters = {
@@ -94,6 +95,36 @@ p2p0_stokes_solver_parameters = {
 }
 
 
+al_stokes_solver_parameters = {
+    "mat_type": "matfree",
+    "ksp_type": "fgmres",
+    "ksp_monitor": None,
+    "pc_type": "fieldsplit",
+    "pc_fieldsplit_type": "schur",
+    "pc_fieldsplit_schur_type": "full",
+    "fieldsplit_0": {
+        "ksp_type": "preonly",
+        #"ksp_converged_reason": None,
+        "pc_type": "python",
+        "pc_python_type": "gadopt.AugmentedAssembledPC",
+        "assembled_pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    },
+    "fieldsplit_1": {
+        "ksp_type": "preonly",
+        "pc_type": "python",
+        "pc_python_type": "gadopt.VariableMassInvPC",
+        "Mp_ksp_type": "cg",
+        "Mp_ksp_rtol": 1e-5,
+        "Mp_ksp_converged_reason": None,
+        "Mp_pc_type": "sor",
+        "Mp2_ksp_type": "cg",
+        "Mp2_ksp_rtol": 1e-5,
+        "Mp2_pc_type": "sor",
+        "Mp2_ksp_converged_reason": None,
+    }
+}
+
 direct_stokes_solver_parameters = {
     "mat_type": "aij",
     "ksp_type": "preonly",
@@ -107,6 +138,7 @@ newton_stokes_solver_parameters = {
     "snes_max_it": 100,
     "snes_atol": 1e-10,
     "snes_rtol": 1e-5,
+    "snes_converged_reason": None,
 }
 
 
@@ -223,10 +255,14 @@ class StokesSolver:
             if self.gamma is not None:
                 # Augmented Lagrangian only implemted for P2-P0 at the moment
                 assert self.Z.sub(0).ufl_element().degree() == 2
-                assert self.Z.sub(1).ufl_element().degree() == 0
+                # assert self.Z.sub(1).ufl_element().degree() == 0
                 # only for isoviscous
                 # assert isinstance(self.mu, fd.Constant)
-                self.solver_parameters.update(p2p0_stokes_solver_parameters)
+                self.solver_parameters.update(al_stokes_solver_parameters)
+                #self.solver_parameters.update(hacky_stokes_solver_parameters)
+                alc = AugmentedLagrangianContext(self.F, self.solution, self.gamma, bcs=self.strong_bcs)
+                self.solver_kwargs['post_function_callback'] = alc.post_function_callback
+                self.appctx['alc'] = alc
             elif self.mesh.topological_dimension() == 2 and cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
@@ -261,6 +297,25 @@ class StokesSolver:
                          Q.ufl_element(): (fd.prolong, fd.restrict, qtransfer.inject)}
             transfermanager = fd.TransferManager(native_transfers=transfers)
             self.solver.set_transfer_manager(transfermanager)
+            def wrap(f, message):
+                def wrapper(*args, **kwargs):
+                    if hasattr(args[0], 'getSizes'):
+                        print(message, f'  {args[0].getSizes()}')
+                    else:
+                        print(message)
+                    return f(*args, **kwargs)
+                return wrapper
+            ctx = self.solver._ctx._jac.petscmat.getPythonContext()
+            #ctx.mult = wrap(ctx.mult, 'Multiplying coupled matrix')
+            def wrap_createSubMatrix(f, message):
+                def wrapper(*args, **kwargs):
+                    print('Creating submatrix!!')
+                    submat = f(*args, **kwargs)
+                    ctx = submat.getPythonContext()
+                    ctx.mult = wrap(ctx.mult, message)
+                    return submat
+                return wrapper
+            #ctx.createSubMatrix = wrap_createSubMatrix(ctx.createSubMatrix, 'Multiplying sub-matrix')
 
         self._solver_setup = True
 
