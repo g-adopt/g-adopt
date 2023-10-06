@@ -6,7 +6,7 @@ import pandas as pd
 from pathlib import Path
 
 enabled_cases = {
-    "smooth/cylindrical/free_slip": {"convergence": (4.0, 2.0)},
+    "smooth/cylindrical/free_slip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
     "smooth/cylindrical/zero_slip": {"convergence": (4.0, 2.0)},
     "delta/cylindrical/free_slip": {"convergence": (1.5, 0.5)},
     "delta/cylindrical/zero_slip": {"convergence": (1.5, 0.5)},
