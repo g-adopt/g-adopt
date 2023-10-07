@@ -72,8 +72,8 @@ jobs:
             else
               echo "$st" | awk '/^Command/ {print "Failed: " $0} /^Time/'
               echo "$st" | grep '^Command' >> test_output.log
-              tsp -t $id | tail -n 10
-              tsp -t $id >> test_output.log
+              tsp -c $id | tail -n 10 || true
+              tsp -c $id >> test_output.log || true
             fi
           done
 
