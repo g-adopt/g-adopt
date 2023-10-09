@@ -82,6 +82,7 @@ stokes_bcs = {
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 energy_solver.solver_parameters['ksp_converged_reason'] = None
 energy_solver.solver_parameters['ksp_view'] = None
+energy_solver.solver_parameters['ksp_rtol'] = 1e-7
 Told = energy_solver.T_old
 Ttheta = 0.5*T + 0.5*Told
 Told.assign(T)
@@ -89,11 +90,15 @@ stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs, mu=mu,
                              cartesian=False,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
+
 stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+stokes_solver.solver_parameters['fieldsplit_0']['ksp_monitor_true_residual'] = None
 stokes_solver.solver_parameters['fieldsplit_0']['ksp_view'] = None
+stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-7
+stokes_solver.solver_parameters['fieldsplit_0']["assembled_pc_gamg_mis_minimum_degree_ordering"] = False
 stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
 stokes_solver.solver_parameters['fieldsplit_1']['ksp_view'] = None
-
+stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
 
 # Now perform the time loop:
 for timestep in range(0, max_timesteps):
