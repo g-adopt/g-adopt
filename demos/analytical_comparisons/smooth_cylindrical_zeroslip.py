@@ -76,8 +76,8 @@ def model(level, k, nn, do_write=False):
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
     # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-14
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-12
+    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
+    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-11
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
     # and the RHS == 0.
