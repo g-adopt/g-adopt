@@ -3,7 +3,7 @@ from firedrake import sym, grad, inner, div, Identity
 from .utility import ensure_constant, vertical_component
 
 
-class BaseApproximation(metaclass=abc.ABCMeta):
+class BaseApproximation(abc.ABC):
     """
     Base class to provide expressions in (Navier?)-Stokes + energy equations
 
