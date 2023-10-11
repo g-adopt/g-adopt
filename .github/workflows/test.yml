@@ -15,6 +15,10 @@ jobs:
       image: firedrakeproject/firedrake:latest
       options: --shm-size 2g
 
+    concurrency:
+      group: testing-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+
     env:
       OMP_NUM_THREADS: 1
 
