@@ -200,6 +200,7 @@ class LevelSetEquation(ScalarAdvectionEquation):
     def mass_term(self, test, trial):
         return super().mass_term(test, trial)
 
+
 class EnergyEquation(ScalarAdvectionDiffusionEquation):
     def __init__(self, test_space, trial_space, rhocp=None, quad_degree=None):
         self.rhocp = rhocp
