@@ -1,8 +1,20 @@
-from .equations import BaseTerm, BaseEquation
-from firedrake import dot, inner, div, grad, avg, jump, sign
-from firedrake import min_value, Identity
-from firedrake import FacetArea, CellVolume
-from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio
+from firedrake import (
+    CellVolume,
+    FacetArea,
+    Identity,
+    avg,
+    div,
+    dot,
+    grad,
+    inner,
+    jump,
+    min_value,
+    sign,
+)
+
+from .equations import BaseEquation, BaseTerm
+from .utility import cell_edge_integral_ratio, is_continuous, normal_is_continuous
+
 r"""
 This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
 
@@ -192,6 +204,13 @@ class ScalarAdvectionDiffusionEquation(BaseEquation):
 
     terms = [ScalarAdvectionTerm, ScalarDiffusionTerm, ScalarSourceTerm, ScalarAbsorptionTerm]
 
+
+class LevelSetEquation(ScalarAdvectionEquation):
+    def __init__(self, test_space, trial_space, quad_degree=None):
+        super().__init__(test_space, trial_space, quad_degree=quad_degree)
+
+    def mass_term(self, test, trial):
+        return super().mass_term(test, trial)
 
 class EnergyEquation(ScalarAdvectionDiffusionEquation):
     def __init__(self, test_space, trial_space, rhocp=None, quad_degree=None):
