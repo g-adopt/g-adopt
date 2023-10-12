@@ -43,7 +43,6 @@ def run_forward():
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-    Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
     Z = MixedFunctionSpace([V, W])
 
