@@ -1,20 +1,8 @@
-from firedrake import (
-    CellVolume,
-    FacetArea,
-    Identity,
-    avg,
-    div,
-    dot,
-    grad,
-    inner,
-    jump,
-    min_value,
-    sign,
-)
-
-from .equations import BaseEquation, BaseTerm
-from .utility import cell_edge_integral_ratio, is_continuous, normal_is_continuous
-
+from .equations import BaseTerm, BaseEquation
+from firedrake import dot, inner, div, grad, avg, jump, sign
+from firedrake import min_value, Identity
+from firedrake import FacetArea, CellVolume
+from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio
 r"""
 This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
 
