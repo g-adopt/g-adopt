@@ -62,4 +62,3 @@ class LevelSetSolver:
             self.setup_solver()
         t = 0  # not used atm
         self.ts.advance(t)
-
