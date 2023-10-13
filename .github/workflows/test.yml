@@ -8,6 +8,22 @@ on:
   workflow_dispatch:
 
 jobs:
+  check_commit:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check_commit.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.push.after || github.event.pull_request.head.sha || github.event.workflow_dispatch.ref }}
+      - name: Check if message contains skip keyword
+        id: check_commit
+        run: |
+          message=$(git log -1 --pretty=format:'%B')
+          regex="\[skip tests\]"
+          if [[ "$message" =~ $regex ]]; then
+            echo skip=true >> "$GITHUB_OUTPUT"
+          fi
   build:
     name: Benchmark regression test
     runs-on: self-hosted
@@ -19,6 +35,9 @@ jobs:
       group: testing-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
 
+    needs: check_commit
+    if: ${{ needs.check_commit.outputs.skip != 'true' }}
+
     env:
       OMP_NUM_THREADS: 1
 
@@ -28,7 +47,7 @@ jobs:
           sudo apt update
           sudo apt install -y task-spooler time
           tsp -S 48
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Load pyrol wheel from cache
         uses: actions/cache/restore@v3
