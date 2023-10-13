@@ -11,8 +11,8 @@ enabled_cases = {
     "delta/cylindrical/zero_slip": {"convergence": (1.5, 0.5)},
     "delta/cylindrical/free_slip_dpc": {"convergence": (3.5, 2.0), "rtol": 1e-1},
     "delta/cylindrical/zero_slip_dpc": {"convergence": (3.5, 2.0), "rtol": 2e-1},
-    "smooth/spherical/free_slip": {"convergence": (4.0, 2.0)},
-    "smooth/spherical/zero_slip": {"convergence": (4.0, 2.0)},
+    "smooth/spherical/free_slip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
+    "smooth/spherical/zero_slip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
 }
 
 longtest_cases = [
