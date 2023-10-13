@@ -4,7 +4,7 @@ A module with utitity functions for gadopt
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
-from firedrake import interpolate
+from firedrake import Interpolator, op2, interpolate
 import ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
@@ -42,28 +42,46 @@ class ParameterLog:
 
 
 class TimestepAdaptor:
-    def __init__(self, dt_const, u_fs, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
+    """
+    Computes timestep based on CFL condition for provided velocity field"""
+    def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
+        """
+        :arg dt_const:      Constant whose value will be updated by the timestep adaptor
+        :arg u:             Velocity to base CFL condition on
+        :arg V:             FunctionSpace for reference velocity, usually velocity space
+        :kwarg target_cfl:  CFL number to target with chosen timestep
+        :kwarg increase_tolerance: Maximum tolerance timestep is allowed to change by
+        :kwarg maximum_timestep:   Maximum allowable timestep"""
         self.dt_const = dt_const
-        self.u_fs = u_fs
+        self.u = u
         self.target_cfl = target_cfl
         self.increase_tolerance = increase_tolerance
         self.maximum_timestep = maximum_timestep
-        self.mesh = u_fs.mesh()
-        self.ref_vel = Function(self.u_fs, name="Reference_Velocity")
+        self.mesh = V.mesh()
 
-    def compute_timestep(self, u):
+        self.ref_vel = Function(V, name="Reference_Velocity")
+        # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
+        # in all adjacent elements when interpolating it to a continuous function space
+        # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
+        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), self.ref_vel, access=op2.MAX)
+
+    def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
         if self.maximum_timestep is not None:
             max_ts = min(max_ts, self.maximum_timestep)
 
-        self.ref_vel.interpolate(dot(JacobianInverse(self.mesh), u))
-        # NOTE; we're incorparing max_ts here before divinging by max. ref. vel. as it may be zero
-        ts = self.target_cfl / max(self.mesh.comm.allreduce(np.abs(self.ref_vel.dat.data.max()), MPI.MAX), self.target_cfl / max_ts)
+        # need to reset ref_vel to avoid taking max with previous values
+        self.ref_vel.assign(0)
+        self.ref_vel_interpolator.interpolate()
+        local_maxrefvel = self.ref_vel.dat.data.max()
+        max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
+        # NOTE; we're incorparating max_ts here before dividing by max. ref. vel. as it may be zero
+        ts = self.target_cfl / max(max_refvel, self.target_cfl / max_ts)
 
         return ts
 
-    def update_timestep(self, u):
-        self.dt_const.assign(self.compute_timestep(u))
+    def update_timestep(self):
+        self.dt_const.assign(self.compute_timestep())
         return float(self.dt_const)
 
 

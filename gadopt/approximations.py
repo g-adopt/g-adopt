@@ -3,7 +3,7 @@ from firedrake import sym, grad, inner, div, Identity
 from .utility import ensure_constant, vertical_component
 
 
-class BaseApproximation:
+class BaseApproximation(abc.ABC):
     """
     Base class to provide expressions in (Navier?)-Stokes + energy equations
 
@@ -21,7 +21,7 @@ class BaseApproximation:
     kappa() is diffusivity or conductivity depending on rhocp()
     Tbar (property) is 0 or reference temperature profile (ALA)
     compressible (property) False or True
-    if compressible then dev_stess=mu*[sym(grad(u)-2/3 div(u()]
+    if compressible then dev_stress=mu*[sym(grad(u)-2/3 div(u()]
     if not compressible then dev_stress=mu*sym(grad(u)) and rho_continuity is assumed to be 1
     """
     @property
@@ -72,7 +72,7 @@ class BoussinesqApproximation(BaseApproximation):
 
     Small density variation linear in Temperature only, only taken into account in buoyancy term.
     All references rho, cp, alpha are constant and typically incorporated in Ra
-    Viscosous dissipation is neglected (Di << 1)."""
+    Viscous dissipation is neglected (Di << 1)."""
     compressible = False
 
     def __init__(self, Ra, kappa=1, g=1, rho=1, alpha=1):
