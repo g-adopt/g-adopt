@@ -15,6 +15,10 @@ jobs:
       image: firedrakeproject/firedrake:latest
       options: --shm-size 2g
 
+    concurrency:
+      group: testing-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+
     env:
       OMP_NUM_THREADS: 1
 
@@ -22,7 +26,7 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt update
-          sudo apt install -y task-spooler
+          sudo apt install -y task-spooler time
           tsp -S 48
       - uses: actions/checkout@v3
 
@@ -51,15 +55,31 @@ jobs:
           python3 -m pip install --no-index -f /tmp/wheels pyroltrilinos
           python3 -m pip install -r requirements.txt
           python3 -m pip install .
-          python3 -m pip install git+https://github.com/angus-g/pyadjoint@angus-g/rol-dualspace
 
       - name: Run test
         run: |
           . /home/firedrake/firedrake/bin/activate
-          make -j test > test_output.log
+          make -j test
           python -m pytest
         env:
           GADOPT_LOGLEVEL: INFO
+          TS_MAXFINISHED: 100
+
+      - name: Output timing information
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          for id in $(tsp | tail +2 | awk '{print $1}'); do
+            st="$(tsp -i $id)"
+            if [[ "$st" =~ "exit code 0" ]]; then
+              echo "$st" | awk '/^(Time|Command)/'
+            else
+              echo "$st" | awk '/^Command/ {print "Failed: " $0} /^Time/'
+              echo "$st" | grep '^Command' >> test_output.log
+              tsp -c $id | tail -n 10 || true
+              tsp -c $id >> test_output.log || true
+            fi
+          done
 
       - name: Upload failed run log
         if: failure()
