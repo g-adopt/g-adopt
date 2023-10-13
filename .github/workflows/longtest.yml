@@ -32,9 +32,16 @@ jobs:
           EOF
 
       - name: Run test cases
+        id: run_tests
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && make longtest gadopt_checkout=${{secrets.GADI_REPO_PATH}} gadopt_prefix_image=${{secrets.GADI_PREFIX_IMAGE}} project=${{secrets.GADI_PROJECT}}"
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && make -j longtest gadopt_checkout=${{secrets.GADI_REPO_PATH}} gadopt_prefix_image=${{secrets.GADI_PREFIX_IMAGE}} project=${{secrets.GADI_PROJECT}}"
 
-# copy test results back
+      - name: Test results
+        if: ${{ success() }}
+        run: |
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && python3 -m pytest -m longtest"
 
-# check tests
+      - name: Get error output
+        if: ${{ failure() }}
+        run: |
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && make longtest_output"

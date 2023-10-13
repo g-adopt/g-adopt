@@ -15,6 +15,11 @@ enabled_cases = {
     "smooth/spherical/zero_slip": {"convergence": (4.0, 2.0)},
 }
 
+longtest_cases = [
+    "smooth/spherical/free_slip",
+    "smooth/spherical/zero_slip",
+]
+
 params = {
     f"{l1}/{l2}/{l3}": v3 for l1, v1 in analytical.cases.items()
     for l2, v2 in v1.items()
@@ -31,7 +36,11 @@ for name, conf in params.items():
     permutate = conf.pop("permutate", True)
 
     for combination in analytical.param_sets(conf, permutate):
-        configs.append((name, enabled_cases[name], dict(zip(conf.keys(), combination))))
+        conf_tuple = (name, enabled_cases[name], dict(zip(conf.keys(), combination)))
+        if name in longtest_cases:
+            configs.append(pytest.param(*conf_tuple, marks=pytest.mark.longtest))
+        else:
+            configs.append(conf_tuple)
 
 
 def idfn(val):

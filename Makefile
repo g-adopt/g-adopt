@@ -11,3 +11,6 @@ test:
 
 longtest:
 	$(MAKE) -C demos longtest
+
+longtest_output:
+	$(MAKE) -C demos longtest_output
