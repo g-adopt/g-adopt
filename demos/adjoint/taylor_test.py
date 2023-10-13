@@ -9,10 +9,10 @@ from mpi4py import MPI
 import numpy as np
 import sys
 
+from cases import cases
+
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
-
-cases = ["damping", "smoothing", "Tobs", "uobs"]
 
 
 def rectangle_taylor_test(case):
