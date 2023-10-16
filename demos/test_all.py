@@ -8,7 +8,7 @@ cases = {
     "2d_compressible_ALA": {},
     "viscoplastic_case": {},
     "2d_cylindrical": {},
-    "3d_spherical": {},
+    "3d_spherical": {"extra_checks": ["t_dev_avg"]},
     "3d_cartesian": {"rtol": 1e-4},
 }
 
@@ -41,9 +41,10 @@ def test_benchmark(benchmark):
 
     compare_params = cases[benchmark]
     convergence_tolerance = compare_params.pop("iterations", 2)
+    extra_checks = compare_params.pop("extra_checks", [])
 
     pd.testing.assert_series_equal(
-        df[["u_rms", "nu_top"]], expected,
+        df[["u_rms", "nu_top"] + extra_checks], expected,
         check_names=False, **compare_params
     )
 
