@@ -103,16 +103,35 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          for id in $(tsp | tail +2 | awk '{print $1}'); do
+          declare -A timings
+          declare -A success
+
+          # extract info
+          for id in $(tsp | awk 'NR>1 { print $1 }'); do
             st="$(tsp -i $id)"
-            if [[ "$st" =~ "exit code 0" ]]; then
-              echo "$st" | awk '/^(Time|Command)/'
+            command=$(sed -En 's/^Command.*python3? //p' <<< "$st")
+            timings["$command"]=$(sed -n 's/^Time run: //p' <<< "$st")
+
+            if grep -q "exit code 0" <<< "$st"; then
+              success["$command"]=Yes
             else
-              echo "$st" | awk '/^Command/ {print "Failed: " $0} /^Time/'
-              echo "$st" | grep '^Command' >> test_output.log
+              success["$command"]=No
+              echo "$command failed:"
               tsp -c $id | tail -n 10 || true
+              echo $command >> test_output.log
               tsp -c $id >> test_output.log || true
             fi
+          done
+
+          # sort by case name
+          declare -a cases
+          while IFS= read -r -d '' entry; do
+            cases+=("$entry")
+          done < <(printf "%s\0" "${!timings[@]}" | sort -z)
+
+          printf "## Case timings\nCase | Time | Success?\n---- | ---- | ----\n" >> "$GITHUB_STEP_SUMMARY"
+          for case in "${cases[@]}"; do
+            printf "%s | %s | %s\n" "$case" ${timings["$case"]} ${success["$case"]} >> "$GITHUB_STEP_SUMMARY"
           done
 
       - name: Upload failed run log
