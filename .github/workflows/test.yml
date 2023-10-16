@@ -76,13 +76,28 @@ jobs:
           python3 -m pip install .
 
       - name: Run test
+        id: run_tests
         run: |
           . /home/firedrake/firedrake/bin/activate
           make -j test
-          python -m pytest -m 'not longtest'
         env:
           GADOPT_LOGLEVEL: INFO
           TS_MAXFINISHED: 100
+
+      - name: Pytest
+        id: run_pytest
+        run: |
+          . /home/firedrake/firedrake/bin/activate
+          python -m pytest -m 'not longtest' --junit-xml=test_results.xml
+
+      - name: Pytest report
+        uses: mikepenz/action-junit-report@v4
+        if: ${{ !cancelled() && steps.run_pytest.conclusion != 'skipped' }}
+        with:
+          check_name: Test suite report
+          report_paths: test_results.xml
+          include_passed: true
+          annotate_only: true
 
       - name: Output timing information
         if: ${{ !cancelled() }}
@@ -101,7 +116,7 @@ jobs:
           done
 
       - name: Upload failed run log
-        if: failure()
+        if: steps.run_tests.conclusion == 'failure'
         uses: actions/upload-artifact@v3
         with:
           name: run-log
