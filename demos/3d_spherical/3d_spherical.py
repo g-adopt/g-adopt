@@ -118,7 +118,7 @@ for timestep in range(0, max_timesteps):
         # compute radially averaged temperature profile
         averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
         # compute deviation from layer average
-        T_dev.project(T-T_avg)
+        T_dev.assign(T-T_avg)
         output_file.write(u, p, T, T_dev)
 
     if timestep != 0:
