@@ -350,7 +350,7 @@ class LayerAveraging:
         XYZ = SpatialCoordinate(mesh)
 
         if cartesian:
-            self.r = XYZ[-1]
+            self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))
 
