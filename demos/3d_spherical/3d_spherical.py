@@ -1,7 +1,6 @@
 from gadopt import *
 import scipy.special
 import math
-import numpy as np
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -19,7 +18,7 @@ domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RM
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar), also used for layer average T
+W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 Qlayer = FunctionSpace(mesh2d, "CG", 2)  # used to compute layer average
@@ -60,11 +59,11 @@ approximation = BoussinesqApproximation(Ra)
 delta_t = Constant(1e-6)  # Initial time-step
 
 # For computing layer averages
-T_avg = Function(W, name='Layer_Averaged_Temp')
-T_dev = Function(W, name='Temperature_Deviation')
+T_avg = Function(Q, name='Layer_Averaged_Temp')
+T_dev = Function(Q, name='Temperature_Deviation')
 
 # Compute layer average for initial stage:
-averager = LayerAveraging(mesh, np.linspace(rmin, rmax, nlayers * 2), cartesian=False, quad_degree=6)
+averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
 averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
 # Define time stepping parameters:
@@ -138,6 +137,7 @@ for timestep in range(0, max_timesteps):
     nusselt_number_top = gd.Nu_top() * (rmax*(rmin-rmax)/rmin)
     nusselt_number_base = gd.Nu_bottom() * (rmin*(rmax-rmin)/rmax)
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
+    T_dev_avg = assemble(T_dev * dx) / domain_volume
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
@@ -145,7 +145,7 @@ for timestep in range(0, max_timesteps):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
-                 f"{energy_conservation} {gd.T_avg()} ")
+                 f"{energy_conservation} {gd.T_avg()} {T_dev_avg} ")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
