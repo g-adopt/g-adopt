@@ -358,7 +358,7 @@ class LayerAveraging:
         if quad_degree is not None:
             self.dx = dx(degree=quad_degree)
 
-        if r1d:
+        if r1d is not None:
             self.r1d = r1d
         else:
             try:
