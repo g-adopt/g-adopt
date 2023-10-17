@@ -7,14 +7,15 @@ from .utility import is_continuous
 class LevelSetSolver:
     def __init__(self, level_set, u, dt, timestepper, bcs=None, solver_parameters=None):
         self.level_set = level_set
-        self.Q = level_set.function_space()
-        self.mesh = self.Q.mesh()
+        self.func_space = level_set.function_space()
+        self.mesh = self.func_space.mesh()
         self.dt = dt
-        self.eq = LevelSetEquation(self.Q, self.Q)
+        self.eq = LevelSetEquation(self.func_space, self.func_space)
         self.fields = {"velocity": u}
 
         if solver_parameters is None:
             self.solver_parameters = {
+                "mat_type": "aij",
                 "ksp_type": "preonly",
                 "pc_type": "bjacobi",
                 "sub_pc_type": "ilu",
@@ -30,7 +31,7 @@ class LevelSetSolver:
             for type, value in bc.items():
                 if type == "T":
                     if apply_strongly:
-                        self.strong_bcs.append(DirichletBC(self.Q, value, id))
+                        self.strong_bcs.append(DirichletBC(self.func_space, value, id))
                     else:
                         weak_bc["q"] = value
                 else:
@@ -38,7 +39,7 @@ class LevelSetSolver:
             self.weak_bcs[id] = weak_bc
 
         self.timestepper = timestepper
-        self.level_set_old = Function(self.Q)
+        self.level_set_old = Function(self.func_space)
         # solver is set up only last minute to enable overwriting of the parameters we
         # have set up here
         self._solver_setup = False
