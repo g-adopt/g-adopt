@@ -113,6 +113,7 @@ class ReinitialisationSolver:
         timestepper,
         bcs=None,
         solver_parameters=None,
+        coupled_solver=None,
     ):
         self.level_set = level_set
         self.func_space = level_set.function_space()
@@ -123,6 +124,7 @@ class ReinitialisationSolver:
             "level_set_grad": level_set_grad,
             "epsilon": ensure_constant(epsilon),
         }
+        self.coupled_solver = coupled_solver
 
         if solver_parameters is None:
             self.solver_parameters = {
@@ -168,6 +170,7 @@ class ReinitialisationSolver:
             solution_old=self.level_set_old,
             strong_bcs=self.strong_bcs,
             solver_parameters=self.solver_parameters,
+            coupled_solver=self.coupled_solver,
         )
         self._solver_setup = True
 
@@ -272,7 +275,12 @@ t_adapt = TimestepAdaptor(dt, u, V, target_cfl=target_cfl, maximum_timestep=5)
 level_set_solver = LevelSetSolver(level_set, u, dt, SSPRK33)
 projection_solver = ProjectionSolver(level_set_grad_proj, level_set)
 reinitialisation_solver = ReinitialisationSolver(
-    level_set, level_set_grad_proj, epsilon, dt_reini, SSPRK33
+    level_set,
+    level_set_grad_proj,
+    epsilon,
+    dt_reini,
+    SSPRK33,
+    coupled_solver=projection_solver,
 )
 
 time_now, time_end = 0, 2000
@@ -297,8 +305,6 @@ while time_now < time_end:
     stokes_solver.solve()
 
     level_set_solver.solve()
-
-    projection_solver.solve()
 
     # if step > 0 and step % 5 == 0:
     #     if conservative_level_set:
