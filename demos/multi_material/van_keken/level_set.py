@@ -34,7 +34,7 @@ def initial_signed_distance(lx, node_coords_x, node_coords_y):
 
 
 # Set up geometry
-nx, ny = 128, 128
+nx, ny = 64, 64
 lx, ly = 0.9142, 1
 mesh = fd.RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Mesh boundary IDs
@@ -43,7 +43,7 @@ mesh_coords = fd.SpatialCoordinate(mesh)
 
 conservative_level_set = True
 
-level_set_func_space_deg = 2
+level_set_func_space_deg = 1
 func_space_dg = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
 vec_func_space_cg = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
 level_set = fd.Function(func_space_dg, name="level_set")
@@ -54,7 +54,7 @@ node_coords_y = fd.Function(func_space_dg).interpolate(mesh_coords[1]).dat.data
 node_sign_dist_to_interface = initial_signed_distance(lx, node_coords_x, node_coords_y)
 
 if conservative_level_set:
-    epsilon = min(lx / nx, ly / ny) / 10  # Loose guess
+    epsilon = min(lx / nx, ly / ny)  # Loose guess
     level_set.dat.data[:] = (
         np.tanh(np.asarray(node_sign_dist_to_interface) / 2 / epsilon) + 1
     ) / 2
@@ -118,7 +118,7 @@ projection_solver = ProjectionSolver(level_set_grad_proj, projection_fields)
 reinitialisation_solver = TimeStepperSolver(
     level_set,
     reinitialisation_fields,
-    dt / 10,  # Loose guess
+    dt / 100,  # Loose guess
     SSPRK33,
     ReinitialisationEquation,
     coupled_solver=projection_solver,
@@ -147,13 +147,15 @@ while time_now < time_end:
 
     level_set_solver.solve()
 
-    if step > 0:
+    if step > 10:
         reinitialisation_solver.ts.solution_old.assign(level_set)
 
-    if conservative_level_set:
-        reinitialisation_solver.solve()
+    if step > 0 and step % 10 == 0:
+        for reini_step in range(10):
+            if conservative_level_set:
+                reinitialisation_solver.solve()
 
-    level_set_solver.ts.solution_old.assign(level_set)
+        level_set_solver.ts.solution_old.assign(level_set)
 
     step += 1
 output_file.write(level_set, u_, p_, level_set_grad_proj)
