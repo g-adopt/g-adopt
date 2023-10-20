@@ -25,8 +25,8 @@ cases = {
     },
 }
 
+
 def run_subcommand(args):
-    from mpi4py import MPI
     from stokes_cubed_sphere import model
 
     model(args.level, args.layers, args.timestep, steps=args.steps)

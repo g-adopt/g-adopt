@@ -14,9 +14,6 @@ def model(ref_level, nlayers, delta_t, steps=None):
     mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
     mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
     bottom_id, top_id = "bottom", "top"
-    n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
-    domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
-
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -40,12 +37,10 @@ def model(ref_level, nlayers, delta_t, steps=None):
 
     # Set up temperature field and initialise:
     T = Function(Q, name="Temperature")
-    T_dev = Function(Q, name="Temperature_Deviation")
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
     theta = atan2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
     phi = atan2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol to Zhong)
-    k = as_vector((X[0]/r, X[1]/r, X[2]/r))  # Radial unit vector (in direction opposite to gravity)
 
     conductive_term = rmin*(rmax - r) / (r*(rmax - rmin))
     # evaluate P_lm node-wise using scipy lpmv
@@ -85,13 +80,12 @@ def model(ref_level, nlayers, delta_t, steps=None):
     energy_solver.solver_parameters['ksp_converged_reason'] = None
     energy_solver.solver_parameters['ksp_view'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-7
-    Told = energy_solver.T_old
-    Ttheta = 0.5*T + 0.5*Told
-    Told.assign(T)
-    stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs, mu=mu,
+
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
                                  cartesian=False,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
+
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_monitor_true_residual'] = None
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_view'] = None
@@ -101,10 +95,8 @@ def model(ref_level, nlayers, delta_t, steps=None):
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_view'] = None
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
 
-
     # Now perform the time loop:
     for timestep in range(0, max_timesteps):
-
         dt = float(delta_t)
         time += dt
 
