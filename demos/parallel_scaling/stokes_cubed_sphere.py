@@ -84,6 +84,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
     energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
     energy_solver.solver_parameters['ksp_converged_reason'] = None
     energy_solver.solver_parameters['ksp_view'] = None
+    energy_solver.solver_parameters['ksp_rtol'] = 1e-7
     Told = energy_solver.T_old
     Ttheta = 0.5*T + 0.5*Told
     Told.assign(T)
@@ -92,9 +93,13 @@ def model(ref_level, nlayers, delta_t, steps=None):
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+    stokes_solver.solver_parameters['fieldsplit_0']['ksp_monitor_true_residual'] = None
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_view'] = None
+    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-7
+    stokes_solver.solver_parameters['fieldsplit_0'].pop('assembled_mg_levels_pc_sor_diagonal_shift')
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_view'] = None
+    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
 
 
     # Now perform the time loop:
