@@ -223,9 +223,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                          iteration_region=op2.ON_TOP)
 
         if self.clip_min is not None:
-            self.min_field.assign(max_value(self.min_field, self.clip_min))
+            self.min_field.interpolate(max_value(self.min_field, self.clip_min))
         if self.clip_max is not None:
-            self.max_field.assign(min_value(self.max_field, self.clip_max))
+            self.max_field.interpolate(min_value(self.max_field, self.clip_max))
 
     def apply(self, field):
         """
@@ -233,6 +233,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         :arg field: :class:`Function` to limit
         """
+
         with timed_stage('limiter'):
 
             if self.is_vector:
@@ -245,3 +246,8 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 self.P1DG.restore_work_function(tmp_func)
             else:
                 super(VertexBasedP1DGLimiter, self).apply(field)
+
+            if self.clip_min is not None:
+                field.interpolate(max_value(field, self.clip_min))
+            if self.clip_max is not None:
+                field.interpolate(min_value(field, self.clip_max))
