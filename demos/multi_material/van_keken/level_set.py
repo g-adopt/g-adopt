@@ -1,8 +1,11 @@
 import firedrake as fd
+import matplotlib.pyplot as plt
 import numpy as np
 import shapely as sl
+from mpi4py import MPI
 
 from gadopt.approximations import BoussinesqApproximation
+from gadopt.diagnostics import domain_volume
 from gadopt.level_set_tools import (
     LevelSetEquation,
     ProjectionSolver,
@@ -43,7 +46,7 @@ mesh_coords = fd.SpatialCoordinate(mesh)
 
 conservative_level_set = True
 
-level_set_func_space_deg = 1
+level_set_func_space_deg = 2
 func_space_dg = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
 vec_func_space_cg = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
 level_set = fd.Function(func_space_dg, name="level_set")
@@ -54,7 +57,7 @@ node_coords_y = fd.Function(func_space_dg).interpolate(mesh_coords[1]).dat.data
 node_sign_dist_to_interface = initial_signed_distance(lx, node_coords_x, node_coords_y)
 
 if conservative_level_set:
-    epsilon = min(lx / nx, ly / ny)  # Loose guess
+    epsilon = min(lx / nx, ly / ny) / 4  # Loose guess
     level_set.dat.data[:] = (
         np.tanh(np.asarray(node_sign_dist_to_interface) / 2 / epsilon) + 1
     ) / 2
@@ -76,10 +79,10 @@ T = fd.Constant(1)
 
 if conservative_level_set:
     rho = fd.conditional(level_set > 0.5, 1 / g, 0 / g)
-    mu = fd.conditional(level_set > 0.5, 1, 0.1)
+    mu = fd.conditional(level_set > 0.5, 1, 1)
 else:
     rho = fd.conditional(level_set > 0, 1 / g, 0 / g)
-    mu = fd.conditional(level_set > 0, 1, 0.1)
+    mu = fd.conditional(level_set > 0, 1, 1)
 
 approximation = BoussinesqApproximation(Ra, g=g, rho=rho)
 Z_nullspace = create_stokes_nullspace(Z)
@@ -111,14 +114,23 @@ reinitialisation_fields = {
     "epsilon": ensure_constant(epsilon),
 }
 
+# Forces gradient norm to satisfy reinitialisation equation
+projection_boundary_conditions = fd.DirichletBC(
+    vec_func_space_cg,
+    level_set * (1 - level_set) / ensure_constant(epsilon) * fd.Constant((1, 0)),
+    "on_boundary",
+)
+
 level_set_solver = TimeStepperSolver(
     level_set, level_set_fields, dt, SSPRK33, LevelSetEquation
 )
-projection_solver = ProjectionSolver(level_set_grad_proj, projection_fields)
+projection_solver = ProjectionSolver(
+    level_set_grad_proj, projection_fields, bcs=projection_boundary_conditions
+)
 reinitialisation_solver = TimeStepperSolver(
     level_set,
     reinitialisation_fields,
-    dt / 100,  # Loose guess
+    dt / 50,  # Loose guess
     SSPRK33,
     ReinitialisationEquation,
     coupled_solver=projection_solver,
@@ -133,8 +145,14 @@ u_, p_ = z.subfunctions
 u_.rename("Velocity")
 p_.rename("Pressure")
 
+output_time = []
+rms_velocity = []
+entrainment = []
+
 # Perform the time loop
 step = 0
+reini_frequency = 1
+reini_iterations = 5
 while time_now < time_end:
     if time_now >= dump_counter * dump_period:
         dump_counter += 1
@@ -147,15 +165,40 @@ while time_now < time_end:
 
     level_set_solver.solve()
 
-    if step > 10:
+    if step > reini_frequency:
         reinitialisation_solver.ts.solution_old.assign(level_set)
 
-    if step > 0 and step % 10 == 0:
-        for reini_step in range(10):
+    if step > 0 and step % reini_frequency == 0:
+        for reini_step in range(reini_iterations):
             if conservative_level_set:
                 reinitialisation_solver.solve()
 
         level_set_solver.ts.solution_old.assign(level_set)
 
+    output_time.append(time_now)
+    rms_velocity.append(fd.norm(u) / fd.sqrt(domain_volume(mesh)))
+    entrainment.append(
+        fd.assemble(fd.conditional(mesh_coords[1] >= 0.2, 1 - rho * g, 0) * fd.dx)
+        / lx
+        / 0.2
+    )
+
     step += 1
 output_file.write(level_set, u_, p_, level_set_grad_proj)
+
+if MPI.COMM_WORLD.rank == 0:
+    np.savez(
+        "output", time=output_time, rms_velocity=rms_velocity, entrainment=entrainment
+    )
+
+    fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
+
+    ax[0].set_xlabel("Time (non-dimensional)")
+    ax[1].set_xlabel("Time (non-dimensional)")
+    ax[0].set_ylabel("Root-mean-square velocity (non-dimensional)")
+    ax[1].set_ylabel("Entrainment (non-dimensional)")
+
+    ax[0].plot(output_time, rms_velocity)
+    ax[1].plot(output_time, entrainment)
+
+    fig.savefig("rms_velocity_and_entrainment.pdf", dpi=300, bbox_inches="tight")

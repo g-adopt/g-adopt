@@ -149,7 +149,7 @@ class TimeStepperSolver:
 
 
 class ProjectionSolver:
-    def __init__(self, function, fields, solver_parameters=None):
+    def __init__(self, function, fields, bcs=None, solver_parameters=None):
         self.func_space = function.function_space()
         self.mesh = self.func_space.mesh()
 
@@ -165,6 +165,7 @@ class ProjectionSolver:
         self.bilinear = self.eq.mass_term(self.test, self.trial)
         self.linear = self.eq.residual(self.test, None, None, self.fields, None)
 
+        self.bcs = bcs
         if solver_parameters is None:
             self.solver_parameters = {
                 "mat_type": "aij",
@@ -179,7 +180,7 @@ class ProjectionSolver:
 
     def setup_solver(self):
         self.problem = LinearVariationalProblem(
-            self.bilinear, self.linear, self.function
+            self.bilinear, self.linear, self.function, bcs=self.bcs
         )
         self.solver = LinearVariationalSolver(
             self.problem, solver_parameters=self.solver_parameters

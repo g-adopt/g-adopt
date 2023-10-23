@@ -273,6 +273,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         bnd_conditions=None,
         solver_parameters={},
         strong_bcs=None,
+        coupled_solver=None,
         terms_to_add="all",
     ):
         """
@@ -292,7 +293,14 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         :type terms_to_add: 'all' or list of 'implicit', 'explicit', 'source'.
         """
         super(DIRKGeneric, self).__init__(
-            equation, solution, fields, dt, solution_old, solver_parameters, strong_bcs
+            equation,
+            solution,
+            fields,
+            dt,
+            solution_old,
+            solver_parameters,
+            strong_bcs,
+            coupled_solver,
         )
         self.solver_parameters.setdefault("snes_type", "newtonls")
         self._initialized = False
@@ -537,6 +545,7 @@ class SSPRK33Abstract(AbstractRKScheme):
 
     CFL coefficient is 1.0
     """
+
     a = [[0, 0, 0], [1.0, 0, 0], [0.25, 0.25, 0]]
     b = [1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0]
     c = [0, 1.0, 0.5]
@@ -567,6 +576,7 @@ class ImplicitMidpointAbstract(AbstractRKScheme):
         \end{array}
 
     """
+
     a = [[0.5]]
     b = [1.0]
     c = [0.5]
@@ -605,6 +615,7 @@ class DIRK22Abstract(AbstractRKScheme):
     time-dependent partial differential equations. Applied Numerical
     Mathematics, 25:151-167. http://dx.doi.org/10.1137/0732037
     """
+
     gamma = (2.0 + np.sqrt(2.0)) / 2.0
     a = [[gamma, 0], [1 - gamma, gamma]]
     b = [1 - gamma, gamma]
@@ -633,6 +644,7 @@ class DIRK23Abstract(AbstractRKScheme):
     time-dependent partial differential equations. Applied Numerical
     Mathematics, 25:151-167. http://dx.doi.org/10.1137/0732037
     """
+
     gamma = (3 + np.sqrt(3)) / 6
     a = [[gamma, 0], [1 - 2 * gamma, gamma]]
     b = [0.5, 0.5]
@@ -778,3 +790,22 @@ class DIRKLSPUM2(DIRKGeneric, DIRKLSPUM2Abstract):
 
 class DIRKLPUM2(DIRKGeneric, DIRKLPUM2Abstract):
     pass
+
+
+def shu_osher_butcher(α_or_λ, β_or_μ):
+    """
+    Generate arrays composing the Butcher tableau of a Runge-Kutta method from the
+    coefficient arrays of the equivalent, original or modified, Shu-Osher form.
+    Code adapted from RK-Opt written in MATLAB by David Ketcheson.
+    See also Ketcheson, Macdonald, and Gottlieb (2009).
+
+    Function arguments:
+    α_or_λ : array_like, shape (n + 1, n)
+    β_or_μ : array_like, shape (n + 1, n)
+    """
+
+    X = np.identity(α_or_λ.shape[1]) - α_or_λ[:-1]
+    A = np.linalg.solve(X, β_or_μ[:-1])
+    b = np.transpose(β_or_μ[-1] + np.dot(α_or_λ[-1], A))
+    c = np.sum(A, axis=1)
+    return A, b, c
