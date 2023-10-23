@@ -1,5 +1,8 @@
 #!/bin/bash -i
 
+level=$1
+shift
+
 module load python3/3.10.4 openmpi/4.0.7
 
 export PETSC_DIR=$PBS_JOBFS/firedrake-prefix
@@ -17,4 +20,6 @@ EOF"
 
 export LD_LIBRARY_PATH=$PBS_JOBFS/firedrake-prefix/lib:$LD_LIBRARY_PATH
 
-mpiexec $@
+mpiexec $@ -n 1 2> level_${level}_warmup.err > level_${level}_warmup.out
+export PETSC_OPTIONS="-log_view :profile_${level}.txt"
+mpiexec $@ 2> level_${level}_full.err > level_${level}_full.out

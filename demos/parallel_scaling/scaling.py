@@ -1,5 +1,4 @@
 import argparse
-import os
 import subprocess
 import sys
 
@@ -41,23 +40,11 @@ def submit_subcommand(args):
     proc = subprocess.Popen(
         [
             *command.split(), sys.executable, sys.argv[0],
-            "run", "-n", "2",
-            str(args.level), *[str(v) for v in config.values()],
-        ]
-    )
-    if proc.wait() != 0:
-        print(f"level {args.level} failed first timestep: {proc.returncode}")
-        sys.exit(1)
-
-    proc = subprocess.Popen(
-        [
-            *command.split(), sys.executable, sys.argv[0],
             "run", str(args.level), *[str(v) for v in config.values()],
         ],
-        env=dict(os.environ, PETSC_OPTIONS=f"-log_view :profile_{args.level}.txt"),
     )
     if proc.wait() != 0:
-        print(f"level {args.level} failed full timesteps: {proc.returncode}")
+        print(f"level {args.level} failed: {proc.returncode}")
         sys.exit(1)
 
 
