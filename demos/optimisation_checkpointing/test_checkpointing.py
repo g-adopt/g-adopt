@@ -6,8 +6,13 @@ def test_checkpointing():
     base = Path(__file__).parent.resolve()
 
     full_optimisation = np.loadtxt(base / "full_optimisation.dat")
-    restored_optimisation = np.loadtxt(base / "restored_optimisation.dat")
+    restored_optimisation = np.loadtxt(base / "restored_optimisation_from_it_5.dat")
 
     restored_steps = restored_optimisation.size
 
     assert np.allclose(full_optimisation[-restored_steps:], restored_optimisation)
+
+    restored_optimisation_last_it = np.loadtxt(base / "restored_optimisation_from_last_it.dat")
+    restored_steps_last_it = restored_optimisation_last_it.size
+
+    assert np.allclose(full_optimisation[-restored_steps_last_it:], restored_optimisation)
