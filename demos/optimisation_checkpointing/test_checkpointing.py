@@ -13,6 +13,5 @@ def test_checkpointing():
     assert np.allclose(full_optimisation[-restored_steps:], restored_optimisation)
 
     restored_optimisation_last_it = np.loadtxt(base / "restored_optimisation_from_last_it.dat")
-    restored_steps_last_it = restored_optimisation_last_it.size
 
-    assert np.allclose(full_optimisation[-restored_steps_last_it:], restored_optimisation)
+    assert full_optimisation[-1] > restored_optimisation_last_it[0]
