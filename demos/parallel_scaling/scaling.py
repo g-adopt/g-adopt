@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 import sys
 
@@ -35,7 +36,7 @@ def run_subcommand(args):
 def submit_subcommand(args):
     config = cases[args.level]
     cores = config.pop("cores")
-    command = args.template.format(cores=cores)
+    command = args.template.format(cores=cores, mem=4*cores, level=args.level)
 
     proc = subprocess.Popen(
         [
@@ -52,7 +53,8 @@ def submit_subcommand(args):
         [
             *command.split(), sys.executable, sys.argv[0],
             "run", str(args.level), *[str(v) for v in config.values()],
-        ]
+        ],
+        env=dict(os.environ, PETSC_OPTIONS=f"-log_view :profile_{args.level}.txt"),
     )
     if proc.wait() != 0:
         print(f"level {args.level} failed full timesteps: {proc.returncode}")
