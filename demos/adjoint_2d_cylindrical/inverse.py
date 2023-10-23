@@ -59,7 +59,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
     r_410 = rmax - (rmax_earth - r_410_earth) / (rmax_earth - rmin_earth)
     r_660 = rmax - (rmax_earth - r_660_earth) / (rmax_earth - rmin_earth)
 
-    with CheckpointFile("Checkpoint230.h5", "r") as f:
+    with CheckpointFile("Checkpoint_State.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
 
     enable_disk_checkpointing()
@@ -68,12 +68,12 @@ def inverse(alpha_u, alpha_d, alpha_s):
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
-    Q1 = FunctionSpace(mesh, "CG", 1)  # Control function space
-    Z = MixedFunctionSpace([V, W])  # Mixed function space
+    Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
+    Z = MixedFunctionSpace([V, W])
 
     # Test functions and functions to hold solutions:
-    z = Function(Z)  # A field over the mixed function space Z
-    u, p = split(z)  # Symbolic UFL expressions for u and p
+    z = Function(Z)  # a field over the mixed function space Z.
+    u, p = split(z)  # Returns symbolic UFL expression for u and p
 
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
@@ -107,7 +107,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
             0.5 * (1 + tanh((1 if increasing else -1) * (r - centre) * sharpness))
         )
 
-    # From this point, we define a depth-dependent viscosity mu
+    # From this point, we define a depth-dependent viscosity mu_lin
     mu_lin = 2.0
 
     # Assemble the depth dependence
@@ -126,8 +126,10 @@ def inverse(alpha_u, alpha_d, alpha_s):
 
     # Assemble the viscosity expression in terms of velocity u
     eps = sym(grad(u))
-    epsii = sqrt(0.5 * inner(eps, eps))
-    sigma_y = 1e4 + 2.0e5 * (rmax - r)
+    epsii = sqrt(inner(eps, eps) + 1e-10)
+    # yield stress and its depth dependence
+    # consistent with values used in Coltice et al. 2017
+    sigma_y = 2e4 + 4e5 * (rmax - r)
     mu_plast = 0.1 + (sigma_y / epsii)
     mu_eff = 2 * (mu_lin * mu_plast) / (mu_lin + mu_plast)
     mu = conditional(mu_eff > 0.4, mu_eff, 0.4)
@@ -138,22 +140,18 @@ def inverse(alpha_u, alpha_d, alpha_s):
         Z, closed=False, rotational=True, translations=[0, 1]
     )
 
+    # Free-slip velocity boundary condition on all sides
     stokes_bcs = {
-        "top": {"un": 0},
         "bottom": {"un": 0},
+        "top": {"un": 0},
     }
     temp_bcs = {
-        "top": {"T": 0.0},
         "bottom": {"T": 1.0},
+        "top": {"T": 0.0},
     }
 
     energy_solver = EnergySolver(
-        T,
-        u,
-        approximation,
-        delta_t,
-        ImplicitMidpoint,
-        bcs=temp_bcs,
+        T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
     )
 
     stokes_solver = StokesSolver(

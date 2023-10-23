@@ -21,6 +21,7 @@ iterative_stokes_solver_parameters = {
         "assembled_pc_gamg_threshold": 0.01,
         "assembled_pc_gamg_square_graph": 100,
         "assembled_pc_gamg_coarse_eq_limit": 1000,
+        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
     },
     "fieldsplit_1": {
         "ksp_type": "fgmres",
