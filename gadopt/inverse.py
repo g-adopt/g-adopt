@@ -201,8 +201,8 @@ class LinMoreOptimiser:
     def restore(self, iteration=None):
         """Restore the ROL state from disk.
 
-	The last stored iteration in `checkpoint_dir` is used unless a given iteration is specifed.
-	"""
+        The last stored iteration in `checkpoint_dir` is used unless a given iteration is specifed.
+        """
         if iteration is not None:
             self.iteration = iteration
         else:
