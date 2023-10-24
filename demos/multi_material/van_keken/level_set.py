@@ -14,7 +14,7 @@ from gadopt.level_set_tools import (
 )
 from gadopt.stokes_integrators import StokesSolver, create_stokes_nullspace
 from gadopt.time_stepper import SSPRK33
-from gadopt.utility import TimestepAdaptor, ensure_constant
+from gadopt.utility import TimestepAdaptor
 
 
 def initial_signed_distance(lx, node_coords_x, node_coords_y):
@@ -57,12 +57,15 @@ node_coords_y = fd.Function(func_space_dg).interpolate(mesh_coords[1]).dat.data
 node_sign_dist_to_interface = initial_signed_distance(lx, node_coords_x, node_coords_y)
 
 if conservative_level_set:
-    epsilon = min(lx / nx, ly / ny) / 4  # Loose guess
+    epsilon = fd.Constant(min(lx / nx, ly / ny) / 4)  # Loose guess
     level_set.dat.data[:] = (
-        np.tanh(np.asarray(node_sign_dist_to_interface) / 2 / epsilon) + 1
+        np.tanh(np.asarray(node_sign_dist_to_interface) / 2 / epsilon.values().item())
+        + 1
     ) / 2
+    level_set_contour = 0.5
 else:
     level_set.dat.data[:] = node_sign_dist_to_interface
+    level_set_contour = 0
 
 # Set up Stokes function spaces - currently using the bilinear Q2Q1 element pair:
 V = fd.VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -77,12 +80,8 @@ g = fd.Constant(10)
 Ra = fd.Constant(-1)
 T = fd.Constant(1)
 
-if conservative_level_set:
-    rho = fd.conditional(level_set > 0.5, 1 / g, 0 / g)
-    mu = fd.conditional(level_set > 0.5, 1, 1)
-else:
-    rho = fd.conditional(level_set > 0, 1 / g, 0 / g)
-    mu = fd.conditional(level_set > 0, 1, 1)
+rho = fd.conditional(level_set > level_set_contour, 1 / g, 0 / g)
+mu = fd.conditional(level_set > level_set_contour, 1, 1)
 
 approximation = BoussinesqApproximation(Ra, g=g, rho=rho)
 Z_nullspace = create_stokes_nullspace(Z)
@@ -109,15 +108,12 @@ t_adapt = TimestepAdaptor(dt, u, V, target_cfl=target_cfl, maximum_timestep=5)
 
 level_set_fields = {"velocity": u}
 projection_fields = {"target": level_set}
-reinitialisation_fields = {
-    "level_set_grad": level_set_grad_proj,
-    "epsilon": ensure_constant(epsilon),
-}
+reinitialisation_fields = {"level_set_grad": level_set_grad_proj, "epsilon": epsilon}
 
 # Forces gradient norm to satisfy reinitialisation equation
 projection_boundary_conditions = fd.DirichletBC(
     vec_func_space_cg,
-    level_set * (1 - level_set) / ensure_constant(epsilon) * fd.Constant((1, 0)),
+    level_set * (1 - level_set) / epsilon * fd.Constant((1, 0)),
     "on_boundary",
 )
 
@@ -169,8 +165,8 @@ while time_now < time_end:
         reinitialisation_solver.ts.solution_old.assign(level_set)
 
     if step > 0 and step % reini_frequency == 0:
-        for reini_step in range(reini_iterations):
-            if conservative_level_set:
+        if conservative_level_set:
+            for reini_step in range(reini_iterations):
                 reinitialisation_solver.solve()
 
         level_set_solver.ts.solution_old.assign(level_set)

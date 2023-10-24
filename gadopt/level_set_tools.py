@@ -26,23 +26,21 @@ class ProjectionTerm(BaseTerm):
         return -ufl_element + ufl_bc
 
 
-class ReinitialisationSharpenTerm(BaseTerm):
-    def residual(self, test, trial, trial_lagged, fields, bcs):
-        return -trial * (1 - trial) * (1 - 2 * trial) * test * self.dx
-
-
-class ReinitialisationBalanceTerm(BaseTerm):
+class ReinitialisationTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
         level_set_grad = fields["level_set_grad"]
         epsilon = fields["epsilon"]
 
-        return (
+        sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * test * self.dx
+        balance_term = (
             epsilon
             * (1 - 2 * trial)
             * sqrt(level_set_grad[0] ** 2 + level_set_grad[1] ** 2)
             * test
             * self.dx
         )
+
+        return sharpen_term + balance_term
 
 
 class LevelSetEquation(ScalarAdvectionEquation):
@@ -64,7 +62,7 @@ class ProjectionEquation(BaseEquation):
 
 
 class ReinitialisationEquation(BaseEquation):
-    terms = [ReinitialisationSharpenTerm, ReinitialisationBalanceTerm]
+    terms = [ReinitialisationTerm]
 
     def __init__(self, test_space, trial_space, quad_degree=None):
         super().__init__(test_space, trial_space, quad_degree=quad_degree)
