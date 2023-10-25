@@ -5,6 +5,7 @@ from __future__ import absolute_import
 from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
 from firedrake import max_value, min_value
 from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement
+from firedrake import Function, grad, par_loop, READ, WRITE
 import numpy as np
 from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
 from pyop2 import op2
@@ -251,3 +252,61 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 field.interpolate(max_value(field, self.clip_min))
             if self.clip_max is not None:
                 field.interpolate(min_value(field, self.clip_max))
+
+
+class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
+    def __init__(self, p1dg_space):
+        # NOTE: clip_min, clip_max not supported (as it would use the same values to limit derivatives)
+        # also doesn't support vector-valued fields at the moment
+
+        super().__init__(p1dg_space)
+
+        # Perform limiting loop
+        domain = "{[i]: 0 <= i < q.dofs}"
+        instructions = """
+        <float64> alpha = 1
+        <float64> qavg = qbar[0, 0]
+        for i
+            <float64> _alpha1 = fmin(alpha, fmin(1, (qmax[i] - qavg)/(q[i] - qavg)))
+            <float64> _alpha2 = fmin(alpha, fmin(1, (qavg - qmin[i])/(qavg - q[i])))
+            alpha = _alpha1 if q[i] > qavg else (_alpha2 if q[i] < qavg else  alpha)
+        end
+        alphap0[0,0] = alpha
+        """
+        self._alpha_kernel = (domain, instructions)
+        gdim = p1dg_space.mesh().ufl_cell().geometric_dimension()
+        self.gradQ = FunctionSpace(p1dg_space.mesh(), VectorElement(p1dg_space.ufl_element(), dim=gdim))
+        self.grad_field = Function(self.gradQ)
+        self.alpha1 = Function(self.P0, name='alpha1')
+        self.alpha2 = Function(self.P0, name='alpha2')
+        self.DPC1 = FunctionSpace(p1dg_space.mesh(), "DPC", 1)
+        self.field_dpc1 = Function(self.DPC1)
+        self.field_linearised = Function(p1dg_space)
+
+    def apply(self, field):
+        self.grad_field.interpolate(grad(field))
+        self.alpha2.assign(1.e10)
+        alphax = Function(self.P0)
+        for q in self.grad_field._components:
+            self.compute_bounds(q)
+            self._update_centroids(q)
+            par_loop(self._alpha_kernel, dx,
+                     {"qbar": (self.centroids, READ),
+                      "alphap0": (alphax, WRITE),
+                      "q": (q, READ),
+                      "qmax": (self.max_field, READ),
+                      "qmin": (self.min_field, READ)})
+            self.alpha2.interpolate(min_value(self.alpha2, alphax))
+
+        self.field_dpc1.project(field)
+        self.field_linearised.interpolate(self.field_dpc1)
+        self.compute_bounds(self.field_linearised)
+        self._update_centroids(self.field_linearised)
+        par_loop(self._alpha_kernel, dx,
+                 {"qbar": (self.centroids, READ),
+                  "alphap0": (self.alpha1, WRITE),
+                  "q": (self.field_linearised, READ),
+                  "qmax": (self.max_field, READ),
+                  "qmin": (self.min_field, READ)})
+        self.alpha1.interpolate(max_value(self.alpha1, self.alpha2))
+        field.interpolate((1-self.alpha1)*self.centroids + (self.alpha1-self.alpha2) * self.field_linearised + self.alpha2*field)

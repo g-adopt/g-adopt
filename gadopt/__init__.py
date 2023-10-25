@@ -1,6 +1,6 @@
 from firedrake import *
 from .time_stepper import CrankNicolsonRK, ImplicitMidpoint
-from .limiter import VertexBasedP1DGLimiter
+from .limiter import VertexBasedP1DGLimiter, VertexBasedQ1DGLimiter
 from .utility import log, ParameterLog, TimestepAdaptor, LayerAveraging, timer_decorator
 from .diagnostics import GeodynamicalDiagnostics
 from .momentum_equation import StokesEquations
