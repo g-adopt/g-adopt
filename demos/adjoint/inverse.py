@@ -47,7 +47,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
         mesh = f.load_mesh("firedrake_default_extruded")
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
-    X = SpatialCoordinate(mesh)  # spatial coordinate
+    X = SpatialCoordinate(mesh)
 
     enable_disk_checkpointing()
 
