@@ -17,7 +17,7 @@ def main():
 
 def gaussian(r, r_0, sigma):
     """
-    Returning a gaussing distribution around r_0 with std deviation of sigma
+    Return a Gaussian distribution centred around r_0 with standard deviation of sigma
 
     Args:
         r: spatial variable
