@@ -11,6 +11,18 @@ ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
 
+def gaussian(r, r_0, sigma):
+    """
+    Returning a gaussing distribution around r_0 with std deviation of sigma
+
+    Args:
+        r: spatial variable
+        r_0: centre of Gaussian
+        sigma: standard deviation
+    """
+    return exp(-0.5 * (r - r_0) ** 2 / sigma**2)
+
+
 def main():
     inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
 
@@ -35,6 +47,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
         mesh = f.load_mesh("firedrake_default_extruded")
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
+    X = SpatialCoordinate(mesh)  # spatial coordinate
 
     enable_disk_checkpointing()
 
@@ -137,8 +150,9 @@ def inverse(alpha_u, alpha_d, alpha_s):
     checkpoint_file.close()
 
     # Define the component terms of the overall objective functional
-    damping = assemble((Tic - Taverage) ** 2 * dx)
-    norm_damping = assemble(Taverage**2 * dx)
+    damping_mask = gaussian(X[1], 1.0, 0.1) + gaussian(X[1], 0.0, 0.1)
+    damping = assemble(damping_mask * (Tic - Taverage) ** 2 * dx)
+    norm_damping = assemble(damping_mask * Taverage**2 * dx)
     smoothing = assemble(dot(grad(Tic - Taverage), grad(Tic - Taverage)) * dx)
     norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
     norm_obs = assemble(Tobs**2 * dx)
@@ -148,10 +162,10 @@ def inverse(alpha_u, alpha_d, alpha_s):
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
     objective = (
-        t_misfit +
-        alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface) +
-        alpha_d * (norm_obs * damping / norm_damping) +
-        alpha_s * (norm_obs * smoothing / norm_smoothing)
+        t_misfit
+        + alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface)
+        + alpha_d * (norm_obs * damping / norm_damping)
+        + alpha_s * (norm_obs * smoothing / norm_smoothing)
     )
 
     # All done with the forward run, stop annotating anything else to the tape
