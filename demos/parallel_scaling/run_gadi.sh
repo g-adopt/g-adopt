@@ -9,6 +9,9 @@ export PETSC_DIR=$PBS_JOBFS/firedrake-prefix
 export OMP_NUM_THREADS=1
 export PYTHONUSERBASE=$PBS_JOBFS/firedrake-prefix
 export XDG_CACHE_HOME=$PBS_JOBFS/xdg
+export FIREDRAKE_TSFC_KERNEL_CACHE_DIR=$PBS_JOBFS/tsfc
+export PYOP2_CACHE_DIR=$PBS_JOBFS/pyop2
+export MPLCONFIGDIR=$HOME/.config/matplotlib
 
 mpiexec --map-by ppr:1:node --np $PBS_NNODES bash -c "tar -C $PBS_JOBFS -xf $GADOPT_PREFIX_IMAGE && \
 cat > $PBS_JOBFS/firedrake-prefix/lib/python3.10/site-packages/petsc4py/lib/petsc.cfg <<EOF && \

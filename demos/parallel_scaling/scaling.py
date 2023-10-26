@@ -4,22 +4,22 @@ import sys
 
 cases = {
     5: {
-        "cores": 24,
+        "cores": 26,
         "layers": 16,
         "timestep": 5e-8,
     },
     6: {
-        "cores": 192,
+        "cores": 208,
         "layers": 32,
         "timestep": 2.5e-8,
     },
     7: {
-        "cores": 1536,
+        "cores": 1664,
         "layers": 64,
         "timestep": 1.25e-8,
     },
     8: {
-        "cores": 12288,
+        "cores": 13312,
         "layers": 128,
         "timestep": 6.25e-9,
     },
