@@ -11,6 +11,10 @@ ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
 
+def main():
+    inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
+
+
 def gaussian(r, r_0, sigma):
     """
     Returning a gaussing distribution around r_0 with std deviation of sigma
@@ -21,10 +25,6 @@ def gaussian(r, r_0, sigma):
         sigma: standard deviation
     """
     return exp(-0.5 * (r - r_0) ** 2 / sigma**2)
-
-
-def main():
-    inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
 
 
 def inverse(alpha_u, alpha_d, alpha_s):
