@@ -77,8 +77,8 @@ def model(level, nn, do_write=False):
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
     # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-14
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-12
+    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
+    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-11
 
     # add delta forcing as ad-hoc aditional term
     # forcing is applied as "internal" boundary integral over facets

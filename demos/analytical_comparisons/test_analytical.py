@@ -1,6 +1,5 @@
 import pytest
 import analytical
-import itertools
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -12,7 +11,14 @@ enabled_cases = {
     "delta/cylindrical/zero_slip": {"convergence": (1.5, 0.5)},
     "delta/cylindrical/free_slip_dpc": {"convergence": (3.5, 2.0), "rtol": 1e-1},
     "delta/cylindrical/zero_slip_dpc": {"convergence": (3.5, 2.0), "rtol": 2e-1},
+    "smooth/spherical/free_slip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
+    "smooth/spherical/zero_slip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
 }
+
+longtest_cases = [
+    "smooth/spherical/free_slip",
+    "smooth/spherical/zero_slip",
+]
 
 params = {
     f"{l1}/{l2}/{l3}": v3 for l1, v1 in analytical.cases.items()
@@ -27,9 +33,14 @@ for name, conf in params.items():
     conf = conf.copy()
     conf.pop("cores")
     conf.pop("levels")
+    permutate = conf.pop("permutate", True)
 
-    for combination in itertools.product(*conf.values()):
-        configs.append((name, enabled_cases[name], dict(zip(conf.keys(), combination))))
+    for combination in analytical.param_sets(conf, permutate):
+        conf_tuple = (name, enabled_cases[name], dict(zip(conf.keys(), combination)))
+        if name in longtest_cases:
+            configs.append(pytest.param(*conf_tuple, marks=pytest.mark.longtest))
+        else:
+            configs.append(conf_tuple)
 
 
 def idfn(val):

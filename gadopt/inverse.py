@@ -198,10 +198,17 @@ class LinMoreOptimiser:
             for i, func in enumerate(self.rol_solver.rolvector.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def restore(self, iteration):
-        """Restore the ROL state from a given iteration from disk."""
+    def restore(self, iteration=None):
+        """Restore the ROL state from disk.
 
-        self.iteration = iteration
+        The last stored iteration in `checkpoint_dir` is used unless a given iteration is specifed.
+        """
+        if iteration is not None:
+            self.iteration = iteration
+        else:
+            stored_iterations = [int(path.parts[-1]) for path in self._base_checkpoint_dir.glob('*[0-9]/')]
+            self.iteration = sorted(stored_iterations)[-1]
+
         self.rol_algorithm = ROL.load_algorithm(MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
         self._add_statustest()
 
