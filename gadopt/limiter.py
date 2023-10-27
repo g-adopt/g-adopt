@@ -274,34 +274,31 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
         alphap0[0,0] = alpha
         """
         self._alpha_kernel = (domain, instructions)
-        gdim = p1dg_space.mesh().ufl_cell().geometric_dimension()
-        self.gradQ = FunctionSpace(p1dg_space.mesh(), VectorElement(p1dg_space.ufl_element(), dim=gdim))
-        self.grad_field = Function(self.gradQ)
         self.alpha1 = Function(self.P0, name='alpha1')
         self.alpha2 = Function(self.P0, name='alpha2')
+        self.alphax = Function(self.P0, name='alphax')
+        self.q = Function(self.P1DG, name='field_component')
         self.DPC1 = FunctionSpace(p1dg_space.mesh(), "DPC", 1)
         self.field_dpc1 = Function(self.DPC1)
         self.field_linearised = Function(p1dg_space)
+        self.gdim = self.P0.mesh().ufl_cell().geometric_dimension()
 
     def apply(self, field):
-        self.grad_field.interpolate(grad(field))
         self.alpha2.assign(1.e10)
-        alphax = Function(self.P0)
-        for q in self.grad_field._components:
-            self.compute_bounds(q)
-            self._update_centroids(q)
+        for i in range(self.gdim):
+            self.q.interpolate(grad(field)[i])
+            self.compute_bounds(self.q)
             par_loop(self._alpha_kernel, dx,
                      {"qbar": (self.centroids, READ),
-                      "alphap0": (alphax, WRITE),
-                      "q": (q, READ),
+                      "alphap0": (self.alphax, WRITE),
+                      "q": (self.q, READ),
                       "qmax": (self.max_field, READ),
                       "qmin": (self.min_field, READ)})
-            self.alpha2.interpolate(min_value(self.alpha2, alphax))
+            self.alpha2.interpolate(min_value(self.alpha2, self.alphax))
 
         self.field_dpc1.project(field)
         self.field_linearised.interpolate(self.field_dpc1)
         self.compute_bounds(self.field_linearised)
-        self._update_centroids(self.field_linearised)
         par_loop(self._alpha_kernel, dx,
                  {"qbar": (self.centroids, READ),
                   "alphap0": (self.alpha1, WRITE),
