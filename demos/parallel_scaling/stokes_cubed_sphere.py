@@ -90,7 +90,6 @@ def model(ref_level, nlayers, delta_t, steps=None):
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_monitor_true_residual'] = None
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_view'] = None
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-7
-    stokes_solver.solver_parameters['fieldsplit_0'].pop('assembled_mg_levels_pc_sor_diagonal_shift')
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_view'] = None
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
