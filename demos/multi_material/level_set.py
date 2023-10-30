@@ -1,0 +1,389 @@
+import firedrake as fd
+import matplotlib.pyplot as plt
+import numpy as np
+import shapely as sl
+from mpi4py import MPI
+from scipy.special import erf
+
+from gadopt.approximations import BoussinesqApproximation
+from gadopt.diagnostics import domain_volume
+from gadopt.energy_solver import EnergySolver
+from gadopt.level_set_tools import (
+    LevelSetEquation,
+    ProjectionSolver,
+    ReinitialisationEquation,
+    TimeStepperSolver,
+)
+from gadopt.stokes_integrators import StokesSolver, create_stokes_nullspace
+from gadopt.time_stepper import ImplicitMidpoint, eSSPRKs3p3, eSSPRKs10p3
+from gadopt.utility import TimestepAdaptor
+
+
+def initial_signed_distance_van_keken():
+    """Set up the initial signed distance function to the material interface"""
+
+    def get_interface_y(interface_x):
+        return layer_interface_y + interface_deflection * np.cos(
+            np.pi * interface_x / domain_length_x
+        )
+
+    interface_x = np.linspace(0, domain_length_x, 1000)
+    interface_y = get_interface_y(interface_x)
+    curve = sl.LineString([*np.column_stack((interface_x, interface_y))])
+    sl.prepare(curve)
+
+    node_coords_x = fd.Function(func_space_dg).interpolate(mesh_coords[0]).dat.data
+    node_coords_y = fd.Function(func_space_dg).interpolate(mesh_coords[1]).dat.data
+
+    node_relation_to_curve = [
+        (
+            node_coord_y > get_interface_y(node_coord_x),
+            curve.distance(sl.Point(node_coord_x, node_coord_y)),
+        )
+        for node_coord_x, node_coord_y in zip(node_coords_x, node_coords_y)
+    ]
+    node_sign_dist_to_curve = [
+        dist if is_above else -dist for is_above, dist in node_relation_to_curve
+    ]
+    return node_sign_dist_to_curve
+
+
+def initial_signed_distance_gerya():
+    """Set up the initial signed distance function to the material interface"""
+
+    square = sl.Polygon(
+        [(2e5, 4.5e5), (3e5, 4.5e5), (3e5, 3.5e5), (2e5, 3.5e5), (2e5, 4.5e5)]
+    )
+    sl.prepare(square)
+
+    node_coords_x = fd.Function(func_space_dg).interpolate(mesh_coords[0]).dat.data
+    node_coords_y = fd.Function(func_space_dg).interpolate(mesh_coords[1]).dat.data
+
+    node_relation_to_square = [
+        (
+            square.contains(sl.Point(x, y)) or square.boundary.contains(sl.Point(x, y)),
+            square.boundary.distance(sl.Point(x, y)),
+        )
+        for x, y in zip(node_coords_x, node_coords_y)
+    ]
+    node_sign_dist_to_square = [
+        -dist if is_inside else dist for is_inside, dist in node_relation_to_square
+    ]
+    return node_sign_dist_to_square
+
+
+def define_material_fields(benchmark):
+    "Set up physical fields depending on the material interface"
+    match benchmark:
+        case "van_Keken_1997_isothermal":
+            compo_field = fd.conditional(level_set > level_set_contour, 1, 0)
+            visc = fd.conditional(level_set > level_set_contour, 1, 1)
+        case "van_Keken_1997_thermochemical":
+            compo_field = fd.conditional(level_set > level_set_contour, 0, 1)
+            visc = fd.conditional(level_set > level_set_contour, 1, 1)
+        case "Gerya_2003":
+            compo_field = fd.conditional(level_set > level_set_contour, 0, 1)
+            visc = fd.conditional(level_set > level_set_contour, 1e21, 1e21)
+
+    return compo_field, visc
+
+
+def initialise_temperature(benchmark):
+    """Set up the initial temperature field"""
+    # Temperature function and associated function space
+    temp_func_space = fd.FunctionSpace(mesh, "CG", 2)
+    T = fd.Function(temp_func_space, name="Temperature")
+
+    match benchmark:
+        case "van_Keken_1997_isothermal":
+            pass
+        case "van_Keken_1997_thermochemical":
+            node_coords_x = (
+                fd.Function(temp_func_space).interpolate(mesh_coords[0]).dat.data
+            )
+            node_coords_y = (
+                fd.Function(temp_func_space).interpolate(mesh_coords[1]).dat.data
+            )
+
+            u0 = (
+                domain_length_x ** (7 / 3)
+                / (1 + domain_length_x**4) ** (2 / 3)
+                * (Ra.values().item() / 2 / np.sqrt(np.pi)) ** (2 / 3)
+            )
+            v0 = u0
+            Q = 2 * np.sqrt(domain_length_x / np.pi / u0)
+            Tu = erf((1 - node_coords_y) / 2 * np.sqrt(u0 / node_coords_x)) / 2
+            Tl = 1 - 1 / 2 * erf(
+                node_coords_y / 2 * np.sqrt(u0 / (domain_length_x - node_coords_x))
+            )
+            Tr = 1 / 2 + Q / 2 / np.sqrt(np.pi) * np.sqrt(
+                v0 / (node_coords_y + 1)
+            ) * np.exp(-(node_coords_x**2) * v0 / (4 * node_coords_y + 4))
+            Ts = 1 / 2 - Q / 2 / np.sqrt(np.pi) * np.sqrt(
+                v0 / (2 - node_coords_y)
+            ) * np.exp(
+                -((domain_length_x - node_coords_x) ** 2) * v0 / (8 - 4 * node_coords_y)
+            )
+
+            T.dat.data[:] = Tu + Tl + Tr + Ts - 3 / 2
+            fd.DirichletBC(temp_func_space, 1, 3).apply(T)
+            fd.DirichletBC(temp_func_space, 0, 4).apply(T)
+            T.interpolate(fd.max_value(fd.min_value(T, 1), 0))
+        case "Gerya_2003":
+            pass
+
+    return T
+
+
+def post_processing(benchmark, fields):
+    if "van_Keken" in benchmark:
+        fields["output_time"].append(time_now)
+        fields["rms_velocity"].append(fd.norm(u) / fd.sqrt(domain_volume(mesh)))
+        fields["entrainment"].append(
+            fd.assemble(
+                fd.conditional(mesh_coords[1] >= entrainment_height, 1 - compo_field, 0)
+                * fd.dx
+            )
+            / domain_length_x
+            / layer_interface_y
+        )
+
+
+def save_and_plot(benchmark, fields):
+    if "van_Keken" in benchmark:
+        np.savez("output", fields=fields)
+
+        fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
+
+        ax[0].set_xlabel("Time (non-dimensional)")
+        ax[1].set_xlabel("Time (non-dimensional)")
+        ax[0].set_ylabel("Root-mean-square velocity (non-dimensional)")
+        ax[1].set_ylabel("Entrainment (non-dimensional)")
+
+        ax[0].plot(fields["output_time"], fields["rms_velocity"])
+        ax[1].plot(fields["output_time"], fields["entrainment"])
+
+        fig.savefig("rms_velocity_and_entrainment.pdf", dpi=300, bbox_inches="tight")
+
+
+benchmark = "van_Keken_1997_thermochemical"
+match benchmark:
+    case "van_Keken_1997_isothermal":
+        domain_length_x, domain_length_y = 0.9142, 1
+        layer_interface_y = domain_length_y / 5
+        interface_deflection = domain_length_y / 50
+
+        Ra = fd.Constant(0)
+        ref_dens = fd.Constant(1)
+        g = fd.Constant(1)
+        Rb = fd.Constant(1)
+        dens_diff = fd.Constant(1)
+
+        temp_bcs = None
+        stokes_bcs = {
+            1: {"ux": 0},
+            2: {"ux": 0},
+            3: {"ux": 0, "uy": 0},
+            4: {"ux": 0, "uy": 0},
+        }
+
+        dt = fd.Constant(1)
+        time_end = 2000
+        dump_period = 10
+
+        post_process_fields = {"output_time": [], "rms_velocity": [], "entrainment": []}
+        entrainment_height = domain_length_y / 5
+    case "van_Keken_1997_thermochemical":
+        domain_length_x, domain_length_y = 2, 1
+        layer_interface_y = domain_length_y / 40
+        interface_deflection = 0
+
+        Ra = fd.Constant(3e5)
+        ref_dens = fd.Constant(1)
+        g = fd.Constant(1)
+        Rb = fd.Constant(4.5e5)
+        dens_diff = fd.Constant(1)
+
+        temp_bcs = {3: {"T": 1}, 4: {"T": 0}}
+        stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
+
+        dt = fd.Constant(1e-6)
+        time_end = 0.05
+        dump_period = 1e-4
+
+        post_process_fields = {"output_time": [], "rms_velocity": [], "entrainment": []}
+        entrainment_height = domain_length_y / 50
+    case "Gerya_2003":
+        domain_length_x, domain_length_y = 5e5, 5e5
+
+        Ra = fd.Constant(1)
+        ref_dens = fd.Constant(3200)
+        g = fd.Constant(9.8)
+        Rb = fd.Constant(1)
+        dens_diff = fd.Constant(100)
+
+        temp_bcs = None
+        stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
+
+        dt = fd.Constant(1e10)
+        time_end = 9.886e6 * 365.25 * 8.64e4
+        dump_period = 1e5 * 365.25 * 8.64e4
+
+        post_process_fields = {}
+    case _:
+        raise ValueError("Unknown benchmark.")
+
+# Set up geometry
+mesh_elements_x, mesh_elements_y = 512, 128
+mesh = fd.RectangleMesh(
+    mesh_elements_x,
+    mesh_elements_y,
+    domain_length_x,
+    domain_length_y,
+    quadrilateral=True,
+)  # RectangleMesh boundary mapping: {1: left, 2: right, 3: bottom, 4: top}
+mesh_coords = fd.SpatialCoordinate(mesh)
+
+# Set up function spaces and functions used as part of the level-set approach
+level_set_func_space_deg = 2
+func_space_dg = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
+vec_func_space_cg = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
+level_set = fd.Function(func_space_dg, name="level_set")
+level_set_grad_proj = fd.Function(vec_func_space_cg, name="level_set_grad_proj")
+
+# Initial interface layout
+match benchmark:
+    case "van_Keken_1997_isothermal":
+        signed_dist_to_interface = initial_signed_distance_van_keken()
+    case "van_Keken_1997_thermochemical":
+        signed_dist_to_interface = initial_signed_distance_van_keken()
+    case "Gerya_2003":
+        signed_dist_to_interface = initial_signed_distance_gerya()
+
+# Initialise level set
+conservative_level_set = True
+if conservative_level_set:
+    epsilon = fd.Constant(
+        min(
+            domain_length_x / mesh_elements_x,
+            domain_length_y / mesh_elements_y,
+        )
+        / 4
+    )  # Loose guess
+    level_set.dat.data[:] = (
+        np.tanh(np.asarray(signed_dist_to_interface) / 2 / epsilon.values().item()) + 1
+    ) / 2
+    level_set_contour = 0.5
+else:
+    level_set.dat.data[:] = signed_dist_to_interface
+    level_set_contour = 0
+
+# Set up Stokes function spaces corresponding to the bilinear Q2Q1 element pair
+vel_func_space = fd.VectorFunctionSpace(mesh, "CG", 2)
+pres_func_space = fd.FunctionSpace(mesh, "CG", 1)
+stokes_func_space = fd.MixedFunctionSpace([vel_func_space, pres_func_space])
+
+stokes_function = fd.Function(stokes_func_space)
+u, p = fd.split(stokes_function)  # Symbolic UFL expression for velocity and pressure
+
+compo_field, visc = define_material_fields(benchmark)
+
+T = initialise_temperature(benchmark)
+
+# Set up energy and Stokes solvers
+approximation = BoussinesqApproximation(
+    Ra, rho=ref_dens, g=g, Rb=Rb, delta_rho=dens_diff
+)
+energy_solver = EnergySolver(T, u, approximation, dt, ImplicitMidpoint, bcs=temp_bcs)
+stokes_nullspace = create_stokes_nullspace(stokes_func_space)
+stokes_solver = StokesSolver(
+    stokes_function,
+    T,
+    approximation,
+    bcs=stokes_bcs,
+    mu=visc,
+    C=compo_field,
+    nullspace=stokes_nullspace,
+    transpose_nullspace=stokes_nullspace,
+)
+
+# Additional fields required for each level-set solver
+level_set_fields = {"velocity": u}
+projection_fields = {"target": level_set}
+reinitialisation_fields = {"level_set_grad": level_set_grad_proj, "epsilon": epsilon}
+
+# Force projected gradient norm to satisfy the reinitialisation equation
+projection_boundary_conditions = fd.DirichletBC(
+    vec_func_space_cg,
+    level_set * (1 - level_set) / epsilon * fd.Constant((1, 0)),
+    "on_boundary",
+)
+
+# Set up level-set solvers
+level_set_solver = TimeStepperSolver(
+    level_set, level_set_fields, dt, eSSPRKs10p3, LevelSetEquation
+)
+projection_solver = ProjectionSolver(
+    level_set_grad_proj, projection_fields, bcs=projection_boundary_conditions
+)
+reinitialisation_solver = TimeStepperSolver(
+    level_set,
+    reinitialisation_fields,
+    1e-3,  # Loose guess
+    eSSPRKs3p3,
+    ReinitialisationEquation,
+    coupled_solver=projection_solver,
+)
+
+# Time-loop objects
+t_adapt = TimestepAdaptor(dt, u, vel_func_space, target_cfl=0.7)
+step = 0
+time_now, time_end = 0, time_end
+dump_counter, dump_period = 0, dump_period
+reini_frequency, reini_iterations = 1, 2
+output_file = fd.File("level_set/output.pvd", target_degree=level_set_func_space_deg)
+
+# Extract individual velocity and pressure fields and rename them for output
+u_, p_ = stokes_function.subfunctions
+u_.rename("Velocity")
+p_.rename("Pressure")
+
+# Perform the time loop
+while time_now < time_end:
+    if time_now >= dump_counter * dump_period:  # Write to output file
+        dump_counter += 1
+        output_file.write(level_set, level_set_grad_proj, u_, p_, T)
+
+    # Update time and timestep
+    dt = t_adapt.update_timestep()
+    time_now += dt
+
+    # Solve Stokes system
+    stokes_solver.solve()
+
+    # Solve energy system
+    energy_solver.solve()
+
+    # Solve level-set advection
+    level_set_solver.solve()
+
+    if step > reini_frequency:  # Update stored function given previous solve
+        reinitialisation_solver.ts.solution_old.assign(level_set)
+
+    if step > 0 and step % reini_frequency == 0:  # Solve level-set reinitialisation
+        if conservative_level_set:
+            for reini_step in range(reini_iterations):
+                reinitialisation_solver.solve()
+
+        # Update stored function given previous solve
+        level_set_solver.ts.solution_old.assign(level_set)
+
+    post_processing(benchmark, post_process_fields)
+
+    # Increment time-loop step counter
+    step += 1
+# Write final simulation state to output file
+output_file.write(level_set, level_set_grad_proj, u_, p_, T)
+
+if MPI.COMM_WORLD.rank == 0:  # Save post-processing fields and produce graphs
+    save_and_plot(benchmark, post_process_fields)

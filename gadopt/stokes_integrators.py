@@ -1,7 +1,7 @@
-from .momentum_equation import StokesEquations
-from .utility import upward_normal, ensure_constant
-from .utility import log_level, INFO, DEBUG, depends_on
 import firedrake as fd
+
+from .momentum_equation import StokesEquations
+from .utility import DEBUG, INFO, depends_on, ensure_constant, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -31,7 +31,7 @@ iterative_stokes_solver_parameters = {
         "Mp_ksp_rtol": 1e-5,
         "Mp_ksp_type": "cg",
         "Mp_pc_type": "sor",
-    }
+    },
 }
 
 direct_stokes_solver_parameters = {
@@ -95,17 +95,33 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
 
 
 class StokesSolver:
-    name = 'Stokes'
+    name = "Stokes"
 
-    def __init__(self, z, T, approximation, bcs=None, mu=1,
-                 quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False, J=None,
-                 **kwargs):
+    def __init__(
+        self,
+        z,
+        T,
+        approximation,
+        bcs=None,
+        mu=1,
+        C=0,
+        quad_degree=6,
+        cartesian=True,
+        solver_parameters=None,
+        closed=True,
+        rotational=False,
+        J=None,
+        **kwargs
+    ):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
-        self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
-                                         compressible=approximation.compressible)
+        self.equations = StokesEquations(
+            self.Z,
+            self.Z,
+            quad_degree=quad_degree,
+            compressible=approximation.compressible,
+        )
         self.solution = z
         self.approximation = approximation
         self.mu = ensure_constant(mu)
@@ -117,13 +133,15 @@ class StokesSolver:
         u, p = fd.split(self.solution)
         self.k = upward_normal(self.Z.mesh(), cartesian)
         self.fields = {
-            'velocity': u,
-            'pressure': p,
-            'viscosity': self.mu,
-            'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
-                                                   # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
-            'source': self.approximation.buoyancy(p, T) * self.k,
-            'rho_continuity': self.approximation.rho_continuity(),
+            "velocity": u,
+            "pressure": p,
+            "viscosity": self.mu,
+            "interior_penalty": fd.Constant(
+                2.0
+            ),  # allows for some wiggle room in imposition of weak BCs
+            # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
+            "source": self.approximation.buoyancy(p, T, C) * self.k,
+            "rho_continuity": self.approximation.rho_continuity(),
         }
 
         self.weak_bcs = {}
@@ -131,14 +149,20 @@ class StokesSolver:
         for id, bc in bcs.items():
             weak_bc = {}
             for type, value in bc.items():
-                if type == 'u':
+                if type == "u":
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
-                elif type == 'ux':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
-                elif type == 'uy':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
-                elif type == 'uz':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
+                elif type == "ux":
+                    self.strong_bcs.append(
+                        fd.DirichletBC(self.Z.sub(0).sub(0), value, id)
+                    )
+                elif type == "uy":
+                    self.strong_bcs.append(
+                        fd.DirichletBC(self.Z.sub(0).sub(1), value, id)
+                    )
+                elif type == "uz":
+                    self.strong_bcs.append(
+                        fd.DirichletBC(self.Z.sub(0).sub(2), value, id)
+                    )
                 else:
                     weak_bc[type] = value
             self.weak_bcs[id] = weak_bc
@@ -153,29 +177,36 @@ class StokesSolver:
             else:
                 self.solver_parameters = newton_stokes_solver_parameters.copy()
             if INFO >= log_level:
-                self.solver_parameters['snes_monitor'] = None
+                self.solver_parameters["snes_monitor"] = None
 
             if self.mesh.topological_dimension() == 2 and cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
                 if DEBUG >= log_level:
-                    self.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-                    self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
+                    self.solver_parameters["fieldsplit_0"][
+                        "ksp_converged_reason"
+                    ] = None
+                    self.solver_parameters["fieldsplit_1"]["ksp_monitor"] = None
                 elif INFO >= log_level:
-                    self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+                    self.solver_parameters["fieldsplit_1"][
+                        "ksp_converged_reason"
+                    ] = None
         # solver is setup only last minute
         # so people can overwrite parameters we've setup here
         self._solver_setup = False
 
     def setup_solver(self):
-        self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
-                                                      bcs=self.strong_bcs, J=self.J)
-        self.solver = fd.NonlinearVariationalSolver(self.problem,
-                                                    solver_parameters=self.solver_parameters,
-                                                    options_prefix=self.name,
-                                                    appctx={"mu": self.mu},
-                                                    **self.solver_kwargs)
+        self.problem = fd.NonlinearVariationalProblem(
+            self.F, self.solution, bcs=self.strong_bcs, J=self.J
+        )
+        self.solver = fd.NonlinearVariationalSolver(
+            self.problem,
+            solver_parameters=self.solver_parameters,
+            options_prefix=self.name,
+            appctx={"mu": self.mu},
+            **self.solver_kwargs
+        )
         self._solver_setup = True
 
     def solve(self):

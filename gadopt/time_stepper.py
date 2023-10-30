@@ -7,7 +7,7 @@ import numpy as np
 from .utility import ensure_constant
 
 """
-Timestepper code, this is mostly copied from Thetis. At the moment explicit RK methods only.
+Timestepper code, this is mostly copied from Thetis.
 """
 
 
@@ -476,6 +476,25 @@ class AbstractRKScheme(ABC):
         self.is_dirk = np.diag(self.a).all()
 
 
+def shu_osher_butcher(α_or_λ, β_or_μ):
+    """
+    Generate arrays composing the Butcher tableau of a Runge-Kutta method from the
+    coefficient arrays of the equivalent, original or modified, Shu-Osher form.
+    Code adapted from RK-Opt written in MATLAB by David Ketcheson.
+    See also Ketcheson, Macdonald, and Gottlieb (2009).
+
+    Function arguments:
+    α_or_λ : array_like, shape (n + 1, n)
+    β_or_μ : array_like, shape (n + 1, n)
+    """
+
+    X = np.identity(α_or_λ.shape[1]) - α_or_λ[:-1]
+    A = np.linalg.solve(X, β_or_μ[:-1])
+    b = np.transpose(β_or_μ[-1] + np.dot(α_or_λ[-1], A))
+    c = np.sum(A, axis=1)
+    return A, b, c
+
+
 class ForwardEulerAbstract(AbstractRKScheme):
     """
     Forward Euler method
@@ -550,6 +569,313 @@ class SSPRK33Abstract(AbstractRKScheme):
     b = [1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0]
     c = [0, 1.0, 0.5]
     cfl_coeff = 1.0
+
+
+class eSSPRKs3p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [[0.0, 0.0, 0.0], [2 / 3, 0.0, 0.0], [2 / 9, 4 / 9, 0.0]]
+    b = [0.25, 0.1875, 0.5625]
+    c = [0, 2 / 3, 2 / 3]
+    cfl_coeff = 3 / 4
+
+
+class eSSPRKs4p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0],
+        [11 / 20, 0.0, 0.0, 0.0],
+        [11 / 32, 11 / 32, 0.0, 0.0],
+        [55 / 288, 55 / 288, 11 / 36, 0.0],
+    ]
+    b = [0.24517906, 0.13774105, 0.22038567, 0.39669421]
+    c = [0, 11 / 20, 11 / 16, 11 / 16]
+    cfl_coeff = 20 / 11
+
+
+class eSSPRKs5p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.37949799, 0.0, 0.0, 0.0, 0.0],
+        [0.35866028, 0.35866028, 0.0, 0.0, 0.0],
+        [0.23456423, 0.23456423, 0.24819211, 0.0, 0.0],
+        [0.15340527, 0.15340527, 0.16231792, 0.24819211, 0.0],
+    ]
+    b = [0.20992362, 0.1975535, 0.1217419, 0.18614938, 0.28463159]
+    c = [0.0, 0.37949799, 0.71732056, 0.71732057, 0.71732057]
+    cfl_coeff = 2.63506005
+
+
+class eSSPRKs6p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.28422072, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.28422072, 0.28422072, 0.0, 0.0, 0.0, 0.0],
+        [0.23301578, 0.23301578, 0.23301578, 0.0, 0.0, 0.0],
+        [0.16684082, 0.16532461, 0.16532461, 0.20165449, 0.0, 0.0],
+        [0.21178186, 0.102324, 0.10202706, 0.12444738, 0.17540162, 0.0],
+    ]
+    b = [0.21181784, 0.10241434, 0.10198818, 0.12438557, 0.17531451, 0.28407956]
+    c = [0.0, 0.28422072, 0.56844144, 0.69904734, 0.69914453, 0.71598192]
+    cfl_coeff = 3.51839231
+
+
+class eSSPRKs7p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.23333473, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.23333473, 0.23333473, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.23144338, 0.23144338, 0.23144338, 0.0, 0.0, 0.0, 0.0],
+        [0.17322863, 0.17322863, 0.17322863, 0.17464425, 0.0, 0.0, 0.0],
+        [0.13071968, 0.12941249, 0.12941249, 0.13047004, 0.17431545, 0.0, 0.0],
+        [0.16655731, 0.16570664, 0.08421603, 0.08490424, 0.11343693, 0.15184412, 0.0],
+    ]
+    b = [
+        0.16655731,
+        0.16570664,
+        0.08421603,
+        0.08490424,
+        0.11343693,
+        0.15184412,
+        0.23333473,
+    ]
+    c = [0.0, 0.23333473, 0.46666946, 0.69433014, 0.69433014, 0.69433015, 0.76666527]
+    cfl_coeff = 4.28568865
+
+
+class eSSPRKs8p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.19580402, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.19580402, 0.19580402, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.19580402, 0.19580402, 0.19580402, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.15369244, 0.15369244, 0.15369244, 0.15369244, 0.0, 0.0, 0.0, 0.0],
+        [0.11656615, 0.11656615, 0.11656615, 0.11656615, 0.14850516, 0.0, 0.0, 0.0],
+        [
+            0.12960593,
+            0.09738344,
+            0.09738344,
+            0.09738344,
+            0.12406641,
+            0.16358153,
+            0.0,
+            0.0,
+        ],
+        [
+            0.12970594,
+            0.09753214,
+            0.09723632,
+            0.09723632,
+            0.12387897,
+            0.16333439,
+            0.1955082,
+            0.0,
+        ],
+    ]
+    b = [
+        0.1462899,
+        0.12218849,
+        0.12196689,
+        0.10127077,
+        0.09279782,
+        0.1223539,
+        0.14645532,
+        0.14667691,
+    ]
+    c = [
+        0.0,
+        0.19580402,
+        0.39160804,
+        0.58741206,
+        0.61476976,
+        0.61476976,
+        0.70940419,
+        0.90443228,
+    ]
+    cfl_coeff = 5.10714756
+
+
+class eSSPRKs9p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.16666667, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.16666667, 0.16666667, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.16666667, 0.16666667, 0.16666667, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.16666667, 0.16666667, 0.16666667, 0.16666667, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [
+            0.13333333,
+            0.13333333,
+            0.13333333,
+            0.13333333,
+            0.13333333,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [0.14166667, 0.1, 0.1, 0.1, 0.1, 0.125, 0.0, 0.0, 0.0],
+        [
+            0.15,
+            0.12222222,
+            0.06666667,
+            0.06666667,
+            0.06666667,
+            0.08333333,
+            0.11111111,
+            0.0,
+            0.0,
+        ],
+        [
+            0.15,
+            0.12222222,
+            0.06666667,
+            0.06666667,
+            0.06666667,
+            0.08333333,
+            0.11111111,
+            0.16666667,
+            0.0,
+        ],
+    ]
+    b = [
+        0.15,
+        0.12222222,
+        0.06666667,
+        0.06666667,
+        0.06666667,
+        0.08333333,
+        0.11111111,
+        0.16666667,
+        0.16666667,
+    ]
+    c = [
+        0.0,
+        0.16666667,
+        0.33333334,
+        0.50000001,
+        0.66666668,
+        0.66666665,
+        0.66666667,
+        0.66666667,
+        0.83333334,
+    ]
+    cfl_coeff = 6.0
+
+
+class eSSPRKs10p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.14737756, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.14737756, 0.14737756, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.14737756, 0.14737756, 0.14737756, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.14737756, 0.14737756, 0.14737756, 0.14737756, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [
+            0.11790205,
+            0.11790205,
+            0.11790205,
+            0.11790205,
+            0.11790205,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.10906732,
+            0.10906703,
+            0.10906703,
+            0.10906703,
+            0.10906703,
+            0.13633378,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.11862231,
+            0.11856848,
+            0.08186453,
+            0.08186453,
+            0.08186453,
+            0.10233067,
+            0.11062,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.12708168,
+            0.12704369,
+            0.08137218,
+            0.0577812,
+            0.0577812,
+            0.07222649,
+            0.07807723,
+            0.10402125,
+            0.0,
+            0.0,
+        ],
+        [
+            0.1270886,
+            0.12705062,
+            0.08139469,
+            0.05776149,
+            0.05776149,
+            0.07220186,
+            0.07805061,
+            0.10398578,
+            0.1473273,
+            0.0,
+        ],
+    ]
+    b = [
+        0.1270886,
+        0.12705062,
+        0.08139469,
+        0.05776149,
+        0.05776149,
+        0.07220186,
+        0.07805061,
+        0.10398578,
+        0.1473273,
+        0.14737756,
+    ]
+    c = [
+        0.0,
+        0.14737756,
+        0.29475512,
+        0.44213268,
+        0.58951024,
+        0.58951025,
+        0.68166922,
+        0.69573505,
+        0.70538492,
+        0.85262244,
+    ]
+    cfl_coeff = 3.51839231
 
 
 class BackwardEulerAbstract(AbstractRKScheme):
@@ -756,6 +1082,38 @@ class SSPRK33(ERKGeneric, SSPRK33Abstract):
     pass
 
 
+class eSSPRKs3p3(ERKGeneric, eSSPRKs3p3Abstract):
+    pass
+
+
+class eSSPRKs4p3(ERKGeneric, eSSPRKs4p3Abstract):
+    pass
+
+
+class eSSPRKs5p3(ERKGeneric, eSSPRKs5p3Abstract):
+    pass
+
+
+class eSSPRKs6p3(ERKGeneric, eSSPRKs6p3Abstract):
+    pass
+
+
+class eSSPRKs7p3(ERKGeneric, eSSPRKs7p3Abstract):
+    pass
+
+
+class eSSPRKs8p3(ERKGeneric, eSSPRKs8p3Abstract):
+    pass
+
+
+class eSSPRKs9p3(ERKGeneric, eSSPRKs9p3Abstract):
+    pass
+
+
+class eSSPRKs10p3(ERKGeneric, eSSPRKs10p3Abstract):
+    pass
+
+
 class BackwardEuler(DIRKGeneric, BackwardEulerAbstract):
     pass
 
@@ -790,22 +1148,3 @@ class DIRKLSPUM2(DIRKGeneric, DIRKLSPUM2Abstract):
 
 class DIRKLPUM2(DIRKGeneric, DIRKLPUM2Abstract):
     pass
-
-
-def shu_osher_butcher(α_or_λ, β_or_μ):
-    """
-    Generate arrays composing the Butcher tableau of a Runge-Kutta method from the
-    coefficient arrays of the equivalent, original or modified, Shu-Osher form.
-    Code adapted from RK-Opt written in MATLAB by David Ketcheson.
-    See also Ketcheson, Macdonald, and Gottlieb (2009).
-
-    Function arguments:
-    α_or_λ : array_like, shape (n + 1, n)
-    β_or_μ : array_like, shape (n + 1, n)
-    """
-
-    X = np.identity(α_or_λ.shape[1]) - α_or_λ[:-1]
-    A = np.linalg.solve(X, β_or_μ[:-1])
-    b = np.transpose(β_or_μ[-1] + np.dot(α_or_λ[-1], A))
-    c = np.sum(A, axis=1)
-    return A, b, c

@@ -1,5 +1,7 @@
 import abc
-from firedrake import sym, grad, inner, div, Identity
+
+from firedrake import Identity, div, grad, inner, sym
+
 from .utility import ensure_constant, vertical_component
 
 
@@ -24,6 +26,7 @@ class BaseApproximation(abc.ABC):
     if compressible then dev_stress=mu*[sym(grad(u)-2/3 div(u()]
     if not compressible then dev_stress=mu*sym(grad(u)) and rho_continuity is assumed to be 1
     """
+
     @property
     @abc.abstractmethod
     def compressible(self):
@@ -73,21 +76,33 @@ class BoussinesqApproximation(BaseApproximation):
     Small density variation linear in Temperature only, only taken into account in buoyancy term.
     All references rho, cp, alpha are constant and typically incorporated in Ra
     Viscous dissipation is neglected (Di << 1)."""
+
     compressible = False
 
-    def __init__(self, Ra, kappa=1, g=1, rho=1, alpha=1):
+    def __init__(self, Ra, rho=1, g=1, alpha=1, kappa=1, Rb=0, delta_rho=1):
         """
-        :arg Ra:   Rayleigh number
-        :arg kappa, g, rho, alpha:  Diffusivity, gravitational acceleration, reference density and thermal expansion coefficient
-                                    Normally kept at 1 when non-dimensionalised."""
+        :arg Ra: Rayleigh number
+        :arg rho: Reference density
+        :arg g: Gravitational acceleration
+        :arg alpha: Coefficient of thermal expansion
+        :arg kappa: Thermal diffusivity
+        :arg Rb: Compositional Rayleigh number obtained as a product of the Rayleigh
+                 and buoyancy numbers
+        :arg delta_rho: Compositional density difference from the reference density
+        """
         self.Ra = ensure_constant(Ra)
-        self._kappa = ensure_constant(kappa)
-        self.g = ensure_constant(g)
         self.rho = ensure_constant(rho)
+        self.g = ensure_constant(g)
         self.alpha = ensure_constant(alpha)
+        self._kappa = ensure_constant(kappa)
+        self.Rb = ensure_constant(Rb)
+        self.delta_rho = ensure_constant(delta_rho)
 
-    def buoyancy(self, p, T):
-        return self.Ra * self.g * self.alpha * self.rho * T
+    def buoyancy(self, p, T, C):
+        return (
+            self.Ra * self.rho * self.alpha * T * self.g
+            - self.Rb * self.delta_rho * C * self.g
+        )
 
     def rho_continuity(self):
         return 1
@@ -111,7 +126,9 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     Extended Boussinesq
 
-    As Boussinesq but includes viscous dissipation and work against gravity (both scaled with Di)."""
+    As Boussinesq but includes viscous dissipation and work against gravity (both scaled with Di).
+    """
+
     compressible = False
 
     def __init__(self, Ra, Di, mu=1, H=None, cartesian=True, **kwargs):
@@ -133,7 +150,7 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
         if self.compressible:  # (used in AnelasticLiquidApproximations below)
-            stress -= 2/3 * self.mu * div(u) * Identity(u.ufl_shape[0])
+            stress -= 2 / 3 * self.mu * div(u) * Identity(u.ufl_shape[0])
         phi = inner(stress, grad(u))
         return phi * self.Di / self.Ra
 
@@ -156,13 +173,12 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     """
     Truncated Anelastic Liquid Approximation
 
-    Compressible approximation. Excludes linear dependence of density on pressure (chi)"""
+    Compressible approximation. Excludes linear dependence of density on pressure (chi)
+    """
+
     compressible = True
 
-    def __init__(self, Ra, Di,
-                 Tbar=0, chi=1, cp=1,
-                 gamma0=1, cp0=1, cv0=1,
-                 **kwargs):
+    def __init__(self, Ra, Di, Tbar=0, chi=1, cp=1, gamma0=1, cp0=1, cv0=1, **kwargs):
         """
         :arg Ra:   Rayleigh number
         :arg Di:   Dissipation number
@@ -178,13 +194,14 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         :arg kappa, g:  Diffusivity, gravitational acceleration
         Constant coefficients in pressure dependent buoyancy term::w
         :arg gamma0:   Gruneisen number
-        :arg cp0, cv0: specific heat at constant pressure and volume reference for entire Mantle (all references above may be depth-dependent)."""
+        :arg cp0, cv0: specific heat at constant pressure and volume reference for entire Mantle (all references above may be depth-dependent).
+        """
         super().__init__(Ra, Di, **kwargs)
         self.Tbar = Tbar
         # Equation of State:
         self.chi = chi
         self.cp = cp
-        assert 'g' not in kwargs
+        assert "g" not in kwargs
         self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
     def rho_continuity(self):
@@ -202,9 +219,19 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     """
     Anelastic Liquid Approximation
 
-    Compressible approximation. Includes linear dependence of density on pressure (chi)"""
+    Compressible approximation. Includes linear dependence of density on pressure (chi)
+    """
 
     def buoyancy(self, p, T):
-        pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
+        pressure_part = (
+            -self.Di
+            * self.cp0
+            / self.cv0
+            / self.gamma0
+            * self.g
+            * self.rho
+            * self.chi
+            * p
+        )
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
