@@ -142,11 +142,12 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         b = assemble(TestFunction(self.P0) * field * dx)
         self.centroid_solver.solve(self.centroids, b)
 
-    def compute_bounds(self, field):
+    def compute_bounds(self, field, clip=True):
         """
         Re-compute min/max values of all neighbouring centroids
 
         :arg field: :class:`Function` to limit
+        :arg clip:  whether to include clip_min and clip_max in the bounds
         """
         # Call general-purpose bound computation.
         super(VertexBasedP1DGLimiter, self).compute_bounds(field)
@@ -223,10 +224,11 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                          top_idx(op2.READ),
                          iteration_region=op2.ON_TOP)
 
-        if self.clip_min is not None:
-            self.min_field.interpolate(max_value(self.min_field, self.clip_min))
-        if self.clip_max is not None:
-            self.max_field.interpolate(min_value(self.max_field, self.clip_max))
+        if clip:
+            if self.clip_min is not None:
+                self.min_field.interpolate(max_value(self.min_field, self.clip_min))
+            if self.clip_max is not None:
+                self.max_field.interpolate(min_value(self.max_field, self.clip_max))
 
     def apply(self, field):
         """
@@ -255,11 +257,11 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
 
 class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
-    def __init__(self, p1dg_space):
+    def __init__(self, p1dg_space, clip_min=None, clip_max=None):
         # NOTE: clip_min, clip_max not supported (as it would use the same values to limit derivatives)
         # also doesn't support vector-valued fields at the moment
 
-        super().__init__(p1dg_space)
+        super().__init__(p1dg_space, clip_min=clip_min, clip_max)
 
         # Perform limiting loop
         domain = "{[i]: 0 <= i < q.dofs}"
@@ -287,7 +289,7 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
         self.alpha2.assign(1.e10)
         for i in range(self.gdim):
             self.q.interpolate(grad(field)[i])
-            self.compute_bounds(self.q)
+            self.compute_bounds(self.q, clip=False)
             par_loop(self._alpha_kernel, dx,
                      {"qbar": (self.centroids, READ),
                       "alphap0": (self.alphax, WRITE),
@@ -307,3 +309,8 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
                   "qmin": (self.min_field, READ)})
         self.alpha1.interpolate(max_value(self.alpha1, self.alpha2))
         field.interpolate((1-self.alpha1)*self.centroids + (self.alpha1-self.alpha2) * self.field_linearised + self.alpha2*field)
+
+        if self.clip_min is not None:
+            field.interpolate(max_value(field, self.clip_min))
+        if self.clip_max is not None:
+            field.interpolate(min_value(field, self.clip_max))
