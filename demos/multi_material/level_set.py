@@ -72,22 +72,6 @@ def initial_signed_distance_gerya():
     return node_sign_dist_to_square
 
 
-def define_material_fields(benchmark):
-    "Set up physical fields depending on the material interface"
-    match benchmark:
-        case "van_Keken_1997_isothermal":
-            compo_field = fd.conditional(level_set > level_set_contour, 1, 0)
-            visc = fd.conditional(level_set > level_set_contour, 1, 1)
-        case "van_Keken_1997_thermochemical":
-            compo_field = fd.conditional(level_set > level_set_contour, 0, 1)
-            visc = fd.conditional(level_set > level_set_contour, 1, 1)
-        case "Gerya_2003":
-            compo_field = fd.conditional(level_set > level_set_contour, 0, 1)
-            visc = fd.conditional(level_set > level_set_contour, 1e21, 1e21)
-
-    return compo_field, visc
-
-
 def initialise_temperature(benchmark):
     """Set up the initial temperature field"""
     # Temperature function and associated function space
@@ -141,7 +125,7 @@ def post_processing(benchmark, fields):
         fields["rms_velocity"].append(fd.norm(u) / fd.sqrt(domain_volume(mesh)))
         fields["entrainment"].append(
             fd.assemble(
-                fd.conditional(mesh_coords[1] >= entrainment_height, 1 - compo_field, 0)
+                fd.conditional(mesh_coords[1] >= entrainment_height, compo_field, 0)
                 * fd.dx
             )
             / domain_length_x
@@ -173,10 +157,12 @@ match benchmark:
         layer_interface_y = domain_length_y / 5
         interface_deflection = domain_length_y / 50
 
+        visc_ref, visc_compo = 1, 1
+
         Ra = fd.Constant(0)
         ref_dens = fd.Constant(1)
         g = fd.Constant(1)
-        Rb = fd.Constant(1)
+        Rb = fd.Constant(-1)
         dens_diff = fd.Constant(1)
 
         temp_bcs = None
@@ -188,6 +174,7 @@ match benchmark:
         }
 
         dt = fd.Constant(1)
+        subcycles = 1
         time_end = 2000
         dump_period = 10
 
@@ -197,6 +184,8 @@ match benchmark:
         domain_length_x, domain_length_y = 2, 1
         layer_interface_y = domain_length_y / 40
         interface_deflection = 0
+
+        visc_ref, visc_compo = 1, 1
 
         Ra = fd.Constant(3e5)
         ref_dens = fd.Constant(1)
@@ -208,13 +197,16 @@ match benchmark:
         stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
         dt = fd.Constant(1e-6)
+        subcycles = 7
         time_end = 0.05
         dump_period = 1e-4
 
         post_process_fields = {"output_time": [], "rms_velocity": [], "entrainment": []}
-        entrainment_height = domain_length_y / 50
+        entrainment_height = domain_length_y / 5
     case "Gerya_2003":
         domain_length_x, domain_length_y = 5e5, 5e5
+
+        visc_ref, visc_compo = 1e21, 1e21
 
         Ra = fd.Constant(1)
         ref_dens = fd.Constant(3200)
@@ -225,7 +217,8 @@ match benchmark:
         temp_bcs = None
         stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
-        dt = fd.Constant(1e10)
+        dt = fd.Constant(1e11)
+        subcycles = 1
         time_end = 9.886e6 * 365.25 * 8.64e4
         dump_period = 1e5 * 365.25 * 8.64e4
 
@@ -234,7 +227,7 @@ match benchmark:
         raise ValueError("Unknown benchmark.")
 
 # Set up geometry
-mesh_elements_x, mesh_elements_y = 512, 128
+mesh_elements_x, mesh_elements_y = 128, 64
 mesh = fd.RectangleMesh(
     mesh_elements_x,
     mesh_elements_y,
@@ -286,7 +279,8 @@ stokes_func_space = fd.MixedFunctionSpace([vel_func_space, pres_func_space])
 stokes_function = fd.Function(stokes_func_space)
 u, p = fd.split(stokes_function)  # Symbolic UFL expression for velocity and pressure
 
-compo_field, visc = define_material_fields(benchmark)
+compo_field = fd.conditional(level_set > level_set_contour, 0, 1)
+visc = fd.conditional(level_set > level_set_contour, visc_ref, visc_compo)
 
 T = initialise_temperature(benchmark)
 
@@ -321,7 +315,7 @@ projection_boundary_conditions = fd.DirichletBC(
 
 # Set up level-set solvers
 level_set_solver = TimeStepperSolver(
-    level_set, level_set_fields, dt, eSSPRKs10p3, LevelSetEquation
+    level_set, level_set_fields, dt / subcycles, eSSPRKs10p3, LevelSetEquation
 )
 projection_solver = ProjectionSolver(
     level_set_grad_proj, projection_fields, bcs=projection_boundary_conditions
@@ -329,19 +323,21 @@ projection_solver = ProjectionSolver(
 reinitialisation_solver = TimeStepperSolver(
     level_set,
     reinitialisation_fields,
-    1e-3,  # Loose guess
+    2e-2,  # Loose guess
     eSSPRKs3p3,
     ReinitialisationEquation,
     coupled_solver=projection_solver,
 )
 
 # Time-loop objects
-t_adapt = TimestepAdaptor(dt, u, vel_func_space, target_cfl=0.7)
+t_adapt = TimestepAdaptor(dt, u, vel_func_space, target_cfl=subcycles * 0.7)
 step = 0
 time_now, time_end = 0, time_end
 dump_counter, dump_period = 0, dump_period
 reini_frequency, reini_iterations = 1, 2
-output_file = fd.File("level_set/output.pvd", target_degree=level_set_func_space_deg)
+output_file = fd.File(
+    "level_set_subcycles/output.pvd", target_degree=level_set_func_space_deg
+)
 
 # Extract individual velocity and pressure fields and rename them for output
 u_, p_ = stokes_function.subfunctions
@@ -364,19 +360,20 @@ while time_now < time_end:
     # Solve energy system
     energy_solver.solve()
 
-    # Solve level-set advection
-    level_set_solver.solve()
+    for subcycle in range(subcycles):
+        # Solve level-set advection
+        level_set_solver.solve()
 
-    if step > reini_frequency:  # Update stored function given previous solve
-        reinitialisation_solver.ts.solution_old.assign(level_set)
+        if step > reini_frequency:  # Update stored function given previous solve
+            reinitialisation_solver.ts.solution_old.assign(level_set)
 
-    if step > 0 and step % reini_frequency == 0:  # Solve level-set reinitialisation
-        if conservative_level_set:
-            for reini_step in range(reini_iterations):
-                reinitialisation_solver.solve()
+        if step > 0 and step % reini_frequency == 0:  # Solve level-set reinitialisation
+            if conservative_level_set:
+                for reini_step in range(reini_iterations):
+                    reinitialisation_solver.solve()
 
-        # Update stored function given previous solve
-        level_set_solver.ts.solution_old.assign(level_set)
+            # Update stored function given previous solve
+            level_set_solver.ts.solution_old.assign(level_set)
 
     post_processing(benchmark, post_process_fields)
 

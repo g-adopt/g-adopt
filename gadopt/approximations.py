@@ -34,7 +34,7 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def buoyancy(self, p, T):
+    def buoyancy(self, p, T, C):
         "UFL expression for buoyancy (momentum source in gravity direction)"
         pass
 
@@ -222,7 +222,7 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     Compressible approximation. Includes linear dependence of density on pressure (chi)
     """
 
-    def buoyancy(self, p, T):
+    def buoyancy(self, p, T, C):
         pressure_part = (
             -self.Di
             * self.cp0
@@ -233,5 +233,5 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
             * self.chi
             * p
         )
-        temperature_part = super().buoyancy(p, T)
+        temperature_part = super().buoyancy(p, T, C)
         return pressure_part + temperature_part
