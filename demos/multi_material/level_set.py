@@ -32,9 +32,6 @@ def initial_signed_distance_van_keken():
     curve = sl.LineString([*np.column_stack((interface_x, interface_y))])
     sl.prepare(curve)
 
-    node_coords_x = fd.Function(func_space_dg).interpolate(mesh_coords[0]).dat.data
-    node_coords_y = fd.Function(func_space_dg).interpolate(mesh_coords[1]).dat.data
-
     node_relation_to_curve = [
         (
             node_coord_y > get_interface_y(node_coord_x),
@@ -56,9 +53,6 @@ def initial_signed_distance_gerya():
     )
     sl.prepare(square)
 
-    node_coords_x = fd.Function(func_space_dg).interpolate(mesh_coords[0]).dat.data
-    node_coords_y = fd.Function(func_space_dg).interpolate(mesh_coords[1]).dat.data
-
     node_relation_to_square = [
         (
             square.contains(sl.Point(x, y)) or square.boundary.contains(sl.Point(x, y)),
@@ -70,6 +64,37 @@ def initial_signed_distance_gerya():
         -dist if is_inside else dist for is_inside, dist in node_relation_to_square
     ]
     return node_sign_dist_to_square
+
+
+def initial_signed_distance_schmalholz():
+    interface_x = np.array([0, 4.6e5, 4.6e5, 5.4e5, 5.4e5, 1e6])
+    interface_y = np.array([5.8e5, 5.8e5, 3.3e5, 3.3e5, 5.8e5, 5.8e5])
+    curve = sl.LineString([*np.column_stack((interface_x, interface_y))])
+    sl.prepare(curve)
+
+    rectangle_lith = sl.Polygon(
+        [(0, 6.6e5), (1e6, 6.6e5), (1e6, 5.8e5), (0, 5.8e5), (0, 6.6e5)]
+    )
+    sl.prepare(rectangle_lith)
+    rectangle_slab = sl.Polygon(
+        [(4.6e5, 5.8e5), (5.4e5, 5.8e5), (5.4e5, 3.3e5), (4.6e5, 3.3e5), (4.6e5, 5.8e5)]
+    )
+    sl.prepare(rectangle_slab)
+    polygon_lith = sl.union(rectangle_lith, rectangle_slab)
+    sl.prepare(polygon_lith)
+
+    node_relation_to_curve = [
+        (
+            polygon_lith.contains(sl.Point(x, y))
+            or polygon_lith.boundary.contains(sl.Point(x, y)),
+            curve.distance(sl.Point(x, y)),
+        )
+        for x, y in zip(node_coords_x, node_coords_y)
+    ]
+    node_sign_dist_to_curve = [
+        -dist if is_inside else dist for is_inside, dist in node_relation_to_curve
+    ]
+    return node_sign_dist_to_curve
 
 
 def initialise_temperature(benchmark):
@@ -115,11 +140,13 @@ def initialise_temperature(benchmark):
             T.interpolate(fd.max_value(fd.min_value(T, 1), 0))
         case "Gerya_2003":
             pass
+        case "Schmalholz_2011":
+            pass
 
     return T
 
 
-def post_processing(benchmark, fields):
+def diagnostics(benchmark, fields):
     if "van_Keken" in benchmark:
         fields["output_time"].append(time_now)
         fields["rms_velocity"].append(fd.norm(u) / fd.sqrt(domain_volume(mesh)))
@@ -150,7 +177,7 @@ def save_and_plot(benchmark, fields):
         fig.savefig("rms_velocity_and_entrainment.pdf", dpi=300, bbox_inches="tight")
 
 
-benchmark = "van_Keken_1997_thermochemical"
+benchmark = "Schmalholz_2011"
 match benchmark:
     case "van_Keken_1997_isothermal":
         domain_length_x, domain_length_y = 0.9142, 1
@@ -223,11 +250,42 @@ match benchmark:
         dump_period = 1e5 * 365.25 * 8.64e4
 
         post_process_fields = {}
+    case "Schmalholz_2011":
+        domain_length_x, domain_length_y = 1e6, 6.6e5
+
+        visc_ref = 1e21
+        visc_coeff = 4.75e11
+        stress_exponent = 4
+        slab_length = 2.5e5
+
+        Ra = fd.Constant(1)
+        ref_dens = fd.Constant(3150)
+        g = fd.Constant(9.81)
+        Rb = fd.Constant(1)
+        dens_diff = fd.Constant(150)
+
+        temp_bcs = None
+        stokes_bcs = {
+            1: {"ux": 0, "uy": 0},
+            2: {"ux": 0, "uy": 0},
+            3: {"uy": 0},
+            4: {"uy": 0},
+        }
+
+        dt = fd.Constant(1e11)
+        subcycles = 1
+        time_end = 25e6 * 365.25 * 8.64e4
+        dump_period = 5e5 * 365.25 * 8.64e4
+
+        post_process_fields = {}
+        # characteristic_time = (
+        #     4 * visc_coeff / dens_diff.values().item() / g.values().item() / slab_length
+        # ) ** stress_exponent
     case _:
         raise ValueError("Unknown benchmark.")
 
 # Set up geometry
-mesh_elements_x, mesh_elements_y = 128, 64
+mesh_elements_x, mesh_elements_y = 128, 128
 mesh = fd.RectangleMesh(
     mesh_elements_x,
     mesh_elements_y,
@@ -241,10 +299,14 @@ mesh_coords = fd.SpatialCoordinate(mesh)
 level_set_func_space_deg = 2
 func_space_dg = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
 vec_func_space_cg = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
-level_set = fd.Function(func_space_dg, name="level_set")
-level_set_grad_proj = fd.Function(vec_func_space_cg, name="level_set_grad_proj")
+level_set = fd.Function(func_space_dg, name="Level Set")
+level_set_grad_proj = fd.Function(
+    vec_func_space_cg, name="Level-Set Gradient (Projection)"
+)
 
 # Initial interface layout
+node_coords_x = fd.Function(func_space_dg).interpolate(mesh_coords[0]).dat.data
+node_coords_y = fd.Function(func_space_dg).interpolate(mesh_coords[1]).dat.data
 match benchmark:
     case "van_Keken_1997_isothermal":
         signed_dist_to_interface = initial_signed_distance_van_keken()
@@ -252,6 +314,8 @@ match benchmark:
         signed_dist_to_interface = initial_signed_distance_van_keken()
     case "Gerya_2003":
         signed_dist_to_interface = initial_signed_distance_gerya()
+    case "Schmalholz_2011":
+        signed_dist_to_interface = initial_signed_distance_schmalholz()
 
 # Initialise level set
 conservative_level_set = True
@@ -279,8 +343,20 @@ stokes_func_space = fd.MixedFunctionSpace([vel_func_space, pres_func_space])
 stokes_function = fd.Function(stokes_func_space)
 u, p = fd.split(stokes_function)  # Symbolic UFL expression for velocity and pressure
 
+if benchmark == "Schmalholz_2011":
+    strain_rate = fd.sym(fd.grad(u))
+    strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate))
+    # grad_u = fd.grad(u)
+    # strain_rate_sec_inv = fd.sqrt(fd.inner(grad_u, grad_u) - 2 * fd.det(grad_u)) / 2
+    visc_compo = fd.max_value(
+        fd.min_value(
+            visc_coeff * strain_rate_sec_inv ** (1 / stress_exponent - 1), 1e25
+        ),
+        1e21,
+    )
 compo_field = fd.conditional(level_set > level_set_contour, 0, 1)
 visc = fd.conditional(level_set > level_set_contour, visc_ref, visc_compo)
+viscosity = fd.Function(pres_func_space, name="Viscosity")
 
 T = initialise_temperature(benchmark)
 
@@ -331,12 +407,11 @@ reinitialisation_solver = TimeStepperSolver(
 
 # Time-loop objects
 t_adapt = TimestepAdaptor(dt, u, vel_func_space, target_cfl=subcycles * 0.7)
-step = 0
-time_now, time_end = 0, time_end
-dump_counter, dump_period = 0, dump_period
+time_output = fd.Function(pres_func_space, name="Time")
+time_now, step, dump_counter = 0, 0, 0
 reini_frequency, reini_iterations = 1, 2
 output_file = fd.File(
-    "level_set_subcycles/output.pvd", target_degree=level_set_func_space_deg
+    f"{benchmark.lower()}/output.pvd", target_degree=level_set_func_space_deg
 )
 
 # Extract individual velocity and pressure fields and rename them for output
@@ -348,7 +423,11 @@ p_.rename("Pressure")
 while time_now < time_end:
     if time_now >= dump_counter * dump_period:  # Write to output file
         dump_counter += 1
-        output_file.write(level_set, level_set_grad_proj, u_, p_, T)
+        time_output.assign(time_now)
+        viscosity.interpolate(visc)
+        output_file.write(
+            time_output, level_set, level_set_grad_proj, u_, p_, T, viscosity
+        )
 
     # Update time and timestep
     dt = t_adapt.update_timestep()
@@ -375,12 +454,14 @@ while time_now < time_end:
             # Update stored function given previous solve
             level_set_solver.ts.solution_old.assign(level_set)
 
-    post_processing(benchmark, post_process_fields)
+    diagnostics(benchmark, post_process_fields)
 
     # Increment time-loop step counter
     step += 1
 # Write final simulation state to output file
-output_file.write(level_set, level_set_grad_proj, u_, p_, T)
+time_output.assign(time_now)
+viscosity.interpolate(visc)
+output_file.write(time_output, level_set, level_set_grad_proj, u_, p_, T, viscosity)
 
 if MPI.COMM_WORLD.rank == 0:  # Save post-processing fields and produce graphs
     save_and_plot(benchmark, post_process_fields)
