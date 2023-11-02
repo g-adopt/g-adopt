@@ -11,7 +11,6 @@ left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-#W = FunctionSpace(mesh, "DG", 0)  # Pressure function space (scalar)
 W = FunctionSpace(mesh, "DPC", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
@@ -34,7 +33,7 @@ T = Function(Q, name="Temperature")
 T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 
 delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(200)  # Rayleigh number
@@ -62,7 +61,7 @@ u, p = z.subfunctions  # Do this first to extract individual velocity and pressu
 u.rename("Velocity")
 p.rename("Pressure")
 # Create output file and select output_frequency:
-output_file = File("output.pvd")
+output_file = File("output_dpc.pvd")
 dump_period = 1
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4
@@ -91,7 +90,6 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
                              gamma=2000,
                              cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
-#stokes_solver.solver_parameters['ksp_monitor_true_residual'] = None
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)
@@ -104,7 +102,7 @@ for timestep in range(0, max_timesteps):
         mu_func.interpolate(mu)
         output_file.write(u, p, T, mu_func)
 
-    dt = t_adapt.update_timestep(u)
+    dt = t_adapt.update_timestep()
     time += dt
 
     # Solve Stokes sytem:

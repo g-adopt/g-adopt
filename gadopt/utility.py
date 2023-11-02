@@ -3,8 +3,8 @@ A module with utitity functions for gadopt
 """
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, MeshHierarchy
-from firedrake import Interpolator, op2, interpolate
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
+from firedrake import Interpolator, op2, interpolate, MeshHierarchy
 import ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals

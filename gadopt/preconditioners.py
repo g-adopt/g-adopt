@@ -83,10 +83,6 @@ class VariableMassInvPC(fd.PCBase):
                              mat_type=mat_type, options_prefix=self.options_prefix)
 
         Pmat = self.A.petscmat
-        Pmat.setNullSpace(P.getNullSpace())
-        tnullsp = P.getTransposeNullSpace()
-        if tnullsp.handle != 0:
-            Pmat.setTransposeNullSpace(tnullsp)
 
         ksp = PETSc.KSP().create(comm=pc.comm)
         ksp.incrementTabLevel(1, parent=pc)
@@ -98,23 +94,19 @@ class VariableMassInvPC(fd.PCBase):
 
         self.alc = appctx.get('alc')
         if self.alc:
-            self.al_case = self.alc['alc_case']
+            self.al_case = self.alc.al_case
         else:
             self.al_case = 0
         if self.al_case == 1:
+            self.options_prefix2 = prefix + "Mp2_"
             a2 = fd.inner(u, v)*fd.dx
             A2 = fd.assemble(a2, form_compiler_parameters=self.fc_params,
                              mat_type=mat_type, options_prefix=self.options_prefix2)
             Pmat2 = A2.petscmat
-            Pmat2.setNullSpace(P.getNullSpace())
-            tnullsp2 = P.getTransposeNullSpace()
-            if tnullsp2.handle != 0:
-                Pmat2.setTransposeNullSpace(tnullsp2)
 
             ksp2 = PETSc.KSP().create(comm=pc.comm)
             ksp2.incrementTabLevel(1, parent=pc)
             ksp2.setOperators(Pmat2)
-            self.options_prefix2 = prefix + "Mp2_"
             ksp2.setOptionsPrefix(self.options_prefix2)
             ksp2.setFromOptions()
             ksp2.setUp()
@@ -182,7 +174,7 @@ class AugmentedLagrangianContext:
         self.a10 = fs[(1, 0)]
         self.a11 = fs[(1, 1)]
         # TODO: reassemble when needed?
-        M = fd.assemble(self.J, bcs=bcs,mat_type='nest').petscmat
+        M = fd.assemble(self.J, bcs=bcs, mat_type='nest').petscmat
         M.getNestSubMatrix(0, 0).destroy()
         M.getNestSubMatrix(1, 1).destroy()
         self.A10 = M.getNestSubMatrix(1, 0)
@@ -191,7 +183,6 @@ class AugmentedLagrangianContext:
         self.augl = None
 
     def augment_jacobian(self, Kmat):
-        print("Augmenting Jacobian!")
         Winv = self.get_Winv_mat().petscmat
         A01 = self.A01
         A10 = self.A10

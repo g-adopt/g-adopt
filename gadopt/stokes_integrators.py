@@ -104,7 +104,6 @@ al_stokes_solver_parameters = {
     "pc_fieldsplit_schur_type": "full",
     "fieldsplit_0": {
         "ksp_type": "preonly",
-        #"ksp_converged_reason": None,
         "pc_type": "python",
         "pc_python_type": "gadopt.AugmentedAssembledPC",
         "assembled_pc_type": "lu",
@@ -191,7 +190,7 @@ class StokesSolver:
 
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False, J=None,
+                 use_direct_solvers=None, rotational=False, J=None,
                  gamma=None,
                  **kwargs):
         self.Z = z.function_space()
@@ -220,7 +219,8 @@ class StokesSolver:
             'rho_continuity': self.approximation.rho_continuity(),
         }
         self.appctx = {"mu": self.mu}
-        if self.gamma is not None:
+        self.p2p0_al = self.gamma is not None and self.Z.sub(0).ufl_element().degree() == 2 and self.Z.sub(1).ufl_element().degree() == 0
+        if self.p2p0_al:
             self.fields['gamma'] = self.gamma
             self.appctx['gamma'] = self.gamma
 
@@ -245,6 +245,11 @@ class StokesSolver:
         for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
+        if self.gamma is not None and not self.p2p0_al:
+            alc = AugmentedLagrangianContext(self.F, self.solution, self.gamma, bcs=self.strong_bcs)
+            self.solver_kwargs['post_function_callback'] = alc.post_function_callback
+            self.appctx['alc'] = alc
+
         if self.solver_parameters is None:
             if self.linear:
                 self.solver_parameters = {"snes_type": "ksponly"}
@@ -253,19 +258,15 @@ class StokesSolver:
             if INFO >= log_level:
                 self.solver_parameters['snes_monitor'] = None
 
-            if self.gamma is not None:
-                # Augmented Lagrangian only implemted for P2-P0 at the moment
-                assert self.Z.sub(0).ufl_element().degree() == 2
-                # assert self.Z.sub(1).ufl_element().degree() == 0
-                # only for isoviscous
-                # assert isinstance(self.mu, fd.Constant)
-                self.solver_parameters.update(al_stokes_solver_parameters)
-                #self.solver_parameters.update(hacky_stokes_solver_parameters)
-                alc = AugmentedLagrangianContext(self.F, self.solution, self.gamma, bcs=self.strong_bcs)
-                self.solver_kwargs['post_function_callback'] = alc.post_function_callback
-                self.appctx['alc'] = alc
-            elif self.mesh.topological_dimension() == 2 and cartesian:
+            if use_direct_solvers is None:
+                use_direct_solvers = self.mesh.topological_dimension() == 2 and cartesian and self.gamma is None
+
+            if use_direct_solvers:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
+            elif self.p2p0_al:
+                self.solver_parameters.update(p2p0_stokes_solver_parameters)
+            elif self.gamma is not None:
+                self.solver_parameters.update(al_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
                 if DEBUG >= log_level:
@@ -273,6 +274,7 @@ class StokesSolver:
                     self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
                 elif INFO >= log_level:
                     self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+
         # solver is setup only last minute
         # so people can overwrite parameters we've setup here
         self._solver_setup = False
@@ -285,7 +287,7 @@ class StokesSolver:
                                                     options_prefix=self.name,
                                                     appctx=self.appctx,
                                                     **self.solver_kwargs)
-        if self.gamma is not None:
+        if self.p2p0_al:
             from .mg_transfers import VariablePkP0SchoeberlTransfer, NullTransfer
             V = self.Z.sub(0)
             Q = self.Z.sub(1)
@@ -298,25 +300,6 @@ class StokesSolver:
                          Q.ufl_element(): (fd.prolong, fd.restrict, qtransfer.inject)}
             transfermanager = fd.TransferManager(native_transfers=transfers)
             self.solver.set_transfer_manager(transfermanager)
-            def wrap(f, message):
-                def wrapper(*args, **kwargs):
-                    if hasattr(args[0], 'getSizes'):
-                        print(message, f'  {args[0].getSizes()}')
-                    else:
-                        print(message)
-                    return f(*args, **kwargs)
-                return wrapper
-            ctx = self.solver._ctx._jac.petscmat.getPythonContext()
-            #ctx.mult = wrap(ctx.mult, 'Multiplying coupled matrix')
-            def wrap_createSubMatrix(f, message):
-                def wrapper(*args, **kwargs):
-                    print('Creating submatrix!!')
-                    submat = f(*args, **kwargs)
-                    ctx = submat.getPythonContext()
-                    ctx.mult = wrap(ctx.mult, message)
-                    return submat
-                return wrapper
-            #ctx.createSubMatrix = wrap_createSubMatrix(ctx.createSubMatrix, 'Multiplying sub-matrix')
 
         self._solver_setup = True
 
