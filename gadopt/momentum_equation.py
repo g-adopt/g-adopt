@@ -2,7 +2,7 @@ from .equations import BaseTerm, BaseEquation
 from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
 from firedrake import avg, sym, Identity, jump
 from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
-from firedrake import FacetArea, CellVolume
+from firedrake import FacetArea, CellVolume, cell_avg
 r"""
 This module contains the classes for the momentum equation and its terms.
 
@@ -153,6 +153,17 @@ class PressureGradientTerm(BaseTerm):
         return -F
 
 
+class DivGradTerm(BaseTerm):
+    def residual(self, test, trial, trial_lagged, fields, bcs):
+        return 0
+        gamma = fields.get('gamma')
+        if not gamma:
+            return 0
+
+        F = gamma * inner(cell_avg(div(test)), div(trial)) * self.dx(metadata={"mode": "vanilla"})
+        return -F
+
+
 class DivergenceTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
         psi = test
@@ -192,7 +203,7 @@ class MomentumEquation(BaseEquation):
     Momentum equation with advection, viscosity, pressure gradient, source term, and coriolis.
     """
 
-    terms = [ViscosityTerm, PressureGradientTerm, MomentumSourceTerm]
+    terms = [ViscosityTerm, PressureGradientTerm, MomentumSourceTerm, DivGradTerm]
 
 
 class ContinuityEquation(BaseEquation):

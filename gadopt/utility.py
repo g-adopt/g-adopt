@@ -3,7 +3,7 @@ A module with utitity functions for gadopt
 """
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, MeshHierarchy
 from firedrake import Interpolator, op2, interpolate
 import ufl
 import time
@@ -473,3 +473,22 @@ def timer_decorator(func):
         log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
         return result
     return wrapper
+
+
+def _before(dm, i):
+    for p in range(*dm.getHeightStratum(1)):
+        dm.setLabelValue("prolongation", p, i+1)
+
+
+def _after(dm, i):
+    for p in range(*dm.getHeightStratum(1)):
+        dm.setLabelValue("prolongation", p, i+2)
+
+
+def LabeledMeshHierarchy(base_mesh, refinement_levels, **kwargs):
+    """Variant of firedrake's MeshHierachy that labels all facets with 'prolongation'
+
+    As require by alfi's TransferManagers"""
+    assert 'callbacks' not in kwargs
+    kwargs['callbacks'] = (_before, _after)
+    return MeshHierarchy(base_mesh, refinement_levels, **kwargs)

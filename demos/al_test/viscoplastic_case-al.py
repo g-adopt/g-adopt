@@ -2,19 +2,25 @@ from gadopt import *
 from mpi4py import MPI
 
 # Set up geometry:
-nx, ny = 80, 80
-mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
+nx, ny = 5, 5
+base_mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
+mh = LabeledMeshHierarchy(base_mesh, 4, reorder=True)
+mesh = mh[-1]
+
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+#W = FunctionSpace(mesh, "DG", 0)  # Pressure function space (scalar)
+W = FunctionSpace(mesh, "DPC", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
+P1 = FunctionSpace(mesh, "CG", 1)  # Scalar space for diagnostic viscosity output
 
 # Function to store the solutions:
 z = Function(Z)  # a field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
+mu_func = Function(P1, name="Viscosity")
 
 # Output function space information:
 log("Number of Velocity DOF:", V.dim())
@@ -82,8 +88,10 @@ stokes_bcs = {
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
+                             gamma=2000,
                              cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
+#stokes_solver.solver_parameters['ksp_monitor_true_residual'] = None
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)
@@ -93,7 +101,8 @@ for timestep in range(0, max_timesteps):
 
     # Write output:
     if timestep % dump_period == 0:
-        output_file.write(u, p, T)
+        mu_func.interpolate(mu)
+        output_file.write(u, p, T, mu_func)
 
     dt = t_adapt.update_timestep(u)
     time += dt

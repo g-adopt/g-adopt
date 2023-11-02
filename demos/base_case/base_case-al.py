@@ -2,13 +2,15 @@ from gadopt import *
 from mpi4py import MPI
 
 # Set up geometry:
-nx, ny = 80, 80
-mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
+nx, ny = 40, 40
+base_mesh = UnitSquareMesh(5, 5, quadrilateral=False)  # Square mesh generated via firedrake
+mh = LabeledMeshHierarchy(base_mesh, 3, reorder=True)
+mesh = mh[-1]
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+W = FunctionSpace(mesh, "DG", 0)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
@@ -31,20 +33,12 @@ delta_t = Constant(1e-6)  # Initial time-step
 t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-Ra = Constant(200)  # Rayleigh number
+Ra = Constant(1e4)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
-# Rheology:
-gamma_T, gamma_Z = Constant(ln(10**6)), Constant(ln(10))
-mu_star, sigma_y = Constant(0.001), Constant(1.0)
-epsilon = sym(grad(u))  # Strain-rate
-epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
-mu_lin = exp(-gamma_T*T + gamma_Z*(1 - X[1]))
-mu_plast = mu_star + (sigma_y / epsii)
-mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
 
 time = 0.0
 steady_state_tolerance = 1e-9
-max_timesteps = 10
+max_timesteps = 20000
 kappa = Constant(1.0)  # Thermal diffusivity
 
 # Nullspaces and near-nullspaces:
@@ -57,7 +51,7 @@ u.rename("Velocity")
 p.rename("Pressure")
 # Create output file and select output_frequency:
 output_file = File("output.pvd")
-dump_period = 1
+dump_period = 50
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4
 
@@ -81,8 +75,11 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                             cartesian=True,
+Told = energy_solver.T_old
+Ttheta = 0.5*T + 0.5*Told
+Told.assign(T)
+stokes_solver = StokesSolver(z, Ttheta, approximation, bcs=stokes_bcs,
+                             cartesian=True, gamma=1e+5,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
@@ -100,6 +97,8 @@ for timestep in range(0, max_timesteps):
 
     # Solve Stokes sytem:
     stokes_solver.solve()
+
+    File('tmp.pvd').write(u, p)
 
     # Temperature system:
     energy_solver.solve()
