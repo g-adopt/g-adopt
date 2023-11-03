@@ -57,7 +57,7 @@ u.rename("Velocity")
 p.rename("Pressure")
 # Create output file and select output_frequency:
 output_file = File("output.pvd")
-dump_period = 1
+dump_period = 50
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
