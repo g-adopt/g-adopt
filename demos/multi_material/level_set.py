@@ -146,6 +146,18 @@ def initialise_temperature(benchmark):
     return T
 
 
+def write_output(dump_counter):
+    time_output.assign(time_now)
+    composition.interpolate(compo_field)
+    viscosity.interpolate(visc)
+    output_file.write(
+        time_output, level_set, level_set_grad_proj, u_, p_, T, composition, viscosity
+    )
+
+    dump_counter += 1
+    return dump_counter
+
+
 def diagnostics(benchmark, fields):
     if "van_Keken" in benchmark:
         fields["output_time"].append(time_now)
@@ -278,13 +290,17 @@ match benchmark:
         dump_period = 5e5 * 365.25 * 8.64e4
 
         post_process_fields = {}
-        # characteristic_time = (
-        #     4 * visc_coeff / dens_diff.values().item() / g.values().item() / slab_length
-        # ) ** stress_exponent
+        characteristic_time = (
+            4 * visc_coeff / dens_diff.values().item() / g.values().item() / slab_length
+        ) ** stress_exponent
     case _:
         raise ValueError("Unknown benchmark.")
 
 # Set up geometry
+# Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
+# the level-set approach. Insufficient mesh refinement leads to the vanishing of the
+# material interface during advection and to unwanted motion of the material interface
+# during reinitialisation.
 mesh_elements_x, mesh_elements_y = 128, 128
 mesh = fd.RectangleMesh(
     mesh_elements_x,
@@ -296,7 +312,8 @@ mesh = fd.RectangleMesh(
 mesh_coords = fd.SpatialCoordinate(mesh)
 
 # Set up function spaces and functions used as part of the level-set approach
-level_set_func_space_deg = 2
+# Running "Schmalholz_2011" using DQ2 does not work.
+level_set_func_space_deg = 1
 func_space_dg = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
 vec_func_space_cg = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
 level_set = fd.Function(func_space_dg, name="Level Set")
@@ -326,7 +343,7 @@ if conservative_level_set:
             domain_length_y / mesh_elements_y,
         )
         / 4
-    )  # Loose guess
+    )  # Empirical calibration that seems to be robust
     level_set.dat.data[:] = (
         np.tanh(np.asarray(signed_dist_to_interface) / 2 / epsilon.values().item()) + 1
     ) / 2
@@ -345,9 +362,7 @@ u, p = fd.split(stokes_function)  # Symbolic UFL expression for velocity and pre
 
 if benchmark == "Schmalholz_2011":
     strain_rate = fd.sym(fd.grad(u))
-    strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate))
-    # grad_u = fd.grad(u)
-    # strain_rate_sec_inv = fd.sqrt(fd.inner(grad_u, grad_u) - 2 * fd.det(grad_u)) / 2
+    strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate) / 2)
     visc_compo = fd.max_value(
         fd.min_value(
             visc_coeff * strain_rate_sec_inv ** (1 / stress_exponent - 1), 1e25
@@ -356,6 +371,7 @@ if benchmark == "Schmalholz_2011":
     )
 compo_field = fd.conditional(level_set > level_set_contour, 0, 1)
 visc = fd.conditional(level_set > level_set_contour, visc_ref, visc_compo)
+composition = fd.Function(pres_func_space, name="Composition")
 viscosity = fd.Function(pres_func_space, name="Viscosity")
 
 T = initialise_temperature(benchmark)
@@ -399,7 +415,7 @@ projection_solver = ProjectionSolver(
 reinitialisation_solver = TimeStepperSolver(
     level_set,
     reinitialisation_fields,
-    2e-2,  # Loose guess
+    2e-2,  # Trade-off between actual reinitialisation and unwanted interface motion
     eSSPRKs3p3,
     ReinitialisationEquation,
     coupled_solver=projection_solver,
@@ -422,12 +438,7 @@ p_.rename("Pressure")
 # Perform the time loop
 while time_now < time_end:
     if time_now >= dump_counter * dump_period:  # Write to output file
-        dump_counter += 1
-        time_output.assign(time_now)
-        viscosity.interpolate(visc)
-        output_file.write(
-            time_output, level_set, level_set_grad_proj, u_, p_, T, viscosity
-        )
+        dump_counter = write_output(dump_counter)
 
     # Update time and timestep
     dt = t_adapt.update_timestep()
@@ -459,9 +470,7 @@ while time_now < time_end:
     # Increment time-loop step counter
     step += 1
 # Write final simulation state to output file
-time_output.assign(time_now)
-viscosity.interpolate(visc)
-output_file.write(time_output, level_set, level_set_grad_proj, u_, p_, T, viscosity)
+dump_counter = write_output(dump_counter)
 
 if MPI.COMM_WORLD.rank == 0:  # Save post-processing fields and produce graphs
     save_and_plot(benchmark, post_process_fields)
