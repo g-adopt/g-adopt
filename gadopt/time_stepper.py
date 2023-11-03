@@ -875,7 +875,7 @@ class eSSPRKs10p3Abstract(AbstractRKScheme):
         0.70538492,
         0.85262244,
     ]
-    cfl_coeff = 3.51839231
+    cfl_coeff = 6.78529356
 
 
 class BackwardEulerAbstract(AbstractRKScheme):
