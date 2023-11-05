@@ -911,7 +911,7 @@ class ImplicitMidpointAbstract(AbstractRKScheme):
 
 class CrankNicolsonAbstract(AbstractRKScheme):
     """
-    Crack-Nicolson scheme
+    Crank-Nicolson scheme
     """
 
     a = [[0.0, 0.0], [0.5, 0.5]]

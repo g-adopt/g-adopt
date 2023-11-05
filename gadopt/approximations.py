@@ -79,7 +79,7 @@ class BoussinesqApproximation(BaseApproximation):
 
     compressible = False
 
-    def __init__(self, Ra, rho=1, g=1, alpha=1, kappa=1, Rb=0, delta_rho=1):
+    def __init__(self, Ra, rho=1, g=1, alpha=1, kappa=1, Rb=0, delta_rho=1, H=None):
         """
         :arg Ra: Rayleigh number
         :arg rho: Reference density
@@ -97,6 +97,7 @@ class BoussinesqApproximation(BaseApproximation):
         self._kappa = ensure_constant(kappa)
         self.Rb = ensure_constant(Rb)
         self.delta_rho = ensure_constant(delta_rho)
+        self.H = H
 
     def buoyancy(self, p, T, C):
         return (
@@ -119,6 +120,8 @@ class BoussinesqApproximation(BaseApproximation):
         return 0
 
     def energy_source(self, u):
+        if self.H:
+            return self.rho * self.H
         return 0
 
 
