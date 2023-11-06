@@ -39,7 +39,21 @@ jobs:
       - name: Test results
         if: ${{ success() }}
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && python3 -m pytest -m longtest"
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && python3 -m pytest -m longtest --junit-xml=test_results.xml"
+
+      - name: Retrieve test results
+        if: ${{ !cancelled() }}
+        run: |
+          scp gadi:${{secrets.GADI_REPO_PATH}}/test_results.xml .
+
+      - name: Pytest report
+        uses: mikepenz/action-junit-report@v4
+        if: ${{ !cancelled() }}
+        with:
+          check_name: Test suite report
+          report_paths: test_results.xml
+          include_passed: true
+          annotate_only: true
 
       - name: Get error output
         if: ${{ failure() }}
