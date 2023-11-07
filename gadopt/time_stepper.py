@@ -78,7 +78,6 @@ class TimeIntegrator(TimeIntegratorBase):
         self.strong_bcs = strong_bcs or []
         self.hom_bcs = [firedrake.DirichletBC(bci.function_space(), 0, bci.sub_domain) for bci in strong_bcs]
 
-
         self.coupled_solver = coupled_solver
 
 

@@ -85,6 +85,7 @@ class BoussinesqApproximation(BaseApproximation):
         :arg RaB: Compositional Rayleigh number obtained as a product of the Rayleigh
                  and buoyancy numbers
         :arg delta_rho: Compositional density difference from the reference density
+        :arg H: Internal heating rate
         """
         self.Ra = ensure_constant(Ra)
         self.rho = ensure_constant(rho)
