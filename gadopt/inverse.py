@@ -215,6 +215,8 @@ class LinMoreOptimiser:
         self.rol_solver.rolvector.checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
         self.rol_solver.rolvector.load(self._mesh)
 
+        self.iteration -= 1
+
         # The various ROLVector objects can load all their metadata, but can't actually
         # restore from the Firedrake checkpoint. They register themselves, so we can access
         # them through a flat list.
