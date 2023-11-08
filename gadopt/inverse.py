@@ -215,6 +215,11 @@ class LinMoreOptimiser:
         self.rol_solver.rolvector.checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
         self.rol_solver.rolvector.load(self._mesh)
 
+        # ROL algorithms run in a loop like `while (statusTest()) { ... }`
+        # so we will double up on saving the restored iteration
+        # by rolling back the iteration counter, we make sure we overwrite the checkpoint
+        # we just restored, to keep the ROL iteration count, and our checkpoint iteration
+        # count in sync
         self.iteration -= 1
 
         # The various ROLVector objects can load all their metadata, but can't actually
