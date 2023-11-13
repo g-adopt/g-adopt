@@ -8,6 +8,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  check_commit:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check_commit.outputs.skip }}
+    steps:
+      - name: Always run tests on workflow dispatch
+        id: early_exit
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run:
+          echo skip=true >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: ${{ steps.early_exit.outputs.skip != 'true' }}
+        with:
+          ref: ${{ github.event.push.after || github.event.pull_request.head.sha || github.event.workflow_dispatch.ref }}
+      - name: Check if message contains skip keyword
+        id: check_commit
+        if: ${{ steps.early_exit.outputs.skip != 'true' }}
+        run: |
+          message=$(git log -1 --pretty=format:'%B')
+          regex="\[skip tests\]"
+          if [[ "$message" =~ $regex ]]; then
+            echo skip=true >> "$GITHUB_OUTPUT"
+          fi
   build:
     name: Benchmark regression test
     runs-on: self-hosted
@@ -19,6 +42,9 @@ jobs:
       group: testing-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
 
+    needs: check_commit
+    if: ${{ needs.check_commit.outputs.skip != 'true' }}
+
     env:
       OMP_NUM_THREADS: 1
 
@@ -28,7 +54,7 @@ jobs:
           sudo apt update
           sudo apt install -y task-spooler time
           tsp -S 48
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Load pyrol wheel from cache
         uses: actions/cache/restore@v3
@@ -57,32 +83,66 @@ jobs:
           python3 -m pip install .
 
       - name: Run test
+        id: run_tests
         run: |
           . /home/firedrake/firedrake/bin/activate
           make -j test
-          python -m pytest
         env:
           GADOPT_LOGLEVEL: INFO
           TS_MAXFINISHED: 100
+
+      - name: Pytest
+        id: run_pytest
+        run: |
+          . /home/firedrake/firedrake/bin/activate
+          python -m pytest -m 'not longtest' --junit-xml=test_results.xml
+
+      - name: Pytest report
+        uses: mikepenz/action-junit-report@v4
+        if: ${{ !cancelled() && steps.run_pytest.conclusion != 'skipped' }}
+        with:
+          check_name: Test suite report
+          report_paths: test_results.xml
+          include_passed: true
+          annotate_only: true
 
       - name: Output timing information
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          for id in $(tsp | tail +2 | awk '{print $1}'); do
+          declare -A timings
+          declare -A success
+
+          # extract info
+          for id in $(tsp | awk 'NR>1 { print $1 }'); do
             st="$(tsp -i $id)"
-            if [[ "$st" =~ "exit code 0" ]]; then
-              echo "$st" | awk '/^(Time|Command)/'
+            command=$(sed -En 's/^Command.*python3? //p' <<< "$st")
+            timings["$command"]=$(sed -n 's/^Time run: //p' <<< "$st")
+
+            if grep -q "exit code 0" <<< "$st"; then
+              success["$command"]=Yes
             else
-              echo "$st" | awk '/^Command/ {print "Failed: " $0} /^Time/'
-              echo "$st" | grep '^Command' >> test_output.log
+              success["$command"]=No
+              echo "$command failed:"
               tsp -c $id | tail -n 10 || true
+              echo $command >> test_output.log
               tsp -c $id >> test_output.log || true
             fi
           done
 
+          # sort by case name
+          declare -a cases
+          while IFS= read -r -d '' entry; do
+            cases+=("$entry")
+          done < <(printf "%s\0" "${!timings[@]}" | sort -z)
+
+          printf "## Case timings\nCase | Time | Success?\n---- | ---- | ----\n" >> "$GITHUB_STEP_SUMMARY"
+          for case in "${cases[@]}"; do
+            printf "%s | %s | %s\n" "$case" ${timings["$case"]} ${success["$case"]} >> "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Upload failed run log
-        if: failure()
+        if: steps.run_tests.conclusion == 'failure'
         uses: actions/upload-artifact@v3
         with:
           name: run-log

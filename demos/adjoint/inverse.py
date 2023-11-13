@@ -15,6 +15,18 @@ def main():
     inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
 
 
+def gaussian(r, r_0, sigma):
+    """
+    Return a Gaussian distribution centred around r_0 with standard deviation of sigma
+
+    Args:
+        r: spatial variable
+        r_0: centre of Gaussian
+        sigma: standard deviation
+    """
+    return exp(-0.5 * (r - r_0) ** 2 / sigma**2)
+
+
 def inverse(alpha_u, alpha_d, alpha_s):
     """
     Use adjoint-based optimisation to solve for the initial condition of the rectangular
@@ -35,6 +47,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
         mesh = f.load_mesh("firedrake_default_extruded")
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
+    X = SpatialCoordinate(mesh)
 
     enable_disk_checkpointing()
 
@@ -137,8 +150,9 @@ def inverse(alpha_u, alpha_d, alpha_s):
     checkpoint_file.close()
 
     # Define the component terms of the overall objective functional
-    damping = assemble((Tic - Taverage) ** 2 * dx)
-    norm_damping = assemble(Taverage**2 * dx)
+    damping_mask = gaussian(X[1], 1.0, 0.1) + gaussian(X[1], 0.0, 0.1)
+    damping = assemble(damping_mask * (Tic - Taverage) ** 2 * dx)
+    norm_damping = assemble(damping_mask * Taverage**2 * dx)
     smoothing = assemble(dot(grad(Tic - Taverage), grad(Tic - Taverage)) * dx)
     norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
     norm_obs = assemble(Tobs**2 * dx)

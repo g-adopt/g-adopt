@@ -53,10 +53,6 @@ class VariableMassInvPC(fd.PCBase):
                              mat_type=mat_type, options_prefix=self.options_prefix)
 
         Pmat = self.A.petscmat
-        Pmat.setNullSpace(P.getNullSpace())
-        tnullsp = P.getTransposeNullSpace()
-        if tnullsp.handle != 0:
-            Pmat.setTransposeNullSpace(tnullsp)
 
         ksp = PETSc.KSP().create(comm=pc.comm)
         ksp.incrementTabLevel(1, parent=pc)

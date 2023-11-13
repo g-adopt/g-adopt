@@ -1,208 +1,90 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python3
 
-import numpy
-import pylab
-import sys
+import numpy as np
 from matplotlib import rcParams
+import matplotlib.pyplot as plt
+import pandas as pd
+import sys
+
+from scaling import cases, get_data
 
 preamble = sys.argv[1]
 
-# Matplotlib defaults:
 rcParams['axes.titlesize'] = 16
 rcParams['axes.labelsize'] = 16
 rcParams['xtick.labelsize'] = 16
 rcParams['ytick.labelsize'] = 16
 rcParams['legend.fontsize'] = 15
 
-# FIRST GATHER DATA
+cores = []
+frames = []
+for level, conf in cases.items():
+    try:
+        data = get_data(level)
+    except FileNotFoundError:
+        continue
 
-dirs = ["Level_5", "Level_6", "Level_7", "Level_8"]
-cores = [24, 192, 1536, 12288]
+    cores.append(conf["cores"])
+    df = pd.DataFrame(data, index=[level])
+    frames.append(df)
 
-# Set up arrays:
-schur_solve_time = numpy.zeros((len(dirs), 1))
-energy_solve_time = numpy.zeros((len(dirs), 1))
-SNES_function_time = numpy.zeros((len(dirs), 1))
-SNES_jacobian_time = numpy.zeros((len(dirs), 1))
-assembly_time = numpy.zeros((len(dirs), 1))
-PC_setup_time = numpy.zeros((len(dirs), 1))
-mean_velocity_its = numpy.zeros((len(dirs), 1))
-mean_pressure_its = numpy.zeros((len(dirs), 1))
-mean_energy_its = numpy.zeros((len(dirs), 1))
-velocity_cost_per_it = numpy.zeros((len(dirs), 1))
-total_cost = numpy.zeros((len(dirs), 1))
+df = pd.concat(frames)
+df["assembly_time"] = df["snes_function"] + df["snes_jacobian"]
+df["velocity_cost"] = (df["stokes_solve"] - df["pc_setup"]) / df["velocity_iterations"]
 
-# Loop over directiories and store data:
-for dir in range(len(dirs)):
-    data = numpy.loadtxt(dirs[dir]+"/Timings_Iterations.dat")
-    schur_solve_time[dir, :] = data[0]
-    energy_solve_time[dir, :] = data[1]
-    SNES_function_time[dir, :] = data[2]
-    SNES_jacobian_time[dir, :] = data[3]
-    PC_setup_time[dir, :] = data[4]
-    mean_velocity_its[dir, :] = data[5]
-    mean_pressure_its[dir, :] = data[6]
-    mean_energy_its[dir, :] = data[7]
-    total_cost[dir, :] = data[8]
 
-assembly_time = SNES_function_time + SNES_jacobian_time
-velocity_cost_per_it = (schur_solve_time - PC_setup_time) / mean_velocity_its
+def plot_quantity(quantity, label, suffix, xlim=(10, 3e4), ylim=None, yticks=None):
+    plt.semilogx(cores, quantity, "ko", linestyle="none", markersize=10)
 
-# NOW PLOT
+    plt.xlabel("# Cores")
+    plt.ylabel(label)
 
-# Schur solve time
-pylab.plot(cores, schur_solve_time, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("Stokes Solve (s)")
-pylab.xlim(2, 20000)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(6000, 14000)
-pylab.yticks(numpy.linspace(6000, 14000, 5))
-pylab.grid()
-pylab.savefig(preamble+"_Schur_Solve_time.png", bbox_inches="tight")
-pylab.savefig(preamble+"_Schur_Solve_time.pdf", bbox_inches="tight")
-pylab.close()
+    plt.xlim(*xlim)
 
-# Energy solve time
-pylab.plot(cores, energy_solve_time, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("Energy Solve (s)")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(8, 14)
-pylab.yticks(numpy.linspace(8, 14, 4))
-pylab.grid()
-pylab.savefig(preamble+"_Energy_Solve_time.png", bbox_inches="tight")
-pylab.savefig(preamble+"_Energy_Solve_time.pdf", bbox_inches="tight")
-pylab.close()
+    if ylim is not None:
+        plt.ylim(*ylim)
+    if yticks is not None:
+        plt.yticks(yticks)
+    plt.grid()
 
-# SNES Function time
-pylab.plot(cores, SNES_function_time, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("SNES Function (s)")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.grid()
-pylab.savefig(preamble+"_SNES_function_time.png", bbox_inches="tight")
-pylab.savefig(preamble+"_SNES_function_time.pdf", bbox_inches="tight")
-pylab.close()
+    for ext in ("png", "pdf"):
+        plt.savefig(f"{preamble}_{suffix}.{ext}", bbox_inches="tight")
 
-# SNES Jacobian time
-pylab.plot(cores, SNES_jacobian_time, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("SNES Jacobian (s)")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.grid()
-pylab.savefig(preamble+"_SNES_jacobian_time.png", bbox_inches="tight")
-pylab.savefig(preamble+"_SNES_jacobian_time.pdf", bbox_inches="tight")
-pylab.close()
+    plt.close()
 
-# Assembly time
-pylab.plot(cores, assembly_time, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("Assembly (s)")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(0, 5)
-pylab.yticks(numpy.linspace(0, 5, 3))
-pylab.grid()
-pylab.savefig(preamble+"_assembly_time.png", bbox_inches="tight")
-pylab.savefig(preamble+"_assembly_time.pdf", bbox_inches="tight")
-pylab.close()
 
-# PC Setup Time
-pylab.plot(cores, PC_setup_time, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("PC Setup (s)")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(200, 500)
-pylab.yticks(numpy.linspace(200, 500, 4))
-pylab.grid()
-pylab.savefig(preamble+"_PC_Setup_time.png", bbox_inches="tight")
-pylab.savefig(preamble+"_PC_Setup_time.pdf", bbox_inches="tight")
-pylab.close()
+plot_quantity(df["stokes_solve"], "Stokes Solve (s)", "Schur_Solve_time",
+              ylim=(0, 16000), yticks=np.linspace(0, 16000, 5))
+plot_quantity(df["energy_solve"], "Energy Solve (s)", "Energy_Solve_time",
+              ylim=(8, 14), yticks=np.linspace(8, 14, 4))
+plot_quantity(df["snes_function"], "SNES Function (s)", "SNES_function_time")
+plot_quantity(df["snes_jacobian"], "SNES Jacobian (s)", "SNES_jacobian_time")
+plot_quantity(df["assembly_time"], "Assembly (s)", "assembly_time",
+              ylim=(0, 12), yticks=np.linspace(0, 12, 4))
+plot_quantity(df["pc_setup"], "PC Setup (s)", "PC_Setup_time",
+              ylim=(0, 600), yticks=np.linspace(0, 600, 7))
+plot_quantity(df["pressure_iterations"], "# Pressure Solve Iterations", "Pressure_Iterations",
+              ylim=(9, 11), yticks=np.linspace(9, 11, 5))
+plot_quantity(df["velocity_iterations"], "# Velocity Solve Iterations", "Velocity_Iterations",
+              ylim=(20, 40), yticks=np.linspace(20, 40, 5))
+plot_quantity(df["energy_iterations"], "# Energy Solve Iterations", "Energy_Iterations",
+              ylim=(11, 13), yticks=np.linspace(11, 13, 5))
+plot_quantity(df["velocity_cost"], "Per Velocity Iteration (s)", "Velocity_Cost_Per_Iteration",
+              ylim=(0, 300), yticks=np.linspace(0, 300, 4))
+plot_quantity(df["total_time"], "Total Time (s)", "Total_Time",
+              ylim=(0, 16000), yticks=np.linspace(0, 16000, 5))
 
-# Pressure iterations
-pylab.plot(cores, mean_pressure_its, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("# Pressure Solve Iterations")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(9, 11)
-pylab.yticks(numpy.linspace(9, 11, 5))
-pylab.grid()
-pylab.savefig(preamble+"_Pressure_Iterations.png", bbox_inches="tight")
-pylab.savefig(preamble+"_Pressure_Iterations.pdf", bbox_inches="tight")
-pylab.close()
-
-# Velocity iterations ###
-pylab.plot(cores, mean_velocity_its, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("# Velocity Solve Iterations")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(40, 56)
-pylab.yticks(numpy.linspace(40, 56, 5))
-pylab.grid()
-pylab.savefig(preamble+"_Velocity_Iterations.png", bbox_inches="tight")
-pylab.savefig(preamble+"_Velocity_Iterations.pdf", bbox_inches="tight")
-pylab.close()
-
-# Energy iterations
-pylab.plot(cores, mean_energy_its, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("# Energy Solve Iterations")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(11, 13)
-pylab.yticks(numpy.linspace(11, 13, 5))
-pylab.grid()
-pylab.savefig(preamble+"_Energy_Iterations.png", bbox_inches="tight")
-pylab.savefig(preamble+"_Energy_Iterations.pdf", bbox_inches="tight")
-pylab.close()
-
-# Velocity cost per iteration
-pylab.plot(cores, velocity_cost_per_it, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("Per Velocity Iteration (s)")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(150, 230)
-pylab.yticks(numpy.linspace(150, 230, 5))
-pylab.grid()
-pylab.savefig(preamble+"_Velocity_Cost_Per_Iteration.png", bbox_inches="tight")
-pylab.savefig(preamble+"_Velocity_Cost_Per_Iteration.pdf", bbox_inches="tight")
-pylab.close()
-
-# Total Time
-pylab.plot(cores, total_cost, 'ko', linestyle="none", markersize=10)
-pylab.xlabel("# Cores")
-pylab.ylabel("Total Time (s)")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(6000, 14000)
-pylab.yticks(numpy.linspace(6000, 14000, 5))
-pylab.grid()
-pylab.savefig(preamble+"_Total_Time.png", bbox_inches="tight")
-pylab.savefig(preamble+"_Total_Time.pdf", bbox_inches="tight")
-pylab.close()
-
-# Make some combination plots:
-
-# Iterations
-pylab.plot(cores, mean_velocity_its, 'go', linestyle="none", markersize=10, label="Velocity")
-pylab.plot(cores, mean_pressure_its, 'rs', linestyle="none", markersize=10, label="Pressure")
-pylab.plot(cores, mean_energy_its, 'b*', linestyle="none", markersize=10, label="Energy")
-pylab.xlabel("# Cores")
-pylab.ylabel("# Solve Iterations")
-pylab.xlim(-500, 12500)
-pylab.xticks(numpy.linspace(0, 12500, 6))
-pylab.ylim(5, 75)
-pylab.yticks(numpy.linspace(10, 70, 4))
-pylab.grid()
-pylab.legend(numpoints=1)
-pylab.savefig(preamble+"_Combined_Iterations.png", bbox_inches="tight")
-pylab.savefig(preamble+"_Combined_Iterations.pdf", bbox_inches="tight")
-pylab.close()
+# Combined plot of iterations per phase
+plt.semilogx(cores, df["velocity_iterations"], 'go', linestyle="none", markersize=10, label="Velocity")
+plt.semilogx(cores, df["pressure_iterations"], 'rs', linestyle="none", markersize=10, label="Pressure")
+plt.semilogx(cores, df["energy_iterations"], 'b*', linestyle="none", markersize=10, label="Energy")
+plt.xlabel("# Cores")
+plt.ylabel("# Solve Iterations")
+plt.xlim(10, 3e4)
+plt.ylim(0, 80)
+plt.yticks(np.linspace(0, 80, 5))
+plt.grid()
+plt.legend(numpoints=1)
+for ext in ("png", "pdf"):
+    plt.savefig(f"{preamble}_Combined_Iterations.{ext}", bbox_inches="tight")
+plt.close()

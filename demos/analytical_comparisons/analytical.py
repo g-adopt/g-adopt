@@ -21,16 +21,20 @@ cases = {
         },
         "spherical": {
             "free_slip": {
-                "l": [2, 4, 8],
-                "k": [3, 5, 9],
+                "cores": [24, 48, 96, 192],  # cascade lake
                 "levels": [3, 4, 5, 6],
-                "layers": [8, 16, 32, 64],
+                "l": [2, 8],
+                "m": [2, 1],  # divide l by this value to get actual m
+                "k": [3, 9],
+                "permutate": False,
             },
             "zero_slip": {
-                "l": [2, 4, 8],
-                "k": [3, 5, 9],
+                "cores": [24, 48, 96, 192],
                 "levels": [3, 4, 5, 6],
-                "layers": [8, 16, 32, 64],
+                "l": [2, 8],
+                "m": [2, 1],
+                "k": [3, 9],
+                "permutate": False,
             },
         },
     },
@@ -69,6 +73,13 @@ def get_case(cases, config):
     return cases
 
 
+def param_sets(config, permutate=False):
+    if permutate:
+        return itertools.product(*config.values())
+
+    return zip(*config.values())
+
+
 def run_subcommand(args):
     from mpi4py import MPI
 
@@ -84,6 +95,10 @@ def run_subcommand(args):
         from delta_cylindrical_freeslip_dpc import model
     elif args.case == "delta/cylindrical/zero_slip_dpc":
         from delta_cylindrical_zeroslip_dpc import model
+    elif args.case == "smooth/spherical/free_slip":
+        from smooth_spherical_freeslip import model
+    elif args.case == "smooth/spherical/zero_slip":
+        from smooth_spherical_zeroslip import model
     else:
         raise ValueError(f"unknown case {args.case}")
 
@@ -104,10 +119,12 @@ def submit_subcommand(args):
     config = get_case(cases, args.case)
     procs = {}
 
+    permutate = config.pop("permutate", True)
+
     for level, cores in zip(config.pop("levels"), config.pop("cores")):
-        for params in itertools.product(*config.values()):
-            command = args.template.format(cores=cores)
+        for params in param_sets(config, permutate):
             paramstr = "-".join([str(v) for v in params])
+            command = args.template.format(cores=cores, mem=4*cores, params=paramstr, level=level)
 
             procs[paramstr] = subprocess.Popen(
                 [
@@ -127,6 +144,15 @@ def submit_subcommand(args):
         sys.exit(1)
 
 
+def count_subcommand(args):
+    config = get_case(cases, args.case)
+    permutate = config.pop("permutate", True)
+    levels = zip(config.pop("levels"), config.pop("cores"))
+    params = param_sets(config, permutate)
+
+    print(len(list(levels)) * len(list(params)))
+
+
 # two modes, submit and run
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -143,6 +169,9 @@ if __name__ == "__main__":
     parser_submit.add_argument("-t", "--template", default="mpiexec -np {cores}", help="template command for running commands under MPI")
     parser_submit.add_argument("case")
     parser_submit.set_defaults(func=submit_subcommand)
+    parser_count = subparsers.add_parser("count", help="return the number of jobs to run for a specific case")
+    parser_count.add_argument("case")
+    parser_count.set_defaults(func=count_subcommand)
 
     args = parser.parse_args()
     args.func(args)

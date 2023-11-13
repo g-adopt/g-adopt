@@ -61,7 +61,7 @@ optimiser = LinMoreOptimiser(
 )
 run(optimiser, rf, mesh.comm.rank, "full_optimisation.dat")
 
-# re-initialise optimiser, and restore from checkpoint
+# re-initialise optimiser, and restore from checkpoint 5
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
@@ -69,4 +69,16 @@ optimiser = LinMoreOptimiser(
     auto_checkpoint=False,
 )
 optimiser.restore(5)
-run(optimiser, rf, mesh.comm.rank, "restored_optimisation.dat")
+run(optimiser, rf, mesh.comm.rank, "restored_optimisation_from_it_5.dat")
+
+# re-initialise optimiser, and restore from last stored checkpoint
+
+minimisation_parameters["Status Test"]["Iteration Limit"] = 15
+optimiser = LinMoreOptimiser(
+    minimisation_problem,
+    minimisation_parameters,
+    checkpoint_dir="optimisation_checkpoint",
+    auto_checkpoint=False,
+)
+optimiser.restore()
+run(optimiser, rf, mesh.comm.rank, "restored_optimisation_from_last_it.dat")
