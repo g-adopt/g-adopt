@@ -279,21 +279,28 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
         self.alpha1 = Function(self.P0, name='alpha1')
         self.alpha2 = Function(self.P0, name='alpha2')
         self.alphax = Function(self.P0, name='alphax')
-        self.q = Function(self.P1DG, name='field_component')
+        self.gdim = self.P0.mesh().ufl_cell().geometric_dimension()
+        self.q = []
+        self.qbefore = []
+        for i in range(self.gdim):
+            self.q.append(Function(self.P1DG, name=f'field_component {i}'))
+            self.qbefore.append(Function(self.P1DG, name=f'field_component {i} before'))
         self.DPC1 = FunctionSpace(p1dg_space.mesh(), "DPC", 1)
         self.field_dpc1 = Function(self.DPC1)
         self.field_linearised = Function(p1dg_space)
-        self.gdim = self.P0.mesh().ufl_cell().geometric_dimension()
 
     def apply(self, field):
         self.alpha2.assign(1.e10)
         for i in range(self.gdim):
             self.q.interpolate(grad(field)[i])
             self.compute_bounds(self.q, clip=False)
+            self.q[i].interpolate(grad(field)[i])
+            self.qbefore[i].assign(self.q[i])
+            self.compute_bounds(self.q[i], clip=False)
             par_loop(self._alpha_kernel, dx,
                      {"qbar": (self.centroids, READ),
                       "alphap0": (self.alphax, WRITE),
-                      "q": (self.q, READ),
+                      "q": (self.q[i], READ),
                       "qmax": (self.max_field, READ),
                       "qmin": (self.min_field, READ)})
             self.alpha2.interpolate(min_value(self.alpha2, self.alphax))
