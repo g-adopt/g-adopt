@@ -1,4 +1,4 @@
-from firedrake import DirichletBC, Function
+from firedrake import DirichletBC, Function, utils, TestFunction, assemble, norm
 from .scalar_equation import EnergyEquation
 from .utility import is_continuous, ensure_constant
 from .utility import log_level, INFO, DEBUG
@@ -89,3 +89,15 @@ class EnergySolver:
             self.setup_solver()
         t = 0  # not used atm
         self.ts.advance(t)
+
+    @utils.cached_property
+    def steady_state_form(self):
+        test = TestFunction(self.Q)
+        return self.eq.residual(test, self.T, self.T, self.fields, self.weak_bcs)
+
+    def steady_state_residual(self, zero_bc_nodes=True):
+        return assemble(self.steady_state_form, bcs=self.strong_bcs, zero_bc_nodes=zero_bc_nodes)
+
+    def steady_state_residual_norm(self, zero_bc_nodes=True):
+        r = self.steady_state_residual(zero_bc_nodes=zero_bc_nodes)
+        return norm(Function(r.function_space().dual(), val=r.dat))

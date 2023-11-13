@@ -182,3 +182,14 @@ class StokesSolver:
         if not self._solver_setup:
             self.setup_solver()
         self.solver.solve()
+
+    @fd.utils.cached_property
+    def steady_state_form(self):
+        return self.F
+
+    def steady_state_residual(self, zero_bc_nodes=True):
+        return fd.assemble(self.steady_state_form, bcs=self.strong_bcs, zero_bc_nodes=zero_bc_nodes)
+
+    def steady_state_residual_norm(self, zero_bc_nodes=True):
+        r = self.steady_state_residual(zero_bc_nodes=zero_bc_nodes)
+        return fd.norm(fd.Function(r.function_space().dual(), val=r.dat))
