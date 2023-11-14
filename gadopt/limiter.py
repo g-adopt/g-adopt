@@ -261,7 +261,7 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
         # NOTE: clip_min, clip_max not supported (as it would use the same values to limit derivatives)
         # also doesn't support vector-valued fields at the moment
 
-        super().__init__(p1dg_space, clip_min=clip_min, clip_max)
+        super().__init__(p1dg_space, clip_min=clip_min, clip_max=clip_max)
 
         # Perform limiting loop
         domain = "{[i]: 0 <= i < q.dofs}"
@@ -288,12 +288,15 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
         self.DPC1 = FunctionSpace(p1dg_space.mesh(), "DPC", 1)
         self.field_dpc1 = Function(self.DPC1)
         self.field_linearised = Function(p1dg_space)
+        from firedrake import File
+        self.f = [File('debug0.pvd'), File('debug1.pvd')]
+        self.centroids.rename("centroids")
+        self.max_field.rename("max_field")
+        self.min_field.rename("min_field")
 
     def apply(self, field):
         self.alpha2.assign(1.e10)
         for i in range(self.gdim):
-            self.q.interpolate(grad(field)[i])
-            self.compute_bounds(self.q, clip=False)
             self.q[i].interpolate(grad(field)[i])
             self.qbefore[i].assign(self.q[i])
             self.compute_bounds(self.q[i], clip=False)
@@ -303,6 +306,7 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
                       "q": (self.q[i], READ),
                       "qmax": (self.max_field, READ),
                       "qmin": (self.min_field, READ)})
+            #self.f[i].write(self.centroids, self.alphax, self.max_field, self.min_field, self.q[i])
             self.alpha2.interpolate(min_value(self.alpha2, self.alphax))
 
         self.field_dpc1.project(field)
@@ -321,3 +325,14 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
             field.interpolate(max_value(field, self.clip_min))
         if self.clip_max is not None:
             field.interpolate(min_value(field, self.clip_max))
+
+class VertexBasedDPC2Limiter(VertexBasedQ1DGLimiter):
+    def __init__(self, dpc2_space, clip_min=None, clip_max=None):
+        self.DPC2 = dpc2_space
+        h_cell, v_cell = dpc2_space.mesh().ufl_cell().sub_cells()
+        from firedrake import FiniteElement, TensorProductElement, FunctionSpace
+        h_elt = FiniteElement("DG", h_cell, 1, variant='equispaced')
+        v_elt = FiniteElement("DG", v_cell, 1, variant='equispaced')
+        elt = TensorProductElement(h_elt, v_elt)
+        q1dg = FunctionSpace(dpc2_space.mesh(), elt)
+        super().__init__(q1dg, clip_min=clip_min, clip_max=clip_max)
