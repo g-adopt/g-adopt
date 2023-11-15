@@ -28,7 +28,6 @@ T = Function(Q, name="Temperature")
 T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 
 delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e4)  # Rayleigh number
@@ -58,6 +57,7 @@ plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
 
 gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 
 temp_bcs = {
@@ -87,7 +87,7 @@ for timestep in range(0, max_timesteps):
     if timestep % dump_period == 0:
         output_file.write(u, p, T)
 
-    dt = t_adapt.update_timestep(u)
+    dt = t_adapt.update_timestep()
     time += dt
 
     # Solve Stokes sytem:

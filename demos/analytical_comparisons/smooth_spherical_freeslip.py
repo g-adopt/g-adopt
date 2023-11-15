@@ -15,37 +15,37 @@ _project_solver_parameters = {
 }
 
 
-def model(level, k, nn, do_write=False):
-    """The smooth initial condition, cylindrical domain, free-slip boundary condition model.
+def model(level, l, mm, k, do_write=False):
+    """The smooth initial condition, spherical domain, free-slip boundary condition model.
 
     Args:
         level: refinement level
-        k: radial degree
-        nn: wave number per radial degree
+        l: spherical harmonic degree
+        mm: ratio of spherical harmonic degree to spherical harmonic order
+        k: radial component of forcing term
         do_write: whether to output the velocity/pressure fields
     """
 
     rmin, rmax = 1.22, 2.22
-    nn = k * nn
+    m = l // mm
 
+    l = Constant(l)
+    m = Constant(m)
     k = Constant(k)
-    nn = Constant(nn)
 
-    ncells = level * 256
-    nlayers = level * 16
+    nlayers = 2 ** level
 
-    # Construct a circle mesh and then extrude into a cylinder:
-    mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
-    mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
+    # Construct a cubed sphere mesh and then extrude into a sphere:
+    mesh2d = CubedSphereMesh(radius=rmin, refinement_level=level, degree=2)
+    mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
     bottom_id, top_id = "bottom", "top"
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
-    r = sqrt(X[0]**2 + X[1]**2)
-    phi = atan2(X[1], X[0])
 
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
+    Vscl = FunctionSpace(mesh, "CG", 2)  # scalar version of V, used for rho'
     W = FunctionSpace(mesh, "CG", 1)  # pressure function space (scalar)
     Wvec = VectorFunctionSpace(mesh, "CG", 1)  # vector version of W, used for coordinates in anal. pressure solution
     Z = MixedFunctionSpace([V, W])
@@ -59,7 +59,13 @@ def model(level, k, nn, do_write=False):
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
 
-    T = -r**k/rmax**k*cos(nn*phi)  # RHS
+    # RHS provided by assess solution: rho'=r**k Y_lm
+    solution = assess.SphericalStokesSolutionSmoothFreeSlip(float(l), float(m), float(k), nu=float(mu), Rp=rmax, Rm=rmin, g=1.0)
+    u_xyz = interpolate(X, V)
+    rhop = Function(Vscl)
+    rhop.dat.data[:] = [solution.delta_rho_cartesian(xyzi) for xyzi in u_xyz.dat.data]
+
+    T = -rhop  # RHS
 
     approximation = BoussinesqApproximation(1)
     stokes_bcs = {
@@ -76,8 +82,8 @@ def model(level, k, nn, do_write=False):
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
     # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-11
+    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-10
+    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-9
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
     # and the RHS == 0.
@@ -85,7 +91,13 @@ def model(level, k, nn, do_write=False):
 
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
-    rot = as_vector((-X[1], X[0]))
+    rot = as_vector((0, X[2], -X[1]))
+    coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
+    u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
+    rot = as_vector((-X[2], 0, X[0]))
+    coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
+    u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
+    rot = as_vector((-X[1], X[0], 0))
     coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
     u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
 
@@ -93,18 +105,16 @@ def model(level, k, nn, do_write=False):
     coef = assemble(p_ * _dx)/assemble(Constant(1.0)*_dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
-    solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
-
     # compute u analytical and error
-    uxy = interpolate(as_vector((X[0], X[1])), V)
+    uxzy = interpolate(as_vector((X[0], X[1], X[2])), V)
     u_anal = Function(V, name="AnalyticalVelocity")
-    u_anal.dat.data[:] = [solution.velocity_cartesian(xyi) for xyi in uxy.dat.data]
+    u_anal.dat.data[:] = [solution.velocity_cartesian(xyzi) for xyzi in uxzy.dat.data]
     u_error = Function(V, name="VelocityError").assign(u_-u_anal)
 
     # compute p analytical and error
-    pxy = interpolate(as_vector((X[0], X[1])), Wvec)
+    pxyz = interpolate(as_vector((X[0], X[1], X[2])), Wvec)
     p_anal = Function(W, name="AnalyticalPressure")
-    p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
+    p_anal.dat.data[:] = [solution.pressure_cartesian(xyzi) for xyzi in pxyz.dat.data]
     p_error = Function(W, name="PressureError").assign(p_-p_anal)
 
     if do_write:

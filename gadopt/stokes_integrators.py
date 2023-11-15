@@ -12,19 +12,22 @@ iterative_stokes_solver_parameters = {
     "fieldsplit_0": {
         "ksp_type": "cg",
         "ksp_rtol": 1e-5,
+        "ksp_max_it": 1000,
         "pc_type": "python",
-        "pc_python_type": "firedrake.AssembledPC",
+        "pc_python_type": "gadopt.SPDAssembledPC",
         "assembled_pc_type": "gamg",
         "assembled_mg_levels_pc_type": "sor",
-        "assembled_mg_levels_pc_sor_diagonal_shift": 1e-100,
         "assembled_pc_gamg_threshold": 0.01,
         "assembled_pc_gamg_square_graph": 100,
+        "assembled_pc_gamg_coarse_eq_limit": 1000,
+        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
     },
     "fieldsplit_1": {
         "ksp_type": "fgmres",
         "ksp_rtol": 1e-4,
+        "ksp_max_it": 200,
         "pc_type": "python",
-        "pc_python_type": "firedrake.MassInvPC",
+        "pc_python_type": "gadopt.VariableMassInvPC",
         "Mp_ksp_rtol": 1e-5,
         "Mp_ksp_type": "cg",
         "Mp_pc_type": "sor",
@@ -117,7 +120,8 @@ class StokesSolver:
             'velocity': u,
             'pressure': p,
             'viscosity': self.mu,
-            'interior_penalty': fd.Constant(6.25),  # matches C_ip=100. in "old" code for Q2Q1 in 2d
+            'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
+                                                   # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
             'source': self.approximation.buoyancy(p, T) * self.k,
             'rho_continuity': self.approximation.rho_continuity(),
         }

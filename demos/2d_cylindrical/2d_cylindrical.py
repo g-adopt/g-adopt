@@ -34,13 +34,12 @@ log("Number of Temperature DOF:", Q.dim())
 T = Function(Q, name="Temperature")
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2)
-T.interpolate(rmax - r + 0.02*cos(4*atan_2(X[1], X[0])) * sin((r - rmin) * pi))
+T.interpolate(rmax - r + 0.02*cos(4*atan2(X[1], X[0])) * sin((r - rmin) * pi))
 
 Ra = Constant(1e5)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
 
 delta_t = Constant(1e-7)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Define time stepping parameters:
 steady_state_tolerance = 1e-7
@@ -58,7 +57,7 @@ u.rename("Velocity")
 p.rename("Pressure")
 # Create output file and select output_frequency:
 output_file = File("output.pvd")
-dump_period = 1
+dump_period = 50
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4
 # Open file for logging diagnostic output:
@@ -80,6 +79,8 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)
 
@@ -91,7 +92,7 @@ for timestep in range(0, max_timesteps):
         output_file.write(u, p, T)
 
     if timestep != 0:
-        dt = t_adapt.update_timestep(u)
+        dt = t_adapt.update_timestep()
     else:
         dt = float(delta_t)
     time += dt

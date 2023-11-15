@@ -29,13 +29,9 @@ T0 = Constant(0.091)  # Non-dimensional surface temperature
 Di = Constant(0.5)  # Dissipation number.
 T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
 
-delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
-
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e5)  # Rayleigh number
 mu = Constant(1.0)  # Viscosity
-Di = Constant(0.5)  # Dissipation number.
 
 # Compressible reference state:
 gruneisen = 1.0
@@ -70,6 +66,10 @@ ref_file = File('reference_state.pvd')
 dump_period = 100
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4
+
+delta_t = Constant(1e-6)  # Initial time-step
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+
 
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
@@ -109,7 +109,7 @@ for timestep in range(0, max_timesteps):
         output_file.write(u, p, T, FullT)
         ref_file.write(rhobar, Tbar, alphabar, cpbar, chibar)
 
-    dt = t_adapt.update_timestep(u)
+    dt = t_adapt.update_timestep()
     time += dt
 
     # Solve Stokes sytem:
