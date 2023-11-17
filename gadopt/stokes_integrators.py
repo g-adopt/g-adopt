@@ -97,7 +97,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
 class StokesSolver:
     name = 'Stokes'
 
-    def __init__(self, z, T, approximation, bcs=None, mu=1, C=0,
+    def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False, J=None,
                  **kwargs):
@@ -122,7 +122,7 @@ class StokesSolver:
             'viscosity': self.mu,
             'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
                                                    # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
-            'source': self.approximation.buoyancy(p, T, C) * self.k,
+            'source': self.approximation.buoyancy(p, T) * self.k,
             'rho_continuity': self.approximation.rho_continuity(),
         }
 

@@ -1,0 +1,127 @@
+import firedrake as fd
+import initial_signed_distance as isd
+
+from gadopt.level_set_tools import AbstractMaterial
+
+
+class Mantle(AbstractMaterial):
+    def B():
+        return None
+
+    def RaB():
+        return None
+
+    def density():
+        return 3150
+
+    @classmethod
+    def viscosity(cls, velocity):
+        return 1e21
+
+    def thermal_expansion():
+        return 1
+
+    def thermal_conductivity():
+        return 1
+
+    def specific_heat_capacity():
+        return 1
+
+    def internal_heating_rate():
+        return 0
+
+
+class Lithosphere(AbstractMaterial):
+    visc_coeff = 4.75e11
+    stress_exponent = 4
+    visc_bounds = (1e21, 1e25)
+
+    def B():
+        return None
+
+    def RaB():
+        return None
+
+    def density():
+        return 3300
+
+    @classmethod
+    def viscosity(cls, velocity):
+        strain_rate = fd.sym(fd.grad(velocity))
+        strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate) / 2)
+
+        return fd.min_value(
+            fd.max_value(
+                cls.visc_coeff * strain_rate_sec_inv ** (1 / cls.stress_exponent - 1),
+                cls.visc_bounds[0],
+            ),
+            cls.visc_bounds[1],
+        )
+
+    def thermal_expansion():
+        return 1
+
+    def thermal_conductivity():
+        return 1
+
+    def specific_heat_capacity():
+        return 1
+
+    def internal_heating_rate():
+        return 0
+
+
+class Simulation:
+    name = "Schmalholz_2011"
+
+    # In material_interfaces, for each sub-list, the first material corresponds to the
+    # negative side of the signed distance function
+    materials = {"ref_mat": Mantle, "lithosphere": Lithosphere}
+    material_interfaces = [[materials["ref_mat"], materials["lithosphere"]]]
+
+    # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
+    # the level-set approach. Insufficient mesh refinement leads to the vanishing of the
+    # material interface during advection and to unwanted motion of the material interface
+    # during reinitialisation.
+    domain_dimensions = (1e6, 6.6e5)
+    mesh_elements = (128, 32)
+
+    isd_params = [None]
+
+    initialise_signed_distance = [isd.isd_schmalholz]
+
+    Ra, g = 1, 9.81
+
+    temp_bcs = None
+    stokes_bcs = {
+        1: {"ux": 0, "uy": 0},
+        2: {"ux": 0, "uy": 0},
+        3: {"uy": 0},
+        4: {"uy": 0},
+    }
+
+    dt = 1e11
+    subcycles = 1
+    time_end = 25e6 * 365.25 * 8.64e4
+    dump_period = 5e5 * 365.25 * 8.64e4
+
+    slab_length = 2.5e5
+    characteristic_time = (
+        4
+        * Lithosphere.visc_coeff
+        / (Lithosphere.density() - Mantle.density())
+        / g
+        / slab_length
+    ) ** Lithosphere.stress_exponent
+
+    @staticmethod
+    def initialise_temperature(temperature):
+        pass
+
+    @classmethod
+    def diagnostics(cls, simu_time, variables):
+        pass
+
+    @classmethod
+    def save_and_plot(cls):
+        pass

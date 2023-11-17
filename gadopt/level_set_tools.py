@@ -1,3 +1,5 @@
+import abc
+
 from firedrake import (
     DirichletBC,
     Function,
@@ -13,6 +15,47 @@ from firedrake import (
 from .equations import BaseEquation, BaseTerm
 from .scalar_equation import ScalarAdvectionEquation
 from .utility import is_continuous
+
+
+class AbstractMaterial(abc.ABC):
+    @classmethod
+    @abc.abstractmethod
+    def B(cls):
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def RaB(cls):
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def density(cls):
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def viscosity(cls):
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def thermal_expansion(cls):
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def thermal_conductivity(cls):
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def specific_heat_capacity(cls):
+        pass
+
+    @classmethod
+    def thermal_diffusivity(cls):
+        return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
 
 
 class ProjectionTerm(BaseTerm):

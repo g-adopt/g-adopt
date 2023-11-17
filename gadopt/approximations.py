@@ -31,7 +31,7 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def buoyancy(self, p, T, C):
+    def buoyancy(self, p, T):
         "UFL expression for buoyancy (momentum source in gravity direction)"
         pass
 
@@ -75,7 +75,7 @@ class BoussinesqApproximation(BaseApproximation):
     Viscous dissipation is neglected (Di << 1)."""
     compressible = False
 
-    def __init__(self, Ra, rho=1, g=1, alpha=1, kappa=1, RaB=0, delta_rho=1, H=None):
+    def __init__(self, Ra, rho=1, g=1, alpha=1, kappa=1, RaB=0, delta_rho=1, H=0):
         """
         :arg Ra: Rayleigh number
         :arg rho: Reference density
@@ -94,12 +94,12 @@ class BoussinesqApproximation(BaseApproximation):
         self._kappa = ensure_constant(kappa)
         self.RaB = ensure_constant(RaB)
         self.delta_rho = ensure_constant(delta_rho)
-        self.H = H
+        self.H = ensure_constant(H)
 
-    def buoyancy(self, p, T, C):
+    def buoyancy(self, p, T):
         return (
             self.Ra * self.rho * self.alpha * T * self.g
-            - self.RaB * self.delta_rho * C * self.g
+            - self.RaB * self.delta_rho * self.g
         )
 
     def rho_continuity(self):
@@ -117,9 +117,7 @@ class BoussinesqApproximation(BaseApproximation):
         return 0
 
     def energy_source(self, u):
-        if self.H:
-            return self.rho * self.H
-        return 0
+        return self.rho * self.H
 
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):

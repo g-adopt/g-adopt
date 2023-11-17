@@ -473,3 +473,13 @@ def timer_decorator(func):
         log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
         return result
     return wrapper
+
+
+def node_coordinates(function):
+    """Extract mesh coordinates and interpolate them onto the relevant function space"""
+    func_space = function.function_space()
+    mesh_coords = SpatialCoordinate(func_space.mesh())
+
+    return [
+        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
+    ]
