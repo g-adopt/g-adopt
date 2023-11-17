@@ -1,6 +1,6 @@
 import firedrake as fd
 import numpy as np
-from benchmarks.crameri_2012 import Simulation
+from benchmarks.robey_2019 import Simulation
 from mpi4py import MPI
 
 from gadopt.approximations import BoussinesqApproximation
@@ -30,7 +30,10 @@ def recursive_conditional(level_set, value_pairs):
 
 def write_output(dump_counter):
     time_output.assign(time_now)
-    density.interpolate(dens_diff + ref_dens)
+    if B_is_None and RaB_is_None:
+        density.interpolate(dens_diff + ref_dens)
+    else:
+        RaB.interpolate(RaB_ufl)
     viscosity.interpolate(viscosity_ufl)
 
     output_file.write(
@@ -39,6 +42,7 @@ def write_output(dump_counter):
         *level_set_grad_proj,
         velocity,
         pressure,
+        RaB,
         density,
         viscosity,
         temperature,
@@ -53,12 +57,12 @@ mesh = fd.RectangleMesh(
     *Simulation.mesh_elements, *Simulation.domain_dimensions, quadrilateral=True
 )  # RectangleMesh boundary mapping: {1: left, 2: right, 3: bottom, 4: top}
 
-# Set up Stokes function spaces corresponding to the bilinear Q2Q1 element pair
-vel_func_space = fd.VectorFunctionSpace(mesh, "CG", 2)
-pres_func_space = fd.FunctionSpace(mesh, "CG", 1)
-stokes_func_space = fd.MixedFunctionSpace([vel_func_space, pres_func_space])
+# Set up Stokes function spaces corresponding to the Q2Q1 Taylor-Hood element
+func_space_vel = fd.VectorFunctionSpace(mesh, "CG", 2)
+func_space_pres = fd.FunctionSpace(mesh, "CG", 1)
+func_space_stokes = fd.MixedFunctionSpace([func_space_vel, func_space_pres])
 # Define Stokes functions on the mixed function space
-stokes_function = fd.Function(stokes_func_space)
+stokes_function = fd.Function(func_space_stokes)
 velocity_ufl, pressure_ufl = fd.split(
     stokes_function
 )  # Symbolic UFL expression for velocity and pressure
@@ -66,25 +70,25 @@ velocity, pressure = stokes_function.subfunctions  # Associated Firedrake functi
 velocity.rename("Velocity")
 pressure.rename("Pressure")
 
-# Temperature function and associated function space
-temp_func_space = fd.FunctionSpace(mesh, "CG", 2)
-temperature = fd.Function(temp_func_space, name="Temperature")
+# Define temperature function space and initialise temperature
+func_space_temp = fd.FunctionSpace(mesh, "CG", 2)
+temperature = fd.Function(func_space_temp, name="Temperature")
 Simulation.initialise_temperature(temperature)
 
-# Set up function spaces and functions used as part of the level-set approach
+# Set up function spaces and functions used in the level-set approach
 level_set_func_space_deg = 2
-ls_func_space = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
-lsgp_func_space = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
+func_space_ls = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
+func_space_lsgp = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
 level_set = [
-    fd.Function(ls_func_space, name=f"Level set #{i}")
+    fd.Function(func_space_ls, name=f"Level set #{i}")
     for i in range(len(Simulation.material_interfaces))
 ]
 level_set_grad_proj = [
-    fd.Function(lsgp_func_space, name=f"Level-set gradient (projection) #{i}")
+    fd.Function(func_space_lsgp, name=f"Level-set gradient (projection) #{i}")
     for i in range(len(level_set))
 ]
 
-# Parameters relevant to the conservative level-set approach
+# Thickness of the hyperbolic tangent profile in the conservative level-set approach
 epsilon = fd.Constant(
     min(
         dim / elem
@@ -105,6 +109,7 @@ for ls, isd, params in zip(
 # Set up fields that depend on the material interface
 func_space_interp = fd.FunctionSpace(mesh, "CG", level_set_func_space_deg)
 density = fd.Function(func_space_interp, name="Density")
+RaB = fd.Function(func_space_interp, name="RaB")
 
 B_is_None = all(
     Simulation.materials[mat].B() is None for mat in Simulation.materials.keys()
@@ -112,11 +117,8 @@ B_is_None = all(
 RaB_is_None = all(
     Simulation.materials[mat].RaB() is None for mat in Simulation.materials.keys()
 )
-density_is_None = all(
-    Simulation.materials[mat].density() is None for mat in Simulation.materials.keys()
-)
 if B_is_None and RaB_is_None:
-    RaB = fd.Constant(1)
+    RaB_ufl = fd.Constant(1)
     ref_dens = Simulation.materials["ref_mat"].density()
     dens_diff = recursive_conditional(
         level_set.copy(),
@@ -129,20 +131,22 @@ if B_is_None and RaB_is_None:
 elif RaB_is_None:
     ref_dens = fd.Constant(1)
     dens_diff = fd.Constant(1)
-    RaB = recursive_conditional(
+    RaB_ufl = recursive_conditional(
         level_set.copy(),
         [
             [mat_0.B() * Simulation.Ra, mat_1.B() * Simulation.Ra]
             for mat_0, mat_1 in Simulation.material_interfaces
         ],
     )
+    RaB.interpolate(RaB_ufl)
 elif B_is_None:
     ref_dens = fd.Constant(1)
     dens_diff = fd.Constant(1)
-    RaB = recursive_conditional(
+    RaB_ufl = recursive_conditional(
         level_set.copy(),
         [[mat_0.RaB(), mat_1.RaB()] for mat_0, mat_1 in Simulation.material_interfaces],
     )
+    RaB.interpolate(RaB_ufl)
 else:
     raise ValueError("Providing B and RaB is redundant.")
 
@@ -162,7 +166,7 @@ int_heat_rate_ufl = recursive_conditional(
         for mat_0, mat_1 in Simulation.material_interfaces
     ],
 )
-int_heat_rate = fd.Function(temp_func_space, name="Internal heating rate").interpolate(
+int_heat_rate = fd.Function(func_space_temp, name="Internal heating rate").interpolate(
     int_heat_rate_ufl
 )
 
@@ -175,7 +179,7 @@ approximation = BoussinesqApproximation(
     g=Simulation.g,
     alpha=1,
     kappa=1,
-    RaB=RaB,
+    RaB=RaB_ufl,
     delta_rho=dens_diff,
     H=int_heat_rate_ufl,
 )
@@ -187,7 +191,7 @@ energy_solver = EnergySolver(
     ImplicitMidpoint,
     bcs=Simulation.temp_bcs,
 )
-stokes_nullspace = create_stokes_nullspace(stokes_func_space)
+stokes_nullspace = create_stokes_nullspace(func_space_stokes)
 stokes_solver = StokesSolver(
     stokes_function,
     temperature,
@@ -209,7 +213,7 @@ reinitialisation_fields = [
 # Force projected gradient norm to satisfy the reinitialisation equation
 projection_boundary_conditions = [
     fd.DirichletBC(
-        lsgp_func_space,
+        func_space_lsgp,
         ls * (1 - ls) / epsilon * fd.Constant((1, 0)),
         "on_boundary",
     )
@@ -245,12 +249,9 @@ reinitialisation_solver = [
 
 # Time-loop objects
 t_adapt = TimestepAdaptor(
-    dt,
-    velocity_ufl,
-    vel_func_space,
-    target_cfl=Simulation.subcycles * eSSPRKs10p3.cfl_coeff / 10,
+    dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.2
 )
-time_output = fd.Function(pres_func_space, name="Time")
+time_output = fd.Function(func_space_pres, name="Time")
 time_now, step, dump_counter = 0, 0, 0
 reini_frequency, reini_iterations = 1, 2
 output_file = fd.File(
@@ -278,8 +279,8 @@ while time_now < Simulation.time_end:
 
     # Update time and timestep
     t_adapt.maximum_timestep = Simulation.time_end - time_now
-    dt = t_adapt.update_timestep()
-    time_now += dt
+    dt.assign(t_adapt.update_timestep())
+    time_now += float(dt)
 
     # Solve Stokes system
     stokes_solver.solve()
@@ -312,6 +313,4 @@ while time_now < Simulation.time_end:
 dump_counter = write_output(dump_counter)
 
 if MPI.COMM_WORLD.rank == 0:  # Save post-processing fields and produce graphs
-    Simulation.save_and_plot()
-    Simulation.save_and_plot()
     Simulation.save_and_plot()

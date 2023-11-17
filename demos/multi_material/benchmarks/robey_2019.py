@@ -8,56 +8,70 @@ from gadopt.utility import node_coordinates
 
 
 class ReferenceMaterial(AbstractMaterial):
-    def B():
+    @classmethod
+    def B(cls):
         return 0
 
-    def RaB():
+    @classmethod
+    def RaB(cls):
         return None
 
-    def density():
+    @classmethod
+    def density(cls):
         return None
 
     @classmethod
     def viscosity(cls, velocity):
         return 1
 
-    def thermal_expansion():
+    @classmethod
+    def thermal_expansion(cls):
         return 1
 
-    def thermal_conductivity():
+    @classmethod
+    def thermal_conductivity(cls):
         return 1
 
-    def specific_heat_capacity():
+    @classmethod
+    def specific_heat_capacity(cls):
         return 1
 
-    def internal_heating_rate():
+    @classmethod
+    def internal_heating_rate(cls):
         return 0
 
 
 class BottomMaterial(AbstractMaterial):
-    def B():
-        return -1
+    @classmethod
+    def B(cls):
+        return 0.5
 
-    def RaB():
+    @classmethod
+    def RaB(cls):
         return None
 
-    def density():
+    @classmethod
+    def density(cls):
         return None
 
     @classmethod
     def viscosity(cls, velocity):
         return 1
 
-    def thermal_expansion():
+    @classmethod
+    def thermal_expansion(cls):
         return 1
 
-    def thermal_conductivity():
+    @classmethod
+    def thermal_conductivity(cls):
         return 1
 
-    def specific_heat_capacity():
+    @classmethod
+    def specific_heat_capacity(cls):
         return 1
 
-    def internal_heating_rate():
+    @classmethod
+    def internal_heating_rate(cls):
         return 0
 
 
@@ -74,7 +88,7 @@ class Simulation:
     # material interface during advection and to unwanted motion of the material interface
     # during reinitialisation.
     domain_dimensions = (3, 1)
-    mesh_elements = (128, 32)
+    mesh_elements = (128, 64)
 
     slope = 0
     intercept = 0.5
