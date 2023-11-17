@@ -6,6 +6,7 @@ from firedrake import sqrt, Function, FiniteElement, TensorProductElement, Funct
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
 from firedrake import Interpolator, op2, interpolate
 import ufl
+import finat.ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
@@ -136,7 +137,7 @@ class CombinedSurfaceMeasure(ufl.Measure):
 
 
 def _get_element(ufl_or_element):
-    if isinstance(ufl_or_element, ufl.FiniteElementBase):
+    if isinstance(ufl_or_element, ufl.AbstractFiniteElement):
         return ufl_or_element
     else:
         return ufl_or_element.ufl_element()
@@ -148,11 +149,11 @@ def is_continuous(expr):
 
     if isinstance(expr, ufl.indexed.Indexed):
         elem = expr.ufl_operands[0].ufl_element()
-        if isinstance(elem, ufl.MixedElement):
+        if isinstance(elem, finat.ufl.MixedElement):
             # the second operand is a MultiIndex
             assert len(expr.ufl_operands[1]) == 1
             sub_element_index, _ = elem.extract_subelement_component(int(expr.ufl_operands[1][0]))
-            elem = elem.sub_elements()[sub_element_index]
+            elem = elem.sub_elements[sub_element_index]
     else:
         elem = _get_element(expr)
 
@@ -161,7 +162,7 @@ def is_continuous(expr):
         return True
     elif family == 'Discontinuous Lagrange' or family == 'DQ':
         return False
-    elif isinstance(elem, ufl.HCurlElement) or isinstance(elem, ufl.HDivElement):
+    elif elem in ufl.HCurl or elem in ufl.HDiv:
         return False
     elif family == 'TensorProductElement':
         return all(is_continuous(sele) for sele in elem.sub_elements())
@@ -189,9 +190,9 @@ def normal_is_continuous(expr):
         return True
     elif family == 'Discontinuous Lagrange' or family == 'DQ':
         return False
-    elif isinstance(elem, ufl.HCurlElement):
+    elif elem in ufl.HCurl:
         return False
-    elif isinstance(elem, ufl.HDivElement):
+    elif elem in ufl.HDiv:
         return True
     elif family == 'TensorProductElement':
         return all(is_continuous(sele) for sele in elem.sub_elements())
@@ -322,7 +323,7 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
         v_elt = FiniteElement(v_family, v_cell, v_degree, variant=v_variant)
         elt = TensorProductElement(h_elt, v_elt)
         if hdiv:
-            elt = ufl.HDiv(elt)
+            elt = ufl.HDivElement(elt)
     else:
         elt = FiniteElement(h_family, mesh.ufl_cell(), h_degree, variant=variant)
 
