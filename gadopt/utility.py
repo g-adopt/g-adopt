@@ -157,19 +157,7 @@ def is_continuous(expr):
     else:
         elem = _get_element(expr)
 
-    family = elem.family()
-    if family == 'Lagrange' or family == 'Q':
-        return True
-    elif family == 'Discontinuous Lagrange' or family == 'DQ':
-        return False
-    elif elem in ufl.HCurl or elem in ufl.HDiv:
-        return False
-    elif family == 'TensorProductElement':
-        return all(is_continuous(sele) for sele in elem.sub_elements())
-    elif family == 'EnrichedElement':
-        return all(is_continuous(e) for e in elem._elements)
-    else:
-        raise NotImplementedError("Unknown finite element family")
+    return elem in ufl.H1
 
 
 def depends_on(ufl_expr, terminal):
@@ -185,21 +173,7 @@ def normal_is_continuous(expr):
 
     elem = _get_element(expr)
 
-    family = elem.family()
-    if family == 'Lagrange' or family == 'Q':
-        return True
-    elif family == 'Discontinuous Lagrange' or family == 'DQ':
-        return False
-    elif elem in ufl.HCurl:
-        return False
-    elif elem in ufl.HDiv:
-        return True
-    elif family == 'TensorProductElement':
-        return all(is_continuous(sele) for sele in elem.sub_elements())
-    elif family == 'EnrichedElement':
-        return all(normal_is_continuous(e) for e in elem._elements)
-    else:
-        raise NotImplementedError("Unknown finite element family")
+    return elem in ufl.HDiv
 
 
 def cell_size(mesh):
