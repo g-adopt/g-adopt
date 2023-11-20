@@ -4,7 +4,7 @@ A module with utitity functions for gadopt
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
-from firedrake import Interpolator, op2, interpolate
+from firedrake import Interpolator, op2, interpolate, VectorElement
 import ufl
 import finat.ufl
 import time
@@ -236,7 +236,7 @@ def extend_function_to_3d(func, mesh_extruded):
     family = ufl_elem.family()
     degree = ufl_elem.degree()
     name = func.name()
-    if isinstance(ufl_elem, ufl.VectorElement):
+    if isinstance(ufl_elem, VectorElement):
         # vector function space
         fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0, dim=2, vector=True)
     else:
