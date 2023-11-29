@@ -4,8 +4,10 @@ Slope limiters for discontinuous fields
 from __future__ import absolute_import
 from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
 from firedrake import max_value, min_value
-from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement
+from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement, FiniteElement
 from firedrake import Function, grad, par_loop, READ, WRITE
+from firedrake import interpolate
+import ufl
 import numpy as np
 from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
 from pyop2 import op2
@@ -306,7 +308,7 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
                       "q": (self.q[i], READ),
                       "qmax": (self.max_field, READ),
                       "qmin": (self.min_field, READ)})
-            #self.f[i].write(self.centroids, self.alphax, self.max_field, self.min_field, self.q[i])
+            # self.f[i].write(self.centroids, self.alphax, self.max_field, self.min_field, self.q[i])
             self.alpha2.interpolate(min_value(self.alpha2, self.alphax))
 
         self.field_dpc1.project(field)
@@ -326,13 +328,71 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
         if self.clip_max is not None:
             field.interpolate(min_value(field, self.clip_max))
 
+
 class VertexBasedDPC2Limiter(VertexBasedQ1DGLimiter):
     def __init__(self, dpc2_space, clip_min=None, clip_max=None):
         self.DPC2 = dpc2_space
         h_cell, v_cell = dpc2_space.mesh().ufl_cell().sub_cells()
-        from firedrake import FiniteElement, TensorProductElement, FunctionSpace
         h_elt = FiniteElement("DG", h_cell, 1, variant='equispaced')
         v_elt = FiniteElement("DG", v_cell, 1, variant='equispaced')
         elt = TensorProductElement(h_elt, v_elt)
         q1dg = FunctionSpace(dpc2_space.mesh(), elt)
         super().__init__(q1dg, clip_min=clip_min, clip_max=clip_max)
+
+
+class VertexBasedLeastSquaresLimiter:
+    def __init__(self, V):
+        self.degree = max(V.ufl_element().degree())
+        self.mesh = V.mesh()
+        self.dim = self.mesh.geometric_dimension()
+        ele1d = FiniteElement("Discontinuous Taylor", ufl.interval, self.degree)
+        ele = TensorProductElement(*([ele1d]*self.dim))
+        self.DT = FunctionSpace(self.mesh, ele)
+        ele1d = FiniteElement("DG", ufl.interval, 1, variant='equispaced')
+        ele = TensorProductElement(*([ele1d]*self.dim))
+        self.DQ1 = FunctionSpace(self.mesh, ele)
+        import firedrake as fd
+
+        # functionspaces storing a vector of taylor basis coefficients on each vertex (Q1) or cell (Q0)
+        ntaylor = (self.degree+1)**2
+        assert ntaylor == self.DT.cell_node_map().arity
+        self.taylor_Q1 = fd.VectorFunctionSpace(self.mesh, "Q", 1, dim=ntaylor)
+        self.taylor_Q0 = fd.VectorFunctionSpace(self.mesh, "DQ", 0, dim=ntaylor)
+        self.taylor_mass_Q0 = fd.TensorFunctionSpace(self.mesh, "DQ", 0, shape=(ntaylor, ntaylor))
+
+        mass = fd.assemble(TestFunction(self.DT) * TrialFunction(self.DT) * dx)
+        data = mass.petscmat.getValuesCSR()[2]
+        self.taylor_mass = Function(self.taylor_mass_Q0)
+        self.taylor_mass.dat.data[:] = data.reshape((-1, ntaylor, ntaylor))
+
+        self.taylor_u = Function(self.DT)
+        self.taylor_u0 = Function(self.taylor_Q0)
+        self.taylor_umin = Function(self.taylor_Q1)
+        self.taylor_umax = Function(self.taylor_Q1)
+
+        import os .path
+        c_source_file = os.path.join(os.path.split(__file__)[0], 'lsq_limiter.c')
+        code = open(c_source_file, 'r').read()
+        from firedrake.slate.slac.compiler import BLASLAPACK_LIB, BLASLAPACK_INCLUDE
+        self.kernel = op2.Kernel(code % {'degree': self.degree}, 'least_squares_kernel',
+                                 include_dirs=BLASLAPACK_INCLUDE.split(),
+                                 ldargs=BLASLAPACK_LIB.split())
+
+    def apply(self, field):
+        self.taylor_u.project(field)
+        self.taylor_u0.dat.data[:] = self.taylor_u.dat.data.reshape(self.taylor_u0.dat.data.shape)
+        finfo = np.finfo(field.dat.dtype)
+        self.taylor_umin.assign(finfo.max)
+        interpolate(self.taylor_u0, self.taylor_umin, access=op2.MIN)
+        self.taylor_umax.assign(finfo.min)
+        interpolate(self.taylor_u0, self.taylor_umax, access=op2.MAX)
+        mass = self.taylor_mass.copy(deepcopy=True)
+        op2.par_loop(self.kernel, self.mesh.cell_set,
+                     self.taylor_u.dat(op2.RW, self.DT.cell_node_map()),
+                     self.taylor_u0.dat(op2.READ, self.taylor_Q0.cell_node_map()),
+                     self.taylor_umin.dat(op2.READ, self.taylor_Q1.cell_node_map()),
+                     self.taylor_umax.dat(op2.READ, self.taylor_Q1.cell_node_map()),
+                     self.taylor_mass.dat(op2.RW, self.taylor_mass_Q0.cell_node_map())
+                     )
+        field.interpolate(self.taylor_u)
+        import pdb; pdb.set_trace()
