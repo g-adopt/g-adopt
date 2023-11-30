@@ -1,15 +1,14 @@
-# Demo for scalar pure advection - this is mostly copied from the Firedrake demo DG_advection
-
-# As usual, we start by importing Firedrake.  We also import the math library to
-# give us access to the value of pi.  We use a 40-by-40 mesh of squares. ::
+# Demo for pure scalar advection - this is mostly copied from the Firedrake demo DG_advection,
+# but here we use gadopt's implementation as ScalarAdvectionEquation and use a CG discretisation
+# with Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
 from gadopt.scalar_equation import ScalarAdvectionEquation
 from gadopt.time_stepper import SSPRK33
 from gadopt.utility import su_nubar
-import math
 from numpy import ones
 
+# We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
 
 # We set up a function space of discontinous bilinear elements for :math:`q`, and
@@ -43,7 +42,7 @@ slot_left = 0.475
 slot_right = 0.525
 slot_top = 0.85
 
-bell = 0.25*(1+cos(math.pi*min_value(sqrt(pow(x-bell_x0, 2) + pow(y-bell_y0, 2))/bell_r0, 1.0)))
+bell = 0.25*(1+cos(pi*min_value(sqrt(pow(x-bell_x0, 2) + pow(y-bell_y0, 2))/bell_r0, 1.0)))
 cone = 1.0 - min_value(sqrt(pow(x-cone_x0, 2) + pow(y-cone_y0, 2))/cyl_r0, 1.0)
 slot_cyl = conditional(sqrt(pow(x-cyl_x0, 2) + pow(y-cyl_y0, 2)) < cyl_r0,
                        conditional(And(And(x > slot_left, x < slot_right), y < slot_top),
@@ -60,7 +59,7 @@ q = Function(V).assign(q_init)
 
 # We declare the output filename, and write out the initial condition. ::
 
-outfile = File("CG_SUadv.pvd")
+outfile = File("CG_SUadv_q.pvd")
 outfile.write(q)
 
 J = Function(TensorFunctionSpace(mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(mesh))
@@ -70,24 +69,31 @@ nubar = Function(V).interpolate(su_nubar(u, J, beta_pe))
 nubar_outfile = File("CG_SUadv_nubar.pvd")
 nubar_outfile.write(nubar)
 
-u_outfile = File("SUadv_u.pvd")
+u_outfile = File("CG_SUadv_u.pvd")
 u_outfile.write(u)
 # We will run for time :math:`2\pi`, a full rotation.  We take 600 steps, giving
 # a timestep close to the CFL limit.  Finally, we define the inflow boundary
 # condition, :math:`q_\mathrm{in}`.  In general, this would be a ``Function``, but
 # here we just use a ``Constant`` value. ::
 
-T = 2*math.pi
+T = 2*pi
 dt = T/600.0
 q_in = Constant(1.0)
+
+
+# Now we call G-ADOPT's scalar advection equation to set up the equations
+# and set up a timestepper. We use the SSPRK33 Runge-Kutta method for
+# timestepping. We also need to provide the velocity field, u, to the timestepper
+# as well as boundary conditions. In this case we apply a boundary value
+# for when there is inflow.
 
 eq = ScalarAdvectionEquation(V, V, su_advection=True)
 fields = {'velocity': u}
 bc_in = {'q': q_in}
-
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 timestepper = SSPRK33(eq, q, fields, dt, bnd_conditions=bcs)
 
+# Here is the time stepping loop, with an output every 20 steps.
 t = 0.0
 step = 0
 while t < T - 0.5*dt:
