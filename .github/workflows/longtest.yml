@@ -1,0 +1,61 @@
+name: Run long regression tests
+
+on:
+  workflow_dispatch:
+
+concurrency: longtest_environment
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync repository to Gadi
+        uses: up9cloud/action-rsync@v1.4
+        env:
+          HOST: gadi.nci.org.au
+          TARGET: ${{secrets.GADI_REPO_PATH}}
+          KEY: ${{secrets.GADI_TESTING_KEY}}
+          USER: ${{secrets.GADI_USER}}
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{secrets.GADI_TESTING_KEY}}" > ~/.ssh/gadi.key
+          chmod 600 ~/.ssh/gadi.key
+          echo "${{secrets.GADI_HOST_KEY}}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          cat >>~/.ssh/config <<EOF
+          Host gadi
+            Hostname gadi.nci.org.au
+            User ${{secrets.GADI_USER}}
+            IdentityFile ~/.ssh/gadi.key
+          EOF
+
+      - name: Run test cases
+        id: run_tests
+        run: |
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && make -j longtest gadopt_checkout=${{secrets.GADI_REPO_PATH}} gadopt_prefix_image=${{secrets.GADI_PREFIX_IMAGE}} project=${{secrets.GADI_PROJECT}}"
+
+      - name: Test results
+        if: ${{ success() }}
+        run: |
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && python3 -m pytest -m longtest --junit-xml=test_results.xml"
+
+      - name: Retrieve test results
+        if: ${{ !cancelled() }}
+        run: |
+          scp gadi:${{secrets.GADI_REPO_PATH}}/test_results.xml .
+
+      - name: Pytest report
+        uses: mikepenz/action-junit-report@v4
+        if: ${{ !cancelled() }}
+        with:
+          check_name: Test suite report
+          report_paths: test_results.xml
+          include_passed: true
+          annotate_only: true
+
+      - name: Get error output
+        if: ${{ failure() }}
+        run: |
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && make longtest_output"

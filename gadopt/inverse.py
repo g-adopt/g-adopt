@@ -198,15 +198,29 @@ class LinMoreOptimiser:
             for i, func in enumerate(self.rol_solver.rolvector.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def restore(self, iteration):
-        """Restore the ROL state from a given iteration from disk."""
+    def restore(self, iteration=None):
+        """Restore the ROL state from disk.
 
-        self.iteration = iteration
+        The last stored iteration in `checkpoint_dir` is used unless a given iteration is specifed.
+        """
+        if iteration is not None:
+            self.iteration = iteration
+        else:
+            stored_iterations = [int(path.parts[-1]) for path in self._base_checkpoint_dir.glob('*[0-9]/')]
+            self.iteration = sorted(stored_iterations)[-1]
+
         self.rol_algorithm = ROL.load_algorithm(MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
         self._add_statustest()
 
         self.rol_solver.rolvector.checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
         self.rol_solver.rolvector.load(self._mesh)
+
+        # ROL algorithms run in a loop like `while (statusTest()) { ... }`
+        # so we will double up on saving the restored iteration
+        # by rolling back the iteration counter, we make sure we overwrite the checkpoint
+        # we just restored, to keep the ROL iteration count, and our checkpoint iteration
+        # count in sync
+        self.iteration -= 1
 
         # The various ROLVector objects can load all their metadata, but can't actually
         # restore from the Firedrake checkpoint. They register themselves, so we can access
