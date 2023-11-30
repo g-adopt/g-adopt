@@ -25,7 +25,7 @@
            up = alpha*u + (1-alpha)*up
            find_new_active(up, is_active)
        else:
-           find_worst_non_optimal(u, is_active, ijk)
+           find_least_optimal(u, is_active, ijk)
            if no ijk found (all optimal or empty active set): return
            is_active[ijk] = false
        up = u
@@ -112,6 +112,44 @@ void find_new_active(PetscScalar *u, bool *is_active,
     }
 }
 
+void find_least_optimal(PetscScalar *u, PetscScalar *gradu, bool *is_active,
+                    PetscScalar *umin, PetscScalar *umax, PetscScalar *u0,
+                    PetscScalar *max_lambda) {
+    const double eps=1e-12;
+    int max_ijk;
+    *max_lambda = -1.;
+    for (int i=0, ijk=0; i<m; i++, ijk++) {
+        double Tx = -0.5 + (i %% 2); // (xi-xc)/dx
+        double Ty = -0.5 + (i / 2); // (yi-yc)/dy
+        for (int jk=0; jk<n2-1; jk++, ijk++) {
+            if (!is_active[ijk]) continue;
+            // lower and upper bound are the same: we should always keep this as eq. constraint
+            if (umax[ijk]-umin[ijk] < eps) continue;
+            int k = jk %% n;
+            double dot = 0.0; // gradu dot T_ijk
+            double norm = 0.0, lhs = 0.0;
+            if (k<n-1) { // contribution to the right
+              dot += Tx*gradu[jk+1]; norm += Tx*Tx;
+              lhs += Tx*u[jk+1];
+            }
+            if (jk+n<n2) { // contribution from row below
+              dot += Ty*gradu[jk+n]; norm += Ty*Ty;
+              lhs += Ty*u[jk+n];
+            }
+            double lambda = dot/sqrt(norm);
+            if (umax[ijk]-u0[jk]-lhs<eps) { // upper bound constraint is active
+              lambda = -lambda;
+            }
+            if (lambda>*max_lambda) {
+              *max_lambda = lambda; max_ijk = ijk;
+            }
+        }
+    }
+    if (max_lambda>0) {
+      is_active[max_ijk] = false;
+    }
+}
+
 void least_squares_kernel(
     PetscScalar *u,  // the field to be limited, in taylor basis: n x n
     PetscScalar *u0, // a copy of this field (left unchanged): n x n
@@ -140,8 +178,8 @@ void least_squares_kernel(
     for (int jk=1; jk<n2; jk++) {
       up[jk] = alpha*u[jk];
     }
-    find_new_active(up, is_active, umin, umax, u0);
-    while (alpha<1.0) {
+    while (true) {
+        find_new_active(up, is_active, umin, umax, u0);
         int nactive = 0;
         // assemble constraint matrix T
         // first constraint is simply imposing u^(0,0) to be unchanged
@@ -221,9 +259,19 @@ void least_squares_kernel(
             for (int jk=1; jk<n2; jk++) {
               up[jk] = alpha*u[jk] + (1-alpha)*up[jk];
             }
-            find_new_active(up, is_active, umin, umax, u0);
         } else {
-          alpha = 1.;
+          // compute gradu = M (u-u0) = U^T y
+          PetscScalar gradu[n2];
+          for (int i=0; i<n2; i++) { // column index of U
+            gradu[i] = 0.;
+            for (int j=0; j<i+1; j++) { // row
+              gradu[i] += mass[i*n2+j]*y[j];
+            }
+          }
+          double max_lambda;
+          find_least_optimal(u, gradu, is_active, umin, umax, u0, &max_lambda);
+          if (max_lambda<0.) break;
+          memcpy(up, u, n2*sizeof(PetscScalar));
         }
     }
 }

@@ -67,10 +67,10 @@ def test_slope_limiters():
             np.testing.assert_allclose(u.dat.data[:].max(), 0.45)
 
 def test_least_squares_limiter():
-    mesh1d = fd.UnitIntervalMesh(1)
-    mesh = fd.ExtrudedMesh(mesh1d, 1)
-    mesh1d = fd.CircleManifoldMesh(8, 1.22, degree=2)
-    mesh = fd.ExtrudedMesh(mesh1d, 2, extrusion_type='radial')
+    mesh1d = fd.UnitIntervalMesh(4)
+    mesh = fd.ExtrudedMesh(mesh1d, 2)
+    # mesh1d = fd.CircleManifoldMesh(8, 1.22, degree=2)
+    # mesh = fd.ExtrudedMesh(mesh1d, 2, extrusion_type='radial')
     V = gadopt.utility.get_functionspace(mesh, "DG", 1, "DG", 1)
     u = fd.Function(V)
     u0 = fd.Function(V)
