@@ -44,7 +44,7 @@ class ReferenceMaterial(AbstractMaterial):
 class BottomMaterial(AbstractMaterial):
     @classmethod
     def B(cls):
-        return 0.5
+        return 0.2
 
     @classmethod
     def RaB(cls):
@@ -88,7 +88,7 @@ class Simulation:
     # material interface during advection and to unwanted motion of the material interface
     # during reinitialisation.
     domain_dimensions = (3, 1)
-    mesh_elements = (128, 64)
+    mesh_elements = (196, 64)
 
     slope = 0
     intercept = 0.5
@@ -108,8 +108,8 @@ class Simulation:
 
     dt = 1e-6
     subcycles = 1
-    time_end = 0.025
-    dump_period = 1e-4
+    time_end = 0.0236
+    dump_period = 4e-4
 
     @classmethod
     def initialise_temperature(cls, temperature):

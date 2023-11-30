@@ -4,66 +4,81 @@ from gadopt.level_set_tools import AbstractMaterial
 
 
 class ReferenceMaterial(AbstractMaterial):
-    def B():
+    @classmethod
+    def B(cls):
         return None
 
-    def RaB():
+    @classmethod
+    def RaB(cls):
         return None
 
-    def density():
+    @classmethod
+    def density(cls):
         return 3200
 
     @classmethod
     def viscosity(cls, velocity):
         return 1e21
 
-    def thermal_expansion():
+    @classmethod
+    def thermal_expansion(cls):
         return 1
 
-    def thermal_conductivity():
+    @classmethod
+    def thermal_conductivity(cls):
         return 1
 
-    def specific_heat_capacity():
+    @classmethod
+    def specific_heat_capacity(cls):
         return 1
 
-    def internal_heating_rate():
+    @classmethod
+    def internal_heating_rate(cls):
         return 0
 
 
 class DenseMaterial(AbstractMaterial):
-    def B():
+    @classmethod
+    def B(cls):
         return None
 
-    def RaB():
+    @classmethod
+    def RaB(cls):
         return None
 
-    def density():
+    @classmethod
+    def density(cls):
         return 3300
 
     @classmethod
     def viscosity(cls, velocity):
         return 1e21
 
-    def thermal_expansion():
+    @classmethod
+    def thermal_expansion(cls):
         return 1
 
-    def thermal_conductivity():
+    @classmethod
+    def thermal_conductivity(cls):
         return 1
 
-    def specific_heat_capacity():
+    @classmethod
+    def specific_heat_capacity(cls):
         return 1
 
-    def internal_heating_rate():
+    @classmethod
+    def internal_heating_rate(cls):
         return 0
 
 
 class Simulation:
     name = "Gerya_2003"
 
-    # In material_interfaces, for each sub-list, the first material corresponds to the
-    # negative side of the signed distance function
-    materials = {"ref_mat": ReferenceMaterial, "dens_mat": DenseMaterial}
-    material_interfaces = [[materials["dens_mat"], materials["ref_mat"]]]
+    # List simulation materials such that, starting from the end, each material
+    # corresponds to the negative side of the signed distance function associated with
+    # each level set.
+    materials = [ReferenceMaterial, DenseMaterial]
+    reference_material = ReferenceMaterial
 
     # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
     # the level-set approach. Insufficient mesh refinement leads to the vanishing of the

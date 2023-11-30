@@ -1,6 +1,6 @@
 import firedrake as fd
 import numpy as np
-from benchmarks.robey_2019 import Simulation
+from benchmarks.gerya_2003 import Simulation
 from mpi4py import MPI
 
 from gadopt.approximations import BoussinesqApproximation
@@ -16,16 +16,17 @@ from gadopt.time_stepper import ImplicitMidpoint, eSSPRKs3p3, eSSPRKs10p3
 from gadopt.utility import TimestepAdaptor
 
 
-def recursive_conditional(level_set, value_pairs):
+def recursive_conditional(level_set, material_value):
     ls = level_set.pop()
-    values = value_pairs.pop()
 
-    if level_set:
+    if level_set:  # Directly specify material value on only one side of the interface
         return fd.conditional(
-            ls < 0.5, values[0], recursive_conditional(level_set, value_pairs)
+            ls < 0.5,
+            material_value.pop(),
+            recursive_conditional(level_set, material_value),
         )
-    else:
-        return fd.conditional(ls < 0.5, *values)
+    else:  # Final level set; specify values for last two materials
+        return fd.conditional(ls < 0.5, *reversed(material_value))
 
 
 def write_output(dump_counter):
@@ -63,9 +64,7 @@ func_space_pres = fd.FunctionSpace(mesh, "CG", 1)
 func_space_stokes = fd.MixedFunctionSpace([func_space_vel, func_space_pres])
 # Define Stokes functions on the mixed function space
 stokes_function = fd.Function(func_space_stokes)
-velocity_ufl, pressure_ufl = fd.split(
-    stokes_function
-)  # Symbolic UFL expression for velocity and pressure
+velocity_ufl, pressure_ufl = fd.split(stokes_function)  # UFL expressions
 velocity, pressure = stokes_function.subfunctions  # Associated Firedrake functions
 velocity.rename("Velocity")
 pressure.rename("Pressure")
@@ -76,12 +75,12 @@ temperature = fd.Function(func_space_temp, name="Temperature")
 Simulation.initialise_temperature(temperature)
 
 # Set up function spaces and functions used in the level-set approach
-level_set_func_space_deg = 2
+level_set_func_space_deg = 1
 func_space_ls = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
 func_space_lsgp = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
 level_set = [
     fd.Function(func_space_ls, name=f"Level set #{i}")
-    for i in range(len(Simulation.material_interfaces))
+    for i in range(len(Simulation.materials) - 1)
 ]
 level_set_grad_proj = [
     fd.Function(func_space_lsgp, name=f"Level-set gradient (projection) #{i}")
@@ -111,21 +110,14 @@ func_space_interp = fd.FunctionSpace(mesh, "CG", level_set_func_space_deg)
 density = fd.Function(func_space_interp, name="Density")
 RaB = fd.Function(func_space_interp, name="RaB")
 
-B_is_None = all(
-    Simulation.materials[mat].B() is None for mat in Simulation.materials.keys()
-)
-RaB_is_None = all(
-    Simulation.materials[mat].RaB() is None for mat in Simulation.materials.keys()
-)
+B_is_None = all(material.B() is None for material in Simulation.materials)
+RaB_is_None = all(material.RaB() is None for material in Simulation.materials)
 if B_is_None and RaB_is_None:
     RaB_ufl = fd.Constant(1)
-    ref_dens = Simulation.materials["ref_mat"].density()
+    ref_dens = fd.Constant(Simulation.reference_material.density())
     dens_diff = recursive_conditional(
         level_set.copy(),
-        [
-            [mat_0.density() - ref_dens, mat_1.density() - ref_dens]
-            for mat_0, mat_1 in Simulation.material_interfaces
-        ],
+        [material.density() - ref_dens for material in Simulation.materials],
     )
     density.interpolate(dens_diff + ref_dens)
 elif RaB_is_None:
@@ -133,10 +125,7 @@ elif RaB_is_None:
     dens_diff = fd.Constant(1)
     RaB_ufl = recursive_conditional(
         level_set.copy(),
-        [
-            [mat_0.B() * Simulation.Ra, mat_1.B() * Simulation.Ra]
-            for mat_0, mat_1 in Simulation.material_interfaces
-        ],
+        [Simulation.Ra * material.B() for material in Simulation.materials],
     )
     RaB.interpolate(RaB_ufl)
 elif B_is_None:
@@ -144,7 +133,7 @@ elif B_is_None:
     dens_diff = fd.Constant(1)
     RaB_ufl = recursive_conditional(
         level_set.copy(),
-        [[mat_0.RaB(), mat_1.RaB()] for mat_0, mat_1 in Simulation.material_interfaces],
+        [material.RaB() for material in Simulation.materials],
     )
     RaB.interpolate(RaB_ufl)
 else:
@@ -152,19 +141,13 @@ else:
 
 viscosity_ufl = recursive_conditional(
     level_set.copy(),
-    [
-        [mat_0.viscosity(velocity_ufl), mat_1.viscosity(velocity_ufl)]
-        for mat_0, mat_1 in Simulation.material_interfaces
-    ],
+    [material.viscosity(velocity_ufl) for material in Simulation.materials],
 )
 viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
 
 int_heat_rate_ufl = recursive_conditional(
     level_set.copy(),
-    [
-        [mat_0.internal_heating_rate(), mat_1.internal_heating_rate()]
-        for mat_0, mat_1 in Simulation.material_interfaces
-    ],
+    [material.internal_heating_rate() for material in Simulation.materials],
 )
 int_heat_rate = fd.Function(func_space_temp, name="Internal heating rate").interpolate(
     int_heat_rate_ufl
@@ -249,7 +232,7 @@ reinitialisation_solver = [
 
 # Time-loop objects
 t_adapt = TimestepAdaptor(
-    dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.2
+    dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.65
 )
 time_output = fd.Function(func_space_pres, name="Time")
 time_now, step, dump_counter = 0, 0, 0
@@ -278,7 +261,9 @@ while time_now < Simulation.time_end:
     #     update_internal_heating_rate(int_heat_rate, time_now)
 
     # Update time and timestep
-    t_adapt.maximum_timestep = Simulation.time_end - time_now
+    t_adapt.maximum_timestep = min(
+        Simulation.dump_period, Simulation.time_end - time_now
+    )
     dt.assign(t_adapt.update_timestep())
     time_now += float(dt)
 

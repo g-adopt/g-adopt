@@ -1,11 +1,11 @@
 from functools import partial
 
+import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
+
 from gadopt.diagnostics import entrainment, rms_velocity
 from gadopt.level_set_tools import AbstractMaterial
-
-import initial_signed_distance as isd
 
 
 class ReferenceMaterial(AbstractMaterial):
@@ -43,39 +43,46 @@ class ReferenceMaterial(AbstractMaterial):
 
 
 class BuoyantMaterial(AbstractMaterial):
-    def B():
+    @classmethod
+    def B(cls):
         return None
 
-    def RaB():
+    @classmethod
+    def RaB(cls):
         return -1
 
-    def density():
+    @classmethod
+    def density(cls):
         return None
 
     @classmethod
     def viscosity(cls, velocity):
         return 1
 
-    def thermal_expansion():
+    @classmethod
+    def thermal_expansion(cls):
         return 1
 
-    def thermal_conductivity():
+    @classmethod
+    def thermal_conductivity(cls):
         return 1
 
-    def specific_heat_capacity():
+    @classmethod
+    def specific_heat_capacity(cls):
         return 1
 
-    def internal_heating_rate():
+    @classmethod
+    def internal_heating_rate(cls):
         return 0
 
 
 class Simulation:
     name = "van_Keken_1997_isothermal"
 
-    # In material_interfaces, for each sub-list, the first material corresponds to the
-    # negative side of the signed distance function
-    materials = {"ref_mat": ReferenceMaterial, "buoy_mat": BuoyantMaterial}
-    material_interfaces = [[materials["buoy_mat"], materials["ref_mat"]]]
+    # List simulation materials such that, starting from the end, each material corresponds
+    # to the negative side of the signed distance function associated to each level set.
+    materials = [ReferenceMaterial, BuoyantMaterial]
+    reference_material = ReferenceMaterial
 
     # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
     # the level-set approach. Insufficient mesh refinement leads to the vanishing of the
@@ -136,7 +143,7 @@ class Simulation:
 
     @classmethod
     def save_and_plot(cls):
-        np.savez(f"{cls.name}/output", diag_fields=cls.diag_fields)
+        np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
 
         fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
 

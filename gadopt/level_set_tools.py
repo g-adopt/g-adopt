@@ -54,6 +54,11 @@ class AbstractMaterial(abc.ABC):
         pass
 
     @classmethod
+    @abc.abstractmethod
+    def internal_heating_rate(cls):
+        pass
+
+    @classmethod
     def thermal_diffusivity(cls):
         return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
 

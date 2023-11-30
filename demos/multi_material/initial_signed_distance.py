@@ -91,4 +91,27 @@ def isd_schmalholz(parameters, level_set):
         for x, y in zip(node_coords_x, node_coords_y)
     ]
     return [dist if is_inside else -dist for is_inside, dist in node_relation_to_curve]
-    return [dist if is_inside else -dist for is_inside, dist in node_relation_to_curve]
+
+
+def isd_schmeling(parameters, level_set):
+    rectangle_lith = sl.Polygon(
+        [(1e6, 7e5), (3e6, 7e5), (3e6, 6e5), (1e6, 6e5), (1e6, 7e5)]
+    )
+    sl.prepare(rectangle_lith)
+    rectangle_slab = sl.Polygon(
+        [(1e6, 6e5), (1.1e6, 6e5), (1.1e6, 5e5), (1e6, 5e5), (1e6, 6e5)]
+    )
+    sl.prepare(rectangle_slab)
+    polygon_lith = sl.union(rectangle_lith, rectangle_slab)
+    sl.prepare(polygon_lith)
+
+    node_coords_x, node_coords_y = node_coordinates(level_set)
+    node_relation_to_curve = [
+        (
+            polygon_lith.contains(sl.Point(x, y))
+            or polygon_lith.boundary.contains(sl.Point(x, y)),
+            polygon_lith.boundary.distance(sl.Point(x, y)),
+        )
+        for x, y in zip(node_coords_x, node_coords_y)
+    ]
+    return [-dist if is_inside else dist for is_inside, dist in node_relation_to_curve]
