@@ -6,7 +6,6 @@
 # and for regression testing.
 
 from gadopt import *
-from gadopt.scalar_equation import ScalarAdvectionDiffusionEquation
 from gadopt.time_stepper import DIRK33
 import numpy as np
 import sys
@@ -58,21 +57,29 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     T = 10.
     dt = 0.01
 
-    eq = ScalarAdvectionDiffusionEquation(V, V, su_advection=su_advection)
-    fields = {'velocity': u, 'diffusivity': kappa, 'source': 1.0}
-    strong_bcs = DirichletBC(V, 0, [1, 2])
-    timestepper = DIRK33(eq, q, fields, dt, strong_bcs=strong_bcs)
+    # Set up boundary conditions
+    q_left = 0.0
+    q_right = 0.0
+    # 'T' sets strong dirichlet boundary conditions for G-ADOPT's energy solver
+    bcs = {1: {'T': q_left}, 2: {'T': q_right}}
+
+    # Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
+    # the choice of units is up to the user.
+    approximation = BoussinesqApproximation(Ra=1, kappa=kappa)
+    approximation.energy_source = Constant(1)  # Provide a source term to force the equations.
+
+    energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=su_advection)
 
     steady_state_tolerance = 1e-7  # this may need tweaking for different length runs/Pe values
     t = 0.0
     step = 0
-
     while t < T - 0.5*dt:
-        timestepper.advance(t)
+        energy_solver.solve()
 
         # Calculate L2-norm of change in temperature:
-        maxchange = sqrt(assemble((q - timestepper.solution_old)**2 * dx))
+        maxchange = sqrt(assemble((q - energy_solver.T_old)**2 * dx))
         log("maxchange", maxchange)
+
         step += 1
         t += dt
         log("t=", t)

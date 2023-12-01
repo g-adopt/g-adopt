@@ -1,7 +1,8 @@
-from firedrake import DirichletBC, Function
+from firedrake import DirichletBC, Function, TensorFunctionSpace, Jacobian, dot
 from .scalar_equation import EnergyEquation
 from .utility import is_continuous, ensure_constant
-from .utility import log_level, INFO, DEBUG
+from .utility import log_level, INFO, DEBUG, log
+from .utility import absv, beta, su_nubar
 
 iterative_energy_solver_parameters = {
     "mat_type": "aij",
@@ -22,13 +23,13 @@ direct_energy_solver_parameters = {
 
 class EnergySolver:
     def __init__(self, T, u, approximation,
-                 delta_t, timestepper, bcs=None, solver_parameters=None, su_advection=None):
+                 delta_t, timestepper, bcs=None, solver_parameters=None, su_advection=False):
         self.T = T
         self.Q = T.function_space()
         self.mesh = self.Q.mesh()
         self.delta_t = delta_t
         rhocp = approximation.rhocp()
-        self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp, su_advection=su_advection)
+        self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp)
         self.fields = {
             'diffusivity': ensure_constant(approximation.kappa()),
             'reference_for_diffusion': approximation.Tbar,
@@ -39,6 +40,26 @@ class EnergySolver:
         sink = approximation.linearized_energy_sink(u)
         if sink:
             self.fields['absorption_coefficient'] = sink
+
+        if su_advection:
+            log("Using SU advection")
+            # SU(PG) ala Donea & Huerta:
+            # Columns of Jacobian J are the vectors that span the quad/hex
+            # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
+            # thus u^T J is (dx * u , dy * v)
+            # and following (2.44c) Pe = u^T J / 2 kappa
+            # beta(Pe) is the xibar vector in (2.44a)
+            # then we get artifical viscosity nubar from (2.49)
+
+            J = Function(TensorFunctionSpace(self.mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(self.mesh))
+            kappa = self.fields['diffusivity'] + 1e-12  # Set lower bound for diffusivity in case zero diffusivity specified for pure advection.
+            vel = self.fields['velocity']
+            Pe = absv(dot(vel, J)) / (2*kappa)  # Calculate grid peclet number
+            beta_pe = beta(Pe)
+
+            nubar = su_nubar(vel, J, beta_pe)  # Calculate SU artifical diffusion
+
+            self.fields['su_nubar'] = nubar
 
         if solver_parameters is None:
             if self.mesh.topological_dimension() == 2:

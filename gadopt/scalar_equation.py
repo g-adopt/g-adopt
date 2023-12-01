@@ -1,10 +1,8 @@
 from .equations import BaseTerm, BaseEquation
 from firedrake import dot, inner, div, grad, avg, jump, sign
-from firedrake import min_value, Identity, Function
-from firedrake import FacetArea, CellVolume, TensorFunctionSpace, Jacobian, as_vector
-from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio
-from .utility import absv, beta, su_nubar, log
-from numpy import ones
+from firedrake import min_value, Identity
+from firedrake import FacetArea, CellVolume
+from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio, log
 r"""
 This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
 
@@ -34,27 +32,10 @@ class ScalarAdvectionTerm(BaseTerm):
         if 'advective_velocity_scaling' in fields:
             u = fields['advective_velocity_scaling'] * u
 
-        if self.su_advection:
+        if 'su_nubar' in fields:
+            # SU(PG) ala Donea & Huerta 2003
             log("Using SU advection")
-            # SU(PG) ala Donea & Huerta:
-            # Columns of Jacobian J are the vectors that span the quad/hex
-            # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
-            # thus u^T J is (dx * u , dy * v)
-            # and following (2.44c) Pe = u^T J / 2 (as nu=diffusivity=1)
-            # beta(Pe) is the xibar vector in (2.44a)
-            # then we get artifical viscosity nubar from (2.49)
-
-            J = Function(TensorFunctionSpace(self.mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(self.mesh))
-
-            if 'diffusivity' not in fields:
-                beta_pe = as_vector(ones(self.dim))  # beta(Pe) -> 1 as kappa -> 0
-            else:
-                log("non zero diffusivity")
-                kappa = fields['diffusivity'] + 1e-12
-                Pe = absv(dot(u, J)) / (2*kappa)
-                beta_pe = beta(Pe)
-
-            nubar = su_nubar(u, J, beta_pe)
+            nubar = fields['su_nubar']
             phi = phi + nubar / (dot(u, u)+1e-12) * dot(u, grad(phi))
 
             F = phi * dot(u, grad(q)) * self.dx  # The advection term is not integrated by parts so there are no boundary terms
@@ -222,9 +203,9 @@ class ScalarAdvectionDiffusionEquation(BaseEquation):
 
 
 class EnergyEquation(ScalarAdvectionDiffusionEquation):
-    def __init__(self, test_space, trial_space, rhocp=None, quad_degree=None, su_advection=None):
+    def __init__(self, test_space, trial_space, rhocp=None, quad_degree=None):
         self.rhocp = rhocp
-        super().__init__(test_space, trial_space, quad_degree=quad_degree, su_advection=su_advection)
+        super().__init__(test_space, trial_space, quad_degree=quad_degree)
 
     def mass_term(self, test, trial):
         if self.rhocp:
