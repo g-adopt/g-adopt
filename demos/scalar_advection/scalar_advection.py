@@ -11,11 +11,11 @@ from numpy import ones
 # We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
 
-# We set up a function space of discontinous bilinear elements for :math:`q`, and
+# We set up a function space of bilinear elements for :math:`q`, and
 # a vector-valued continuous function space for our velocity field. ::
 
 V = FunctionSpace(mesh, "Q", 1)
-W = VectorFunctionSpace(mesh, "CG", 1)
+W = VectorFunctionSpace(mesh, "Q", 1)
 
 # We set up the initial velocity field using a simple analytic expression. ::
 
@@ -62,6 +62,7 @@ q = Function(V).assign(q_init)
 outfile = File("CG_SUadv_q.pvd")
 outfile.write(q)
 
+# Calculate nu_bar for plotting
 J = Function(TensorFunctionSpace(mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(mesh))
 beta_pe = as_vector(ones(2))  # beta(Pe) -> 1 as kappa -> 0
 nubar = Function(V).interpolate(su_nubar(u, J, beta_pe))

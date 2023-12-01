@@ -486,7 +486,7 @@ def beta(Pe):
 
 
 def su_nubar(u, J, beta_pe):
-    """SU stabilisation viscosity as a function of velocity, Jacio beta(Pe)"""
+    """SU stabilisation viscosity as a function of velocity, Jaciobian and beta(Pe)"""
     # SU(PG) ala Donea & Huerta:
     # Columns of Jacobian J are the vectors that span the quad/hex
     # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)

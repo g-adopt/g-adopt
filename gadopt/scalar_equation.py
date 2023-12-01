@@ -2,7 +2,8 @@ from .equations import BaseTerm, BaseEquation
 from firedrake import dot, inner, div, grad, avg, jump, sign
 from firedrake import min_value, Identity, Function
 from firedrake import FacetArea, CellVolume, TensorFunctionSpace, Jacobian, as_vector
-from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio, absv, beta, su_nubar
+from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio
+from .utility import absv, beta, su_nubar, log
 from numpy import ones
 r"""
 This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
@@ -34,7 +35,7 @@ class ScalarAdvectionTerm(BaseTerm):
             u = fields['advective_velocity_scaling'] * u
 
         if self.su_advection:
-            print("Using SU advection")
+            log("Using SU advection")
             # SU(PG) ala Donea & Huerta:
             # Columns of Jacobian J are the vectors that span the quad/hex
             # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
@@ -48,7 +49,7 @@ class ScalarAdvectionTerm(BaseTerm):
             if 'diffusivity' not in fields:
                 beta_pe = as_vector(ones(self.dim))  # beta(Pe) -> 1 as kappa -> 0
             else:
-                print("non zero diffusivity")
+                log("non zero diffusivity")
                 kappa = fields['diffusivity'] + 1e-12
                 Pe = absv(dot(u, J)) / (2*kappa)
                 beta_pe = beta(Pe)
