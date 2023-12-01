@@ -1,12 +1,16 @@
 # Demo for scalar advection-diffusion based on Figure 2.19 in
 # Chapter 2 Steady transport problems from Finite element Methods
 # for Flow problems - Donea and Huerta, 2003
+# In this demo the flow direction is 'skewed' relative to the grid 
+# so it is a good test of the tensor implementation of SU, compared 
+# with the quasi 1D demo based on Figure 2.7.
 
 from gadopt import *
 from gadopt.scalar_equation import ScalarAdvectionDiffusionEquation
 from gadopt.time_stepper import DIRK33
 
-mesh = UnitSquareMesh(10, 10, quadrilateral=True)
+nx, ny = 10, 10
+mesh = UnitSquareMesh(nx, ny, quadrilateral=True)
 
 # We set up a function space of discontinous bilinear elements for :math:`q`, and
 # a vector-valued continuous function space for our velocity field. ::
@@ -19,11 +23,11 @@ W = VectorFunctionSpace(mesh, "CG", 1)
 x, y = SpatialCoordinate(mesh)
 velocity = as_vector((cos(30*pi/180), sin(30*pi/180)))
 u = Function(W).interpolate(velocity)
-File('u.pvd').write(u)
+File('advdif_DH219_u.pvd').write(u)
 
-# the diffusivity
-Pe = 1e4
-h = 0.1
+# the diffusivity based on a chosen grid Peclet number
+Pe = 1e4  # This seems very high so presumably diffusion added from SU dominates.
+h = 1.0 / nx
 kappa = Constant(1*h/(2*Pe))
 
 
@@ -42,7 +46,7 @@ dt = 0.01
 
 eq = ScalarAdvectionDiffusionEquation(V, V, su_advection=True)
 fields = {'velocity': u, 'diffusivity': kappa, 'source': 0.0}
-# weakly applied dirichlet bcs on top and bottom
+# strongly applied dirichlet bcs on top and bottom
 q_left = DirichletBC(V, conditional(y < 0.2, 0.0, 1.0), 1)
 q_bottom = DirichletBC(V, 0, 3)
 strong_bcs = [q_bottom, q_left]
