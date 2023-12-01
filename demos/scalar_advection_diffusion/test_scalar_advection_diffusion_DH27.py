@@ -1,3 +1,9 @@
+# Test based on scalar advection-diffusion problem from Figure 2.7 in
+# Chapter 2 Steady transport problems from Finite element Methods
+# for Flow problems - Donea and Huerta, 2003
+# Tests for second order convergence cf with the analytical solution
+# (when grid Peclet < 1) and for regression testing based on solution norm.
+
 import itertools
 import numpy as np
 from pathlib import Path

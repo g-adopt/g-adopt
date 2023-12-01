@@ -1,3 +1,10 @@
+# Demo for scalar advection-diffusion based on Figure 2.7 in
+# Chapter 2 Steady transport problems from Finite element Methods
+# for Flow problems - Donea and Huerta, 2003
+# This script is also called as part of the CI for testing
+# compared with the analytical solution (when grid Peclet < 1)
+# and for regression testing.
+
 from gadopt import *
 from gadopt.scalar_equation import ScalarAdvectionDiffusionEquation
 from gadopt.time_stepper import DIRK33
@@ -18,7 +25,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     """
     mesh = UnitSquareMesh(n, n, quadrilateral=True)
 
-    # We set up a function space of discontinous bilinear elements for :math:`q`, and
+    # We set up a function space of bilinear elements for :math:`q`, and
     # a vector-valued continuous function space for our velocity field. ::
 
     V = FunctionSpace(mesh, "CG", 1)
@@ -53,7 +60,6 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
 
     eq = ScalarAdvectionDiffusionEquation(V, V, su_advection=su_advection)
     fields = {'velocity': u, 'diffusivity': kappa, 'source': 1.0}
-    # weakly applied dirichlet bcs on top and bottom
     strong_bcs = DirichletBC(V, 0, [1, 2])
     timestepper = DIRK33(eq, q, fields, dt, strong_bcs=strong_bcs)
 
@@ -62,21 +68,20 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     step = 0
 
     while t < T - 0.5*dt:
-        # the solution reaches a steady state and finishes the solve when a  max no. of iterations is reached
         timestepper.advance(t)
 
         # Calculate L2-norm of change in temperature:
         maxchange = sqrt(assemble((q - timestepper.solution_old)**2 * dx))
-        print("maxchange", maxchange)
+        log("maxchange", maxchange)
         step += 1
         t += dt
-        print("t=", t)
+        log("t=", t)
 
         if do_write:
             outfile.write(q)
 
         if maxchange < steady_state_tolerance:
-            print("Steady-state acheieved -- exiting time-step loop")
+            log("Steady-state acheieved -- exiting time-step loop")
             break
 
     # analytical solution from equation 2.23 in Chapter 2 Steady transport problems
@@ -90,8 +95,8 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
         L2anal_q = norm(q_anal)
         L2q = norm(q)
 
-        print("L2_anal_q", L2anal_q)
-        print("L2_error_q", L2error_q)
+        log("L2_anal_q", L2anal_q)
+        log("L2_error_q", L2error_q)
 
     return L2error_q, L2anal_q, L2q
 
@@ -110,4 +115,4 @@ if __name__ == "__main__":
     else:
         # default to a simple case if not running a specific
         # case through CI
-        model(5, write=True)
+        model(5, do_write=True)
