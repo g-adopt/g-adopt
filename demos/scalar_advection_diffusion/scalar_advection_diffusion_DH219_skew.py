@@ -6,7 +6,6 @@
 # with the quasi 1D demo based on Figure 2.7.
 
 from gadopt import *
-from gadopt.scalar_equation import ScalarAdvectionDiffusionEquation
 from gadopt.time_stepper import DIRK33
 
 nx, ny = 10, 10
@@ -26,7 +25,7 @@ u = Function(W).interpolate(velocity)
 File('advdif_DH219_u.pvd').write(u)
 
 # the diffusivity based on a chosen grid Peclet number
-Pe = 1e4  # This seems very high so presumably diffusion added from SU dominates.
+Pe = 1e1  # This seems very high so presumably diffusion added from SU dominates.
 h = 1.0 / nx
 kappa = Constant(1*h/(2*Pe))
 
@@ -44,24 +43,31 @@ outfile.write(q)
 T = 10.
 dt = 0.01
 
-eq = ScalarAdvectionDiffusionEquation(V, V, su_advection=True)
-fields = {'velocity': u, 'diffusivity': kappa, 'source': 0.0}
+# Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
+# the choice of units is up to the user. We use the diagonaly implicit DIRK33 Runge-Kutta
+# method for timestepping. 'T' means that the boundary conditions will be applied strongly
+# by the energy solver.
+approximation = BoussinesqApproximation(Ra=1, kappa=kappa)
 # strongly applied dirichlet bcs on top and bottom
-q_left = DirichletBC(V, conditional(y < 0.2, 0.0, 1.0), 1)
-q_bottom = DirichletBC(V, 0, 3)
-strong_bcs = [q_bottom, q_left]
-timestepper = DIRK33(eq, q, fields, dt, strong_bcs=strong_bcs)
+q_left = conditional(y < 0.2, 0.0, 1.0)
+q_bottom = 0
+bcs = {3: {'T': q_bottom}, 1: {'T': q_left}}
+energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
 
+# Get nubar (additional SU diffusion) for plotting
+nubar = Function(V).interpolate(energy_solver.fields['su_nubar'])
+nubar_outfile = File("advdof_DH219_skew_CG1_Pe"+str(Pe)+"_SU_nubar.pvd")
+nubar_outfile.write(nubar)
 
 t = 0.0
 step = 0
 while t < T - 0.5*dt:
     # the solution reaches a steady state and finishes the solve when a  max no. of iterations is reached
-    timestepper.advance(t)
+    energy_solver.solve()
 
     step += 1
     t += dt
 
-    if step % 1 == 0:
+    if step % 10 == 0:
         outfile.write(q)
         print("t=", t)

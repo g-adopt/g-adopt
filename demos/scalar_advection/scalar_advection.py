@@ -1,12 +1,9 @@
 # Demo for pure scalar advection - this is mostly copied from the Firedrake demo DG_advection,
-# but here we use gadopt's implementation as ScalarAdvectionEquation and use a CG discretisation
+# but here we use G-ADOPT's Energy solver and use a CG discretisation
 # with Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
-from gadopt.scalar_equation import ScalarAdvectionEquation
-from gadopt.time_stepper import SSPRK33
-from gadopt.utility import su_nubar
-from numpy import ones
+from gadopt.time_stepper import DIRK33
 
 # We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
@@ -62,13 +59,6 @@ q = Function(V).assign(q_init)
 outfile = File("CG_SUadv_q.pvd")
 outfile.write(q)
 
-# Calculate nu_bar for plotting
-J = Function(TensorFunctionSpace(mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(mesh))
-beta_pe = as_vector(ones(2))  # beta(Pe) -> 1 as kappa -> 0
-nubar = Function(V).interpolate(su_nubar(u, J, beta_pe))
-
-nubar_outfile = File("CG_SUadv_nubar.pvd")
-nubar_outfile.write(nubar)
 
 u_outfile = File("CG_SUadv_u.pvd")
 u_outfile.write(u)
@@ -82,24 +72,25 @@ dt = T/600.0
 q_in = Constant(1.0)
 
 
-# Now we call G-ADOPT's scalar advection equation to set up the equations
-# and set up a timestepper. We use the SSPRK33 Runge-Kutta method for
-# timestepping. We also need to provide the velocity field, u, to the timestepper
-# as well as boundary conditions. In this case we apply a boundary value
-# for when there is inflow.
-
-eq = ScalarAdvectionEquation(V, V, su_advection=True)
-fields = {'velocity': u}
+# Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
+# the choice of units is up to the user. We set the diffusiviy to zero for pure advection.
+# We also apply weak boundary conditions on inflow regions.
+approximation = BoussinesqApproximation(Ra=1, kappa=Constant(0))
 bc_in = {'q': q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
-timestepper = SSPRK33(eq, q, fields, dt, bnd_conditions=bcs)
+energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
+
+# Get nubar (additional SU diffusion) for plotting
+nubar = Function(V).interpolate(energy_solver.fields['su_nubar'])
+nubar_outfile = File("CG_SUadv_nubar.pvd")
+nubar_outfile.write(nubar)
 
 # Here is the time stepping loop, with an output every 20 steps.
 t = 0.0
 step = 0
 while t < T - 0.5*dt:
 
-    timestepper.advance(t)
+    energy_solver.solve()
 
     step += 1
     t += dt

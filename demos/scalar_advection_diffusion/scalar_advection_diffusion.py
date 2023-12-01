@@ -1,11 +1,9 @@
 # Demo for scalar advection-diffusion - this is mostly copied from the scalar
-# advection demo but here we use gadopt's ScalarAdvectionDiffusionEquation and use
-# a CG discretisation with Streamline Upwind (SU) stabilisation.
+# advection demo but here we use G-ADOPT's Energy solver and a CG discretisation
+# with Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
-from gadopt.scalar_equation import ScalarAdvectionDiffusionEquation
 from gadopt.time_stepper import DIRK33
-from gadopt.utility import absv, beta, su_nubar
 
 # We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
@@ -29,20 +27,9 @@ u = Function(W).interpolate(velocity)
 
 kappa = Constant(1e-4)
 
-# Calculate nu_bar for plotting
-J = Function(TensorFunctionSpace(mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(mesh))
-grid_peclet = absv(dot(u, J)) / (2*kappa)
-beta_pe = beta(grid_peclet)
-nubar = Function(V).interpolate(su_nubar(u, J, beta_pe))
-
-# Plot nu_bar
-nubar_outfile = File("CG_SUadvdiff_nubar.pvd")
-nubar_outfile.write(nubar)
-
 # Plot velocity
 u_outfile = File("CG_SUadvdiff_u.pvd")
 u_outfile.write(u)
-
 
 # Set up the initial conditions (similar to the scalar advection example)
 cyl_r0 = 0.15
@@ -70,31 +57,27 @@ T = 10.
 dt = T/600.0
 
 
-# Now we call G-ADOPT's scalar advection diffusion equation to set up the equations
-# and set up a timestepper. We use the diagonaly implicit DIRK33 Runge-Kutta method for
-# timestepping. We also need to provide the velocity field, u, to the timestepper
-# as well as boundary conditions. In this case we apply a boundary value
-# for when there is inflow.
-eq = ScalarAdvectionDiffusionEquation(V, V, su_advection=True)
-fields = {'velocity': u, 'diffusivity': kappa}
-
-# weakly applied dirichlet bcs on top and bottom
+# Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
+# the choice of units is up to the user. We use the diagonaly implicit DIRK33 Runge-Kutta
+# method for timestepping. 'T' means that the boundary conditions will be applied strongly
+# by the energy solver.
+approximation = BoussinesqApproximation(Ra=1, kappa=kappa)
 q_top = 1.0
 q_bottom = 0.0
-bcs = {3: {'q': q_bottom}, 4: {'q': q_top}}
+bcs = {3: {'T': q_bottom}, 4: {'T': q_top}}
+energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
 
-# Strongly applied dirichlet bcs on top and bottom
-strong_qtop = DirichletBC(V, q_top, 4)
-strong_qbottom = DirichletBC(V, q_bottom, 3)
-strong_bcs = [strong_qtop, strong_qbottom]
-timestepper = DIRK33(eq, q, fields, dt, strong_bcs=strong_bcs)  # uncomment for weak bcs bnd_conditions=bcs)
+# Get nubar (additional SU diffusion) for plotting
+nubar = Function(V).interpolate(energy_solver.fields['su_nubar'])
+nubar_outfile = File("CG_SUadvdiff_nubar.pvd")
+nubar_outfile.write(nubar)
 
 # Here is the time stepping loop, with an output every 20 steps.
 t = 0.0
 step = 0
 while t < T - 0.5*dt:
 
-    timestepper.advance(t)
+    energy_solver.solve()
 
     step += 1
     t += dt
