@@ -1,8 +1,8 @@
 # Demo for scalar advection-diffusion based on Figure 2.19 in
 # Chapter 2 Steady transport problems from Finite element Methods
 # for Flow problems - Donea and Huerta, 2003
-# In this demo the flow direction is 'skewed' relative to the grid 
-# so it is a good test of the tensor implementation of SU, compared 
+# In this demo the flow direction is 'skewed' relative to the grid
+# so it is a good test of the tensor implementation of SU, compared
 # with the quasi 1D demo based on Figure 2.7.
 
 from gadopt import *
