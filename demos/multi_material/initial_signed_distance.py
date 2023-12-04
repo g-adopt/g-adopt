@@ -54,7 +54,7 @@ def isd_rectangle(parameters, level_set):
         for x, y in zip(node_coords_x, node_coords_y)
     ]
     return [
-        -dist if is_inside else dist for is_inside, dist in node_relation_to_rectangle
+        dist if is_inside else -dist for is_inside, dist in node_relation_to_rectangle
     ]
 
 
@@ -114,4 +114,4 @@ def isd_schmeling(parameters, level_set):
         )
         for x, y in zip(node_coords_x, node_coords_y)
     ]
-    return [-dist if is_inside else dist for is_inside, dist in node_relation_to_curve]
+    return [dist if is_inside else -dist for is_inside, dist in node_relation_to_curve]

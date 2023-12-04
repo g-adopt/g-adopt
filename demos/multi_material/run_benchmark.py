@@ -1,6 +1,7 @@
 import firedrake as fd
 import numpy as np
-from benchmarks.gerya_2003 import Simulation
+from benchmarks.trim_2023 import Simulation
+from material_interface import diffuse_interface
 from mpi4py import MPI
 
 from gadopt.approximations import BoussinesqApproximation
@@ -14,19 +15,6 @@ from gadopt.level_set_tools import (
 from gadopt.stokes_integrators import StokesSolver, create_stokes_nullspace
 from gadopt.time_stepper import ImplicitMidpoint, eSSPRKs3p3, eSSPRKs10p3
 from gadopt.utility import TimestepAdaptor
-
-
-def recursive_conditional(level_set, material_value):
-    ls = level_set.pop()
-
-    if level_set:  # Directly specify material value on only one side of the interface
-        return fd.conditional(
-            ls < 0.5,
-            material_value.pop(),
-            recursive_conditional(level_set, material_value),
-        )
-    else:  # Final level set; specify values for last two materials
-        return fd.conditional(ls < 0.5, *reversed(material_value))
 
 
 def write_output(dump_counter):
@@ -75,7 +63,7 @@ temperature = fd.Function(func_space_temp, name="Temperature")
 Simulation.initialise_temperature(temperature)
 
 # Set up function spaces and functions used in the level-set approach
-level_set_func_space_deg = 1
+level_set_func_space_deg = 2
 func_space_ls = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
 func_space_lsgp = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
 level_set = [
@@ -115,43 +103,53 @@ RaB_is_None = all(material.RaB() is None for material in Simulation.materials)
 if B_is_None and RaB_is_None:
     RaB_ufl = fd.Constant(1)
     ref_dens = fd.Constant(Simulation.reference_material.density())
-    dens_diff = recursive_conditional(
+    dens_diff = diffuse_interface(
         level_set.copy(),
         [material.density() - ref_dens for material in Simulation.materials],
+        method="arithmetic",
     )
     density.interpolate(dens_diff + ref_dens)
 elif RaB_is_None:
     ref_dens = fd.Constant(1)
     dens_diff = fd.Constant(1)
-    RaB_ufl = recursive_conditional(
+    RaB_ufl = diffuse_interface(
         level_set.copy(),
         [Simulation.Ra * material.B() for material in Simulation.materials],
+        method="arithmetic",
     )
     RaB.interpolate(RaB_ufl)
 elif B_is_None:
     ref_dens = fd.Constant(1)
     dens_diff = fd.Constant(1)
-    RaB_ufl = recursive_conditional(
+    RaB_ufl = diffuse_interface(
         level_set.copy(),
         [material.RaB() for material in Simulation.materials],
+        method="arithmetic",
     )
     RaB.interpolate(RaB_ufl)
 else:
     raise ValueError("Providing B and RaB is redundant.")
 
-viscosity_ufl = recursive_conditional(
+viscosity_ufl = diffuse_interface(
     level_set.copy(),
     [material.viscosity(velocity_ufl) for material in Simulation.materials],
+    method="geometric",
 )
 viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
 
-int_heat_rate_ufl = recursive_conditional(
-    level_set.copy(),
-    [material.internal_heating_rate() for material in Simulation.materials],
-)
-int_heat_rate = fd.Function(func_space_temp, name="Internal heating rate").interpolate(
-    int_heat_rate_ufl
-)
+if Simulation.name == "Trim_2023":
+    int_heat_rate_ufl = fd.Function(func_space_temp, name="Internal heating rate")
+    int_heat_rate = int_heat_rate_ufl
+    Simulation.internal_heating_rate(int_heat_rate_ufl, 0)
+else:
+    int_heat_rate_ufl = diffuse_interface(
+        level_set.copy(),
+        [material.internal_heating_rate() for material in Simulation.materials],
+        method="geometric",
+    )
+    int_heat_rate = fd.Function(
+        func_space_interp, name="Internal heating rate"
+    ).interpolate(int_heat_rate_ufl)
 
 dt = fd.Constant(Simulation.dt)
 
@@ -193,15 +191,15 @@ reinitialisation_fields = [
     for ls_grad_proj in level_set_grad_proj
 ]
 
-# Force projected gradient norm to satisfy the reinitialisation equation
-projection_boundary_conditions = [
-    fd.DirichletBC(
-        func_space_lsgp,
-        ls * (1 - ls) / epsilon * fd.Constant((1, 0)),
-        "on_boundary",
-    )
-    for ls in level_set
-]
+# # Force projected gradient norm to satisfy the reinitialisation equation
+# projection_boundary_conditions = [
+#     fd.DirichletBC(
+#         func_space_lsgp,
+#         ls * (1 - ls) / epsilon * fd.Constant((1, 0)),
+#         "on_boundary",
+#     )
+#     for ls in level_set
+# ]
 
 # Set up level-set solvers
 level_set_solver = [
@@ -210,11 +208,15 @@ level_set_solver = [
     )
     for ls in level_set
 ]
+# projection_solver = [
+#     ProjectionSolver(ls_grad_proj, proj_fields, bcs=proj_bcs)
+#     for ls_grad_proj, proj_fields, proj_bcs in zip(
+#         level_set_grad_proj, projection_fields, projection_boundary_conditions
+#     )
+# ]
 projection_solver = [
-    ProjectionSolver(ls_grad_proj, proj_fields, bcs=proj_bcs)
-    for ls_grad_proj, proj_fields, proj_bcs in zip(
-        level_set_grad_proj, projection_fields, projection_boundary_conditions
-    )
+    ProjectionSolver(ls_grad_proj, proj_fields)
+    for ls_grad_proj, proj_fields in zip(level_set_grad_proj, projection_fields)
 ]
 reinitialisation_solver = [
     TimeStepperSolver(
@@ -257,15 +259,15 @@ while time_now < Simulation.time_end:
     if time_now >= dump_counter * Simulation.dump_period:  # Write to output file
         dump_counter = write_output(dump_counter)
 
-    # if Simulation.name.startswith("Trim_2023"):
-    #     update_internal_heating_rate(int_heat_rate, time_now)
-
     # Update time and timestep
     t_adapt.maximum_timestep = min(
         Simulation.dump_period, Simulation.time_end - time_now
     )
     dt.assign(t_adapt.update_timestep())
     time_now += float(dt)
+
+    if Simulation.name == "Trim_2023":
+        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
 
     # Solve Stokes system
     stokes_solver.solve()
@@ -280,7 +282,7 @@ while time_now < Simulation.time_end:
         ):
             ls_solver.solve()
 
-            if step > reini_frequency:  # Update stored function given previous solve
+            if step >= reini_frequency:  # Update stored function given previous solve
                 reini_solver.ts.solution_old.assign(ls)
 
             if step % reini_frequency == 0:  # Solve level-set reinitialisation

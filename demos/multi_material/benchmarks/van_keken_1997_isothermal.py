@@ -81,7 +81,7 @@ class Simulation:
 
     # List simulation materials such that, starting from the end, each material corresponds
     # to the negative side of the signed distance function associated to each level set.
-    materials = [ReferenceMaterial, BuoyantMaterial]
+    materials = [BuoyantMaterial, ReferenceMaterial]
     reference_material = ReferenceMaterial
 
     # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
@@ -89,7 +89,7 @@ class Simulation:
     # material interface during advection and to unwanted motion of the material interface
     # during reinitialisation.
     domain_dimensions = (0.9142, 1)
-    mesh_elements = (64, 128)
+    mesh_elements = (64, 64)
 
     material_interface_y = 0.2
     interface_deflection = 0.02

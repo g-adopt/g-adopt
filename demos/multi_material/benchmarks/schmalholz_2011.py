@@ -5,29 +5,36 @@ from gadopt.level_set_tools import AbstractMaterial
 
 
 class Mantle(AbstractMaterial):
-    def B():
+    @classmethod
+    def B(cls):
         return None
 
-    def RaB():
+    @classmethod
+    def RaB(cls):
         return None
 
-    def density():
+    @classmethod
+    def density(cls):
         return 3150
 
     @classmethod
     def viscosity(cls, velocity):
         return 1e21
 
-    def thermal_expansion():
+    @classmethod
+    def thermal_expansion(cls):
         return 1
 
-    def thermal_conductivity():
+    @classmethod
+    def thermal_conductivity(cls):
         return 1
 
-    def specific_heat_capacity():
+    @classmethod
+    def specific_heat_capacity(cls):
         return 1
 
-    def internal_heating_rate():
+    @classmethod
+    def internal_heating_rate(cls):
         return 0
 
 
@@ -36,13 +43,16 @@ class Lithosphere(AbstractMaterial):
     stress_exponent = 4
     visc_bounds = (1e21, 1e25)
 
-    def B():
+    @classmethod
+    def B(cls):
         return None
 
-    def RaB():
+    @classmethod
+    def RaB(cls):
         return None
 
-    def density():
+    @classmethod
+    def density(cls):
         return 3300
 
     @classmethod
@@ -58,33 +68,38 @@ class Lithosphere(AbstractMaterial):
             cls.visc_bounds[1],
         )
 
-    def thermal_expansion():
+    @classmethod
+    def thermal_expansion(cls):
         return 1
 
-    def thermal_conductivity():
+    @classmethod
+    def thermal_conductivity(cls):
         return 1
 
-    def specific_heat_capacity():
+    @classmethod
+    def specific_heat_capacity(cls):
         return 1
 
-    def internal_heating_rate():
+    @classmethod
+    def internal_heating_rate(cls):
         return 0
 
 
 class Simulation:
     name = "Schmalholz_2011"
 
-    # In material_interfaces, for each sub-list, the first material corresponds to the
-    # negative side of the signed distance function
-    materials = {"ref_mat": Mantle, "lithosphere": Lithosphere}
-    material_interfaces = [[materials["ref_mat"], materials["lithosphere"]]]
+    # List simulation materials such that, starting from the end, each material
+    # corresponds to the negative side of the signed distance function associated with
+    # each level set.
+    materials = [Mantle, Lithosphere]
+    reference_material = Mantle
 
     # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
     # the level-set approach. Insufficient mesh refinement leads to the vanishing of the
     # material interface during advection and to unwanted motion of the material interface
     # during reinitialisation.
     domain_dimensions = (1e6, 6.6e5)
-    mesh_elements = (128, 32)
+    mesh_elements = (32, 32)
 
     isd_params = [None]
 

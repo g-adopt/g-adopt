@@ -7,7 +7,7 @@ from gadopt.level_set_tools import AbstractMaterial
 from gadopt.utility import node_coordinates
 
 
-class ReferenceMaterial(AbstractMaterial):
+class TopMaterial(AbstractMaterial):
     @classmethod
     def B(cls):
         return 0
@@ -44,7 +44,7 @@ class ReferenceMaterial(AbstractMaterial):
 class BottomMaterial(AbstractMaterial):
     @classmethod
     def B(cls):
-        return 0.2
+        return 0.5
 
     @classmethod
     def RaB(cls):
@@ -78,17 +78,18 @@ class BottomMaterial(AbstractMaterial):
 class Simulation:
     name = "Robey_2019"
 
-    # In material_interfaces, for each sub-list, the first material corresponds to the
-    # negative side of the signed distance function
-    materials = {"ref_mat": ReferenceMaterial, "bottom_mat": BottomMaterial}
-    material_interfaces = [[materials["bottom_mat"], materials["ref_mat"]]]
+    # List simulation materials such that, starting from the end, each material
+    # corresponds to the negative side of the signed distance function associated with
+    # each level set.
+    materials = [BottomMaterial, TopMaterial]
+    reference_material = TopMaterial
 
     # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
     # the level-set approach. Insufficient mesh refinement leads to the vanishing of the
     # material interface during advection and to unwanted motion of the material interface
     # during reinitialisation.
     domain_dimensions = (3, 1)
-    mesh_elements = (196, 64)
+    mesh_elements = (144, 48)
 
     slope = 0
     intercept = 0.5

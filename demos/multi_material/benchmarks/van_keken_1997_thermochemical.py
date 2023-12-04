@@ -82,17 +82,17 @@ class DenseMaterial(AbstractMaterial):
 class Simulation:
     name = "van_Keken_1997_thermochemical"
 
-    # In material_interfaces, for each sub-list, the first material corresponds to the
-    # negative side of the signed distance function
-    materials = {"ref_mat": ReferenceMaterial, "dens_mat": DenseMaterial}
-    material_interfaces = [[materials["dens_mat"], materials["ref_mat"]]]
+    # List simulation materials such that, starting from the end, each material corresponds
+    # to the negative side of the signed distance function associated to each level set.
+    materials = [DenseMaterial, ReferenceMaterial]
+    reference_material = ReferenceMaterial
 
     # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
     # the level-set approach. Insufficient mesh refinement leads to the vanishing of the
     # material interface during advection and to unwanted motion of the material interface
     # during reinitialisation.
     domain_dimensions = (2, 1)
-    mesh_elements = (256, 64)
+    mesh_elements = (128, 32)
 
     slope = 0
     intercept = 0.025

@@ -151,7 +151,7 @@ class TimeStepperSolver:
         for id, bc in bcs.items():
             weak_bc = {}
             for type, value in bc.items():
-                if type == "T":
+                if type == "ls":
                     if apply_strongly:
                         self.strong_bcs.append(DirichletBC(self.func_space, value, id))
                     else:

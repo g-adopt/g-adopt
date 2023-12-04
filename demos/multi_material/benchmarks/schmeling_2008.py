@@ -92,7 +92,7 @@ class Simulation:
     # List simulation materials such that, starting from the end, each material
     # corresponds to the negative side of the signed distance function associated with
     # each level set.
-    materials = [Air, Mantle, Lithosphere]
+    materials = [Mantle, Air, Lithosphere]
     reference_material = Mantle
 
     # Mesh resolution should be sufficient to capture the smaller-scale dynamics
