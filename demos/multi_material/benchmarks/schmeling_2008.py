@@ -100,7 +100,7 @@ class Simulation:
     # vanishing of the material interface during advection and to unwanted motion of
     # the material interface during reinitialisation.
     domain_dimensions = (3e6, 7.5e5)
-    mesh_elements = (256, 64)
+    mesh_elements = (128, 32)
 
     slope = 0
     intercept = 7e5
@@ -121,7 +121,7 @@ class Simulation:
     dt = 1e11
     subcycles = 1
     time_end = 4e7 * 365.25 * 8.64e4
-    dump_period = 8e5 * 365.25 * 8.64e4
+    dump_period = 2e5 * 365.25 * 8.64e4
 
     @classmethod
     def initialise_temperature(cls, temperature):

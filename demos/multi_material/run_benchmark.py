@@ -1,6 +1,6 @@
 import firedrake as fd
 import numpy as np
-from benchmarks.trim_2023 import Simulation
+from benchmarks.schmeling_2008 import Simulation
 from material_interface import diffuse_interface
 from mpi4py import MPI
 
@@ -63,7 +63,7 @@ temperature = fd.Function(func_space_temp, name="Temperature")
 Simulation.initialise_temperature(temperature)
 
 # Set up function spaces and functions used in the level-set approach
-level_set_func_space_deg = 2
+level_set_func_space_deg = 1
 func_space_ls = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
 func_space_lsgp = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
 level_set = [

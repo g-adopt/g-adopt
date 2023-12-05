@@ -60,12 +60,12 @@ class Lithosphere(AbstractMaterial):
         strain_rate = fd.sym(fd.grad(velocity))
         strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate) / 2)
 
-        return fd.min_value(
-            fd.max_value(
-                cls.visc_coeff * strain_rate_sec_inv ** (1 / cls.stress_exponent - 1),
-                cls.visc_bounds[0],
-            ),
+        visc = cls.visc_coeff * strain_rate_sec_inv ** (1 / cls.stress_exponent - 1)
+
+        return fd.conditional(
+            visc > cls.visc_bounds[1],
             cls.visc_bounds[1],
+            fd.conditional(visc < cls.visc_bounds[0], cls.visc_bounds[0], visc),
         )
 
     @classmethod
@@ -99,7 +99,7 @@ class Simulation:
     # material interface during advection and to unwanted motion of the material interface
     # during reinitialisation.
     domain_dimensions = (1e6, 6.6e5)
-    mesh_elements = (32, 32)
+    mesh_elements = (96, 64)
 
     isd_params = [None]
 
