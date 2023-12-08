@@ -1,7 +1,7 @@
 import numpy as np
 import shapely as sl
 
-from gadopt.utility import node_coordinates
+import gadopt as ga
 
 
 def straight_line(x, slope, intercept):
@@ -19,7 +19,7 @@ def isd_simple_curve(domain_dim_x, curve, parameters, level_set):
     line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
     sl.prepare(line_string)
 
-    node_coords_x, node_coords_y = node_coordinates(level_set)
+    node_coords_x, node_coords_y = ga.node_coordinates(level_set)
     node_relation_to_curve = [
         (
             node_coord_y > curve(node_coord_x, *parameters),
@@ -44,7 +44,7 @@ def isd_rectangle(parameters, level_set):
     )
     sl.prepare(rectangle)
 
-    node_coords_x, node_coords_y = node_coordinates(level_set)
+    node_coords_x, node_coords_y = ga.node_coordinates(level_set)
     node_relation_to_rectangle = [
         (
             rectangle.contains(sl.Point(x, y))
@@ -81,7 +81,7 @@ def isd_schmalholz(parameters, level_set):
     curve = sl.LineString([*np.column_stack((interface_x, interface_y))])
     sl.prepare(curve)
 
-    node_coords_x, node_coords_y = node_coordinates(level_set)
+    node_coords_x, node_coords_y = ga.node_coordinates(level_set)
     node_relation_to_curve = [
         (
             polygon_lith.contains(sl.Point(x, y))
@@ -105,7 +105,7 @@ def isd_schmeling(parameters, level_set):
     polygon_lith = sl.union(rectangle_lith, rectangle_slab)
     sl.prepare(polygon_lith)
 
-    node_coords_x, node_coords_y = node_coordinates(level_set)
+    node_coords_x, node_coords_y = ga.node_coordinates(level_set)
     node_relation_to_curve = [
         (
             polygon_lith.contains(sl.Point(x, y))

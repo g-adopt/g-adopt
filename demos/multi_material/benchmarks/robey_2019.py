@@ -1,13 +1,12 @@
 from functools import partial
 
+import firedrake as fd
 import initial_signed_distance as isd
-import numpy as np
 
-from gadopt.level_set_tools import AbstractMaterial
-from gadopt.utility import node_coordinates
+import gadopt as ga
 
 
-class TopMaterial(AbstractMaterial):
+class TopMaterial(ga.AbstractMaterial):
     @classmethod
     def B(cls):
         return 0
@@ -41,10 +40,10 @@ class TopMaterial(AbstractMaterial):
         return 0
 
 
-class BottomMaterial(AbstractMaterial):
+class BottomMaterial(ga.AbstractMaterial):
     @classmethod
     def B(cls):
-        return 0.5
+        return 0.2
 
     @classmethod
     def RaB(cls):
@@ -78,62 +77,79 @@ class BottomMaterial(AbstractMaterial):
 class Simulation:
     name = "Robey_2019"
 
-    # List simulation materials such that, starting from the end, each material
-    # corresponds to the negative side of the signed distance function associated with
-    # each level set.
-    materials = [BottomMaterial, TopMaterial]
-    reference_material = TopMaterial
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 2
 
-    # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
-    # the level-set approach. Insufficient mesh refinement leads to the vanishing of the
-    # material interface during advection and to unwanted motion of the material interface
-    # during reinitialisation.
+    # Mesh resolution should be sufficient to capture eventual small-scale dynamics
+    # in the neighbourhood of material interfaces tracked by the level-set approach.
+    # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (3, 1)
-    mesh_elements = (144, 48)
+    mesh_elements = (192, 64)
 
+    # Parameters to initialise level sets
     slope = 0
     intercept = 0.5
+    # The following two lists must be ordered such that, unpacking from the end, each
+    # pair of arguments enables initialising a level set whose 0-contour corresponds to
+    # the entire interface between a given material and the remainder of the numerical
+    # domain. By convention, the material thereby isolated occupies the positive side
+    # of the signed-distance level set.
     isd_params = [(slope, intercept)]
-
     initialise_signed_distance = [
         partial(isd.isd_simple_curve, domain_dimensions[0], isd.straight_line)
     ]
 
+    # Material ordering must follow the logic implemented in the above two lists. In
+    # other words, the last material in the below list corresponds to the portion of
+    # the numerical domain entirely isolated by the level set initialised using the
+    # first pair of arguments (unpacking from the end) in the above two lists.
+    # Consequently, the first material in the below list occupies the negative side of
+    # the level set resulting from the last pair of arguments above.
+    materials = [BottomMaterial, TopMaterial]
+    reference_material = TopMaterial
+
+    # Physical parameters
     Ra, g = 1e5, 1
 
+    # Parameters to initialise temperature
     A = 0.05
     k = 1.5
 
+    # Boundary conditions
     temp_bcs = {3: {"T": 1}, 4: {"T": 0}}
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
+    # Timestepping objects
     dt = 1e-6
     subcycles = 1
     time_end = 0.0236
-    dump_period = 4e-4
+    dump_period = 2e-4
 
     @classmethod
     def initialise_temperature(cls, temperature):
-        node_coords_x, node_coords_y = node_coordinates(temperature)
+        mesh_coords = fd.SpatialCoordinate(temperature.function_space().mesh())
 
-        mask_bottom = node_coords_y <= 1 / 10
-        mask_top = node_coords_y >= 9 / 10
-
-        temperature.dat.data[:] = 0.5
-        temperature.dat.data[mask_bottom] = (
+        bottom_tbl = (
             1
-            - 5 * node_coords_y[mask_bottom]
+            - 5 * mesh_coords[1]
             + cls.A
-            * np.sin(10 * np.pi * node_coords_y[mask_bottom])
-            * (1 - np.cos(2 / 3 * cls.k * np.pi * node_coords_x[mask_bottom]))
+            * fd.sin(10 * fd.pi * mesh_coords[1])
+            * (1 - fd.cos(2 / 3 * cls.k * fd.pi * mesh_coords[0]))
         )
-        temperature.dat.data[mask_top] = (
+        top_tbl = (
             5
-            - 5 * node_coords_y[mask_top]
+            - 5 * mesh_coords[1]
             + cls.A
-            * np.sin(10 * np.pi * node_coords_y[mask_top])
-            * (1 - np.cos(2 / 3 * cls.k * np.pi * node_coords_x[mask_top] + np.pi))
+            * fd.sin(10 * fd.pi * mesh_coords[1])
+            * (1 - fd.cos(2 / 3 * cls.k * fd.pi * mesh_coords[0] + fd.pi))
         )
+
+        initial_temperature = fd.conditional(
+            mesh_coords[1] <= 0.1,
+            bottom_tbl,
+            fd.conditional(mesh_coords[1] >= 0.9, top_tbl, 0.5),
+        )
+        temperature.interpolate(initial_temperature)
 
     @classmethod
     def diagnostics(cls, simu_time, variables):

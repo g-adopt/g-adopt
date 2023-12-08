@@ -1,10 +1,10 @@
 import firedrake as fd
 import initial_signed_distance as isd
 
-from gadopt.level_set_tools import AbstractMaterial
+import gadopt as ga
 
 
-class Mantle(AbstractMaterial):
+class Mantle(ga.AbstractMaterial):
     @classmethod
     def B(cls):
         return None
@@ -38,7 +38,7 @@ class Mantle(AbstractMaterial):
         return 0
 
 
-class Lithosphere(AbstractMaterial):
+class Lithosphere(ga.AbstractMaterial):
     visc_coeff = 4.75e11
     stress_exponent = 4
     visc_bounds = (1e21, 1e25)
@@ -88,25 +88,36 @@ class Lithosphere(AbstractMaterial):
 class Simulation:
     name = "Schmalholz_2011"
 
-    # List simulation materials such that, starting from the end, each material
-    # corresponds to the negative side of the signed distance function associated with
-    # each level set.
-    materials = [Mantle, Lithosphere]
-    reference_material = Mantle
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 1
 
-    # Mesh resolution should be sufficient to capture the smaller-scale dynamics tracked by
-    # the level-set approach. Insufficient mesh refinement leads to the vanishing of the
-    # material interface during advection and to unwanted motion of the material interface
-    # during reinitialisation.
+    # Mesh resolution should be sufficient to capture eventual small-scale dynamics
+    # in the neighbourhood of material interfaces tracked by the level-set approach.
+    # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (1e6, 6.6e5)
     mesh_elements = (96, 64)
 
+    # The following two lists must be ordered such that, unpacking from the end, each
+    # pair of arguments enables initialising a level set whose 0-contour corresponds to
+    # the entire interface between a given material and the remainder of the numerical
+    # domain. By convention, the material thereby isolated occupies the positive side
+    # of the signed-distance level set.
     isd_params = [None]
-
     initialise_signed_distance = [isd.isd_schmalholz]
 
+    # Material ordering must follow the logic implemented in the above two lists. In
+    # other words, the last material in the below list corresponds to the portion of
+    # the numerical domain entirely isolated by the level set initialised using the
+    # first pair of arguments (unpacking from the end) in the above two lists.
+    # Consequently, the first material in the below list occupies the negative side of
+    # the level set resulting from the last pair of arguments above.
+    materials = [Mantle, Lithosphere]
+    reference_material = Mantle
+
+    # Physical parameters
     Ra, g = 1, 9.81
 
+    # Boundary conditions
     temp_bcs = None
     stokes_bcs = {
         1: {"ux": 0, "uy": 0},
@@ -115,11 +126,13 @@ class Simulation:
         4: {"uy": 0},
     }
 
+    # Timestepping objects
     dt = 1e11
     subcycles = 1
     time_end = 25e6 * 365.25 * 8.64e4
     dump_period = 5e5 * 365.25 * 8.64e4
 
+    # Diagnostic objects
     slab_length = 2.5e5
     characteristic_time = (
         4
@@ -129,8 +142,8 @@ class Simulation:
         / slab_length
     ) ** Lithosphere.stress_exponent
 
-    @staticmethod
-    def initialise_temperature(temperature):
+    @classmethod
+    def initialise_temperature(cls, temperature):
         pass
 
     @classmethod

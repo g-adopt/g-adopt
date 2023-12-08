@@ -1,77 +1,75 @@
 import abc
 
 from firedrake import (
-    DirichletBC,
+    FacetNormal,
     Function,
     LinearVariationalProblem,
     LinearVariationalSolver,
     TestFunction,
     TrialFunction,
+    VectorFunctionSpace,
     div,
     dot,
+    ds,
+    dx,
+    inner,
     sqrt,
 )
 
 from .equations import BaseEquation, BaseTerm
 from .scalar_equation import ScalarAdvectionEquation
-from .utility import is_continuous
 
 
 class AbstractMaterial(abc.ABC):
-    @classmethod
+    """Abstract class to specify relevant material properties that affect simulation's
+    evolution. Each material property is provided as a method to allow for temporal and
+    spatial dependency."""
+
     @abc.abstractmethod
-    def B(cls):
+    def B():
+        """Buoyancy number"""
         pass
 
-    @classmethod
     @abc.abstractmethod
-    def RaB(cls):
+    def RaB():
+        """Compositional Rayleigh number, expressed as the product of the Rayleigh and
+        Buoyancy numbers"""
         pass
 
-    @classmethod
     @abc.abstractmethod
-    def density(cls):
+    def density():
+        """Dimensional density"""
         pass
 
-    @classmethod
     @abc.abstractmethod
-    def viscosity(cls):
+    def viscosity():
+        """Dimensional dynamic viscosity"""
         pass
 
-    @classmethod
     @abc.abstractmethod
-    def thermal_expansion(cls):
+    def thermal_expansion():
+        """Dimensional coefficient of thermal expansion"""
         pass
 
-    @classmethod
     @abc.abstractmethod
-    def thermal_conductivity(cls):
+    def thermal_conductivity():
+        """Dimensional thermal conductivity"""
         pass
 
-    @classmethod
     @abc.abstractmethod
-    def specific_heat_capacity(cls):
+    def specific_heat_capacity():
+        """Dimensional specific heat capacity at constant pressure"""
         pass
 
-    @classmethod
     @abc.abstractmethod
-    def internal_heating_rate(cls):
+    def internal_heating_rate():
+        """Dimensional internal heating rate per unit mass"""
         pass
 
     @classmethod
     def thermal_diffusivity(cls):
+        """Dimensional thermal diffusivity"""
         return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
-
-
-class ProjectionTerm(BaseTerm):
-    def residual(self, test, trial, trial_lagged, fields, bcs):
-        target = fields["target"]
-        n = self.n
-
-        ufl_element = target * div(test) * self.dx
-        ufl_bc = target * dot(test, n) * self.ds
-
-        return -ufl_element + ufl_bc
 
 
 class ReinitialisationTerm(BaseTerm):
@@ -91,149 +89,107 @@ class ReinitialisationTerm(BaseTerm):
         return sharpen_term + balance_term
 
 
-class LevelSetEquation(ScalarAdvectionEquation):
-    def __init__(self, test_space, trial_space, quad_degree=None):
-        super().__init__(test_space, trial_space, quad_degree=quad_degree)
-
-    def mass_term(self, test, trial):
-        return super().mass_term(test, trial)
-
-
-class ProjectionEquation(BaseEquation):
-    terms = [ProjectionTerm]
-
-    def __init__(self, test_space, trial_space, quad_degree=None):
-        super().__init__(test_space, trial_space, quad_degree=quad_degree)
-
-    def mass_term(self, test, trial):
-        return super().mass_term(test, trial)
-
-
 class ReinitialisationEquation(BaseEquation):
     terms = [ReinitialisationTerm]
 
-    def __init__(self, test_space, trial_space, quad_degree=None):
-        super().__init__(test_space, trial_space, quad_degree=quad_degree)
 
-    def mass_term(self, test, trial):
-        return super().mass_term(test, trial)
-
-
-class TimeStepperSolver:
+class LevelSetSolver:
     def __init__(
         self,
-        function,
-        fields,
-        dt,
-        timestepper,
-        equation,
-        coupled_solver=None,
-        bcs=None,
-        solver_parameters=None,
+        level_set,
+        velocity,
+        tstep,
+        tstep_alg,
+        subcycles,
+        reini_params,
+        solver_params=None,
     ):
-        self.func_space = function.function_space()
-        self.mesh = self.func_space.mesh()
+        func_space = level_set.function_space()
+        self.mesh = func_space.mesh()
+        self.level_set = level_set
+        ls_fields = {"velocity": velocity}
 
-        self.function = function
-        self.function_old = Function(self.func_space)
+        self.func_space_lsgp = VectorFunctionSpace(
+            self.mesh, "CG", func_space.finat_element.degree
+        )
+        self.level_set_grad_proj = Function(
+            self.func_space_lsgp,
+            name=f"Level-set gradient (projection) #{level_set.name()[-1]}",
+        )
+        self.proj_solver = self.gradient_L2_proj()
 
-        self.fields = fields
-        self.dt = dt
-        self.timestepper = timestepper
-        self.coupled_solver = coupled_solver
+        self.reini_params = reini_params
+        reini_fields = {
+            "level_set_grad": self.level_set_grad_proj,
+            "epsilon": reini_params["epsilon"],
+        }
 
-        self.eq = equation(self.func_space, self.func_space)
+        ls_eq = ScalarAdvectionEquation(func_space, func_space)
+        reini_eq = ReinitialisationEquation(func_space, func_space)
 
-        apply_strongly = is_continuous(function)
-        self.strong_bcs = []
-        self.weak_bcs = {}
-        bcs = bcs or {}
-        for id, bc in bcs.items():
-            weak_bc = {}
-            for type, value in bc.items():
-                if type == "ls":
-                    if apply_strongly:
-                        self.strong_bcs.append(DirichletBC(self.func_space, value, id))
-                    else:
-                        weak_bc["q"] = value
-                else:
-                    weak_bc[type] = value
-            self.weak_bcs[id] = weak_bc
-
-        if solver_parameters is None:
-            self.solver_parameters = {
+        if solver_params is None:
+            solver_params = {
                 "mat_type": "aij",
                 "ksp_type": "preonly",
                 "pc_type": "bjacobi",
                 "sub_pc_type": "ilu",
             }
-        else:
-            self.solver_parameters = solver_parameters
 
-        self._solver_setup = False
-
-    def setup_solver(self):
-        """Setup timestepper and associated solver"""
-        self.ts = self.timestepper(
-            self.eq,
-            self.function,
-            self.fields,
-            self.dt,
-            bnd_conditions=self.weak_bcs,
-            solution_old=self.function_old,
-            strong_bcs=self.strong_bcs,
-            solver_parameters=self.solver_parameters,
-            coupled_solver=self.coupled_solver,
+        self.ls_ts = tstep_alg(
+            ls_eq,
+            self.level_set,
+            ls_fields,
+            tstep / subcycles,
+            solver_parameters=solver_params,
         )
-        self._solver_setup = True
-
-    def solve(self):
-        if not self._solver_setup:
-            self.setup_solver()
-        t = 0  # not used atm
-        self.ts.advance(t)
-
-
-class ProjectionSolver:
-    def __init__(self, function, fields, bcs=None, solver_parameters=None):
-        self.func_space = function.function_space()
-        self.mesh = self.func_space.mesh()
-
-        self.test = TestFunction(self.func_space)
-        self.trial = TrialFunction(self.func_space)
-
-        self.function = function
-
-        self.fields = fields
-
-        self.eq = ProjectionEquation(self.func_space, self.func_space)
-
-        self.bilinear = self.eq.mass_term(self.test, self.trial)
-        self.linear = self.eq.residual(self.test, None, None, self.fields, None)
-
-        self.bcs = bcs
-        if solver_parameters is None:
-            self.solver_parameters = {
-                "mat_type": "aij",
-                "ksp_type": "preonly",
-                "pc_type": "lu",
-                "pc_factor_mat_solver_type": "mumps",
-            }
-        else:
-            self.solver_parameters = solver_parameters
-
-        self._solver_setup = False
-
-    def setup_solver(self):
-        self.problem = LinearVariationalProblem(
-            self.bilinear, self.linear, self.function, bcs=self.bcs
+        self.reini_ts = reini_params["tstep_alg"](
+            reini_eq,
+            self.level_set,
+            reini_fields,
+            reini_params["tstep"],
+            solver_parameters=solver_params,
         )
-        self.solver = LinearVariationalSolver(
-            self.problem, solver_parameters=self.solver_parameters
-        )
-        self._solver_setup = True
 
-    def solve(self):
-        if not self._solver_setup:
-            self.setup_solver()
-        self.solver.solve()
+        self.subcycles = subcycles
+
+    def gradient_L2_proj(self):
+        test_function = TestFunction(self.func_space_lsgp)
+        trial_function = TrialFunction(self.func_space_lsgp)
+
+        mass_term = inner(test_function, trial_function) * dx(domain=self.mesh)
+        residual_element = self.level_set * div(test_function) * dx(domain=self.mesh)
+        residual_boundary = (
+            self.level_set
+            * dot(test_function, FacetNormal(self.mesh))
+            * ds(domain=self.mesh)
+        )
+        residual = -residual_element + residual_boundary
+        problem = LinearVariationalProblem(
+            mass_term, residual, self.level_set_grad_proj
+        )
+
+        solver_params = {
+            "mat_type": "aij",
+            "ksp_type": "preonly",
+            "pc_type": "lu",
+            "pc_factor_mat_solver_type": "mumps",
+        }
+        return LinearVariationalSolver(problem, solver_parameters=solver_params)
+
+    def update_level_set_gradient(self, *args):
+        self.proj_solver.solve()
+
+    def solve(self, step):
+        for subcycle in range(self.subcycles):
+            self.ls_ts.advance(0)
+
+            if step >= self.reini_params["frequency"]:
+                self.reini_ts.solution_old.assign(self.level_set)
+
+            if step % self.reini_params["frequency"] == 0:
+                for reini_step in range(self.reini_params["iterations"]):
+                    self.reini_ts.advance(
+                        0, update_forcings=self.update_level_set_gradient
+                    )
+
+                self.ls_ts.solution_old.assign(self.level_set)

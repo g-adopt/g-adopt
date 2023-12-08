@@ -1,7 +1,9 @@
-from abc import ABC, abstractmethod, abstractproperty
-import firedrake
 import operator
+from abc import ABC, abstractmethod, abstractproperty
+
+import firedrake
 import numpy as np
+
 from .utility import ensure_constant
 
 """
@@ -44,7 +46,7 @@ class TimeIntegrator(TimeIntegratorBase):
     Base class for all time integrator objects that march a single equation
     """
     def __init__(self, equation, solution, fields, dt, solution_old=None,
-                 solver_parameters=None, strong_bcs=None, coupled_solver=None):
+                 solver_parameters=None, strong_bcs=None):
         """
         :arg equation: the equation to solve
         :type equation: :class:`BaseEquation` object
@@ -76,9 +78,7 @@ class TimeIntegrator(TimeIntegratorBase):
             self.solver_parameters.update(solver_parameters)
 
         self.strong_bcs = strong_bcs or []
-        self.hom_bcs = [firedrake.DirichletBC(bci.function_space(), 0, bci.sub_domain) for bci in strong_bcs]
-
-        self.coupled_solver = coupled_solver
+        self.hom_bcs = [firedrake.DirichletBC(bci.function_space(), 0, bci.sub_domain) for bci in self.strong_bcs]
 
 
 class RungeKuttaTimeIntegrator(TimeIntegrator):
@@ -105,8 +105,6 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         if not self._initialized:
             self.initialize(self.solution)
         for i in range(self.n_stages):
-            if self.coupled_solver:
-                self.coupled_solver.solve()
             self.solve_stage(i, t, update_forcings)
         self.get_final_solution()
 
@@ -119,7 +117,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
     """
     def __init__(self, equation, solution, fields, dt,
                  solution_old=None, bnd_conditions=None,
-                 solver_parameters={}, strong_bcs=None, coupled_solver=None):
+                 solver_parameters={}, strong_bcs=None):
         """
         :arg equation: the equation to solve
         :type equation: :class:`Equation` object
@@ -134,7 +132,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         :kwarg list strong_bcs: list of DirichletsBCs
         """
         super(ERKGeneric, self).__init__(equation, solution, fields, dt,
-                                         solution_old, solver_parameters, strong_bcs, coupled_solver)
+                                         solution_old, solver_parameters, strong_bcs)
         self._initialized = False
         V = solution.function_space()
         assert V == equation.trial_space
@@ -218,7 +216,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
     """
     def __init__(self, equation, solution, fields, dt,
                  solution_old=None, bnd_conditions=None,
-                 solver_parameters={}, strong_bcs=None, coupled_solver=None, terms_to_add='all'):
+                 solver_parameters={}, strong_bcs=None, terms_to_add='all'):
         """
         :arg equation: the equation to solve
         :type equation: :class:`Equation` object
@@ -236,7 +234,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         :type terms_to_add: 'all' or list of 'implicit', 'explicit', 'source'.
         """
         super(DIRKGeneric, self).__init__(equation, solution, fields, dt,
-                                          solution_old, solver_parameters, strong_bcs, coupled_solver)
+                                          solution_old, solver_parameters, strong_bcs)
         self.solver_parameters.setdefault('snes_type', 'newtonls')
         self._initialized = False
 

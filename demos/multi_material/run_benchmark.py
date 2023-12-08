@@ -1,20 +1,9 @@
 import firedrake as fd
 import numpy as np
-from benchmarks.schmeling_2008 import Simulation
-from material_interface import diffuse_interface
-from mpi4py import MPI
+from benchmarks.van_keken_1997_isothermal import Simulation
+from material_interface import diffuse_interface, sharp_interface
 
-from gadopt.approximations import BoussinesqApproximation
-from gadopt.energy_solver import EnergySolver
-from gadopt.level_set_tools import (
-    LevelSetEquation,
-    ProjectionSolver,
-    ReinitialisationEquation,
-    TimeStepperSolver,
-)
-from gadopt.stokes_integrators import StokesSolver, create_stokes_nullspace
-from gadopt.time_stepper import ImplicitMidpoint, eSSPRKs3p3, eSSPRKs10p3
-from gadopt.utility import TimestepAdaptor
+import gadopt as ga
 
 
 def write_output(dump_counter):
@@ -63,16 +52,11 @@ temperature = fd.Function(func_space_temp, name="Temperature")
 Simulation.initialise_temperature(temperature)
 
 # Set up function spaces and functions used in the level-set approach
-level_set_func_space_deg = 1
+level_set_func_space_deg = Simulation.level_set_func_space_deg
 func_space_ls = fd.FunctionSpace(mesh, "DQ", level_set_func_space_deg)
-func_space_lsgp = fd.VectorFunctionSpace(mesh, "CG", level_set_func_space_deg)
 level_set = [
     fd.Function(func_space_ls, name=f"Level set #{i}")
     for i in range(len(Simulation.materials) - 1)
-]
-level_set_grad_proj = [
-    fd.Function(func_space_lsgp, name=f"Level-set gradient (projection) #{i}")
-    for i in range(len(level_set))
 ]
 
 # Thickness of the hyperbolic tangent profile in the conservative level-set approach
@@ -81,7 +65,7 @@ epsilon = fd.Constant(
         dim / elem
         for dim, elem in zip(Simulation.domain_dimensions, Simulation.mesh_elements)
     )
-    / 4
+    / 10
 )  # Empirical calibration that seems to be robust
 
 # Initialise level set
@@ -97,13 +81,14 @@ for ls, isd, params in zip(
 func_space_interp = fd.FunctionSpace(mesh, "CG", level_set_func_space_deg)
 density = fd.Function(func_space_interp, name="Density")
 RaB = fd.Function(func_space_interp, name="RaB")
-
+# Identify if the equations are written in dimensional form or not and define relevant
+# variables accordingly
 B_is_None = all(material.B() is None for material in Simulation.materials)
 RaB_is_None = all(material.RaB() is None for material in Simulation.materials)
 if B_is_None and RaB_is_None:
     RaB_ufl = fd.Constant(1)
     ref_dens = fd.Constant(Simulation.reference_material.density())
-    dens_diff = diffuse_interface(
+    dens_diff = sharp_interface(
         level_set.copy(),
         [material.density() - ref_dens for material in Simulation.materials],
         method="arithmetic",
@@ -154,7 +139,7 @@ else:
 dt = fd.Constant(Simulation.dt)
 
 # Set up energy and Stokes solvers
-approximation = BoussinesqApproximation(
+approximation = ga.BoussinesqApproximation(
     Simulation.Ra,
     rho=ref_dens,
     g=Simulation.g,
@@ -164,16 +149,16 @@ approximation = BoussinesqApproximation(
     delta_rho=dens_diff,
     H=int_heat_rate_ufl,
 )
-energy_solver = EnergySolver(
+energy_solver = ga.EnergySolver(
     temperature,
     velocity_ufl,
     approximation,
     dt,
-    ImplicitMidpoint,
+    ga.ImplicitMidpoint,
     bcs=Simulation.temp_bcs,
 )
-stokes_nullspace = create_stokes_nullspace(func_space_stokes)
-stokes_solver = StokesSolver(
+stokes_nullspace = ga.create_stokes_nullspace(func_space_stokes)
+stokes_solver = ga.StokesSolver(
     stokes_function,
     temperature,
     approximation,
@@ -183,62 +168,30 @@ stokes_solver = StokesSolver(
     transpose_nullspace=stokes_nullspace,
 )
 
-# Additional fields required for each level-set solver
-level_set_fields = {"velocity": velocity_ufl}
-projection_fields = [{"target": ls} for ls in level_set]
-reinitialisation_fields = [
-    {"level_set_grad": ls_grad_proj, "epsilon": epsilon}
-    for ls_grad_proj in level_set_grad_proj
-]
-
-# # Force projected gradient norm to satisfy the reinitialisation equation
-# projection_boundary_conditions = [
-#     fd.DirichletBC(
-#         func_space_lsgp,
-#         ls * (1 - ls) / epsilon * fd.Constant((1, 0)),
-#         "on_boundary",
-#     )
-#     for ls in level_set
-# ]
+# Parameters involved in level-set reinitialisation
+reini_params = {
+    "epsilon": epsilon,
+    "tstep": 5e-2,
+    "tstep_alg": ga.eSSPRKs3p3,
+    "frequency": 1,
+    "iterations": 1,
+}
 
 # Set up level-set solvers
 level_set_solver = [
-    TimeStepperSolver(
-        ls, level_set_fields, dt / Simulation.subcycles, eSSPRKs10p3, LevelSetEquation
+    ga.LevelSetSolver(
+        ls, velocity_ufl, dt, ga.eSSPRKs10p3, Simulation.subcycles, reini_params
     )
     for ls in level_set
 ]
-# projection_solver = [
-#     ProjectionSolver(ls_grad_proj, proj_fields, bcs=proj_bcs)
-#     for ls_grad_proj, proj_fields, proj_bcs in zip(
-#         level_set_grad_proj, projection_fields, projection_boundary_conditions
-#     )
-# ]
-projection_solver = [
-    ProjectionSolver(ls_grad_proj, proj_fields)
-    for ls_grad_proj, proj_fields in zip(level_set_grad_proj, projection_fields)
-]
-reinitialisation_solver = [
-    TimeStepperSolver(
-        ls,
-        reini_fields,
-        2e-2,  # Trade-off between actual reinitialisation and unwanted interface motion
-        eSSPRKs3p3,
-        ReinitialisationEquation,
-        coupled_solver=proj_solver,
-    )
-    for ls, reini_fields, proj_solver in zip(
-        level_set, reinitialisation_fields, projection_solver
-    )
-]
+level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solver]
 
 # Time-loop objects
-t_adapt = TimestepAdaptor(
+t_adapt = ga.TimestepAdaptor(
     dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.65
 )
 time_output = fd.Function(func_space_pres, name="Time")
 time_now, step, dump_counter = 0, 0, 0
-reini_frequency, reini_iterations = 1, 2
 output_file = fd.File(
     f"{Simulation.name}/output.pvd".lower(), target_degree=level_set_func_space_deg
 )
@@ -275,22 +228,8 @@ while time_now < Simulation.time_end:
     # Solve energy system
     energy_solver.solve()
 
-    for subcycle in range(Simulation.subcycles):
-        # Solve level-set advection
-        for ls, ls_solver, reini_solver in zip(
-            level_set, level_set_solver, reinitialisation_solver
-        ):
-            ls_solver.solve()
-
-            if step >= reini_frequency:  # Update stored function given previous solve
-                reini_solver.ts.solution_old.assign(ls)
-
-            if step % reini_frequency == 0:  # Solve level-set reinitialisation
-                for reini_step in range(reini_iterations):
-                    reini_solver.solve()
-
-                # Update stored function given previous solve
-                ls_solver.ts.solution_old.assign(ls)
+    for ls_solv in level_set_solver:
+        ls_solv.solve(step)
 
     Simulation.diagnostics(time_now, diag_vars)
 
@@ -299,5 +238,5 @@ while time_now < Simulation.time_end:
 # Write final simulation state to output file
 dump_counter = write_output(dump_counter)
 
-if MPI.COMM_WORLD.rank == 0:  # Save post-processing fields and produce graphs
-    Simulation.save_and_plot()
+# Save post-processing fields and produce graphs
+Simulation.save_and_plot()
