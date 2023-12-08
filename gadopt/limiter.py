@@ -11,6 +11,11 @@ import ufl
 import numpy as np
 from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
 from pyop2 import op2
+from firedrake.slate.slac.compiler import BLASLAPACK_LIB, BLASLAPACK_INCLUDE
+from finat.finiteelementbase import entity_support_dofs
+from tsfc.finatinterface import create_element as create_finat_element
+import os.path
+import firedrake as fd
 
 
 def assert_function_space(fs, family, degree):
@@ -74,7 +79,6 @@ def get_facet_mask(function_space, facet='bottom'):
         Here we assume that the mesh has been extruded upwards (along positive
         z axis).
     """
-    from tsfc.finatinterface import create_element as create_finat_element
 
     # get base element
     elem = get_extruded_base_element(function_space.ufl_element())
@@ -90,6 +94,119 @@ def get_facet_mask(function_space, facet='bottom'):
     offset = 0 if facet == 'bottom' else 1
     indices = np.arange(nb_nodes_h)*nb_nodes_v + offset
     return indices
+
+
+class ExteriorFacetAverager:
+    def __init__(self, field):
+        self.field = field
+        mesh = field.function_space().mesh()
+        extruded = hasattr(mesh.ufl_cell(), 'sub_cells')
+        shape = field.ufl_element().value_shape
+        if not shape:
+            self.trace_P0 = fd.FunctionSpace(mesh, "HDiv Trace", 0)
+        elif len(shape) == 1:
+            self.trace_P0 = fd.VectorFunctionSpace(mesh, "HDiv Trace", 0, dim=shape[0])
+        elif len(shape) == 2:
+            self.trace_P0 = fd.TensorFunctionSpace(mesh, "HDiv Trace", 0, shape=shape)
+        else:
+            raise ValueError("Unknown value_shape for field")
+        self.facet_average = fd.Function(self.trace_P0)
+        test = fd.TestFunction(self.trace_P0)
+        if extruded:
+            F = 0
+            for ds in [fd.ds_tb, fd.ds_v]:
+                F += fd.dot(test, self.facet_average) * ds - fd.dot(test, field) * ds
+            for dS in [fd.dS_h, fd.dS_v]:
+                F += fd.dot(fd.avg(test), fd.avg(self.facet_average)) * dS
+        else:
+            F = fd.dot(test, self.facet_average) * fd.ds - fd.dot(test, field) * fd.ds
+            F += fd.dot(fd.avg(test), fd.avg(self.facet_average)) * fd.dS
+        problem = fd.NonlinearVariationalProblem(F, self.facet_average)
+        self.solver = fd. NonlinearVariationalSolver(
+            problem, solver_parameters={
+                'snes_type': 'ksponly',
+                'ksp_type': 'preonly',
+                'pc_type': 'jacobi',
+                'ksp_norm_type': 'none',
+                'ksp_max_it': 1})
+
+    def average(self):
+        self.solver.solve()
+
+
+def _add_facet_averages(min_field, max_field, facet_mean):
+    # Add the average of lateral boundary facets to min/max fields
+    # NOTE this does not work if field is a subfunction in parallel
+    #      need to make copy to scalar field to make this work
+    # NOTE this just computes the arithmetic mean of nodal values on the facet,
+    # which in general is not equivalent to the mean of the field over the bnd facet.
+    # This is OK for P1DG triangles, but not exact for the extruded case (quad facets)
+
+    P1CG = min_field.function_space()
+    mesh = P1CG.mesh()
+    dim = mesh.geometric_dimension()
+    extruded = hasattr(mesh.ufl_cell(), 'sub_cells')
+    if extruded:
+        entity_dim = (dim-2, 1)  # get vertical facets
+    else:
+        entity_dim = dim-1
+    boundary_dofs = entity_support_dofs(P1CG.finat_element, entity_dim)
+    local_facet_nodes = np.array([boundary_dofs[e] for e in sorted(boundary_dofs.keys())])
+    n_bnd_nodes = local_facet_nodes.shape[1]
+    local_facet_idx = op2.Global(local_facet_nodes.shape, local_facet_nodes, dtype=np.int32, name='local_facet_idx')
+    code = """
+        void my_kernel(double *qmax, double *qmin, double *facet_mean, unsigned int *facet, unsigned int *local_facet_idx)
+        {
+            double face_mean = 0.0;
+            for (int i = 0; i < %(nnodes)d; i++) {
+                unsigned int idx = local_facet_idx[facet[0]*%(nnodes)d + i];
+                qmax[idx] = fmax(qmax[idx], facet_mean[facet[0]]);
+                qmin[idx] = fmin(qmin[idx], facet_mean[facet[0]]);
+            }
+        }"""
+    bnd_kernel = op2.Kernel(code % {'nnodes': n_bnd_nodes}, 'my_kernel')
+    op2.par_loop(bnd_kernel,
+                 mesh.exterior_facets.set,
+                 max_field.dat(op2.MAX, max_field.exterior_facet_node_map()),
+                 min_field.dat(op2.MIN, min_field.exterior_facet_node_map()),
+                 facet_mean.dat(op2.READ, facet_mean.exterior_facet_node_map()),
+                 mesh.exterior_facets.local_facet_dat(op2.READ),
+                 local_facet_idx(op2.READ))
+    if extruded:
+        # Add nodal values from surface/bottom boundaries
+        # NOTE calling firedrake par_loop with measure=ds_t raises an error
+        bottom_nodes = get_facet_mask(P1CG, 'bottom')
+        top_nodes = get_facet_mask(P1CG, 'top')
+        bottom_idx = op2.Global(len(bottom_nodes), bottom_nodes, dtype=np.int32, name='node_idx')
+        top_idx = op2.Global(len(top_nodes), top_nodes, dtype=np.int32, name='node_idx')
+        # cell_node_map of facet_mean provides one DOF per facet in each cell, with two horizontal facets last
+        facets_per_cell = facet_mean.function_space().cell_node_map().arity
+        bottom_facet_idx = op2.Global(1, [facets_per_cell-2], dtype=np.int32, name='bottom_facet_idx')
+        top_facet_idx = op2.Global(1, [facets_per_cell-1], dtype=np.int32, name='top_facet_idx')
+        code = """
+            void my_kernel(double *qmax, double *qmin, double *facet_mean, int *idx, int *hor_facet_idx) {
+                for (int i=0; i<%(nnodes)d; i++) {
+                    qmax[idx[i]] = fmax(qmax[idx[i]], facet_mean[hor_facet_idx[0]]);
+                    qmin[idx[i]] = fmin(qmin[idx[i]], facet_mean[hor_facet_idx[0]]);
+                }
+            }"""
+        kernel = op2.Kernel(code % {'nnodes': len(bottom_nodes)}, 'my_kernel')
+
+        op2.par_loop(kernel, mesh.cell_set,
+                     max_field.dat(op2.MAX, max_field.function_space().cell_node_map()),
+                     min_field.dat(op2.MIN, min_field.function_space().cell_node_map()),
+                     facet_mean.dat(op2.READ, facet_mean.function_space().cell_node_map()),
+                     bottom_idx(op2.READ),
+                     bottom_facet_idx(op2.READ),
+                     iteration_region=op2.ON_BOTTOM)
+
+        op2.par_loop(kernel, mesh.cell_set,
+                     max_field.dat(op2.MAX, max_field.function_space().cell_node_map()),
+                     min_field.dat(op2.MIN, min_field.function_space().cell_node_map()),
+                     facet_mean.dat(op2.READ, facet_mean.function_space().cell_node_map()),
+                     top_idx(op2.READ),
+                     top_facet_idx(op2.READ),
+                     iteration_region=op2.ON_TOP)
 
 
 class VertexBasedP1DGLimiter(VertexBasedLimiter):
@@ -154,77 +271,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         # Call general-purpose bound computation.
         super(VertexBasedP1DGLimiter, self).compute_bounds(field)
 
-        # Add the average of lateral boundary facets to min/max fields
-        # NOTE this just computes the arithmetic mean of nodal values on the facet,
-        # which in general is not equivalent to the mean of the field over the bnd facet.
-        # This is OK for P1DG triangles, but not exact for the extruded case (quad facets)
-        from finat.finiteelementbase import entity_support_dofs
-
-        if self.extruded:
-            entity_dim = (self.dim-2, 1)  # get vertical facets
-        else:
-            entity_dim = self.dim-1
-        boundary_dofs = entity_support_dofs(self.P1DG.finat_element, entity_dim)
-        local_facet_nodes = np.array([boundary_dofs[e] for e in sorted(boundary_dofs.keys())])
-        n_bnd_nodes = local_facet_nodes.shape[1]
-        local_facet_idx = op2.Global(local_facet_nodes.shape, local_facet_nodes, dtype=np.int32, name='local_facet_idx')
-        code = """
-            void my_kernel(double *qmax, double *qmin, double *field, unsigned int *facet, unsigned int *local_facet_idx)
-            {
-                double face_mean = 0.0;
-                for (int i = 0; i < %(nnodes)d; i++) {
-                    unsigned int idx = local_facet_idx[facet[0]*%(nnodes)d + i];
-                    face_mean += field[idx];
-                }
-                face_mean /= %(nnodes)d;
-                for (int i = 0; i < %(nnodes)d; i++) {
-                    unsigned int idx = local_facet_idx[facet[0]*%(nnodes)d + i];
-                    qmax[idx] = fmax(qmax[idx], face_mean);
-                    qmin[idx] = fmin(qmin[idx], face_mean);
-                }
-            }"""
-        bnd_kernel = op2.Kernel(code % {'nnodes': n_bnd_nodes}, 'my_kernel')
-        op2.par_loop(bnd_kernel,
-                     self.P1DG.mesh().exterior_facets.set,
-                     self.max_field.dat(op2.MAX, self.max_field.exterior_facet_node_map()),
-                     self.min_field.dat(op2.MIN, self.min_field.exterior_facet_node_map()),
-                     field.dat(op2.READ, field.exterior_facet_node_map()),
-                     self.P1DG.mesh().exterior_facets.local_facet_dat(op2.READ),
-                     local_facet_idx(op2.READ))
-        if self.extruded:
-            # Add nodal values from surface/bottom boundaries
-            # NOTE calling firedrake par_loop with measure=ds_t raises an error
-            bottom_nodes = get_facet_mask(self.P1CG, 'bottom')
-            top_nodes = get_facet_mask(self.P1CG, 'top')
-            bottom_idx = op2.Global(len(bottom_nodes), bottom_nodes, dtype=np.int32, name='node_idx')
-            top_idx = op2.Global(len(top_nodes), top_nodes, dtype=np.int32, name='node_idx')
-            code = """
-                void my_kernel(double *qmax, double *qmin, double *field, int *idx) {
-                    double face_mean = 0;
-                    for (int i=0; i<%(nnodes)d; i++) {
-                        face_mean += field[idx[i]];
-                    }
-                    face_mean /= %(nnodes)d;
-                    for (int i=0; i<%(nnodes)d; i++) {
-                        qmax[idx[i]] = fmax(qmax[idx[i]], face_mean);
-                        qmin[idx[i]] = fmin(qmin[idx[i]], face_mean);
-                    }
-                }"""
-            kernel = op2.Kernel(code % {'nnodes': len(bottom_nodes)}, 'my_kernel')
-
-            op2.par_loop(kernel, self.mesh.cell_set,
-                         self.max_field.dat(op2.MAX, self.max_field.function_space().cell_node_map()),
-                         self.min_field.dat(op2.MIN, self.min_field.function_space().cell_node_map()),
-                         field.dat(op2.READ, field.function_space().cell_node_map()),
-                         bottom_idx(op2.READ),
-                         iteration_region=op2.ON_BOTTOM)
-
-            op2.par_loop(kernel, self.mesh.cell_set,
-                         self.max_field.dat(op2.MAX, self.max_field.function_space().cell_node_map()),
-                         self.min_field.dat(op2.MIN, self.min_field.function_space().cell_node_map()),
-                         field.dat(op2.READ, field.function_space().cell_node_map()),
-                         top_idx(op2.READ),
-                         iteration_region=op2.ON_TOP)
+        efa = ExteriorFacetAverager(field)
+        efa.average()
+        _add_facet_averages(self.min_field, self.max_field, efa.facet_average)
 
         if clip:
             if self.clip_min is not None:
@@ -290,8 +339,7 @@ class VertexBasedQ1DGLimiter(VertexBasedP1DGLimiter):
         self.DPC1 = FunctionSpace(p1dg_space.mesh(), "DPC", 1)
         self.field_dpc1 = Function(self.DPC1)
         self.field_linearised = Function(p1dg_space)
-        from firedrake import File
-        self.f = [File('debug0.pvd'), File('debug1.pvd')]
+        self.f = [fd.File('debug0.pvd'), fd.File('debug1.pvd')]
         self.centroids.rename("centroids")
         self.max_field.rename("max_field")
         self.min_field.rename("min_field")
@@ -348,10 +396,6 @@ class VertexBasedLeastSquaresLimiter:
         ele1d = FiniteElement("Discontinuous Taylor", ufl.interval, self.degree)
         ele = TensorProductElement(*([ele1d]*self.dim))
         self.DT = FunctionSpace(self.mesh, ele)
-        ele1d = FiniteElement("DG", ufl.interval, 1, variant='equispaced')
-        ele = TensorProductElement(*([ele1d]*self.dim))
-        self.DQ1 = FunctionSpace(self.mesh, ele)
-        import firedrake as fd
 
         # functionspaces storing a vector of taylor basis coefficients on each vertex (Q1) or cell (Q0)
         ntaylor = (self.degree+1)**2
@@ -370,29 +414,49 @@ class VertexBasedLeastSquaresLimiter:
         self.taylor_umin = Function(self.taylor_Q1)
         self.taylor_umax = Function(self.taylor_Q1)
 
-        import os .path
+        P0 = FunctionSpace(self.mesh, "DG", 0)
+        self.info = Function(P0, dtype=int)
+        self.iterations = Function(P0, dtype=int)
+
+        self.trace_P0 = fd.FunctionSpace(self.mesh, "HDiv Trace", 0)
+        self.is_interior_facet = op2.Dat(self.trace_P0.dof_dset.set, dtype=bool)
+        test = fd.avg(fd.TestFunction(self.trace_P0))
+        self.is_interior_facet.data[:] = fd.assemble(test*fd.dS_v + test*fd.dS_h).dat.data > 0.
+
         c_source_file = os.path.join(os.path.split(__file__)[0], 'lsq_limiter.c')
         code = open(c_source_file, 'r').read()
-        from firedrake.slate.slac.compiler import BLASLAPACK_LIB, BLASLAPACK_INCLUDE
-        self.kernel = op2.Kernel(code % {'degree': self.degree}, 'least_squares_kernel',
+        code = code % {'degree': self.degree, 'nvertices': 4, 'nfacets': self.trace_P0.cell_node_map().arity}
+        self.kernel = op2.Kernel(code, 'least_squares_kernel',
                                  include_dirs=BLASLAPACK_INCLUDE.split(),
                                  ldargs=BLASLAPACK_LIB.split())
 
-    def apply(self, field):
-        self.taylor_u.project(field)
-        self.taylor_u0.dat.data[:] = self.taylor_u.dat.data.reshape(self.taylor_u0.dat.data.shape)
-        finfo = np.finfo(field.dat.dtype)
+
+
+    def compute_bounds(self):
+        """Recompute bounds
+
+        Requires self.taylor_u and self.taylor_u0 to be up-to-date"""
+        finfo = np.finfo(self.taylor_u.dat.dtype)
         self.taylor_umin.assign(finfo.max)
         interpolate(self.taylor_u0, self.taylor_umin, access=op2.MIN)
         self.taylor_umax.assign(finfo.min)
         interpolate(self.taylor_u0, self.taylor_umax, access=op2.MAX)
+
+    def apply(self, field):
+        self.taylor_u.project(field)
+        self.taylor_u0.dat.data[:] = self.taylor_u.dat.data.reshape(self.taylor_u0.dat.data.shape)
+
+        self.compute_bounds()
+
         mass = self.taylor_mass.copy(deepcopy=True)
         op2.par_loop(self.kernel, self.mesh.cell_set,
                      self.taylor_u.dat(op2.RW, self.DT.cell_node_map()),
                      self.taylor_u0.dat(op2.READ, self.taylor_Q0.cell_node_map()),
                      self.taylor_umin.dat(op2.READ, self.taylor_Q1.cell_node_map()),
                      self.taylor_umax.dat(op2.READ, self.taylor_Q1.cell_node_map()),
-                     self.taylor_mass.dat(op2.RW, self.taylor_mass_Q0.cell_node_map())
+                     self.taylor_mass.dat(op2.RW, self.taylor_mass_Q0.cell_node_map()),
+                     self.is_interior_facet(op2.READ, self.trace_P0.cell_node_map()),
+                     self.iterations.dat(op2.INC, self.iterations.cell_node_map()),
+                     self.info.dat(op2.WRITE, self.info.cell_node_map())
                      )
         field.interpolate(self.taylor_u)
-        import pdb; pdb.set_trace()
