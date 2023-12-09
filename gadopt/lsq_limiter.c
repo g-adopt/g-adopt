@@ -151,7 +151,7 @@ void find_least_optimal(PetscScalar *u, PetscScalar *gradu, bool *is_active,
         for (int jk=0; jk<n2-1; jk++, ijk++) {
             if (!is_active[ijk]) continue;
             // lower and upper bound are the same: we should always keep this as eq. constraint
-            if (umax[ijk]-umin[ijk] < eps) continue;
+            if (umax[ijk]-umin[ijk] < 2 * eps) continue;
             int k = jk %% n;
             double dot = 0.0; // gradu dot T_ijk
             double norm = 0.0, lhs = 0.0;
@@ -212,7 +212,7 @@ void least_squares_kernel(
       up[jk] = alpha*u[jk];
     }
     find_new_active(up, is_active, umin, umax, u0, is_interior_facet);
-    while (true) {
+    while (iterations<n2) {
         (*iterations)++;
         int nactive = 0;
         // assemble constraint matrix T
