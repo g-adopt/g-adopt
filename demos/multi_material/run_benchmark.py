@@ -1,7 +1,8 @@
+import argparse
+import importlib
+
 import firedrake as fd
 import numpy as np
-from benchmarks.van_keken_1997_isothermal import Simulation
-from material_interface import diffuse_interface, sharp_interface
 
 import gadopt as ga
 
@@ -29,6 +30,11 @@ def write_output(dump_counter):
 
     return dump_counter + 1
 
+
+parser = argparse.ArgumentParser()
+parser.add_argument("benchmark")
+args = parser.parse_args()
+Simulation = importlib.import_module(args.benchmark).Simulation
 
 # Set up geometry
 mesh = fd.RectangleMesh(
@@ -65,7 +71,7 @@ epsilon = fd.Constant(
         dim / elem
         for dim, elem in zip(Simulation.domain_dimensions, Simulation.mesh_elements)
     )
-    / 10
+    / 4
 )  # Empirical calibration that seems to be robust
 
 # Initialise level set
@@ -88,7 +94,7 @@ RaB_is_None = all(material.RaB() is None for material in Simulation.materials)
 if B_is_None and RaB_is_None:
     RaB_ufl = fd.Constant(1)
     ref_dens = fd.Constant(Simulation.reference_material.density())
-    dens_diff = sharp_interface(
+    dens_diff = ga.sharp_interface(
         level_set.copy(),
         [material.density() - ref_dens for material in Simulation.materials],
         method="arithmetic",
@@ -97,7 +103,7 @@ if B_is_None and RaB_is_None:
 elif RaB_is_None:
     ref_dens = fd.Constant(1)
     dens_diff = fd.Constant(1)
-    RaB_ufl = diffuse_interface(
+    RaB_ufl = ga.sharp_interface(
         level_set.copy(),
         [Simulation.Ra * material.B() for material in Simulation.materials],
         method="arithmetic",
@@ -106,7 +112,7 @@ elif RaB_is_None:
 elif B_is_None:
     ref_dens = fd.Constant(1)
     dens_diff = fd.Constant(1)
-    RaB_ufl = diffuse_interface(
+    RaB_ufl = ga.sharp_interface(
         level_set.copy(),
         [material.RaB() for material in Simulation.materials],
         method="arithmetic",
@@ -115,7 +121,7 @@ elif B_is_None:
 else:
     raise ValueError("Providing B and RaB is redundant.")
 
-viscosity_ufl = diffuse_interface(
+viscosity_ufl = ga.diffuse_interface(
     level_set.copy(),
     [material.viscosity(velocity_ufl) for material in Simulation.materials],
     method="geometric",
@@ -127,7 +133,7 @@ if Simulation.name == "Trim_2023":
     int_heat_rate = int_heat_rate_ufl
     Simulation.internal_heating_rate(int_heat_rate_ufl, 0)
 else:
-    int_heat_rate_ufl = diffuse_interface(
+    int_heat_rate_ufl = ga.diffuse_interface(
         level_set.copy(),
         [material.internal_heating_rate() for material in Simulation.materials],
         method="geometric",
@@ -164,6 +170,7 @@ stokes_solver = ga.StokesSolver(
     approximation,
     bcs=Simulation.stokes_bcs,
     mu=viscosity_ufl,
+    quad_degree=None,
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )
@@ -171,7 +178,7 @@ stokes_solver = ga.StokesSolver(
 # Parameters involved in level-set reinitialisation
 reini_params = {
     "epsilon": epsilon,
-    "tstep": 5e-2,
+    "tstep": 2e-2,
     "tstep_alg": ga.eSSPRKs3p3,
     "frequency": 1,
     "iterations": 1,

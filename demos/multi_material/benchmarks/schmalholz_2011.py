@@ -58,14 +58,14 @@ class Lithosphere(ga.AbstractMaterial):
     @classmethod
     def viscosity(cls, velocity):
         strain_rate = fd.sym(fd.grad(velocity))
-        strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate) / 2)
+        strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate) / 2 + 1e-99)
 
-        visc = cls.visc_coeff * strain_rate_sec_inv ** (1 / cls.stress_exponent - 1)
-
-        return fd.conditional(
-            visc > cls.visc_bounds[1],
+        return fd.min_value(
+            fd.max_value(
+                cls.visc_coeff * strain_rate_sec_inv ** (1 / cls.stress_exponent - 1),
+                cls.visc_bounds[0],
+            ),
             cls.visc_bounds[1],
-            fd.conditional(visc < cls.visc_bounds[0], cls.visc_bounds[0], visc),
         )
 
     @classmethod
@@ -89,13 +89,13 @@ class Simulation:
     name = "Schmalholz_2011"
 
     # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 1
+    level_set_func_space_deg = 2
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (1e6, 6.6e5)
-    mesh_elements = (96, 64)
+    mesh_elements = (192, 128)
 
     # The following two lists must be ordered such that, unpacking from the end, each
     # pair of arguments enables initialising a level set whose 0-contour corresponds to

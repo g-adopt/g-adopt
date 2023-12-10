@@ -5,7 +5,6 @@ import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
-from scipy.special import erf
 
 import gadopt as ga
 
@@ -145,8 +144,8 @@ class Simulation:
         )
         v0 = u0
         Q = 2 * fd.sqrt(cls.domain_dimensions[0] / fd.pi / u0)
-        Tu = erf((1 - mesh_coords[1]) / 2 * fd.sqrt(u0 / mesh_coords[0])) / 2
-        Tl = 1 - 1 / 2 * erf(
+        Tu = fd.erf((1 - mesh_coords[1]) / 2 * fd.sqrt(u0 / mesh_coords[0])) / 2
+        Tl = 1 - 1 / 2 * fd.erf(
             mesh_coords[1]
             / 2
             * fd.sqrt(u0 / (cls.domain_dimensions[0] - mesh_coords[0]))
@@ -162,10 +161,9 @@ class Simulation:
             / (8 - 4 * mesh_coords[1])
         )
 
-        temperature.interpolate(Tu + Tl + Tr + Ts - 3 / 2)
+        temperature.interpolate(fd.max_value(fd.min_value(Tu + Tl + Tr + Ts - 3 / 2, 1), 0))
         fd.DirichletBC(temperature.function_space(), 1, 3).apply(temperature)
         fd.DirichletBC(temperature.function_space(), 0, 4).apply(temperature)
-        temperature.interpolate(fd.max_value(fd.min_value(temperature, 1), 0))
 
     @classmethod
     def diagnostics(cls, simu_time, variables):
@@ -174,8 +172,7 @@ class Simulation:
         cls.diag_fields["entrainment"].append(
             ga.entrainment(
                 variables["level_set"][0],
-                cls.diag_params["domain_dim_x"],
-                cls.diag_params["material_interface_y"],
+                cls.diag_params["domain_dim_x"] * cls.diag_params["material_interface_y"],
                 cls.diag_params["entrainment_height"],
             )
         )

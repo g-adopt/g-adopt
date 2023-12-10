@@ -3,7 +3,6 @@ from functools import partial
 import firedrake as fd
 import flib
 import initial_signed_distance as isd
-import numpy as np
 
 import gadopt as ga
 
@@ -86,7 +85,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (1, 1)
-    mesh_elements = (64, 64)
+    mesh_elements = (128, 128)
 
     # Parameters to initialise level sets
     slope = 0
@@ -118,11 +117,11 @@ class Simulation:
     a = 100
     b = 100
     t = 0
-    f = a * np.sin(np.pi * b * t)
+    f = a * fd.sin(fd.pi * b * t)
     k = 35
 
     # Boundary conditions
-    temp_bcs = {3: {"T": 1}, 4: {"T": 0}}
+    temp_bcs = {1: {"flux": 0}, 2: {"flux": 0}, 3: {"T": 1}, 4: {"T": 0}}
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
     # Timestepping objects
@@ -138,15 +137,18 @@ class Simulation:
         C0 = 1 / (1 + fd.exp(-2 * cls.k * (cls.intercept - mesh_coords[1])))
 
         temperature.interpolate(
-            -fd.pi**3
-            * (cls.domain_dimensions[0] ** 2 + 1) ** 2
-            / cls.domain_dimensions[0] ** 3
-            * fd.cos(fd.pi * mesh_coords[0] / cls.domain_dimensions[0])
-            * fd.sin(fd.pi * mesh_coords[1])
-            * cls.f
-            + cls.RaB * C0
-            + (cls.Ra - cls.RaB) * (1 - mesh_coords[1])
-        ) / cls.Ra
+            (
+                -fd.pi**3
+                * (cls.domain_dimensions[0] ** 2 + 1) ** 2
+                / cls.domain_dimensions[0] ** 3
+                * fd.cos(fd.pi * mesh_coords[0] / cls.domain_dimensions[0])
+                * fd.sin(fd.pi * mesh_coords[1])
+                * cls.f
+                + cls.RaB * C0
+                + (cls.Ra - cls.RaB) * (1 - mesh_coords[1])
+            )
+            / cls.Ra
+        )
 
     @classmethod
     def internal_heating_rate(cls, int_heat_rate, simu_time):

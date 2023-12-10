@@ -116,7 +116,7 @@ class Simulation:
     k = 1.5
 
     # Boundary conditions
-    temp_bcs = {3: {"T": 1}, 4: {"T": 0}}
+    temp_bcs = {1: {"flux": 0}, 2: {"flux": 0}, 3: {"T": 1}, 4: {"T": 0}}
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
     # Timestepping objects

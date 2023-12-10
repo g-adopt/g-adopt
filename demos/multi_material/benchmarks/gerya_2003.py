@@ -81,7 +81,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (5e5, 5e5)
-    mesh_elements = (256, 256)
+    mesh_elements = (128, 128)
 
     # Parameters to initialise level sets
     ref_vertex_x = 2e5
