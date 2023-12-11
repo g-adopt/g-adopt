@@ -75,7 +75,7 @@ class BoussinesqApproximation(BaseApproximation):
     Viscous dissipation is neglected (Di << 1)."""
     compressible = False
 
-    def __init__(self, Ra, rho=1, g=1, alpha=1, kappa=1, RaB=0, delta_rho=1, H=0):
+    def __init__(self, Ra, *, rho=1, g=1, alpha=1, kappa=1, RaB=0, delta_rho=1, H=0):
         """
         :arg Ra: Rayleigh number
         :arg rho: Reference density
