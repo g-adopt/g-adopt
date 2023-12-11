@@ -390,7 +390,11 @@ class VertexBasedDPC2Limiter(VertexBasedQ1DGLimiter):
 
 class VertexBasedLeastSquaresLimiter:
     def __init__(self, V):
-        self.degree = max(V.ufl_element().degree())
+        Vdeg = V.ufl_element().degree()
+        if isinstance(Vdeg, int):
+            self.degree = Vdeg
+        else:
+            self.degree = max(Vdeg)
         self.mesh = V.mesh()
         self.dim = self.mesh.geometric_dimension()
         ele1d = FiniteElement("Discontinuous Taylor", ufl.interval, self.degree)
@@ -430,8 +434,6 @@ class VertexBasedLeastSquaresLimiter:
                                  include_dirs=BLASLAPACK_INCLUDE.split(),
                                  ldargs=BLASLAPACK_LIB.split())
 
-
-
     def compute_bounds(self):
         """Recompute bounds
 
@@ -448,7 +450,6 @@ class VertexBasedLeastSquaresLimiter:
 
         self.compute_bounds()
 
-        mass = self.taylor_mass.copy(deepcopy=True)
         op2.par_loop(self.kernel, self.mesh.cell_set,
                      self.taylor_u.dat(op2.RW, self.DT.cell_node_map()),
                      self.taylor_u0.dat(op2.READ, self.taylor_Q0.cell_node_map()),
