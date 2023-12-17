@@ -27,16 +27,16 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     # We set up a function space of bilinear elements for :math:`q`, and
     # a vector-valued continuous function space for our velocity field. ::
 
-    V = FunctionSpace(mesh, "CG", 1)
-    V2 = FunctionSpace(mesh, "CG", 2)
-    W = VectorFunctionSpace(mesh, "CG", 1)
+    Q = FunctionSpace(mesh, "CG", 1)
+    Q2 = FunctionSpace(mesh, "CG", 2)
+    V = VectorFunctionSpace(mesh, "CG", 1)
 
     # We set up the initial velocity field using a simple analytic expression. ::
 
     x = SpatialCoordinate(mesh)
     a = Constant(1)
     velocity = as_vector((a, 0))
-    u = Function(W).interpolate(velocity)
+    u = Function(V).interpolate(velocity)
     if do_write:
         File('u.pvd').write(u)
 
@@ -46,7 +46,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
 
     # the tracer function and its initial condition
     q_init = Constant(0.0)
-    q = Function(V).interpolate(q_init)
+    q = Function(Q).interpolate(q_init)
 
     # We declare the output filename, and write out the initial condition. ::
     if do_write:
@@ -95,7 +95,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     # from Finite element Methods for Flow problems - Donea and Huerta, 2003
     # N.b they have the scalar called 'u' whereas we have 'q'
         gamma = Constant(a/kappa)
-        q_anal = Function(V2)
+        q_anal = Function(Q2)
         q_anal.interpolate((1/a) * (x[0] - (1 - exp(gamma*x[0]))/(1-exp(gamma))))
 
         L2error_q = errornorm(q_anal, q, norm_type='L2')

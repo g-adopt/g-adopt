@@ -14,14 +14,14 @@ mesh = UnitSquareMesh(nx, ny, quadrilateral=True)
 # We set up a function space of discontinous bilinear elements for :math:`q`, and
 # a vector-valued continuous function space for our velocity field. ::
 
-V = FunctionSpace(mesh, "CG", 1)
-W = VectorFunctionSpace(mesh, "CG", 1)
+Q = FunctionSpace(mesh, "CG", 1)
+V = VectorFunctionSpace(mesh, "CG", 1)
 
 # We set up the initial velocity field using a simple analytic expression. ::
 
 x, y = SpatialCoordinate(mesh)
 velocity = as_vector((cos(30*pi/180), sin(30*pi/180)))
-u = Function(W).interpolate(velocity)
+u = Function(V).interpolate(velocity)
 File('advdif_DH219_u.pvd').write(u)
 
 # the diffusivity based on a chosen grid Peclet number
@@ -32,7 +32,7 @@ kappa = Constant(1*h/(2*Pe))
 
 # the tracer function and its initial condition
 q_init = Constant(0.0)
-q = Function(V).interpolate(q_init)
+q = Function(Q).interpolate(q_init)
 
 # We declare the output filename, and write out the initial condition. ::
 
@@ -55,7 +55,7 @@ bcs = {3: {'T': q_bottom}, 1: {'T': q_left}}
 energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
 
 # Get nubar (additional SU diffusion) for plotting
-nubar = Function(V).interpolate(energy_solver.fields['su_nubar'])
+nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
 nubar_outfile = File("advdof_DH219_skew_CG1_Pe"+str(Pe)+"_SU_nubar.pvd")
 nubar_outfile.write(nubar)
 

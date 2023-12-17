@@ -1,4 +1,4 @@
-# Demo for pure scalar advection - this is mostly copied from the Firedrake demo DG_advection,
+# Demo for pure scalar advection - this is adapted from the Firedrake DG_advection demo,
 # but here we use G-ADOPT's Energy solver and use a CG discretisation
 # with Streamline Upwind (SU) stabilisation.
 
@@ -11,8 +11,8 @@ mesh = UnitSquareMesh(40, 40, quadrilateral=True)
 # We set up a function space of bilinear elements for :math:`q`, and
 # a vector-valued continuous function space for our velocity field. ::
 
-V = FunctionSpace(mesh, "Q", 1)
-W = VectorFunctionSpace(mesh, "Q", 1)
+Q = FunctionSpace(mesh, "Q", 1)
+V = VectorFunctionSpace(mesh, "Q", 1)
 
 # We set up the initial velocity field using a simple analytic expression. ::
 
@@ -20,7 +20,7 @@ x, y = SpatialCoordinate(mesh)
 
 velocity = as_vector((0.5 - y, x - 0.5))
 # velocity = as_vector((0.5, 0))  # flow to the right to test weak dirichlet inflow bcs
-u = Function(W).interpolate(velocity)
+u = Function(V).interpolate(velocity)
 
 # Now, we set up the cosine-bell--cone--slotted-cylinder initial coniditon. The
 # first four lines declare various parameters relating to the positions of these
@@ -51,8 +51,8 @@ slot_cyl = conditional(sqrt(pow(x-cyl_x0, 2) + pow(y-cyl_y0, 2)) < cyl_r0,
 # neglecting the inflow boundary condition.  We also save the initial state so
 # that we can check the :math:`L^2`-norm error at the end. ::
 
-q_init = Function(V).interpolate(1.0 + bell + cone + slot_cyl)
-q = Function(V).assign(q_init)
+q_init = Function(Q).interpolate(1.0 + bell + cone + slot_cyl)
+q = Function(Q).assign(q_init)
 
 # We declare the output filename, and write out the initial condition. ::
 
@@ -81,7 +81,7 @@ bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
 
 # Get nubar (additional SU diffusion) for plotting
-nubar = Function(V).interpolate(energy_solver.fields['su_nubar'])
+nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
 nubar_outfile = File("CG_SUadv_nubar.pvd")
 nubar_outfile.write(nubar)
 
