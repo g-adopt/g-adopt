@@ -2,12 +2,11 @@ import argparse
 import importlib
 
 import firedrake as fd
-import numpy as np
 
 import gadopt as ga
 
 
-def write_output(dump_counter):
+def write_output(dump_counter, checkpoint_fields=None):
     time_output.assign(time_now)
     if B_is_None and RaB_is_None:
         density.interpolate(dens_diff + ref_dens)
@@ -27,6 +26,14 @@ def write_output(dump_counter):
         temperature,
         int_heat_rate,
     )
+
+    if checkpoint_fields is not None:
+        with ga.CheckpointFile(
+            f"{Simulation.name.lower()}/checkpoint_{dump_counter}.h5", mode="w"
+        ) as checkpoint_file:
+            checkpoint_file.save_mesh(mesh)
+            for field_name, field in checkpoint_fields.items():
+                checkpoint_file.save_function(field, name=field_name, idx=0)
 
     return dump_counter + 1
 
@@ -66,22 +73,24 @@ level_set = [
 ]
 
 # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-epsilon = fd.Constant(
-    min(
-        dim / elem
-        for dim, elem in zip(Simulation.domain_dimensions, Simulation.mesh_elements)
-    )
-    / 4
-)  # Empirical calibration that seems to be robust
+if Simulation.name == "Trim_2023":
+    epsilon = fd.Constant(1 / 2 / Simulation.k)
+else:
+    epsilon = fd.Constant(
+        min(
+            dim / elem
+            for dim, elem in zip(Simulation.domain_dimensions, Simulation.mesh_elements)
+        )
+        / 4
+    )  # Empirical calibration that seems to be robust
 
 # Initialise level set
+signed_dist_to_interface = fd.Function(func_space_ls)
 for ls, isd, params in zip(
     level_set, Simulation.initialise_signed_distance, Simulation.isd_params
 ):
-    signed_dist_to_interface = isd(params, ls)
-    ls.dat.data[:] = (
-        np.tanh(np.asarray(signed_dist_to_interface) / 2 / float(epsilon)) + 1
-    ) / 2
+    signed_dist_to_interface.dat.data[:] = isd(params, ls)
+    ls.interpolate((1 + fd.tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 
 # Set up fields that depend on the material interface
 func_space_interp = fd.FunctionSpace(mesh, "CG", level_set_func_space_deg)
@@ -103,7 +112,7 @@ if B_is_None and RaB_is_None:
 elif RaB_is_None:
     ref_dens = fd.Constant(1)
     dens_diff = fd.Constant(1)
-    RaB_ufl = ga.sharp_interface(
+    RaB_ufl = ga.diffuse_interface(
         level_set.copy(),
         [Simulation.Ra * material.B() for material in Simulation.materials],
         method="arithmetic",
@@ -178,7 +187,7 @@ stokes_solver = ga.StokesSolver(
 # Parameters involved in level-set reinitialisation
 reini_params = {
     "epsilon": epsilon,
-    "tstep": 2e-2,
+    "tstep": 1.5e-2,
     "tstep_alg": ga.eSSPRKs3p3,
     "frequency": 1,
     "iterations": 1,
@@ -203,7 +212,9 @@ output_file = fd.File(
     f"{Simulation.name}/output.pvd".lower(), target_degree=level_set_func_space_deg
 )
 
-diag_vars = {
+checkpoint_fields = {"Level set": level_set[0], "Temperature": temperature}
+
+diagnostic_fields = {
     "level_set": level_set,
     "level_set_grad_proj": level_set_grad_proj,
     "velocity": velocity_ufl,
@@ -226,9 +237,6 @@ while time_now < Simulation.time_end:
     dt.assign(t_adapt.update_timestep())
     time_now += float(dt)
 
-    if Simulation.name == "Trim_2023":
-        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
-
     # Solve Stokes system
     stokes_solver.solve()
 
@@ -238,12 +246,15 @@ while time_now < Simulation.time_end:
     for ls_solv in level_set_solver:
         ls_solv.solve(step)
 
-    Simulation.diagnostics(time_now, diag_vars)
+    Simulation.diagnostics(time_now, diagnostic_fields)
+
+    if Simulation.name == "Trim_2023":
+        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
 
     # Increment time-loop step counter
     step += 1
 # Write final simulation state to output file
-dump_counter = write_output(dump_counter)
+dump_counter = write_output(dump_counter, checkpoint_fields)
 
 # Save post-processing fields and produce graphs
 Simulation.save_and_plot()

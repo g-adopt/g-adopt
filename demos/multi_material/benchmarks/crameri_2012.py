@@ -1,6 +1,10 @@
 from functools import partial
 
+import firedrake as fd
 import initial_signed_distance as isd
+import matplotlib.pyplot as plt
+import numpy as np
+from mpi4py import MPI
 
 import gadopt as ga
 
@@ -117,7 +121,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (2.8e6, 8e5)
-    mesh_elements = (384, 128)
+    mesh_elements = (512, 1024)
 
     # Parameters to initialise level sets
     slope = 0
@@ -160,14 +164,72 @@ class Simulation:
     time_end = 1e5 * 365.25 * 8.64e4
     dump_period = 2e3 * 365.25 * 8.64e4
 
+    # Diagnostic objects
+    diag_fields = {
+        "output_time": [0],
+        "max_topography": [7],
+        "max_topography_analytical": [7],
+    }
+    relaxation_rate = -0.2139e-11
+
     @classmethod
     def initialise_temperature(cls, temperature):
         pass
 
     @classmethod
     def diagnostics(cls, simu_time, variables):
-        pass
+        max_topography_analytical = (
+            cls.interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
+        )
+        max_topo_per_core = (
+            fd.Function(variables["level_set"][1].function_space())
+            .interpolate(
+                fd.conditional(
+                    variables["level_set"][1] <= 0.5,
+                    variables["level_set"][1].function_space().mesh().coordinates[1],
+                    0,
+                )
+            )
+            .dat.data_ro_with_halos.max(initial=0)
+        )
+        max_topography = variables["level_set"][1].comm.allreduce(
+            max_topo_per_core, MPI.MAX
+        )
+
+        cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
+        cls.diag_fields["max_topography"].append(
+            (max_topography - cls.material_interface_y) / 1e3
+        )
+        cls.diag_fields["max_topography_analytical"].append(max_topography_analytical)
 
     @classmethod
     def save_and_plot(cls):
-        pass
+        if MPI.COMM_WORLD.rank == 0:
+            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+
+            fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
+
+            ax.set_xlim(0, 100)
+            ax.set_ylim(0, 7)
+
+            ax.set_xlabel("Time (kyr)")
+            ax.set_ylabel("Maximum topography (km)")
+
+            ax.plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["max_topography"],
+                label="Simulation",
+            )
+            ax.plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["max_topography_analytical"],
+                label="Analytical",
+            )
+
+            ax.legend()
+
+            fig.savefig(
+                f"{cls.name}/maximum_topography.pdf".lower(),
+                dpi=300,
+                bbox_inches="tight",
+            )

@@ -3,6 +3,9 @@ from functools import partial
 import firedrake as fd
 import flib
 import initial_signed_distance as isd
+import matplotlib.pyplot as plt
+import numpy as np
+from mpi4py import MPI
 
 import gadopt as ga
 
@@ -79,13 +82,13 @@ class Simulation:
     name = "Trim_2023"
 
     # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    level_set_func_space_deg = 1
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (1, 1)
-    mesh_elements = (128, 128)
+    mesh_elements = (512, 512)
 
     # Parameters to initialise level sets
     slope = 0
@@ -116,12 +119,14 @@ class Simulation:
     # Parameters to initialise temperature
     a = 100
     b = 100
-    t = 0
-    f = a * fd.sin(fd.pi * b * t)
     k = 35
 
     # Boundary conditions
-    temp_bcs = {1: {"flux": 0}, 2: {"flux": 0}, 3: {"T": 1}, 4: {"T": 0}}
+    C0_0 = 1 / (1 + fd.exp(-2 * k * (intercept - 0)))
+    C0_1 = 1 / (1 + fd.exp(-2 * k * (intercept - 1)))
+    temp_bc_bot = RaB / Ra * (C0_0 - 1) + 1
+    temp_bc_top = RaB / Ra * C0_1
+    temp_bcs = {3: {"T": temp_bc_bot}, 4: {"T": temp_bc_top}}
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
     # Timestepping objects
@@ -130,22 +135,39 @@ class Simulation:
     time_end = 0.01
     dump_period = 1e-4
 
+    # Diagnostic objects
+    diag_fields = {
+        "output_time": [],
+        "rms_velocity": [],
+        "rms_velocity_analytical": [],
+        "entrainment": [],
+    }
+    material_area = domain_dimensions[0] * intercept
+    entrainment_height = 0.5
+
+    @classmethod
+    def C0(cls, mesh_coord_y):
+        return 1 / (1 + fd.exp(-2 * cls.k * (cls.intercept - mesh_coord_y)))
+
+    @classmethod
+    def f(cls, t):
+        return cls.a * fd.sin(fd.pi * cls.b * t)
+
     @classmethod
     def initialise_temperature(cls, temperature):
-        mesh_coords = fd.SpatialCoordinate(temperature.function_space().mesh())
-
-        C0 = 1 / (1 + fd.exp(-2 * cls.k * (cls.intercept - mesh_coords[1])))
+        λ = cls.domain_dimensions[0]
+        x, y = fd.SpatialCoordinate(temperature.function_space().mesh())
 
         temperature.interpolate(
             (
                 -fd.pi**3
-                * (cls.domain_dimensions[0] ** 2 + 1) ** 2
-                / cls.domain_dimensions[0] ** 3
-                * fd.cos(fd.pi * mesh_coords[0] / cls.domain_dimensions[0])
-                * fd.sin(fd.pi * mesh_coords[1])
-                * cls.f
-                + cls.RaB * C0
-                + (cls.Ra - cls.RaB) * (1 - mesh_coords[1])
+                * (λ**2 + 1) ** 2
+                / λ**3
+                * fd.cos(fd.pi * x / λ)
+                * fd.sin(fd.pi * y)
+                * cls.f(0)
+                + cls.RaB * cls.C0(y)
+                + (cls.Ra - cls.RaB) * (1 - y)
             )
             / cls.Ra
         )
@@ -173,8 +195,50 @@ class Simulation:
 
     @classmethod
     def diagnostics(cls, simu_time, variables):
-        pass
+        λ = cls.domain_dimensions[0]
+        rms_velocity_analytical = (
+            fd.pi * fd.sqrt(λ**2 + 1) / 2 / λ * abs(cls.f(simu_time))
+        )
+        entrainment = ga.entrainment(
+            variables["level_set"][0], cls.material_area, cls.entrainment_height
+        )
+
+        cls.diag_fields["output_time"].append(simu_time)
+        cls.diag_fields["rms_velocity"].append(ga.rms_velocity(variables["velocity"]))
+        cls.diag_fields["rms_velocity_analytical"].append(rms_velocity_analytical)
+        cls.diag_fields["entrainment"].append(entrainment)
 
     @classmethod
     def save_and_plot(cls):
-        pass
+        if MPI.COMM_WORLD.rank == 0:
+            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+
+            fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
+
+            ax[0].set_ylim(0, 250)
+            ax[1].set_ylim(0, 0.8)
+
+            ax[0].set_xlabel("Time (non-dimensional)")
+            ax[1].set_xlabel("Time (non-dimensional)")
+            ax[0].set_ylabel("Root-mean-square velocity (non-dimensional)")
+            ax[1].set_ylabel("Entrainment (non-dimensional)")
+
+            ax[0].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["rms_velocity"],
+                label="Simulation",
+            )
+            ax[0].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["rms_velocity_analytical"],
+                label="Analytical",
+            )
+            ax[1].plot(cls.diag_fields["output_time"], cls.diag_fields["entrainment"])
+
+            ax[0].legend()
+
+            fig.savefig(
+                f"{cls.name}/rms_velocity_and_entrainment.pdf".lower(),
+                dpi=300,
+                bbox_inches="tight",
+            )
