@@ -166,9 +166,9 @@ class Simulation:
 
     # Diagnostic objects
     diag_fields = {
-        "output_time": [0],
-        "max_topography": [7],
-        "max_topography_analytical": [7],
+        "output_time": [],
+        "max_topography": [],
+        "max_topography_analytical": [],
     }
     relaxation_rate = -0.2139e-11
 

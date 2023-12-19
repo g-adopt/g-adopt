@@ -1,6 +1,7 @@
 import abc
 
 from firedrake import (
+    Constant,
     FacetNormal,
     Function,
     LinearVariationalProblem,
@@ -237,3 +238,46 @@ def diffuse_interface(level_set, material_value, method):
                 return material_value[0] ** (1 - ls) * material_value[1] ** ls
             case "harmonic":
                 return 1 / ((1 - ls) / material_value[0] + ls / material_value[1])
+
+
+def density_RaB(Simulation, level_set, func_space_interp):
+    density = Function(func_space_interp, name="Density")
+    RaB = Function(func_space_interp, name="RaB")
+    # Identify if the equations are written in dimensional form or not and define relevant
+    # variables accordingly
+    B_is_None = all(material.B() is None for material in Simulation.materials)
+    RaB_is_None = all(material.RaB() is None for material in Simulation.materials)
+    if B_is_None and RaB_is_None:
+        RaB_ufl = Constant(1)
+        ref_dens = Constant(Simulation.reference_material.density())
+        dens_diff = sharp_interface(
+            level_set.copy(),
+            [material.density() - ref_dens for material in Simulation.materials],
+            method="arithmetic",
+        )
+        density.interpolate(dens_diff + ref_dens)
+        dimensionless = False
+    elif RaB_is_None:
+        ref_dens = Constant(1)
+        dens_diff = Constant(1)
+        RaB_ufl = diffuse_interface(
+            level_set.copy(),
+            [Simulation.Ra * material.B() for material in Simulation.materials],
+            method="arithmetic",
+        )
+        RaB.interpolate(RaB_ufl)
+        dimensionless = True
+    elif B_is_None:
+        ref_dens = Constant(1)
+        dens_diff = Constant(1)
+        RaB_ufl = sharp_interface(
+            level_set.copy(),
+            [material.RaB() for material in Simulation.materials],
+            method="arithmetic",
+        )
+        RaB.interpolate(RaB_ufl)
+        dimensionless = True
+    else:
+        raise ValueError("Providing B and RaB is redundant.")
+
+    return ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless

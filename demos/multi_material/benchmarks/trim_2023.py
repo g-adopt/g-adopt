@@ -182,7 +182,7 @@ class Simulation:
                 flib.h_python(
                     coord_x,
                     coord_y,
-                    simu_time,
+                    float(simu_time),
                     cls.domain_dimensions[0],
                     cls.k,
                     cls.intercept,

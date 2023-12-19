@@ -1,5 +1,6 @@
 import argparse
 import importlib
+from functools import partial
 
 import firedrake as fd
 
@@ -8,10 +9,10 @@ import gadopt as ga
 
 def write_output(dump_counter, checkpoint_fields=None):
     time_output.assign(time_now)
-    if B_is_None and RaB_is_None:
-        density.interpolate(dens_diff + ref_dens)
-    else:
+    if dimensionless:
         RaB.interpolate(RaB_ufl)
+    else:
+        density.interpolate(dens_diff + ref_dens)
     viscosity.interpolate(viscosity_ufl)
 
     output_file.write(
@@ -94,41 +95,9 @@ for ls, isd, params in zip(
 
 # Set up fields that depend on the material interface
 func_space_interp = fd.FunctionSpace(mesh, "CG", level_set_func_space_deg)
-density = fd.Function(func_space_interp, name="Density")
-RaB = fd.Function(func_space_interp, name="RaB")
-# Identify if the equations are written in dimensional form or not and define relevant
-# variables accordingly
-B_is_None = all(material.B() is None for material in Simulation.materials)
-RaB_is_None = all(material.RaB() is None for material in Simulation.materials)
-if B_is_None and RaB_is_None:
-    RaB_ufl = fd.Constant(1)
-    ref_dens = fd.Constant(Simulation.reference_material.density())
-    dens_diff = ga.sharp_interface(
-        level_set.copy(),
-        [material.density() - ref_dens for material in Simulation.materials],
-        method="arithmetic",
-    )
-    density.interpolate(dens_diff + ref_dens)
-elif RaB_is_None:
-    ref_dens = fd.Constant(1)
-    dens_diff = fd.Constant(1)
-    RaB_ufl = ga.diffuse_interface(
-        level_set.copy(),
-        [Simulation.Ra * material.B() for material in Simulation.materials],
-        method="arithmetic",
-    )
-    RaB.interpolate(RaB_ufl)
-elif B_is_None:
-    ref_dens = fd.Constant(1)
-    dens_diff = fd.Constant(1)
-    RaB_ufl = ga.sharp_interface(
-        level_set.copy(),
-        [material.RaB() for material in Simulation.materials],
-        method="arithmetic",
-    )
-    RaB.interpolate(RaB_ufl)
-else:
-    raise ValueError("Providing B and RaB is redundant.")
+ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
+    Simulation, level_set, func_space_interp
+)
 
 viscosity_ufl = ga.diffuse_interface(
     level_set.copy(),
@@ -184,10 +153,13 @@ stokes_solver = ga.StokesSolver(
     transpose_nullspace=stokes_nullspace,
 )
 
+# Solve initial Stokes system
+stokes_solver.solve()
+
 # Parameters involved in level-set reinitialisation
 reini_params = {
     "epsilon": epsilon,
-    "tstep": 1.5e-2,
+    "tstep": 2e-2,
     "tstep_alg": ga.eSSPRKs3p3,
     "frequency": 1,
     "iterations": 1,
@@ -225,36 +197,41 @@ diagnostic_fields = {
     "int_heat_rate": int_heat_rate,
 }
 
+if Simulation.name == "Trim_2023":
+    update_forcings = partial(Simulation.internal_heating_rate, int_heat_rate_ufl)
+else:
+    update_forcings = None
+
 # Perform the time loop
 while time_now < Simulation.time_end:
     if time_now >= dump_counter * Simulation.dump_period:  # Write to output file
         dump_counter = write_output(dump_counter)
+
+    Simulation.diagnostics(time_now, diagnostic_fields)
 
     # Update time and timestep
     t_adapt.maximum_timestep = min(
         Simulation.dump_period, Simulation.time_end - time_now
     )
     dt.assign(t_adapt.update_timestep())
-    time_now += float(dt)
-
-    # Solve Stokes system
-    stokes_solver.solve()
 
     # Solve energy system
-    energy_solver.solve()
+    if Simulation.name == "Trim_2023":
+        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
+    energy_solver.solve(t=time_now, update_forcings=update_forcings)
 
     for ls_solv in level_set_solver:
         ls_solv.solve(step)
 
-    Simulation.diagnostics(time_now, diagnostic_fields)
+    # Solve Stokes system
+    stokes_solver.solve()
 
-    if Simulation.name == "Trim_2023":
-        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
-
-    # Increment time-loop step counter
+    # Increment simulation time and time-loop step counter
+    time_now += float(dt)
     step += 1
-# Write final simulation state to output file
+# Write final simulation state to output file and generate checkpoint
 dump_counter = write_output(dump_counter, checkpoint_fields)
-
+# Calculate final simulation diagnostics
+Simulation.diagnostics(time_now, diagnostic_fields)
 # Save post-processing fields and produce graphs
 Simulation.save_and_plot()
