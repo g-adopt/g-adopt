@@ -1,6 +1,7 @@
 import numpy as np
 import pygplates
 import firedrake as fd
+from firedrake.ufl_expr import extract_unique_domain
 import numpy
 from gadopt.utility import log
 
@@ -50,7 +51,7 @@ class pyGplatesConnector(object):
             dbc.function_space(),
             name="coordinates").interpolate(
                 fd.SpatialCoordinate(
-                    dbc.function_space().ufl_domain()
+                    extract_unique_domain(dbc.function_arg)
                 )
         )
         self.velocity_domain_features = (
@@ -88,10 +89,10 @@ class pyGplatesConnector(object):
 
         # only calculate new velocities if, either it's the first time step, or there has been more than delta_time since last calculation
         # velocities are stored in cache
-        if not self.reconstruction_time or abs(requested_reconstruction_time - self.reconstruction_time) > self.delta_time:
+        if self.reconstruction_time is None or abs(requested_reconstruction_time - self.reconstruction_time) > self.delta_time:
             self.reconstruction_time = requested_reconstruction_time
-            velocities = self._obtain_velocities(reconstruction_time=self.reconstruction_time)
-        self.boundary_condition.dat.data_with_halos[self.dbc.nodes] = velocities
+            self.boundary_condition.dat.data_with_halos[self.dbc.nodes] = (
+                self._obtain_velocities(reconstruction_time=self.reconstruction_time))
 
     def ndtime2geotime(self, ndtime):
         """ converts non-dimensised time to geologic time with respect to present-day (Ma)
