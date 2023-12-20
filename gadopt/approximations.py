@@ -78,15 +78,14 @@ class BoussinesqApproximation(BaseApproximation):
     compressible = False
     Tbar = 0
 
-    def __init__(self, Ra, *, rho=1, alpha=1, Tbar=0, g=1, RaB=0, delta_rho=1, kappa=1, H=0):
+    def __init__(self, Ra, *, rho=1, alpha=1, T0=0, g=1, RaB=0, delta_rho=1, kappa=1, H=0):
         """
         :arg Ra: Rayleigh number
         :arg rho: Reference density
         :arg alpha: Coefficient of thermal expansion
-        :arg Tbar: Reference temperature
+        :arg T0: Reference temperature
         :arg g: Gravitational acceleration
-        :arg RaB: Compositional Rayleigh number obtained as a product of the Rayleigh
-                 and buoyancy numbers
+        :arg RaB: Compositional Rayleigh number; product of the Rayleigh and buoyancy numbers
         :arg delta_rho: Compositional density difference from the reference density
         :arg kappa: Thermal diffusivity
         :arg H: Internal heating rate
@@ -94,7 +93,7 @@ class BoussinesqApproximation(BaseApproximation):
         self.Ra = ensure_constant(Ra)
         self.rho = ensure_constant(rho)
         self.alpha = ensure_constant(alpha)
-        self.Tbar = ensure_constant(Tbar)
+        self.T0 = ensure_constant(T0)
         self.g = ensure_constant(g)
         self._kappa = ensure_constant(kappa)
         self.RaB = ensure_constant(RaB)
@@ -103,7 +102,7 @@ class BoussinesqApproximation(BaseApproximation):
 
     def buoyancy(self, p, T):
         return (
-            self.Ra * self.rho * self.alpha * (T - self.Tbar) * self.g
+            self.Ra * self.rho * self.alpha * (T - self.T0) * self.g
             - self.RaB * self.delta_rho * self.g
         )
 
