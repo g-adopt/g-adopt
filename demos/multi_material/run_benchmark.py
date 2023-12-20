@@ -101,7 +101,7 @@ ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
 
 viscosity_ufl = ga.diffuse_interface(
     level_set.copy(),
-    [material.viscosity(velocity_ufl) for material in Simulation.materials],
+    [material.viscosity(velocity=velocity_ufl) for material in Simulation.materials],
     method="geometric",
 )
 viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
@@ -126,11 +126,12 @@ dt = fd.Constant(Simulation.dt)
 approximation = ga.BoussinesqApproximation(
     Simulation.Ra,
     rho=ref_dens,
-    g=Simulation.g,
     alpha=1,
-    kappa=1,
+    g=Simulation.g,
+    Tbar=0,
     RaB=RaB_ufl,
     delta_rho=dens_diff,
+    kappa=1,
     H=int_heat_rate_ufl,
 )
 energy_solver = ga.EnergySolver(

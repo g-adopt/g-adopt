@@ -1,4 +1,5 @@
-import abc
+from dataclasses import dataclass, fields
+from typing import Optional
 
 from firedrake import (
     Constant,
@@ -24,55 +25,57 @@ from .equations import BaseEquation, BaseTerm
 from .scalar_equation import ScalarAdvectionEquation
 
 
-class AbstractMaterial(abc.ABC):
-    """Abstract class to specify relevant material properties that affect simulation's
-    evolution. Each material property is provided as a method to allow for temporal and
-    spatial dependency."""
+@dataclass(kw_only=True)
+class Material:
+    """A material defined by physical properties and compatible with a level set."""
 
-    @abc.abstractmethod
-    def B():
-        """Buoyancy number"""
-        pass
+    density: Optional[float] = None  # Reference density
+    B: Optional[float] = None  # Buoyancy number
+    RaB: Optional[float] = None  # Compositional Rayleigh number
 
-    @abc.abstractmethod
-    def RaB():
-        """Compositional Rayleigh number, expressed as the product of the Rayleigh and
-        Buoyancy numbers"""
-        pass
+    def __post_init__(self):
+        count_float = 0
+        count_None = 0
+        for field_var in fields(self):
+            if isinstance(field_var_value := getattr(self, field_var.name), float):
+                count_float += 1
+                self.density_B_RaB = field_var.name
+            elif field_var_value is None:
+                count_None += 1
+        if count_float != 1 and count_None != 2:
+            raise ValueError(
+                "One, and only one, of density, B, and RaB must be provided, and it"
+                " must be a float"
+            )
 
-    @abc.abstractmethod
-    def density():
-        """Dimensional density"""
-        pass
+    @staticmethod
+    def viscosity(*args, **kwargs):
+        """Dynamic viscosity (Pa s)"""
+        return 1.0
 
-    @abc.abstractmethod
-    def viscosity():
-        """Dimensional dynamic viscosity"""
-        pass
+    @staticmethod
+    def thermal_expansion(*args, **kwargs):
+        """Volumetric thermal expansion coefficient (K^-1)"""
+        return 1.0
 
-    @abc.abstractmethod
-    def thermal_expansion():
-        """Dimensional coefficient of thermal expansion"""
-        pass
+    @staticmethod
+    def thermal_conductivity(*args, **kwargs):
+        """Thermal conductivity (W m^-1 K^-1)"""
+        return 1.0
 
-    @abc.abstractmethod
-    def thermal_conductivity():
-        """Dimensional thermal conductivity"""
-        pass
+    @staticmethod
+    def specific_heat_capacity(*args, **kwargs):
+        """Specific heat capacity at constant pressure (J kg^-1 K^-1)"""
+        return 1.0
 
-    @abc.abstractmethod
-    def specific_heat_capacity():
-        """Dimensional specific heat capacity at constant pressure"""
-        pass
-
-    @abc.abstractmethod
-    def internal_heating_rate():
-        """Dimensional internal heating rate per unit mass"""
-        pass
+    @staticmethod
+    def internal_heating_rate(*args, **kwargs):
+        """Internal heating rate per unit mass (W kg^-1)"""
+        return 0.0
 
     @classmethod
-    def thermal_diffusivity(cls):
-        """Dimensional thermal diffusivity"""
+    def thermal_diffusivity(cls, *args, **kwargs):
+        "Thermal diffusivity (m^2 s^-1)"
         return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
 
 
@@ -243,41 +246,41 @@ def diffuse_interface(level_set, material_value, method):
 def density_RaB(Simulation, level_set, func_space_interp):
     density = Function(func_space_interp, name="Density")
     RaB = Function(func_space_interp, name="RaB")
-    # Identify if the equations are written in dimensional form or not and define relevant
-    # variables accordingly
-    B_is_None = all(material.B() is None for material in Simulation.materials)
-    RaB_is_None = all(material.RaB() is None for material in Simulation.materials)
-    if B_is_None and RaB_is_None:
+    # Identify if the governing equations are written in dimensional form or not and
+    # define accordingly relevant variables for the buoyancy term
+    if all(material.density_B_RaB == "density" for material in Simulation.materials):
         RaB_ufl = Constant(1)
-        ref_dens = Constant(Simulation.reference_material.density())
+        ref_dens = Constant(Simulation.reference_material.density)
         dens_diff = sharp_interface(
             level_set.copy(),
-            [material.density() - ref_dens for material in Simulation.materials],
+            [material.density - ref_dens for material in Simulation.materials],
             method="arithmetic",
         )
         density.interpolate(dens_diff + ref_dens)
         dimensionless = False
-    elif RaB_is_None:
+    elif all(material.density_B_RaB == "B" for material in Simulation.materials):
         ref_dens = Constant(1)
         dens_diff = Constant(1)
         RaB_ufl = diffuse_interface(
             level_set.copy(),
-            [Simulation.Ra * material.B() for material in Simulation.materials],
+            [Simulation.Ra * material.B for material in Simulation.materials],
             method="arithmetic",
         )
         RaB.interpolate(RaB_ufl)
         dimensionless = True
-    elif B_is_None:
+    elif all(material.density_B_RaB == "RaB" for material in Simulation.materials):
         ref_dens = Constant(1)
         dens_diff = Constant(1)
         RaB_ufl = sharp_interface(
             level_set.copy(),
-            [material.RaB() for material in Simulation.materials],
+            [material.RaB for material in Simulation.materials],
             method="arithmetic",
         )
         RaB.interpolate(RaB_ufl)
         dimensionless = True
     else:
-        raise ValueError("Providing B and RaB is redundant.")
+        raise ValueError(
+            "All materials must be initialised using the same buoyancy-related variable"
+        )
 
     return ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless

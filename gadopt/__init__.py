@@ -9,7 +9,7 @@ from .stokes_integrators import StokesSolver, create_stokes_nullspace
 from .energy_solver import EnergySolver
 from .approximations import BoussinesqApproximation, ExtendedBoussinesqApproximation, AnelasticLiquidApproximation, TruncatedAnelasticLiquidApproximation
 from .preconditioners import SPDAssembledPC, VariableMassInvPC
-from .level_set_tools import AbstractMaterial, LevelSetSolver, diffuse_interface, sharp_interface, density_RaB
+from .level_set_tools import Material, LevelSetSolver, diffuse_interface, sharp_interface, density_RaB
 
 from firedrake.petsc import PETSc
 PETSc.Sys.popErrorHandler()

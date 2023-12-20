@@ -1,63 +1,27 @@
+from dataclasses import dataclass
+from typing import ClassVar
+
 import firedrake as fd
 import initial_signed_distance as isd
 
 import gadopt as ga
 
 
-class Mantle(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 3150
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class Mantle(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e21
 
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
+
+@dataclass
+class Lithosphere(ga.Material):
+    visc_coeff: ClassVar = 4.75e11
+    stress_exponent: ClassVar = 4
+    visc_bounds: ClassVar = (1e21, 1e25)
 
     @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class Lithosphere(ga.AbstractMaterial):
-    visc_coeff = 4.75e11
-    stress_exponent = 4
-    visc_bounds = (1e21, 1e25)
-
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 3300
-
-    @classmethod
-    def viscosity(cls, velocity):
-        strain_rate = fd.sym(fd.grad(velocity))
+    def viscosity(cls, *args, **kwargs):
+        strain_rate = fd.sym(fd.grad(kwargs["velocity"]))
         strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate) / 2 + 1e-99)
 
         return fd.min_value(
@@ -67,22 +31,6 @@ class Lithosphere(ga.AbstractMaterial):
             ),
             cls.visc_bounds[1],
         )
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
 
 
 class Simulation:
@@ -111,8 +59,10 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    materials = [Mantle, Lithosphere]
-    reference_material = Mantle
+    mantle = Mantle(density=3150.0)
+    lithosphere = Lithosphere(density=3300.0)
+    materials = [mantle, lithosphere]
+    reference_material = mantle
 
     # Physical parameters
     Ra, g = 1, 9.81
@@ -137,7 +87,7 @@ class Simulation:
     characteristic_time = (
         4
         * Lithosphere.visc_coeff
-        / (Lithosphere.density() - Mantle.density())
+        / (lithosphere.density - mantle.density)
         / g
         / slab_length
     ) ** Lithosphere.stress_exponent

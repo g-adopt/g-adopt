@@ -10,74 +10,6 @@ from mpi4py import MPI
 import gadopt as ga
 
 
-class TopMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return 0
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return None
-
-    @classmethod
-    def viscosity(cls, velocity):
-        return 1
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return None
-
-
-class BottomMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return 0.5
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return None
-
-    @classmethod
-    def viscosity(cls, velocity):
-        return 1
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return None
-
-
 class Simulation:
     name = "Trim_2023"
 
@@ -109,12 +41,14 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    materials = [BottomMaterial, TopMaterial]
+    top_material = ga.Material(B=0.0)
+    bottom_material = ga.Material(B=0.5)
+    materials = [bottom_material, top_material]
     reference_material = None
 
     # Physical parameters
     Ra, g = 1e5, 1
-    RaB = Ra * BottomMaterial.B()
+    RaB = Ra * bottom_material.B
 
     # Parameters to initialise temperature
     a = 100

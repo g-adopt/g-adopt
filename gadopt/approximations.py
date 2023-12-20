@@ -1,5 +1,7 @@
 import abc
-from firedrake import sym, grad, inner, div, Identity
+
+from firedrake import Identity, div, grad, inner, sym
+
 from .utility import ensure_constant, vertical_component
 
 
@@ -74,23 +76,26 @@ class BoussinesqApproximation(BaseApproximation):
     All references rho, cp, alpha are constant and typically incorporated in Ra
     Viscous dissipation is neglected (Di << 1)."""
     compressible = False
+    Tbar = 0
 
-    def __init__(self, Ra, *, rho=1, g=1, alpha=1, kappa=1, RaB=0, delta_rho=1, H=0):
+    def __init__(self, Ra, *, rho=1, alpha=1, Tbar=0, g=1, RaB=0, delta_rho=1, kappa=1, H=0):
         """
         :arg Ra: Rayleigh number
         :arg rho: Reference density
-        :arg g: Gravitational acceleration
         :arg alpha: Coefficient of thermal expansion
-        :arg kappa: Thermal diffusivity
+        :arg Tbar: Reference temperature
+        :arg g: Gravitational acceleration
         :arg RaB: Compositional Rayleigh number obtained as a product of the Rayleigh
                  and buoyancy numbers
         :arg delta_rho: Compositional density difference from the reference density
+        :arg kappa: Thermal diffusivity
         :arg H: Internal heating rate
         """
         self.Ra = ensure_constant(Ra)
         self.rho = ensure_constant(rho)
-        self.g = ensure_constant(g)
         self.alpha = ensure_constant(alpha)
+        self.Tbar = ensure_constant(Tbar)
+        self.g = ensure_constant(g)
         self._kappa = ensure_constant(kappa)
         self.RaB = ensure_constant(RaB)
         self.delta_rho = ensure_constant(delta_rho)
@@ -98,7 +103,7 @@ class BoussinesqApproximation(BaseApproximation):
 
     def buoyancy(self, p, T):
         return (
-            self.Ra * self.rho * self.alpha * T * self.g
+            self.Ra * self.rho * self.alpha * (T - self.Tbar) * self.g
             - self.RaB * self.delta_rho * self.g
         )
 
@@ -110,8 +115,6 @@ class BoussinesqApproximation(BaseApproximation):
 
     def kappa(self):
         return self._kappa
-
-    Tbar = 0
 
     def linearized_energy_sink(self, u):
         return 0
