@@ -199,9 +199,10 @@ class CheckpointFile(CheckpointFile):
 
     def get_timesteps(self):
         if "time-stepping" in self.h5pyfile:
-            return self.h5pyfile["time-stepping"][:]
+            ret = self.h5pyfile["time-stepping"][:]
         else:
-            return None
+            ret = None
+        return ret[:, 0].astype("int"), ret[:, 1]
 
 
 def generate_mesh():
