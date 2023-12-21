@@ -1,4 +1,4 @@
-from firedrake import *
+from gadopt import *
 import numpy as np
 from pykdtree.kdtree import KDTree
 from pyshtools import SHCoeffs
@@ -45,13 +45,10 @@ def map_tomography_model():
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-    W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
-    Z = MixedFunctionSpace([V, W])  # Mixed function space.
+
     Q1 = FunctionSpace(mesh, "CG", 1)
     Qlayer = FunctionSpace(mesh2d, "CG", 1)
-    # Test functions and functions to hold solutions:
-    z = Function(Z)  # a field over the mixed function space Z.
 
     Told = Function(Q, name="NewTemp")
     Tlayer = Function(Qlayer, name="LayerAverage")
@@ -60,11 +57,6 @@ def map_tomography_model():
     tic_dc = DumbCheckpoint("Temperature_State_0", mode=FILE_READ)
     tic_dc.load(Told, name="Temperature")
     tic_dc.close()
-
-    # Initial condition for Stokes:
-    uic_dc = DumbCheckpoint("Stokes_State_0", mode=FILE_READ)
-    uic_dc.load(z, name="Stokes")
-    uic_dc.close()
 
     r = Function(V, name="SpatialCoordinates").interpolate(SpatialCoordinate(mesh))
     rmag = Function(Q, name="Rmag").interpolate(sqrt(SpatialCoordinate(mesh) ** 2))
@@ -105,14 +97,31 @@ def map_tomography_model():
             average_temperature.dat.data[i::vnodes] = assemble(Tlayer * dx) / Rmin_area
         return average_temperature
 
+    # Function for viscosity
+    mu_function = Function(Q, name="Viscosity")
+
+    r1d = np.linspace(rmin, rmax, vnodes)
+    terra_mu = np.loadtxt("mu_2_lith.visc_smoothened.rad")
+    terra_rad = np.linspace(rmax, rmin, terra_mu.shape[0])
+    dists, inds = KDTree(terra_rad).query(r1d, k=2)
+    mu_1d = np.sum(1/dists * terra_mu[inds], axis=1)/np.sum(1/dists, axis=1)
+    mu_1d[dists[:, 0] <= 1e-6] = terra_mu[inds[dists[:, 0] <= 1e-5, 0]]
+
+    # Calculate the layer average of the initial state
+    averager = LayerAveraging(
+        mesh, r1d, cartesian=False, quad_degree=6
+    )
+    averager.extrapolate_layer_average(mu_function, mu_1d)
+
     with CheckpointFile("Adjoint_CheckpointFile.h5", mode="w") as fi:
         fi.save_mesh(mesh)
         fi.save_function(Told, name="Temperature")
-        fi.save_function(z, name="Stokes")
         fi.save_function(ref_temperatureQ1, name="ReferenceTemperature")
         fi.save_function(layer_average(ref_temperatureQ1), name="AverageTemperature")
+        fi.save_function(mu_function, name="mu1viscosity")
 
     File("./output/Output.pvd").write(Told, ref_temperature, average_temperature)
+    File("./output/viscosity.pvd").write(mu_function)
 
 
 def make_sample_mesh():
