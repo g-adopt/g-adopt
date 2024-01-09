@@ -1,17 +1,19 @@
 from gadopt import *
 from gadopt.gplates import pyGplatesConnector
-import os
 
 rmin, rmax = 1.22, 2.22
 
 
 def forward():
+    # see if there are any checkpointfiles
+    state_id = find_latest_id()
+
     # make sure the mesh is generated
-    if not os.path.isfile("./mesh.h5"):
+    if state_id is None:
         generate_mesh()
 
     # Load mesh
-    with CheckpointFile("./mesh.h5", "r") as f:
+    with CheckpointFile(f"./states_{0 if state_id is None else state_id}.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
 
     bottom_id, top_id = "bottom", "top"
@@ -47,13 +49,20 @@ def forward():
     delta_t = Constant(1.0e-9)  # Initial time step
 
     # Initialise temperature field
-    T_initialise(T, ((1.0 - (T0*exp(Di) - T0)) * (2.22-r)))
+    if state_id is None:
+        old_indices, old_times = [0], [0.]
+        T_initialise(T, ((1.0 - (T0*exp(Di) - T0)) * (rmax-r)))
+    else:
+        with CheckpointFile(f"./states_{find_latest_id()}.h5", mode="r") as f:
+            old_indices, old_times = f.get_timesteps(mesh, name="Temperature")
+            T.interpolate(f.load_function(mesh, name="Temperature", idx=old_indices[-1]))
 
     # Top velocity boundary condition
     gplates_velocities = Function(V, name="GPlates_Velocity")
 
     # Compressible reference state:
-    rho_0, alpha = 1.0, 1.0
+    rho_0 = 1.0
+    alpha = 1.0
     rhobar = Function(Q, name="CompRefDensity").interpolate(
         rho_0 * exp(((1.0 - (r-rmin)) * Di) / alpha))
     Tbar = Function(Q, name="CompRefTemperature").interpolate(
@@ -62,7 +71,6 @@ def forward():
     cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
     chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
 
-    # approximation = BoussinesqApproximation(Ra)
     approximation = TruncatedAnelasticLiquidApproximation(
         Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
 
@@ -82,7 +90,7 @@ def forward():
         bottom_id: {'un': 0},
     }
 
-    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)  # , su_advection=True)
+    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)# , su_advection=True)
     energy_solver.fields['source'] = rhobar * H_int
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu_constructor(T, u),
                                  cartesian=False,
@@ -116,33 +124,45 @@ def forward():
 
     # diagnostics
     gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+
     # adaptive time-stepper
     t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
     averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
 
     # logging diagnostic
-    plog = ParameterLog('params.log', mesh)
-    plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg")
+    plog = ParameterLog(f"params_{0 if state_id is None else state_id + 1}.log", mesh)
+    plog.log_str("timestep time dt u_rms t_dev_avg")
 
     # number of timesteps
-    num_timestep = 0
+    num_timestep = old_indices[-1]
+
+    # Period for dumping solutions
+    dumping_period = 10
+    pvd_period = 50
 
     # non-dimensionalised time for present geologic day (0)
-    ndtime_now = pl_rec_model.ndtime2geotime(0.0)
+    ndtime_now = pl_rec_model.geotime2ndtime(300.0)
+
+    # what index will we use for checkpointing
+    new_state_id = 0 if state_id is None else state_id + 1
 
     # A checkpoint file for storing data
-    chkpoint_file = CheckpointFile("states.h5", mode="w")
-    paraview_file = File("paraivew/output.pvd")
+    with CheckpointFile(f"states_{new_state_id}.h5", mode="w") as chkpoint_file:
+        chkpoint_file.save_mesh(mesh)
+    paraview_file = File(f"visual_{new_state_id}/output.pvd")
 
-    time = 0.0
+    time = old_times[-1]
+
     # Now perform the time loop:
     while time < ndtime_now:
-        # Update surface velocitiesvelocities
-        pl_rec_model.assign_plate_velocities(time)
+        # Update surface velocities
+        pl_rec_model.assign_plate_velocities(
+            pl_rec_model.geotime2ndtime(400.0)
+        )
 
-        # # Solve Stokes sytem:
-        # stokes_solver.solve()
+        # Solve Stokes system:
+        stokes_solver.solve()
 
         # Adapt time step
         if num_timestep != 0:
@@ -153,62 +173,37 @@ def forward():
 
         # Make sure we are not going past present day
         if ndtime_now - time < float(dt):
-            dt.assign(ndtime_now - time)
+            dt = ndtime_now - time
 
-        # # Temperature system:
-        # energy_solver.solve()
+        # Temperature system:
+        energy_solver.solve()
+
+        time += float(delta_t)
+        num_timestep += 1
 
         # Write output:
-        if num_timestep % 1 == 0:
+        if num_timestep % pvd_period == 0:
+
             # compute radially averaged temperature profile
             averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
             # compute deviation from layer average
             T_dev.assign(T-T_avg)
             paraview_file.write(u, p, T, T_dev)
-            chkpoint_file.set_timestep(idx=num_timestep, time=time)
-            chkpoint_file.save_function(u, idx=num_timestep)
+
+        if num_timestep % dumping_period == 0:
+            with CheckpointFile(f"states_{new_state_id}.h5", mode="a") as chkpoint_file:
+                chkpoint_file.save_function(T, name="Temperature", idx=num_timestep, timetag=time)
 
         # Log diagnostics:
-        plog.log_str(f"{num_timestep} {time} {float(dt)} {gd.u_rms()} "
-                     f"{gd.T_avg()}")
-        time += float(delta_t)
-        num_timestep += 1
-
-        if num_timestep >= 7:
-            break
-
+        plog.log_str(f"{num_timestep} {time} {float(dt)} "
+                     f"{gd.u_rms()} {gd.T_avg()}")
     plog.close()
-
-
-class CheckpointFile(CheckpointFile):
-    def __init__(self, filename, mode, comm=None):
-        if comm is None:
-            super().__init__(filename, mode)
-        else:
-            super().__init__(filename, mode, comm)
-        self.dset = None
-
-    def set_timestep(self, idx, time):
-        if "time-stepping" not in self.h5pyfile:
-            dset = self.h5pyfile.create_dataset('time-stepping', shape=(1, 2), maxshape=(None, 2))
-            dset = [idx, time]
-        else:
-            dset = self.h5pyfile["time-stepping"]
-            dset.resize((dset.shape[0] + 1, 2))
-            dset[-1, :] = [idx, time]
-
-    def get_timesteps(self):
-        if "time-stepping" in self.h5pyfile:
-            ret = self.h5pyfile["time-stepping"][:]
-        else:
-            ret = None
-        return ret[:, 0].astype("int"), ret[:, 1]
 
 
 def generate_mesh():
 
     # Set up geometry:
-    ref_level, nlayers = 6, 32
+    ref_level, nlayers = 7, 128
 
     # Variable radial resolution
     # Initiating layer heights with 1.
@@ -237,7 +232,7 @@ def generate_mesh():
         extrusion_type="radial",
     )
 
-    with CheckpointFile("mesh.h5", mode="w") as fi:
+    with CheckpointFile("states_0.h5", mode="w") as fi:
         fi.save_mesh(mesh)
 
 
@@ -301,6 +296,17 @@ def mu_constructor(T, u):
     mu_plast = mu_star + (sigma_y / epsii)
     mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
     return mu
+
+
+def find_latest_id():
+    import glob
+
+    file_names = glob.glob("states_[0-9]*.h5")
+    if len(file_names) != 0:
+        file_names = sorted(file_names, key=lambda x: int(x.split("_")[-1].split(".")[0]))
+        return int(file_names[-1].split("_")[-1].split(".")[0])
+    else:
+        return None
 
 
 if __name__ == "__main__":
