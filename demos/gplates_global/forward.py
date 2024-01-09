@@ -90,7 +90,7 @@ def forward():
         bottom_id: {'un': 0},
     }
 
-    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)# , su_advection=True)
+    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)  # , su_advection=True)
     energy_solver.fields['source'] = rhobar * H_int
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu_constructor(T, u),
                                  cartesian=False,
