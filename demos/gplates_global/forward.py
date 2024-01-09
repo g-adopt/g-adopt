@@ -142,7 +142,7 @@ def forward():
     pvd_period = 50
 
     # non-dimensionalised time for present geologic day (0)
-    ndtime_now = pl_rec_model.geotime2ndtime(300.0)
+    ndtime_now = pl_rec_model.geotime2ndtime(0)
 
     # what index will we use for checkpointing
     new_state_id = 0 if state_id is None else state_id + 1
@@ -157,9 +157,7 @@ def forward():
     # Now perform the time loop:
     while time < ndtime_now:
         # Update surface velocities
-        pl_rec_model.assign_plate_velocities(
-            pl_rec_model.geotime2ndtime(400.0)
-        )
+        pl_rec_model.assign_plate_velocities(time)
 
         # Solve Stokes system:
         stokes_solver.solve()
@@ -203,7 +201,7 @@ def forward():
 def generate_mesh():
 
     # Set up geometry:
-    ref_level, nlayers = 7, 128
+    ref_level, nlayers = 7, 64
 
     # Variable radial resolution
     # Initiating layer heights with 1.
