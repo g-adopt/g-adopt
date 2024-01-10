@@ -2,6 +2,8 @@ from .momentum_equation import StokesEquations
 from .utility import upward_normal, ensure_constant
 from .utility import log_level, INFO, DEBUG, depends_on
 import firedrake as fd
+import ufl
+from firedrake import slate
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -110,7 +112,17 @@ class StokesSolver:
         self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
-        self.J = J
+
+        if isinstance(J, (ufl.BaseForm, slate.TensorBase)):
+            self.J = J
+            self.constant_jacobian = False
+        elif isinstance(J, str) and J == "constant":
+            self.J = None
+            self.constant_jacobian = True
+        else:
+            raise TypeError(
+                "Provided Jacobian is a '%s', and is not valid" % type(J).__name__)
+
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
@@ -169,13 +181,26 @@ class StokesSolver:
         self._solver_setup = False
 
     def setup_solver(self):
-        self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
-                                                      bcs=self.strong_bcs, J=self.J)
-        self.solver = fd.NonlinearVariationalSolver(self.problem,
-                                                    solver_parameters=self.solver_parameters,
-                                                    options_prefix=self.name,
-                                                    appctx={"mu": self.mu},
-                                                    **self.solver_kwargs)
+        if self.constant_jacobian:
+            z_tri = fd.TrialFunction(self.Z)
+            F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
+            a, L = fd.lhs(F_stokes_lin), fd.rhs(F_stokes_lin)
+            self.problem = fd.LinearVariationalProblem(a, L, self.solution,
+                                                       bcs=self.strong_bcs,
+                                                       constant_jacobian=True,)
+            self.solver = fd.LinearVariationalSolver(self.problem,
+                                                     solver_parameters=self.solver_parameters,
+                                                     options_prefix=self.name,
+                                                     appctx={"mu": self.mu},
+                                                     **self.solver_kwargs)
+        else:
+            self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
+                                                          bcs=self.strong_bcs, J=self.J)
+            self.solver = fd.NonlinearVariationalSolver(self.problem,
+                                                        solver_parameters=self.solver_parameters,
+                                                        options_prefix=self.name,
+                                                        appctx={"mu": self.mu},
+                                                        **self.solver_kwargs)
         self._solver_setup = True
 
     def solve(self):

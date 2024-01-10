@@ -103,7 +103,7 @@ stokes_bcs = {
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=False,
+                             cartesian=False, J="constant",
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 
