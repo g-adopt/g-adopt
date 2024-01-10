@@ -142,14 +142,14 @@ class StokesSolver:
         self.strong_bcs = []
         for id, bc in bcs.items():
             weak_bc = {}
-            for type, value in bc.items():
-                if type == 'u':
+            for bc_type, value in bc.items():
+                if bc_type == 'u':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
-                elif type == 'ux':
+                elif bc_type == 'ux':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
-                elif type == 'uy':
+                elif bc_type == 'uy':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
-                elif type == 'uz':
+                elif bc_type == 'uz':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
                 else:
                     weak_bc[type] = value
