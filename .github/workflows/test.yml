@@ -66,6 +66,8 @@ jobs:
       - name: Build pyrol wheel
         if: steps.cache-pyrol.outputs.cache-hit != 'true'
         run: |
+          curl -OL https://github.com/Kitware/CMake/releases/download/v3.28.1/cmake-3.28.1-linux-x86_64.tar.gz
+          sudo tar --strip-components=1 -C /usr/local -xf cmake-3.28.1-linux-x86_64.tar.gz
           /home/firedrake/firedrake/bin/pip wheel -r requirements-git.txt -w /tmp/wheels
 
       - name: Save pyrol to cache
