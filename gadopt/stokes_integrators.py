@@ -113,15 +113,17 @@ class StokesSolver:
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
 
-        if isinstance(J, (ufl.BaseForm, slate.TensorBase)):
-            self.J = J
-            self.constant_jacobian = False
-        elif isinstance(J, str) and J == "constant":
-            self.J = None
-            self.constant_jacobian = True
-        else:
-            raise TypeError(
-                "Provided Jacobian is a '%s', and is not valid" % type(J).__name__)
+        # In case J is provide, making sure is valid
+        if J is not None:
+            if isinstance(J, (ufl.BaseForm, slate.TensorBase)):
+                self.J = J
+                self.constant_jacobian = False
+            elif isinstance(J, str) and J == "constant":
+                self.J = None
+                self.constant_jacobian = True
+            else:
+                raise TypeError(
+                    "Provided Jacobian is a '%s', and is not valid" % type(J).__name__)
 
         self.linear = not depends_on(self.mu, self.solution)
 
