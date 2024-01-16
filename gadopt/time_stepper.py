@@ -76,7 +76,7 @@ class TimeIntegrator(TimeIntegratorBase):
             self.solver_parameters.update(solver_parameters)
 
         self.strong_bcs = strong_bcs or []
-        self.hom_bcs = [firedrake.DirichletBC(bci.function_space(), 0, bci.sub_domain) for bci in strong_bcs]
+        self.hom_bcs = [bci.__class__(bci.function_space(), 0, bci.sub_domain) for bci in self.strong_bcs]
 
 
 class RungeKuttaTimeIntegrator(TimeIntegrator):

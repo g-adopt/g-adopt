@@ -1,5 +1,5 @@
-from .momentum_equation import StokesEquations
-from .utility import upward_normal, ensure_constant
+from .momentum_equation import StokesEquations, FreeSurfaceStokesEquations
+from .utility import upward_normal, ensure_constant, InteriorBC
 from .utility import log_level, INFO, DEBUG, depends_on
 import firedrake as fd
 
@@ -99,14 +99,22 @@ class StokesSolver:
 
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False, J=None,
-                 **kwargs):
+                 closed=True, rotational=False, J=None, additional_fields={},
+                 equations=StokesEquations, **kwargs):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
-        self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
-                                         compressible=approximation.compressible)
+
+        if equations == FreeSurfaceStokesEquations:
+            surface_id = additional_fields['surface_id']
+            self.dt = additional_fields['dt']
+            self.equations = equations(self.Z, self.Z, surface_id, quad_degree=quad_degree,
+                                       compressible=approximation.compressible)
+        else:
+            self.equations = equations(self.Z, self.Z, quad_degree=quad_degree,
+                                       compressible=approximation.compressible)
         self.solution = z
+        self.solution_old = fd.Function(self.solution)
         self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
@@ -114,8 +122,16 @@ class StokesSolver:
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
-        u, p = fd.split(self.solution)
+        if equations == FreeSurfaceStokesEquations:
+            u, p, eta = fd.split(self.solution)
+            u_old, p_old, eta_old = fd.split(self.solution_old)
+            theta = 0.5
+            eta_theta = (1-theta)*eta_old + theta*eta
+        else:
+            u, p = fd.split(self.solution)
+
         self.k = upward_normal(self.Z.mesh(), cartesian)
+
         self.fields = {
             'velocity': u,
             'pressure': p,
@@ -125,6 +141,12 @@ class StokesSolver:
             'source': self.approximation.buoyancy(p, T) * self.k,
             'rho_continuity': self.approximation.rho_continuity(),
         }
+
+        if equations == FreeSurfaceStokesEquations:
+            self.fields['eta'] = eta_theta  # free surface variable
+
+        for key, value in additional_fields.items():
+            self.fields[key] = value
 
         self.weak_bcs = {}
         self.strong_bcs = []
@@ -139,6 +161,9 @@ class StokesSolver:
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
                 elif type == 'uz':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
+                elif type == 'eta_interior':
+                    # Set internal dofs to zero to prevent singular matrix for free surface equation
+                    self.strong_bcs.append(InteriorBC(self.Z.sub(2), value, id))
                 else:
                     weak_bc[type] = value
             self.weak_bcs[id] = weak_bc
@@ -146,6 +171,9 @@ class StokesSolver:
         self.F = 0
         for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
+
+        if equations == FreeSurfaceStokesEquations:
+            self.F += self.equations[2].mass_term(self.test[2], (eta-eta_old)/self.dt)
 
         if self.solver_parameters is None:
             if self.linear:
@@ -181,4 +209,7 @@ class StokesSolver:
     def solve(self):
         if not self._solver_setup:
             self.setup_solver()
+
+        self.solution_old.assign(self.solution)  # need this for implicit free sufarce
+
         self.solver.solve()

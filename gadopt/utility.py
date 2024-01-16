@@ -4,7 +4,7 @@ A module with utitity functions for gadopt
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
-from firedrake import Interpolator, op2, interpolate, VectorElement
+from firedrake import Interpolator, op2, interpolate, VectorElement, DirichletBC, utils
 import ufl
 import finat.ufl
 import time
@@ -448,3 +448,10 @@ def timer_decorator(func):
         log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
         return result
     return wrapper
+
+
+class InteriorBC(DirichletBC):
+    """DirichletBC applied to anywhere that is *not* on the specified boundary"""
+    @utils.cached_property
+    def nodes(self):
+        return np.array(list(set(range(self._function_space.node_count)) - set(super().nodes)))
