@@ -1,4 +1,5 @@
-cases := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical analytical_comparisons Drucker-Prager_rheology 3d_spherical 3d_cartesian adjoint optimisation_checkpointing
+#cases := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical analytical_comparisons Drucker-Prager_rheology 3d_spherical 3d_cartesian adjoint optimisation_checkpointing free_surface
+cases := free_surface
 long_cases := analytical_comparisons parallel_scaling
 
 .PHONY: all longtest longtest_output $(cases) $(long_cases) clean generate

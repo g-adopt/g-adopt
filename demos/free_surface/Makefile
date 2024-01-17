@@ -4,5 +4,4 @@ all: $(cases)
 
 $(cases): implicit_viscous_surface.py
 	echo "running implicit free surface coupling " >&2
-#	tsp -N 1 -f python3 $< 
-	python3 $< 
+	tsp -N 1 -f python3 $< 
