@@ -113,11 +113,15 @@ class StokesSolver:
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
 
-        # In case J is provide, making sure is valid
+        # By default we assume the Jacobian to be varying in time
+        self.constant_jacobian = False
+
+        # In case J is provide, making sure is valid and see if it needs to be constant
         if J is not None:
+            # in cases where J is provided
             if isinstance(J, (ufl.BaseForm, slate.TensorBase)):
                 self.J = J
-                self.constant_jacobian = False
+            # for constant viscosity
             elif isinstance(J, str) and J == "constant":
                 self.J = None
                 self.constant_jacobian = True
