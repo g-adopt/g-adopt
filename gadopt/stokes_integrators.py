@@ -113,21 +113,20 @@ class StokesSolver:
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
 
-        # By default we assume the Jacobian to be varying in time
+        # Assume Jacobian varies in time unless specified otherwise
         self.constant_jacobian = False
+        self.J = None  # Default value for Jacobian
 
-        # In case J is provide, making sure is valid and see if it needs to be constant
+        # Validate and set the Jacobian if provided
         if J is not None:
-            # in cases where J is provided
             if isinstance(J, (ufl.BaseForm, slate.TensorBase)):
                 self.J = J
-            # for constant viscosity
-            elif isinstance(J, str) and J == "constant":
-                self.J = None
+            elif isinstance(J, str) and J.lower() == "constant":
+                # Handling constant Jacobian
                 self.constant_jacobian = True
             else:
-                raise TypeError(
-                    "Provided Jacobian is a '%s', and is not valid" % type(J).__name__)
+                # Raising error for invalid Jacobian type
+                raise TypeError(f"Invalid Jacobian type: {repr(J)}")
 
         self.linear = not depends_on(self.mu, self.solution)
 
