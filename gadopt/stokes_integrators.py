@@ -2,8 +2,6 @@ from .momentum_equation import StokesEquations
 from .utility import upward_normal, ensure_constant
 from .utility import log_level, INFO, DEBUG, depends_on
 import firedrake as fd
-import ufl
-from firedrake import slate
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -112,23 +110,8 @@ class StokesSolver:
         self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
-
-        # Assume Jacobian varies in time unless specified otherwise
-        self.constant_jacobian = False
         self.J = J
         self.constant_jacobian = constant_jacobian
-
-        # Validate and set the Jacobian if provided
-        if J is not None:
-            if isinstance(J, (ufl.BaseForm, slate.TensorBase)):
-                self.J = J
-            elif isinstance(J, str) and J.lower() == "constant":
-                # Handling constant Jacobian
-                self.constant_jacobian = True
-            else:
-                # Raising error for invalid Jacobian type
-                raise TypeError(f"Invalid Jacobian type: {repr(J)}")
-
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
@@ -193,7 +176,7 @@ class StokesSolver:
             a, L = fd.lhs(F_stokes_lin), fd.rhs(F_stokes_lin)
             self.problem = fd.LinearVariationalProblem(a, L, self.solution,
                                                        bcs=self.strong_bcs,
-                                                       constant_jacobian=True,)
+                                                       constant_jacobian=True)
             self.solver = fd.LinearVariationalSolver(self.problem,
                                                      solver_parameters=self.solver_parameters,
                                                      options_prefix=self.name,
