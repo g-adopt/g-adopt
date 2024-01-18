@@ -101,7 +101,7 @@ class StokesSolver:
 
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False, J=None,
+                 closed=True, rotational=False, J=None, constant_jacobian=False,
                  **kwargs):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
@@ -115,7 +115,8 @@ class StokesSolver:
 
         # Assume Jacobian varies in time unless specified otherwise
         self.constant_jacobian = False
-        self.J = None  # Default value for Jacobian
+        self.J = J
+        self.constant_jacobian = constant_jacobian
 
         # Validate and set the Jacobian if provided
         if J is not None:
@@ -157,7 +158,7 @@ class StokesSolver:
                 elif bc_type == 'uz':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
                 else:
-                    weak_bc[type] = value
+                    weak_bc[bc_type] = value
             self.weak_bcs[id] = weak_bc
 
         self.F = 0
