@@ -1,7 +1,7 @@
-cases := $(shell python3 test_implicit_viscous_surface.py)
+cases := explicit implicit
 
 all: $(cases)
 
-$(cases): implicit_viscous_surface.py
-	echo "running implicit free surface coupling " >&2
-	tsp -N 1 -f python3 $< 
+$(cases): 
+	echo "running $@ free surface coupling "
+	tsp -N 1 -f python3 $@_viscous_surface.py
