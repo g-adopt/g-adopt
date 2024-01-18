@@ -94,7 +94,7 @@ stokes_bcs = {
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=True, J="constant",
+                             cartesian=True, constant_jacobian=True,
                              transpose_nullspace=Z_nullspace)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
