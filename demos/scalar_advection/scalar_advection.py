@@ -19,7 +19,6 @@ V = VectorFunctionSpace(mesh, "Q", 1)
 x, y = SpatialCoordinate(mesh)
 
 velocity = as_vector((0.5 - y, x - 0.5))
-# velocity = as_vector((0.5, 0))  # flow to the right to test weak dirichlet inflow bcs
 u = Function(V).interpolate(velocity)
 
 # Now, we set up the cosine-bell--cone--slotted-cylinder initial coniditon. The

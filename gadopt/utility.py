@@ -455,13 +455,8 @@ def absv(u):
     return as_vector([abs(ui) for ui in u])
 
 
-def beta(Pe):
-    """Component-wise beta formula Donea and Huerta (2.47a) for SU stabilisation"""
-    return as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
-
-
-def su_nubar(u, J, beta_pe):
-    """SU stabilisation viscosity as a function of velocity, Jaciobian and beta(Pe)"""
+def su_nubar(u, J, Pe):
+    """SU stabilisation viscosity as a function of velocity, Jaciobian and grid Peclet number"""
     # SU(PG) ala Donea & Huerta:
     # Columns of Jacobian J are the vectors that span the quad/hex
     # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
@@ -469,5 +464,6 @@ def su_nubar(u, J, beta_pe):
     # and following (2.44c) Pe = u^T J / (2*nu)
     # beta(Pe) is the xibar vector in (2.44a)
     # then we get artifical viscosity nubar from (2.49)
+    beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
 
     return dot(absv(dot(u, J)), beta_pe)/2

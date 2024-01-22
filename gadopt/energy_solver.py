@@ -2,7 +2,7 @@ from firedrake import DirichletBC, Function, TensorFunctionSpace, Jacobian, dot
 from .scalar_equation import EnergyEquation
 from .utility import is_continuous, ensure_constant
 from .utility import log_level, INFO, DEBUG, log
-from .utility import absv, beta, su_nubar
+from .utility import absv, su_nubar
 
 iterative_energy_solver_parameters = {
     "mat_type": "aij",
@@ -55,9 +55,7 @@ class EnergySolver:
             kappa = self.fields['diffusivity'] + 1e-12  # Set lower bound for diffusivity in case zero diffusivity specified for pure advection.
             vel = self.fields['velocity']
             Pe = absv(dot(vel, J)) / (2*kappa)  # Calculate grid peclet number
-            beta_pe = beta(Pe)
-
-            nubar = su_nubar(vel, J, beta_pe)  # Calculate SU artifical diffusion
+            nubar = su_nubar(vel, J, Pe)  # Calculate SU artifical diffusion
 
             self.fields['su_nubar'] = nubar
 

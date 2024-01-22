@@ -91,9 +91,9 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
             log("Steady-state acheieved -- exiting time-step loop")
             break
 
-    # analytical solution from equation 2.23 in Chapter 2 Steady transport problems
-    # from Finite element Methods for Flow problems - Donea and Huerta, 2003
-    # N.b they have the scalar called 'u' whereas we have 'q'
+        # analytical solution from equation 2.23 in Chapter 2 Steady transport problems
+        # from Finite element Methods for Flow problems - Donea and Huerta, 2003
+        # N.b they have the scalar called 'u' whereas we have 'q'
         gamma = Constant(a/kappa)
         q_anal = Function(Q2)
         q_anal.interpolate((1/a) * (x[0] - (1 - exp(gamma*x[0]))/(1-exp(gamma))))

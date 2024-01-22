@@ -4,15 +4,17 @@ import matplotlib.pyplot as plt
 nx = [50/(2**i) for i in range(8)]  # really this is the grid peclet number
 
 # running with a grid peclet number of 50 and initial mesh resolution of 5 cells gives these results
+SU = np.loadtxt("errors-Pe50.0_SUTrue.dat")[:, 0]
+SU = np.append(SU, [0.03732994, 0.0180603, 0.00614359, 0.00170367])
+noSU = np.loadtxt("errors-Pe50.0_SUFalse.dat")[:, 0]
+noSU = np.append(noSU, [0.04086379, 0.01557628, 0.00484643, 0.00130424])
 SU_upwind = [0.16548618, 0.11845977, 0.08582658, 0.06341912, 0.0456253, 0.02835158, 0.01551193, 0.00813498]  # i.e set Beta(Pe) = 1.
-SU = [0.16343463, 0.11554859, 0.0816918, 0.05753857, 0.03732994, 0.0180603, 0.00614359, 0.00170367]
-noSU = [0.57030194, 1.08824244, 0.22152179, 0.09494632, 0.04086379, 0.01557628, 0.00484643, 0.00130424]
 
 # running with a grid peclet number of 0.25 and initial mesh resolution of 5 cells gives these results
 nx_fromPe0pt25 = [0.25/(2**i) for i in range(4)]  # really this is the grid peclet number
-SU_fromPe0pt25 = [0.01091291, 0.00276109, 0.00069343, 0.00017465]
-noSU_fromPe0pt25 = [0.00863846, 0.00217787, 0.00054636, 0.00013744]
-SU_upwind_fromPe0pt25 = [0.04179666, 0.02128963, 0.01080482, 0.00545314]
+SU_fromPe0pt25 = np.loadtxt("errors-Pe0.25_SUTrue.dat")[:, 0]
+noSU_fromPe0pt25 = np.loadtxt("errors-Pe0.25_SUFalse.dat")[:, 0]
+SU_upwind_fromPe0pt25 = [0.04179666, 0.02128963, 0.01080482, 0.00545314]  # i.e set Beta(Pe) = 1.
 
 halforder = 1e-2*np.array(nx)**0.5
 firstorder = 0.5*np.array(nx_fromPe0pt25)

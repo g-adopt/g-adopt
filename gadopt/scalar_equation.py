@@ -2,7 +2,7 @@ from .equations import BaseTerm, BaseEquation
 from firedrake import dot, inner, div, grad, avg, jump, sign
 from firedrake import min_value, Identity
 from firedrake import FacetArea, CellVolume
-from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio, log
+from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio
 r"""
 This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
 
@@ -34,7 +34,6 @@ class ScalarAdvectionTerm(BaseTerm):
 
         if 'su_nubar' in fields:
             # SU(PG) ala Donea & Huerta 2003
-            log("Using SU advection")
             nubar = fields['su_nubar']
             phi = phi + nubar / (dot(u, u)+1e-12) * dot(u, grad(phi))
 
