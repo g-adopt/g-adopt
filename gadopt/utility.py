@@ -3,7 +3,7 @@ A module with utitity functions for gadopt
 """
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import Interpolator, op2, interpolate, VectorElement
 import ufl
 import finat.ufl
@@ -448,3 +448,22 @@ def timer_decorator(func):
         log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
         return result
     return wrapper
+
+
+def absv(u):
+    """Component-wise absolute value of vector for SU stabilisation"""
+    return as_vector([abs(ui) for ui in u])
+
+
+def su_nubar(u, J, Pe):
+    """SU stabilisation viscosity as a function of velocity, Jaciobian and grid Peclet number"""
+    # SU(PG) ala Donea & Huerta:
+    # Columns of Jacobian J are the vectors that span the quad/hex
+    # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
+    # thus u^T J is (dx * u , dy * v)
+    # and following (2.44c) Pe = u^T J / (2*nu)
+    # beta(Pe) is the xibar vector in (2.44a)
+    # then we get artifical viscosity nubar from (2.49)
+    beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
+
+    return dot(absv(dot(u, J)), beta_pe)/2

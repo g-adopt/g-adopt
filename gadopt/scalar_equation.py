@@ -32,23 +32,31 @@ class ScalarAdvectionTerm(BaseTerm):
         if 'advective_velocity_scaling' in fields:
             u = fields['advective_velocity_scaling'] * u
 
-        F = -q*div(phi*u)*self.dx
+        if 'su_nubar' in fields:
+            # SU(PG) ala Donea & Huerta 2003
+            nubar = fields['su_nubar']
+            phi = phi + nubar / (dot(u, u)+1e-12) * dot(u, grad(phi))
 
-        # integration by parts leads to boundary term
-        F += q*dot(n, u)*phi*self.ds
+            F = phi * dot(u, grad(q)) * self.dx  # The advection term is not integrated by parts so there are no boundary terms
 
-        # which is replaced at incoming Dirichlet 'q' boundaries:
+        else:
+            F = -q*div(phi*u)*self.dx
+
+            # integration by parts leads to boundary term
+            F += q*dot(n, u)*phi*self.ds
+
+            if not (is_continuous(self.trial_space) and continuous_u_normal):
+                # s=0: u.n(-)<0  =>  flow goes from '+' to '-' => '+' is upwind
+                # s=1: u.n(-)>0  =>  flow goes from '-' to '+' => '-' is upwind
+                s = 0.5*(sign(dot(avg(u), n('-'))) + 1.0)
+                q_up = q('-')*s + q('+')*(1-s)
+                F += jump(phi*u, n) * q_up * self.dS
+
+        # replace boundary value on incoming Dirichlet 'q' boundaries:
         for id, bc in bcs.items():
             if 'q' in bc:
                 # on incoming boundaries, dot(u,n)<0, replace q with bc['q']
                 F += phi*min_value(dot(u, n), 0)*(bc['q']-q) * self.ds(id)
-
-        if not (is_continuous(self.trial_space) and continuous_u_normal):
-            # s=0: u.n(-)<0  =>  flow goes from '+' to '-' => '+' is upwind
-            # s=1: u.n(-)>0  =>  flow goes from '-' to '+' => '-' is upwind
-            s = 0.5*(sign(dot(avg(u), n('-'))) + 1.0)
-            q_up = q('-')*s + q('+')*(1-s)
-            F += jump(phi*u, n) * q_up * self.dS
 
         return -F
 
