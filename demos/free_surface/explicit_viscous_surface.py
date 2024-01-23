@@ -6,22 +6,25 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
 
     # Set up geometry:
     D = 3e6  # Depth of domain in m
-    lam = D/2  # wavelength of load in m
     L = D  # Length of the domain in m
+    lam_dimensional = D/2  # wavelength of load in m
+    L0 = D  # characteristic length scale for scaling the equations
+    lam = lam_dimensional/L0  # dimensionless lambda
+
     ny = nx
-    mesh = RectangleMesh(nx, ny, L, D)  # Rectangle mesh generated via firedrake
+    mesh = RectangleMesh(nx, ny, L/L0, D/L0)  # Rectangle mesh generated via firedrake
     left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
-    V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space (vector)
+    V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
-    Z = MixedFunctionSpace([V, W])  # Mixed function space.
+    Z = MixedFunctionSpace([V, W])  # Mixed function space
 
     # Function to store the solutions:
-    z = Function(Z)  # a field over the mixed function space Z.
+    z = Function(Z)  # a field over the mixed function space Z
     u, p = split(z)  # Returns symbolic UFL expression for u and p
-    u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
+    u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields
 
     # Next rename for output:
     u_.rename("Velocity")
@@ -29,49 +32,52 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
 
     eta = Function(W, name="eta")  # Define a free surface function
 
-    T = Function(Q, name="Temperature").assign(0)
+    T = Function(Q, name="Temperature").assign(0)  # Setup a dummy function for temperature
+
     # Output function space information:
     log("Number of Velocity DOF:", V.dim())
     log("Number of Pressure DOF:", W.dim())
     log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
     log("Number of Temperature DOF:", Q.dim())
 
-    eta_eq = FreeSurfaceEquation(W, W, surface_id=top_id)
+    eta_eq = FreeSurfaceEquation(W, W, free_surface_id=top_id)  # Initialise the separate free surface equation for explicit coupling
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-    Ra = Constant(0)  # Rayleigh number
-    rho0 = 4500  # density in kg/m^3
-    g = 10  # gravitational acceleration in m/s^2
-    approximation = BoussinesqApproximation(Ra, g=g, rho=rho0)
+    Ra = Constant(0)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
+    approximation = BoussinesqApproximation(Ra)
 
-    kk = 2 * pi / lam  # wavenumber in m^-1
-    F0 = 1000  # initial free surface amplitude in m
+    rho0 = approximation.rho  # This defaults to rho0 = 1 (dimensionless)
+    g = approximation.g  # This defaults to g = 1 (dimensionless)
+
+    kk = Constant(2 * pi / lam)  # wavenumber (dimensionless)
+    F0 = Constant(1000 / L0)  # initial free surface amplitude (dimensionless)
     X = SpatialCoordinate(mesh)
-    eta.interpolate(F0 * cos(kk * X[0]))
-    n = FacetNormal(mesh)
+    eta.interpolate(F0 * cos(kk * X[0]))  # initial free surface condition
 
     # timestepping
-    mu = 1e21  # Shear modulus in Pa
-    tau0 = 2 * kk * mu / (rho0 * g)
+    mu = Constant(1)  # Dynamic viscosity (dimensionless)
+    tau0 = Constant(2 * kk * mu / (rho0 * g))  # Characteristic time scale (dimensionless)
     log("tau0", tau0)
-    dt = dt_factor*tau0/round(D/lam)  # Initial time-step for explicit free surface to be stable you need the
-    # timestep to be smaller than the maximum possible wavelength which is the domain width. Otherwise at later times an instability can grow.
-    time = 0.0
-    max_timesteps = round(10*tau0/dt)
-    print("max_timesteps", max_timesteps)
 
+    dt = Constant(0.5*dt_factor*tau0)  # Timestep (dimensionless)
+    log("dt (dimensionless)", dt)
+
+    time = Constant(0.0)
+    max_timesteps = round(10*tau0/dt)  # Simulation runs for 10 characteristic time scales so end state is close to being fully relaxed
+    log("max_timesteps", max_timesteps)
+
+    # No normal flow except on the free surface
     stokes_bcs = {
         bottom_id: {'un': 0},
-        top_id: {'stress': -rho0 * g * eta * n},
+        top_id: {'free_surface_stress': rho0 * g * eta},  # Apply stress on free surface
         left_id: {'un': 0},
         right_id: {'un': 0},
     }
 
-    eta_fields = {'velocity': u_,
-                  'surface_id': top_id}
+    eta_fields = {'velocity': u_}
 
     eta_bcs = {}
-    eta_strong_bcs = [InteriorBC(W, 0., top_id)]
+    eta_strong_bcs = [InteriorBC(W, 0., top_id)]  # Apply strong homogenous boundary to interior DOFs to prevent a singular matrix when only integrating the free surface equation over the top surface.
 
     mumps_solver_parameters = {
         'snes_monitor': None,
@@ -85,8 +91,10 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
         'snes_atol': 1e-6,
         'mat_mumps_icntl_14': 200
     }
+    # Set up the stokes solver
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, solver_parameters=mumps_solver_parameters)
 
+    # Set up a timestepper for the free surface, here we use a first order backward Euler method following Kramer et al. 2012
     eta_timestepper = BackwardEuler(eta_eq, eta, eta_fields, dt, bnd_conditions=eta_bcs, strong_bcs=eta_strong_bcs, solver_parameters=mumps_solver_parameters)
 
     # analytical function
@@ -96,7 +104,7 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
     if do_write:
         # Create output file and select output_frequency:
         filename = "explicit_viscous_freesurface"
-        output_file = File(filename+"_D"+str(D)+"_mu"+str(mu)+"_nx"+str(nx)+"_dt"+str(dt/tau0)+"tau.pvd")
+        output_file = File(filename+"_D"+str(float(D/L0))+"_mu"+str(float(mu))+"_nx"+str(nx)+"_dt"+str(float(dt/tau0))+"tau.pvd")
         dump_period = round(tau0/dt)
         log(dump_period)
         output_file.write(u_, eta, p_, eta_analytical)
@@ -109,17 +117,16 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
         stokes_solver.solve()
         eta_timestepper.advance(time)
 
-        time += dt
+        time.assign(time + dt)
         eta_analytical.interpolate(exp(-time/tau0)*F0 * cos(kk * X[0]))
 
         local_error = assemble(pow(eta-eta_analytical, 2)*ds(top_id))
         error += local_error*dt
         # Write output:
         if do_write:
-
             if timestep % dump_period == 0:
-                print("timestep", timestep)
-                print("time", time)
+                log("timestep", timestep)
+                log("time", time)
                 output_file.write(u_, eta, p_, eta_analytical)
 
     final_error = pow(error, 0.5)/L

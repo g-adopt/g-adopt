@@ -6,14 +6,17 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
 
     # Set up geometry:
     D = 3e6  # Depth of domain in m
-    lam = D/2  # wavelength of load in m
     L = D  # Length of the domain in m
+    lam_dimensional = D/2  # wavelength of load in m
+    L0 = D  # characteristic length scale for scaling the equations
+    lam = lam_dimensional/L0  # dimensionless lambda
+
     ny = nx
-    mesh = RectangleMesh(nx, ny, L, D)  # Rectangle mesh generated via firedrake
+    mesh = RectangleMesh(nx, ny, L/L0, D/L0)  # Rectangle mesh generated via firedrake
     left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
-    V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space (vector)
+    V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W, W])  # Mixed function space.
@@ -28,7 +31,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
     p_.rename("Pressure")
     eta_.rename("eta")
 
-    T = Function(Q, name="Temperature").assign(0)
+    T = Function(Q, name="Temperature").assign(0)  # Setup a dummy function for temperature
     # Output function space information:
     log("Number of Velocity DOF:", V.dim())
     log("Number of Pressure DOF:", W.dim())
@@ -36,37 +39,36 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
     log("Number of Temperature DOF:", Q.dim())
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-    Ra = Constant(0)  # Rayleigh number
-    rho0 = 4500  # density in kg/m^3
-    g = 10  # gravitational acceleration in m/s^2
-    approximation = BoussinesqApproximation(Ra, g=g, rho=rho0)
+    Ra = Constant(0)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
+    approximation = BoussinesqApproximation(Ra)
 
-    kk = 2 * pi / lam  # wavenumber in m^-1
-    F0 = 1000  # initial free surface amplitude in m
+    rho0 = approximation.rho  # This defaults to rho0 = 1 (dimensionless)
+    g = approximation.g  # This defaults to g = 1 (dimensionless)
+
+    kk = Constant(2 * pi / lam)  # wavenumber (dimensionless)
+    F0 = Constant(1000 / L0)  # initial free surface amplitude (dimensionless)
     X = SpatialCoordinate(mesh)
-    eta_.interpolate(F0 * cos(kk * X[0]))
+    eta_.interpolate(F0 * cos(kk * X[0]))  # Initial free surface condition
 
     # timestepping
-    mu = 1e21  # Shear modulus in Pa
-    tau0 = 2 * kk * mu / (rho0 * g)
+    mu = Constant(1)  # Shear modulus (dimensionless)
+    tau0 = Constant(2 * kk * mu / (rho0 * g))  # Characteristic time scale (dimensionless)
     log("tau0", tau0)
-    dt = dt_factor*tau0/round(D/lam)
-    log("dt", dt)
-    time = 0.0
-    max_timesteps = round(10*tau0/dt)
+
+    dt = Constant(dt_factor*tau0)  # timestep (dimensionless)
+    log("dt (dimensionless)", dt)
+
+    time = Constant(0.0)
+    max_timesteps = round(10*tau0/dt)  # Simulation runs for 10 characteristic time scales so end state is close to being fully relaxed
     log("max_timesteps", max_timesteps)
 
+    # No normal flow except on the free surface
     stokes_bcs = {
         bottom_id: {'un': 0},
-        top_id: {'eta_interior': 0, 'eta': None},  # stress from free surface in momentum_equation.py
+        top_id: {},  # Free surface boundary conditions are applied automatically in stokes_integrators and momentum_equation for implicit free surface coupling
         left_id: {'un': 0},
         right_id: {'un': 0},
     }
-
-    stokes_fields = {
-        'surface_id': 4,  # VERY HACKY!
-        'rhog': 45000,
-        'dt': dt}  # Incredibly hacky! rho*g
 
     mumps_solver_parameters = {
         'snes_monitor': None,
@@ -80,11 +82,11 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
         'snes_atol': 1e-6,
         'mat_mumps_icntl_14': 200
     }
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, solver_parameters=mumps_solver_parameters, equations=FreeSurfaceStokesEquations, additional_fields=stokes_fields)
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, solver_parameters=mumps_solver_parameters, equations=FreeSurfaceStokesEquations, free_surface_dt=dt, free_surface_id=top_id)
 
     if do_write:
         eta_midpoint = []
-        eta_midpoint.append(eta_.at(L/2, D-0.001))
+        eta_midpoint.append(eta_.at((L/L0)/2, (D/L0)-0.001/L0))
 
     # analytical function
     eta_analytical = Function(W, name="eta analytical")
@@ -96,7 +98,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
         dump_period = 1
         log("dump_period ", dump_period)
         filename = "implicit_viscous_freesurface"
-        output_file = File(filename+"_D"+str(D)+"_mu"+str(mu)+"_nx"+str(nx)+"_dt"+str(dt/tau0)+"tau.pvd")
+        output_file = File(filename+"_D"+str(float(D/L0))+"_mu"+str(float(mu))+"_nx"+str(nx)+"_dt"+str(float(dt/tau0))+"tau.pvd")
         output_file.write(u_, eta_, p_, eta_analytical)
 
     error = 0
@@ -105,7 +107,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
 
         # Solve Stokes sytem:
         stokes_solver.solve()
-        time += dt
+        time.assign(time + dt)
         eta_analytical.interpolate(exp(-time/tau0)*F0 * cos(kk * X[0]))
 
         local_error = assemble(pow(eta-eta_analytical, 2)*ds(top_id))
@@ -113,14 +115,14 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
 
         # Write output:
         if do_write:
-            eta_midpoint.append(eta_.at(L/2, D-0.001))
+            eta_midpoint.append(eta_.at((L/L0)/2, (D/L0)-0.001/L0))
 
             if timestep % dump_period == 0:
                 log("timestep", timestep)
-                log("time", time)
+                log("time", float(time))
                 output_file.write(u_, eta_, p_, eta_analytical)
     if do_write:
-        with open(filename+"_D3e6_visc1e21_impliciteta_nx"+str(nx)+"_dt"+str(dt_factor)+".txt", 'w') as file:
+        with open(filename+"_D"+str(float(D/L0))+"_mu"+str(float(mu))+"_nx"+str(nx)+"_dt"+str(float(dt/tau0))+"tau.txt", 'w') as file:
             for line in eta_midpoint:
                 file.write(f"{line}\n")
 
@@ -130,6 +132,6 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
 
 if __name__ == "__main__":
     # default case run with nx = 80 for four dt factors
-    dt_factors = 4 / (2**np.arange(4))
+    dt_factors = 2 / (2**np.arange(4))
     errors = np.array([implicit_viscous_freesurface_model(80, dtf) for dtf in dt_factors])
     np.savetxt("errors-implicit-free-surface-coupling.dat", errors)

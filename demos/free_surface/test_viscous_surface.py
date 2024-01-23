@@ -17,7 +17,7 @@ def test_scalar_advection_diffusion_DH27(coupling, expected_convergence, expecte
     errors = np.loadtxt(base / f"errors-{coupling}-free-surface-coupling.dat")
 
     # check that norm(q) is the same as previously run
-    assert np.allclose(errors, expected_errors, rtol=1e-6)
+    assert np.allclose(errors, expected_errors, rtol=1e-6, atol=1e-16)
 
     # use the highest resolution analytical solutions as the reference in scaling
     ref = errors[-1]

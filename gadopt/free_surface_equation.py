@@ -21,15 +21,13 @@ class FreeSurfaceTerm(BaseTerm):
     Free Surface term: u \dot n
     """
     def residual(self, test, trial, trial_lagged, fields, bcs):
+        assert 'free_surface_id' in self.term_kwargs
+        free_surface_id = self.term_kwargs['free_surface_id']
         u = fields['velocity']
-        assert 'surface_id' in fields
-        surface_id = fields['surface_id']
         psi = test
         n = self.n
 
-#        print("eta u.. inside: ", u.dat.data[:])
-
-        F = psi * dot(u, n) * self.ds(surface_id)  # Note this term is already on the RHS
+        F = psi * dot(u, n) * self.ds(free_surface_id)  # Note this term is already on the RHS
 
         return F
 

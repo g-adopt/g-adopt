@@ -116,15 +116,10 @@ class ViscosityTerm(BaseTerm):
                 # here we need only the third term, because we assume jump_u=0 (u_ext=u)
                 # the provided stress = n.(mu.stress_tensor)
                 F += dot(-phi, bc['stress']) * self.ds(id)
-            if 'eta' in bc:
+            if 'free_surface_stress' in bc:
                 # add the free surface stress
-                assert 'surface_id' in fields
-                assert 'rhog' in fields
-                print("eta in fields...")
-                print(fields['surface_id'])
-                eta = fields['eta']
-                rhog = fields['rhog']
-                F -= dot(-phi, rhog*eta*n) * self.ds(fields['surface_id'])
+                free_surface_stress = bc['free_surface_stress']
+                F -= dot(-phi, free_surface_stress * n) * self.ds(id)
 
             if 'drag' in bc:  # (bottom) drag of the form tau = -C_D u |u|
                 C_D = bc['drag']
@@ -220,8 +215,8 @@ def StokesEquations(test_space, trial_space, quad_degree=None, **kwargs):
     return [mom_eq, cty_eq]
 
 
-def FreeSurfaceStokesEquations(test_space, trial_space, surface_id, quad_degree=None, **kwargs):
+def FreeSurfaceStokesEquations(test_space, trial_space, quad_degree=None, **kwargs):
     mom_eq = MomentumEquation(test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs)
     cty_eq = ContinuityEquation(test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs)
-    eta_eq = FreeSurfaceEquation(test_space.sub(2), trial_space.sub(2), quad_degree=quad_degree, surface_id=surface_id, **kwargs)
+    eta_eq = FreeSurfaceEquation(test_space.sub(2), trial_space.sub(2), quad_degree=quad_degree, **kwargs)
     return [mom_eq, cty_eq, eta_eq]

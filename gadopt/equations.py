@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import firedrake
-from .utility import CombinedSurfaceMeasure
+from .utility import CombinedSurfaceMeasure, log
 
 
 class BaseEquation(ABC):
@@ -9,7 +9,7 @@ class BaseEquation(ABC):
     """This should be a list of BaseTerm sub-classes that form the terms of the equation."""
     terms = []
 
-    def __init__(self, test_space, trial_space, quad_degree=None, surface_id=None, **kwargs):
+    def __init__(self, test_space, trial_space, quad_degree=None, **kwargs):
         """
         :arg test_space: the test functionspace
         :arg trial_space: The trial functionspace
@@ -21,7 +21,6 @@ class BaseEquation(ABC):
         self.test_space = test_space
         self.trial_space = trial_space
         self.mesh = trial_space.mesh()
-        self.surface_id = surface_id
 
         p = trial_space.ufl_element().degree()
         if isinstance(p, int):
@@ -46,6 +45,8 @@ class BaseEquation(ABC):
 
         self.dx = firedrake.dx(domain=self.mesh, degree=quad_degree)
 
+        self.kwargs = kwargs
+
         # self._terms stores the actual instances of the BaseTerm-classes in self.terms
         self._terms = []
         for TermClass in self.terms:
@@ -54,11 +55,11 @@ class BaseEquation(ABC):
     def mass_term(self, test, trial):
         r"""Return the UFL for the mass term \int test * trial * dx typically used in the time term."""
 
-        if self.surface_id is None:
-            return firedrake.inner(test, trial) * self.dx
+        if 'free_surface_id' in self.kwargs:
+            log("using surface mass term...")
+            return firedrake.inner(test, trial) * self.ds(self.kwargs['free_surface_id'])
         else:
-            print("using surface mass term...")
-            return firedrake.inner(test, trial) * self.ds(self.surface_id)
+            return firedrake.inner(test, trial) * self.dx
 
     def residual(self, test, trial, trial_lagged=None, fields=None, bcs=None):
         """Return the UFL for all terms (except the time derivative)."""

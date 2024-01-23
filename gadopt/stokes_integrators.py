@@ -99,17 +99,22 @@ class StokesSolver:
 
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False, J=None, additional_fields={},
-                 equations=StokesEquations, **kwargs):
+                 closed=True, rotational=False, J=None, equations=StokesEquations,
+                 free_surface_dt=None, free_surface_id=None, **kwargs):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
 
         if equations == FreeSurfaceStokesEquations:
-            surface_id = additional_fields['surface_id']
-            self.dt = additional_fields['dt']
-            self.equations = equations(self.Z, self.Z, surface_id, quad_degree=quad_degree,
-                                       compressible=approximation.compressible)
+            assert free_surface_dt is not None
+            assert free_surface_id is not None
+
+            self.free_surface_dt = free_surface_dt
+            self.free_surface_id = free_surface_id
+
+            self.equations = equations(self.Z, self.Z, quad_degree=quad_degree,
+                                       compressible=approximation.compressible,
+                                       free_surface_id=free_surface_id)
         else:
             self.equations = equations(self.Z, self.Z, quad_degree=quad_degree,
                                        compressible=approximation.compressible)
@@ -142,12 +147,6 @@ class StokesSolver:
             'rho_continuity': self.approximation.rho_continuity(),
         }
 
-        if equations == FreeSurfaceStokesEquations:
-            self.fields['eta'] = eta_theta  # free surface variable
-
-        for key, value in additional_fields.items():
-            self.fields[key] = value
-
         self.weak_bcs = {}
         self.strong_bcs = []
         for id, bc in bcs.items():
@@ -161,19 +160,23 @@ class StokesSolver:
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
                 elif type == 'uz':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
-                elif type == 'eta_interior':
-                    # Set internal dofs to zero to prevent singular matrix for free surface equation
-                    self.strong_bcs.append(InteriorBC(self.Z.sub(2), value, id))
                 else:
                     weak_bc[type] = value
             self.weak_bcs[id] = weak_bc
+
+        if equations == FreeSurfaceStokesEquations:
+            # Add free surface stress term
+            self.weak_bcs[self.free_surface_id] = {'free_surface_stress': self.approximation.rho * self.approximation.g * eta_theta}
+
+            # Set internal dofs to zero to prevent singular matrix for free surface equation
+            self.strong_bcs.append(InteriorBC(self.Z.sub(2), 0, self.free_surface_id))
 
         self.F = 0
         for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
         if equations == FreeSurfaceStokesEquations:
-            self.F += self.equations[2].mass_term(self.test[2], (eta-eta_old)/self.dt)
+            self.F += self.equations[2].mass_term(self.test[2], (eta-eta_old)/self.free_surface_dt)
 
         if self.solver_parameters is None:
             if self.linear:
@@ -210,6 +213,6 @@ class StokesSolver:
         if not self._solver_setup:
             self.setup_solver()
 
-        self.solution_old.assign(self.solution)  # need this for implicit free sufarce
+        self.solution_old.assign(self.solution)  # Need to update old solution for implicit free surface
 
         self.solver.solve()
