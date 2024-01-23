@@ -99,8 +99,8 @@ class StokesSolver:
 
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False, J=None, equations=StokesEquations,
-                 free_surface_dt=None, free_surface_id=None, **kwargs):
+                 closed=True, rotational=False, J=None, constant_jacobian=False,
+                 equations=StokesEquations, free_surface_dt=None, free_surface_id=None, **kwargs):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
@@ -124,6 +124,7 @@ class StokesSolver:
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
         self.J = J
+        self.constant_jacobian = constant_jacobian
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
@@ -151,17 +152,17 @@ class StokesSolver:
         self.strong_bcs = []
         for id, bc in bcs.items():
             weak_bc = {}
-            for type, value in bc.items():
-                if type == 'u':
+            for bc_type, value in bc.items():
+                if bc_type == 'u':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
-                elif type == 'ux':
+                elif bc_type == 'ux':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
-                elif type == 'uy':
+                elif bc_type == 'uy':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
-                elif type == 'uz':
+                elif bc_type == 'uz':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
                 else:
-                    weak_bc[type] = value
+                    weak_bc[bc_type] = value
             self.weak_bcs[id] = weak_bc
 
         if equations == FreeSurfaceStokesEquations:
@@ -200,13 +201,26 @@ class StokesSolver:
         self._solver_setup = False
 
     def setup_solver(self):
-        self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
-                                                      bcs=self.strong_bcs, J=self.J)
-        self.solver = fd.NonlinearVariationalSolver(self.problem,
-                                                    solver_parameters=self.solver_parameters,
-                                                    options_prefix=self.name,
-                                                    appctx={"mu": self.mu},
-                                                    **self.solver_kwargs)
+        if self.constant_jacobian:
+            z_tri = fd.TrialFunction(self.Z)
+            F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
+            a, L = fd.lhs(F_stokes_lin), fd.rhs(F_stokes_lin)
+            self.problem = fd.LinearVariationalProblem(a, L, self.solution,
+                                                       bcs=self.strong_bcs,
+                                                       constant_jacobian=True)
+            self.solver = fd.LinearVariationalSolver(self.problem,
+                                                     solver_parameters=self.solver_parameters,
+                                                     options_prefix=self.name,
+                                                     appctx={"mu": self.mu},
+                                                     **self.solver_kwargs)
+        else:
+            self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
+                                                          bcs=self.strong_bcs, J=self.J)
+            self.solver = fd.NonlinearVariationalSolver(self.problem,
+                                                        solver_parameters=self.solver_parameters,
+                                                        options_prefix=self.name,
+                                                        appctx={"mu": self.mu},
+                                                        **self.solver_kwargs)
         self._solver_setup = True
 
     def solve(self):

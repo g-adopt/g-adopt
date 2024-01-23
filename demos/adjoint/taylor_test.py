@@ -100,6 +100,7 @@ def rectangle_taylor_test(case):
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
+        constant_jacobian=True,
     )
 
     # Control variable for optimisation
