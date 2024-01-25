@@ -31,7 +31,6 @@ T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(p
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e5)  # Rayleigh number
-mu = Constant(1.0)  # Viscosity
 
 # Compressible reference state:
 gruneisen = 1.0
@@ -95,7 +94,7 @@ stokes_bcs = {
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=True,
+                             cartesian=True, constant_jacobian=True,
                              transpose_nullspace=Z_nullspace)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")

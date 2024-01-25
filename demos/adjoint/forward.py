@@ -88,6 +88,7 @@ stokes_solver = StokesSolver(
     bcs=stokes_bcs,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
+    constant_jacobian=True,
 )
 
 # Create output file and select output_frequency
