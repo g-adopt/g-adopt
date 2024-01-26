@@ -187,7 +187,7 @@ class StokesSolver:
             if INFO >= log_level:
                 self.solver_parameters['snes_monitor'] = None
 
-            if self.mesh.topological_dimension() == 2 and cartesian:
+            if False: #self.mesh.topological_dimension() == 2 and cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)

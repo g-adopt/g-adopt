@@ -70,19 +70,11 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
         right_id: {'un': 0},
     }
 
-    mumps_solver_parameters = {
-        'snes_monitor': None,
-        'snes_type': 'ksponly',
-        'ksp_type': 'preonly',
-        'pc_type': 'lu',
-        'pc_factor_mat_solver_type': 'mumps',
-        'mat_type': 'aij',
-        'snes_max_it': 100,
-        'snes_rtol': 1e-8,
-        'snes_atol': 1e-6,
-        'mat_mumps_icntl_14': 200
-    }
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, solver_parameters=mumps_solver_parameters, equations=FreeSurfaceStokesEquations, free_surface_dt=dt, free_surface_id=top_id)
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, equations=FreeSurfaceStokesEquations, free_surface_dt=dt, free_surface_id=top_id)
+    stokes_solver.solver_parameters.update(
+            {'pc_fieldsplit_0_fields': '0',
+             'pc_fieldsplit_1_fields': '1,2',
+             })
 
     if do_write:
         eta_midpoint = []

@@ -1,5 +1,6 @@
 import firedrake as fd
 from firedrake.petsc import PETSc
+from .utility import InteriorBC
 
 
 class VariableMassInvPC(fd.PCBase):
@@ -44,13 +45,17 @@ class VariableMassInvPC(fd.PCBase):
 
         # 1/mu goes into the inner product in case it varies spatially.
         self.a = fd.inner(1/mu * u, v)*fd.dx
+        top_id = 4
+        self.a = fd.inner(1/mu * u[0], v[0])*fd.dx + fd.inner(1/mu *u[1], v[1])*fd.ds(top_id)
+        self.bc = InteriorBC(V.sub(1), 0, top_id)
 
         opts = PETSc.Options()
         mat_type = opts.getString(self.options_prefix + "mat_type",
                                   fd.parameters["default_matrix_type"])
 
         self.A = fd.assemble(self.a, form_compiler_parameters=self.fc_params,
-                             mat_type=mat_type, options_prefix=self.options_prefix)
+                             mat_type=mat_type, options_prefix=self.options_prefix,
+                             bcs=self.bc)
 
         Pmat = self.A.petscmat
 
@@ -64,7 +69,8 @@ class VariableMassInvPC(fd.PCBase):
 
     def update(self, pc):
         fd.assemble(self.a, form_compiler_parameters=self.fc_params,
-                    tensor=self.A, options_prefix=self.options_prefix)
+                    tensor=self.A, options_prefix=self.options_prefix,
+                    bcs=self.bc)
 
     def apply(self, pc, X, Y):
         self.ksp.solve(X, Y)
