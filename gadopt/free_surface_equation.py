@@ -1,7 +1,7 @@
 from .equations import BaseTerm, BaseEquation
 from firedrake import dot
 r"""
-This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
+This module contains the free surface terms and equations
 
 NOTE: for all terms, the residual() method returns the residual as it would be on the RHS of the equation, i.e.:
 
