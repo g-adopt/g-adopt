@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import firedrake
-from .utility import CombinedSurfaceMeasure, log
+from .utility import CombinedSurfaceMeasure
 
 
 class BaseEquation(ABC):
@@ -55,11 +55,7 @@ class BaseEquation(ABC):
     def mass_term(self, test, trial):
         r"""Return the UFL for the mass term \int test * trial * dx typically used in the time term."""
 
-        if 'free_surface_id' in self.kwargs:
-            log("using surface mass term...")
-            return firedrake.inner(test, trial) * self.ds(self.kwargs['free_surface_id'])
-        else:
-            return firedrake.inner(test, trial) * self.dx
+        return firedrake.inner(test, trial) * self.dx
 
     def residual(self, test, trial, trial_lagged=None, fields=None, bcs=None):
         """Return the UFL for all terms (except the time derivative)."""

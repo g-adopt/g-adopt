@@ -167,7 +167,7 @@ class StokesSolver:
 
         if equations == FreeSurfaceStokesEquations:
             # Add free surface stress term
-            self.weak_bcs[self.free_surface_id] = {'free_surface_stress': self.approximation.rho * self.approximation.g * eta_theta}
+            self.weak_bcs[self.free_surface_id] = {'normal_stress': self.approximation.rho * self.approximation.g * eta_theta}
 
             # Set internal dofs to zero to prevent singular matrix for free surface equation
             self.strong_bcs.append(InteriorBC(self.Z.sub(2), 0, self.free_surface_id))

@@ -70,19 +70,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
         right_id: {'un': 0},
     }
 
-    mumps_solver_parameters = {
-        'snes_monitor': None,
-        'snes_type': 'ksponly',
-        'ksp_type': 'preonly',
-        'pc_type': 'lu',
-        'pc_factor_mat_solver_type': 'mumps',
-        'mat_type': 'aij',
-        'snes_max_it': 100,
-        'snes_rtol': 1e-8,
-        'snes_atol': 1e-6,
-        'mat_mumps_icntl_14': 200
-    }
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, solver_parameters=mumps_solver_parameters, equations=FreeSurfaceStokesEquations, free_surface_dt=dt, free_surface_id=top_id)
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, equations=FreeSurfaceStokesEquations, free_surface_dt=dt, free_surface_id=top_id)
 
     if do_write:
         eta_midpoint = []
@@ -98,7 +86,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
         dump_period = 1
         log("dump_period ", dump_period)
         filename = "implicit_viscous_freesurface"
-        output_file = File(filename+"_D"+str(float(D/L0))+"_mu"+str(float(mu))+"_nx"+str(nx)+"_dt"+str(float(dt/tau0))+"tau.pvd")
+        output_file = File(f"{filename}_D{float(D/L0)}_mu{float(mu)}_nx{nx}_dt{float(dt/tau0)}tau.pvd")
         output_file.write(u_, eta_, p_, eta_analytical)
 
     error = 0
@@ -122,7 +110,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
                 log("time", float(time))
                 output_file.write(u_, eta_, p_, eta_analytical)
     if do_write:
-        with open(filename+"_D"+str(float(D/L0))+"_mu"+str(float(mu))+"_nx"+str(nx)+"_dt"+str(float(dt/tau0))+"tau.txt", 'w') as file:
+        with open(f"{filename}_D{float(D/L0)}_mu{float(mu)}_nx{nx}_dt{float(dt/tau0)}tau.txt", 'w') as file:
             for line in eta_midpoint:
                 file.write(f"{line}\n")
 

@@ -69,7 +69,7 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
     # No normal flow except on the free surface
     stokes_bcs = {
         bottom_id: {'un': 0},
-        top_id: {'free_surface_stress': rho0 * g * eta},  # Apply stress on free surface
+        top_id: {'normal_stress': rho0 * g * eta},  # Apply stress on free surface
         left_id: {'un': 0},
         right_id: {'un': 0},
     }
@@ -79,23 +79,11 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
     eta_bcs = {}
     eta_strong_bcs = [InteriorBC(W, 0., top_id)]  # Apply strong homogenous boundary to interior DOFs to prevent a singular matrix when only integrating the free surface equation over the top surface.
 
-    mumps_solver_parameters = {
-        'snes_monitor': None,
-        'snes_type': 'ksponly',
-        'ksp_type': 'preonly',
-        'pc_type': 'lu',
-        'pc_factor_mat_solver_type': 'mumps',
-        'mat_type': 'aij',
-        'snes_max_it': 100,
-        'snes_rtol': 1e-8,
-        'snes_atol': 1e-6,
-        'mat_mumps_icntl_14': 200
-    }
     # Set up the stokes solver
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, solver_parameters=mumps_solver_parameters)
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True)
 
     # Set up a timestepper for the free surface, here we use a first order backward Euler method following Kramer et al. 2012
-    eta_timestepper = BackwardEuler(eta_eq, eta, eta_fields, dt, bnd_conditions=eta_bcs, strong_bcs=eta_strong_bcs, solver_parameters=mumps_solver_parameters)
+    eta_timestepper = BackwardEuler(eta_eq, eta, eta_fields, dt, bnd_conditions=eta_bcs, strong_bcs=eta_strong_bcs)
 
     # analytical function
     eta_analytical = Function(W, name="eta analytical")
@@ -104,7 +92,7 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
     if do_write:
         # Create output file and select output_frequency:
         filename = "explicit_viscous_freesurface"
-        output_file = File(filename+"_D"+str(float(D/L0))+"_mu"+str(float(mu))+"_nx"+str(nx)+"_dt"+str(float(dt/tau0))+"tau.pvd")
+        output_file = File(f"{filename}_D{float(D/L0)}_mu{float(mu)}_nx{nx}_dt{float(dt/tau0)}tau.pvd")
         dump_period = round(tau0/dt)
         log(dump_period)
         output_file.write(u_, eta, p_, eta_analytical)
