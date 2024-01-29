@@ -70,7 +70,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
         right_id: {'un': 0},
     }
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, equations=FreeSurfaceStokesEquations, free_surface_dt=dt, free_surface_id=top_id)
+    stokes_solver = FreeSurfaceStokesSolver(z, T, approximation, dt, top_id, bcs=stokes_bcs, mu=mu, cartesian=True)
 
     if do_write:
         eta_midpoint = []
