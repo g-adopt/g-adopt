@@ -108,6 +108,7 @@ class StokesSolver:
         self.solution_old = fd.Function(self.solution)  # This is used for the implicit free surface coupling
         self.T = T
         self.approximation = approximation
+        self.bcs = bcs
         self.mu = ensure_constant(mu)
         self.quad_degree = quad_degree
         self.solver_parameters = solver_parameters
@@ -117,35 +118,27 @@ class StokesSolver:
         self.solver_kwargs = kwargs
         self.k = upward_normal(self.Z.mesh(), cartesian)
 
-        # Note that velocity, pressure and the buoyancy term are added to fields later in initialise().
-        # This allows there to be three trial functions when 'splitting' z for the implicit free surface coupling.
+        # Add velocity, pressure and buoyancy term to the fields dictionary
+        u, p = fd.split(self.solution)[:2]  # For default stokes this is a tuple of (velocity, pressure)
+
         self.fields = {
+            'velocity': u,
+            'pressure': p,
             'viscosity': self.mu,
             'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
                                                    # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
+            'source': self.approximation.buoyancy(p, self.T) * self.k,
             'rho_continuity': self.approximation.rho_continuity(),
         }
 
-        self.weak_bcs = {}
-        self.strong_bcs = []
-        for id, bc in bcs.items():
-            weak_bc = {}
-            for bc_type, value in bc.items():
-                if bc_type == 'u':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
-                elif bc_type == 'ux':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
-                elif bc_type == 'uy':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
-                elif bc_type == 'uz':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
-                else:
-                    weak_bc[bc_type] = value
-            self.weak_bcs[id] = weak_bc
+        self.setup_equations()
 
-        # Still need to set up the equations and add trial functions to fields in initialise()
-        # to allow for a free surface coupling with an extra trial function
-        self._initialised = False
+        self.setup_bcs()
+
+        # Add terms to StokesEquations
+        self.F = 0
+        for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
+            self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
         if self.solver_parameters is None:
             if self.linear:
@@ -168,24 +161,28 @@ class StokesSolver:
         # so people can overwrite parameters we've setup here
         self._solver_setup = False
 
-    def initialise(self):
-
-        # Add velocity, pressure and buoyancy term to the fields dictionary
-        u, p = fd.split(self.solution)
-        self.fields['velocity'] = u
-        self.fields['pressure'] = p
-        self.fields['source'] = self.approximation.buoyancy(p, self.T) * self.k
-
+    def setup_equations(self):
         # Initialise StokesEquations
         self.equations = StokesEquations(self.Z, self.Z, quad_degree=self.quad_degree,
                                          compressible=self.approximation.compressible)
 
-        # Add terms to StokesEquations
-        self.F = 0
-        for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
-            self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
-
-        self._initialised = True
+    def setup_bcs(self):
+        self.weak_bcs = {}
+        self.strong_bcs = []
+        for id, bc in self.bcs.items():
+            weak_bc = {}
+            for bc_type, value in bc.items():
+                if bc_type == 'u':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
+                elif bc_type == 'ux':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
+                elif bc_type == 'uy':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
+                elif bc_type == 'uz':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
+                else:
+                    weak_bc[bc_type] = value
+            self.weak_bcs[id] = weak_bc
 
     def setup_solver(self):
         if self.constant_jacobian:
@@ -211,8 +208,6 @@ class StokesSolver:
         self._solver_setup = True
 
     def solve(self):
-        if not self._initialised:
-            self.initialise()
         if not self._solver_setup:
             self.setup_solver()
 
@@ -228,45 +223,34 @@ class FreeSurfaceStokesSolver(StokesSolver):
                  quad_degree=6, cartesian=True, solver_parameters=None, closed=True,
                  rotational=False, J=None, constant_jacobian=False, **kwargs):
 
+        self.free_surface_dt = free_surface_dt
+        self.free_surface_id = free_surface_id
+
         super().__init__(z, T, approximation, bcs=bcs, mu=mu, quad_degree=quad_degree,
                          cartesian=cartesian, solver_parameters=solver_parameters, closed=closed,
                          rotational=rotational, J=J, constant_jacobian=constant_jacobian, **kwargs)
 
-        self.free_surface_dt = free_surface_dt
-        self.free_surface_id = free_surface_id
+        # Add free surface time derivative term
+        self.F += self.equations[2].mass_term(self.test[2], (self.eta-self.eta_old)/self.free_surface_dt)
 
-    def initialise(self):
-        # Solution is made up of 3 trial functions so we have a separate initialise()
-        u, p, eta = fd.split(self.solution)
-        u_old, p_old, eta_old = fd.split(self.solution_old)
-
-        # Theta timestepping scheme for free surface variable
-        # Forward Euler (theta = 0), Crank Nicholson (thetat = 0.5), Backward Euler (theta = 1)
-        theta = 0.5
-        eta_theta = (1-theta)*eta_old + theta*eta
-
-        # Add velocity, pressure and buoyancy term to the fields dictionary
-        self.fields['velocity'] = u
-        self.fields['pressure'] = p
-        self.fields['source'] = self.approximation.buoyancy(p, self.T) * self.k
-
+    def setup_equations(self):
         # Initialise Stokes equations with a free surface
+        assert len(fd.split(self.solution)) == 3
+        self.eta = fd.split(self.solution)[2]
+        self.eta_old = fd.split(self.solution_old)[2]
+        theta = 0.5
+        self.eta_theta = (1-theta)*self.eta_old + theta*self.eta
+
         self.equations = FreeSurfaceStokesEquations(self.Z, self.Z, quad_degree=self.quad_degree,
                                                     compressible=self.approximation.compressible,
                                                     free_surface_id=self.free_surface_id)
 
-        # Add free surface stress term
-        self.weak_bcs[self.free_surface_id] = {'normal_stress': self.approximation.rho * self.approximation.g * eta_theta}
+    def setup_bcs(self):
+        # Setup default Stokes boundary conditions
+        super().setup_bcs()
 
-        # Add default Stokes terms to the equation
-        self.F = 0
-        for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
-            self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
+        # Add free surface stress term
+        self.weak_bcs[self.free_surface_id] = {'normal_stress': self.approximation.rho * self.approximation.g * self.eta_theta}
 
         # Set internal dofs to zero to prevent singular matrix for free surface equation
         self.strong_bcs.append(InteriorBC(self.Z.sub(2), 0, self.free_surface_id))
-
-        # Set free surface mass term
-        self.F += self.equations[2].mass_term(self.test[2], (eta-eta_old)/self.free_surface_dt)
-
-        self._initialised = True

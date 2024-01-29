@@ -215,7 +215,6 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         #    alpha_SPD=0   deta/du not included
         #    alpha_SPD=1   full deta/du term included
         # Thus we simply subtract (1-alpha_SPD) times that term
-        newton_solver.initialise()
         jac = derivative(newton_solver.F, z) - (1-alpha_SPD) * inner(grad(v), 2*derivative(mu, u, u_trial)*sym(grad(u))) * dx
         newton_solver.J = jac
 
