@@ -11,7 +11,7 @@ def expected_errors(coupling):
 
 
 @pytest.mark.parametrize("coupling,expected_convergence", [("explicit", [1.4, 1.1, 1.0]), ("implicit", [2.0, 2.0, 2.0])])
-def test_scalar_advection_diffusion_DH27(coupling, expected_convergence, expected_errors):
+def test_free_surface(coupling, expected_convergence, expected_errors):
 
     errors = np.loadtxt(base / f"errors-{coupling}-free-surface-coupling.dat")
 
