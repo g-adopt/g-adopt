@@ -86,6 +86,7 @@ def model(level, nn, do_write=False):
     marker = Function(P0)
     marker.interpolate(conditional(r < rp, 1, 0))
     n = FacetNormal(mesh)
+    stokes_solver.initialise()
     stokes_solver.F += g * cos(nn*phi) * dot(jump(marker, n), avg(v)) * dS_h
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
