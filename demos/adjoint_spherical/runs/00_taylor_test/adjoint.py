@@ -1,9 +1,7 @@
 from gadopt import *
 from gadopt.inverse import *
+from gadopt.gplates import pyGplatesConnector
 import numpy as np
-import warnings
-import libgplates
-from spherical_utils import step_func
 from wrappers import collect_garbage
 from firedrake.adjoint_utils import blocks
 
@@ -42,6 +40,10 @@ ReducedFunctional.derivative = collect_garbage(
 )
 
 
+def __main__():
+    forward_problem()
+
+
 def my_taylor_test():
     Tic, reduced_functional = forward_problem()
     Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
@@ -57,13 +59,19 @@ def forward_problem():
     enable_disk_checkpointing()
 
     # Load mesh
-    with CheckpointFile("./Adjoint_CheckpointFile.h5", "r") as f:
+    with CheckpointFile("../../Adjoint_CheckpointFile.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
-        Tic = f.load_function(mesh, name="Temperature")
-        Tobs = f.load_function(mesh, name="ReferenceTemperature")
-        Tave = f.load_function(mesh, name="AverageTemperature")
+        Tic = f.load_function(mesh, name="Temperature")  # initial guess
+        Tobs = f.load_function(mesh, name="ReferenceTemperature")  # reference tomography temperature
+        Tave = f.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
+        mu_function = f.load_function(mesh, name="mu1viscosity")  # viscosity function
 
+    # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
+
+    # For accessing the coordinates
+    X = SpatialCoordinate(mesh)
+    r = sqrt(X[0] ** 2 + X[1] ** 2 + X[2] ** 2)
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -77,52 +85,20 @@ def forward_problem():
     u, p = split(z)
 
     # Set up temperature field and initialise:
-    X = SpatialCoordinate(mesh)
-    r = sqrt(X[0] ** 2 + X[1] ** 2 + X[2] ** 2)
     T = Function(Q, name="Temperature")
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
     H_int = Constant(10.0)  # Internal heating
 
-    time = (409 - 10.0) * (
-        libgplates.myrs2sec *
-        libgplates.plate_scaling_factor /
-        libgplates.time_dim_factor
-    )
-    time_presentday = 409 * (
-        libgplates.myrs2sec *
-        libgplates.plate_scaling_factor /
-        libgplates.time_dim_factor
-    )
-
+    # Initial time step
     delta_t = Constant(1.0e-6)
 
-    # GPLATES
-    X_val = interpolate(X, V)
-
-    # set up a Function for gplate velocities
+    # Top velocity boundary condition
     gplates_velocities = Function(V, name="GPlates_Velocity")
 
     # Setup Equations Stokes related constants
     Ra = Constant(5.0e7)  # Rayleigh number
     Di = Constant(0.5)  # Dissipation number.
-    mu_lin = 2.0
-
-    # assemble the depth dependence for the lower mantle increase
-    # we multiply the profile with a linear function
-    for line, step in zip(
-            [5.0 * (rmax - r), 1.0, 1.0],
-            [step_func(r, 1.992, 30, False), step_func(r, 2.078, 10, False), step_func(r, 2.2, 10, True)]):
-        mu_lin += line * step
-
-    # Adding temperature dependence:
-    delta_mu_T = Constant(100.)
-    mu_lin *= exp(-ln(delta_mu_T) * T)
-    mu_star, sigma_y = Constant(1.0), 5.0e5 + 2.5e6*(rmax-r)
-    epsilon = sym(grad(u))  # strain-rate
-    epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
-    mu_plast = mu_star + (sigma_y / epsii)
-    mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
 
     # Compressible reference state:
     rho_0, alpha = 1.0, 1.0
@@ -133,39 +109,41 @@ def forward_problem():
     cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
     chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
 
-    # approximation = BoussinesqApproximation(Ra)
-    approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
-
-    delta_t = Constant(1e-6)  # Initial time-step
+    # We use TALA for approximation
+    approximation = TruncatedAnelasticLiquidApproximation(
+        Ra, Di, rho=rhobar, Tbar=Tbar,
+        alpha=alphabar, chi=chibar, cp=cpbar)
 
     # Nullspaces and near-nullspaces:
-    Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
-    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
+    Z_nullspace = create_stokes_nullspace(
+        Z, closed=True, rotational=False)
+    Z_near_nullspace = create_stokes_nullspace(
+        Z, closed=False, rotational=True, translations=[0, 1, 2])
 
-    # Write output files in VTK format:
-    u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
-    # Next rename for output:
-    u_.rename("Velocity")
-    p_.rename("Pressure")
-
-    # Open file for logging diagnostic output:
+    # Temperature boundary conditions (constant)
     temp_bcs = {
         bottom_id: {'T': 1.0 - (T0*exp(Di) - T0)},
         top_id: {'T': 0.0},
     }
+    # Velocity boundary conditions
     stokes_bcs = {
         top_id: {'u': gplates_velocities},
         bottom_id: {'un': 0},
     }
 
-    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs, su_advection=True)
+    # Constructing Energy and Stokes solver
+    energy_solver = EnergySolver(
+        T, u, approximation, delta_t,
+        ImplicitMidpoint, bcs=temp_bcs, su_advection=True)
     energy_solver.fields['source'] = rhobar * H_int
-    energy_solver.solver_parameters['ksp_converged_reason'] = None
-    energy_solver.solver_parameters['ksp_rtol'] = 1e-4
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                                 cartesian=False,
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu_function,
+                                 cartesian=False, constant_jacobian=True,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
+
+    # tweaking solver parameters
+    energy_solver.solver_parameters['ksp_converged_reason'] = None
+    energy_solver.solver_parameters['ksp_rtol'] = 1e-4
     stokes_solver.solver_parameters['snes_rtol'] = 5e-2
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 5e-4
@@ -173,11 +151,39 @@ def forward_problem():
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 5e-3
 
-    # No-Slip (prescribed) boundary condition for the top surface
-    boundary_X = X_val.dat.data_ro_with_halos[stokes_solver.strong_bcs[0].nodes]
+    # Initiating a plate reconstruction model
+    pl_rec_model = pyGplatesConnector(
+        rotation_filenames=[
+            '../../gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot'],
+        topology_filenames=[
+            '../../gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
+            '../../gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
+            '../../gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
+        dbc=stokes_solver.strong_bcs[0],
+        geologic_zero=409,
+        delta_time=1.0
+    )
 
+    # non-dimensionalised time for present geologic day (0)
+    ndtime_now = pl_rec_model.geotime2ndtime(0)
+
+    # non-dimensionalised time for 10 Myrs ago
+    time = pl_rec_model.geotime2ndtime(10)
+
+    # Write output files in VTK format:
+    u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
+    # Next rename for output:
+    u_.rename("Velocity")
+    p_.rename("Pressure")
+
+    # adaptive time-stepper
+    t_adapt = TimestepAdaptor(delta_t, u_, V, maximum_timestep=0.1, increase_tolerance=1.5)
+
+    # Defining control
     control = Control(Tic)
 
+    # project the initial condition from Q1 to Q2, and imposing
+    # boundary conditions
     project(
         Tic,
         T,
@@ -187,54 +193,94 @@ def forward_problem():
         bcs=energy_solver.strong_bcs,
     )
 
-    u_misfit = 0.0
-    num_timesteps = 0
+    # Logging output file
+    plog = ParameterLog("output.log", mesh)
+    plog.log_str("timestep time dt")
 
     # Now perform the time loop:
-    while time < time_presentday:
-        # Update gplates velocities
-        libgplates.rec_model.set_time(model_time=time)
-        gplates_velocities.dat.data_with_halos[
-            stokes_solver.strong_bcs[0].nodes
-        ] = libgplates.rec_model.get_velocities(boundary_X)
-        gplates_velocities.create_block_variable()
+    while time < ndtime_now:
+        # Update surface velocities
+        pl_rec_model.assign_plate_velocities(time)
 
         # Solve Stokes sytem:
         stokes_solver.solve()
 
-        u_misfit += assemble(
-            dot(u_ - gplates_velocities, u_ - gplates_velocities) * ds_t
-        )
+        # Adapt time step
+        dt = t_adapt.update_timestep()
 
-        if time_presentday - time < float(delta_t):
-            delta_t.assign(time_presentday - time)
+        # Make sure we are not going past present day
+        if ndtime_now - time < float(dt):
+            delta_t.assign(ndtime_now - time)
 
         # Temperature system:
         energy_solver.solve()
 
         time += float(delta_t)
-        num_timesteps += 1
-        break
+
+        # logging everything
+        plog.log_str(
+            f"{time} {float(dt)}")
 
     # Define the component terms of the overall objective functional
     smoothing = assemble(dot(grad(Tic - Tave), grad(Tic - Tave)) * dx)
     norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
     norm_obs = assemble(Tobs**2 * dx)
-    norm_u_surface = assemble(dot(gplates_velocities, gplates_velocities) * ds_t)
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
     objective = (
         t_misfit +
-        0.01 * (norm_obs * u_misfit / num_timesteps / norm_u_surface) +
         0.01 * (norm_obs * smoothing / norm_smoothing)
     )
 
+    plog.close()
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
     return Tic, ReducedFunctional(objective, control)
 
 
+def mu_constructor(T, u):
+    def step_func(r, center, mag, increasing=True, sharpness=30):
+        """
+        A step function designed to control viscosity jumps:
+        input:
+          r: is the radius array
+          center: radius of the jump
+          increasing: if True, the jump happens towards lower r, otherwise jump happens at higher r
+          sharpness: how sharp should the jump should be (larger numbers = sharper).
+        """
+        if increasing:
+            sign = 1
+        else:
+            sign = -1
+        return mag * (0.5 * (1 + tanh(sign*(r-center)*sharpness)))
+
+    # a constant mu
+    mu_lin = 2.0
+
+    # coordinates
+    X = SpatialCoordinate(T.ufl_domain())
+    r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
+
+    # Depth dependence: for the lower mantle increase we
+    # multiply the profile with a linear function
+    for line, step in zip([5.*(rmax-r), 1., 1.],
+                          [step_func(r, 1.992, 30, False),
+                           step_func(r, 2.078, 10, False),
+                           step_func(r, 2.2, 10, True)]):
+        mu_lin += line*step
+
+    # Adding temperature dependence:
+    delta_mu_T = Constant(100.)
+    mu_lin *= exp(-ln(delta_mu_T) * T)
+    mu_star, sigma_y = Constant(1.0), 5.0e5 + 2.5e6*(rmax-r)
+    epsilon = sym(grad(u))  # strain-rate
+    epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
+    mu_plast = mu_star + (sigma_y / epsii)
+    mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
+    return mu
+
+
 if __name__ == "__main__":
-    my_taylor_test()
+    __main__()
