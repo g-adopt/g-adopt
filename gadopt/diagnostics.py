@@ -1,5 +1,6 @@
 import firedrake
 from firedrake import assemble, Constant, sqrt, dot, grad, FacetNormal
+from firedrake.ufl_expr import extract_unique_domain
 from .utility import CombinedSurfaceMeasure
 
 
@@ -10,7 +11,7 @@ def domain_volume(mesh):
 class GeodynamicalDiagnostics:
 
     def __init__(self, u, p, T, bottom_id, top_id, degree=4):
-        mesh = u.ufl_domain()
+        mesh = extract_unique_domain(u)
         self.domain_volume = domain_volume(mesh)
         self.u = u
         self.p = p

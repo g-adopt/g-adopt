@@ -4,7 +4,8 @@ A module with utitity functions for gadopt
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import Interpolator, op2, interpolate, VectorElement
+from firedrake import op2, VectorElement
+from firedrake.__future__ import Interpolator
 import ufl
 import finat.ufl
 import time
@@ -341,7 +342,7 @@ class LayerAveraging:
             except AttributeError:
                 raise ValueError("For non-extruded mesh need to specify depths array r1d.")
             CG1 = FunctionSpace(mesh, "CG", 1)
-            r_func = interpolate(self.r, CG1)
+            r_func = Function(CG1).interpolate(self.r)
             self.r1d = r_func.dat.data[:nlayers]
 
         self.mass = np.zeros((2, len(self.r1d)))
