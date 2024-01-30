@@ -3,7 +3,6 @@ from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
 from firedrake import avg, sym, Identity, jump
 from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
 from firedrake import FacetArea, CellVolume
-from .free_surface_equation import FreeSurfaceEquation
 r"""
 This module contains the classes for the momentum equation and its terms.
 
@@ -217,10 +216,3 @@ def StokesEquations(test_space, trial_space, quad_degree=None, **kwargs):
     mom_eq = MomentumEquation(test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs)
     cty_eq = ContinuityEquation(test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs)
     return [mom_eq, cty_eq]
-
-
-def FreeSurfaceStokesEquations(test_space, trial_space, quad_degree=None, **kwargs):
-    mom_eq = MomentumEquation(test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs)
-    cty_eq = ContinuityEquation(test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs)
-    eta_eq = FreeSurfaceEquation(test_space.sub(2), trial_space.sub(2), quad_degree=quad_degree, **kwargs)
-    return [mom_eq, cty_eq, eta_eq]
