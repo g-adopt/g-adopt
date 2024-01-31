@@ -4,6 +4,8 @@ import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
 import numpy
 from gadopt.utility import log
+from scipy.spatial import cKDTree
+import warnings
 
 # non-dimensionalisation constants
 # Factor to non-dimensionalise gplates velocities: d/kappa
@@ -17,16 +19,51 @@ myrs2sec = 1e6*yrs2sec
 
 
 class pyGplatesConnector(object):
-    def __init__(self, rotation_filenames, topology_filenames, geologic_zero, dbc, delta_time=1., scaling_factor=1.0):
-        """ An interface to pygplates, using which one can update given Dirichlet boundary condition given by dbc.
+    def __init__(self, rotation_filenames, topology_filenames, geologic_zero, dbc, delta_time=1., scaling_factor=1.0, nseeds=1000, nneighbours=3):
+        """
+        An interface to pygplates, used for updating top Dirichlet boundary condition
+        using plate tectonic reconstructions.
 
-        Args:
-            rotation_filenames (string or list of stringd): collection of rotation file names for pygplates
-            topology_filenames (string or list of strings): collection of topology file names for pygplates
-            geologic_zero (float): what is the oldest time present in the plate reconstruction model
-            dbc (firedrake.bcs.DirichletBC): contains the information for boundary condition
-            delta_time (float, optional): what is the window range out of which plate velocities will be updated Defaults to 1..
-            scaling_factor (float, optional): Scaling factor for surface velocities. Defaults to 1.0.
+        The class provides functionality to assign plate velocities at different geological
+        times to the boundary conditions specified with dbc. As pygplates can be sometimes
+        fidlly with finding the plate id for a given point, specially for high resolution
+        simulations, we use [#nseeds] number equidistantial points on a sphere to calculate
+        velocities, and then use those points that have been assigned a plate id, and interpolate
+        between. Any time a point is not assigned with a plate ide, we raise a Warning.
+
+        Parameters
+        ----------
+        rotation_filenames : str or list of str
+            Collection of rotation file names for pygplates.
+        topology_filenames : str or list of str
+            Collection of topology file names for pygplates.
+        geologic_zero : float
+            The oldest time present in the plate reconstruction model.
+        dbc : firedrake.bcs.DirichletBC
+            The Dirichlet boundary condition object from Firedrake.
+        delta_time : float, optional
+            The time window range outside of which plate velocities will be updated.
+            Defaults to 1.0.
+        scaling_factor : float, optional
+            Scaling factor for surface velocities. Defaults to 1.0.
+        nseeds : int, optional
+            Number of seed points used in the Fibonacci sphere generation. Defaults to 1000.
+        nneighbours : int, optional
+            Number of neighboring points to consider in velocity calculations. Defaults to 3.
+
+        Methods
+        -------
+        assign_plate_velocities(model_time)
+            Assigns plate velocities based on the specified model time.
+        ndtime2geotime(ndtime)
+            Converts non-dimensionalised time to geologic time.
+        geotime2ndtime(geotime)
+            Converts geologic time to non-dimensionalised time.
+
+        Examples
+        --------
+        >>> connector = pyGplatesConnector(rotation_filenames, topology_filenames, geologic_zero, dbc)
+        >>> connector.assign_plate_velocities(model_time=100)
         """
 
         # Rotation model(s)
@@ -46,17 +83,23 @@ class pyGplatesConnector(object):
         # Assiging the DirichletBC object from firedrake
         self.dbc = dbc
 
-        # velocity domain features hold values for each coordinate
-        CoordFunction = fd.Function(
+        # store the coordinates of the function that need to be assigned
+        # these are basically the mesh nodes on a sphere
+        self.boundary_coords = fd.Function(
             dbc.function_space(),
             name="coordinates").interpolate(
                 fd.SpatialCoordinate(
-                    extract_unique_domain(dbc.function_arg)
-                )
-        )
+                    extract_unique_domain(dbc.function_arg))).dat.data_ro_with_halos[self.dbc.nodes]
+        self.boundary_coords /= np.linalg.norm(self.boundary_coords, axis=1)[:, np.newaxis]
+
+        # seeds are equidistantial points generate on a sphere
+        self.seeds = self._fibonacci_sphere(samples=int(nseeds))
+        # number of neighbouring points that will be used for interpolation
+
+        self.nneighbours = nneighbours
         self.velocity_domain_features = (
             self._make_GPML_velocity_feature(
-                CoordFunction.dat.data_ro_with_halos[self.dbc.nodes]
+                self.seeds
             )
         )
 
@@ -76,6 +119,39 @@ class pyGplatesConnector(object):
 
     # setting the time that we are interested in
     def assign_plate_velocities(self, model_time):
+        """
+        Assigns plate velocities to the boundary condition function based on a specified
+        model time, integrating plate tectonic reconstructions from pyGplates. This method
+        adjusts the boundary condition of the simulation according to the
+        velocities derived from plate tectonic models.
+
+        The method calculates new plate velocities if the specified model time differs
+        significantly (greater than delta_time) from the last reconstruction time. This
+        ensures that the boundary conditions are updated only when necessary. It uses
+        the cKDTree data structure for efficient nearest neighbor searches to interpolate
+        velocities onto the mesh nodes.
+
+        Parameters
+        ----------
+        model_time : float
+            The model time for which plate velocities are to be calculated and assigned.
+            This time is converted to geological time and used to extract relevant
+            plate motions from the pyGplates model.
+
+        Raises
+        ------
+        Exception
+            If the requested reconstruction time is negative, indicating an issue with
+            the plate reconstruction model or time conversion.
+
+        Notes
+        -----
+        - The method uses non-dimensionalised time to geologic time conversions.
+        - It assumes the presence of a valid Firedrake DirichletBC (dbc) object and
+          pyGplates rotation and topology models within the class.
+        - Velocities are non-dimensionalised and scaled for the simulation before
+          being applied.
+        """
         # stretch the dimensionalised time by plate_scaling_factor
         requested_reconstruction_time = self.ndtime2geotime(ndtime=model_time)
 
@@ -91,8 +167,33 @@ class pyGplatesConnector(object):
         # velocities are stored in cache
         if self.reconstruction_time is None or abs(requested_reconstruction_time - self.reconstruction_time) > self.delta_time:
             self.reconstruction_time = requested_reconstruction_time
-            self.boundary_condition.dat.data_with_halos[self.dbc.nodes] = (
-                self._obtain_velocities(reconstruction_time=self.reconstruction_time))
+            # calculate velocities here
+            seeds_u = self._calc_velocities(
+                velocity_domain_features=self.velocity_domain_features,
+                topology_features=self.topology_features,
+                rotation_model=self.rotation_model,
+                time=self.reconstruction_time,
+                delta_time=self.delta_time)
+
+            seeds_u = numpy.array([i.to_xyz() for i in seeds_u]) *\
+                ((1e-2 * velocity_non_dim_factor) / (self.scaling_factor * yrs2sec))
+            # generate a KD-tree of the seeds points that have a numerical value
+            tree = cKDTree(data=self.seeds[seeds_u[:, 0] == seeds_u[:, 0], :], leafsize=16)
+
+            # find the neighboring points
+            dists, idx = tree.query(x=self.boundary_coords, k=self.nneighbours)
+
+            # weighted average (by 1/distance) of the data
+            res_u = numpy.einsum(
+                'i, ij->ij',
+                1/numpy.sum(1/dists, axis=1),
+                numpy.einsum('ij, ijk ->ik', 1/dists, seeds_u[idx])
+            )
+
+            # if too close assign the value of the nearest point
+            res_u[dists[:, 0] <= 1e-8, :] = seeds_u[idx[dists[:, 0] <= 1e-8, 0]]
+
+            self.boundary_condition.dat.data_with_halos[self.dbc.nodes] = res_u
 
     def ndtime2geotime(self, ndtime):
         """ converts non-dimensised time to geologic time with respect to present-day (Ma)
@@ -117,19 +218,6 @@ class pyGplatesConnector(object):
          """
         ndtime = (self.geologic_zero - geotime)*(myrs2sec*self.scaling_factor / time_dim_factor)
         return ndtime
-
-    # computing the velocities for the seed points
-    def _obtain_velocities(self, reconstruction_time):
-        # calculate velocities here
-        all_velocities = self._calc_velocities(
-            velocity_domain_features=self.velocity_domain_features,
-            topology_features=self.topology_features,
-            rotation_model=self.rotation_model,
-            time=reconstruction_time,
-            delta_time=self.delta_time)
-
-        return (numpy.array([i.to_xyz() for i in all_velocities]) *
-                ((1e-2 * velocity_non_dim_factor) / (self.scaling_factor * yrs2sec)))
 
     # convert seeds to Gplate features
     def _make_GPML_velocity_feature(self, coords):
@@ -189,10 +277,51 @@ class pyGplatesConnector(object):
                         # add it to the list
                         all_velocities.extend(velocity_vectors)
                     else:
-                        raise Exception("No plate id found. There is an issue with the reconstruciton model.")
+                        warnings.warn("No plate id found. There is an issue with the reconstruciton model.", category=RuntimeWarning)
                         all_velocities.extend([pygplates.Vector3D(numpy.NaN, numpy.NaN, numpy.NaN)])
 
         return all_velocities
+
+    def _fibonacci_sphere(self, samples):
+        """
+        Generates points on a sphere using the Fibonacci sphere algorithm, which
+        distributes points approximately evenly over the surface of a sphere.
+
+        This method calculates coordinates for each point using the golden angle,
+        ensuring that each point is equidistant from its neighbors. The algorithm
+        is particularly useful for creating evenly spaced points on a sphere's
+        surface without clustering at the poles, a common issue in other spherical
+        point distribution methods.
+
+        Args:
+            samples (int): The number of points to generate on the sphere's surface.
+
+        Returns:
+            numpy.ndarray: A 2D array of shape (samples, 3), where each row
+                           contains the [x, y, z] coordinates of a point on the
+                           sphere.
+
+        Example:
+            >>> sphere = _fibonacci_sphere(100)
+            >>> print(sphere.shape)
+            (100, 3)
+
+        Note:
+            We use this method for generating seed points that can be interpolated onto our mesh
+
+        References:
+            The algorithm is based on the concept of the golden angle, derived from
+            the Fibonacci sequence and the golden ratio.
+        """
+
+        phi = numpy.pi * (3. - numpy.sqrt(5.))  # golden angle in radians
+
+        y = 1 - (numpy.array(list(range(samples)))/(samples-1)) * 2
+        radius = numpy.sqrt(1 - y * y)
+        theta = phi * numpy.array(list(range(samples)))
+        x = numpy.cos(theta) * radius
+        z = numpy.sin(theta) * radius
+        return numpy.array([[x[i], y[i], z[i]] for i in range(len(x))])
 
 
 def validate_topology_rotation(topology_filenames, rotation_filenames, test_times):
