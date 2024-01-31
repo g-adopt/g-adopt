@@ -1,6 +1,7 @@
 from gadopt import *
 from gadopt.inverse import *
 from gadopt.gplates import pyGplatesConnector
+from pyadjoint import stop_annotating
 import numpy as np
 from wrappers import collect_garbage
 from firedrake.adjoint_utils import blocks
@@ -97,7 +98,7 @@ def forward_problem():
     gplates_velocities = Function(V, name="GPlates_Velocity")
 
     # Setup Equations Stokes related constants
-    Ra = Constant(5.0e7)  # Rayleigh number
+    Ra = Constant(1.0e7)  # Rayleigh number
     Di = Constant(0.5)  # Dissipation number.
 
     # Compressible reference state:
@@ -206,7 +207,9 @@ def forward_problem():
         stokes_solver.solve()
 
         # Adapt time step
-        dt = t_adapt.update_timestep()
+        # For now we don't need annotating
+        with stop_annotating():
+            dt = t_adapt.update_timestep()
 
         # Make sure we are not going past present day
         if ndtime_now - time < float(dt):

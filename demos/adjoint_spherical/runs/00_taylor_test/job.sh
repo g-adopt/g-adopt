@@ -1,7 +1,7 @@
 #PBS -N test
 #PBS -P xd2
-#PBS -q expresssr
-#PBS -l walltime=01:00:00
+#PBS -q normalsr
+#PBS -l walltime=24:00:00
 #PBS -l mem=6500GB
 #PBS -l ncpus=1352
 #PBS -l jobfs=5200GB
@@ -9,7 +9,7 @@
 #PBS -l wd
 #### Load relevant modules:
 
-module load python3/3.10.4 load openmpi/4.0.7
+module load python3/3.10.4 openmpi/4.0.7
 
 export PETSC_DIR="/tmp/fd_prefix"
 export PETSC_ARC=""
