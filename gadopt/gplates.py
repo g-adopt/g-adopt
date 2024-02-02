@@ -177,6 +177,7 @@ class pyGplatesConnector(object):
 
             seeds_u = numpy.array([i.to_xyz() for i in seeds_u]) *\
                 ((1e-2 * velocity_non_dim_factor) / (self.scaling_factor * yrs2sec))
+
             # generate a KD-tree of the seeds points that have a numerical value
             tree = cKDTree(data=self.seeds[seeds_u[:, 0] == seeds_u[:, 0], :], leafsize=16)
 
@@ -187,12 +188,10 @@ class pyGplatesConnector(object):
             res_u = numpy.einsum(
                 'i, ij->ij',
                 1/numpy.sum(1/dists, axis=1),
-                numpy.einsum('ij, ijk ->ik', 1/dists, seeds_u[idx])
+                numpy.einsum('ij, ijk ->ik', 1/dists, seeds_u[seeds_u[:, 0] == seeds_u[:, 0]][idx])
             )
-
             # if too close assign the value of the nearest point
-            res_u[dists[:, 0] <= 1e-8, :] = seeds_u[idx[dists[:, 0] <= 1e-8, 0]]
-
+            res_u[dists[:, 0] <= 1e-8, :] = seeds_u[seeds_u[:, 0] == seeds_u[:, 0]][idx[dists[:, 0] <= 1e-8, 0]]
             self.boundary_condition.dat.data_with_halos[self.dbc.nodes] = res_u
 
     def ndtime2geotime(self, ndtime):
