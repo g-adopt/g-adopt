@@ -1,5 +1,5 @@
 from .equations import BaseTerm, BaseEquation
-from firedrake import dot
+from firedrake import dot, FacetNormal
 r"""
 This module contains the free surface terms and equations
 
@@ -23,11 +23,21 @@ class FreeSurfaceTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
         assert 'free_surface_id' in self.term_kwargs
         free_surface_id = self.term_kwargs['free_surface_id']
+
+        # Multiply by constant factor to keep the block system symmetric for the implicit coupling case
+        if 'theta' in self.term_kwargs:
+            assert 'free_surface_dt' in self.term_kwargs
+            free_surface_dt = self.term_kwargs['free_surface_dt']
+            theta = self.term_kwargs['theta']
+            prefactor = free_surface_dt * theta
+        else:
+            prefactor = 1
+
         u = fields['velocity']
         psi = test
         n = self.n
 
-        F = psi * dot(u, n) * self.ds(free_surface_id)  # Note this term is already on the RHS
+        F = prefactor * psi * dot(u, n) * self.ds(free_surface_id)  # Note this term is already on the RHS
 
         return F
 
@@ -44,4 +54,8 @@ class FreeSurfaceEquation(BaseEquation):
         assert 'free_surface_id' in self.kwargs
         free_surface_id = self.kwargs['free_surface_id']
 
-        return dot(test, trial) * self.ds(free_surface_id)
+        assert 'k' in self.kwargs
+        k = self.kwargs['k']
+        n = FacetNormal(self.mesh)
+
+        return dot(n, k) * dot(test, trial) * self.ds(free_surface_id)

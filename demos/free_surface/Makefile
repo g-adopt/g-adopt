@@ -1,4 +1,4 @@
-cases := explicit implicit
+cases := explicit implicit implicit_top_bottom
 
 all: $(cases)
 

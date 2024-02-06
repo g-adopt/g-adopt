@@ -101,45 +101,105 @@ class StokesSolver:
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False, J=None, constant_jacobian=False,
-                 **kwargs):
+                 free_surface_dt=None, **kwargs):
 
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
+        self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
+                                         compressible=approximation.compressible)
         self.solution = z
-
         self.approximation = approximation
-        self.bcs = bcs
+
         self.mu = ensure_constant(mu)
-        self.quad_degree = quad_degree
         self.solver_parameters = solver_parameters
         self.J = J
         self.constant_jacobian = constant_jacobian
-
         self.linear = not depends_on(self.mu, self.solution)
+
         self.solver_kwargs = kwargs
+        self.stokes_vars = fd.split(self.solution)  # For default stokes this is a tuple of (velocity, pressure)
         self.k = upward_normal(self.Z.mesh(), cartesian)
 
         # Add velocity, pressure and buoyancy term to the fields dictionary
-        self.stokes_vars = fd.split(self.solution)  # For default stokes this is a tuple of (velocity, pressure)
-
         self.fields = {
             'velocity': self.stokes_vars[0],
             'pressure': self.stokes_vars[1],
             'viscosity': self.mu,
             'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
                                                    # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
-            'source': self.approximation.buoyancy(self.stokes_vars[1], T) * self.k,
-            'rho_continuity': self.approximation.rho_continuity(),
+            'source': approximation.buoyancy(self.stokes_vars[1], T) * self.k,
+            'rho_continuity': approximation.rho_continuity(),
         }
 
-        self.setup_equations()
-        self.setup_bcs()
+        # Setup boundary conditions
+        self.weak_bcs = {}
+        self.strong_bcs = []
+        free_surface_dict = {}  # Separate dictionary for copying free surface information
+        self.free_surface = False
 
-        # Add terms to StokesEquations
+        for id, bc in bcs.items():
+            weak_bc = {}
+            for bc_type, value in bc.items():
+                if bc_type == 'u':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
+                elif bc_type == 'ux':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
+                elif bc_type == 'uy':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
+                elif bc_type == 'uz':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
+                elif bc_type == 'free_surface':
+                    # Copy free surface information to a new dictionary
+                    free_surface_dict[id] = value
+                    self.free_surface = True
+                else:
+                    weak_bc[bc_type] = value
+            self.weak_bcs[id] = weak_bc
+
+        if self.free_surface:
+            assert free_surface_dt is not None
+
+            self.solution_old = fd.Function(self.solution)
+            eta = []
+            eta_old = []
+            eta_theta = []
+
+            c = 0  # Counter for free surfaces (N.b. we already have two equations from StokesEquations)
+            for id, value in free_surface_dict.items():
+                if 'exterior_density' in value:
+                    exterior_density = value['exterior_density']
+                else:
+                    exterior_density = 0
+
+                # Define free surface variables for timestepping
+                eta.append(self.stokes_vars[2+c])
+                eta_old.append(fd.split(self.solution_old)[2+c])
+                theta = 0.5  # This gives a second order in time integration scheme
+                eta_theta.append((1-theta)*eta_old[c] + theta*eta[c])
+
+                # Add free surface equation
+                self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
+                                      free_surface_id=id, free_surface_dt=free_surface_dt, theta=theta, k=self.k))
+                # Add free surface stress term
+                self.weak_bcs[id] = {'normal_stress': (approximation.rho - exterior_density) * approximation.g * eta_theta[c]}
+
+                # Set internal dofs to zero to prevent singular matrix for free surface equation
+                self.strong_bcs.append(InteriorBC(self.Z.sub(2+c), 0, id))
+
+                c += 1
+
+        # Add terms to Stokes Equations
         self.F = 0
         for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
+
+        if self.free_surface:
+            for i in range(len(eta)):
+                # Add free surface time derivative term
+                # Multiply by constant factor (theta.dt) to keep the block system symmetric for the implicit coupling case
+                # (N.b. we already have two equations from StokesEquations)
+                self.F += self.equations[2+i].mass_term(self.test[2+i], theta*(eta[i]-eta_old[i]))
 
         if self.solver_parameters is None:
             if self.linear:
@@ -161,29 +221,6 @@ class StokesSolver:
         # solver is setup only last minute
         # so people can overwrite parameters we've setup here
         self._solver_setup = False
-
-    def setup_equations(self):
-        # Initialise StokesEquations
-        self.equations = StokesEquations(self.Z, self.Z, quad_degree=self.quad_degree,
-                                         compressible=self.approximation.compressible)
-
-    def setup_bcs(self):
-        self.weak_bcs = {}
-        self.strong_bcs = []
-        for id, bc in self.bcs.items():
-            weak_bc = {}
-            for bc_type, value in bc.items():
-                if bc_type == 'u':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
-                elif bc_type == 'ux':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
-                elif bc_type == 'uy':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
-                elif bc_type == 'uz':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
-                else:
-                    weak_bc[bc_type] = value
-            self.weak_bcs[id] = weak_bc
 
     def setup_solver(self):
         if self.constant_jacobian:
@@ -211,58 +248,6 @@ class StokesSolver:
     def solve(self):
         if not self._solver_setup:
             self.setup_solver()
-
+        if self.free_surface:
+            self.solution_old.assign(self.solution)  # Need to update old solution for implicit free surface
         self.solver.solve()
-
-
-class FreeSurfaceStokesSolver(StokesSolver):
-    name = 'FreeSurfaceStokesSolver'
-
-    def __init__(self, z, T, approximation, free_surface_dt, free_surface_id, bcs=None, mu=1,
-                 quad_degree=6, cartesian=True, solver_parameters=None, closed=True,
-                 rotational=False, J=None, constant_jacobian=False, **kwargs):
-
-        self.free_surface_id = free_surface_id
-
-        super().__init__(z, T, approximation, bcs=bcs, mu=mu, quad_degree=quad_degree,
-                         cartesian=cartesian, solver_parameters=solver_parameters, closed=closed,
-                         rotational=rotational, J=J, constant_jacobian=constant_jacobian, **kwargs)
-
-        # Add free surface time derivative term
-        self.F += self.equations[2].mass_term(self.test[2], (self.eta-self.eta_old)/free_surface_dt)
-
-    def setup_equations(self):
-        # Initialise Stokes equations with a free surface, this method will be called instead of the
-        # StokesSolver.setup_equations() in StokesSolver.__init__()
-
-        # First setup Stokes equations (without a free surface)
-        super().setup_equations()
-
-        # Define free surface variables for timestepping
-        assert len(self.stokes_vars) == 3
-        self.solution_old = fd.Function(self.solution)
-        self.eta = self.stokes_vars[2]
-        self.eta_old = fd.split(self.solution_old)[2]
-        theta = 0.5  # This gives a second order in time integration scheme
-        self.eta_theta = (1-theta)*self.eta_old + theta*self.eta
-
-        # Add free surface equation
-        self.equations.append(FreeSurfaceEquation(self.Z.sub(2), self.Z.sub(2), quad_degree=self.quad_degree,
-                              free_surface_id=self.free_surface_id))
-
-    def setup_bcs(self):
-        # Initialise boundary conditions for Stokes equations with a free surface,
-        # this method will be called instead of the StokesSolver.setup_bcs() in StokesSolver.__init__()
-
-        # Setup default Stokes boundary conditions (without a free surface)
-        super().setup_bcs()
-
-        # Add free surface stress term
-        self.weak_bcs[self.free_surface_id] = {'normal_stress': self.approximation.rho * self.approximation.g * self.eta_theta}
-
-        # Set internal dofs to zero to prevent singular matrix for free surface equation
-        self.strong_bcs.append(InteriorBC(self.Z.sub(2), 0, self.free_surface_id))
-
-    def solve(self):
-        self.solution_old.assign(self.solution)  # Need to update old solution for implicit free surface
-        super().solve()

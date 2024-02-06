@@ -1,8 +1,11 @@
 from gadopt import *
 import numpy as np
+from gadopt.utility import upward_normal
 
 
 def viscous_freesurface_model(nx, dt_factor, do_write=False):
+    # Test case from Section 3.1.1 of `An implicit free surface algorithm
+    # for geodynamical simulations', Kramer et al 2012.
 
     # Set up geometry:
     D = 3e6  # Depth of domain in m
@@ -40,7 +43,7 @@ def viscous_freesurface_model(nx, dt_factor, do_write=False):
     log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
     log("Number of Temperature DOF:", Q.dim())
 
-    eta_eq = FreeSurfaceEquation(W, W, free_surface_id=top_id)  # Initialise the separate free surface equation for explicit coupling
+    eta_eq = FreeSurfaceEquation(W, W, free_surface_id=top_id, k=upward_normal(mesh, cartesian=True))  # Initialise the separate free surface equation for explicit coupling
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     Ra = Constant(0)  # Rayleigh number, here we set this to zero as there are no bouyancy terms

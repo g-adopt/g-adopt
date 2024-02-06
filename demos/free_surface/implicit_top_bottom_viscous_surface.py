@@ -2,8 +2,8 @@ from gadopt import *
 import numpy as np
 
 
-def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
-    # Test case from Section 3.1.1 of `An implicit free surface algorithm
+def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=False):
+    # Test case from Section 3.1.2 of `An implicit free surface algorithm
     # for geodynamical simulations', Kramer et al 2012.
 
     # Set up geometry:
@@ -21,17 +21,18 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
-    Z = MixedFunctionSpace([V, W, W])  # Mixed function space.
+    Z = MixedFunctionSpace([V, W, W, W])  # Mixed function space.
 
     # Function to store the solutions:
     z = Function(Z)  # a field over the mixed function space Z.
-    u, p, eta = split(z)  # Returns symbolic UFL expression for u, p and eta
-    u_, p_, eta_ = z.subfunctions  # Returns functions for u, p and eta
+    u, p, eta, zeta = split(z)  # Returns symbolic UFL expression for u, p and eta
+    u_, p_, eta_, zeta_ = z.subfunctions  # Returns functions for u, p and eta
 
     # Next rename for output:
     u_.rename("Velocity")
     p_.rename("Pressure")
     eta_.rename("eta")
+    zeta_.rename("zeta")
 
     T = Function(Q, name="Temperature").assign(0)  # Setup a dummy function for temperature
     # Output function space information:
@@ -45,16 +46,21 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
     approximation = BoussinesqApproximation(Ra)
 
     rho0 = approximation.rho  # This defaults to rho0 = 1 (dimensionless)
+    rho_bottom = 2  # Bottom external density is 2x larger from Section 3.1.2 Kramer et al 2012
     g = approximation.g  # This defaults to g = 1 (dimensionless)
 
     kk = Constant(2 * pi / lam)  # wavenumber (dimensionless)
     F0 = Constant(1000 / L0)  # initial free surface amplitude (dimensionless)
+    G0 = Constant(1000 / L0)  # initial free surface amplitude (dimensionless)
     X = SpatialCoordinate(mesh)
     eta_.interpolate(F0 * cos(kk * X[0]))  # Initial free surface condition
+    zeta_.interpolate(G0 * cos(kk * X[0]))  # Initial free surface condition
 
     # timestepping
     mu = Constant(1)  # Shear modulus (dimensionless)
     tau0 = Constant(2 * kk * mu / (rho0 * g))  # Characteristic time scale (dimensionless)
+    delta_rho = rho_bottom - rho0
+    tau0_zeta = Constant(2 * kk * mu / (delta_rho * g))  # Characteristic time scale (dimensionless)
     log("tau0", tau0)
 
     dt = Constant(dt_factor*tau0)  # timestep (dimensionless)
@@ -64,10 +70,11 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
     max_timesteps = round(10*tau0/dt)  # Simulation runs for 10 characteristic time scales so end state is close to being fully relaxed
     log("max_timesteps", max_timesteps)
 
-    # No normal flow except on the free surface
+    # No normal flow except on the free surfaces
+    # Free surface boundary conditions are applied automatically in stokes_integrators and momentum_equation for implicit free surface coupling
     stokes_bcs = {
-        bottom_id: {'un': 0},
-        top_id: {'free_surface': {}},  # Free surface boundary conditions are applied automatically in stokes_integrators and momentum_equation for implicit free surface coupling
+        top_id: {'free_surface': {}},
+        bottom_id: {'free_surface': {'exterior_density': rho_bottom}},  # Specify exterior density below bottom free surface
         left_id: {'un': 0},
         right_id: {'un': 0},
     }
@@ -82,16 +89,19 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
     eta_analytical = Function(W, name="eta analytical")
     eta_analytical.interpolate(exp(-time/tau0)*F0 * cos(kk * X[0]))
 
+    zeta_analytical = Function(W, name="eta analytical")
+    zeta_analytical.interpolate(exp(-time/tau0_zeta)*G0 * cos(kk * X[0]))
     # Create output file and select output_frequency:
     if do_write:
         # Write output files in VTK format:
         dump_period = 1
         log("dump_period ", dump_period)
-        filename = "implicit_viscous_freesurface"
+        filename = "implicit_viscous_freesurface_topbot"
         output_file = File(f"{filename}_D{float(D/L0)}_mu{float(mu)}_nx{nx}_dt{float(dt/tau0)}tau.pvd")
-        output_file.write(u_, eta_, p_, eta_analytical)
+        output_file.write(u_, eta_, p_, eta_analytical, zeta_, zeta_analytical)
 
     error = 0
+    error_zeta = 0
     # Now perform the time loop:
     for timestep in range(1, max_timesteps+1):
 
@@ -99,9 +109,12 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
         stokes_solver.solve()
         time.assign(time + dt)
         eta_analytical.interpolate(exp(-time/tau0)*F0 * cos(kk * X[0]))
+        zeta_analytical.interpolate(exp(-time/tau0_zeta)*G0 * cos(kk * X[0]))
 
         local_error = assemble(pow(eta-eta_analytical, 2)*ds(top_id))
         error += local_error*dt
+        local_error_zeta = assemble(pow(zeta-zeta_analytical, 2)*ds(bottom_id))
+        error_zeta += local_error_zeta*dt
 
         # Write output:
         if do_write:
@@ -110,18 +123,20 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=False):
             if timestep % dump_period == 0:
                 log("timestep", timestep)
                 log("time", float(time))
-                output_file.write(u_, eta_, p_, eta_analytical)
+                output_file.write(u_, eta_, p_, eta_analytical, zeta_, zeta_analytical)
     if do_write:
         with open(f"{filename}_D{float(D/L0)}_mu{float(mu)}_nx{nx}_dt{float(dt/tau0)}tau.txt", 'w') as file:
             for line in eta_midpoint:
                 file.write(f"{line}\n")
 
     final_error = pow(error, 0.5)/L
-    return final_error
+    final_error_zeta = pow(error_zeta, 0.5)/L
+    return final_error, final_error_zeta
 
 
 if __name__ == "__main__":
     # default case run with nx = 80 for four dt factors
     dt_factors = 2 / (2**np.arange(4))
-    errors = np.array([implicit_viscous_freesurface_model(80, dtf) for dtf in dt_factors])
-    np.savetxt("errors-implicit-free-surface-coupling.dat", errors)
+    errors = np.array([implicit_viscous_two_freesurface_model(80, dtf) for dtf in dt_factors])
+    np.savetxt("errors-implicit-top-free-surface-coupling.dat", errors[:, 0])
+    np.savetxt("errors-implicit-bottom-free-surface-coupling.dat", errors[:, 1])
