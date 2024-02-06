@@ -6,6 +6,7 @@ import numpy
 from gadopt.utility import log
 from scipy.spatial import cKDTree
 import warnings
+from pyadjoint.tape import annotate_tape
 
 # non-dimensionalisation constants
 # Factor to non-dimensionalise gplates velocities: d/kappa
@@ -167,32 +168,11 @@ class pyGplatesConnector(object):
         # velocities are stored in cache
         if self.reconstruction_time is None or abs(requested_reconstruction_time - self.reconstruction_time) > self.delta_time:
             self.reconstruction_time = requested_reconstruction_time
-            # calculate velocities here
-            seeds_u = self._calc_velocities(
-                velocity_domain_features=self.velocity_domain_features,
-                topology_features=self.topology_features,
-                rotation_model=self.rotation_model,
-                time=self.reconstruction_time,
-                delta_time=self.delta_time)
-
-            seeds_u = numpy.array([i.to_xyz() for i in seeds_u]) *\
-                ((1e-2 * velocity_non_dim_factor) / (self.scaling_factor * yrs2sec))
-
-            # generate a KD-tree of the seeds points that have a numerical value
-            tree = cKDTree(data=self.seeds[seeds_u[:, 0] == seeds_u[:, 0], :], leafsize=16)
-
-            # find the neighboring points
-            dists, idx = tree.query(x=self.boundary_coords, k=self.nneighbours)
-
-            # weighted average (by 1/distance) of the data
-            res_u = numpy.einsum(
-                'i, ij->ij',
-                1/numpy.sum(1/dists, axis=1),
-                numpy.einsum('ij, ijk ->ik', 1/dists, seeds_u[seeds_u[:, 0] == seeds_u[:, 0]][idx])
-            )
-            # if too close assign the value of the nearest point
-            res_u[dists[:, 0] <= 1e-8, :] = seeds_u[seeds_u[:, 0] == seeds_u[:, 0]][idx[dists[:, 0] <= 1e-8, 0]]
-            self.boundary_condition.dat.data_with_halos[self.dbc.nodes] = res_u
+            interpolated_u = self._interpolatae_seeds_u()
+            self.boundary_condition.dat.data_with_halos[self.dbc.nodes] = interpolated_u
+            # if in adjoint mode annotate
+            if annotate_tape():
+                self.boundary_condition.create_block_variable()
 
     def ndtime2geotime(self, ndtime):
         """ converts non-dimensised time to geologic time with respect to present-day (Ma)
@@ -237,6 +217,34 @@ class pyGplatesConnector(object):
         output_feature_collection = pygplates.FeatureCollection(meshnode_feature)
 
         return output_feature_collection
+
+    def _interpolatae_seeds_u(self):
+        # calculate velocities here
+        seeds_u = self._calc_velocities(
+            velocity_domain_features=self.velocity_domain_features,
+            topology_features=self.topology_features,
+            rotation_model=self.rotation_model,
+            time=self.reconstruction_time,
+            delta_time=self.delta_time)
+
+        seeds_u = numpy.array([i.to_xyz() for i in seeds_u]) *\
+            ((1e-2 * velocity_non_dim_factor) / (self.scaling_factor * yrs2sec))
+
+        # generate a KD-tree of the seeds points that have a numerical value
+        tree = cKDTree(data=self.seeds[seeds_u[:, 0] == seeds_u[:, 0], :], leafsize=16)
+
+        # find the neighboring points
+        dists, idx = tree.query(x=self.boundary_coords, k=self.nneighbours)
+
+        # weighted average (by 1/distance) of the data
+        res_u = numpy.einsum(
+            'i, ij->ij',
+            1/numpy.sum(1/dists, axis=1),
+            numpy.einsum('ij, ijk ->ik', 1/dists, seeds_u[seeds_u[:, 0] == seeds_u[:, 0]][idx])
+        )
+        # if too close assign the value of the nearest point
+        res_u[dists[:, 0] <= 1e-8, :] = seeds_u[seeds_u[:, 0] == seeds_u[:, 0]][idx[dists[:, 0] <= 1e-8, 0]]
+        return res_u
 
     def _calc_velocities(self, velocity_domain_features, topology_features, rotation_model, time, delta_time):
         # All domain points and associated (magnitude, azimuth, inclination) velocities for the current time.
