@@ -4,7 +4,8 @@ A module with utitity functions for gadopt
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import Interpolator, op2, interpolate, VectorElement, DirichletBC, utils
+from firedrake import op2, VectorElement, DirichletBC, utils
+from firedrake.__future__ import Interpolator
 import ufl
 import finat.ufl
 import time
@@ -60,11 +61,10 @@ class TimestepAdaptor:
         self.maximum_timestep = maximum_timestep
         self.mesh = V.mesh()
 
-        self.ref_vel = Function(V, name="Reference_Velocity")
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), self.ref_vel, access=op2.MAX)
+        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -72,9 +72,8 @@ class TimestepAdaptor:
             max_ts = min(max_ts, self.maximum_timestep)
 
         # need to reset ref_vel to avoid taking max with previous values
-        self.ref_vel.assign(0)
-        self.ref_vel_interpolator.interpolate()
-        local_maxrefvel = self.ref_vel.dat.data.max()
+        ref_vel = assemble(self.ref_vel_interpolator.interpolate())
+        local_maxrefvel = ref_vel.dat.data.max()
         max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
         # NOTE; we're incorparating max_ts here before dividing by max. ref. vel. as it may be zero
         ts = self.target_cfl / max(max_refvel, self.target_cfl / max_ts)
@@ -341,7 +340,7 @@ class LayerAveraging:
             except AttributeError:
                 raise ValueError("For non-extruded mesh need to specify depths array r1d.")
             CG1 = FunctionSpace(mesh, "CG", 1)
-            r_func = interpolate(self.r, CG1)
+            r_func = Function(CG1).interpolate(self.r)
             self.r1d = r_func.dat.data[:nlayers]
 
         self.mass = np.zeros((2, len(self.r1d)))
