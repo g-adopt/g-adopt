@@ -158,7 +158,8 @@ class StokesSolver:
             self.weak_bcs[id] = weak_bc
 
         if self.free_surface:
-            assert free_surface_dt is not None
+            if free_surface_dt is None:
+                raise TypeError("Please provide a timestep to advance the free surface, currently free_surface_dt=None.")
 
             self.solution_old = fd.Function(self.solution)
             eta = []
