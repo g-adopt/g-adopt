@@ -26,10 +26,7 @@ class FreeSurfaceTerm(BaseTerm):
 
         # Multiply by constant factor to keep the block system symmetric for the implicit coupling case
         if 'theta' in self.term_kwargs:
-            assert 'free_surface_dt' in self.term_kwargs
-            free_surface_dt = self.term_kwargs['free_surface_dt']
-            theta = self.term_kwargs['theta']
-            prefactor = free_surface_dt * theta
+            prefactor = self.term_kwargs['theta']
         else:
             prefactor = 1
 
