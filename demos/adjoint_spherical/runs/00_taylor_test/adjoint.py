@@ -42,7 +42,7 @@ ReducedFunctional.derivative = collect_garbage(
 
 
 def __main__():
-    forward_problem()
+    my_taylor_test()
 
 
 def my_taylor_test():
@@ -92,13 +92,13 @@ def forward_problem():
     H_int = Constant(10.0)  # Internal heating
 
     # Initial time step
-    delta_t = Constant(1.0e-6)
+    delta_t = Constant(5.0e-6)
 
     # Top velocity boundary condition
     gplates_velocities = Function(V, name="GPlates_Velocity")
 
     # Setup Equations Stokes related constants
-    Ra = Constant(1.0e7)  # Rayleigh number
+    Ra = Constant(2.0e7)  # Rayleigh number
     Di = Constant(0.5)  # Dissipation number.
 
     # Compressible reference state:
@@ -166,10 +166,10 @@ def forward_problem():
     )
 
     # non-dimensionalised time for present geologic day (0)
-    ndtime_now = pl_rec_model.geotime2ndtime(0)
+    ndtime_now = pl_rec_model.geotime2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = pl_rec_model.geotime2ndtime(10)
+    time = pl_rec_model.geotime2ndtime(5.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -177,8 +177,8 @@ def forward_problem():
     u_.rename("Velocity")
     p_.rename("Pressure")
 
-    # adaptive time-stepper
-    t_adapt = TimestepAdaptor(delta_t, u_, V, maximum_timestep=0.1, increase_tolerance=1.5)
+    # # adaptive time-stepper
+    # t_adapt = TimestepAdaptor(delta_t, u_, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
     # Defining control
     control = Control(Tic)
@@ -206,13 +206,8 @@ def forward_problem():
         # Solve Stokes sytem:
         stokes_solver.solve()
 
-        # Adapt time step
-        # For now we don't need annotating
-        with stop_annotating():
-            dt = t_adapt.update_timestep()
-
         # Make sure we are not going past present day
-        if ndtime_now - time < float(dt):
+        if ndtime_now - time < float(delta_t):
             delta_t.assign(ndtime_now - time)
 
         # Temperature system:
@@ -222,7 +217,7 @@ def forward_problem():
 
         # logging everything
         plog.log_str(
-            f"{time} {float(dt)}")
+            f"{time}, {pl_rec_model.ndtime2geotime(time)}")
 
     # Define the component terms of the overall objective functional
     smoothing = assemble(dot(grad(Tic - Tave), grad(Tic - Tave)) * dx)

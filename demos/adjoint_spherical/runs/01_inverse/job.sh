@@ -1,4 +1,4 @@
-#PBS -N 2Myrs
+#PBS -N Adjoint
 #PBS -P xd2
 #PBS -q normalsr
 #PBS -l walltime=24:00:00
@@ -28,4 +28,4 @@ export PYTHONPATH="/scratch/xd2/sg8812/g-adopt/demos/adjoint_spherical":${PYTHON
 # Making sure all nodes have matplotlib
 mpiexec --map-by ppr:1:node -np $PBS_NNODES  python3 -c "import matplotlib.pyplot as plt"
 
-mpiexec -np 1344 python3 adjoint.py > output.dat 2> error.dat
+mpiexec -np 1344 python3 adjoint.py >output.dat 2>error.dat
