@@ -159,7 +159,7 @@ pl_rec_model = pyGplatesConnector(
 ndtime_now = pl_rec_model.geotime2ndtime(0.)
 
 # non-dimensionalised time for 10 Myrs ago
-time = pl_rec_model.geotime2ndtime(20.)
+time = pl_rec_model.geotime2ndtime(25.)
 
 # Defining control
 control = Control(Tic)
@@ -178,9 +178,15 @@ project(
 # Now perform the time loop:
 while time < ndtime_now:
     # Update surface velocities
-    pl_rec_model.assign_plate_velocities(time)
+    pl_rec_time = pl_rec_model.assign_plate_velocities(time)
 
-    # Solve Stokes sytem:
+    # Surface velocities should be considered as a new block if the
+    #   content has changed. This happens when the updated
+    #   reconstruction time is the one as requested time
+    if pl_rec_time == time:
+        gplates_velocities.create_block_variable()
+
+    # Solve Stokes sytem
     stokes_solver.solve()
 
     # Make sure we are not going past present day
@@ -190,7 +196,7 @@ while time < ndtime_now:
     # Temperature system:
     energy_solver.solve()
 
-    # updating time
+    # Updating time
     time += float(delta_t)
 
 # Define the component terms of the overall objective functional
@@ -213,11 +219,13 @@ pause_annotation()
 # Defining the object for pyadjoint
 reduced_functional = ReducedFunctional(objective, control)
 
+
+# call-back function for both
 def callback():
-    final_misfit = assemble(
+    final_T_misfit = assemble(
         (T.block_variable.checkpoint.restore() - Tobs) ** 2 * dx
     )
-    log(f"One iteration Done Initial misfit; final misfit: {final_misfit}")
+    log(f"One iteration Done Initial misfit; final misfit: {final_T_misfit}")
 
 
 # Perform a bounded nonlinear optimisation where temperature
@@ -229,10 +237,13 @@ T_ub.assign(1.0)
 
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
 
+# Establish a LinMore Optimiser
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
     checkpoint_dir="optimisation_checkpoint",
 )
+# Add the callback function to optimisation
 optimiser.add_callback(callback)
+# run the optimisation
 optimiser.run()
