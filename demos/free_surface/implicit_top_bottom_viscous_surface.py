@@ -2,7 +2,7 @@ from gadopt import *
 import numpy as np
 
 
-def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=False):
+def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=False, iterative_2d=False):
     # Test case from Section 3.1.2 of `An implicit free surface algorithm
     # for geodynamical simulations', Kramer et al 2012.
 
@@ -79,7 +79,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=False):
         right_id: {'un': 0},
     }
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, free_surface_dt=dt)
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, free_surface_dt=dt, iterative_2d=iterative_2d)
 
     if do_write:
         eta_midpoint = []
@@ -140,3 +140,7 @@ if __name__ == "__main__":
     errors = np.array([implicit_viscous_two_freesurface_model(80, dtf) for dtf in dt_factors])
     np.savetxt("errors-implicit-top-free-surface-coupling.dat", errors[:, 0])
     np.savetxt("errors-implicit-bottom-free-surface-coupling.dat", errors[:, 1])
+
+#    errors_iterative = np.array([implicit_viscous_two_freesurface_model(80, dtf, iterative_2d=True) for dtf in dt_factors])
+#    np.savetxt("errors-implicit-iterative-top-free-surface-coupling.dat", errors_iterative[:, 0])
+#    np.savetxt("errors-implicit-iterative-bottom-free-surface-coupling.dat", errors_iterative[:, 1])

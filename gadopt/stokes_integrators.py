@@ -101,7 +101,7 @@ class StokesSolver:
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False, J=None, constant_jacobian=False,
-                 free_surface_dt=None, **kwargs):
+                 iterative_2d=False, free_surface_dt=None, **kwargs):
 
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
@@ -165,6 +165,7 @@ class StokesSolver:
             eta = []
             eta_old = []
             eta_theta = []
+            self.free_surface_id_list = []
 
             c = 0  # Counter for free surfaces (N.b. we already have two equations from StokesEquations)
             for id, value in free_surface_dict.items():
@@ -188,6 +189,8 @@ class StokesSolver:
                 # Set internal dofs to zero to prevent singular matrix for free surface equation
                 self.strong_bcs.append(InteriorBC(self.Z.sub(2+c), 0, id))
 
+                self.free_surface_id_list.append(id)
+
                 c += 1
 
         # Add terms to Stokes Equations
@@ -210,7 +213,7 @@ class StokesSolver:
             if INFO >= log_level:
                 self.solver_parameters['snes_monitor'] = None
 
-            if self.mesh.topological_dimension() == 2 and cartesian:
+            if self.mesh.topological_dimension() == 2 and cartesian and not iterative_2d:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
@@ -219,11 +222,21 @@ class StokesSolver:
                     self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
                 elif INFO >= log_level:
                     self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+
+                if self.free_surface:
+                    # Merge free surface fields with pressure field for Schur complement solve
+                    self.solver_parameters.update({'pc_fieldsplit_0_fields': '0',
+                                                   'pc_fieldsplit_1_fields': '1,'+','.join(str(2+i) for i in range(len(eta)))})
         # solver is setup only last minute
         # so people can overwrite parameters we've setup here
         self._solver_setup = False
 
     def setup_solver(self):
+        appctx = {"mu": self.mu}
+
+        if self.free_surface:
+            appctx["free_surface_id_list"] = self.free_surface_id_list
+
         if self.constant_jacobian:
             z_tri = fd.TrialFunction(self.Z)
             F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
@@ -234,7 +247,7 @@ class StokesSolver:
             self.solver = fd.LinearVariationalSolver(self.problem,
                                                      solver_parameters=self.solver_parameters,
                                                      options_prefix=self.name,
-                                                     appctx={"mu": self.mu},
+                                                     appctx=appctx,
                                                      **self.solver_kwargs)
         else:
             self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
@@ -242,8 +255,9 @@ class StokesSolver:
             self.solver = fd.NonlinearVariationalSolver(self.problem,
                                                         solver_parameters=self.solver_parameters,
                                                         options_prefix=self.name,
-                                                        appctx={"mu": self.mu},
+                                                        appctx=appctx,
                                                         **self.solver_kwargs)
+
         self._solver_setup = True
 
     def solve(self):

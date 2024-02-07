@@ -1,5 +1,6 @@
 import firedrake as fd
 from firedrake.petsc import PETSc
+from .utility import InteriorBC
 
 
 class VariableMassInvPC(fd.PCBase):
@@ -45,12 +46,21 @@ class VariableMassInvPC(fd.PCBase):
         # 1/mu goes into the inner product in case it varies spatially.
         self.a = fd.inner(1/mu * u, v)*fd.dx
 
+        self.bcs = []
+        if "free_surface_id_list" in context.appctx:
+            c = 0  # Counter for free surfaces, N.b the first u[0] is pressure
+            for id in context.appctx["free_surface_id_list"]:
+                self.a += fd.inner(1/mu * u[1+c], v[1+c])*fd.ds(id)
+                self.bcs.append(InteriorBC(V.sub(1+c), 0, id))
+                c += 1
+
         opts = PETSc.Options()
         mat_type = opts.getString(self.options_prefix + "mat_type",
                                   fd.parameters["default_matrix_type"])
 
         self.A = fd.assemble(self.a, form_compiler_parameters=self.fc_params,
-                             mat_type=mat_type, options_prefix=self.options_prefix)
+                             mat_type=mat_type, options_prefix=self.options_prefix,
+                             bcs=self.bcs)
 
         Pmat = self.A.petscmat
 
@@ -64,7 +74,8 @@ class VariableMassInvPC(fd.PCBase):
 
     def update(self, pc):
         fd.assemble(self.a, form_compiler_parameters=self.fc_params,
-                    tensor=self.A, options_prefix=self.options_prefix)
+                    tensor=self.A, options_prefix=self.options_prefix,
+                    bcs=self.bcs)
 
     def apply(self, pc, X, Y):
         self.ksp.solve(X, Y)
