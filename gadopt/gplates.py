@@ -6,7 +6,6 @@ import numpy
 from gadopt.utility import log
 from scipy.spatial import cKDTree
 import warnings
-from pyadjoint.tape import annotate_tape
 
 # non-dimensionalisation constants
 # Factor to non-dimensionalise gplates velocities: d/kappa
@@ -104,9 +103,6 @@ class pyGplatesConnector(object):
             )
         )
 
-        # the boundary condition to be updated
-        self.boundary_condition = dbc.function_arg
-
         # last reconstruction time
         self.reconstruction_time = None
 
@@ -156,23 +152,23 @@ class pyGplatesConnector(object):
         # stretch the dimensionalised time by plate_scaling_factor
         requested_reconstruction_time = self.ndtime2geotime(ndtime=model_time)
 
+        # Raising an error if the user is asking for invalid time
         if requested_reconstruction_time < 0:
             raise Exception(
-                ("pyGplates: geologic time is being negative!"
-                 f"maximum: {self.geologic_zero/(time_dim_factor/myrs2sec/self.scaling_factor)}")
+                ("pyGplates: requested geologic time is negative!"
+                 f"maximum: {self.ndtime2geotime(0.0)}")
             )
 
-        log(f"pyGplates: Time {requested_reconstruction_time}.")
-
-        # only calculate new velocities if, either it's the first time step, or there has been more than delta_time since last calculation
-        # velocities are stored in cache
+        # Only calculate new velocities if, either it's the first time step,
+        # or it has been longer than {delta_time} since last calculation
+        # The boundary condition gets updated here
         if self.reconstruction_time is None or abs(requested_reconstruction_time - self.reconstruction_time) > self.delta_time:
             self.reconstruction_time = requested_reconstruction_time
             interpolated_u = self._interpolatae_seeds_u()
-            self.boundary_condition.dat.data_with_halos[self.dbc.nodes] = interpolated_u
-            # if in adjoint mode annotate
-            if annotate_tape():
-                self.boundary_condition.create_block_variable()
+            self.dbc.function_arg.dat.data_with_halos[self.dbc.nodes] = interpolated_u
+            log(f"pyGplates: Calculated surface velocities for {self.reconstruction_time} Ma.")
+
+        return self.geotime2ndtime(self.reconstruction_time)
 
     def ndtime2geotime(self, ndtime):
         """ converts non-dimensised time to geologic time with respect to present-day (Ma)
