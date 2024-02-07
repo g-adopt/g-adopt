@@ -1,17 +1,7 @@
 import firedrake
-from firedrake import (
-    Constant,
-    FacetNormal,
-    SpatialCoordinate,
-    assemble,
-    conditional,
-    dot,
-    dx,
-    grad,
-    norm,
-    sqrt,
-)
-
+from firedrake import assemble, Constant, sqrt, dot, grad, FacetNormal
+from firedrake import SpatialCoordinate, conditional, dx, norm
+from firedrake.ufl_expr import extract_unique_domain
 from .utility import CombinedSurfaceMeasure
 
 
@@ -37,7 +27,7 @@ def rms_velocity(velocity):
 class GeodynamicalDiagnostics:
 
     def __init__(self, u, p, T, bottom_id, top_id, degree=4):
-        mesh = u.ufl_domain()
+        mesh = extract_unique_domain(u)
         self.domain_volume = domain_volume(mesh)
         self.u = u
         self.p = p
