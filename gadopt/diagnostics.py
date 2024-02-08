@@ -1,15 +1,6 @@
 from firedrake import (
-    Constant,
-    FacetNormal,
-    SpatialCoordinate,
-    assemble,
-    conditional,
-    dot,
-    ds,
-    dx,
-    grad,
-    norm,
-    sqrt,
+    Constant, FacetNormal, SpatialCoordinate,
+    assemble, conditional, dot, ds, dx, grad, norm, sqrt,
 )
 from firedrake.ufl_expr import extract_unique_domain
 
