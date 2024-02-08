@@ -193,6 +193,9 @@ def forward_problem():
         bcs=energy_solver.strong_bcs,
     )
 
+    # timestep counter
+    timestep_index = 0
+
     # Now perform the time loop:
     while time < ndtime_now:
         if timestep_index % 2 == 0:
@@ -215,6 +218,7 @@ def forward_problem():
 
         # Updating time
         time += float(delta_t)
+        timestep_index += 1
 
     # Define the component terms of the overall objective functional
     smoothing = assemble(dot(grad(Tic - Tave), grad(Tic - Tave)) * dx)

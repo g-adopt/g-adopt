@@ -175,6 +175,9 @@ project(
     bcs=energy_solver.strong_bcs,
 )
 
+# counter for number of time-stepes
+timestep_index = 0
+
 # Now perform the time loop:
 while time < ndtime_now:
     if timestep_index % 2 == 0:
@@ -197,6 +200,7 @@ while time < ndtime_now:
 
     # Updating time
     time += float(delta_t)
+    timestep_index += 0
 
 # Define the component terms of the overall objective functional
 smoothing = assemble(dot(grad(Tic - Tave), grad(Tic - Tave)) * dx)
