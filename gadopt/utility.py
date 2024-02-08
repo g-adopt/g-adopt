@@ -66,7 +66,6 @@ class TimestepAdaptor:
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
         self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -74,8 +73,6 @@ class TimestepAdaptor:
             max_ts = min(max_ts, self.maximum_timestep)
 
         # need to reset ref_vel to avoid taking max with previous values
-        ref_vel = assemble(self.ref_vel_interpolator.interpolate())
-        local_maxrefvel = ref_vel.dat.data.max()
         ref_vel = assemble(self.ref_vel_interpolator.interpolate())
         local_maxrefvel = ref_vel.dat.data.max()
         max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
@@ -344,7 +341,6 @@ class LayerAveraging:
             except AttributeError:
                 raise ValueError("For non-extruded mesh need to specify depths array r1d.")
             CG1 = FunctionSpace(mesh, "CG", 1)
-            r_func = Function(CG1).interpolate(self.r)
             r_func = Function(CG1).interpolate(self.r)
             self.r1d = r_func.dat.data[:nlayers]
 

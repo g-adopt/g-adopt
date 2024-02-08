@@ -30,7 +30,6 @@ class GeodynamicalDiagnostics:
 
     def __init__(self, u, p, T, bottom_id, top_id, degree=4):
         mesh = extract_unique_domain(u)
-        mesh = extract_unique_domain(u)
         self.domain_volume = domain_volume(mesh)
         self.u = u
         self.p = p
