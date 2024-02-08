@@ -3,9 +3,11 @@ A module with utitity functions for gadopt
 """
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
-from firedrake import Interpolator, op2, interpolate
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
+from firedrake import op2, VectorElement
+from firedrake.__future__ import Interpolator
 import ufl
+import finat.ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
@@ -59,11 +61,10 @@ class TimestepAdaptor:
         self.maximum_timestep = maximum_timestep
         self.mesh = V.mesh()
 
-        self.ref_vel = Function(V, name="Reference_Velocity")
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), self.ref_vel, access=op2.MAX)
+        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -71,9 +72,8 @@ class TimestepAdaptor:
             max_ts = min(max_ts, self.maximum_timestep)
 
         # need to reset ref_vel to avoid taking max with previous values
-        self.ref_vel.assign(0)
-        self.ref_vel_interpolator.interpolate()
-        local_maxrefvel = self.ref_vel.dat.data.max()
+        ref_vel = assemble(self.ref_vel_interpolator.interpolate())
+        local_maxrefvel = ref_vel.dat.data.max()
         max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
         # NOTE; we're incorparating max_ts here before dividing by max. ref. vel. as it may be zero
         ts = self.target_cfl / max(max_refvel, self.target_cfl / max_ts)
@@ -136,7 +136,7 @@ class CombinedSurfaceMeasure(ufl.Measure):
 
 
 def _get_element(ufl_or_element):
-    if isinstance(ufl_or_element, ufl.FiniteElementBase):
+    if isinstance(ufl_or_element, ufl.AbstractFiniteElement):
         return ufl_or_element
     else:
         return ufl_or_element.ufl_element()
@@ -148,27 +148,15 @@ def is_continuous(expr):
 
     if isinstance(expr, ufl.indexed.Indexed):
         elem = expr.ufl_operands[0].ufl_element()
-        if isinstance(elem, ufl.MixedElement):
+        if isinstance(elem, finat.ufl.MixedElement):
             # the second operand is a MultiIndex
             assert len(expr.ufl_operands[1]) == 1
             sub_element_index, _ = elem.extract_subelement_component(int(expr.ufl_operands[1][0]))
-            elem = elem.sub_elements()[sub_element_index]
+            elem = elem.sub_elements[sub_element_index]
     else:
         elem = _get_element(expr)
 
-    family = elem.family()
-    if family == 'Lagrange' or family == 'Q':
-        return True
-    elif family == 'Discontinuous Lagrange' or family == 'DQ':
-        return False
-    elif isinstance(elem, ufl.HCurlElement) or isinstance(elem, ufl.HDivElement):
-        return False
-    elif family == 'TensorProductElement':
-        return all(is_continuous(sele) for sele in elem.sub_elements())
-    elif family == 'EnrichedElement':
-        return all(is_continuous(e) for e in elem._elements)
-    else:
-        raise NotImplementedError("Unknown finite element family")
+    return elem in ufl.H1
 
 
 def depends_on(ufl_expr, terminal):
@@ -184,21 +172,7 @@ def normal_is_continuous(expr):
 
     elem = _get_element(expr)
 
-    family = elem.family()
-    if family == 'Lagrange' or family == 'Q':
-        return True
-    elif family == 'Discontinuous Lagrange' or family == 'DQ':
-        return False
-    elif isinstance(elem, ufl.HCurlElement):
-        return False
-    elif isinstance(elem, ufl.HDivElement):
-        return True
-    elif family == 'TensorProductElement':
-        return all(is_continuous(sele) for sele in elem.sub_elements())
-    elif family == 'EnrichedElement':
-        return all(normal_is_continuous(e) for e in elem._elements)
-    else:
-        raise NotImplementedError("Unknown finite element family")
+    return elem in ufl.HDiv
 
 
 def cell_size(mesh):
@@ -261,7 +235,7 @@ def extend_function_to_3d(func, mesh_extruded):
     family = ufl_elem.family()
     degree = ufl_elem.degree()
     name = func.name()
-    if isinstance(ufl_elem, ufl.VectorElement):
+    if isinstance(ufl_elem, VectorElement):
         # vector function space
         fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0, dim=2, vector=True)
     else:
@@ -322,7 +296,7 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
         v_elt = FiniteElement(v_family, v_cell, v_degree, variant=v_variant)
         elt = TensorProductElement(h_elt, v_elt)
         if hdiv:
-            elt = ufl.HDiv(elt)
+            elt = ufl.HDivElement(elt)
     else:
         elt = FiniteElement(h_family, mesh.ufl_cell(), h_degree, variant=variant)
 
@@ -366,7 +340,7 @@ class LayerAveraging:
             except AttributeError:
                 raise ValueError("For non-extruded mesh need to specify depths array r1d.")
             CG1 = FunctionSpace(mesh, "CG", 1)
-            r_func = interpolate(self.r, CG1)
+            r_func = Function(CG1).interpolate(self.r)
             self.r1d = r_func.dat.data[:nlayers]
 
         self.mass = np.zeros((2, len(self.r1d)))
@@ -473,3 +447,22 @@ def timer_decorator(func):
         log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
         return result
     return wrapper
+
+
+def absv(u):
+    """Component-wise absolute value of vector for SU stabilisation"""
+    return as_vector([abs(ui) for ui in u])
+
+
+def su_nubar(u, J, Pe):
+    """SU stabilisation viscosity as a function of velocity, Jaciobian and grid Peclet number"""
+    # SU(PG) ala Donea & Huerta:
+    # Columns of Jacobian J are the vectors that span the quad/hex
+    # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
+    # thus u^T J is (dx * u , dy * v)
+    # and following (2.44c) Pe = u^T J / (2*nu)
+    # beta(Pe) is the xibar vector in (2.44a)
+    # then we get artifical viscosity nubar from (2.49)
+    beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
+
+    return dot(absv(dot(u, J)), beta_pe)/2

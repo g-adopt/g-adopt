@@ -4,9 +4,8 @@ Slope limiters for discontinuous fields
 from __future__ import absolute_import
 from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
 from firedrake import max_value, min_value
-from firedrake import TensorProductElement
+from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement
 import numpy as np
-import ufl
 from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
 from pyop2 import op2
 
@@ -27,12 +26,12 @@ def assert_function_space(fs, family, degree):
     if not isinstance(family, list):
         fam_list = [family]
     ufl_elem = fs.ufl_element()
-    if isinstance(ufl_elem, ufl.VectorElement):
-        ufl_elem = ufl_elem.sub_elements()[0]
+    if isinstance(ufl_elem, VectorElement):
+        ufl_elem = ufl_elem.sub_elements[0]
 
     if ufl_elem.family() == 'TensorProductElement':
         # extruded mesh
-        A, B = ufl_elem.sub_elements()
+        A, B = ufl_elem.sub_elements
         assert A.family() in fam_list, 'horizontal space must be one of {0:s}'.format(fam_list)
         assert B.family() in fam_list, 'vertical space must be {0:s}'.format(fam_list)
         assert A.degree() == degree, 'degree of horizontal space must be {0:d}'.format(degree)
@@ -49,13 +48,13 @@ def get_extruded_base_element(ufl_element):
 
     In case of a non-extruded mesh, returns the element itself.
     """
-    if isinstance(ufl_element, ufl.HDivElement):
+    if isinstance(ufl_element, HDivElement):
         ufl_element = ufl_element._element
-    if isinstance(ufl_element, ufl.MixedElement):
-        ufl_element = ufl_element.sub_elements()[0]
-    if isinstance(ufl_element, ufl.VectorElement):
-        ufl_element = ufl_element.sub_elements()[0]  # take the first component
-    if isinstance(ufl_element, ufl.EnrichedElement):
+    if isinstance(ufl_element, MixedElement):
+        ufl_element = ufl_element.sub_elements[0]
+    if isinstance(ufl_element, VectorElement):
+        ufl_element = ufl_element.sub_elements[0]  # take the first component
+    if isinstance(ufl_element, EnrichedElement):
         ufl_element = ufl_element._elements[0]
     return ufl_element
 
@@ -79,7 +78,7 @@ def get_facet_mask(function_space, facet='bottom'):
     assert isinstance(elem, TensorProductElement), \
         f'function space must be defined on an extruded 3D mesh: {elem}'
     # figure out number of nodes in sub elements
-    h_elt, v_elt = elem.sub_elements()
+    h_elt, v_elt = elem.sub_elements
     nb_nodes_h = create_finat_element(h_elt).space_dimension()
     nb_nodes_v = create_finat_element(v_elt).space_dimension()
     # compute top/bottom facet indices
@@ -93,9 +92,6 @@ def get_facet_mask(function_space, facet='bottom'):
 class VertexBasedP1DGLimiter(VertexBasedLimiter):
     """
     Vertex based limiter for P1DG tracer fields, see Kuzmin (2010)
-
-    .. note::
-        Currently only scalar fields are supported
 
     Kuzmin (2010). A vertex-based hierarchical slope limiter
     for p-adaptive discontinuous Galerkin methods. Journal of Computational
@@ -117,9 +113,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         self.mesh = self.P0.mesh()
         self.dim = self.mesh.geometric_dimension()
         self.extruded = hasattr(self.mesh.ufl_cell(), 'sub_cells')
-        assert not self.extruded or len(p1dg_space.ufl_element().sub_elements()) > 0, \
+        assert not self.extruded or len(p1dg_space.ufl_element().sub_elements) > 0, \
             "Extruded mesh requires extruded function space"
-        assert not self.extruded or all(e.variant() == 'equispaced' for e in p1dg_space.ufl_element().sub_elements()), \
+        assert not self.extruded or all(e.variant() == 'equispaced' for e in p1dg_space.ufl_element().sub_elements), \
             "Extruded function space must be equivariant"
         self.clip_min = clip_min
         self.clip_max = clip_max
