@@ -6,7 +6,6 @@ import numpy as np
 from wrappers import collect_garbage
 from firedrake.adjoint_utils import blocks
 
-
 # Quadrature degree:
 dx = dx(degree=6)
 ds_b = ds_b(degree=6)
@@ -62,7 +61,7 @@ def forward_problem():
     # Load mesh
     with CheckpointFile("../../Adjoint_CheckpointFile.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
-        Tic = f.load_function(mesh, name="Temperature")  # initial guess
+        T_initial_guess = f.load_function(mesh, name="Temperature")  # initial guess
         Tobs = f.load_function(mesh, name="ReferenceTemperature")  # reference tomography temperature
         Tave = f.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
         mu_function = f.load_function(mesh, name="mu1viscosity")  # viscosity function
@@ -78,6 +77,7 @@ def forward_problem():
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+    Q1 = FunctionSpace(mesh, "CG", 1)  # Initial Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
     # Test functions and functions to hold solutions:
@@ -86,13 +86,15 @@ def forward_problem():
     u, p = split(z)
 
     # Set up temperature field and initialise:
+    Tic = Function(Q1, name="Tic")
+    Tic.interpolate(T_initial_guess)
     T = Function(Q, name="Temperature")
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
     H_int = Constant(10.0)  # Internal heating
 
     # Initial time step
-    delta_t = Constant(5.0e-6)
+    delta_t = Constant(1.0e-6)
 
     # Top velocity boundary condition
     gplates_velocities = Function(V, name="GPlates_Velocity")
@@ -145,12 +147,12 @@ def forward_problem():
     # tweaking solver parameters
     energy_solver.solver_parameters['ksp_converged_reason'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-4
-    stokes_solver.solver_parameters['snes_rtol'] = 5e-2
+    stokes_solver.solver_parameters['snes_rtol'] = 1e-3
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 5e-4
+    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-4
     stokes_solver.solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 5e-3
+    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-3
 
     # Initiating a plate reconstruction model
     pl_rec_model = pyGplatesConnector(
@@ -169,16 +171,13 @@ def forward_problem():
     ndtime_now = pl_rec_model.geotime2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = pl_rec_model.geotime2ndtime(5.)
+    time = pl_rec_model.geotime2ndtime(25.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
     # Next rename for output:
     u_.rename("Velocity")
     p_.rename("Pressure")
-
-    # # adaptive time-stepper
-    # t_adapt = TimestepAdaptor(delta_t, u_, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
     # Defining control
     control = Control(Tic)
@@ -194,17 +193,18 @@ def forward_problem():
         bcs=energy_solver.strong_bcs,
     )
 
-    # Logging output file
-    plog = ParameterLog("output.log", mesh)
-    plog.log_str("timestep time dt")
-
     # Now perform the time loop:
     while time < ndtime_now:
-        # Update surface velocities
-        pl_rec_model.assign_plate_velocities(time)
+        if timestep_index % 2 == 0:
+            # Update surface velocities
+            pl_rec_model.assign_plate_velocities(time)
+            # Surface velocities should be considered as a new block if the
+            #   content has changed. This happens when the updated
+            #   reconstruction time is the one as requested time
+            gplates_velocities.create_block_variable()
 
-        # Solve Stokes sytem:
-        stokes_solver.solve()
+            # Solve Stokes sytem
+            stokes_solver.solve()
 
         # Make sure we are not going past present day
         if ndtime_now - time < float(delta_t):
@@ -213,11 +213,8 @@ def forward_problem():
         # Temperature system:
         energy_solver.solve()
 
+        # Updating time
         time += float(delta_t)
-
-        # logging everything
-        plog.log_str(
-            f"{time}, {pl_rec_model.ndtime2geotime(time)}")
 
     # Define the component terms of the overall objective functional
     smoothing = assemble(dot(grad(Tic - Tave), grad(Tic - Tave)) * dx)
@@ -227,12 +224,14 @@ def forward_problem():
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
+    # Assembling the objective
     objective = (
         t_misfit +
         0.01 * (norm_obs * smoothing / norm_smoothing)
     )
 
-    plog.close()
+    log(f"Value of objective: {objective}")
+
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
     return Tic, ReducedFunctional(objective, control)

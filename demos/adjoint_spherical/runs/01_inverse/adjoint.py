@@ -2,8 +2,8 @@ from gadopt import *
 from gadopt.inverse import *
 from gadopt.gplates import pyGplatesConnector
 from pyadjoint import stop_annotating
-from firedrake.adjoint_utils import blocks
 from wrappers import collect_garbage
+from firedrake.adjoint_utils import blocks
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -20,7 +20,7 @@ iterative_solver_parameters = {
     "ksp_rtol": 1e-12,
 }
 # Making initial radius smaller
-minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.5e-2
+minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
 
 LinearSolver.DEFAULT_SNES_PARAMETERS = {"snes_type": "ksponly"}
 NonlinearVariationalSolver.DEFAULT_SNES_PARAMETERS = {"snes_type": "ksponly"}
@@ -177,17 +177,16 @@ project(
 
 # Now perform the time loop:
 while time < ndtime_now:
-    # Update surface velocities
-    pl_rec_time = pl_rec_model.assign_plate_velocities(time)
-
-    # Surface velocities should be considered as a new block if the
-    #   content has changed. This happens when the updated
-    #   reconstruction time is the one as requested time
-    if pl_rec_time == time:
+    if timestep_index % 2 == 0:
+        # Update surface velocities
+        pl_rec_model.assign_plate_velocities(time)
+        # Surface velocities should be considered as a new block if the
+        #   content has changed. This happens when the updated
+        #   reconstruction time is the one as requested time
         gplates_velocities.create_block_variable()
 
-    # Solve Stokes sytem
-    stokes_solver.solve()
+        # Solve Stokes sytem
+        stokes_solver.solve()
 
     # Make sure we are not going past present day
     if ndtime_now - time < float(delta_t):
@@ -212,6 +211,8 @@ objective = (
     t_misfit +
     0.01 * (norm_obs * smoothing / norm_smoothing)
 )
+
+log(f"Value of objective: {objective}")
 
 # All done with the forward run, stop annotating anything else to the tape
 pause_annotation()
