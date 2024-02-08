@@ -2,14 +2,14 @@ from gadopt import *
 import numpy as np
 
 
-def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=False, iterative_2d=False):
+def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterative_2d=False):
     # Test case from Section 3.1.2 of `An implicit free surface algorithm
     # for geodynamical simulations', Kramer et al 2012.
 
     # Set up geometry:
     D = 3e6  # Depth of domain in m
-    L = D  # Length of the domain in m
     lam_dimensional = D/2  # wavelength of load in m
+    L = lam_dimensional  # Length of the domain in m
     L0 = D  # characteristic length scale for scaling the equations
     lam = lam_dimensional/L0  # dimensionless lambda
 
@@ -75,11 +75,44 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=False, iterat
     stokes_bcs = {
         top_id: {'free_surface': {}},
         bottom_id: {'free_surface': {'exterior_density': rho_bottom}},  # Specify exterior density below bottom free surface
-        left_id: {'un': 0},
-        right_id: {'un': 0},
+        left_id: {'ux': 0},
+        right_id: {'ux': 0},
     }
 
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, free_surface_dt=dt, iterative_2d=iterative_2d)
+
+    class SpecifiedNodeBC(DirichletBC):
+        def __init__(self, V, value, node):
+            sub_domain = 0  # I think sub_domain is not actually used in the __init__
+            super().__init__(V, value, sub_domain)
+            self.nodes = np.array([node])
+
+    def find_nearest(point, V):
+        m = V.mesh()
+        # Now make the VectorFunctionSpace corresponding to V.
+        W = VectorFunctionSpace(m, V.ufl_element())
+
+        # Next, interpolate the coordinates onto the nodes of W.
+        X = interpolate(m.coordinates, W)
+        distance_vector = X.dat.data - point
+        abs_distance = np.square(distance_vector[:, 0])+np.square(distance_vector[:, 1])
+        idx = abs_distance.argmin()
+        return idx, X.dat.data[idx]
+
+    stationary_point = [0.125, 0.5 * D / L0]
+    node, coords = find_nearest(stationary_point, Z.sub(0).sub(1))
+    print(f"Nearest point is {coords}, at id {node}")
+#   pin_bc = SpecifiedNodeBC(Z.sub(0), as_vector((0,0)), node)
+    pin_bc = SpecifiedNodeBC(Z.sub(0).sub(1), 0, node)
+    stokes_solver.strong_bcs.append(pin_bc)
+
+#   stationary_point = [0.375, 0.5 * D / L0]
+#    node, coords = find_nearest(stationary_point, V.sub(1))
+#    print(f"Nearest point is {coords}, at id {node}")
+#    pin_bc2 = SpecifiedNodeBC(Z.sub(0), as_vector((0,0)), node)
+#    pin_bc2 = SpecifiedNodeBC(Z.sub(0).sub(1), 0, node)
+#    print("pin bc value is ", pin_bc.function_arg)
+#    stokes_solver.strong_bcs.append(pin_bc2)
 
     if do_write:
         eta_midpoint = []
@@ -136,11 +169,12 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=False, iterat
 
 if __name__ == "__main__":
     # default case run with nx = 80 for four dt factors
-    dt_factors = 2 / (2**np.arange(4))
-    errors = np.array([implicit_viscous_two_freesurface_model(80, dtf) for dtf in dt_factors])
-    np.savetxt("errors-implicit-top-free-surface-coupling.dat", errors[:, 0])
-    np.savetxt("errors-implicit-bottom-free-surface-coupling.dat", errors[:, 1])
+    # dt_factors = 2 / (2**np.arange(4))
+    dt_factors = [1]
+    # errors = np.array([implicit_viscous_two_freesurface_model(80, dtf) for dtf in dt_factors])
+    # np.savetxt("errors-implicit-top-free-surface-coupling.dat", errors[:, 0])
+    # np.savetxt("errors-implicit-bottom-free-surface-coupling.dat", errors[:, 1])
 
-#    errors_iterative = np.array([implicit_viscous_two_freesurface_model(80, dtf, iterative_2d=True) for dtf in dt_factors])
-#    np.savetxt("errors-implicit-iterative-top-free-surface-coupling.dat", errors_iterative[:, 0])
-#    np.savetxt("errors-implicit-iterative-bottom-free-surface-coupling.dat", errors_iterative[:, 1])
+    errors_iterative = np.array([implicit_viscous_two_freesurface_model(80, dtf, iterative_2d=True) for dtf in dt_factors])
+    np.savetxt("errors-implicit-iterative-top-free-surface-coupling.dat", errors_iterative[:, 0])
+    np.savetxt("errors-implicit-iterative-bottom-free-surface-coupling.dat", errors_iterative[:, 1])

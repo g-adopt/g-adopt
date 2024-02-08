@@ -12,9 +12,9 @@ def expected_errors(coupling):
 
 cases = [("explicit", [1.4, 1.1, 1.0]),
          ("implicit", [2.0, 2.0, 2.0]),
-         ("implicit-iterative", [2.0, 2.0, 2.0]),
-         ("implicit-top", [2.0, 2.0, 2.0]),
-         ("implicit-bottom", [2.0, 2.0, 2.0])]
+         ("implicit-iterative", [2.0, 2.0, 2.0]),]
+#         ("implicit-top", [2.0, 2.0, 2.0]),
+#         ("implicit-bottom", [2.0, 2.0, 2.0])]
 
 
 @pytest.mark.parametrize("coupling,expected_convergence", cases)

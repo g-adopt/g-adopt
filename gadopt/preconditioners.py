@@ -44,7 +44,7 @@ class VariableMassInvPC(fd.PCBase):
         # Handle vector and tensor-valued spaces.
 
         # 1/mu goes into the inner product in case it varies spatially.
-        self.a = fd.inner(1/mu * u, v)*fd.dx
+        self.a = fd.inner(1/mu * u[0], v[0])*fd.dx
 
         self.bcs = []
         if "free_surface_id_list" in context.appctx:
