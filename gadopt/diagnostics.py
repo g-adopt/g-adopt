@@ -58,12 +58,3 @@ class GeodynamicalDiagnostics:
 
     def T_avg(self):
         return assemble(self.T * self.dx) / self.domain_volume
-
-    def Nu_top(self):
-        return -1 * assemble(dot(grad(self.T), self.n) * self.ds_t) * (1./assemble(Constant(1) * self.ds_t))
-
-    def Nu_bottom(self):
-        return assemble(dot(grad(self.T), self.n) * self.ds_b) * (1./assemble(Constant(1) * self.ds_b))
-
-    def T_avg(self):
-        return assemble(self.T * self.dx) / self.domain_volume

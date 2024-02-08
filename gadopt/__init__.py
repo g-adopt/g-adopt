@@ -13,4 +13,3 @@ from .level_set_tools import Material, LevelSetSolver, field_interface, density_
 
 from firedrake.petsc import PETSc
 PETSc.Sys.popErrorHandler()
-

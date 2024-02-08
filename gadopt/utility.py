@@ -1,46 +1,23 @@
 """
 A module with utitity functions for gadopt
 """
-import logging
-import os
-import time
-from logging import CRITICAL, DEBUG, ERROR, INFO, WARNING  # NOQA
-
-import finat.ufl
-import numpy as np
-import ufl
-from firedrake import (
-    CellDiameter,
-    CellVolume,
-    Constant,
-    FiniteElement,
-    Function,
-    FunctionSpace,
-    JacobianInverse,
-    SpatialCoordinate,
-    TensorProductElement,
-    VectorElement,
-    VectorFunctionSpace,
-    as_vector,
-    assemble,
-    dot,
-    ds_b,
-    ds_t,
-    ds_v,
-    dx,
-    max_value,
-    min_value,
-    op2,
-    outer,
-    sqrt,
-    tanh,
-)
+from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
+from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
+from firedrake import op2, VectorElement
 from firedrake.__future__ import Interpolator
-from firedrake.petsc import PETSc
 from firedrake.ufl_expr import extract_unique_domain
-from mpi4py import MPI
-from scipy.linalg import solveh_banded
+import ufl
+import finat.ufl
+import time
 from ufl.corealg.traversal import traverse_unique_terminals
+from firedrake.petsc import PETSc
+from mpi4py import MPI
+import numpy as np
+import logging
+from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
+import os
+from scipy.linalg import solveh_banded
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -481,29 +458,6 @@ def absv(u):
     """Component-wise absolute value of vector for SU stabilisation"""
     return as_vector([abs(ui) for ui in u])
 
-
-def su_nubar(u, J, Pe):
-    """SU stabilisation viscosity as a function of velocity, Jacobian and grid Peclet number"""
-    # SU(PG) ala Donea & Huerta:
-    # Columns of Jacobian J are the vectors that span the quad/hex
-    # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
-    # thus u^T J is (dx * u , dy * v)
-    # and following (2.44c) Pe = u^T J / (2*nu)
-    # beta(Pe) is the xibar vector in (2.44a)
-    # then we get artifical viscosity nubar from (2.49)
-    beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
-
-    return dot(absv(dot(u, J)), beta_pe)/2
-
-
-def node_coordinates(function):
-    """Extract mesh coordinates and interpolate them onto the relevant function space"""
-    func_space = function.function_space()
-    mesh_coords = SpatialCoordinate(func_space.mesh())
-
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]
 
 def su_nubar(u, J, Pe):
     """SU stabilisation viscosity as a function of velocity, Jacobian and grid Peclet number"""
