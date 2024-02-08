@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import partial
 
 import initial_signed_distance as isd
@@ -5,106 +6,22 @@ import initial_signed_distance as isd
 import gadopt as ga
 
 
-class Mantle(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 3200
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class Mantle(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e21
 
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
 
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class Lithosphere(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 3300
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class Lithosphere(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e23
 
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
 
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class Air(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 0
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class Air(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e19
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
 
 
 class Simulation:
@@ -140,8 +57,11 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    materials = [Mantle, Air, Lithosphere]
-    reference_material = Mantle
+    mantle = Mantle(density=3200)
+    lithosphere = Lithosphere(density=3300)
+    air = Air(density=0)
+    materials = [mantle, air, lithosphere]
+    reference_material = mantle
 
     # Physical parameters
     Ra, g = 1, 9.81

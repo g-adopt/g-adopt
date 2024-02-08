@@ -1,22 +1,14 @@
-import firedrake
 from firedrake import (
-    Constant,
-    FacetNormal,
-    SpatialCoordinate,
-    assemble,
-    conditional,
-    dot,
-    dx,
-    grad,
-    norm,
-    sqrt,
+    Constant, FacetNormal, SpatialCoordinate,
+    assemble, conditional, dot, ds, dx, grad, norm, sqrt,
 )
+from firedrake.ufl_expr import extract_unique_domain
 
 from .utility import CombinedSurfaceMeasure
 
 
 def domain_volume(mesh):
-    return assemble(Constant(1)*firedrake.dx(domain=mesh))
+    return assemble(Constant(1)*dx(domain=mesh))
 
 
 def entrainment(level_set, material_area, entrainment_height):
@@ -31,24 +23,24 @@ def entrainment(level_set, material_area, entrainment_height):
 
 
 def rms_velocity(velocity):
-    return norm(velocity) / sqrt(domain_volume(velocity.ufl_domain()))
+    return norm(velocity) / sqrt(domain_volume(extract_unique_domain(velocity)))
 
 
 class GeodynamicalDiagnostics:
 
     def __init__(self, u, p, T, bottom_id, top_id, degree=4):
-        mesh = u.ufl_domain()
+        mesh = extract_unique_domain(u)
         self.domain_volume = domain_volume(mesh)
         self.u = u
         self.p = p
         self.T = T
-        self.dx = firedrake.dx(degree=degree)
+        self.dx = dx(degree=degree)
         if T.function_space().extruded:
-            ds = CombinedSurfaceMeasure(mesh, degree)
+            self.ds = CombinedSurfaceMeasure(mesh, degree)
         else:
-            ds = firedrake.ds(mesh)
-        self.ds_t = ds(top_id)
-        self.ds_b = ds(bottom_id)
+            self.ds = ds(mesh)
+        self.ds_t = self.ds(top_id)
+        self.ds_b = self.ds(bottom_id)
         self.n = FacetNormal(mesh)
 
     def u_rms(self):

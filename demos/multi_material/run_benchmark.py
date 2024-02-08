@@ -8,6 +8,7 @@ import gadopt as ga
 
 
 def write_output(dump_counter, checkpoint_fields=None):
+    """Write diagnostics to the output file and optionally generate a checkpoint."""
     time_output.assign(time_now)
     if dimensionless:
         RaB.interpolate(RaB_ufl)
@@ -95,12 +96,13 @@ for ls, isd, params in zip(
 
 # Set up fields that depend on the material interface
 func_space_interp = fd.FunctionSpace(mesh, "CG", level_set_func_space_deg)
+
 ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
     Simulation, level_set, func_space_interp
 )
 
-viscosity_ufl = ga.diffuse_interface(
-    level_set.copy(),
+viscosity_ufl = ga.field_interface(
+    level_set,
     [material.viscosity(velocity=velocity_ufl) for material in Simulation.materials],
     method="geometric",
 )
@@ -111,8 +113,8 @@ if Simulation.name == "Trim_2023":
     int_heat_rate = int_heat_rate_ufl
     Simulation.internal_heating_rate(int_heat_rate_ufl, 0)
 else:
-    int_heat_rate_ufl = ga.diffuse_interface(
-        level_set.copy(),
+    int_heat_rate_ufl = ga.field_interface(
+        level_set,
         [material.internal_heating_rate() for material in Simulation.materials],
         method="geometric",
     )
@@ -120,6 +122,7 @@ else:
         func_space_interp, name="Internal heating rate"
     ).interpolate(int_heat_rate_ufl)
 
+# Timestep object
 dt = fd.Constant(Simulation.dt)
 
 # Set up energy and Stokes solvers
@@ -185,8 +188,10 @@ output_file = fd.File(
     f"{Simulation.name}/output.pvd".lower(), target_degree=level_set_func_space_deg
 )
 
+# Fields to include in checkpoints
 checkpoint_fields = {"Level set": level_set[0], "Temperature": temperature}
 
+# Fields used to calculate simulation diagnostics
 diagnostic_fields = {
     "level_set": level_set,
     "level_set_grad_proj": level_set_grad_proj,
@@ -198,6 +203,7 @@ diagnostic_fields = {
     "int_heat_rate": int_heat_rate,
 }
 
+# Function to be coupled with the energy solver
 if Simulation.name == "Trim_2023":
     update_forcings = partial(Simulation.internal_heating_rate, int_heat_rate_ufl)
 else:

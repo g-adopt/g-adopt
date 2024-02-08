@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Tuple
 
 import firedrake as fd
 import initial_signed_distance as isd
@@ -15,9 +15,9 @@ class Mantle(ga.Material):
 
 @dataclass
 class Lithosphere(ga.Material):
-    visc_coeff: ClassVar = 4.75e11
-    stress_exponent: ClassVar = 4
-    visc_bounds: ClassVar = (1e21, 1e25)
+    visc_coeff: ClassVar[float] = 4.75e11
+    stress_exponent: ClassVar[float] = 4.0
+    visc_bounds: ClassVar[Tuple[float, float]] = (1e21, 1e25)
 
     @classmethod
     def viscosity(cls, *args, **kwargs):

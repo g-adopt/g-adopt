@@ -1,74 +1,24 @@
+from dataclasses import dataclass
+
+import firedrake as fd
 import initial_signed_distance as isd
+import matplotlib.pyplot as plt
+import numpy as np
+from mpi4py import MPI
 
 import gadopt as ga
 
 
-class BuoyantMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 3200
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class BuoyantMaterial(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e21
 
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
 
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class DenseMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 3300
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class DenseMaterial(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e21
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
 
 
 class Simulation:
@@ -101,8 +51,10 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    materials = [BuoyantMaterial, DenseMaterial]
-    reference_material = BuoyantMaterial
+    buoyant_material = BuoyantMaterial(density=3200)
+    dense_material = DenseMaterial(density=3300)
+    materials = [buoyant_material, dense_material]
+    reference_material = buoyant_material
 
     # Physical parameters
     Ra, g = 1, 9.8
@@ -117,14 +69,59 @@ class Simulation:
     time_end = 9.886e6 * 365.25 * 8.64e4
     dump_period = 1e5 * 365.25 * 8.64e4
 
+    # Diagnostic objects
+    diag_fields = {"output_time": [], "max_depth": [], "min_depth": []}
+
     @classmethod
     def initialise_temperature(cls, temperature):
         pass
 
     @classmethod
     def diagnostics(cls, simu_time, variables):
-        pass
+        level_set = variables["level_set"][0]
+        function_space = level_set.function_space()
+
+        depth_per_core = fd.Function(function_space).interpolate(
+            fd.conditional(
+                level_set >= 0.5,
+                cls.domain_dimensions[1] - function_space.mesh().coordinates[1],
+                np.nan,
+            )
+        )
+        max_depth_per_core = np.nanmax(depth_per_core.dat.data_ro_with_halos, initial=0)
+        min_depth_per_core = np.nanmin(
+            depth_per_core.dat.data_ro_with_halos, initial=cls.domain_dimensions[1]
+        )
+        max_depth = level_set.comm.allreduce(max_depth_per_core, MPI.MAX)
+        min_depth = level_set.comm.allreduce(min_depth_per_core, MPI.MIN)
+
+        cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e6)
+        cls.diag_fields["max_depth"].append(max_depth / 1e3)
+        cls.diag_fields["min_depth"].append(min_depth / 1e3)
 
     @classmethod
     def save_and_plot(cls):
-        pass
+        if MPI.COMM_WORLD.rank == 0:
+            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+
+            fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
+
+            ax.set_xlabel("Time (Myr)")
+            ax.set_ylabel("Depth (km)")
+
+            ax.plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["max_depth"],
+                label="Deepest node within the block",
+            )
+            ax.plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["min_depth"],
+                label="Shallowest node within the block",
+            )
+
+            ax.legend()
+
+            fig.savefig(
+                f"{cls.name}/block_depth.pdf".lower(), dpi=300, bbox_inches="tight"
+            )

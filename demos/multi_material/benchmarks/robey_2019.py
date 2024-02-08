@@ -6,74 +6,6 @@ import initial_signed_distance as isd
 import gadopt as ga
 
 
-class TopMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return 0
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return None
-
-    @classmethod
-    def viscosity(cls, velocity):
-        return 1
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class BottomMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return 0.2
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return None
-
-    @classmethod
-    def viscosity(cls, velocity):
-        return 1
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
 class Simulation:
     name = "Robey_2019"
 
@@ -105,8 +37,10 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    materials = [BottomMaterial, TopMaterial]
-    reference_material = TopMaterial
+    top_material = ga.Material(B=0)
+    bottom_material = ga.Material(B=0.2)
+    materials = [bottom_material, top_material]
+    reference_material = None
 
     # Physical parameters
     Ra, g = 1e5, 1

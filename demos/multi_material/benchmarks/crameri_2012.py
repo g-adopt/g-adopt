@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import partial
 
 import firedrake as fd
@@ -9,106 +10,22 @@ from mpi4py import MPI
 import gadopt as ga
 
 
-class Mantle(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 3300
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class Mantle(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e21
 
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
 
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class Lithosphere(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 3300
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class Lithosphere(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e23
 
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
 
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class Air(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return None
-
-    @classmethod
-    def density(cls):
-        return 0
-
-    @classmethod
-    def viscosity(cls, velocity):
+@dataclass
+class Air(ga.Material):
+    def viscosity(self, *args, **kwargs):
         return 1e18
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
 
 
 class Simulation:
@@ -148,8 +65,11 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    materials = [Mantle, Lithosphere, Air]
-    reference_material = Mantle
+    mantle = Mantle(density=3300)
+    lithosphere = Lithosphere(density=3300)
+    air = Air(density=0)
+    materials = [mantle, lithosphere, air]
+    reference_material = mantle
 
     # Physical parameters
     Ra, g = 1, 10
@@ -181,25 +101,26 @@ class Simulation:
         max_topography_analytical = (
             cls.interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
         )
-        max_topo_per_core = (
-            fd.Function(variables["level_set"][1].function_space())
+
+        level_set = variables["level_set"][1]
+        function_space = level_set.function_space()
+        max_topo_lower_bound_per_core = (
+            fd.Function(function_space)
             .interpolate(
                 fd.conditional(
-                    variables["level_set"][1] <= 0.5,
-                    variables["level_set"][1].function_space().mesh().coordinates[1],
+                    level_set <= 0.5,
+                    function_space.mesh().coordinates[1] - cls.material_interface_y,
                     0,
                 )
             )
             .dat.data_ro_with_halos.max(initial=0)
         )
-        max_topography = variables["level_set"][1].comm.allreduce(
-            max_topo_per_core, MPI.MAX
+        max_topo_lower_bound = level_set.comm.allreduce(
+            max_topo_lower_bound_per_core, MPI.MAX
         )
 
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
-        cls.diag_fields["max_topography"].append(
-            (max_topography - cls.material_interface_y) / 1e3
-        )
+        cls.diag_fields["max_topography"].append(max_topo_lower_bound / 1e3)
         cls.diag_fields["max_topography_analytical"].append(max_topography_analytical)
 
     @classmethod
@@ -209,8 +130,8 @@ class Simulation:
 
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
 
-            ax.set_xlim(0, 100)
-            ax.set_ylim(0, 7)
+            # ax.set_xlim(0, 100)
+            # ax.set_ylim(-1, 7)
 
             ax.set_xlabel("Time (kyr)")
             ax.set_ylabel("Maximum topography (km)")

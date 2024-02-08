@@ -41,7 +41,7 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    top_material = ga.Material(B=0.0)
+    top_material = ga.Material(B=0)
     bottom_material = ga.Material(B=0.5)
     materials = [bottom_material, top_material]
     reference_material = None

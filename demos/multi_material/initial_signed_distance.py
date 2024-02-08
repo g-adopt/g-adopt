@@ -5,15 +5,18 @@ import gadopt as ga
 
 
 def straight_line(x, slope, intercept):
+    """Straight line equation"""
     return slope * x + intercept
 
 
 def cosine_curve(x, amplitude, wavelength, vertical_shift):
-    """Cosine curve with an amplitude and a vertical shift"""
+    """Cosine curve equation with an amplitude and a vertical shift"""
     return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
 
 
 def isd_simple_curve(domain_dim_x, curve, parameters, level_set):
+    """Initialise signed-distance function from a simple curve described by a
+    mathematical function"""
     interface_x = np.linspace(0, domain_dim_x, 1000)
     interface_y = curve(interface_x, *parameters)
     line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
@@ -31,6 +34,7 @@ def isd_simple_curve(domain_dim_x, curve, parameters, level_set):
 
 
 def isd_rectangle(parameters, level_set):
+    """Initialise signed-distance function from a rectangle"""
     ref_vertex_x, ref_vertex_y, edge_length = parameters
 
     rectangle = sl.Polygon(
@@ -59,6 +63,7 @@ def isd_rectangle(parameters, level_set):
 
 
 def isd_schmalholz(parameters, level_set):
+    """Initialise signed-distance function from the model setup of Schmalholz (2011)"""
     rectangle_lith = sl.Polygon(
         [(0, 6.6e5), (1e6, 6.6e5), (1e6, 5.8e5), (0, 5.8e5), (0, 6.6e5)]
     )
@@ -94,6 +99,8 @@ def isd_schmalholz(parameters, level_set):
 
 
 def isd_schmeling(parameters, level_set):
+    """Initialise signed-distance function from the model setup of
+    Schmeling et al. (2008)"""
     rectangle_lith = sl.Polygon(
         [(1e6, 7e5), (3e6, 7e5), (3e6, 6e5), (1e6, 6e5), (1e6, 7e5)]
     )

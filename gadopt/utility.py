@@ -4,12 +4,14 @@ A module with utitity functions for gadopt
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import Interpolator, op2, interpolate, VectorElement
+from firedrake import op2, VectorElement
 import ufl
 import finat.ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
+from firedrake.ufl_expr import extract_unique_domain
+from firedrake.__future__ import Interpolator
 from mpi4py import MPI
 import numpy as np
 import logging
@@ -60,11 +62,10 @@ class TimestepAdaptor:
         self.maximum_timestep = maximum_timestep
         self.mesh = V.mesh()
 
-        self.ref_vel = Function(V, name="Reference_Velocity")
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), self.ref_vel, access=op2.MAX)
+        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -72,9 +73,8 @@ class TimestepAdaptor:
             max_ts = min(max_ts, self.maximum_timestep)
 
         # need to reset ref_vel to avoid taking max with previous values
-        self.ref_vel.assign(0)
-        self.ref_vel_interpolator.interpolate()
-        local_maxrefvel = self.ref_vel.dat.data.max()
+        ref_vel = assemble(self.ref_vel_interpolator.interpolate())
+        local_maxrefvel = ref_vel.dat.data.max()
         max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
         # NOTE; we're incorparating max_ts here before dividing by max. ref. vel. as it may be zero
         ts = self.target_cfl / max(max_refvel, self.target_cfl / max_ts)
@@ -100,7 +100,7 @@ def vertical_component(u, cartesian):
     if cartesian:
         return u[u.ufl_shape[0]-1]
     else:
-        n = upward_normal(u.ufl_domain(), cartesian)
+        n = upward_normal(extract_unique_domain(u), cartesian)
         return dot(n, u)
 
 
@@ -341,7 +341,7 @@ class LayerAveraging:
             except AttributeError:
                 raise ValueError("For non-extruded mesh need to specify depths array r1d.")
             CG1 = FunctionSpace(mesh, "CG", 1)
-            r_func = interpolate(self.r, CG1)
+            r_func = Function(CG1).interpolate(self.r)
             self.r1d = r_func.dat.data[:nlayers]
 
         self.mass = np.zeros((2, len(self.r1d)))
@@ -456,7 +456,7 @@ def absv(u):
 
 
 def su_nubar(u, J, Pe):
-    """SU stabilisation viscosity as a function of velocity, Jaciobian and grid Peclet number"""
+    """SU stabilisation viscosity as a function of velocity, Jacobian and grid Peclet number"""
     # SU(PG) ala Donea & Huerta:
     # Columns of Jacobian J are the vectors that span the quad/hex
     # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
@@ -468,7 +468,7 @@ def su_nubar(u, J, Pe):
 
     return dot(absv(dot(u, J)), beta_pe)/2
 
-  
+
 def node_coordinates(function):
     """Extract mesh coordinates and interpolate them onto the relevant function space"""
     func_space = function.function_space()

@@ -9,74 +9,6 @@ from mpi4py import MPI
 import gadopt as ga
 
 
-class ReferenceMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return 0
-
-    @classmethod
-    def density(cls):
-        return None
-
-    @classmethod
-    def viscosity(cls, velocity):
-        return 1
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class DenseMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return 4.5e5
-
-    @classmethod
-    def density(cls):
-        return None
-
-    @classmethod
-    def viscosity(cls, velocity):
-        return 1
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
 class Simulation:
     name = "van_Keken_1997_thermochemical"
 
@@ -108,8 +40,10 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    materials = [DenseMaterial, ReferenceMaterial]
-    reference_material = ReferenceMaterial
+    reference_material = ga.Material(RaB=0)
+    dense_material = ga.Material(RaB=4.5e5)
+    materials = [dense_material, reference_material]
+    reference_material = None
 
     # Physical parameters
     Ra, g = 3e5, 1

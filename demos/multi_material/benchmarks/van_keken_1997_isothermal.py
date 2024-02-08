@@ -8,74 +8,6 @@ from mpi4py import MPI
 import gadopt as ga
 
 
-class DenseMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return 0
-
-    @classmethod
-    def density(cls):
-        return None
-
-    @classmethod
-    def viscosity(cls, velocity):
-        return 1
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
-class BuoyantMaterial(ga.AbstractMaterial):
-    @classmethod
-    def B(cls):
-        return None
-
-    @classmethod
-    def RaB(cls):
-        return -1
-
-    @classmethod
-    def density(cls):
-        return None
-
-    @classmethod
-    def viscosity(cls, velocity):
-        return 1
-
-    @classmethod
-    def thermal_expansion(cls):
-        return 1
-
-    @classmethod
-    def thermal_conductivity(cls):
-        return 1
-
-    @classmethod
-    def specific_heat_capacity(cls):
-        return 1
-
-    @classmethod
-    def internal_heating_rate(cls):
-        return 0
-
-
 class Simulation:
     name = "van_Keken_1997_isothermal_isoviscous"
 
@@ -109,8 +41,10 @@ class Simulation:
     # first pair of arguments (unpacking from the end) in the above two lists.
     # Consequently, the first material in the below list occupies the negative side of
     # the level set resulting from the last pair of arguments above.
-    materials = [BuoyantMaterial, DenseMaterial]
-    reference_material = DenseMaterial
+    dense_material = ga.Material(RaB=0)
+    buoyant_material = ga.Material(RaB=-1)
+    materials = [buoyant_material, dense_material]
+    reference_material = None
 
     # Physical parameters
     Ra, g = 0, 1
