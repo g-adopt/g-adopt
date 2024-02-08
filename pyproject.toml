@@ -16,5 +16,9 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 
+[project.optional-dependencies]
+testing = ["assess", "pandas"]
+optimisation = ["pyroltrilinos"]
+
 [tool.setuptools]
 packages = ["gadopt"]

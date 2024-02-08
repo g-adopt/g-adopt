@@ -1,6 +1,15 @@
 from firedrake import (
-    Constant, FacetNormal, SpatialCoordinate,
-    assemble, conditional, dot, ds, dx, grad, norm, sqrt,
+    Constant,
+    FacetNormal,
+    SpatialCoordinate,
+    assemble,
+    conditional,
+    dot,
+    ds,
+    dx,
+    grad,
+    norm,
+    sqrt,
 )
 from firedrake.ufl_expr import extract_unique_domain
 
@@ -30,6 +39,7 @@ class GeodynamicalDiagnostics:
 
     def __init__(self, u, p, T, bottom_id, top_id, degree=4):
         mesh = extract_unique_domain(u)
+        mesh = extract_unique_domain(u)
         self.domain_volume = domain_volume(mesh)
         self.u = u
         self.p = p
@@ -48,6 +58,15 @@ class GeodynamicalDiagnostics:
 
     def u_rms_top(self):
         return sqrt(assemble(dot(self.u, self.u) * self.ds_t))
+
+    def Nu_top(self):
+        return -1 * assemble(dot(grad(self.T), self.n) * self.ds_t) * (1./assemble(Constant(1) * self.ds_t))
+
+    def Nu_bottom(self):
+        return assemble(dot(grad(self.T), self.n) * self.ds_b) * (1./assemble(Constant(1) * self.ds_b))
+
+    def T_avg(self):
+        return assemble(self.T * self.dx) / self.domain_volume
 
     def Nu_top(self):
         return -1 * assemble(dot(grad(self.T), self.n) * self.ds_t) * (1./assemble(Constant(1) * self.ds_t))
