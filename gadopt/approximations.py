@@ -1,5 +1,5 @@
 import abc
-from firedrake import sym, grad, inner, div, Identity
+from firedrake import sym, grad, inner, div, Identity, ufl
 from .utility import ensure_constant, vertical_component
 
 
