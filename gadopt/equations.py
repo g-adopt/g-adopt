@@ -96,7 +96,7 @@ class BaseEquation:
         test: firedrake.ufl_expr.Argument,
         trial: firedrake.ufl_expr.Argument | firedrake.Function,
         trial_lagged: Optional[firedrake.ufl_expr.Argument | firedrake.Function] = None,
-        fields = None,
+        fields: Optional[dict[str, firedrake.Constant | firedrake.Function]] = None,
         bcs: Optional[dict[int, dict[str, int | float]]] = None,
     ) -> firedrake.ufl.core.expr.Expr:
         """UFL expression for the residual term expressed as a sum of all terms.
@@ -178,5 +178,16 @@ class BaseTerm(ABC):
 
     @abstractmethod
     def residual(self, test, trial, trial_lagged, fields):
-        """UFL expression for the residual associated with the equation's term."""
+        """UFL expression for the residual associated with the equation's term.
+
+        Args:
+          test:
+            Firedrake test function.
+          trial:
+            Firedrake trial function.
+          trial_lagged:
+            Firedrake trial function from the previous time step.
+          fields:
+            Dictionary of physical fields from the simulation's state.
+        """
         pass

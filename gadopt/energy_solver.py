@@ -49,7 +49,8 @@ direct_energy_solver_parameters = {
 class EnergySolver:
     """Time-stepper solver for the energy equation."""
 
-    def __init__(self,
+    def __init__(
+        self,
         T: Function,
         u: Function,
         approximation: BaseApproximation,
