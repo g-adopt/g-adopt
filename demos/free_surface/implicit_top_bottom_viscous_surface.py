@@ -98,14 +98,17 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
         abs_distance = np.square(distance_vector[:, 0])+np.square(distance_vector[:, 1])
         idx = abs_distance.argmin()
         return idx, X.dat.data[idx]
-
-    stationary_point = [0.125, 0.5 * D / L0]
-    node, coords = find_nearest(stationary_point, Z.sub(0).sub(1))
-    print(f"Nearest point is {coords}, at id {node}")
+    
+#    for i in range(80):
+#        stationary_point = [0.125, i*(1/80)]
+#        node, coords = find_nearest(stationary_point, Z.sub(0).sub(1))
+#        print(f"Nearest point is {coords}, at id {node}")
 #   pin_bc = SpecifiedNodeBC(Z.sub(0), as_vector((0,0)), node)
-    pin_bc = SpecifiedNodeBC(Z.sub(0).sub(1), 0, node)
-    stokes_solver.strong_bcs.append(pin_bc)
-
+#        pin_bc = SpecifiedNodeBC(Z.sub(0).sub(1), 0, node)
+#        stokes_solver.strong_bcs.append(pin_bc)
+    
+    alpha = 0.1 # * (dt_factor / 2)
+    stokes_solver.F += alpha * stokes_solver.test[0][1] * (stokes_solver.stokes_vars[0][1] - 0)*dx
 #   stationary_point = [0.375, 0.5 * D / L0]
 #    node, coords = find_nearest(stationary_point, V.sub(1))
 #    print(f"Nearest point is {coords}, at id {node}")
@@ -129,7 +132,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
         # Write output files in VTK format:
         dump_period = 1
         log("dump_period ", dump_period)
-        filename = "implicit_viscous_freesurface_topbot"
+        filename = "implicit_viscous_freesurface_topbot_innerfs1_1e-10"
         output_file = File(f"{filename}_D{float(D/L0)}_mu{float(mu)}_nx{nx}_dt{float(dt/tau0)}tau.pvd")
         output_file.write(u_, eta_, p_, eta_analytical, zeta_, zeta_analytical)
 
@@ -140,6 +143,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
 
         # Solve Stokes sytem:
         stokes_solver.solve()
+        
         time.assign(time + dt)
         eta_analytical.interpolate(exp(-time/tau0)*F0 * cos(kk * X[0]))
         zeta_analytical.interpolate(exp(-time/tau0_zeta)*G0 * cos(kk * X[0]))
@@ -169,8 +173,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
 
 if __name__ == "__main__":
     # default case run with nx = 80 for four dt factors
-    # dt_factors = 2 / (2**np.arange(4))
-    dt_factors = [1]
+    dt_factors = 2 / (2**np.arange(5))
     # errors = np.array([implicit_viscous_two_freesurface_model(80, dtf) for dtf in dt_factors])
     # np.savetxt("errors-implicit-top-free-surface-coupling.dat", errors[:, 0])
     # np.savetxt("errors-implicit-bottom-free-surface-coupling.dat", errors[:, 1])
