@@ -21,3 +21,57 @@ G-ADOPT is available on PyPI as `gadopt`, and requires a working
 [Firedrake](https://www.firedrakeproject.org/) installation. To bring
 in the optional nonlinear optimisation dependencies, install the
 `gadopt[optimisation]` variant.
+
+Citing
+------
+
+If you use this software in your work, please cite the software using the following metadata and the two articles below:
+<details>
+<summary> APA references</summary>
+   
+    Gibson, A., Davies, R., Kramer, S., Ghelichkhan, S., Turner, R., Duvernay, T., & Scott, W. (2024). G-ADOPT (Version v2.2.0) [Computer software]. https://doi.org/10.5281/zenodo.5644391 
+    
+    Davies, D. R., Kramer, S. C., Ghelichkhan, S., & Gibson, A. (2022). Towards automatic finite-element methods for geodynamics via Firedrake. Geoscientific Model Development, 15(13), 5127–5166. doi:10.5194/gmd-15-5127-2022
+    
+    Ghelichkhan, S., Gibson, A., Davies, D. R., Kramer, S. C., & Ham, D. A. (2023). Automatic adjoint-based inversion schemes for geodynamics: Reconstructing the evolution of Earth’s mantle in space and time. EGUsphere, 2023, 1–46. doi:10.5194/egusphere-2023-2683 
+</details>
+
+<details>
+<summary> Bibtex references</summary>
+    
+    @software{Gibson_G-ADOPT_2024,
+    author = {Gibson, Angus and Davies, Rhodri and Kramer, Stephan and Ghelichkhan, Sia and Turner, Ruby and Duvernay, Thomas and Scott, Will},
+    doi = {10.5281/zenodo.5644391},
+    month = feb,
+    title = {{G-ADOPT}},
+    url = {https://github.com/g-adopt/g-adopt},
+    version = {v2.2.0},
+    year = {2024}
+    }
+    
+    @Article{Davies_Towards_2022,
+    AUTHOR = {Davies, D. R. and Kramer, S. C. and Ghelichkhan, S. and Gibson, A.},
+    TITLE = {Towards automatic finite-element methods for geodynamics via Firedrake},
+    JOURNAL = {Geoscientific Model Development},
+    VOLUME = {15},
+    YEAR = {2022},
+    NUMBER = {13},
+    PAGES = {5127--5166},
+    URL = {https://gmd.copernicus.org/articles/15/5127/2022/},
+    DOI = {10.5194/gmd-15-5127-2022}
+    }
+    
+    @Article{Ghelichkhan_Automatic_2024,
+    AUTHOR = {Ghelichkhan, S. and Gibson, A. and Davies, D. R. and Kramer, S. C. and Ham, D. A.},
+    TITLE = {Automatic adjoint-based inversion schemes for geodynamics: Reconstructing the evolution of Earth’s mantle in space and time},
+    JOURNAL = {EGUsphere},
+    VOLUME = {2023},
+    YEAR = {2023},
+    PAGES = {1--46},
+    URL = {https://egusphere.copernicus.org/preprints/2023/egusphere-2023-2683/},
+    DOI = {10.5194/egusphere-2023-2683}
+    }
+</details>
+
+
+Please also cite Firedrake using the instructions [here](https://www.firedrakeproject.org/citing.html).
