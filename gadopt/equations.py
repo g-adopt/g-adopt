@@ -44,10 +44,10 @@ class BaseEquation:
         self.mesh = trial_space.mesh()
 
         p = trial_space.ufl_element().degree()
-        if isinstance(p, int): # isotropic element
+        if isinstance(p, int):  # isotropic element
             if quad_degree is None:
                 quad_degree = 2*p + 1
-        else: # tensorproduct element
+        else:  # tensorproduct element
             p_h, p_v = p
             if quad_degree is None:
                 quad_degree = 2*max(p_h, p_v) + 1
@@ -136,7 +136,15 @@ class BaseTerm(ABC):
     The implemented expression describes the term's contribution to the residual in the
     finite element discretisation.
     """
-    def __init__(self, test_space, trial_space, dx, ds, dS, **kwargs):
+    def __init__(
+        self,
+        test_space: firedrake.functionspaceimpl.WithGeometry,
+        trial_space: firedrake.functionspaceimpl.WithGeometry,
+        dx: firedrake.Measure,
+        ds: firedrake.Measure,
+        dS: firedrake.Measure,
+        **kwargs,
+    ):
         """Initialises the equation instance given function spaces.
 
         Args:

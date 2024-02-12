@@ -1,26 +1,45 @@
-from .equations import BaseTerm, BaseEquation
-from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
-from firedrake import avg, sym, Identity, jump
-from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
-from firedrake import FacetArea, CellVolume
-r"""
-This module contains the classes for the momentum equation and its terms.
+r"""Contains derived terms and associated equations for the Stokes system.
 
-NOTE: for all terms, the residual() method returns the residual as it would be on the RHS of the equation, i.e.:
+All terms are considered as if they were on the right-hand side of the equation, leading
+to the following UFL expression returned by the `residual` method:
 
   dq/dt = \sum term.residual()
 
-This sign-convention is for compatibility with Thetis' timeintegrators. In general, however we like to think about
-the terms as they are on the LHS. Therefore in the residual methods below we assemble in F as it would be on the LHS:
+This sign convention ensures compatibility with Thetis's time integrators. In general,
+however, we like to think about the terms as they are on the left-hand side. Therefore,
+in the residual methods below, we first sum the terms in the variable `F` as if they
+were on the left-hand side, i.e.
 
-  dq/dt + F(q) = 0
+  dq/dt + F(q) = 0,
 
-and at the very end "return -F".
+and then return `-F`.
 """
+from firedrake import (
+    CellVolume,
+    FacetArea,
+    Identity,
+    avg,
+    div,
+    dot,
+    grad,
+    inner,
+    jump,
+    nabla_grad,
+    outer,
+    sym,
+    transpose,
+)
+
+from .equations import BaseEquation, BaseTerm
+from .utility import (
+    cell_edge_integral_ratio,
+    is_continuous,
+    normal_is_continuous,
+    tensor_jump,
+)
 
 
 class ViscosityTerm(BaseTerm):
-
     r"""
     Viscosity term :math:`-\nabla \cdot (\mu \nabla u)`
 
