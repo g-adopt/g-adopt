@@ -1,71 +1,81 @@
 import abc
-from firedrake import sym, grad, inner, div, Identity, ufl
+
+from firedrake import Function, Identity, div, grad, inner, sym, ufl
+
 from .utility import ensure_constant, vertical_component
+
+__all__ = [
+    "BoussinesqApproximation",
+    "ExtendedBoussinesqApproximation",
+    "TruncatedAnelasticLiquidApproximation",
+    "AnelasticLiquidApproximation"
+]
 
 
 class BaseApproximation(abc.ABC):
-    """
-    Base class to provide expressions in (Navier?)-Stokes + energy equations
+    """Base class to provide expressions for the coupled Stokes + Energy system.
 
-    Basic assumption is that we are solving (to be extended when needed)
+    The basic assumption is that we are solving (to be extended when needed)
 
     > div(dev_stress) + grad p + buoyancy(T, p) * khat = 0
 
     > div(rho_continuity * u) = 0
 
-    > rhocp DT/Dt + linearized_energy_sink(u) * T = div(kappa*grad(Tbar + T)) + energy_source(u)
+    > rhocp DT/Dt + linearized_energy_sink(u) * T
+    > = div(kappa * grad(Tbar + T)) + energy_source(u)
 
-    where the following are provided by Approximation methods:
+    where the following terms are provided by Approximation methods:
 
-    - linearized_energy_sink(u) = 0 (BA/EBA) or Di * rhobar * alphabar * w (ALA)
+    - linearized_energy_sink(u) = 0 (BA), Di * rhobar * alphabar * g * w (EBA),
+      or Di * rhobar * alphabar * w (TALA/ALA)
     - kappa() is diffusivity or conductivity depending on rhocp()
     - Tbar (property) is 0 or reference temperature profile (ALA)
-    - compressible (property) False or True
-        - if compressible then dev_stress=mu*[sym(grad(u)-2/3 div(u)]
-        - if not compressible then dev_stress=mu*sym(grad(u)) and
+    - dev_stress depends on the compressible property (False or True):
+        - if compressible then dev_stress = mu * [sym(grad(u) - 2/3 div(u)]
+        - if not compressible then dev_stress = mu * sym(grad(u)) and
           rho_continuity is assumed to be 1
     """
 
     @property
     @abc.abstractmethod
     def compressible(self) -> bool:
-        "Whether approximation is compressible (True/False)"
+        """Whether equations are given in compressible form (True/False)."""
         pass
 
     @abc.abstractmethod
     def buoyancy(self, p, T) -> ufl.core.expr.Expr:
-        "UFL expression for buoyancy (momentum source in gravity direction)"
+        """UFL expression for buoyancy (momentum source term in gravity direction)."""
         pass
 
     @abc.abstractmethod
-    def rho_continuity(self):
-        "UFL expression for density in mass continuity equation (=1 for incompressible"
+    def rho_continuity(self) -> ufl.core.expr.Expr:
+        """UFL expression for density in the mass continuity equation."""
         pass
 
     @abc.abstractmethod
-    def rhocp(self):
-        "UFL expression expression for coefficient in front of DT/dt in energy eequation"
+    def rhocp(self) -> ufl.core.expr.Expr:
+        """UFL expression for the volumetric heat capacity in the energy equation."""
         pass
 
     @abc.abstractmethod
-    def kappa(self):
-        "UFL expression for diffusivity/conductivity"
+    def kappa(self) -> ufl.core.expr.Expr:
+        """UFL expression for thermal diffusivity."""
         pass
 
     @property
     @abc.abstractmethod
-    def Tbar(self):
-        "Reference temperature profile"
+    def Tbar(self) -> Function:
+        """Firedrake function for the reference temperature profile."""
         pass
 
     @abc.abstractmethod
-    def linearized_energy_sink(self, u):
-        "UFL expression for (temperature dependent) sink terms in energy equation."
+    def linearized_energy_sink(self, u) -> ufl.core.expr.Expr:
+        """UFL expression for temperature-related sink terms in the energy equation."""
         pass
 
     @abc.abstractmethod
-    def energy_source(self, u):
-        "UFL expression for any other terms (not dependent on T or u) in energy equation"
+    def energy_source(self, u) -> ufl.core.expr.Expr:
+        """UFL expression for additional independent terms in the energy equation."""
         pass
 
 
@@ -95,7 +105,7 @@ class BoussinesqApproximation(BaseApproximation):
 
     def __init__(self, Ra, kappa=1, g=1, rho=1, alpha=1):
         self.Ra = ensure_constant(Ra)
-        self._kappa = ensure_constant(kappa)
+        self.thermal_diffusivity = ensure_constant(kappa)
         self.g = ensure_constant(g)
         self.rho = ensure_constant(rho)
         self.alpha = ensure_constant(alpha)
@@ -110,7 +120,7 @@ class BoussinesqApproximation(BaseApproximation):
         return 1
 
     def kappa(self):
-        return self._kappa
+        return self.thermal_diffusivity
 
     Tbar = 0
 
