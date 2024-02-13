@@ -9,7 +9,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
     # Set up geometry:
     D = 3e6  # Depth of domain in m
     lam_dimensional = D/2  # wavelength of load in m
-    L = lam_dimensional  # Length of the domain in m
+    L = D  # Length of the domain in m
     L0 = D  # characteristic length scale for scaling the equations
     lam = lam_dimensional/L0  # dimensionless lambda
 
@@ -19,7 +19,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-    W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+    W = FunctionSpace(mesh, "CG", 1)  # Pressure and Free surface function space (scalar)
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W, W, W])  # Mixed function space.
 
@@ -81,41 +81,12 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
 
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=True, free_surface_dt=dt, iterative_2d=iterative_2d)
 
-    class SpecifiedNodeBC(DirichletBC):
-        def __init__(self, V, value, node):
-            sub_domain = 0  # I think sub_domain is not actually used in the __init__
-            super().__init__(V, value, sub_domain)
-            self.nodes = np.array([node])
-
-    def find_nearest(point, V):
-        m = V.mesh()
-        # Now make the VectorFunctionSpace corresponding to V.
-        W = VectorFunctionSpace(m, V.ufl_element())
-
-        # Next, interpolate the coordinates onto the nodes of W.
-        X = interpolate(m.coordinates, W)
-        distance_vector = X.dat.data - point
-        abs_distance = np.square(distance_vector[:, 0])+np.square(distance_vector[:, 1])
-        idx = abs_distance.argmin()
-        return idx, X.dat.data[idx]
-    
-#    for i in range(80):
-#        stationary_point = [0.125, i*(1/80)]
-#        node, coords = find_nearest(stationary_point, Z.sub(0).sub(1))
-#        print(f"Nearest point is {coords}, at id {node}")
-#   pin_bc = SpecifiedNodeBC(Z.sub(0), as_vector((0,0)), node)
-#        pin_bc = SpecifiedNodeBC(Z.sub(0).sub(1), 0, node)
-#        stokes_solver.strong_bcs.append(pin_bc)
-    
-    alpha = 0.1 # * (dt_factor / 2)
-    stokes_solver.F += alpha * stokes_solver.test[0][1] * (stokes_solver.stokes_vars[0][1] - 0)*dx
-#   stationary_point = [0.375, 0.5 * D / L0]
-#    node, coords = find_nearest(stationary_point, V.sub(1))
-#    print(f"Nearest point is {coords}, at id {node}")
-#    pin_bc2 = SpecifiedNodeBC(Z.sub(0), as_vector((0,0)), node)
-#    pin_bc2 = SpecifiedNodeBC(Z.sub(0).sub(1), 0, node)
-#    print("pin bc value is ", pin_bc.function_arg)
-#    stokes_solver.strong_bcs.append(pin_bc2)
+    if iterative_2d:
+        # Schur complement splitting leads to a nullspace in the velocity block.
+        # Adding a small absorption term bringing the vertical velocity to zero removes this nullspace
+        # and does not effect convergence provided that this term is small compared with the overall numerical error.
+        alpha = dt_factor / 2
+        stokes_solver.F += alpha * stokes_solver.test[0][1] * (stokes_solver.stokes_vars[0][1] - 0)*dx
 
     if do_write:
         eta_midpoint = []
@@ -143,7 +114,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
 
         # Solve Stokes sytem:
         stokes_solver.solve()
-        
+
         time.assign(time + dt)
         eta_analytical.interpolate(exp(-time/tau0)*F0 * cos(kk * X[0]))
         zeta_analytical.interpolate(exp(-time/tau0_zeta)*G0 * cos(kk * X[0]))
@@ -173,10 +144,10 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
 
 if __name__ == "__main__":
     # default case run with nx = 80 for four dt factors
-    dt_factors = 2 / (2**np.arange(5))
-    # errors = np.array([implicit_viscous_two_freesurface_model(80, dtf) for dtf in dt_factors])
-    # np.savetxt("errors-implicit-top-free-surface-coupling.dat", errors[:, 0])
-    # np.savetxt("errors-implicit-bottom-free-surface-coupling.dat", errors[:, 1])
+    dt_factors = 2 / (2**np.arange(4))
+    errors = np.array([implicit_viscous_two_freesurface_model(80, dtf) for dtf in dt_factors])
+    np.savetxt("errors-implicit-top-free-surface-coupling.dat", errors[:, 0])
+    np.savetxt("errors-implicit-bottom-free-surface-coupling.dat", errors[:, 1])
 
     errors_iterative = np.array([implicit_viscous_two_freesurface_model(80, dtf, iterative_2d=True) for dtf in dt_factors])
     np.savetxt("errors-implicit-iterative-top-free-surface-coupling.dat", errors_iterative[:, 0])
