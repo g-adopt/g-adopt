@@ -6,6 +6,7 @@ from typing import Optional
 import firedrake
 import numpy as np
 
+from .equation import BaseEquation
 from .utility import ensure_constant
 
 
@@ -36,22 +37,36 @@ class TimeIntegratorBase(ABC):
 
 
 class TimeIntegrator(TimeIntegratorBase):
-    """
-    Base class for all time integrator objects that march a single equation
-    """
-    def __init__(self, equation, solution, fields, dt, solution_old=None,
-                 solver_parameters=None, strong_bcs=None):
-        """
-        :arg equation: the equation to solve
-        :type equation: :class:`BaseEquation` object
-        :arg solution: :class:`Function` where solution will be stored
-        :arg fields: Dictionary of fields that are passed to the equation
-        :type fields: dict of :class:`Function` or :class:`Constant` objects
-        :arg float dt: time step in seconds
-        :kwarg solution_old: :class:`Function` where solution at previous timestep
-                             is stored. New one will be created if not provided.
-        :kwarg dict solver_parameters: PETSc solver options
-        :kwarg list strong_bcs: list of DirichletsBCs
+    """Time integrator object that marches a single equation."""
+
+    def __init__(
+        self,
+        equation: BaseEquation,
+        solution: firedrake.Function,
+        fields: dict[str, firedrake.Function | firedrake.Constant],
+        dt: float,
+        solution_old: Optional[firedrake.Function] = None,
+        solver_parameters: Optional[dict[str, str | float]] = None,
+        strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
+    ):
+        """Initialises the time integrator instance.
+
+        Args:
+          equation:
+            G-ADOPT equation to integrate.
+          solution:
+            Firedrake function representing the equation's solution.
+          fields:
+            Dictionary of Firedrake fields passed to the equation.
+          dt:
+            Float representing the integration time step.
+          solution_old:
+            Firedrake function representing the equation's solution at the previous
+            timestep.
+          solver_parameters:
+            Dictionary of solver parameters provided to PETSc.
+          strong_bcs:
+            List of Firedrake Dirichlet boundary conditions.
         """
         super(TimeIntegrator, self).__init__()
 

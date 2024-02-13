@@ -5,6 +5,8 @@ import firedrake
 
 from .utility import CombinedSurfaceMeasure
 
+__all__ = ["BaseEquation", "BaseTerm"]
+
 
 class BaseEquation:
     """Produces the UFL for the registered terms constituting an equation.
@@ -22,13 +24,13 @@ class BaseEquation:
         quad_degree: Optional[int] = None,
         **kwargs
     ):
-        """Initialises the equation instance given function spaces.
+        """Initialises the equation instance given test and trial function spaces.
 
         Test and trial spaces are only used to determine the employed discretisation
-        (i.e. UFL elements); test and trial functions are provided separately in
-        residual.
+        (i.e. UFL elements); test and trial functions are provided separately in the
+        residual method.
 
-        Keyword arguments are passed on to each term of the equation.
+        Keyword arguments provided here are passed on to each collected equation term.
 
         Args:
           test_space:
@@ -78,7 +80,7 @@ class BaseEquation:
         test: firedrake.ufl_expr.Argument,
         trial: firedrake.ufl_expr.Argument | firedrake.Function,
     ) -> firedrake.ufl.core.expr.Expr:
-        """UFL expression for the typical mass term used in the time discretisation.
+        """Typical mass term used in time discretisations.
 
         Args:
           test:
@@ -99,7 +101,9 @@ class BaseEquation:
         fields: Optional[dict[str, firedrake.Constant | firedrake.Function]] = None,
         bcs: Optional[dict[int, dict[str, int | float]]] = None,
     ) -> firedrake.ufl.core.expr.Expr:
-        """UFL expression for the residual term expressed as a sum of all terms.
+        """Finite element residual.
+
+        The final residual is calculated as a sum of all individual term residuals.
 
         Args:
           test:
@@ -182,7 +186,7 @@ class BaseTerm(ABC):
         fields: Optional[dict[str, firedrake.Constant | firedrake.Function]] = None,
         bcs: Optional[dict[int, dict[str, int | float]]] = None,
     ) -> firedrake.ufl.core.expr.Expr:
-        """UFL expression for the residual associated with the equation's term.
+        """Residual associated with the equation's term.
 
         Args:
           test:

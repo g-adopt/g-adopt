@@ -47,7 +47,7 @@ direct_energy_solver_parameters = {
 
 
 class EnergySolver:
-    """Time-stepper solver for the energy equation."""
+    """Timestepper solver for the energy equation."""
 
     def __init__(
         self,
@@ -150,7 +150,7 @@ class EnergySolver:
         self._solver_setup = False
 
     def setup_solver(self):
-        """Setup timestepper and associated solver."""
+        """Sets up timestepper and associated solver."""
         self.ts = self.timestepper(self.eq, self.T, self.fields, self.delta_t,
                                    bnd_conditions=self.weak_bcs, solution_old=self.T_old,
                                    strong_bcs=self.strong_bcs,
@@ -158,7 +158,7 @@ class EnergySolver:
         self._solver_setup = True
 
     def solve(self):
-        """Advance solver."""
+        """Advances solver."""
         if not self._solver_setup:
             self.setup_solver()
         t = 0  # not used atm

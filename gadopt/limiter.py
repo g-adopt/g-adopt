@@ -174,7 +174,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         self.clip_min = clip_min
         self.clip_max = clip_max
 
-    def _construct_centroid_solver(self):
+    def _construct_centroid_solver(self) -> LinearSolver:
         """Constructs a linear problem to compute centroids.
 
         Executes as part of the call to the parent `__init__` special method.

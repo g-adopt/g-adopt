@@ -13,23 +13,21 @@ __all__ = [
 
 
 class BaseApproximation(abc.ABC):
-    """Base class to provide expressions for the coupled Stokes + Energy system.
+    """Base class to provide expressions for the coupled Stokes and Energy system.
 
     The basic assumption is that we are solving (to be extended when needed)
 
     > div(dev_stress) + grad p + buoyancy(T, p) * khat = 0
-
     > div(rho_continuity * u) = 0
-
     > rhocp DT/Dt + linearized_energy_sink(u) * T
-    > = div(kappa * grad(Tbar + T)) + energy_source(u)
+      = div(kappa * grad(Tbar + T)) + energy_source(u)
 
     where the following terms are provided by Approximation methods:
 
     - linearized_energy_sink(u) = 0 (BA), Di * rhobar * alphabar * g * w (EBA),
       or Di * rhobar * alphabar * w (TALA/ALA)
     - kappa() is diffusivity or conductivity depending on rhocp()
-    - Tbar (property) is 0 or reference temperature profile (ALA)
+    - Tbar is 0 or reference temperature profile (ALA)
     - dev_stress depends on the compressible property (False or True):
         - if compressible then dev_stress = mu * [sym(grad(u) - 2/3 div(u)]
         - if not compressible then dev_stress = mu * sym(grad(u)) and
@@ -39,71 +37,112 @@ class BaseApproximation(abc.ABC):
     @property
     @abc.abstractmethod
     def compressible(self) -> bool:
-        """Whether equations are given in compressible form (True/False)."""
+        """Defines compressibility.
+
+        Returns:
+          A boolean signalling if the governing equations are in compressible form.
+        """
         pass
 
     @abc.abstractmethod
-    def buoyancy(self, p, T) -> ufl.core.expr.Expr:
-        """UFL expression for buoyancy (momentum source term in gravity direction)."""
+    def buoyancy(self, p: Function, T: Function) -> ufl.core.expr.Expr:
+        """Defines the buoyancy force.
+
+        Returns:
+          A UFL expression for the buoyancy term (momentum source in gravity direction).
+        """
         pass
 
     @abc.abstractmethod
     def rho_continuity(self) -> ufl.core.expr.Expr:
-        """UFL expression for density in the mass continuity equation."""
+        """Defines density.
+
+        Returns:
+          A UFL expression for density in the mass continuity equation.
+        """
         pass
 
     @abc.abstractmethod
     def rhocp(self) -> ufl.core.expr.Expr:
-        """UFL expression for the volumetric heat capacity in the energy equation."""
+        """Defines the volumetric heat capacity.
+
+        Returns:
+          A UFL expression for the volumetric heat capacity in the energy equation.
+        """
         pass
 
     @abc.abstractmethod
     def kappa(self) -> ufl.core.expr.Expr:
-        """UFL expression for thermal diffusivity."""
+        """Defines thermal diffusivity.
+
+        Returns:
+          A UFL expression for thermal diffusivity.
+        """
         pass
 
     @property
     @abc.abstractmethod
     def Tbar(self) -> Function:
-        """Firedrake function for the reference temperature profile."""
+        """Defines the reference temperature profile.
+
+        Returns:
+          A Firedrake function for the reference temperature profile.
+        """
         pass
 
     @abc.abstractmethod
     def linearized_energy_sink(self, u) -> ufl.core.expr.Expr:
-        """UFL expression for temperature-related sink terms in the energy equation."""
+        """Defines temperature-related sink terms.
+
+        Returns:
+          A UFL expression for temperature-related sink terms in the energy equation.
+        """
         pass
 
     @abc.abstractmethod
     def energy_source(self, u) -> ufl.core.expr.Expr:
-        """UFL expression for additional independent terms in the energy equation."""
+        """Defines additional terms.
+
+        Returns:
+          A UFL expression for additional independent terms in the energy equation.
+        """
         pass
 
 
 class BoussinesqApproximation(BaseApproximation):
-    """Boussinesq approximation:
+    """Expressions for the Boussinesq approximation.
 
-    Small density variation linear in temperature only, only taken
-    into account in buoyancy term. All references rho, cp, alpha are
-    constant and typically incorporated in Ra. Viscous dissipation is
-    neglected (Di << 1).
+    Density variations are considered small and only affect the buoyancy term. Reference
+    parameters are typically constant. Viscous dissipation is neglected (Di << 1).
 
-    Arguments:
-      Ra: Rayleigh number
-
-    Keyword Arguments:
-      kappa: Diffusivity
-      g: Gravitational acceleration
-      rho: Reference density
-      alpha: Thermal expansion coefficient
-
-    Note:
-      The diffusivity, gravitational acceleration, reference density,
-      and thermal expansion coefficients are normally kept at 1 when
-      non-dimensionalised.
+    The thermal diffusivity, gravitational acceleration, reference density, and
+    coefficient of thermal expansion are normally kept at 1 when non-dimensionalised.
     """
     compressible = False
+    Tbar = 0
 
-    def __init__(self, Ra, kappa=1, g=1, rho=1, alpha=1):
+    def __init__(
+        self,
+        Ra: Function | int | float,
+        kappa: Function | int | float = 1,
+        g: Function | int | float = 1,
+        rho: Function | int | float = 1,
+        alpha: Function | int | float = 1
+    ):
+        """Initialises the approximation instance.
+
+        Args:
+          Ra:
+            Float denoting the Rayleigh number.
+          kappa:
+            Float denoting thermal diffusivity.
+          g:
+            Float denoting gravitational acceleration.
+          rho:
+            Float denoting the reference density.
+          alpha:
+            Float denoting the coefficient of thermal expansion.
+        """
         self.Ra = ensure_constant(Ra)
         self.thermal_diffusivity = ensure_constant(kappa)
         self.g = ensure_constant(g)
@@ -122,8 +161,6 @@ class BoussinesqApproximation(BaseApproximation):
     def kappa(self):
         return self.thermal_diffusivity
 
-    Tbar = 0
-
     def linearized_energy_sink(self, u):
         return 0
 
@@ -132,35 +169,41 @@ class BoussinesqApproximation(BaseApproximation):
 
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):
+    """Expressions for the extended Boussinesq approximation.
+
+    Extends the Boussinesq approximation by including viscous dissipation and work
+    against gravity (both scaled with Di).
+
+    The thermal diffusivity, gravitational acceleration, reference density, and
+    coefficient of thermal expansion are normally kept at 1 when non-dimensionalised.
     """
-    Extended Boussinesq
-
-    As Boussinesq but includes viscous dissipation and work against gravity (both scaled with Di).
-
-    Arguments:
-      Ra: Rayleigh number
-      Di: Dissipation number
-      mu: Viscosity used in viscous dissipation
-      H:  Volumetric heat production
-      cartesian (bool):
-        - True: gravity points in negative z-direction
-        - False: gravity points radially inward
-
-    Keyword Arguments:
-      kappa: Diffusivity
-      g: Gravitational acceleration
-      rho: Reference density
-      alpha: Thermal expansion coefficient
-
-    Note:
-      The diffusivity, gravitational acceleration, reference density,
-      and thermal expansion coefficients are normally kept at 1 when
-      non-dimensionalised.
-    """
-
     compressible = False
 
     def __init__(self, Ra, Di, mu=1, H=None, cartesian=True, **kwargs):
+        """Initialises the approximation instance.
+
+        Args:
+          Ra:
+            Float denoting the Rayleigh number.
+          Di:
+            Float denoting the Dissipation number.
+          kappa:
+            Float denoting thermal diffusivity.
+          g:
+            Float denoting gravitational acceleration.
+          rho:
+            Float denoting the reference density.
+          alpha:
+            Float denoting the coefficient of thermal expansion.
+          mu:
+            Float denoting dynamic viscosity.
+          H:
+            Float denoting volumetric heat production.
+          cartesian:
+            Boolean signaling if Cartesian coordinates are employed. If True, gravity is
+            assumed to point in the negative z-direction. If False gravity is assumed to
+            point radially inward.
+        """
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.mu = mu
@@ -185,7 +228,6 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
         source = self.viscous_dissipation(u)
         if self.H:
             source += self.H * self.rho
-
         return source
 
 

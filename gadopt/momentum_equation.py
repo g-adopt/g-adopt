@@ -320,16 +320,15 @@ class ContinuityEquation(BaseEquation):
       terms:
         List of equation terms defined through inheritance from BaseTerm.
     """
-
     terms = [DivergenceTerm]
 
 
 def StokesEquations(
-        test_space: fd.functionspaceimpl.WithGeometry,
-        trial_space: fd.functionspaceimpl.WithGeometry,
-        quad_degree: Optional[int] = None,
-        **kwargs
-    ):
+    test_space: fd.functionspaceimpl.WithGeometry,
+    trial_space: fd.functionspaceimpl.WithGeometry,
+    quad_degree: Optional[int] = None,
+    **kwargs,
+):
     """Stokes system involving the momentum and mass continuity equations.
 
     Args:

@@ -8,7 +8,7 @@ __all__ = ["GeodynamicalDiagnostics"]
 
 
 class GeodynamicalDiagnostics:
-    """Typical simulation diagnostics used in geodynamics."""
+    """Typical simulation diagnostics used in geodynamical simulations."""
 
     def __init__(
         self,
@@ -51,25 +51,51 @@ class GeodynamicalDiagnostics:
         self.n = FacetNormal(self.mesh)
 
     def domain_volume(self) -> ufl.core.expr.Expr:
-        """UFL expression to calculate the numerical domain's volume."""
+        """Numerical domain area or volume.
+
+        Returns:
+          A UFL expression to calculate the numerical domain's volume.
+        """
         return assemble(Constant(1)*firedrake.dx(domain=self.mesh))
 
     def u_rms(self) -> ufl.core.expr.Expr:
-        """UFL expression to calculate the root-mean squared velocity."""
+        """Root-mean squared velocity.
+
+        Returns:
+          A UFL expression to calculate the root-mean squared velocity.
+        """
         return sqrt(assemble(dot(self.u, self.u) * self.dx)) * sqrt(1./self.domain_volume())
 
     def u_rms_top(self) -> ufl.core.expr.Expr:
-        """UFL expression to calculate the top-boundary root-mean squared velocity."""
+        """Root-mean squared velocity along the top boundary.
+
+        Returns:
+          A UFL expression to calculate the root-mean squared velocity along the
+          domain's top boundary.
+        """
         return sqrt(assemble(dot(self.u, self.u) * self.ds_t))
 
     def Nu_top(self) -> ufl.core.expr.Expr:
-        """UFL expression to calculate the top-boundary Nusselt number."""
+        """Nusselt number at the top boundary.
+
+        Returns:
+          A UFL expression to calculate the Nusselt number at the domain's top boundary.
+        """
         return -1 * assemble(dot(grad(self.T), self.n) * self.ds_t) * (1./assemble(Constant(1) * self.ds_t))
 
     def Nu_bottom(self) -> ufl.core.expr.Expr:
-        """UFL expression to calculate the bottom-boundary Nusselt number."""
+        """Nusselt number at the bottom boundary.
+
+        Returns:
+          A UFL expression to calculate the Nusselt number at the domain's bottom
+          boundary.
+        """
         return assemble(dot(grad(self.T), self.n) * self.ds_b) * (1./assemble(Constant(1) * self.ds_b))
 
     def T_avg(self) -> ufl.core.expr.Expr:
-        """UFL expression to calculate the average temperature throughout the domain."""
+        """Average temperature.
+
+        Returns:
+          A UFL expression to calculate the average temperature throughout the domain.
+        """
         return assemble(self.T * self.dx) / self.domain_volume()
