@@ -60,7 +60,7 @@ class EnergySolver:
         solver_parameters: Optional[dict[str, str | float]] = None,
         su_advection: bool = False,
     ):
-        """Initialises the diagnostics instance from the simulation's state.
+        """Initialises the solver instance from the simulation's state.
 
         Args:
           T:

@@ -1,42 +1,36 @@
+"""Timestepper implementation, mostly copied from Thetis."""
 import operator
 from abc import ABC, abstractmethod, abstractproperty
+from typing import Optional
 
 import firedrake
 import numpy as np
 
 from .utility import ensure_constant
 
-"""
-Timestepper code, this is mostly copied from Thetis. At the moment explicit RK methods only.
-"""
-
 
 class TimeIntegratorBase(ABC):
-    """
-    Abstract class that defines the API for all time integrators
-
-    Both :class:`TimeIntegrator` and :class:`CoupledTimeIntegrator` inherit
-    from this class.
-    """
+    """Defines the API for all time integrators."""
 
     @abstractmethod
-    def advance(self, t, update_forcings=None):
-        """
-        Advances equations for one time step
+    def advance(self, t: float, update_forcings: Optional[firedrake.Function] = None):
+        """Advances equations for one time step.
 
-        :arg t: simulation time
-        :type t: float
-        :arg update_forcings: user-defined function that takes the simulation
-            time and updates any time-dependent boundary conditions
+        Args:
+          t:
+            Float denoting the current simulation time.
+          update_forcings:
+            Firedrake function used to update any time-dependent boundary conditions.
         """
         pass
 
     @abstractmethod
     def initialize(self, init_solution):
-        """
-        Initialize the time integrator
+        """Initialises the time integrator.
 
-        :arg init_solution: initial solution
+        Args:
+          init_solution:
+            Firedrake function representing the initial solution.
         """
         pass
 

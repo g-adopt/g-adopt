@@ -1,41 +1,55 @@
-from firedrake import (
-    CellVolume,
-    FacetArea,
-    Identity,
-    avg,
-    div,
-    dot,
-    grad,
-    inner,
-    jump,
-    min_value,
-    sign,
-)
+r"""Scalar terms and equations (e.g. for temperature and salinity transport).
+
+All terms are considered as if they were on the right-hand side of the equation, leading
+to the following UFL expression returned by the `residual` method:
+
+  dq/dt = \sum term.residual()
+
+This sign convention ensures compatibility with Thetis's time integrators. In general,
+however, we like to think about the terms as they are on the left-hand side. Therefore,
+in the residual methods below, we first sum the terms in the variable `F` as if they
+were on the left-hand side, i.e.
+
+  dq/dt + F(q) = 0,
+
+and then return `-F`.
+"""
+from typing import Optional
+
+import firedrake as fd
+from firedrake import avg, div, dot, grad, inner, jump, min_value, sign
 
 from .equations import BaseEquation, BaseTerm
 from .utility import cell_edge_integral_ratio, is_continuous, normal_is_continuous
 
-r"""
-This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
-
-NOTE: for all terms, the residual() method returns the residual as it would be on the RHS of the equation, i.e.:
-
-  dq/dt = \sum term.residual()
-
-This sign-convention is for compatibility with Thetis' timeintegrators. In general, however we like to think about
-the terms as they are on the LHS. Therefore in the residual methods below we assemble in F as it would be on the LHS:
-
-  dq/dt + F(q) = 0
-
-and at the very end "return -F".
-"""
-
 
 class ScalarAdvectionTerm(BaseTerm):
-    r"""
-    Scalar advection term (non-conservative): u \dot \div(q)
-    """
-    def residual(self, test, trial, trial_lagged, fields, bcs):
+    r"""Scalar advection term (non-conservative): u \dot \div(q)."""
+    def residual(
+        self,
+        test: fd.ufl_expr.Argument,
+        trial: fd.ufl_expr.Argument | fd.Function,
+        trial_lagged: Optional[fd.ufl_expr.Argument | fd.Function] = None,
+        fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
+        bcs: Optional[dict[int, dict[str, int | float]]] = None,
+    ) -> fd.ufl.core.expr.Expr:
+        """UFL expression for the residual associated with the equation's term.
+
+        Args:
+          test:
+            Firedrake test function.
+          trial:
+            Firedrake trial function.
+          trial_lagged:
+            Firedrake trial function from the previous time step.
+          fields:
+            Dictionary of physical fields from the simulation's state.
+          bcs:
+            Dictionary of identifier-value pairs specifying boundary conditions.
+
+        Returns:
+          A UFL expression for the term's contribution to the finite element residual.
+        """
         u = fields['velocity']
         phi = test
         n = self.n
@@ -74,12 +88,11 @@ class ScalarAdvectionTerm(BaseTerm):
 
 
 class ScalarDiffusionTerm(BaseTerm):
-    r"""
-    Diffusion term :math:`-\nabla \cdot (\kappa \nabla q)`
+    r"""Scalar diffusion term `-\nabla \cdot (\kappa \nabla q)`.
 
-    Using the symmetric interior penalty method the weak form becomes
+    Using the symmetric interior penalty method, the weak form becomes
 
-    .. math::
+    ```
         -\int_\Omega \nabla \cdot (\kappa \nabla q) \phi dx
         =& \int_\Omega \kappa (\nabla \phi) \cdot (\nabla q) dx \\
         &- \int_{\mathcal{I}\cup\mathcal{I}_v} \text{jump}(\phi \textbf{n})
@@ -88,22 +101,45 @@ class ScalarDiffusionTerm(BaseTerm):
         \cdot \text{avg}(\kappa  \nabla \phi) dS \\
         &+ \int_{\mathcal{I}\cup\mathcal{I}_v} \sigma \text{avg}(\kappa) \text{jump}(q \textbf{n}) \cdot
             \text{jump}(\phi \textbf{n}) dS
+    ```
 
-    where :math:`\sigma` is a penalty parameter,
-    see Epshteyn and Riviere (2007).
+    where `\sigma` is a penalty parameter (see Epshteyn and Riviere, 2007).
 
-    Epshteyn and Riviere (2007). Estimation of penalty parameters for symmetric
-    interior penalty Galerkin methods. Journal of Computational and Applied
-    Mathematics, 206(2):843-872. http://dx.doi.org/10.1016/j.cam.2006.08.029
+    Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty parameters for symmetric
+    interior penalty Galerkin methods. Journal of Computational and Applied Mathematics,
+    206(2), 843-872.
 
     """
-    def residual(self, test, trial, trial_lagged, fields, bcs):
+    def residual(
+        self,
+        test: fd.ufl_expr.Argument,
+        trial: fd.ufl_expr.Argument | fd.Function,
+        trial_lagged: Optional[fd.ufl_expr.Argument | fd.Function] = None,
+        fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
+        bcs: Optional[dict[int, dict[str, int | float]]] = None,
+    ) -> fd.ufl.core.expr.Expr:
+        """UFL expression for the residual associated with the equation's term.
 
+        Args:
+          test:
+            Firedrake test function.
+          trial:
+            Firedrake trial function.
+          trial_lagged:
+            Firedrake trial function from the previous time step.
+          fields:
+            Dictionary of physical fields from the simulation's state.
+          bcs:
+            Dictionary of identifier-value pairs specifying boundary conditions.
+
+        Returns:
+          A UFL expression for the term's contribution to the finite element residual.
+        """
         kappa = fields['diffusivity']
         if len(kappa.ufl_shape) == 2:
             diff_tensor = kappa
         else:
-            diff_tensor = kappa * Identity(self.dim)
+            diff_tensor = kappa * fd.Identity(self.dim)
 
         phi = test
         n = self.n
@@ -138,7 +174,7 @@ class ScalarDiffusionTerm(BaseTerm):
             # we use (3.23) + (3.20) from https://www.researchgate.net/publication/260085826
             # instead of maximum over two adjacent cells + and -, we just sum (which is 2*avg())
             # and the for internal facets we have an extra 0.5:
-            sigma_int = sigma * avg(FacetArea(self.mesh)/CellVolume(self.mesh))
+            sigma_int = sigma * avg(fd.FacetArea(self.mesh)/fd.CellVolume(self.mesh))
             F += sigma_int*inner(jump(phi, n), dot(avg(diff_tensor), jump(q, n)))*self.dS
             F += -inner(avg(dot(diff_tensor, grad(phi))), jump(q, n))*self.dS
             F += -inner(jump(phi, n), avg(dot(diff_tensor, grad(q))))*self.dS
@@ -146,7 +182,7 @@ class ScalarDiffusionTerm(BaseTerm):
         for id, bc in bcs.items():
             if 'q' in bc:
                 jump_q = q-bc['q']
-                sigma_ext = sigma * FacetArea(self.mesh)/CellVolume(self.mesh)
+                sigma_ext = sigma * fd.FacetArea(self.mesh)/fd.CellVolume(self.mesh)
                 # this corresponds to the same 3 terms as the dS integrals for DG above:
                 F += 2*sigma_ext*phi*inner(n, dot(diff_tensor, n))*jump_q*self.ds(id)
                 F += -inner(dot(diff_tensor, grad(phi)), n)*jump_q*self.ds(id)
@@ -162,11 +198,33 @@ class ScalarDiffusionTerm(BaseTerm):
 
 
 class ScalarSourceTerm(BaseTerm):
-    r"""
-        Source term :math:`s_T`
-    """
+    r"""Scalar source term `s_T`."""
 
-    def residual(self, test, trial, trial_lagged, fields, bcs):
+    def residual(
+        self,
+        test: fd.ufl_expr.Argument,
+        trial: fd.ufl_expr.Argument | fd.Function,
+        trial_lagged: Optional[fd.ufl_expr.Argument | fd.Function] = None,
+        fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
+        bcs: Optional[dict[int, dict[str, int | float]]] = None,
+    ) -> fd.ufl.core.expr.Expr:
+        """UFL expression for the residual associated with the equation's term.
+
+        Args:
+          test:
+            Firedrake test function.
+          trial:
+            Firedrake trial function.
+          trial_lagged:
+            Firedrake trial function from the previous time step.
+          fields:
+            Dictionary of physical fields from the simulation's state.
+          bcs:
+            Dictionary of identifier-value pairs specifying boundary conditions.
+
+        Returns:
+          A UFL expression for the term's contribution to the finite element residual.
+        """
         if 'source' not in fields:
             return 0
         phi = test
@@ -179,44 +237,111 @@ class ScalarSourceTerm(BaseTerm):
 
 
 class ScalarAbsorptionTerm(BaseTerm):
-    r"""
-            Absorption Term :math:`\alpha_T T`
-        """
+    r"""Scalar absorption term `\alpha_T T`."""
 
-    def residual(self, test, trial, trial_lagged, fields, bcs):
+    def residual(
+        self,
+        test: fd.ufl_expr.Argument,
+        trial: fd.ufl_expr.Argument | fd.Function,
+        trial_lagged: Optional[fd.ufl_expr.Argument | fd.Function] = None,
+        fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
+        bcs: Optional[dict[int, dict[str, int | float]]] = None,
+    ) -> fd.ufl.core.expr.Expr:
+        """UFL expression for the residual associated with the equation's term.
+
+        Args:
+          test:
+            Firedrake test function.
+          trial:
+            Firedrake trial function.
+          trial_lagged:
+            Firedrake trial function from the previous time step.
+          fields:
+            Dictionary of physical fields from the simulation's state.
+          bcs:
+            Dictionary of identifier-value pairs specifying boundary conditions.
+
+        Returns:
+          A UFL expression for the term's contribution to the finite element residual.
+        """
         if 'absorption_coefficient' not in fields:
             return 0
 
         phi = test
         alpha = fields['absorption_coefficient']
 
-        # NOTE, here absorption term F is already on the RHS
-        # implement absorption term implicitly at current time step.
+        # The absorption term F is already on the right-hand side.
+        # Implement absorption term implicitly at current time step.
         F = -dot(phi, alpha*trial)*self.dx
 
         return F
 
 
 class ScalarAdvectionEquation(BaseEquation):
-    """
-    Scalar equation with only an advection term.
-    """
+    """Scalar advection equation with source and absorption terms.
 
+    Attributes:
+      terms:
+        List of equation terms defined through inheritance from BaseTerm.
+    """
     terms = [ScalarAdvectionTerm, ScalarSourceTerm, ScalarAbsorptionTerm]
 
 
 class ScalarAdvectionDiffusionEquation(BaseEquation):
-    """
-    Scalar equation with advection and diffusion.
-    """
+    """Scalar advection-diffusion equation with source and absorption terms.
 
+    Attributes:
+      terms:
+        List of equation terms defined through inheritance from BaseTerm.
+    """
     terms = [ScalarAdvectionTerm, ScalarDiffusionTerm, ScalarSourceTerm, ScalarAbsorptionTerm]
 
 
 class EnergyEquation(ScalarAdvectionDiffusionEquation):
-    def __init__(self, test_space, trial_space, rhocp=None, quad_degree=None):
+    """Energy equation defined as an advection-diffusion equation."""
+    def __init__(
+        self,
+        test_space: fd.functionspaceimpl.WithGeometry,
+        trial_space: fd.functionspaceimpl.WithGeometry,
+        rhocp: Optional[fd.ufl.core.expr.Expr] = None,
+        quad_degree: Optional[int] = None,
+    ):
+        """Initialises the equation instance given function spaces.
+
+        Test and trial spaces are only used to determine the employed discretisation
+        (i.e. UFL elements); test and trial functions are provided separately in
+        residual.
+
+        Keyword arguments are passed on to each term of the equation.
+
+        Args:
+          test_space:
+            Firedrake function space of the test function.
+          trial_space:
+            Firedrake function space of the rial function.
+          rhocp:
+            UFL expression for the volumetric heat capacity.
+          quad_degree:
+            Integer representing the quadrature degree. Default value is `2p + 1`, with
+            p the polynomial degree of the trial space.
+        """
         self.rhocp = rhocp
         super().__init__(test_space, trial_space, quad_degree=quad_degree)
 
-    def mass_term(self, test, trial):
+    def mass_term(
+        self,
+        test: fd.ufl_expr.Argument,
+        trial: fd.ufl_expr.Argument | fd.Function,
+    ) -> fd.ufl.core.expr.Expr:
+        """UFL expression for the mass term used in the time discretisation.
+
+        Args:
+          test:
+            Firedrake test function.
+          trial:
+            Firedrake trial function.
+
+        Returns:
+          The UFL expression associated with the mass term of the equation.
+        """
         return self.rhocp * dot(test, trial) * self.dx

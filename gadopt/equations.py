@@ -159,9 +159,6 @@ class BaseTerm(ABC):
           dS:
             UFL measure for the domain's inner boundaries when using a discontinuous
             function space.
-
-        Returns:
-          The UFL expression associated with all equation terms except the mass term.
         """
         self.test_space = test_space
         self.trial_space = trial_space
@@ -177,7 +174,14 @@ class BaseTerm(ABC):
         self.term_kwargs = kwargs
 
     @abstractmethod
-    def residual(self, test, trial, trial_lagged, fields):
+    def residual(
+        self,
+        test: firedrake.ufl_expr.Argument,
+        trial: firedrake.ufl_expr.Argument | firedrake.Function,
+        trial_lagged: Optional[firedrake.ufl_expr.Argument | firedrake.Function] = None,
+        fields: Optional[dict[str, firedrake.Constant | firedrake.Function]] = None,
+        bcs: Optional[dict[int, dict[str, int | float]]] = None,
+    ) -> firedrake.ufl.core.expr.Expr:
         """UFL expression for the residual associated with the equation's term.
 
         Args:
@@ -189,5 +193,10 @@ class BaseTerm(ABC):
             Firedrake trial function from the previous time step.
           fields:
             Dictionary of physical fields from the simulation's state.
+          bcs:
+            Dictionary of identifier-value pairs specifying boundary conditions.
+
+        Returns:
+          A UFL expression for the term's contribution to the finite element residual.
         """
         pass

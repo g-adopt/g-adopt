@@ -133,9 +133,9 @@ def get_facet_mask(
 class VertexBasedP1DGLimiter(VertexBasedLimiter):
     """Vertex-based limiter for P1DG tracer fields (Kuzmin, 2010).
 
-    Kuzmin (2010). A vertex-based hierarchical slope limiter for p-adaptive
-    discontinuous Galerkin methods. Journal of Computational and Applied Mathematics,
-    233(12):3077-3085. http://dx.doi.org/10.1016/j.cam.2009.05.028
+    Kuzmin, D. (2010). A vertex-based hierarchical slope limiter for p-adaptive
+    discontinuous Galerkin methods. Journal of computational and applied mathematics,
+    233(12), 3077-3085.
     """
     def __init__(
         self,
