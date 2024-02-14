@@ -61,8 +61,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
     """
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
-    V, W, W1 = Z.subfunctions
-#    V, W = Z.subfunctions
+    V, W = Z.subfunctions
     if rotational:
         if dim == 2:
             rotV = fd.Function(V).interpolate(fd.as_vector((-X[1], X[0])))
@@ -93,8 +92,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
     else:
         p_nullspace = W
 
-    return fd.MixedVectorSpaceBasis(Z, [V_nullspace, p_nullspace, W1])
-#    return fd.MixedVectorSpaceBasis(Z, [V_nullspace, p_nullspace])
+    return fd.MixedVectorSpaceBasis(Z, [V_nullspace, p_nullspace])
 
 
 class StokesSolver:

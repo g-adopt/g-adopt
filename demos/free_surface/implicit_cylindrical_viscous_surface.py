@@ -1,23 +1,20 @@
 from gadopt import *
 import numpy as np
 from gadopt.utility import CombinedSurfaceMeasure
-dx = dx(degree=6)
 from mpi4py import MPI
+dx = dx(degree=6)
 
 
-def implicit_viscous_freesurface_model(nx, dt_factor, do_write=True, iterative_2d=False):
+def implicit_viscous_freesurface_model(dt_factor, do_write=True):
     # Free surface relaxation test in a cylindrical domain.
-    
 
     # Set up geometry:
     rmin, rmax, ncells, nlayers = 1.22, 2.22, 512, 64
-    
+
     # Construct a circle mesh and then extrude into a cylinder:
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')
     bottom_id, top_id = "bottom", "top"
-    n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
-    domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
 
     # Set up geometry:
     D = 3e6  # Depth of domain in m
@@ -31,13 +28,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=True, iterative_2
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W, W])  # Mixed function space.
-    
 
-    print("Z.extruded", W.extruded)
-    # Nullspaces and near-nullspaces:
-    Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
-    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
-    
     # Function to store the solutions:
     z = Function(Z)  # a field over the mixed function space Z.
     u, p, eta = split(z)  # Returns symbolic UFL expression for u, p and eta
@@ -47,7 +38,6 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=True, iterative_2
     u_.rename("Velocity")
     p_.rename("Pressure")
     eta_.rename("eta")
-    
 
     T = Function(Q, name="Temperature").assign(0)  # Setup a dummy function for temperature
     # Output function space information:
@@ -63,20 +53,18 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=True, iterative_2
     rho0 = approximation.rho  # This defaults to rho0 = 1 (dimensionless)
     g = approximation.g  # This defaults to g = 1 (dimensionless)
 
-    number_of_lam = 4*round(2 * pi * rmax / (rmax - rmin)) # wavenumber (dimensionless)
-    lam = (2*pi*rmax) / number_of_lam
+    number_of_lam = 4*round(2 * pi * rmax / (rmax - rmin))  # number of waves
+    lam = (2*pi*rmax) / number_of_lam  # wavelength (dimensionless)
+    kk = 2*pi / lam  # wavenumber (dimensionless)
 
-    kk = 2*pi / lam
     F0 = Constant(1000 / L0)  # initial free surface amplitude (dimensionless)
     X = SpatialCoordinate(mesh)
-    r = sqrt(X[0]**2 + X[1]**2)
     eta_.interpolate(F0 * cos(number_of_lam * atan2(X[1], X[0])))  # Initial free surface condition
 
     # timestepping
     mu = Constant(1)  # Shear modulus (dimensionless)
     tau0 = Constant(2 * (kk) * mu / (rho0 * g))  # Characteristic time scale (dimensionless)
     log("tau0", tau0)
-
     dt = Constant(dt_factor*tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
 
@@ -90,8 +78,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=True, iterative_2
         top_id: {'free_surface': {}},  # Free surface boundary conditions are applied automatically in stokes_integrators and momentum_equation for implicit free surface coupling
     }
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=False, free_surface_dt=dt, iterative_2d=iterative_2d, nullspace=Z_nullspace, transpose_nullspace=Z_nullspace, near_nullspace=Z_near_nullspace)
-
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu, cartesian=False, free_surface_dt=dt)
 
     # analytical function
     eta_analytical = Function(W, name="eta analytical")
@@ -104,8 +91,8 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=True, iterative_2
         # Write output files in VTK format:
         dump_period = 1
         log("dump_period ", dump_period)
-        filename = "implicit_cylinder_viscous_freesurface"
-        output_file = File(f"{filename}_D{float(D/L0)}_mu{float(mu)}_nx{nx}_dt{float(dt/tau0)}tau.pvd")
+        filename = "implicit_cylindrical_viscous_freesurface"
+        output_file = File(f"{filename}_rmax{rmax}_rmin{rmin}_mu{float(mu)}_ncells{ncells}_nlay{nlayers}_dt{float(dt/tau0)}tau.pvd")
         output_file.write(u_, eta_, p_, eta_analytical)
 
     error = 0
@@ -116,7 +103,7 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=True, iterative_2
         stokes_solver.solve()
         time.assign(time + dt)
         eta_analytical.interpolate(exp(-time/tau0)*F0 * cos(number_of_lam * atan2(X[1], X[0])))  # Initial free surface condition
-        
+
         local_error = assemble(pow(eta-eta_analytical, 2)*ds(top_id))
         error += local_error*dt
 
@@ -134,10 +121,10 @@ def implicit_viscous_freesurface_model(nx, dt_factor, do_write=True, iterative_2
 
 if __name__ == "__main__":
     # default case run with nx = 80 for four dt factors
-    dt_factors =  2 / (2**np.arange(4))
+    dt_factors = 2 / (2**np.arange(4))
 
     # Rerun with iterative solvers
-    errors_iterative = np.array([implicit_viscous_freesurface_model(80, dtf) for dtf in dt_factors])
-    
+    errors_iterative = np.array([implicit_viscous_freesurface_model(dtf) for dtf in dt_factors])
+
     if MPI.COMM_WORLD.rank == 0:
         np.savetxt("errors-implicit-cylindrical-iterative-free-surface-coupling.dat", errors_iterative)

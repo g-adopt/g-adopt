@@ -1,7 +1,7 @@
 cases := explicit implicit implicit_top_bottom
-parallel := implicit_top_bottom_buoyancy
+parallel := implicit_top_bottom_buoyancy implicit_cylindrical
 
-ncpus := 4
+ncpus := 8
 
 all: $(cases) $(parallel)
 

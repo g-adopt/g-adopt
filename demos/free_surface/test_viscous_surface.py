@@ -21,6 +21,7 @@ cases = [("explicit", [1.4, 1.1, 1.0]),
          ("implicit-buoyancy-bottom", [2.0, 2.0, 2.0]),
          ("implicit-buoyancy-iterative-top", [2.0, 2.0, 2.0]),
          ("implicit-buoyancy-iterative-bottom", [2.0, 2.0, 2.0]),
+         ("implicit-cylindrical-iterative", [2.0, 2.0, 2.0]),
          ]
 
 
