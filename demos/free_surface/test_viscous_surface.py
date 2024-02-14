@@ -16,7 +16,12 @@ cases = [("explicit", [1.4, 1.1, 1.0]),
          ("implicit-top", [2.0, 2.0, 2.0]),
          ("implicit-bottom", [2.0, 2.0, 2.0]),
          ("implicit-iterative-top", [2.0, 2.0, 2.0]),
-         ("implicit-iterative-bottom", [2.0, 2.0, 2.0])]
+         ("implicit-iterative-bottom", [2.0, 2.0, 2.0]),
+         ("implicit-buoyancy-top", [2.0, 2.0, 2.0]),
+         ("implicit-buoyancy-bottom", [2.0, 2.0, 2.0]),
+         ("implicit-buoyancy-iterative-top", [2.0, 2.0, 2.0]),
+         ("implicit-buoyancy-iterative-bottom", [2.0, 2.0, 2.0]),
+         ]
 
 
 @pytest.mark.parametrize("coupling,expected_convergence", cases)
