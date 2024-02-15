@@ -95,6 +95,9 @@ class Simulation:
         if MPI.COMM_WORLD.rank == 0:
             np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
 
+            rms_vel_van_keken = np.loadtxt("data/pvk80_001.vrms.dat")
+            entr_van_keken = np.loadtxt("data/pvk80_001.entr.dat")
+
             fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
 
             ax[0].set_xlabel("Time (non-dimensional)")
@@ -102,8 +105,30 @@ class Simulation:
             ax[0].set_ylabel("Root-mean-square velocity (non-dimensional)")
             ax[1].set_ylabel("Entrainment (non-dimensional)")
 
-            ax[0].plot(cls.diag_fields["output_time"], cls.diag_fields["rms_velocity"])
+            ax[0].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["rms_velocity"],
+                label="Conservative level set",
+            )
             ax[1].plot(cls.diag_fields["output_time"], cls.diag_fields["entrainment"])
+
+            ax[0].plot(
+                rms_vel_van_keken[:, 0],
+                rms_vel_van_keken[:, 1],
+                linestyle="dotted",
+                label="PvK (van Keken et al., 1997)",
+            )
+            ax[1].plot(entr_van_keken[:, 0], entr_van_keken[:, 1], linestyle="dotted")
+
+            ax[0].legend(
+                loc="upper right",
+                bbox_to_anchor=(1, 1),
+                ncol=1,
+                fontsize=12,
+                fancybox=True,
+                shadow=True,
+                bbox_transform=ax[0].transAxes,
+            )
 
             fig.savefig(
                 f"{cls.name}/rms_velocity_and_entrainment.pdf".lower(),

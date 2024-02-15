@@ -208,6 +208,6 @@ class EnergyEquation(ScalarAdvectionDiffusionEquation):
 
     def mass_term(self, test, trial):
         if self.rhocp:
-            return self.rhocp * dot(test, trial) * self.dx
+            return self.rhocp * inner(test, trial) * self.dx
         else:
             return super().mass_term(test, trial)

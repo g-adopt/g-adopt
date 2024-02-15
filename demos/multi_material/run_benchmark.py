@@ -3,6 +3,7 @@ import importlib
 from functools import partial
 
 import firedrake as fd
+from mpi4py import MPI
 
 import gadopt as ga
 
@@ -15,6 +16,8 @@ def write_output(dump_counter, checkpoint_fields=None):
     else:
         density.interpolate(dens_diff + ref_dens)
     viscosity.interpolate(viscosity_ufl)
+    if Simulation.name == "Trim_2023":
+        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
 
     output_file.write(
         time_output,
@@ -46,9 +49,13 @@ args = parser.parse_args()
 Simulation = importlib.import_module(args.benchmark).Simulation
 
 # Set up geometry
-mesh = fd.RectangleMesh(
-    *Simulation.mesh_elements, *Simulation.domain_dimensions, quadrilateral=True
-)  # RectangleMesh boundary mapping: {1: left, 2: right, 3: bottom, 4: top}
+# Boundary mapping: {1: left, 2: right, 3: bottom, 4: top}
+try:
+    mesh = fd.Mesh(Simulation.mesh_file)
+except AttributeError:
+    mesh = fd.RectangleMesh(
+        *Simulation.mesh_elements, *Simulation.domain_dimensions, quadrilateral=True
+    )
 
 # Set up Stokes function spaces corresponding to the Q2Q1 Taylor-Hood element
 func_space_vel = fd.VectorFunctionSpace(mesh, "CG", 2)
@@ -77,14 +84,9 @@ level_set = [
 # Thickness of the hyperbolic tangent profile in the conservative level-set approach
 if Simulation.name == "Trim_2023":
     epsilon = fd.Constant(1 / 2 / Simulation.k)
-else:
-    epsilon = fd.Constant(
-        min(
-            dim / elem
-            for dim, elem in zip(Simulation.domain_dimensions, Simulation.mesh_elements)
-        )
-        / 4
-    )  # Empirical calibration that seems to be robust
+else:  # Empirical calibration that seems to be robust
+    local_min_mesh_size = mesh.cell_sizes.dat.data.min()
+    epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
 
 # Initialise level set
 signed_dist_to_interface = fd.Function(func_space_ls)
@@ -163,9 +165,9 @@ stokes_solver.solve()
 # Parameters involved in level-set reinitialisation
 reini_params = {
     "epsilon": epsilon,
-    "tstep": 2e-2,
+    "tstep": 1e-2,
     "tstep_alg": ga.eSSPRKs3p3,
-    "frequency": 1,
+    "frequency": 5,
     "iterations": 1,
 }
 
@@ -180,7 +182,7 @@ level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solv
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
-    dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.65
+    dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.55
 )
 time_output = fd.Function(func_space_pres, name="Time")
 time_now, step, dump_counter = 0, 0, 0
@@ -193,6 +195,7 @@ checkpoint_fields = {"Level set": level_set[0], "Temperature": temperature}
 
 # Fields used to calculate simulation diagnostics
 diagnostic_fields = {
+    "epsilon": epsilon,
     "level_set": level_set,
     "level_set_grad_proj": level_set_grad_proj,
     "velocity": velocity_ufl,

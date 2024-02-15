@@ -38,7 +38,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (2.8e6, 8e5)
-    mesh_elements = (512, 1024)
+    mesh_file = "benchmarks/crameri_2012.msh"
 
     # Parameters to initialise level sets
     slope = 0
@@ -102,25 +102,59 @@ class Simulation:
             cls.interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
         )
 
+        epsilon = float(variables["epsilon"])
         level_set = variables["level_set"][1]
-        function_space = level_set.function_space()
-        max_topo_lower_bound_per_core = (
-            fd.Function(function_space)
-            .interpolate(
-                fd.conditional(
-                    level_set <= 0.5,
-                    function_space.mesh().coordinates[1] - cls.material_interface_y,
-                    0,
-                )
+        level_set_data = level_set.dat.data_ro_with_halos
+        coords_data = (
+            fd.Function(
+                fd.VectorFunctionSpace(level_set.ufl_domain(), level_set.ufl_element())
             )
-            .dat.data_ro_with_halos.max(initial=0)
-        )
-        max_topo_lower_bound = level_set.comm.allreduce(
-            max_topo_lower_bound_per_core, MPI.MAX
+            .interpolate(fd.SpatialCoordinate(level_set))
+            .dat.data_ro_with_halos
         )
 
+        mask_ls = level_set_data <= 0.5
+        if mask_ls.any():
+            ind_lower_bound = coords_data[mask_ls, 1].argmax()
+            max_topo_lower_bound = coords_data[mask_ls, 1][ind_lower_bound]
+            ls_lower_bound = level_set_data[mask_ls][ind_lower_bound]
+            sdls_lower_bound = epsilon * np.log(ls_lower_bound / (1 - ls_lower_bound))
+
+            if not mask_ls.all():
+                hor_coord_lower_bound = coords_data[mask_ls, 0][ind_lower_bound]
+                mask_hor_coord = (
+                    abs(coords_data[~mask_ls, 0] - hor_coord_lower_bound) < 1e3
+                )
+                if mask_hor_coord.any():
+                    ind_upper_bound = coords_data[~mask_ls, 1][mask_hor_coord].argmin()
+                    max_topo_upper_bound = coords_data[~mask_ls, 1][mask_hor_coord][
+                        ind_upper_bound
+                    ]
+                    ls_upper_bound = level_set_data[~mask_ls][mask_hor_coord][
+                        ind_upper_bound
+                    ]
+                    sdls_upper_bound = epsilon * np.log(
+                        ls_upper_bound / (1 - ls_upper_bound)
+                    )
+
+                    ls_dist = sdls_upper_bound / (sdls_upper_bound - sdls_lower_bound)
+                    max_topo = (
+                        ls_dist * max_topo_lower_bound
+                        + (1 - ls_dist) * max_topo_upper_bound
+                    )
+                else:
+                    max_topo = max_topo_lower_bound
+            else:
+                max_topo = max_topo_lower_bound
+        else:
+            max_topo = -np.inf
+
+        max_topo_global = level_set.comm.allreduce(max_topo, MPI.MAX)
+
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
-        cls.diag_fields["max_topography"].append(max_topo_lower_bound / 1e3)
+        cls.diag_fields["max_topography"].append(
+            (max_topo_global - cls.material_interface_y) / 1e3
+        )
         cls.diag_fields["max_topography_analytical"].append(max_topography_analytical)
 
     @classmethod

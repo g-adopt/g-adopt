@@ -65,7 +65,7 @@ class TimeIntegrator(TimeIntegratorBase):
         self.test = firedrake.TestFunction(solution.function_space())
         self.solution = solution
         self.fields = fields
-        self.dt = dt
+        self.dt = float(dt)
         self.dt_const = ensure_constant(dt)
         self.solution_old = solution_old or firedrake.Function(solution, name='Old'+solution.name())
 
