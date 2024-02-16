@@ -61,8 +61,8 @@ class BaseEquation:
             # "bottom" and "top" as surface identifiers, for example, ds("top").
             self.ds = CombinedSurfaceMeasure(self.mesh, quad_degree)
             self.dS = (
-                firedrake.dS_v(domain=self.mesh, degree=quad_degree)
-                + firedrake.dS_h(domain=self.mesh, degree=quad_degree)
+                firedrake.dS_v(domain=self.mesh, degree=quad_degree) +
+                firedrake.dS_h(domain=self.mesh, degree=quad_degree)
             )
         else:
             self.ds = firedrake.ds(domain=self.mesh, degree=quad_degree)
