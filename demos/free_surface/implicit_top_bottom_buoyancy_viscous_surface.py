@@ -44,7 +44,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
     alpha = 2e-5
     Q_temp_scale = 1
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-    Ra = Constant(1)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
+    Ra = Constant(1)  # Rayleigh number
     approximation = BoussinesqApproximation(Ra, alpha=alpha)
 
     rho0 = approximation.rho  # This defaults to rho0 = 1 (dimensionless)
@@ -57,7 +57,7 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
     width = (1/nx)
     forcing_depth = 0.5
     delta = exp(-pow((X[1]-forcing_depth)/width, 2)) / (width * sqrt(pi))
-    T = Function(Q, name="Temperature").interpolate(delta * Q_temp_scale * cos(kk * X[0]))  # Setup a dummy function for temperature
+    T = Function(Q, name="Temperature").interpolate(delta * Q_temp_scale * cos(kk * X[0]))  # Initialise temperature field
 
     F0 = Constant(0)  # initial free surface amplitude (dimensionless)
     G0 = Constant(0)  # initial free surface amplitude (dimensionless)
@@ -91,15 +91,6 @@ def implicit_viscous_two_freesurface_model(nx, dt_factor, do_write=True, iterati
     if iterative_2d:
         penalty = 0.1 * (dt_factor / 2)
         stokes_solver.F += penalty * stokes_solver.test[0][1] * (stokes_solver.stokes_vars[0][1] - 0)*dx
-
-
-#   stationary_point = [0.375, 0.5 * D / L0]
-#    node, coords = find_nearest(stationary_point, V.sub(1))
-#    print(f"Nearest point is {coords}, at id {node}")
-#    pin_bc2 = SpecifiedNodeBC(Z.sub(0), as_vector((0,0)), node)
-#    pin_bc2 = SpecifiedNodeBC(Z.sub(0).sub(1), 0, node)
-#    print("pin bc value is ", pin_bc.function_arg)
-#    stokes_solver.strong_bcs.append(pin_bc2)
 
     if do_write:
         eta_midpoint = []
