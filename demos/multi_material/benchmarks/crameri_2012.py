@@ -117,9 +117,6 @@ class Simulation:
         if mask_ls.any():
             ind_lower_bound = coords_data[mask_ls, 1].argmax()
             max_topo_lower_bound = coords_data[mask_ls, 1][ind_lower_bound]
-            ls_lower_bound = level_set_data[mask_ls][ind_lower_bound]
-            sdls_lower_bound = epsilon * np.log(ls_lower_bound / (1 - ls_lower_bound))
-
             if not mask_ls.all():
                 hor_coord_lower_bound = coords_data[mask_ls, 0][ind_lower_bound]
                 mask_hor_coord = (
@@ -130,6 +127,12 @@ class Simulation:
                     max_topo_upper_bound = coords_data[~mask_ls, 1][mask_hor_coord][
                         ind_upper_bound
                     ]
+
+                    ls_lower_bound = level_set_data[mask_ls][ind_lower_bound]
+                    sdls_lower_bound = epsilon * np.log(
+                        ls_lower_bound / (1 - ls_lower_bound)
+                    )
+
                     ls_upper_bound = level_set_data[~mask_ls][mask_hor_coord][
                         ind_upper_bound
                     ]
@@ -163,9 +166,6 @@ class Simulation:
             np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
 
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
-
-            # ax.set_xlim(0, 100)
-            # ax.set_ylim(-1, 7)
 
             ax.set_xlabel("Time (kyr)")
             ax.set_ylabel("Maximum topography (km)")

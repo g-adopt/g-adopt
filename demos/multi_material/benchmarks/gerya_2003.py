@@ -70,7 +70,7 @@ class Simulation:
     dump_period = 1e5 * 365.25 * 8.64e4
 
     # Diagnostic objects
-    diag_fields = {"output_time": [], "max_depth": [], "min_depth": []}
+    diag_fields = {"output_time": [], "block_area": []}
 
     @classmethod
     def initialise_temperature(cls, temperature):
@@ -79,25 +79,11 @@ class Simulation:
     @classmethod
     def diagnostics(cls, simu_time, variables):
         level_set = variables["level_set"][0]
-        function_space = level_set.function_space()
 
-        depth_per_core = fd.Function(function_space).interpolate(
-            fd.conditional(
-                level_set >= 0.5,
-                cls.domain_dimensions[1] - function_space.mesh().coordinates[1],
-                np.nan,
-            )
-        )
-        max_depth_per_core = np.nanmax(depth_per_core.dat.data_ro_with_halos, initial=0)
-        min_depth_per_core = np.nanmin(
-            depth_per_core.dat.data_ro_with_halos, initial=cls.domain_dimensions[1]
-        )
-        max_depth = level_set.comm.allreduce(max_depth_per_core, MPI.MAX)
-        min_depth = level_set.comm.allreduce(min_depth_per_core, MPI.MIN)
+        block_area = fd.assemble(fd.conditional(level_set >= 0.5, 1, 0) * fd.dx)
 
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e6)
-        cls.diag_fields["max_depth"].append(max_depth / 1e3)
-        cls.diag_fields["min_depth"].append(min_depth / 1e3)
+        cls.diag_fields["block_area"].append(block_area / 1e10)
 
     @classmethod
     def save_and_plot(cls):
@@ -107,21 +93,10 @@ class Simulation:
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
 
             ax.set_xlabel("Time (Myr)")
-            ax.set_ylabel("Depth (km)")
+            ax.set_ylabel("Relative block area")
 
-            ax.plot(
-                cls.diag_fields["output_time"],
-                cls.diag_fields["max_depth"],
-                label="Deepest node within the block",
-            )
-            ax.plot(
-                cls.diag_fields["output_time"],
-                cls.diag_fields["min_depth"],
-                label="Shallowest node within the block",
-            )
-
-            ax.legend()
+            ax.plot(cls.diag_fields["output_time"], cls.diag_fields["block_area"])
 
             fig.savefig(
-                f"{cls.name}/block_depth.pdf".lower(), dpi=300, bbox_inches="tight"
+                f"{cls.name}/block_area.pdf".lower(), dpi=300, bbox_inches="tight"
             )

@@ -3,6 +3,9 @@ from typing import ClassVar, Tuple
 
 import firedrake as fd
 import initial_signed_distance as isd
+import matplotlib.pyplot as plt
+import numpy as np
+from mpi4py import MPI
 
 import gadopt as ga
 
@@ -43,7 +46,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (1e6, 6.6e5)
-    mesh_elements = (192, 128)
+    mesh_file = "benchmarks/schmalholz_2011.msh"
 
     # The following two lists must be ordered such that, unpacking from the end, each
     # pair of arguments enables initialising a level set whose 0-contour corresponds to
@@ -83,7 +86,10 @@ class Simulation:
     dump_period = 5e5 * 365.25 * 8.64e4
 
     # Diagnostic objects
+    diag_fields = {"normalised_time": [], "slab_necking": []}
+    lithosphere_thickness = 8e4
     slab_length = 2.5e5
+    slab_width = 8e4
     characteristic_time = (
         4
         * Lithosphere.visc_coeff
@@ -98,8 +104,98 @@ class Simulation:
 
     @classmethod
     def diagnostics(cls, simu_time, variables):
-        pass
+        epsilon = float(variables["epsilon"])
+        level_set = variables["level_set"][0]
+        level_set_data = level_set.dat.data_ro_with_halos
+        coords_data = (
+            fd.Function(
+                fd.VectorFunctionSpace(level_set.ufl_domain(), level_set.ufl_element())
+            )
+            .interpolate(fd.SpatialCoordinate(level_set))
+            .dat.data_ro_with_halos
+        )
+
+        mask_ls_outside = (
+            (coords_data[:, 0] <= cls.domain_dimensions[0] / 2)
+            & (
+                coords_data[:, 1]
+                < cls.domain_dimensions[1] - cls.lithosphere_thickness - 2e4
+            )
+            & (
+                coords_data[:, 1]
+                > cls.domain_dimensions[1] - cls.lithosphere_thickness - cls.slab_length
+            )
+            & (level_set_data < 0.5)
+        )
+        mask_ls_inside = (
+            (coords_data[:, 0] <= cls.domain_dimensions[0] / 2)
+            & (
+                coords_data[:, 1]
+                < cls.domain_dimensions[1] - cls.lithosphere_thickness - 2e4
+            )
+            & (
+                coords_data[:, 1]
+                > cls.domain_dimensions[1] - cls.lithosphere_thickness - cls.slab_length
+            )
+            & (level_set_data >= 0.5)
+        )
+        if mask_ls_outside.any():
+            ind_outside = coords_data[mask_ls_outside, 0].argmax()
+            hor_coord_outside = coords_data[mask_ls_outside, 0][ind_outside]
+            if not mask_ls_outside.all():
+                ver_coord_outside = coords_data[mask_ls_outside, 1][ind_outside]
+                mask_ver_coord = (
+                    abs(coords_data[mask_ls_inside, 1] - ver_coord_outside) < 1e3
+                )
+                if mask_ver_coord.any():
+                    ind_inside = coords_data[mask_ls_inside, 0][mask_ver_coord].argmin()
+                    hor_coord_inside = coords_data[mask_ls_inside, 0][mask_ver_coord][
+                        ind_inside
+                    ]
+
+                    ls_outside = level_set_data[mask_ls_outside][ind_outside]
+                    sdls_outside = epsilon * np.log(ls_outside / (1 - ls_outside))
+
+                    ls_inside = level_set_data[mask_ls_inside][mask_ver_coord][
+                        ind_inside
+                    ]
+                    sdls_inside = epsilon * np.log(ls_inside / (1 - ls_inside))
+
+                    ls_dist = sdls_inside / (sdls_inside - sdls_outside)
+                    hor_coord_interface = (
+                        ls_dist * hor_coord_outside + (1 - ls_dist) * hor_coord_inside
+                    )
+                    min_width = cls.domain_dimensions[0] - 2 * hor_coord_interface
+                else:
+                    min_width = cls.domain_dimensions[0] - 2 * hor_coord_outside
+            else:
+                min_width = cls.domain_dimensions[0] - 2 * hor_coord_outside
+        else:
+            min_width = np.inf
+
+        min_width_global = level_set.comm.allreduce(min_width, MPI.MIN)
+
+        cls.diag_fields["normalised_time"].append(simu_time / cls.characteristic_time)
+        cls.diag_fields["slab_necking"].append(min_width_global / cls.slab_width)
 
     @classmethod
     def save_and_plot(cls):
-        pass
+        if MPI.COMM_WORLD.rank == 0:
+            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+
+            fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
+
+            ax.set_xlabel("Normalised time")
+            ax.set_ylabel("Slab necking")
+
+            ax.plot(
+                cls.diag_fields["normalised_time"],
+                cls.diag_fields["slab_necking"],
+                label="Simulation",
+            )
+
+            ax.legend()
+
+            fig.savefig(
+                f"{cls.name}/slab_necking.pdf".lower(), dpi=300, bbox_inches="tight"
+            )

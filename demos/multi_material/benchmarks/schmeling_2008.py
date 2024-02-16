@@ -35,7 +35,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (3e6, 7.5e5)
-    mesh_elements = (512, 128)
+    mesh_file = "benchmarks/schmeling_2008.msh"
 
     # Parameters to initialise level sets
     slope = 0

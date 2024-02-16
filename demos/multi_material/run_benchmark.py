@@ -182,7 +182,7 @@ level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solv
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
-    dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.55
+    dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.6
 )
 time_output = fd.Function(func_space_pres, name="Time")
 time_now, step, dump_counter = 0, 0, 0
