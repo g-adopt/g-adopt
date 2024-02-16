@@ -1,27 +1,14 @@
-from typing import Optional
+from numbers import Number
+from typing import Any, Optional
 
-from firedrake import (
-    Constant,
-    DirichletBC,
-    Function,
-    Jacobian,
-    TensorFunctionSpace,
-    dot,
-)
+from firedrake import Constant, DirichletBC, Function, Jacobian, TensorFunctionSpace, dot
 
 from .approximations import BaseApproximation
 from .scalar_equation import EnergyEquation
 from .time_stepper import RungeKuttaTimeIntegrator
-from .utility import (
-    DEBUG,
-    INFO,
-    absv,
-    ensure_constant,
-    is_continuous,
-    log,
-    log_level,
-    su_nubar,
-)
+from .utility import is_continuous, ensure_constant
+from .utility import log_level, INFO, DEBUG, log
+from .utility import absv, su_nubar
 
 __all__ = [
     "iterative_energy_solver_parameters",
@@ -29,25 +16,38 @@ __all__ = [
     "EnergySolver",
 ]
 
-iterative_energy_solver_parameters = {
+iterative_energy_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
     "snes_type": "ksponly",
     "ksp_type": "gmres",
     "ksp_rtol": 1e-5,
     "pc_type": "sor",
 }
+"""Default solver parameters for iterative solvers"""
 
-direct_energy_solver_parameters = {
+direct_energy_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
     "snes_type": "ksponly",
     "ksp_type": "preonly",
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
 }
+"""Default solver parameters for direct solvers"""
 
 
 class EnergySolver:
-    """Timestepper solver for the energy equation."""
+    """Timestepper solver for the energy equation.
+
+    Arguments:
+      T:                 Firedrake function for the temperature
+      u:                 Firedrake function for the velocity
+      approximation:     G-ADOPT base approximation describing the system of equations
+      delta_t:           the simulation time step
+      bcs:               dictionary of identifier-value pairs specifying boundary conditions
+      solver_parameters: additional solver parameters provided to PETSc
+      su_advection:      whether to use of the streamline-upwind scheme
+
+    """
 
     def __init__(
         self,
@@ -56,28 +56,10 @@ class EnergySolver:
         approximation: BaseApproximation,
         delta_t: Constant,
         timestepper: RungeKuttaTimeIntegrator,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-        solver_parameters: Optional[dict[str, str | float]] = None,
+        bcs: Optional[dict[int, dict[str, Number]]] = None,
+        solver_parameters: Optional[dict[str, Any]] = None,
         su_advection: bool = False,
     ):
-        """Initialises the solver instance from the simulation's state.
-
-        Args:
-          T:
-            Firedrake function for the temperature.
-          u:
-            Firedrake function for the velocity.
-          approximation:
-            G-ADOPT base approximation describing the system of equations.
-          delta_t:
-            Firedrake constant representing the simulation's time step.
-          bcs:
-            Dictionary of identifier-value pairs specifying boundary conditions.
-          solver_parameters:
-            Dictionary of solver parameters provided to PETSc.
-          su_advection:
-            Boolean signaling the use of the streamline-upwind scheme.
-        """
         self.T = T
         self.Q = T.function_space()
         self.mesh = self.Q.mesh()
