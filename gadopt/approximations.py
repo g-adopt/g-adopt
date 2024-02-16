@@ -1,4 +1,6 @@
 import abc
+from numbers import Number
+from typing import Optional
 
 from firedrake import Function, Identity, div, grad, inner, sym, ufl
 
@@ -17,10 +19,10 @@ class BaseApproximation(abc.ABC):
 
     The basic assumption is that we are solving (to be extended when needed)
 
-    > div(dev_stress) + grad p + buoyancy(T, p) * khat = 0
-    > div(rho_continuity * u) = 0
-    > rhocp DT/Dt + linearized_energy_sink(u) * T
-      = div(kappa * grad(Tbar + T)) + energy_source(u)
+        div(dev_stress) + grad p + buoyancy(T, p) * khat = 0
+        div(rho_continuity * u) = 0
+        rhocp DT/Dt + linearized_energy_sink(u) * T
+          = div(kappa * grad(Tbar + T)) + energy_source(u)
 
     where the following terms are provided by Approximation methods:
 
@@ -32,6 +34,7 @@ class BaseApproximation(abc.ABC):
         - if compressible then dev_stress = mu * [sym(grad(u) - 2/3 div(u)]
         - if not compressible then dev_stress = mu * sym(grad(u)) and
           rho_continuity is assumed to be 1
+
     """
 
     @property
@@ -41,6 +44,7 @@ class BaseApproximation(abc.ABC):
 
         Returns:
           A boolean signalling if the governing equations are in compressible form.
+
         """
         pass
 
@@ -50,6 +54,7 @@ class BaseApproximation(abc.ABC):
 
         Returns:
           A UFL expression for the buoyancy term (momentum source in gravity direction).
+
         """
         pass
 
@@ -59,6 +64,7 @@ class BaseApproximation(abc.ABC):
 
         Returns:
           A UFL expression for density in the mass continuity equation.
+
         """
         pass
 
@@ -68,6 +74,7 @@ class BaseApproximation(abc.ABC):
 
         Returns:
           A UFL expression for the volumetric heat capacity in the energy equation.
+
         """
         pass
 
@@ -77,6 +84,7 @@ class BaseApproximation(abc.ABC):
 
         Returns:
           A UFL expression for thermal diffusivity.
+
         """
         pass
 
@@ -87,6 +95,7 @@ class BaseApproximation(abc.ABC):
 
         Returns:
           A Firedrake function for the reference temperature profile.
+
         """
         pass
 
@@ -96,6 +105,7 @@ class BaseApproximation(abc.ABC):
 
         Returns:
           A UFL expression for temperature-related sink terms in the energy equation.
+
         """
         pass
 
@@ -105,6 +115,7 @@ class BaseApproximation(abc.ABC):
 
         Returns:
           A UFL expression for additional independent terms in the energy equation.
+
         """
         pass
 
@@ -115,34 +126,30 @@ class BoussinesqApproximation(BaseApproximation):
     Density variations are considered small and only affect the buoyancy term. Reference
     parameters are typically constant. Viscous dissipation is neglected (Di << 1).
 
-    The thermal diffusivity, gravitational acceleration, reference density, and
-    coefficient of thermal expansion are normally kept at 1 when non-dimensionalised.
+    Arguments:
+      Ra:    Rayleigh number
+      kappa: thermal diffusivity
+      g:     gravitational acceleration
+      rho:   reference density
+      alpha: coefficient of thermal expansion
+
+    Note:
+      The thermal diffusivity, gravitational acceleration, reference
+      density, and coefficient of thermal expansion are normally kept
+      at 1 when non-dimensionalised.
+
     """
     compressible = False
     Tbar = 0
 
     def __init__(
         self,
-        Ra: Function | int | float,
-        kappa: Function | int | float = 1,
-        g: Function | int | float = 1,
-        rho: Function | int | float = 1,
-        alpha: Function | int | float = 1
+        Ra: Function | Number,
+        kappa: Function | Number = 1,
+        g: Function | Number = 1,
+        rho: Function | Number = 1,
+        alpha: Function | Number = 1
     ):
-        """Initialises the approximation instance.
-
-        Args:
-          Ra:
-            Float denoting the Rayleigh number.
-          kappa:
-            Float denoting thermal diffusivity.
-          g:
-            Float denoting gravitational acceleration.
-          rho:
-            Float denoting the reference density.
-          alpha:
-            Float denoting the coefficient of thermal expansion.
-        """
         self.Ra = ensure_constant(Ra)
         self.thermal_diffusivity = ensure_constant(kappa)
         self.g = ensure_constant(g)
@@ -174,36 +181,30 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     Extends the Boussinesq approximation by including viscous dissipation and work
     against gravity (both scaled with Di).
 
-    The thermal diffusivity, gravitational acceleration, reference density, and
-    coefficient of thermal expansion are normally kept at 1 when non-dimensionalised.
+    Arguments:
+      Ra: Rayleigh number
+      Di: Dissipation number
+      mu: dynamic viscosity
+      H:  volumetric heat production
+      cartesian:
+        - True: gravity is assumed to point in the negative z-direction
+        - False: gravity is assumed to point radially inward
+
+    Keyword Arguments:
+      kappa (Number): thermal diffusivity
+      g (Number):     gravitational acceleration
+      rho (Number):   reference density
+      alpha (Number): coefficient of thermal expansion
+
+    Note:
+      The thermal diffusivity, gravitational acceleration, reference
+      density, and coefficient of thermal expansion are normally kept
+      at 1 when non-dimensionalised.
+
     """
     compressible = False
 
-    def __init__(self, Ra, Di, mu=1, H=None, cartesian=True, **kwargs):
-        """Initialises the approximation instance.
-
-        Args:
-          Ra:
-            Float denoting the Rayleigh number.
-          Di:
-            Float denoting the Dissipation number.
-          kappa:
-            Float denoting thermal diffusivity.
-          g:
-            Float denoting gravitational acceleration.
-          rho:
-            Float denoting the reference density.
-          alpha:
-            Float denoting the coefficient of thermal expansion.
-          mu:
-            Float denoting dynamic viscosity.
-          H:
-            Float denoting volumetric heat production.
-          cartesian:
-            Boolean signaling if Cartesian coordinates are employed. If True, gravity is
-            assumed to point in the negative z-direction. If False gravity is assumed to
-            point radially inward.
-        """
+    def __init__(self, Ra: Number, Di: Number, mu: Number = 1, H: Optional[Number] = None, cartesian: bool = True, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.mu = mu
@@ -232,40 +233,46 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
 
 
 class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
-    """
-    Truncated Anelastic Liquid Approximation
+    """Truncated Anelastic Liquid Approximation
 
     Compressible approximation. Excludes linear dependence of density on pressure (chi)
 
     Arguments:
       Ra: Rayleigh number
       Di: Dissipation number
-
-    Keyword Arguments:
-      rho:   reference density
-      alpha: reference thermal expansion coefficient
       Tbar:  reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion) - default 0
       chi:   reference isothermal compressibility
       cp:    reference specific heat at constant pressure
-      mu:    Viscosity used in viscous dissipation
-      H:     Volumetric heat production - default 0
-      cartesian:
+      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
+      cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
+      cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+
+    Keyword Arguments:
+      rho (Number):   reference density
+      alpha (Number): reference thermal expansion coefficient
+      mu (Number):    viscosity used in viscous dissipation
+      H (Number):     volumetric heat production - default 0
+      cartesian (bool):
         - True: gravity points in negative z-direction
         - False: gravity points radially inward
-      kappa: Diffusivity
-      g: Gravitational acceleration
-      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
-      cp0: Specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
-      cv0: specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+      kappa (Number):  diffusivity
+      g (Number):      gravitational acceleration
 
     Note:
       The keyword arguments may be depth-dependent, but default to 1 if not supplied.
+
     """
     compressible = True
 
-    def __init__(self, Ra, Di,
-                 Tbar=0, chi=1, cp=1,
-                 gamma0=1, cp0=1, cv0=1,
+    def __init__(self,
+                 Ra: Number,
+                 Di: Number,
+                 Tbar: Function | Number = 0,
+                 chi: Function | Number = 1,
+                 cp: Function | Number = 1,
+                 gamma0: Function | Number = 1,
+                 cp0: Function | Number = 1,
+                 cv0: Function | Number = 1,
                  **kwargs):
         super().__init__(Ra, Di, **kwargs)
         self.Tbar = Tbar
@@ -287,10 +294,10 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
 
 
 class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
-    """
-    Anelastic Liquid Approximation
+    """Anelastic Liquid Approximation
 
-    Compressible approximation. Includes linear dependence of density on pressure (chi)"""
+    Compressible approximation. Includes linear dependence of density on pressure (chi)
+    """
 
     def buoyancy(self, p, T):
         pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
