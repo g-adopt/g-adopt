@@ -11,9 +11,22 @@ __all__ = ["BaseEquation", "BaseTerm"]
 class BaseEquation:
     """Produces the UFL for the registered terms constituting an equation.
 
+    The equation instance is initialised given test and trial function
+    spaces.  Test and trial spaces are only used to determine the
+    employed discretisation (i.e. UFL elements); test and trial
+    functions are provided separately in the residual method.
+
+    Keyword arguments provided here are passed on to each collected equation term.
+
     Attributes:
-      terms:
-        List of equation terms defined through inheritance from BaseTerm.
+      terms (list[BaseTerm]): List of equation terms defined through inheritance from BaseTerm.
+
+    Arguments:
+      test_space:  Firedrake function space of the test function
+      trial_space: Firedrake function space of the trial function
+      quad_degree:
+        Quadrature degree. Default value is `2p + 1`, where p the polynomial degree of the trial space
+
     """
     terms = []
 
@@ -24,23 +37,6 @@ class BaseEquation:
         quad_degree: Optional[int] = None,
         **kwargs
     ):
-        """Initialises the equation instance given test and trial function spaces.
-
-        Test and trial spaces are only used to determine the employed discretisation
-        (i.e. UFL elements); test and trial functions are provided separately in the
-        residual method.
-
-        Keyword arguments provided here are passed on to each collected equation term.
-
-        Args:
-          test_space:
-            Firedrake function space of the test function.
-          trial_space:
-            Firedrake function space of the rial function.
-          quad_degree:
-            Integer representing the quadrature degree. Default value is `2p + 1`, with
-            p the polynomial degree of the trial space.
-        """
         self.test_space = test_space
         self.trial_space = trial_space
         self.mesh = trial_space.mesh()
@@ -82,14 +78,13 @@ class BaseEquation:
     ) -> firedrake.ufl.core.expr.Expr:
         """Typical mass term used in time discretisations.
 
-        Args:
-          test:
-            Firedrake test function.
-          trial:
-            Firedrake trial function.
+        Arguments:
+          test:  Firedrake test function
+          trial: Firedrake trial function
 
         Returns:
           The UFL expression associated with the mass term of the equation.
+
         """
         return firedrake.inner(test, trial) * self.dx
 
@@ -105,20 +100,16 @@ class BaseEquation:
 
         The final residual is calculated as a sum of all individual term residuals.
 
-        Args:
-          test:
-            Firedrake test function.
-          trial:
-            Firedrake trial function.
-          trial_lagged:
-            Firedrake trial function from the previous time step.
-          fields:
-            Dictionary of physical fields from the simulation's state.
-          bcs:
-            Dictionary of identifier-value pairs specifying boundary conditions.
+        Arguments:
+          test:         Firedrake test function
+          trial:        Firedrake trial function
+          trial_lagged: Firedrake trial function from the previous time step
+          fields:       Dictionary of physical fields from the simulation's state
+          bcs:          Dictionary of identifier-value pairs specifying boundary conditions
 
         Returns:
           The UFL expression associated with all equation terms except the mass term.
+
         """
         if trial_lagged is None:
             trial_lagged = trial
@@ -139,6 +130,16 @@ class BaseTerm(ABC):
 
     The implemented expression describes the term's contribution to the residual in the
     finite element discretisation.
+
+    Arguments:
+      test_space:  Firedrake function space of the test function
+      trial_space: Firedrake function space of the trial function
+      dx:          UFL measure for the domain, boundaries excluded
+      ds:          UFL measure for the domain's outer boundaries
+      dS:
+        UFL measure for the domain's inner boundaries when using a discontinuous
+        function space
+
     """
     def __init__(
         self,
@@ -149,21 +150,6 @@ class BaseTerm(ABC):
         dS: firedrake.Measure,
         **kwargs,
     ):
-        """Initialises the equation instance given function spaces.
-
-        Args:
-          test_space:
-            Firedrake function space of the test function.
-          trial_space:
-            Firedrake function space of the rial function.
-          dx:
-            UFL measure for the domain, boundaries excluded.
-          ds:
-            UFL measure for the domain's outer boundaries.
-          dS:
-            UFL measure for the domain's inner boundaries when using a discontinuous
-            function space.
-        """
         self.test_space = test_space
         self.trial_space = trial_space
 
@@ -188,19 +174,15 @@ class BaseTerm(ABC):
     ) -> firedrake.ufl.core.expr.Expr:
         """Residual associated with the equation's term.
 
-        Args:
-          test:
-            Firedrake test function.
-          trial:
-            Firedrake trial function.
-          trial_lagged:
-            Firedrake trial function from the previous time step.
-          fields:
-            Dictionary of physical fields from the simulation's state.
-          bcs:
-            Dictionary of identifier-value pairs specifying boundary conditions.
+        Arguments:
+          test:         Firedrake test function
+          trial:        Firedrake trial function
+          trial_lagged: Firedrake trial function from the previous time step
+          fields:       Dictionary of physical fields from the simulation's state
+          bcs:          Dictionary of identifier-value pairs specifying boundary conditions
 
         Returns:
           A UFL expression for the term's contribution to the finite element residual.
+
         """
         pass
