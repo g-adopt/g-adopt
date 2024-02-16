@@ -101,7 +101,8 @@ class StokesSolver:
     def __init__(self, z, T, approximation, bcs=None, mu=1,
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False, J=None, constant_jacobian=False,
-                 iterative_2d=False, free_surface_dt=None, **kwargs):
+                 iterative_2d=False, free_surface_dt=None, free_surface_variable_rho=True,
+                 **kwargs):
 
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
@@ -184,7 +185,13 @@ class StokesSolver:
                 self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
                                       free_surface_id=id, free_surface_dt=free_surface_dt, theta=theta, k=self.k))
                 # Add free surface stress term
-                self.weak_bcs[id] = {'normal_stress': (approximation.rho - exterior_density) * approximation.g * eta_theta[c]}
+                if free_surface_variable_rho:
+                    # Use actual density
+                    surface_rho = approximation.rho_field(self.stokes_vars[1], T)
+                else:
+                    # Use reference density (needed for analytical cylindrical cases)
+                    surface_rho = approximation.rho
+                self.weak_bcs[id] = {'normal_stress': (surface_rho - exterior_density) * approximation.g * eta_theta[c]}
 
                 # Set internal dofs to zero to prevent singular matrix for free surface equation
                 self.strong_bcs.append(InteriorBC(self.Z.sub(2+c), 0, id))

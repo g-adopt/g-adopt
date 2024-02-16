@@ -89,6 +89,9 @@ class BoussinesqApproximation(BaseApproximation):
     def buoyancy(self, p, T):
         return self.Ra * self.g * self.alpha * self.rho * T
 
+    def rho_field(self, p, T):
+        return self.rho * (1 - self.alpha * T)
+
     def rho_continuity(self):
         return 1
 
