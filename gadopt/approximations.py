@@ -211,3 +211,31 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
+
+
+class SmallDisplacementViscoelasticApproximation(BaseApproximation):
+
+    """Small Displacement Viscoelastic approximation:
+
+    Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
+    compressible = False
+
+    def __init__(self, background_density, displacement, g=1):
+        """
+        :arg kappa, g, rho, alpha:  Diffusivity, gravitational acceleration, reference density and thermal expansion coefficient
+                                    Normally kept at 1 when non-dimensionalised."""
+        self.g = ensure_constant(g)
+        self.background_density = reference_density  # This is a field
+        self.displacement = displacement  # This is a field
+    
+    def density_perturbation(self):
+        return -inner(self.displacement, grad(self.background_density)
+
+    def buoyancy(self, p, T):
+        # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
+        # accounts for advection of density in the absence of an evolution equation for temperature
+        # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
+        return  -self.g * self.density_perturbation() 
+
+    def rho_continuity(self):
+        return 1
