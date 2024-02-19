@@ -1,53 +1,33 @@
 """Slope limiters for discontinuous fields."""
-from __future__ import absolute_import
-
-from typing import Optional
-
+from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
+from firedrake import max_value, min_value, Function
+from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement, FiniteElement
+from firedrake.functionspaceimpl import WithGeometry
 import numpy as np
-from firedrake import (
-    EnrichedElement,
-    FiniteElement,
-    Function,
-    FunctionSpace,
-    HDivElement,
-    LinearSolver,
-    MixedElement,
-    TensorProductElement,
-    TestFunction,
-    TrialFunction,
-    VectorElement,
-    VertexBasedLimiter,
-    assemble,
-    dx,
-    functionspaceimpl,
-    max_value,
-    min_value,
-)
+from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
 from pyop2 import op2
-from pyop2.profiling import timed_function, timed_region, timed_stage  # NOQA
+from typing import Optional
 
 __all__ = ["VertexBasedP1DGLimiter"]
 
 
 def assert_function_space(
-    fs: functionspaceimpl.WithGeometry, family: str | list[str], degree: int
+    fs: WithGeometry, family: str | list[str], degree: int
 ):
     """Checks the family and degree of the function space.
 
     If the function space lies on an extruded mesh, checks both spaces of the outer
     product.
 
-    Args:
-      fs:
-        UFL function space.
-      family:
-        String or list of strings corresponding to the name of the element family.
-      degree:
-        Integer specifying the polynomial degree of the function space.
+    Arguments:
+      fs: UFL function space
+      family: Name or names of the expected element families
+      degree: Expected polynomial degree of the function space
 
     Raises:
-      AssertionError:
-        Incorrect function space.
+      AssertionError: The family and/or degree of the function
+                      space don't match the expected values
+
     """
     fam_list = family
     if not isinstance(family, list):
@@ -69,16 +49,15 @@ def assert_function_space(
 
 
 def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
-    """Processes an extruded UFL element.
+    """Gets the base element from an extruded element.
 
     In case of a non-extruded mesh, returns the element itself.
 
-    Args:
-      ufl_element:
-        UFL element investigated.
+    Arguments:
+      ufl_element: UFL element from which to extract the base element
 
     Returns:
-      UFL TensorProductElement of an extruded UFL element.
+      The base element, or the provided element for a non-extruded mesh.
     """
     if isinstance(ufl_element, HDivElement):
         ufl_element = ufl_element._element
@@ -92,25 +71,21 @@ def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
 
 
 def get_facet_mask(
-    function_space: functionspaceimpl.WithGeometry, facet: str = 'bottom'
+    function_space: WithGeometry, facet: str = 'bottom'
 ) -> np.ndarray:
-    """
-
-    The meaning of top/bottom depends on the extrusion's direction. Here, we assume
+    """The meaning of top/bottom depends on the extrusion's direction. Here, we assume
     that the mesh has been extruded upwards (along the positive z axis).
 
-    Args:
-      function_space:
-        UFL function space.
-      facet:
-        String specifying the facet.
+    Arguments:
+      function_space: UFL function space
+      facet: String specifying the facet ("bottom" or "top")
 
     Returns:
       The top/bottom nodes of extruded 3D elements.
 
     Raises:
-      AssertionError:
-        The function space is not defined on an extruded mesh.
+      AssertionError: The function space is not defined on an extruded mesh
+
     """
     from tsfc.finatinterface import create_element as create_finat_element
 
@@ -136,24 +111,19 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
     Kuzmin, D. (2010). A vertex-based hierarchical slope limiter for p-adaptive
     discontinuous Galerkin methods. Journal of computational and applied mathematics,
     233(12), 3077-3085.
+
+    Arguments:
+      p1dg_space: UFL P1DG function space
+      clip_min: Minimal threshold to apply
+      clip_max: Maximal threshold to apply
+
     """
     def __init__(
         self,
-        p1dg_space: functionspaceimpl.WithGeometry,
+        p1dg_space: WithGeometry,
         clip_min: Optional[float] = None,
         clip_max: Optional[float] = None,
     ):
-        """Initialises the limiter instance given the P1DG function space.
-
-        Args:
-          p1dg_space:
-            UFL P1DG function space.
-          clip_min:
-            Float specifying the minimal threshold to apply.
-          clip_max:
-            Float specifying the maximal threshold to apply.
-        """
-
         assert_function_space(p1dg_space, ['Discontinuous Lagrange', 'DQ'], 1)
 
         self.is_vector = p1dg_space.value_size > 1
@@ -181,6 +151,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         Returns:
           Firedrake linear solver.
+
         """
         u = TrialFunction(self.P0)
         v = TestFunction(self.P0)
@@ -197,9 +168,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         Executes as part of the call to the parent `compute_bounds` method.
 
-        Args:
-          field:
-            Firedrake function onto which the limiter is applied.
+        Arguments:
+          field: Firedrake function onto which the limiter is applied
+
         """
         b = assemble(TestFunction(self.P0) * field * dx)
         self.centroid_solver.solve(self.centroids, b)
@@ -207,9 +178,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
     def compute_bounds(self, field: Function):
         """Re-computes min/max values of all neighbouring centroids.
 
-        Args:
-          field:
-            Firedrake function onto which the limiter is applied.
+        Arguments:
+          field: Firedrake function onto which the limiter is applied
+
         """
         # Call general-purpose bound computation.
         super(VertexBasedP1DGLimiter, self).compute_bounds(field)
@@ -295,8 +266,8 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         """Applies the limiter on the given field (in place).
 
         Args:
-          field:
-            Firedrake function onto which the limiter is applied.
+          field: Firedrake function onto which the limiter is applied
+
         """
         with timed_stage('limiter'):
 
