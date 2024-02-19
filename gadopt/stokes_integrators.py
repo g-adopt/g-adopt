@@ -319,7 +319,9 @@ class ViscoelasticSolver(StokesSolver):
                  closed=True, rotational=False, J=None, constant_jacobian=False,
                  iterative_2d=False, free_surface_dt=None, free_surface_variable_rho=True,
                  equation=ViscoelasticEquation, **kwargs))
-
+        
+        scale_mu = 1e10  # this is a scaling factor roughly size of mantle maxwell time to make sure that solve converges with strong bcs in parallel...
+        self.F = self.F / scale_mu
 
     def effective_viscosity(viscosity, maxwell_time, dt):
         return viscosity / (maxwell_time + dt / 2)
