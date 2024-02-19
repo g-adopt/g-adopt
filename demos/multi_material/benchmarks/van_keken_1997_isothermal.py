@@ -100,17 +100,13 @@ class Simulation:
 
             fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
 
+            ax[0].grid()
+            ax[1].grid()
+
             ax[0].set_xlabel("Time (non-dimensional)")
             ax[1].set_xlabel("Time (non-dimensional)")
             ax[0].set_ylabel("Root-mean-square velocity (non-dimensional)")
             ax[1].set_ylabel("Entrainment (non-dimensional)")
-
-            ax[0].plot(
-                cls.diag_fields["output_time"],
-                cls.diag_fields["rms_velocity"],
-                label="Conservative level set",
-            )
-            ax[1].plot(cls.diag_fields["output_time"], cls.diag_fields["entrainment"])
 
             ax[0].plot(
                 rms_vel_van_keken[:, 0],
@@ -118,17 +114,26 @@ class Simulation:
                 linestyle="dotted",
                 label="PvK (van Keken et al., 1997)",
             )
-            ax[1].plot(entr_van_keken[:, 0], entr_van_keken[:, 1], linestyle="dotted")
-
-            ax[0].legend(
-                loc="upper right",
-                bbox_to_anchor=(1, 1),
-                ncol=1,
-                fontsize=12,
-                fancybox=True,
-                shadow=True,
-                bbox_transform=ax[0].transAxes,
+            ax[1].plot(
+                entr_van_keken[:, 0],
+                entr_van_keken[:, 1],
+                linestyle="dotted",
+                label="PvK (van Keken et al., 1997)",
             )
+
+            ax[0].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["rms_velocity"],
+                label="Conservative level set",
+            )
+            ax[1].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["entrainment"],
+                label="Conservative level set",
+            )
+
+            ax[0].legend(fontsize=12, fancybox=True, shadow=True)
+            ax[1].legend(fontsize=12, fancybox=True, shadow=True)
 
             fig.savefig(
                 f"{cls.name}/rms_velocity_and_entrainment.pdf".lower(),

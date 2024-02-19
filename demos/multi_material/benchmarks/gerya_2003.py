@@ -92,10 +92,18 @@ class Simulation:
 
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
 
+            ax.grid()
+
             ax.set_xlabel("Time (Myr)")
             ax.set_ylabel("Relative block area")
 
-            ax.plot(cls.diag_fields["output_time"], cls.diag_fields["block_area"])
+            ax.plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["block_area"],
+                label="Conservative level set",
+            )
+
+            ax.legend(fontsize=12, fancybox=True, shadow=True)
 
             fig.savefig(
                 f"{cls.name}/block_area.pdf".lower(), dpi=300, bbox_inches="tight"

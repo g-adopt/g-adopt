@@ -19,17 +19,17 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (2, 1)
-    mesh_elements = (512, 256)
+    mesh_elements = (2048, 1024)
 
     # Parameters to initialise level sets
-    slope = 0
-    intercept = 0.025
+    material_interface_y = 0.025
+    interface_slope = 0
     # The following two lists must be ordered such that, unpacking from the end, each
     # pair of arguments enables initialising a level set whose 0-contour corresponds to
     # the entire interface between a given material and the remainder of the numerical
     # domain. By convention, the material thereby isolated occupies the positive side
     # of the signed-distance level set.
-    isd_params = [(slope, intercept)]
+    isd_params = [(interface_slope, material_interface_y)]
     initialise_signed_distance = [
         partial(isd.isd_simple_curve, domain_dimensions[0], isd.straight_line)
     ]
@@ -63,7 +63,7 @@ class Simulation:
     entrainment_height = 0.2
     diag_params = {
         "domain_dim_x": domain_dimensions[0],
-        "material_interface_y": intercept,
+        "material_interface_y": material_interface_y,
         "entrainment_height": entrainment_height,
     }
 
@@ -95,7 +95,9 @@ class Simulation:
             / (8 - 4 * mesh_coords[1])
         )
 
-        temperature.interpolate(fd.max_value(fd.min_value(Tu + Tl + Tr + Ts - 3 / 2, 1), 0))
+        temperature.interpolate(
+            fd.max_value(fd.min_value(Tu + Tl + Tr + Ts - 3 / 2, 1), 0)
+        )
         fd.DirichletBC(temperature.function_space(), 1, 3).apply(temperature)
         fd.DirichletBC(temperature.function_space(), 0, 4).apply(temperature)
 
@@ -106,7 +108,8 @@ class Simulation:
         cls.diag_fields["entrainment"].append(
             ga.entrainment(
                 variables["level_set"][0],
-                cls.diag_params["domain_dim_x"] * cls.diag_params["material_interface_y"],
+                cls.diag_params["domain_dim_x"]
+                * cls.diag_params["material_interface_y"],
                 cls.diag_params["entrainment_height"],
             )
         )
@@ -116,6 +119,15 @@ class Simulation:
         if MPI.COMM_WORLD.rank == 0:
             np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
 
+            rms_vel_schmeling = np.loadtxt("data/HSvrms4800.dat")
+            entr_schmeling = np.loadtxt("data/HSentr4800.dat")
+            rms_vel_van_keken = np.loadtxt("data/pvk120_003.vrms.dat")
+            entr_van_keken = np.loadtxt("data/pvk120_003.entr.dat")
+            rms_vel_christensen = np.loadtxt("data/URC125x40_240k.vrms.dat")
+            entr_christensen = np.loadtxt("data/URC125x40_240k.entr.dat")
+            rms_vel_christensen_chain = np.loadtxt("data/URCchain.vrms.dat")
+            entr_christensen_chain = np.loadtxt("data/URCchain.entr.dat")
+
             fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
 
             ax[0].set_xlabel("Time (non-dimensional)")
@@ -123,8 +135,68 @@ class Simulation:
             ax[0].set_ylabel("Root-mean-square velocity (non-dimensional)")
             ax[1].set_ylabel("Entrainment (non-dimensional)")
 
-            ax[0].plot(cls.diag_fields["output_time"], cls.diag_fields["rms_velocity"])
-            ax[1].plot(cls.diag_fields["output_time"], cls.diag_fields["entrainment"])
+            ax[0].plot(
+                rms_vel_schmeling[:, 0],
+                rms_vel_schmeling[:, 1],
+                linestyle="dotted",
+                label="HS (van Keken et al., 1997)",
+            )
+            ax[1].plot(
+                entr_schmeling[:, 0],
+                entr_schmeling[:, 1],
+                linestyle="dotted",
+                label="HS (van Keken et al., 1997)",
+            )
+            ax[0].plot(
+                rms_vel_van_keken[:, 0],
+                rms_vel_van_keken[:, 1],
+                linestyle="dotted",
+                label="PvK (van Keken et al., 1997)",
+            )
+            ax[1].plot(
+                entr_van_keken[:, 0],
+                entr_van_keken[:, 1],
+                linestyle="dotted",
+                label="PvK (van Keken et al., 1997)",
+            )
+            ax[0].plot(
+                rms_vel_christensen[:, 0],
+                rms_vel_christensen[:, 1],
+                linestyle="dotted",
+                label="CND (van Keken et al., 1997)",
+            )
+            ax[1].plot(
+                entr_christensen[:, 0],
+                entr_christensen[:, 1],
+                linestyle="dotted",
+                label="CND (van Keken et al., 1997)",
+            )
+            ax[0].plot(
+                rms_vel_christensen_chain[:, 0],
+                rms_vel_christensen_chain[:, 1],
+                linestyle="dotted",
+                label="CND Markerchain (van Keken et al., 1997)",
+            )
+            ax[1].plot(
+                entr_christensen_chain[:, 0],
+                entr_christensen_chain[:, 1],
+                linestyle="dotted",
+                label="CND Markerchain (van Keken et al., 1997)",
+            )
+
+            ax[0].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["rms_velocity"],
+                label="Conservative level set",
+            )
+            ax[1].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["entrainment"],
+                label="Conservative level set",
+            )
+
+            ax[0].legend(fontsize=12, fancybox=True, shadow=True)
+            ax[1].legend(fontsize=12, fancybox=True, shadow=True)
 
             fig.savefig(
                 f"{cls.name}/rms_velocity_and_entrainment.pdf".lower(),

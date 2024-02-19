@@ -16,7 +16,7 @@ def write_output(dump_counter, checkpoint_fields=None):
     else:
         density.interpolate(dens_diff + ref_dens)
     viscosity.interpolate(viscosity_ufl)
-    if Simulation.name == "Trim_2023":
+    if "Trim_2023" in Simulation.name:
         Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
 
     output_file.write(
@@ -82,7 +82,7 @@ level_set = [
 ]
 
 # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-if Simulation.name == "Trim_2023":
+if "Trim_2023" in Simulation.name:
     epsilon = fd.Constant(1 / 2 / Simulation.k)
 else:  # Empirical calibration that seems to be robust
     local_min_mesh_size = mesh.cell_sizes.dat.data.min()
@@ -106,11 +106,11 @@ ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
 viscosity_ufl = ga.field_interface(
     level_set,
     [material.viscosity(velocity=velocity_ufl) for material in Simulation.materials],
-    method="geometric",
+    method="sharp" if "Schmalholz_2011" in Simulation.name else "geometric",
 )
 viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
 
-if Simulation.name == "Trim_2023":
+if "Trim_2023" in Simulation.name:
     int_heat_rate_ufl = fd.Function(func_space_temp, name="Internal heating rate")
     int_heat_rate = int_heat_rate_ufl
     Simulation.internal_heating_rate(int_heat_rate_ufl, 0)
@@ -207,7 +207,7 @@ diagnostic_fields = {
 }
 
 # Function to be coupled with the energy solver
-if Simulation.name == "Trim_2023":
+if "Trim_2023" in Simulation.name:
     update_forcings = partial(Simulation.internal_heating_rate, int_heat_rate_ufl)
 else:
     update_forcings = None
@@ -226,7 +226,7 @@ while time_now < Simulation.time_end:
     dt.assign(t_adapt.update_timestep())
 
     # Solve energy system
-    if Simulation.name == "Trim_2023":
+    if "Trim_2023" in Simulation.name:
         Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
     energy_solver.solve(t=time_now, update_forcings=update_forcings)
 

@@ -1,11 +1,11 @@
-horizontal_resolution = 1e4;
+horizontal_resolution = 5e3;
 
 domain_dimension_x = 3e6;
 domain_dimension_y = 7.5e5;
 
 layer_min_y = 6.5e5;
 layer_thickness = 8e4;
-layer_vertical_resolution = 2e3;
+layer_vertical_resolution = 1e3;
 
 Point(1) = {0, 0, 0, horizontal_resolution};
 Point(2) = {domain_dimension_x, 0, 0, horizontal_resolution};

@@ -41,18 +41,18 @@ class Simulation:
     mesh_file = "benchmarks/crameri_2012.msh"
 
     # Parameters to initialise level sets
-    slope = 0
-    intercept = 6e5
-    material_interface_y = 7e5
-    interface_deflection = 7e3
+    bottom_material_interface_y = 6e5
+    bottom_interface_slope = 0
+    top_material_interface_y = 7e5
+    top_interface_deflection = 7e3
     # The following two lists must be ordered such that, unpacking from the end, each
     # pair of arguments enables initialising a level set whose 0-contour corresponds to
     # the entire interface between a given material and the remainder of the numerical
     # domain. By convention, the material thereby isolated occupies the positive side
     # of the signed-distance level set.
     isd_params = [
-        (slope, intercept),
-        (interface_deflection, domain_dimensions[0], material_interface_y),
+        (bottom_interface_slope, bottom_material_interface_y),
+        (top_interface_deflection, domain_dimensions[0], top_material_interface_y),
     ]
     initialise_signed_distance = [
         partial(isd.isd_simple_curve, domain_dimensions[0], isd.straight_line),
@@ -99,7 +99,7 @@ class Simulation:
     @classmethod
     def diagnostics(cls, simu_time, variables):
         max_topography_analytical = (
-            cls.interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
+            cls.top_interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
         )
 
         epsilon = float(variables["epsilon"])
@@ -156,7 +156,7 @@ class Simulation:
 
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
         cls.diag_fields["max_topography"].append(
-            (max_topo_global - cls.material_interface_y) / 1e3
+            (max_topo_global - cls.top_material_interface_y) / 1e3
         )
         cls.diag_fields["max_topography_analytical"].append(max_topography_analytical)
 
@@ -167,18 +167,20 @@ class Simulation:
 
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
 
+            ax.grid()
+
             ax.set_xlabel("Time (kyr)")
             ax.set_ylabel("Maximum topography (km)")
 
             ax.plot(
                 cls.diag_fields["output_time"],
-                cls.diag_fields["max_topography"],
-                label="Simulation",
+                cls.diag_fields["max_topography_analytical"],
+                label="Analytical (Crameri et al., 2012)",
             )
             ax.plot(
                 cls.diag_fields["output_time"],
-                cls.diag_fields["max_topography_analytical"],
-                label="Analytical",
+                cls.diag_fields["max_topography"],
+                label="Conservative level set",
             )
 
             ax.legend()

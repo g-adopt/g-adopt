@@ -2,6 +2,9 @@ from functools import partial
 
 import firedrake as fd
 import initial_signed_distance as isd
+import matplotlib.pyplot as plt
+import numpy as np
+from mpi4py import MPI
 
 import gadopt as ga
 
@@ -19,14 +22,14 @@ class Simulation:
     mesh_elements = (192, 64)
 
     # Parameters to initialise level sets
-    slope = 0
-    intercept = 0.5
+    material_interface_y = 0.5
+    interface_slope = 0
     # The following two lists must be ordered such that, unpacking from the end, each
     # pair of arguments enables initialising a level set whose 0-contour corresponds to
     # the entire interface between a given material and the remainder of the numerical
     # domain. By convention, the material thereby isolated occupies the positive side
     # of the signed-distance level set.
-    isd_params = [(slope, intercept)]
+    isd_params = [(interface_slope, material_interface_y)]
     initialise_signed_distance = [
         partial(isd.isd_simple_curve, domain_dimensions[0], isd.straight_line)
     ]
@@ -59,6 +62,15 @@ class Simulation:
     time_end = 0.0236
     dump_period = 2e-4
 
+    # Diagnostic objects
+    diag_fields = {"output_time": [], "rms_velocity": [], "entrainment": []}
+    entrainment_height = 0.5
+    diag_params = {
+        "domain_dim_x": domain_dimensions[0],
+        "material_interface_y": material_interface_y,
+        "entrainment_height": entrainment_height,
+    }
+
     @classmethod
     def initialise_temperature(cls, temperature):
         mesh_coords = fd.SpatialCoordinate(temperature.function_space().mesh())
@@ -87,8 +99,48 @@ class Simulation:
 
     @classmethod
     def diagnostics(cls, simu_time, variables):
-        pass
+        cls.diag_fields["output_time"].append(simu_time)
+        cls.diag_fields["rms_velocity"].append(ga.rms_velocity(variables["velocity"]))
+        cls.diag_fields["entrainment"].append(
+            ga.entrainment(
+                variables["level_set"][0],
+                cls.diag_params["domain_dim_x"]
+                * cls.diag_params["material_interface_y"],
+                cls.diag_params["entrainment_height"],
+            )
+        )
 
     @classmethod
     def save_and_plot(cls):
-        pass
+        if MPI.COMM_WORLD.rank == 0:
+            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+
+            fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
+
+            ax[0].grid()
+            ax[1].grid()
+
+            ax[0].set_xlabel("Time (non-dimensional)")
+            ax[1].set_xlabel("Time (non-dimensional)")
+            ax[0].set_ylabel("Root-mean-square velocity (non-dimensional)")
+            ax[1].set_ylabel("Entrainment (non-dimensional)")
+
+            ax[0].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["rms_velocity"],
+                label="Conservative level set",
+            )
+            ax[1].plot(
+                cls.diag_fields["output_time"],
+                cls.diag_fields["entrainment"],
+                label="Conservative level set",
+            )
+
+            ax[0].legend(fontsize=12, fancybox=True, shadow=True)
+            ax[1].legend(fontsize=12, fancybox=True, shadow=True)
+
+            fig.savefig(
+                f"{cls.name}/rms_velocity_and_entrainment.pdf".lower(),
+                dpi=300,
+                bbox_inches="tight",
+            )
