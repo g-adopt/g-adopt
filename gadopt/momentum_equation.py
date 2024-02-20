@@ -13,30 +13,18 @@ were on the left-hand side, i.e.
   dq/dt + F(q) = 0,
 
 and then return `-F`.
+
 """
+
 from typing import Optional
 
 import firedrake as fd
-from firedrake import (
-    avg,
-    div,
-    dot,
-    grad,
-    inner,
-    jump,
-    nabla_grad,
-    outer,
-    sym,
-    transpose,
-)
+from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
+from firedrake import avg, sym, Identity, jump
+from firedrake import FacetArea, CellVolume
 
-from .equations import BaseEquation, BaseTerm
-from .utility import (
-    cell_edge_integral_ratio,
-    is_continuous,
-    normal_is_continuous,
-    tensor_jump,
-)
+from .equations import BaseTerm, BaseEquation
+from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
 
 
 class ViscosityTerm(BaseTerm):
@@ -62,31 +50,8 @@ class ViscosityTerm(BaseTerm):
     206(2), 843-872.
 
     """
-    def residual(
-        self,
-        test: fd.ufl_expr.Argument,
-        trial: fd.ufl_expr.Argument | fd.Function,
-        trial_lagged: Optional[fd.ufl_expr.Argument | fd.Function] = None,
-        fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-    ) -> fd.ufl.core.expr.Expr:
-        """UFL expression for the residual associated with the equation's term.
+    def residual(self, test, trial, trial_lagged, fields, bcs):
 
-        Args:
-          test:
-            Firedrake test function.
-          trial:
-            Firedrake trial function.
-          trial_lagged:
-            Firedrake trial function from the previous time step.
-          fields:
-            Dictionary of physical fields from the simulation's state.
-          bcs:
-            Dictionary of identifier-value pairs specifying boundary conditions.
-
-        Returns:
-          A UFL expression for the term's contribution to the finite element residual.
-        """
         mu = fields['viscosity']
         phi = test
         n = self.n
@@ -97,7 +62,7 @@ class ViscosityTerm(BaseTerm):
         grad_test = nabla_grad(phi)
         stress = 2 * mu * sym(grad(u))
         if compressible:
-            stress -= 2/3 * mu * fd.Identity(self.dim) * div(u)
+            stress -= 2/3 * mu * Identity(self.dim) * div(u)
 
         F = 0
         F += inner(grad_test, stress)*self.dx
@@ -122,12 +87,12 @@ class ViscosityTerm(BaseTerm):
         # instead of maximum over two adjacent cells + and -, we just sum (which is 2*avg())
         # and the for internal facets we have an extra 0.5:
         # WEIRDNESS: avg(1/CellVolume(mesh)) crashes TSFC - whereas it works in scalar diffusion! - instead just writing out explicitly
-        sigma *= fd.FacetArea(self.mesh)*(1/fd.CellVolume(self.mesh)('-') + 1/fd.CellVolume(self.mesh)('+'))/2
+        sigma *= FacetArea(self.mesh)*(1/CellVolume(self.mesh)('-') + 1/CellVolume(self.mesh)('+'))/2
 
         if not is_continuous(self.trial_space):
             u_tensor_jump = tensor_jump(n, u) + tensor_jump(u, n)
             if compressible:
-                u_tensor_jump -= 2/3 * fd.Identity(self.dim) * jump(u, n)
+                u_tensor_jump -= 2/3 * Identity(self.dim) * jump(u, n)
             F += sigma*inner(tensor_jump(n, phi), avg(mu) * u_tensor_jump)*self.dS
             F += -inner(avg(mu * nabla_grad(phi)), u_tensor_jump)*self.dS
             F += -inner(tensor_jump(n, phi), avg(stress))*self.dS
@@ -137,11 +102,11 @@ class ViscosityTerm(BaseTerm):
                 if 'u' in bc:
                     u_tensor_jump = outer(n, u-bc['u'])
                     if compressible:
-                        u_tensor_jump -= 2/3 * fd.Identity(self.dim) * (dot(n, u) - dot(n, bc['u']))
+                        u_tensor_jump -= 2/3 * Identity(self.dim) * (dot(n, u) - dot(n, bc['u']))
                 else:
                     u_tensor_jump = outer(n, n)*(dot(n, u)-bc['un'])
                     if compressible:
-                        u_tensor_jump -= 2/3 * fd.Identity(self.dim) * (dot(n, u) - bc['un'])
+                        u_tensor_jump -= 2/3 * Identity(self.dim) * (dot(n, u) - bc['un'])
                 u_tensor_jump += transpose(u_tensor_jump)
                 # this corresponds to the same 3 terms as the dS integrals for DG above:
                 F += 2*sigma*inner(outer(n, phi), mu * u_tensor_jump)*self.ds(id)
@@ -176,32 +141,7 @@ class ViscosityTerm(BaseTerm):
 
 
 class PressureGradientTerm(BaseTerm):
-    """Pressure gradient term in the momentum equation."""
-    def residual(
-        self,
-        test: fd.ufl_expr.Argument,
-        trial: fd.ufl_expr.Argument | fd.Function,
-        trial_lagged: Optional[fd.ufl_expr.Argument | fd.Function] = None,
-        fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-    ) -> fd.ufl.core.expr.Expr:
-        """UFL expression for the residual associated with the equation's term.
-
-        Args:
-          test:
-            Firedrake test function.
-          trial:
-            Firedrake trial function.
-          trial_lagged:
-            Firedrake trial function from the previous time step.
-          fields:
-            Dictionary of physical fields from the simulation's state.
-          bcs:
-            Dictionary of identifier-value pairs specifying boundary conditions.
-
-        Returns:
-          A UFL expression for the term's contribution to the finite element residual.
-        """
+    def residual(self, test, trial, trial_lagged, fields, bcs):
         phi = test
         n = self.n
         p = fields['pressure']
@@ -220,32 +160,7 @@ class PressureGradientTerm(BaseTerm):
 
 
 class DivergenceTerm(BaseTerm):
-    """Momentum divergence term in the mass continuity equation."""
-    def residual(
-        self,
-        test: fd.ufl_expr.Argument,
-        trial: fd.ufl_expr.Argument | fd.Function,
-        trial_lagged: Optional[fd.ufl_expr.Argument | fd.Function] = None,
-        fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-    ) -> fd.ufl.core.expr.Expr:
-        """UFL expression for the residual associated with the equation's term.
-
-        Args:
-          test:
-            Firedrake test function.
-          trial:
-            Firedrake trial function.
-          trial_lagged:
-            Firedrake trial function from the previous time step.
-          fields:
-            Dictionary of physical fields from the simulation's state.
-          bcs:
-            Dictionary of identifier-value pairs specifying boundary conditions.
-
-        Returns:
-          A UFL expression for the term's contribution to the finite element residual.
-        """
+    def residual(self, test, trial, trial_lagged, fields, bcs):
         psi = test
         n = self.n
         u = fields['velocity']
@@ -265,32 +180,7 @@ class DivergenceTerm(BaseTerm):
 
 
 class MomentumSourceTerm(BaseTerm):
-    """Source term in the momentum equation."""
-    def residual(
-        self,
-        test: fd.ufl_expr.Argument,
-        trial: fd.ufl_expr.Argument | fd.Function,
-        trial_lagged: Optional[fd.ufl_expr.Argument | fd.Function] = None,
-        fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-    ) -> fd.ufl.core.expr.Expr:
-        """UFL expression for the residual associated with the equation's term.
-
-        Args:
-          test:
-            Firedrake test function.
-          trial:
-            Firedrake trial function.
-          trial_lagged:
-            Firedrake trial function from the previous time step.
-          fields:
-            Dictionary of physical fields from the simulation's state.
-          bcs:
-            Dictionary of identifier-value pairs specifying boundary conditions.
-
-        Returns:
-          A UFL expression for the term's contribution to the finite element residual.
-        """
+    def residual(self, test, trial, trial_lagged, fields, bcs):
         if 'source' not in fields:
             return 0
 
@@ -304,22 +194,12 @@ class MomentumSourceTerm(BaseTerm):
 
 
 class MomentumEquation(BaseEquation):
-    """Momentum equation with viscosity, pressure gradient, and source terms.
-
-    Attributes:
-      terms:
-        List of equation terms defined through inheritance from BaseTerm.
-    """
+    """Momentum equation with viscosity, pressure gradient, and source terms."""
     terms = [ViscosityTerm, PressureGradientTerm, MomentumSourceTerm]
 
 
 class ContinuityEquation(BaseEquation):
-    """Mass continuity equation with a single divergence term.
-
-    Attributes:
-      terms:
-        List of equation terms defined through inheritance from BaseTerm.
-    """
+    """Mass continuity equation with a single divergence term."""
     terms = [DivergenceTerm]
 
 
@@ -328,20 +208,18 @@ def StokesEquations(
     trial_space: fd.functionspaceimpl.WithGeometry,
     quad_degree: Optional[int] = None,
     **kwargs,
-):
+) -> list[BaseEquation]:
     """Stokes system involving the momentum and mass continuity equations.
 
-    Args:
-      test_space:
-        Firedrake function space of the test function.
-      trial_space:
-        Firedrake function space of the rial function.
-      quad_degree:
-        Integer representing the quadrature degree. Default value is `2p + 1`, with
-        p the polynomial degree of the trial space.
+    Arguments:
+      test_space: Firedrake function space of the test function
+      trial_space: Firedrake function space of the trial function
+      quad_degree: Quadrature degree. Default value is `2p + 1`, where
+                     p is the polynomial degree of the trial space
 
     Returns:
       A list of equation instances for the Stokes system.
+
     """
     mom_eq = MomentumEquation(
         test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs
