@@ -36,6 +36,7 @@ iterative_stokes_solver_parameters = {
         "Mp_pc_type": "sor",
     }
 }
+"""Default solver parameters for iterative solvers"""
 
 direct_stokes_solver_parameters = {
     "mat_type": "aij",
@@ -43,6 +44,7 @@ direct_stokes_solver_parameters = {
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
 }
+"""Default solver parameters for direct solvers"""
 
 newton_stokes_solver_parameters = {
     "snes_type": "newtonls",
@@ -51,28 +53,26 @@ newton_stokes_solver_parameters = {
     "snes_atol": 1e-10,
     "snes_rtol": 1e-5,
 }
+"""Default solver parameters for non-linear systems"""
 
 
 def create_stokes_nullspace(
     Z: fd.functionspaceimpl.WithGeometry,
     closed: bool = True,
     rotational: bool = False,
-    translations: Optional[list] = None
+    translations: Optional[list[int]] = None
 ) -> fd.nullspace.MixedVectorSpaceBasis:
-    """Creates a null space for the mixed Stokes system.
+    """Create a null space for the mixed Stokes system.
 
-    Args:
-      Z:
-        Firedrake mixed function space associated with the Stokes system.
-      closed:
-        Boolean signaling the inclusion of a constant pressure null space.
-      rotational:
-        Boolean signaling the inclusion of all rotational modes.
-      translations:
-        List of transaltions to include.
+    Arguments:
+      Z: Firedrake mixed function space associated with the Stokes system
+      closed: Whether to include a constant pressure null space
+      rotational: Whether to include all rotational modes
+      translations: List of translations to include
 
     Returns:
-      A Firedrake mixed vector space basis incorporating the null space components.
+      A Firedrake mixed vector space basis incorporating the null space components
+
     """
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
@@ -113,7 +113,22 @@ def create_stokes_nullspace(
 
 
 class StokesSolver:
-    """Solves the Stokes system."""
+    """Solves the Stokes system.
+
+    Arguments:
+      z: Firedrake function representing the mixed Stokes system
+      T: Firedrake function representing the temperature
+      approximation: Approximation describing the system of equations
+      bcs: Dictionary of identifier-value pairs specifying boundary conditions
+      mu: Firedrake function representing dynamic viscosity
+      quad_degree: Quadrature degree. Default value is `2p + 1`, where
+                     p is the polynomial degree of the trial space
+      cartesian: Whether to use Cartesian coordinates
+      solver_parameters: Dictionary of solver parameters provided to PETSc
+      J: Firedrake function representing the Jacobian of the system
+      constant_jacobian: Whether the Jacobian of the system is constant
+
+    """
     name = 'Stokes'
 
     def __init__(
@@ -130,31 +145,6 @@ class StokesSolver:
         constant_jacobian: bool = False,
         **kwargs
     ):
-        """Initialises the solver instance from the simulation's state.
-
-        Args:
-          z:
-            Firedrake function representing the mixed Stokes system.
-          T:
-            Firedrake function representing the temperature.
-          approximation:
-            G-ADOPT base approximation describing the system of equations.
-          bcs:
-            Dictionary of identifier-value pairs specifying boundary conditions.
-          mu:
-            Firedrake function representing dynamic viscosity.
-          quad_degree:
-            Integer representing the quadrature degree. Default value is `2p + 1`, with
-            p the polynomial degree of the trial space.
-          cartesian:
-            Boolean signaling if Cartesian coordinates are employed.
-          solver_parameters:
-            Dictionary of solver parameters provided to PETSc.
-          J:
-            Firedrake function representing the Jacobian of the system.
-          constant_jacobian:
-            Boolean signaling if the Jacobian is constant.
-        """
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
