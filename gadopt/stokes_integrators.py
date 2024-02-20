@@ -1,6 +1,6 @@
 from .momentum_equation import StokesEquations
 from .free_surface_equation import FreeSurfaceEquation
-from .viscoelastic_equation import ViscoelasticEquation
+from .viscoelastic_equation import ViscoelasticEquations
 from .utility import upward_normal, ensure_constant, InteriorBC
 from .utility import log_level, INFO, DEBUG, depends_on
 import firedrake as fd
@@ -292,8 +292,8 @@ class StokesSolver:
         self.solver.solve()
 
 
-class ViscoelasticSolver(StokesSolver):
-    name = "ViscoelasticSolver"
+class ViscoelasticStokesSolver(StokesSolver):
+    name = "ViscoelasticStokesSolver"
 
 
     def __init__(self, z, viscosity, shear_modulus, density, deviatoric_stress, displacement, approximation, dt, bcs=None,
@@ -303,30 +303,30 @@ class ViscoelasticSolver(StokesSolver):
                  **kwargs):
 
         self.density = density
-        self.deviatoric_stress = Function(deviatoric_stress)  # Temporary function to store deviatoric stress from previous time step
+        self.deviatoric_stress = deviatoric_stress  # Temporary function to store deviatoric stress from previous time step
         self.displacement = displacement
 
         
         maxwell_time = viscosity / shear_modulus
         self.effective_viscosity = self.effective_viscosity(viscosity, maxwell_time, dt)
-        self.prestress_prefactor = self.prestress_prefactor(viscosity, maxwell_time, dt)
+        self.prefactor_prestress = self.prefactor_prestress(viscosity, maxwell_time, dt)
         
-        self.previous_stress = Function(previous_stress).interpolate(self.prefactor_prestress * self.deviatoric_stress)  # History stress term from previous time step (explicit RHS forcing)
+        self.previous_stress = fd.Function(deviatoric_stress).interpolate(self.prefactor_prestress * self.deviatoric_stress)  # History stress term from previous time step (explicit RHS forcing)
 
 
-        super().__init__(z, self.density, approximation, bcs=None, mu=self.effective_viscosity,
-                 quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False, J=None, constant_jacobian=False,
-                 iterative_2d=False, free_surface_dt=None, free_surface_variable_rho=True,
-                 equation=ViscoelasticEquation, **kwargs))
+        super().__init__(z, self.density, approximation, bcs=bcs, mu=self.effective_viscosity,
+                 quad_degree=quad_degree, cartesian=cartesian, solver_parameters=solver_parameters,
+                 closed=closed, rotational=rotational, J=J, constant_jacobian=constant_jacobian,
+                 iterative_2d=iterative_2d, free_surface_dt=free_surface_dt, free_surface_variable_rho=free_surface_variable_rho,
+                 equations=ViscoelasticEquations, **kwargs)
         
-        scale_mu = 1e10  # this is a scaling factor roughly size of mantle maxwell time to make sure that solve converges with strong bcs in parallel...
-        self.F = self.F / scale_mu
+        scale_mu = fd.Constant(1e10)  # this is a scaling factor roughly size of mantle maxwell time to make sure that solve converges with strong bcs in parallel...
+        self.F = (1/ scale_mu)*self.F
 
-    def effective_viscosity(viscosity, maxwell_time, dt):
+    def effective_viscosity(self, viscosity, maxwell_time, dt):
         return viscosity / (maxwell_time + dt / 2)
 
-    def prestress_prefactor(viscosity, maxwell_time, dt):
+    def prefactor_prestress(self, viscosity, maxwell_time, dt):
         return (maxwell_time - dt / 2) / (maxwell_time + dt / 2)
 
 
@@ -340,6 +340,7 @@ class ViscoelasticSolver(StokesSolver):
         # Overload method 
         for id, value in self.free_surface_dict.items():
             if 'exterior_density' in value:
+                print("hello exterior density")
                 exterior_density = value['exterior_density']
             else:
                 exterior_density = 0
@@ -347,9 +348,19 @@ class ViscoelasticSolver(StokesSolver):
             # the unknown `incremental displacement' (stokes_vars[0]) that 
             # we are solving for
             implicit_displacement = self.stokes_vars[0] + self.displacement
-            implicit_displacement_up = dot(implicit_displacement, self.k)
-            # Add free surface stress term
-            self.weak_bcs[id] = {'normal_stress': (self.density - exterior_density) * approximation.g * implicit_displacement_up}
+            implicit_displacement_up = fd.dot(implicit_displacement, self.k)
+            # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature. 
+            normal_stress = (self.density - exterior_density) * self.approximation.g * implicit_displacement_up 
+            if 'normal_stress' in self.weak_bcs[id]:
+                # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
+                print("hello normal stress")
+                existing_value = self.weak_bcs[id]['normal_stress']
+                self.weak_bcs[id]['normal_stress'] = existing_value + normal_stress
+            else:
+                self.weak_bcs[id] = {'normal_stress': normal_stress}
+        
+        # Turn off free surface flag because the viscoelastic free surface (for the small displacement approximation) is now setup
+        self.free_surface = False
 
     def solve(self):
         super().solve()
@@ -358,3 +369,4 @@ class ViscoelasticSolver(StokesSolver):
         self.deviatoric_stress.interpolate(2 * self.effective_viscosity * fd.sym(fd.grad(self.stokes_vars[0])) + self.prefactor_prestress * self.deviatoric_stress)
         # Update history stress term for using as a RHS explicit forcing in the next timestep
         self.previous_stress.interpolate(self.prefactor_prestress * self.deviatoric_stress)
+        self.displacement.interpolate(self.displacement+self.stokes_vars[0])

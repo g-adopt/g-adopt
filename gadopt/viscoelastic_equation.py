@@ -1,6 +1,6 @@
 from .equations import BaseTerm
-from .momentum_equation import MomentumEquation
-from firedrake import dot, FacetNormal
+from .momentum_equation import MomentumEquation, ContinuityEquation
+from firedrake import dot, FacetNormal, nabla_grad, inner
 r"""
 This module contains the additional terms and equations necessary for viscoelasticity
 
@@ -39,10 +39,10 @@ class ViscoelasticEquation(MomentumEquation):
     Viscoelastic Equation.
     """
 
-    terms.append(PreviousStressTerm)
+    MomentumEquation.terms.append(PreviousStressTerm)
 
 
-def ViscoElasticEquations(test_space, trial_space, quad_degree=None, **kwargs):
-    mom_eq = ViscoElasticEquation(test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs)
+def ViscoelasticEquations(test_space, trial_space, quad_degree=None, **kwargs):
+    mom_eq = ViscoelasticEquation(test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs)
     cty_eq = ContinuityEquation(test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs)
     return [mom_eq, cty_eq]

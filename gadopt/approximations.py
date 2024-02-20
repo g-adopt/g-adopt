@@ -225,17 +225,33 @@ class SmallDisplacementViscoelasticApproximation(BaseApproximation):
         :arg kappa, g, rho, alpha:  Diffusivity, gravitational acceleration, reference density and thermal expansion coefficient
                                     Normally kept at 1 when non-dimensionalised."""
         self.g = ensure_constant(g)
-        self.background_density = reference_density  # This is a field
+        self.background_density = background_density  # This is a field
         self.displacement = displacement  # This is a field
     
     def density_perturbation(self):
-        return -inner(self.displacement, grad(self.background_density)
+        return -inner(self.displacement, grad(self.background_density))
 
     def buoyancy(self, p, T):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
         # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
+        print("hello viscoelastic approx")
         return  -self.g * self.density_perturbation() 
 
     def rho_continuity(self):
         return 1
+
+    def rhocp(self):
+        return 1
+
+    def kappa(self):
+        return 0
+
+    Tbar = 0
+
+    def linearized_energy_sink(self, u):
+        return 0
+
+    def energy_source(self, u):
+        return 0
+
