@@ -311,7 +311,7 @@ class ViscoelasticStokesSolver(StokesSolver):
         self.effective_viscosity = self.effective_viscosity(viscosity, maxwell_time, dt)
         self.prefactor_prestress = self.prefactor_prestress(viscosity, maxwell_time, dt)
         
-        self.previous_stress = fd.Function(deviatoric_stress).interpolate(self.prefactor_prestress * self.deviatoric_stress)  # History stress term from previous time step (explicit RHS forcing)
+        self.previous_stress = fd.Function(deviatoric_stress, name="previous stress").interpolate(self.prefactor_prestress * self.deviatoric_stress)  # History stress term from previous time step (explicit RHS forcing)
 
 
         super().__init__(z, self.density, approximation, bcs=bcs, mu=self.effective_viscosity,

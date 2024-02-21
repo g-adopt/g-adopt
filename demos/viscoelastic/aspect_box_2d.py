@@ -192,7 +192,7 @@ r =  x#pow(pow(x, 2)+ pow(y, 2), 0.5)
 k_disc = 2*pi/(8*dx)  # wavenumber for disk 2pi / lambda 
 disc = 0.5*(1-tanh(k_disc *(r - disc_radius)))
 
-ice_load.interpolate(-ramp * rho_ice * g *Hice* disc)
+ice_load.interpolate(ramp * rho_ice * g *Hice* disc)
 
 
 averaged_deviatoric_stress = Function(TP1, name='averaged deviatoric_stress')
@@ -212,7 +212,7 @@ u_.rename("Incremental Displacement")
 p_.rename("Pressure")
 # Create output file and select output_frequency:
 filename=os.path.join(output_directory, str(args.date))
-filename += "_2d_new_viscoelastic_weerdesteijn_aspectbox_dx5km_nz"+str(nz)+"scaled_a4_dt"+str(round(dt/year_in_seconds))+"years_dtout"+str(round(dt_out.values()[0]/year_in_seconds))+"years_Tend"+str(round(Tend.values()[0]/year_in_seconds))+"years_minusiceload_testing/"
+filename += "_2d_new_viscoelastic_weerdesteijn_aspectbox_dx5km_nz"+str(nz)+"scaled_a4_dt"+str(round(dt/year_in_seconds))+"years_dtout"+str(round(dt_out.values()[0]/year_in_seconds))+"years_Tend"+str(round(Tend.values()[0]/year_in_seconds))+"years_posiceload_testing/"
 if OUTPUT:
     output_file = File(filename+"out.pvd")
 stokes_bcs = {
@@ -247,7 +247,7 @@ stokes_solver = ViscoelasticStokesSolver(m, viscosity, shear_modulus, density, d
 # analytical function
 #eta_analytical = Function(Q3, name="eta analytical").interpolate(F0-eta)
 if OUTPUT:
-    output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, Function(W).interpolate(stokes_solver.prefactor_prestress), Function(W).interpolate(stokes_solver.effective_viscosity))
+    output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, Function(W, name='prefactor prestress').interpolate(stokes_solver.prefactor_prestress), Function(W, name='effective viscosity').interpolate(stokes_solver.effective_viscosity))
 
 eta_midpoint =[]
 #eta_midpoint.append(displacement.at(L/2+100, -0.001)[1])
@@ -297,7 +297,7 @@ for timestep in range(1, max_timesteps+1):#int(max_timesteps/2)+1):
                     )
 
 #    print(ramp.values()[0]) 
-    ice_load.interpolate(-ramp * rho_ice * g *Hice* disc)
+    ice_load.interpolate(ramp * rho_ice * g *Hice* disc)
 
     stokes_solver.solve()
     
@@ -311,7 +311,7 @@ for timestep in range(1, max_timesteps+1):#int(max_timesteps/2)+1):
         log("timestep", timestep)
         log("time", time.values()[0])
         if OUTPUT:
-            output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density)
+            output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, Function(W, name='prefactor prestress').interpolate(stokes_solver.prefactor_prestress), Function(W, name='effective viscosity').interpolate(stokes_solver.effective_viscosity))
 #            displacement_vom.interpolate(displacement[2])
 
         with CheckpointFile(filename+"chk.h5", "w") as checkpoint:
