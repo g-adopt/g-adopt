@@ -164,7 +164,7 @@ log("max timesteps", max_timesteps)
 if short_simulation:
     dt_out = Constant(10 * year_in_seconds)
 else:
-    dt_out = Constant(1000 * year_in_seconds)
+    dt_out = Constant(10e3 * year_in_seconds)
 
 dump_period = round(dt_out / dt)
 log("dump_period", dump_period)
@@ -212,7 +212,7 @@ u_.rename("Incremental Displacement")
 p_.rename("Pressure")
 # Create output file and select output_frequency:
 filename=os.path.join(output_directory, str(args.date))
-filename += "_2d_new_viscoelastic_weerdesteijn_aspectbox_dx5km_nz"+str(nz)+"scaled_a4_dt"+str(round(dt/year_in_seconds))+"years_dtout"+str(round(dt_out.values()[0]/year_in_seconds))+"years_Tend"+str(round(Tend.values()[0]/year_in_seconds))+"years_posiceload_testing/"
+filename += "_2d_new_viscoelastic_weerdesteijn_aspectbox_dx5km_nz"+str(nz)+"scaled_a4_dt"+str(round(dt/year_in_seconds))+"years_dtout"+str(round(dt_out.values()[0]/year_in_seconds))+"years_Tend"+str(round(Tend.values()[0]/year_in_seconds))+"years_posiceload_testing_dispmin/"
 if OUTPUT:
     output_file = File(filename+"out.pvd")
 stokes_bcs = {
@@ -250,7 +250,7 @@ if OUTPUT:
     output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, Function(W, name='prefactor prestress').interpolate(stokes_solver.prefactor_prestress), Function(W, name='effective viscosity').interpolate(stokes_solver.effective_viscosity))
 
 eta_midpoint =[]
-#eta_midpoint.append(displacement.at(L/2+100, -0.001)[1])
+#eta_midpoint.append(displacement.at(L/2+100,) -0.001)[1])
 
 displacement_vom_matplotlib_df = pd.DataFrame()
 surface_nodes = []
@@ -285,7 +285,7 @@ def displacement_vom_out(t):
 displacement_vom_out(0)
 error = 0
 # Now perform the time loop:
-
+displacement_min_array = []
 for timestep in range(1, max_timesteps+1):#int(max_timesteps/2)+1):
     if short_simulation:
         ramp.assign(conditional(time < T1_load, time / T1_load, 1))
@@ -313,6 +313,9 @@ for timestep in range(1, max_timesteps+1):#int(max_timesteps/2)+1):
         if OUTPUT:
             output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, Function(W, name='prefactor prestress').interpolate(stokes_solver.prefactor_prestress), Function(W, name='effective viscosity').interpolate(stokes_solver.effective_viscosity))
 #            displacement_vom.interpolate(displacement[2])
+        
+        if MPI.COMM_WORLD.rank == 0:
+            np.savetxt(filename+"min_displacement.txt", displacement_min_array)
 
         with CheckpointFile(filename+"chk.h5", "w") as checkpoint:
             checkpoint.save_function(u_, name="Incremental Displacement")
@@ -320,14 +323,18 @@ for timestep in range(1, max_timesteps+1):#int(max_timesteps/2)+1):
             checkpoint.save_function(displacement, name="Displacement")
             checkpoint.save_function(deviatoric_stress, name="Deviatoric stress")
 
+    # Compute diagnostics:
+    bc_displacement = DirichletBC(displacement.function_space(), 0, top_id)
+    displacement_z_min = displacement.dat.data_ro_with_halos[bc_displacement.nodes, 1].min(initial=0)
+    displacement_min = displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
+    log("Greatest (-ve) displacement", displacement_min) 
+
+    displacement_min_array.append([float(time/year_in_seconds), displacement_min])
     displacement_vom_out(time.values()[0])
     
 #with open(filename+"_D3e6_visc1e21_shearmod1e11_nx"+str(nx)+"_dt"+str(dt_factor)+"tau_a6_refinemesh_nosurfadv_expfreesurface.txt", 'w') as file:
 #    for line in eta_midpoint:
 #        file.write(f"{line}\n")
 #final_error = pow(error,0.5)/L
-
-
-
 
 
