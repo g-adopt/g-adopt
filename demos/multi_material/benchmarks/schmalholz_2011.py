@@ -6,6 +6,7 @@ import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
+from scipy.io import loadmat
 
 import gadopt as ga
 
@@ -40,7 +41,7 @@ class Simulation:
     name = "Schmalholz_2011"
 
     # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    level_set_func_space_deg = 1
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
@@ -183,38 +184,7 @@ class Simulation:
         if MPI.COMM_WORLD.rank == 0:
             np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
 
-            slab_necking_schmalholz_2011 = np.array(
-                [
-                    [0, 1],
-                    [0.026, 0.993],
-                    [0.047, 0.985],
-                    [0.065, 0.976],
-                    [0.087, 0.967],
-                    [0.126, 0.950],
-                    [0.155, 0.937],
-                    [0.183, 0.924],
-                    [0.262, 0.885],
-                    [0.311, 0.858],
-                    [0.351, 0.834],
-                    [0.390, 0.809],
-                    [0.439, 0.774],
-                    [0.488, 0.736],
-                    [0.527, 0.701],
-                    [0.556, 0.672],
-                    [0.586, 0.639],
-                    [0.615, 0.607],
-                    [0.654, 0.555],
-                    [0.697, 0.487],
-                    [0.740, 0.403],
-                    [0.765, 0.349],
-                    [0.788, 0.293],
-                    [0.814, 0.225],
-                    [0.832, 0.170],
-                    [0.854, 0.115],
-                    [0.880, 0.059],
-                    [0.908, 0.029],
-                ]
-            )
+            slab_necking_schmalholz = loadmat("data/DET_FREE_NEW_TOP_R100.mat")
 
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
 
@@ -224,8 +194,8 @@ class Simulation:
             ax.set_ylabel("Slab necking")
 
             ax.plot(
-                slab_necking_schmalholz_2011[:, 0],
-                slab_necking_schmalholz_2011[:, 1],
+                slab_necking_schmalholz["Time"][0] / cls.characteristic_time,
+                slab_necking_schmalholz["Thickness"][0] / cls.slab_width * 1e3,
                 label="Schmalholz (2011)",
             )
 

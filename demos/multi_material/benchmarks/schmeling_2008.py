@@ -2,11 +2,13 @@ from dataclasses import dataclass
 from functools import partial
 
 import firedrake as fd
-import gadopt as ga
 import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
+from pandas import read_excel
+
+import gadopt as ga
 
 
 @dataclass
@@ -109,18 +111,64 @@ class Simulation:
         if MPI.COMM_WORLD.rank == 0:
             np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
 
+            datafile = "data/zslab-case1-best-reformatted.xlsx"
+
+            model_names_schmeling = read_excel(
+                datafile, sheet_name="Tabelle1", header=None, skiprows=2, nrows=1
+            )
+
+            geom_cols = []
+            geom_col_names = []
+            for col in model_names_schmeling:
+                model_name = model_names_schmeling[col].item()
+                if isinstance(model_name, str) and "geom" in model_name:
+                    geom_cols.append(col)
+                    geom_col_names.append(model_name)
+
+            cols_to_read = np.repeat(geom_cols, 2)
+            cols_to_read[1::2] += 1
+
+            model_data = read_excel(
+                datafile,
+                sheet_name="Tabelle1",
+                header=None,
+                usecols=cols_to_read,
+                skiprows=4,
+            )
+
+            fdcon_data = read_excel(
+                datafile, sheet_name="zslabmodel5", header=None, usecols=[1, 2]
+            )
+
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
 
             ax.grid()
 
             ax.invert_yaxis()
+            ax.set_xlim(right=65)
 
             ax.set_xlabel("Time (Myr)")
             ax.set_ylabel("Slab tip depth (km)")
 
             ax.plot(
+                fdcon_data[1].dropna().values,
+                fdcon_data[2].dropna().values,
+                linestyle="dotted",
+                label="FDCON 561x141 geom",
+            )
+
+            for col, col_name in zip(geom_cols, geom_col_names):
+                ax.plot(
+                    model_data[col].dropna().values,
+                    model_data[col + 1].dropna().values,
+                    linestyle="dotted",
+                    label=col_name,
+                )
+
+            ax.plot(
                 cls.diag_fields["output_time"],
                 cls.diag_fields["slab_tip_depth"],
+                colour="black",
                 label="Conservative level set",
             )
 
