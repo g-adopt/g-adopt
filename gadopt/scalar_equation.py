@@ -1,8 +1,9 @@
-from .equations import BaseTerm, BaseEquation
-from firedrake import dot, inner, div, grad, avg, jump, sign
-from firedrake import min_value, Identity
-from firedrake import FacetArea, CellVolume
-from .utility import is_continuous, normal_is_continuous, cell_edge_integral_ratio
+import firedrake as fd
+from firedrake import avg, div, dot, grad, inner, jump, min_value, sign
+
+from .equations import BaseEquation, BaseTerm
+from .utility import cell_edge_integral_ratio, is_continuous, normal_is_continuous
+
 r"""
 This module contains the scalar terms and equations (e.g. for temperature and salinity transport)
 
@@ -91,7 +92,7 @@ class ScalarDiffusionTerm(BaseTerm):
         if len(kappa.ufl_shape) == 2:
             diff_tensor = kappa
         else:
-            diff_tensor = kappa * Identity(self.dim)
+            diff_tensor = kappa * fd.Identity(self.dim)
 
         phi = test
         n = self.n
@@ -126,7 +127,7 @@ class ScalarDiffusionTerm(BaseTerm):
             # we use (3.23) + (3.20) from https://www.researchgate.net/publication/260085826
             # instead of maximum over two adjacent cells + and -, we just sum (which is 2*avg())
             # and the for internal facets we have an extra 0.5:
-            sigma_int = sigma * avg(FacetArea(self.mesh)/CellVolume(self.mesh))
+            sigma_int = sigma * avg(fd.FacetArea(self.mesh)/fd.CellVolume(self.mesh))
             F += sigma_int*inner(jump(phi, n), dot(avg(diff_tensor), jump(q, n)))*self.dS
             F += -inner(avg(dot(diff_tensor, grad(phi))), jump(q, n))*self.dS
             F += -inner(jump(phi, n), avg(dot(diff_tensor, grad(q))))*self.dS
@@ -134,7 +135,7 @@ class ScalarDiffusionTerm(BaseTerm):
         for id, bc in bcs.items():
             if 'q' in bc:
                 jump_q = q-bc['q']
-                sigma_ext = sigma * FacetArea(self.mesh)/CellVolume(self.mesh)
+                sigma_ext = sigma * fd.FacetArea(self.mesh)/fd.CellVolume(self.mesh)
                 # this corresponds to the same 3 terms as the dS integrals for DG above:
                 F += 2*sigma_ext*phi*inner(n, dot(diff_tensor, n))*jump_q*self.ds(id)
                 F += -inner(dot(diff_tensor, grad(phi)), n)*jump_q*self.ds(id)

@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
-import firedrake
+
+import firedrake as fd
+from firedrake import dS, ds, dS_h, dS_v, dx, inner
+
 from .utility import CombinedSurfaceMeasure
 
 
@@ -38,12 +41,12 @@ class BaseEquation(ABC):
             # so that ds or dS integrates over both horizontal and vertical boundaries
             # and we can also use "bottom" and "top" as surface ids, e.g. ds("top")
             self.ds = CombinedSurfaceMeasure(self.mesh, quad_degree)
-            self.dS = firedrake.dS_v(domain=self.mesh, degree=quad_degree) + firedrake.dS_h(domain=self.mesh, degree=quad_degree)
+            self.dS = dS_v(domain=self.mesh, degree=quad_degree) + dS_h(domain=self.mesh, degree=quad_degree)
         else:
-            self.ds = firedrake.ds(domain=self.mesh, degree=quad_degree)
-            self.dS = firedrake.dS(domain=self.mesh, degree=quad_degree)
+            self.ds = ds(domain=self.mesh, degree=quad_degree)
+            self.dS = dS(domain=self.mesh, degree=quad_degree)
 
-        self.dx = firedrake.dx(domain=self.mesh, degree=quad_degree)
+        self.dx = dx(domain=self.mesh, degree=quad_degree)
 
         # self._terms stores the actual instances of the BaseTerm-classes in self.terms
         self._terms = []
@@ -52,7 +55,7 @@ class BaseEquation(ABC):
 
     def mass_term(self, test, trial):
         r"""Return the UFL for the mass term \int test * trial * dx typically used in the time term."""
-        return firedrake.inner(test, trial) * self.dx
+        return inner(test, trial) * self.dx
 
     def residual(self, test, trial, trial_lagged=None, fields=None, bcs=None):
         """Return the UFL for all terms (except the time derivative)."""
@@ -79,7 +82,7 @@ class BaseTerm(ABC):
         self.dS = dS
         self.mesh = test_space.mesh()
         self.dim = self.mesh.geometric_dimension()
-        self.n = firedrake.FacetNormal(self.mesh)
+        self.n = fd.FacetNormal(self.mesh)
         self.term_kwargs = kwargs
 
     @abstractmethod

@@ -2,12 +2,12 @@
 Slope limiters for discontinuous fields
 """
 from __future__ import absolute_import
-from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
-from firedrake import max_value, min_value
-from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement
+
+import firedrake as fd
 import numpy as np
-from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
+from firedrake import assemble, dx, max_value, min_value
 from pyop2 import op2
+from pyop2.profiling import timed_stage
 
 
 def assert_function_space(fs, family, degree):
@@ -26,7 +26,7 @@ def assert_function_space(fs, family, degree):
     if not isinstance(family, list):
         fam_list = [family]
     ufl_elem = fs.ufl_element()
-    if isinstance(ufl_elem, VectorElement):
+    if isinstance(ufl_elem, fd.VectorElement):
         ufl_elem = ufl_elem.sub_elements[0]
 
     if ufl_elem.family() == 'TensorProductElement':
@@ -48,13 +48,13 @@ def get_extruded_base_element(ufl_element):
 
     In case of a non-extruded mesh, returns the element itself.
     """
-    if isinstance(ufl_element, HDivElement):
+    if isinstance(ufl_element, fd.HDivElement):
         ufl_element = ufl_element._element
-    if isinstance(ufl_element, MixedElement):
+    if isinstance(ufl_element, fd.MixedElement):
         ufl_element = ufl_element.sub_elements[0]
-    if isinstance(ufl_element, VectorElement):
+    if isinstance(ufl_element, fd.VectorElement):
         ufl_element = ufl_element.sub_elements[0]  # take the first component
-    if isinstance(ufl_element, EnrichedElement):
+    if isinstance(ufl_element, fd.EnrichedElement):
         ufl_element = ufl_element._elements[0]
     return ufl_element
 
@@ -75,7 +75,7 @@ def get_facet_mask(function_space, facet='bottom'):
 
     # get base element
     elem = get_extruded_base_element(function_space.ufl_element())
-    assert isinstance(elem, TensorProductElement), \
+    assert isinstance(elem, fd.TensorProductElement), \
         f'function space must be defined on an extruded 3D mesh: {elem}'
     # figure out number of nodes in sub elements
     h_elt, v_elt = elem.sub_elements
@@ -89,7 +89,7 @@ def get_facet_mask(function_space, facet='bottom'):
     return indices
 
 
-class VertexBasedP1DGLimiter(VertexBasedLimiter):
+class VertexBasedP1DGLimiter(fd.VertexBasedLimiter):
     """
     Vertex based limiter for P1DG tracer fields, see Kuzmin (2010)
 
@@ -106,7 +106,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         assert_function_space(p1dg_space, ['Discontinuous Lagrange', 'DQ'], 1)
         self.is_vector = p1dg_space.value_size > 1
         if self.is_vector:
-            p1dg_scalar_space = FunctionSpace(p1dg_space.mesh(), 'DG', 1)
+            p1dg_scalar_space = fd.FunctionSpace(p1dg_space.mesh(), 'DG', 1)
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_scalar_space)
         else:
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_space)
@@ -126,11 +126,11 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         :return: LinearSolver instance
         """
-        u = TrialFunction(self.P0)
-        v = TestFunction(self.P0)
+        u = fd.TrialFunction(self.P0)
+        v = fd.TestFunction(self.P0)
         self.a_form = u * v * dx
         a = assemble(self.a_form)
-        return LinearSolver(a, solver_parameters={'ksp_type': 'preonly',
+        return fd.LinearSolver(a, solver_parameters={'ksp_type': 'preonly',
                                                   'pc_type': 'bjacobi',
                                                   'sub_pc_type': 'ilu'})
 
@@ -138,7 +138,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         """
         Update centroid values
         """
-        b = assemble(TestFunction(self.P0) * field * dx)
+        b = assemble(fd.TestFunction(self.P0) * field * dx)
         self.centroid_solver.solve(self.centroids, b)
 
     def compute_bounds(self, field):

@@ -1,8 +1,17 @@
-from firedrake import DirichletBC, Function, TensorFunctionSpace, Jacobian, dot
+import firedrake as fd
+from firedrake import dot
+
 from .scalar_equation import EnergyEquation
-from .utility import is_continuous, ensure_constant
-from .utility import log_level, INFO, DEBUG, log
-from .utility import absv, su_nubar
+from .utility import (
+    DEBUG,
+    INFO,
+    absv,
+    ensure_constant,
+    is_continuous,
+    log,
+    log_level,
+    su_nubar,
+)
 
 iterative_energy_solver_parameters = {
     "mat_type": "aij",
@@ -51,7 +60,7 @@ class EnergySolver:
             # beta(Pe) is the xibar vector in (2.44a)
             # then we get artifical viscosity nubar from (2.49)
 
-            J = Function(TensorFunctionSpace(self.mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(self.mesh))
+            J = fd.Function(fd.TensorFunctionSpace(self.mesh, 'DQ', 1), name='Jacobian').interpolate(fd.Jacobian(self.mesh))
             kappa = self.fields['diffusivity'] + 1e-12  # Set lower bound for diffusivity in case zero diffusivity specified for pure advection.
             vel = self.fields['velocity']
             Pe = absv(dot(vel, J)) / (2*kappa)  # Calculate grid peclet number
@@ -82,7 +91,7 @@ class EnergySolver:
             for type, value in bc.items():
                 if type == 'T':
                     if apply_strongly:
-                        self.strong_bcs.append(DirichletBC(self.Q, value, id))
+                        self.strong_bcs.append(fd.DirichletBC(self.Q, value, id))
                     else:
                         weak_bc['q'] = value
                 else:
@@ -90,7 +99,7 @@ class EnergySolver:
             self.weak_bcs[id] = weak_bc
 
         self.timestepper = timestepper
-        self.T_old = Function(self.Q)
+        self.T_old = fd.Function(self.Q)
         # solver is setup only last minute
         # so people can overwrite parameters we've setup here
         self._solver_setup = False

@@ -1,11 +1,12 @@
-import firedrake
-from firedrake import assemble, Constant, sqrt, dot, grad, FacetNormal
+import firedrake as fd
+from firedrake import assemble, dot, dx, grad, sqrt
 from firedrake.ufl_expr import extract_unique_domain
+
 from .utility import CombinedSurfaceMeasure
 
 
 def domain_volume(mesh):
-    return assemble(Constant(1)*firedrake.dx(domain=mesh))
+    return assemble(fd.Constant(1)*dx(domain=mesh))
 
 
 class GeodynamicalDiagnostics:
@@ -16,14 +17,14 @@ class GeodynamicalDiagnostics:
         self.u = u
         self.p = p
         self.T = T
-        self.dx = firedrake.dx(degree=degree)
+        self.dx = dx(degree=degree)
         if T.function_space().extruded:
             ds = CombinedSurfaceMeasure(mesh, degree)
         else:
-            ds = firedrake.ds(mesh)
+            ds = ds(mesh)
         self.ds_t = ds(top_id)
         self.ds_b = ds(bottom_id)
-        self.n = FacetNormal(mesh)
+        self.n = fd.FacetNormal(mesh)
 
     def u_rms(self):
         return sqrt(assemble(dot(self.u, self.u) * self.dx)) * sqrt(1./self.domain_volume)
@@ -32,10 +33,10 @@ class GeodynamicalDiagnostics:
         return sqrt(assemble(dot(self.u, self.u) * self.ds_t))
 
     def Nu_top(self):
-        return -1 * assemble(dot(grad(self.T), self.n) * self.ds_t) * (1./assemble(Constant(1) * self.ds_t))
+        return -1 * assemble(dot(grad(self.T), self.n) * self.ds_t) * (1./assemble(fd.Constant(1) * self.ds_t))
 
     def Nu_bottom(self):
-        return assemble(dot(grad(self.T), self.n) * self.ds_b) * (1./assemble(Constant(1) * self.ds_b))
+        return assemble(dot(grad(self.T), self.n) * self.ds_b) * (1./assemble(fd.Constant(1) * self.ds_b))
 
     def T_avg(self):
         return assemble(self.T * self.dx) / self.domain_volume

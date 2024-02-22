@@ -1,7 +1,10 @@
-from abc import ABC, abstractmethod, abstractproperty
-import firedrake
 import operator
+from abc import ABC, abstractmethod, abstractproperty
+
+import firedrake as fd
 import numpy as np
+from firedrake import split
+
 from .utility import ensure_constant
 
 """
@@ -60,12 +63,12 @@ class TimeIntegrator(TimeIntegratorBase):
         super(TimeIntegrator, self).__init__()
 
         self.equation = equation
-        self.test = firedrake.TestFunction(solution.function_space())
+        self.test = fd.TestFunction(solution.function_space())
         self.solution = solution
         self.fields = fields
         self.dt = dt
         self.dt_const = ensure_constant(dt)
-        self.solution_old = solution_old or firedrake.Function(solution, name='Old'+solution.name())
+        self.solution_old = solution_old or fd.Function(solution, name='Old'+solution.name())
 
         # unique identifier used in solver
         self.name = '-'.join([self.__class__.__name__,
@@ -76,7 +79,7 @@ class TimeIntegrator(TimeIntegratorBase):
             self.solver_parameters.update(solver_parameters)
 
         self.strong_bcs = strong_bcs or []
-        self.hom_bcs = [firedrake.DirichletBC(bci.function_space(), 0, bci.sub_domain) for bci in self.strong_bcs]
+        self.hom_bcs = [fd.DirichletBC(bci.function_space(), 0, bci.sub_domain) for bci in self.strong_bcs]
 
 
 class RungeKuttaTimeIntegrator(TimeIntegrator):
@@ -137,11 +140,11 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
 
         self.tendency = []
         for i in range(self.n_stages):
-            k = firedrake.Function(V, name='tendency{:}'.format(i))
+            k = fd.Function(V, name='tendency{:}'.format(i))
             self.tendency.append(k)
 
         # fully explicit evaluation
-        trial = firedrake.TrialFunction(V)
+        trial = fd.TrialFunction(V)
         self.a_rk = self.equation.mass_term(self.test, trial)
         self.l_rk = self.dt_const*self.equation.residual(self.test, self.solution, self.solution, self.fields, bnd_conditions)
 
@@ -161,8 +164,8 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         if self._nontrivial:
             self.solver = []
             for i in range(self.n_stages):
-                prob = firedrake.LinearVariationalProblem(self.a_rk, self.l_rk, self.tendency[i], bcs=self.hom_bcs)
-                solver = firedrake.LinearVariationalSolver(prob, options_prefix=self.name + '_k{:}'.format(i),
+                prob = fd.LinearVariationalProblem(self.a_rk, self.l_rk, self.tendency[i], bcs=self.hom_bcs)
+                solver = fd.LinearVariationalSolver(prob, options_prefix=self.name + '_k{:}'.format(i),
                                                            solver_parameters=self.solver_parameters)
                 self.solver.append(solver)
 
@@ -245,7 +248,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         self.k = []
         for i in range(self.n_stages):
             fname = '{:}_k{:}'.format(self.name, i)
-            self.k.append(firedrake.Function(fs, name=fname))
+            self.k.append(fd.Function(fs, name=fname))
 
         # construct variational problems
         self.F = []
@@ -265,10 +268,10 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                 for j in range(i+1):
                     if j == 0:
                         u = []  # list of components in the mixed space
-                        for s, k in zip(firedrake.split(self.solution_old), firedrake.split(self.k[j])):
+                        for s, k in zip(split(self.solution_old), split(self.k[j])):
                             u.append(s + self.a[i][j]*self.dt_const*k)
                     else:
-                        for l, k in enumerate(firedrake.split(self.k[j])):
+                        for l, k in enumerate(split(self.k[j])):
                             u[l] += self.a[i][j]*self.dt_const*k
                 self.F.append(self.equation.mass_term(self.test, self.k[i]) -
                               self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
@@ -285,10 +288,10 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         """Create solver objects"""
         self.solver = []
         for i in range(self.n_stages):
-            p = firedrake.NonlinearVariationalProblem(self.F[i], self.k[i], bcs=self.hom_bcs)
+            p = fd.NonlinearVariationalProblem(self.F[i], self.k[i], bcs=self.hom_bcs)
             sname = '{:}_stage{:}_'.format(self.name, i)
             self.solver.append(
-                firedrake.NonlinearVariationalSolver(
+                fd.NonlinearVariationalSolver(
                     p, solver_parameters=self.solver_parameters,
                     options_prefix=sname))
 

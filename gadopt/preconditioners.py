@@ -1,5 +1,5 @@
 import firedrake as fd
-from firedrake.petsc import PETSc
+from firedrake import assemble, dx, inner, parameters
 
 
 class VariableMassInvPC(fd.PCBase):
@@ -43,18 +43,18 @@ class VariableMassInvPC(fd.PCBase):
         # Handle vector and tensor-valued spaces.
 
         # 1/mu goes into the inner product in case it varies spatially.
-        self.a = fd.inner(1/mu * u, v)*fd.dx
+        self.a = inner(1/mu * u, v)*dx
 
-        opts = PETSc.Options()
+        opts = fd.PETSc.Options()
         mat_type = opts.getString(self.options_prefix + "mat_type",
-                                  fd.parameters["default_matrix_type"])
+                                  parameters["default_matrix_type"])
 
-        self.A = fd.assemble(self.a, form_compiler_parameters=self.fc_params,
+        self.A = assemble(self.a, form_compiler_parameters=self.fc_params,
                              mat_type=mat_type, options_prefix=self.options_prefix)
 
         Pmat = self.A.petscmat
 
-        ksp = PETSc.KSP().create(comm=pc.comm)
+        ksp = fd.PETSc.KSP().create(comm=pc.comm)
         ksp.incrementTabLevel(1, parent=pc)
         ksp.setOperators(Pmat)
         ksp.setOptionsPrefix(self.options_prefix)
@@ -63,8 +63,8 @@ class VariableMassInvPC(fd.PCBase):
         self.ksp = ksp
 
     def update(self, pc):
-        fd.assemble(self.a, form_compiler_parameters=self.fc_params,
-                    tensor=self.A, options_prefix=self.options_prefix)
+        assemble(self.a, form_compiler_parameters=self.fc_params,
+                 tensor=self.A, options_prefix=self.options_prefix)
 
     def apply(self, pc, X, Y):
         self.ksp.solve(X, Y)

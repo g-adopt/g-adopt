@@ -1,10 +1,10 @@
-from firedrake import CheckpointFile
-import firedrake.utils
-from firedrake.adjoint import *  # noqa: F401
 from pathlib import Path
-from mpi4py import MPI
+
+import firedrake as fd
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
+from firedrake.adjoint import continue_annotation, stop_annotating
+from mpi4py import MPI
 
 # emulate the previous behaviour of firedrake_adjoint by automatically
 # starting the tape
@@ -85,7 +85,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
         state serialisation.
         """
 
-        with CheckpointFile(str(checkpoint_path), "w") as f:
+        with fd.CheckpointFile(str(checkpoint_path), "w") as f:
             for i, func in enumerate(self.dat):
                 f.save_function(func, name=f"dat_{i}")
 
@@ -97,7 +97,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
         this vector within the registry.
         """
 
-        with CheckpointFile(str(self.checkpoint_path), "r") as f:
+        with fd.CheckpointFile(str(self.checkpoint_path), "r") as f:
             for i in range(len(self.dat)):
                 self.dat[i] = f.load_function(mesh, name=f"dat_{i}")
 
@@ -117,7 +117,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
     def __getstate__(self):
         """Return a state tuple suitable for pickling"""
 
-        checkpoint_filename = f"vector_checkpoint_{firedrake.utils._new_uid()}.h5"
+        checkpoint_filename = f"vector_checkpoint_{fd.utils._new_uid()}.h5"
         checkpoint_path = self._optimiser.checkpoint_dir / checkpoint_filename
         self.save(checkpoint_path)
 
@@ -194,7 +194,7 @@ class LinMoreOptimiser:
         ROL.serialise_algorithm(self.rol_algorithm, MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
 
         checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
-        with CheckpointFile(str(checkpoint_path), "w") as f:
+        with fd.CheckpointFile(str(checkpoint_path), "w") as f:
             for i, func in enumerate(self.rol_solver.rolvector.dat):
                 f.save_function(func, name=f"dat_{i}")
 

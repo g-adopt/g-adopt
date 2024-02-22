@@ -1,7 +1,8 @@
-from .momentum_equation import StokesEquations
-from .utility import upward_normal, ensure_constant
-from .utility import log_level, INFO, DEBUG, depends_on
 import firedrake as fd
+from firedrake import as_vector, lhs, replace, rhs, split
+
+from .momentum_equation import StokesEquations
+from .utility import DEBUG, INFO, depends_on, ensure_constant, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -63,12 +64,12 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
     V, W = Z.subfunctions
     if rotational:
         if dim == 2:
-            rotV = fd.Function(V).interpolate(fd.as_vector((-X[1], X[0])))
+            rotV = fd.Function(V).interpolate(as_vector((-X[1], X[0])))
             basis = [rotV]
         elif dim == 3:
-            x_rotV = fd.Function(V).interpolate(fd.as_vector((0, -X[2], X[1])))
-            y_rotV = fd.Function(V).interpolate(fd.as_vector((X[2], 0, -X[0])))
-            z_rotV = fd.Function(V).interpolate(fd.as_vector((-X[1], X[0], 0)))
+            x_rotV = fd.Function(V).interpolate(as_vector((0, -X[2], X[1])))
+            y_rotV = fd.Function(V).interpolate(as_vector((X[2], 0, -X[0])))
+            z_rotV = fd.Function(V).interpolate(as_vector((-X[1], X[0], 0)))
             basis = [x_rotV, y_rotV, z_rotV]
         else:
             raise ValueError("Unknown dimension")
@@ -78,7 +79,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
         for tdim in translations:
             vec = [0] * dim
             vec[tdim] = 1
-            basis.append(fd.Function(V).interpolate(fd.as_vector(vec)))
+            basis.append(fd.Function(V).interpolate(as_vector(vec)))
 
     if basis:
         V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
@@ -115,7 +116,7 @@ class StokesSolver:
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
-        u, p = fd.split(self.solution)
+        u, p = split(self.solution)
         self.k = upward_normal(self.Z.mesh(), cartesian)
         self.fields = {
             'velocity': u,
@@ -145,7 +146,7 @@ class StokesSolver:
             self.weak_bcs[id] = weak_bc
 
         self.F = 0
-        for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
+        for test, eq, u in zip(self.test, self.equations, split(self.solution)):
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
         if self.solver_parameters is None:
@@ -172,8 +173,8 @@ class StokesSolver:
     def setup_solver(self):
         if self.constant_jacobian:
             z_tri = fd.TrialFunction(self.Z)
-            F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
-            a, L = fd.lhs(F_stokes_lin), fd.rhs(F_stokes_lin)
+            F_stokes_lin = replace(self.F, {self.solution: z_tri})
+            a, L = lhs(F_stokes_lin), rhs(F_stokes_lin)
             self.problem = fd.LinearVariationalProblem(a, L, self.solution,
                                                        bcs=self.strong_bcs,
                                                        constant_jacobian=True)

@@ -1,8 +1,25 @@
-from .equations import BaseTerm, BaseEquation
-from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
-from firedrake import avg, sym, Identity, jump
-from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
-from firedrake import FacetArea, CellVolume
+import firedrake as fd
+from firedrake import (
+    avg,
+    div,
+    dot,
+    grad,
+    inner,
+    jump,
+    nabla_grad,
+    outer,
+    sym,
+    transpose,
+)
+
+from .equations import BaseEquation, BaseTerm
+from .utility import (
+    cell_edge_integral_ratio,
+    is_continuous,
+    normal_is_continuous,
+    tensor_jump,
+)
+
 r"""
 This module contains the classes for the momentum equation and its terms.
 
@@ -56,7 +73,7 @@ class ViscosityTerm(BaseTerm):
         grad_test = nabla_grad(phi)
         stress = 2 * mu * sym(grad(u))
         if compressible:
-            stress -= 2/3 * mu * Identity(self.dim) * div(u)
+            stress -= 2/3 * mu * fd.Identity(self.dim) * div(u)
 
         F = 0
         F += inner(grad_test, stress)*self.dx
@@ -81,12 +98,12 @@ class ViscosityTerm(BaseTerm):
         # instead of maximum over two adjacent cells + and -, we just sum (which is 2*avg())
         # and the for internal facets we have an extra 0.5:
         # WEIRDNESS: avg(1/CellVolume(mesh)) crashes TSFC - whereas it works in scalar diffusion! - instead just writing out explicitly
-        sigma *= FacetArea(self.mesh)*(1/CellVolume(self.mesh)('-') + 1/CellVolume(self.mesh)('+'))/2
+        sigma *= fd.FacetArea(self.mesh)*(1/fd.CellVolume(self.mesh)('-') + 1/fd.CellVolume(self.mesh)('+'))/2
 
         if not is_continuous(self.trial_space):
             u_tensor_jump = tensor_jump(n, u) + tensor_jump(u, n)
             if compressible:
-                u_tensor_jump -= 2/3 * Identity(self.dim) * jump(u, n)
+                u_tensor_jump -= 2/3 * fd.Identity(self.dim) * jump(u, n)
             F += sigma*inner(tensor_jump(n, phi), avg(mu) * u_tensor_jump)*self.dS
             F += -inner(avg(mu * nabla_grad(phi)), u_tensor_jump)*self.dS
             F += -inner(tensor_jump(n, phi), avg(stress))*self.dS
@@ -96,11 +113,11 @@ class ViscosityTerm(BaseTerm):
                 if 'u' in bc:
                     u_tensor_jump = outer(n, u-bc['u'])
                     if compressible:
-                        u_tensor_jump -= 2/3 * Identity(self.dim) * (dot(n, u) - dot(n, bc['u']))
+                        u_tensor_jump -= 2/3 * fd.Identity(self.dim) * (dot(n, u) - dot(n, bc['u']))
                 else:
                     u_tensor_jump = outer(n, n)*(dot(n, u)-bc['un'])
                     if compressible:
-                        u_tensor_jump -= 2/3 * Identity(self.dim) * (dot(n, u) - bc['un'])
+                        u_tensor_jump -= 2/3 * fd.Identity(self.dim) * (dot(n, u) - bc['un'])
                 u_tensor_jump += transpose(u_tensor_jump)
                 # this corresponds to the same 3 terms as the dS integrals for DG above:
                 F += 2*sigma*inner(outer(n, phi), mu * u_tensor_jump)*self.ds(id)

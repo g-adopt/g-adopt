@@ -1,22 +1,33 @@
 """
 A module with utitity functions for gadopt
 """
-from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
-from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement
-from firedrake.__future__ import Interpolator
-import ufl
-import finat.ufl
-import time
-from ufl.corealg.traversal import traverse_unique_terminals
-from firedrake.petsc import PETSc
-from mpi4py import MPI
-import numpy as np
 import logging
-from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
+import time
+
+import finat.ufl
+import firedrake as fd
+import numpy as np
+import ufl
+from firedrake import (
+    as_vector,
+    assemble,
+    dot,
+    ds_b,
+    ds_t,
+    ds_v,
+    dx,
+    max_value,
+    min_value,
+    op2,
+    outer,
+    sqrt,
+    tanh,
+)
+from firedrake.__future__ import Interpolator
+from mpi4py import MPI
 from scipy.linalg import solveh_banded
+from ufl.corealg.traversal import traverse_unique_terminals
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -24,7 +35,7 @@ log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper
 
 def log(*args):
     """Log output to stdout from root processor only"""
-    PETSc.Sys.Print(*args)
+    fd.PETSc.Sys.Print(*args)
 
 
 class ParameterLog:
@@ -64,7 +75,7 @@ class TimestepAdaptor:
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
+        self.ref_vel_interpolator = Interpolator(abs(dot(fd.JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -90,7 +101,7 @@ def upward_normal(mesh, cartesian):
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
-        X = SpatialCoordinate(mesh)
+        X = fd.SpatialCoordinate(mesh)
         r = sqrt(dot(X, X))
         return X/r
 
@@ -105,7 +116,7 @@ def vertical_component(u, cartesian):
 
 def ensure_constant(f):
     if isinstance(f, float) or isinstance(f, int):
-        return Constant(f)
+        return fd.Constant(f)
     else:
         return f
 
@@ -177,9 +188,9 @@ def normal_is_continuous(expr):
 
 def cell_size(mesh):
     if hasattr(mesh.ufl_cell(), 'sub_cells'):
-        return sqrt(CellVolume(mesh))
+        return sqrt(fd.CellVolume(mesh))
     else:
-        return CellDiameter(mesh)
+        return fd.CellDiameter(mesh)
 
 
 def cell_edge_integral_ratio(mesh, p):
@@ -235,17 +246,17 @@ def extend_function_to_3d(func, mesh_extruded):
     family = ufl_elem.family()
     degree = ufl_elem.degree()
     name = func.name()
-    if isinstance(ufl_elem, VectorElement):
+    if isinstance(ufl_elem, fd.VectorElement):
         # vector function space
         fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0, dim=2, vector=True)
     else:
         fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0)
-    func_extended = Function(fs_extended, name=name, val=func.dat._data)
+    func_extended = fd.Function(fs_extended, name=name, val=func.dat._data)
     func_extended.source = func
     return func_extended
 
 
-class ExtrudedFunction(Function):
+class ExtrudedFunction(fd.Function):
     """
     A 2D :class:`Function` that provides a 3D view on the extruded domain.
     The 3D function can be accessed as `ExtrudedFunction.view_3d`.
@@ -292,15 +303,15 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
         if v_degree is None:
             v_degree = h_degree
         h_cell, v_cell = mesh.ufl_cell().sub_cells()
-        h_elt = FiniteElement(h_family, h_cell, h_degree, variant=variant)
-        v_elt = FiniteElement(v_family, v_cell, v_degree, variant=v_variant)
-        elt = TensorProductElement(h_elt, v_elt)
+        h_elt = fd.FiniteElement(h_family, h_cell, h_degree, variant=variant)
+        v_elt = fd.FiniteElement(v_family, v_cell, v_degree, variant=v_variant)
+        elt = fd.TensorProductElement(h_elt, v_elt)
         if hdiv:
             elt = ufl.HDivElement(elt)
     else:
-        elt = FiniteElement(h_family, mesh.ufl_cell(), h_degree, variant=variant)
+        elt = fd.FiniteElement(h_family, mesh.ufl_cell(), h_degree, variant=variant)
 
-    constructor = VectorFunctionSpace if vector else FunctionSpace
+    constructor = fd.VectorFunctionSpace if vector else fd.FunctionSpace
     return constructor(mesh, elt, **kwargs)
 
 
@@ -321,7 +332,7 @@ class LayerAveraging:
         """
 
         self.mesh = mesh
-        XYZ = SpatialCoordinate(mesh)
+        XYZ = fd.SpatialCoordinate(mesh)
 
         if cartesian:
             self.r = XYZ[len(XYZ)-1]
@@ -339,8 +350,8 @@ class LayerAveraging:
                 nlayers = mesh.layers
             except AttributeError:
                 raise ValueError("For non-extruded mesh need to specify depths array r1d.")
-            CG1 = FunctionSpace(mesh, "CG", 1)
-            r_func = Function(CG1).interpolate(self.r)
+            CG1 = fd.FunctionSpace(mesh, "CG", 1)
+            r_func = fd.Function(CG1).interpolate(self.r)
             self.r1d = r_func.dat.data[:nlayers]
 
         self.mass = np.zeros((2, len(self.r1d)))
@@ -350,9 +361,9 @@ class LayerAveraging:
     def _assemble_mass(self):
         # main diagonal of mass matrix
         r = self.r
-        rc = Constant(self.r1d[0])
-        rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rc = fd.Constant(self.r1d[0])
+        rn = fd.Constant(self.r1d[1])
+        rp = fd.Constant(0.)
 
         # radial P1 hat function in rp < r < rn with maximum at rc
         phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
@@ -369,8 +380,8 @@ class LayerAveraging:
         self.mass[0, -1] = assemble(phi**2 * self.dx)
 
         # compute off-diagonal (symmetric)
-        rp = Constant(self.r1d[0])
-        rn = Constant(self.r1d[1])
+        rp = fd.Constant(self.r1d[0])
+        rn = fd.Constant(self.r1d[1])
 
         # overlapping product between two basis functions in rp < r < rn
         overlap = max_value((rn - r) / (rn - rp), 0) * max_value((r - rp) / (rn - rp), 0) * self.dx
@@ -384,9 +395,9 @@ class LayerAveraging:
 
     def _assemble_rhs(self, T):
         r = self.r
-        rc = Constant(self.r1d[0])
-        rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rc = fd.Constant(self.r1d[0])
+        rn = fd.Constant(self.r1d[1])
+        rp = fd.Constant(0.)
 
         phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
 
@@ -415,14 +426,14 @@ class LayerAveraging:
         """
 
         r = self.r
-        rc = Constant(self.r1d[0])
-        rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rc = fd.Constant(self.r1d[0])
+        rn = fd.Constant(self.r1d[1])
+        rp = fd.Constant(0.)
 
         u.assign(0.0)
 
         phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
-        val = Constant(0.)
+        val = fd.Constant(0.)
 
         for a, rin in zip(avg[:-1], self.r1d[1:]):
             val.assign(a)

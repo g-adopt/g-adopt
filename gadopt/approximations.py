@@ -1,5 +1,8 @@
 import abc
-from firedrake import sym, grad, inner, div, Identity
+
+import firedrake as fd
+from firedrake import div, grad, inner, sym
+
 from .utility import ensure_constant, vertical_component
 
 
@@ -133,7 +136,7 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
         if self.compressible:  # (used in AnelasticLiquidApproximations below)
-            stress -= 2/3 * self.mu * div(u) * Identity(u.ufl_shape[0])
+            stress -= 2/3 * self.mu * div(u) * fd.Identity(u.ufl_shape[0])
         phi = inner(stress, grad(u))
         return phi * self.Di / self.Ra
 
