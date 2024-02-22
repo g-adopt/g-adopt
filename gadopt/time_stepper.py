@@ -7,7 +7,7 @@ from typing import Any, Optional
 import firedrake
 import numpy as np
 
-from .equation import BaseEquation
+from .equations import BaseEquation
 from .utility import ensure_constant
 
 
