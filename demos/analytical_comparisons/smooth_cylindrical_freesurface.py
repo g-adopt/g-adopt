@@ -15,7 +15,7 @@ _project_solver_parameters = {
 }
 
 
-def model(level, k, nn, dt_factor, do_write=True):
+def model(level, k, nn, do_write=False):
     """The smooth initial condition, cylindrical domain, free-slip boundary condition model.
 
     Args:
@@ -31,8 +31,8 @@ def model(level, k, nn, dt_factor, do_write=True):
     k = Constant(k)
     nn = Constant(nn)
 
-    ncells = level * 64
-    nlayers = level * 8
+    ncells = level * 256
+    nlayers = level * 16
 
     # Construct a circle mesh and then extrude into a cylinder:
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
@@ -51,6 +51,10 @@ def model(level, k, nn, dt_factor, do_write=True):
     Z = MixedFunctionSpace([V, W, W])  # Mixed function space.
     v, w, w1 = TestFunctions(Z)
 
+    # Nullspaces and near-nullspaces:
+    Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
+    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
+
     # Set up fields on these function spaces - split into each component so that they are easily accessible:
     z = Function(Z)  # a field over the mixed function space Z.
     u, p, eta = split(z)
@@ -64,18 +68,20 @@ def model(level, k, nn, dt_factor, do_write=True):
     approximation = BoussinesqApproximation(1)
     stokes_bcs = {
         bottom_id: {'un': 0},
-        top_id: {'free_surface': {}},
+        top_id: {'free_surface': {}},  # Apply the free surface boundary condition
     }
 
     rho0 = approximation.rho
     g = approximation.g
     tau0 = Constant(2 * nn * mu / (rho0 * g))  # Characteristic time scale (dimensionless)
     log("tau0", tau0)
-    dt = Constant(dt_factor*tau0)  # timestep (dimensionless)
+    dt = Constant(tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
 
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, cartesian=False, free_surface_dt=dt,
-                                 free_surface_variable_rho=False)
+                                 free_surface_variable_rho=False,
+                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                                 near_nullspace=Z_near_nullspace)
 
     # use tighter tolerances than default to ensure convergence:
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
@@ -98,7 +104,7 @@ def model(level, k, nn, dt_factor, do_write=True):
         eta_.rename("Eta")
         u_file = File("fs_velocity_{}.pvd".format(level))
         p_file = File("fs_pressure_{}.pvd".format(level))
-        eta_file = File("fs_eta_{}.pvd".format(level))
+        eta_file = File("fs_eta_{}_theta.pvd".format(level))
         temp_file = File("fs_temp_{}.pvd".format(level))
         temp_file.write(Function(W, name="T").interpolate(T), Function(W, name="Density").interpolate(approximation.rho_field(0, T)))
 
@@ -119,12 +125,20 @@ def model(level, k, nn, dt_factor, do_write=True):
     eta_anal = Function(W, name="AnalyticalEta")
     eta_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in etaxy.dat.data]
 
+    steady_state_tolerance = 1e-8
+
+    u_old, p_old, eta_old = split(stokes_solver.solution_old)
+
     # Now perform the time loop:
-    for timestep in range(1, max_timesteps+1):
+    for timestep in range(1, 20):
 
         # Solve Stokes sytem:
         stokes_solver.solve()
         time.assign(time + dt)
+
+        # Calculate L2-norm of change in velocity:
+        maxchange = sqrt(assemble((u - u_old)**2 * dx))
+        log("maxchange = ", maxchange)
 
         u_error = Function(V, name="VelocityError").assign(u_-u_anal)
         p_error = Function(W, name="PressureError").assign(p_-p_anal)
@@ -136,35 +150,9 @@ def model(level, k, nn, dt_factor, do_write=True):
             p_file.write(p_, p_anal, p_error)
             eta_file.write(eta_, eta_anal, eta_error)
 
-    # take out null modes through L2 projection from velocity and pressure
-    # removing rotation from velocity:
-    rot = as_vector((-X[1], X[0]))
-    coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
-    u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
-
-    # removing constant nullspace from pressure
-    coef = assemble(p_ * _dx)/assemble(Constant(1.0)*_dx(domain=mesh))
-    p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
-
-    solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
-
-    # compute u analytical and error
-    uxy = interpolate(as_vector((X[0], X[1])), V)
-    u_anal = Function(V, name="AnalyticalVelocity")
-    u_anal.dat.data[:] = [solution.velocity_cartesian(xyi) for xyi in uxy.dat.data]
-    u_error = Function(V, name="VelocityError").assign(u_-u_anal)
-
-    # compute p analytical and error
-    pxy = interpolate(as_vector((X[0], X[1])), Wvec)
-    p_anal = Function(W, name="AnalyticalPressure")
-    p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
-    p_error = Function(W, name="PressureError").assign(p_-p_anal)
-
-    # compute eta analytical and error
-    etaxy = interpolate(as_vector((X[0], X[1])), Wvec)
-    eta_anal = Function(W, name="AnalyticalEta")
-    eta_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in etaxy.dat.data]
-    eta_error = Function(W, name="EtaError").assign(eta_-eta_anal)
+        if maxchange < steady_state_tolerance:
+            log("Steady-state achieved -- exiting time-step loop")
+            break
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*_dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*_dx))
@@ -181,7 +169,7 @@ if __name__ == "__main__":
     dt_factors = 2 / (2**np.arange(2))
     levels = [2**i for i in [1, 2]]
     # Rerun with iterative solvers
-    errors = np.array([model(l, 2, 4, 1) for l in levels])
+    errors = np.array([model(l, 2, 4) for l in levels])
     # errors = np.array([model(3, 2, 4, dtf) for dtf in dt_factors])
     log(errors)
     log("u errors", errors[:, 0])

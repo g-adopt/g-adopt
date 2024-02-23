@@ -7,6 +7,7 @@ from pathlib import Path
 enabled_cases = {
     "smooth/cylindrical/free_slip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
     "smooth/cylindrical/zero_slip": {"convergence": (4.0, 2.0)},
+    "smooth/cylindrical/free_surface": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
     "delta/cylindrical/free_slip": {"convergence": (1.5, 0.5)},
     "delta/cylindrical/zero_slip": {"convergence": (1.5, 0.5)},
     "delta/cylindrical/free_slip_dpc": {"convergence": (3.5, 2.0), "rtol": 1e-1},
@@ -63,17 +64,28 @@ def test_analytical(name, expected, config):
         for level in levels
     ]
 
+    if name.split("/")[-1] == "free_surface":
+        columns = ["l2error_u", "l2error_p", "l2error_eta", "l2anal_u", "l2anal_p", "l2anal_eta"]
+        variables = 3  # u, p and eta
+
+    else:
+        columns = ["l2error_u", "l2error_p", "l2anal_u", "l2anal_p"]
+        variables = 2  # u and p
+
+    cols_anal = columns[variables:]
+    cols_err = columns[:variables]
     dat = pd.concat(dats)
-    dat.columns = ["l2error_u", "l2error_p", "l2anal_u", "l2anal_p"]
+
+    dat.columns = columns
     dat.insert(0, "level", levels)
     dat = dat.set_index("level")
 
     # use the highest resolution analytical solutions as the reference
-    ref = dat.iloc[-1][["l2anal_u", "l2anal_p"]].rename(index=lambda s: s.replace("anal", "error"))
-    errs = dat[["l2error_u", "l2error_p"]] / ref
+    ref = dat.iloc[-1][cols_anal].rename(index=lambda s: s.replace("anal", "error"))
+    errs = dat[cols_err] / ref
     errs = errs.reset_index(drop=True)  # drop resolution label
 
     convergence = np.log2(errs.shift() / errs).drop(index=0)
-    expected_convergence = pd.Series(expected["convergence"], index=["l2error_u", "l2error_p"])
+    expected_convergence = pd.Series(expected["convergence"], index=cols_err)
 
     assert np.allclose(convergence, expected_convergence, rtol=expected.get("rtol", 1e-2))

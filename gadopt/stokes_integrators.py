@@ -61,15 +61,15 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
     """
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
-    V, W = Z.subfunctions
+    stokes_funcspace = Z.subfunctions
     if rotational:
         if dim == 2:
-            rotV = fd.Function(V).interpolate(fd.as_vector((-X[1], X[0])))
+            rotV = fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector((-X[1], X[0])))
             basis = [rotV]
         elif dim == 3:
-            x_rotV = fd.Function(V).interpolate(fd.as_vector((0, -X[2], X[1])))
-            y_rotV = fd.Function(V).interpolate(fd.as_vector((X[2], 0, -X[0])))
-            z_rotV = fd.Function(V).interpolate(fd.as_vector((-X[1], X[0], 0)))
+            x_rotV = fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector((0, -X[2], X[1])))
+            y_rotV = fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector((X[2], 0, -X[0])))
+            z_rotV = fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector((-X[1], X[0], 0)))
             basis = [x_rotV, y_rotV, z_rotV]
         else:
             raise ValueError("Unknown dimension")
@@ -79,20 +79,26 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
         for tdim in translations:
             vec = [0] * dim
             vec[tdim] = 1
-            basis.append(fd.Function(V).interpolate(fd.as_vector(vec)))
+            basis.append(fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector(vec)))
 
     if basis:
         V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
         V_nullspace.orthonormalize()
     else:
-        V_nullspace = V
+        V_nullspace = stokes_funcspace[0]
 
     if closed:
         p_nullspace = fd.VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
     else:
-        p_nullspace = W
+        p_nullspace = stokes_funcspace[1]
 
-    return fd.MixedVectorSpaceBasis(Z, [V_nullspace, p_nullspace])
+    null_space = [V_nullspace, p_nullspace]
+
+    # If free surface unknowns, add dummy free surface nullspace
+    for i in range(len(stokes_funcspace)-2):
+        null_space.append(stokes_funcspace[2+i])
+
+    return fd.MixedVectorSpaceBasis(Z, null_space)
 
 
 class StokesSolver:
@@ -102,7 +108,7 @@ class StokesSolver:
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False, J=None, constant_jacobian=False,
                  iterative_2d=False, free_surface_dt=None, free_surface_variable_rho=True,
-                 **kwargs):
+                 free_surface_theta=0.5, **kwargs):
 
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
@@ -178,12 +184,11 @@ class StokesSolver:
                 # Define free surface variables for timestepping
                 eta.append(self.stokes_vars[2+c])
                 eta_old.append(fd.split(self.solution_old)[2+c])
-                theta = 0.5  # This gives a second order in time integration scheme
-                eta_theta.append((1-theta)*eta_old[c] + theta*eta[c])
+                eta_theta.append((1-free_surface_theta)*eta_old[c] + free_surface_theta*eta[c])
 
                 # Add free surface equation
                 self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
-                                      free_surface_id=id, free_surface_dt=free_surface_dt, theta=theta, k=self.k))
+                                      free_surface_id=id, free_surface_dt=free_surface_dt, theta=free_surface_theta, k=self.k))
                 # Add free surface stress term
                 if free_surface_variable_rho:
                     # Use actual density
@@ -210,7 +215,7 @@ class StokesSolver:
                 # Add free surface time derivative term
                 # Multiply by theta to keep the block system symmetric for the implicit coupling case
                 # (N.b. we already have two equations from StokesEquations)
-                self.F += self.equations[2+i].mass_term(self.test[2+i], theta*(eta[i]-eta_old[i])/free_surface_dt)
+                self.F += self.equations[2+i].mass_term(self.test[2+i], free_surface_theta*(eta[i]-eta_old[i])/free_surface_dt)
 
         if self.solver_parameters is None:
             if self.linear:
