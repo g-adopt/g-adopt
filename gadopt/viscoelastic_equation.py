@@ -1,6 +1,6 @@
 from .equations import BaseTerm
 from .momentum_equation import MomentumEquation, ContinuityEquation
-from firedrake import dot, FacetNormal, nabla_grad, inner
+from firedrake import nabla_grad, inner
 r"""
 This module contains the additional terms and equations necessary for viscoelasticity
 
@@ -31,7 +31,7 @@ class PreviousStressTerm(BaseTerm):
 
         F = inner(grad_test, previous_stress)*self.dx
 
-        return -F  
+        return -F
 
 
 class ViscoelasticEquation(MomentumEquation):

@@ -109,7 +109,7 @@ class StokesSolver:
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
         self.equations = equations(self.Z, self.Z, quad_degree=quad_degree,
-                                         compressible=approximation.compressible)
+                                   compressible=approximation.compressible)
         self.solution = z
         self.T = T
         self.approximation = approximation
@@ -126,7 +126,8 @@ class StokesSolver:
         self.solver_kwargs = kwargs
         self.stokes_vars = fd.split(self.solution)  # For default stokes this is a tuple of (velocity, pressure)
         self.k = upward_normal(self.Z.mesh(), cartesian)
-        
+        self.quad_degree = quad_degree
+
         self.setup_fields()
 
         # Setup boundary conditions
@@ -134,7 +135,9 @@ class StokesSolver:
         self.strong_bcs = []
         self.free_surface_dict = {}  # Separate dictionary for copying free surface information
         self.free_surface = False
-        
+        self.free_surface_dt = free_surface_dt
+        self.free_surface_variable_rho = free_surface_variable_rho
+
         for id, bc in bcs.items():
             weak_bc = {}
             for bc_type, value in bc.items():
@@ -163,11 +166,11 @@ class StokesSolver:
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
         if self.free_surface:
-            for i in range(len(eta)):
+            for i in range(len(self.eta)):
                 # Add free surface time derivative term
                 # Multiply by theta to keep the block system symmetric for the implicit coupling case
                 # (N.b. we already have two equations from StokesEquations)
-                self.F += self.equations[2+i].mass_term(self.test[2+i], theta*(eta[i]-eta_old[i])/free_surface_dt)
+                self.F += self.equations[2+i].mass_term(self.test[2+i], self.theta*(self.eta[i]-self.eta_old[i])/free_surface_dt)
 
         if self.solver_parameters is None:
             if self.linear:
@@ -190,11 +193,10 @@ class StokesSolver:
                 if self.free_surface:
                     # Merge free surface fields with pressure field for Schur complement solve
                     self.solver_parameters.update({'pc_fieldsplit_0_fields': '0',
-                                                   'pc_fieldsplit_1_fields': '1,'+','.join(str(2+i) for i in range(len(eta)))})
+                                                   'pc_fieldsplit_1_fields': '1,'+','.join(str(2+i) for i in range(len(self.eta)))})
         # solver is setup only last minute
         # so people can overwrite parameters we've setup here
         self._solver_setup = False
-
 
     def setup_fields(self):
         # Add velocity, pressure and buoyancy term to the fields dictionary
@@ -208,17 +210,15 @@ class StokesSolver:
             'rho_continuity': self.approximation.rho_continuity(),
         }
 
-
-
     def setup_free_surface(self):
-    
+
         if self.free_surface_dt is None:
             raise TypeError("Please provide a timestep to advance the free surface, currently free_surface_dt=None.")
 
         self.solution_old = fd.Function(self.solution)
-        eta = []
-        eta_old = []
-        eta_theta = []
+        self.eta = []
+        self.eta_old = []
+        self.eta_theta = []
         self.free_surface_id_list = []
 
         c = 0  # Counter for free surfaces (N.b. we already have two equations from StokesEquations)
@@ -229,22 +229,22 @@ class StokesSolver:
                 exterior_density = 0
 
             # Define free surface variables for timestepping
-            eta.append(self.stokes_vars[2+c])
-            eta_old.append(fd.split(self.solution_old)[2+c])
-            theta = 0.5  # This gives a second order in time integration scheme
-            eta_theta.append((1-theta)*eta_old[c] + theta*eta[c])
+            self.eta.append(self.stokes_vars[2+c])
+            self.eta_old.append(fd.split(self.solution_old)[2+c])
+            self.theta = 0.5  # This gives a second order in time integration scheme
+            self.eta_theta.append((1-self.theta)*self.eta_old[c] + self.theta*self.eta[c])
 
             # Add free surface equation
-            self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
-                                  free_surface_id=id, free_surface_dt=free_surface_dt, theta=theta, k=self.k))
+            self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=self.quad_degree,
+                                  free_surface_id=id, free_surface_dt=self.free_surface_dt, theta=self.heta, k=self.k))
             # Add free surface stress term
-            if free_surface_variable_rho:
+            if self.free_surface_variable_rho:
                 # Use actual density
-                surface_rho = self.approximation.rho_field(self.stokes_vars[1], T)
+                surface_rho = self.approximation.rho_field(self.stokes_vars[1], self.T)
             else:
                 # Use reference density (needed for analytical cylindrical cases)
                 surface_rho = self.approximation.rho
-            self.weak_bcs[id] = {'normal_stress': (surface_rho - exterior_density) * self.approximation.g * eta_theta[c]}
+            self.weak_bcs[id] = {'normal_stress': (surface_rho - exterior_density) * self.approximation.g * self.eta_theta[c]}
 
             # Set internal dofs to zero to prevent singular matrix for free surface equation
             self.strong_bcs.append(InteriorBC(self.Z.sub(2+c), 0, id))
@@ -295,7 +295,6 @@ class StokesSolver:
 class ViscoelasticStokesSolver(StokesSolver):
     name = "ViscoelasticStokesSolver"
 
-
     def __init__(self, z, viscosity, shear_modulus, density, deviatoric_stress, displacement, approximation, dt, bcs=None,
                  quad_degree=6, cartesian=True, solver_parameters=None,
                  closed=True, rotational=False, J=None, constant_jacobian=False,
@@ -306,22 +305,19 @@ class ViscoelasticStokesSolver(StokesSolver):
         self.deviatoric_stress = deviatoric_stress  # Temporary function to store deviatoric stress from previous time step
         self.displacement = displacement
 
-        
         maxwell_time = viscosity / shear_modulus
         self.effective_viscosity = self.effective_viscosity(viscosity, maxwell_time, dt)
         self.prefactor_prestress = self.prefactor_prestress(viscosity, maxwell_time, dt)
-        
         self.previous_stress = fd.Function(deviatoric_stress, name="previous stress").interpolate(self.prefactor_prestress * self.deviatoric_stress)  # History stress term from previous time step (explicit RHS forcing)
 
-
         super().__init__(z, self.density, approximation, bcs=bcs, mu=self.effective_viscosity,
-                 quad_degree=quad_degree, cartesian=cartesian, solver_parameters=solver_parameters,
-                 closed=closed, rotational=rotational, J=J, constant_jacobian=constant_jacobian,
-                 iterative_2d=iterative_2d, free_surface_dt=free_surface_dt, free_surface_variable_rho=free_surface_variable_rho,
-                 equations=ViscoelasticEquations, **kwargs)
-        
+                         quad_degree=quad_degree, cartesian=cartesian, solver_parameters=solver_parameters,
+                         closed=closed, rotational=rotational, J=J, constant_jacobian=constant_jacobian,
+                         iterative_2d=iterative_2d, free_surface_dt=free_surface_dt, free_surface_variable_rho=free_surface_variable_rho,
+                         equations=ViscoelasticEquations, **kwargs)
+
         scale_mu = fd.Constant(1e10)  # this is a scaling factor roughly size of mantle maxwell time to make sure that solve converges with strong bcs in parallel...
-        self.F = (1/ scale_mu)*self.F
+        self.F = (1 / scale_mu)*self.F
 
     def effective_viscosity(self, viscosity, maxwell_time, dt):
         return viscosity / (maxwell_time + dt / 2)
@@ -329,28 +325,27 @@ class ViscoelasticStokesSolver(StokesSolver):
     def prefactor_prestress(self, viscosity, maxwell_time, dt):
         return (maxwell_time - dt / 2) / (maxwell_time + dt / 2)
 
-
     def setup_fields(self):
         super().setup_fields()
-        # Add additional viscoelastic fields 
+        # Add additional viscoelastic fields
         self.fields["displacement"] = self.displacement
         self.fields["previous_stress"] = self.previous_stress
 
     def setup_free_surface(self):
-        # Overload method 
+        # Overload method
         for id, value in self.free_surface_dict.items():
             if 'exterior_density' in value:
                 print("hello exterior density")
                 exterior_density = value['exterior_density']
             else:
                 exterior_density = 0
-            # First, make the displacement term implicit by incorporating 
-            # the unknown `incremental displacement' (stokes_vars[0]) that 
+            # First, make the displacement term implicit by incorporating
+            # the unknown `incremental displacement' (stokes_vars[0]) that
             # we are solving for
             implicit_displacement = self.stokes_vars[0] + self.displacement
             implicit_displacement_up = fd.dot(implicit_displacement, self.k)
-            # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature. 
-            normal_stress = (self.density - exterior_density) * self.approximation.g * implicit_displacement_up 
+            # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
+            normal_stress = (self.density - exterior_density) * self.approximation.g * implicit_displacement_up
             if 'normal_stress' in self.weak_bcs[id]:
                 # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
                 print("hello normal stress")
@@ -358,7 +353,7 @@ class ViscoelasticStokesSolver(StokesSolver):
                 self.weak_bcs[id]['normal_stress'] = existing_value + normal_stress
             else:
                 self.weak_bcs[id] = {'normal_stress': normal_stress}
-        
+
         # Turn off free surface flag because the viscoelastic free surface (for the small displacement approximation) is now setup
         self.free_surface = False
 

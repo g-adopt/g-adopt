@@ -227,7 +227,7 @@ class SmallDisplacementViscoelasticApproximation(BaseApproximation):
         self.g = ensure_constant(g)
         self.background_density = background_density  # This is a field
         self.displacement = displacement  # This is a field
-    
+
     def density_perturbation(self):
         return -inner(self.displacement, grad(self.background_density))
 
@@ -236,7 +236,7 @@ class SmallDisplacementViscoelasticApproximation(BaseApproximation):
         # accounts for advection of density in the absence of an evolution equation for temperature
         # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
         print("hello viscoelastic approx")
-        return  -self.g * self.density_perturbation() 
+        return -self.g * self.density_perturbation()
 
     def rho_continuity(self):
         return 1
@@ -254,4 +254,3 @@ class SmallDisplacementViscoelasticApproximation(BaseApproximation):
 
     def energy_source(self, u):
         return 0
-
