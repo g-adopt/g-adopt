@@ -1,4 +1,4 @@
-cases := smooth/cylindrical/free_slip smooth/cylindrical/zero_slip delta/cylindrical/free_slip delta/cylindrical/zero_slip delta/cylindrical/free_slip_dpc delta/cylindrical/zero_slip_dpc
+cases := smooth/cylindrical/free_slip smooth/cylindrical/zero_slip smooth/cylindrical/free_surface delta/cylindrical/free_slip delta/cylindrical/zero_slip delta/cylindrical/free_slip_dpc delta/cylindrical/zero_slip_dpc
 spherical_cases := smooth/spherical/free_slip smooth/spherical/zero_slip
 
 .PHONY: all longtest longtest_output $(cases) $(spherical_cases) clean
