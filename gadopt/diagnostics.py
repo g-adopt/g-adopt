@@ -44,11 +44,11 @@ class GeodynamicalDiagnostics:
 
         self.dx = firedrake.dx(degree=degree)
         if T.function_space().extruded:
-            ds = CombinedSurfaceMeasure(self.mesh, degree)
+            self.ds = CombinedSurfaceMeasure(self.mesh, degree)
         else:
-            ds = firedrake.ds(self.mesh)
-        self.ds_t = ds(top_id)
-        self.ds_b = ds(bottom_id)
+            self.ds = firedrake.ds(self.mesh)
+        self.ds_t = self.ds(top_id)
+        self.ds_b = self.ds(bottom_id)
 
         self.n = FacetNormal(self.mesh)
 

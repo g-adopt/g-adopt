@@ -8,10 +8,6 @@ from firedrake.adjoint import *  # noqa: F401
 from mpi4py import MPI
 from pyadjoint import MinimizationProblem
 
-__all__ = [
-    "ROLSolver", "CheckpointedROLVector", "LinMoreOptimiser", "minimisation_parameters"
-]
-
 # emulate the previous behaviour of firedrake_adjoint by automatically
 # starting the tape
 continue_annotation()
