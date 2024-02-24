@@ -41,7 +41,7 @@ class Simulation:
     name = "Schmalholz_2011"
 
     # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 1
+    level_set_func_space_deg = 2
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
@@ -154,12 +154,19 @@ class Simulation:
                         ind_inside
                     ]
 
-                    ls_outside = level_set_data[mask_ls_outside][ind_outside]
+                    ls_outside = max(
+                        1e-6,
+                        min(1 - 1e-6, level_set_data[mask_ls_outside][ind_outside]),
+                    )
                     sdls_outside = epsilon * np.log(ls_outside / (1 - ls_outside))
 
-                    ls_inside = level_set_data[mask_ls_inside][mask_ver_coord][
-                        ind_inside
-                    ]
+                    ls_inside = max(
+                        1e-6,
+                        min(
+                            1 - 1e-6,
+                            level_set_data[mask_ls_inside][mask_ver_coord][ind_inside],
+                        ),
+                    )
                     sdls_inside = epsilon * np.log(ls_inside / (1 - ls_inside))
 
                     ls_dist = sdls_inside / (sdls_inside - sdls_outside)
