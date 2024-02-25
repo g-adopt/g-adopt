@@ -38,8 +38,12 @@ class ViscoelasticEquation(MomentumEquation):
     """
     Viscoelastic Equation.
     """
+    terms = []
+    # Add terms from viscous momentum equation
+    for term in MomentumEquation.terms:
+        terms.append(term)
 
-    MomentumEquation.terms.append(PreviousStressTerm)
+    terms.append(PreviousStressTerm)
 
 
 def ViscoelasticEquations(test_space, trial_space, quad_degree=None, **kwargs):

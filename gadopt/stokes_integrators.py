@@ -236,7 +236,7 @@ class StokesSolver:
 
             # Add free surface equation
             self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=self.quad_degree,
-                                  free_surface_id=id, free_surface_dt=self.free_surface_dt, theta=self.heta, k=self.k))
+                                  free_surface_id=id, free_surface_dt=self.free_surface_dt, theta=self.theta, k=self.k))
             # Add free surface stress term
             if self.free_surface_variable_rho:
                 # Use actual density
@@ -335,7 +335,6 @@ class ViscoelasticStokesSolver(StokesSolver):
         # Overload method
         for id, value in self.free_surface_dict.items():
             if 'exterior_density' in value:
-                print("hello exterior density")
                 exterior_density = value['exterior_density']
             else:
                 exterior_density = 0
@@ -348,7 +347,6 @@ class ViscoelasticStokesSolver(StokesSolver):
             normal_stress = (self.density - exterior_density) * self.approximation.g * implicit_displacement_up
             if 'normal_stress' in self.weak_bcs[id]:
                 # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
-                print("hello normal stress")
                 existing_value = self.weak_bcs[id]['normal_stress']
                 self.weak_bcs[id]['normal_stress'] = existing_value + normal_stress
             else:
