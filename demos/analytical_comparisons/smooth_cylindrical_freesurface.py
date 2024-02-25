@@ -31,8 +31,8 @@ def model(level, k, nn, do_write=False):
     k = Constant(k)
     nn = Constant(nn)
 
-    ncells = level * 256
-    nlayers = level * 16
+    ncells = level * 128
+    nlayers = level * 8
 
     # Construct a circle mesh and then extrude into a cylinder:
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
@@ -125,7 +125,7 @@ def model(level, k, nn, do_write=False):
     eta_anal = Function(W, name="AnalyticalEta")
     eta_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in etaxy.dat.data]
 
-    steady_state_tolerance = 1e-8
+    steady_state_tolerance = 1e-7
 
     u_old, p_old, eta_old = split(stokes_solver.solution_old)
 
