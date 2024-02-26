@@ -101,7 +101,7 @@ class BoussinesqApproximation(BaseApproximation):
         self.H = ensure_constant(H)
 
     def buoyancy(self, p, T):
-        return (
+        return float(
             self.Ra * self.rho * self.alpha * (T - self.T0) * self.g
             - self.RaB * self.delta_rho * self.g
         )
