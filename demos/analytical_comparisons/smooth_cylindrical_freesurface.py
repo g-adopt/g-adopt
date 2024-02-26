@@ -125,7 +125,7 @@ def model(level, k, nn, do_write=False):
     eta_anal = Function(W, name="AnalyticalEta")
     eta_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in etaxy.dat.data]
 
-    steady_state_tolerance = 1e-7
+    steady_state_tolerance = 1e-9
 
     u_old, p_old, eta_old = split(stokes_solver.solution_old)
 
@@ -167,9 +167,9 @@ def model(level, k, nn, do_write=False):
 if __name__ == "__main__":
     # default case run with nx = 80 for four dt factors
     dt_factors = 2 / (2**np.arange(2))
-    levels = [2**i for i in [1, 2]]
+    levels = [2**i for i in [1, 2, 3]]
     # Rerun with iterative solvers
-    errors = np.array([model(l, 2, 4) for l in levels])
+    errors = np.array([model(l, 2, 1) for l in levels])
     # errors = np.array([model(3, 2, 4, dtf) for dtf in dt_factors])
     log(errors)
     log("u errors", errors[:, 0])
