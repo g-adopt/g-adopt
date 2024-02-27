@@ -7,7 +7,14 @@ base = Path(__file__).parent.resolve()
 
 def run_benchmark(model):
     # Run default case run for four dt factors
-    dt_factors = 2 / (2**np.arange(4))
+    if model.name == 'explicit':
+        dtf_start = 1
+        iterative = False
+    else:
+        dtf_start = 2
+        iterative = True
+
+    dt_factors = dtf_start / (2**np.arange(4))
 
     errors = []
     errors_zeta = []
@@ -26,23 +33,24 @@ def run_benchmark(model):
     else:
         np.savetxt(f"errors-{model.name}-free-surface-coupling.dat", errors)
 
-    # Rerun with iterative solvers
-    errors_iterative = []
-    errors_zeta_iterative = []
+    if iterative:
+        # Rerun with iterative solvers
+        errors_iterative = []
+        errors_zeta_iterative = []
 
-    for dtf in dt_factors:
-        simulation = model(dtf, iterative_2d=True)
-        simulation.run_simulation()
-        errors_iterative.append(simulation.final_error)
+        for dtf in dt_factors:
+            simulation = model(dtf, iterative_2d=True)
+            simulation.run_simulation()
+            errors_iterative.append(simulation.final_error)
+
+            if simulation.bottom_free_surface:
+                errors_zeta_iterative.append(simulation.final_zeta_error)
 
         if simulation.bottom_free_surface:
-            errors_zeta_iterative.append(simulation.final_zeta_error)
-
-    if simulation.bottom_free_surface:
-        np.savetxt(f"errors-{model.name}-iterative-top-free-surface-coupling.dat", errors_iterative)
-        np.savetxt(f"errors-{model.name}-iterative-bottom-free-surface-coupling.dat", errors_zeta_iterative)
-    else:
-        np.savetxt(f"errors-{model.name}-iterative-free-surface-coupling.dat", errors_iterative)
+            np.savetxt(f"errors-{model.name}-iterative-top-free-surface-coupling.dat", errors_iterative)
+            np.savetxt(f"errors-{model.name}-iterative-bottom-free-surface-coupling.dat", errors_zeta_iterative)
+        else:
+            np.savetxt(f"errors-{model.name}-iterative-free-surface-coupling.dat", errors_iterative)
 
 
 @pytest.fixture
