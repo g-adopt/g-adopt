@@ -8,10 +8,10 @@ class TopBottomFreeSurfaceModel(FreeSurfaceModel):
     name = "implicit-both"
     bottom_free_surface = True
 
-    def __init__(self, dt_factor, do_write=True, iterative_2d=False):
+    def __init__(self, dt_factor, nx=80, do_write=True, iterative_2d=False):
         self.rho_bottom = 2
         self.zeta_error = 0
-        super().__init__(dt_factor=dt_factor, do_write=do_write, iterative_2d=iterative_2d)
+        super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d)
 
         if iterative_2d:
             # Schur complement splitting leads to a nullspace in the velocity block.

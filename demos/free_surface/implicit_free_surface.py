@@ -7,10 +7,10 @@ class FreeSurfaceModel:
     name = "implicit"
     bottom_free_surface = False
 
-    def __init__(self, dt_factor, do_write=False, iterative_2d=False):
+    def __init__(self, dt_factor, nx=80, do_write=False, iterative_2d=False):
 
         self.do_write = do_write
-        mesh = self.setup_mesh()
+        mesh = self.setup_mesh(nx)
 
         # Set up function spaces - currently using the bilinear Q2Q1 element pair:
         V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -32,22 +32,21 @@ class FreeSurfaceModel:
         self.stokes_vars[1].rename("Pressure")
         self.stokes_vars[2].rename("eta")
 
-        T = self.initialise_temperature(Q)
-
-        # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-        Ra = Constant(0)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
-        approximation = BoussinesqApproximation(Ra)
-
-        rho0 = approximation.rho  # This defaults to rho0 = 1 (dimensionless)
-        g = approximation.g  # This defaults to g = 1 (dimensionless)
+        self.initialise_wavenumber()
 
         self.X = SpatialCoordinate(mesh)
+
+        T = self.initialise_temperature(Q)
+
+        self.initialise_approximation()
+        self.rho0 = self.approximation.rho  # This defaults to rho0 = 1 (dimensionless)
+        g = self.approximation.g  # This defaults to g = 1 (dimensionless)
 
         self.initialise_free_surfaces()
 
         # timestepping
         mu = Constant(1)  # Shear modulus (dimensionless)
-        self.tau0 = Constant(2 * self.kk * mu / (rho0 * g))  # Characteristic time scale (dimensionless)
+        self.tau0 = Constant(2 * self.kk * mu / (self.rho0 * g))  # Characteristic time scale (dimensionless)
         log("tau0", self.tau0)
 
         self.dt = Constant(dt_factor*self.tau0)  # timestep (dimensionless)
@@ -59,7 +58,7 @@ class FreeSurfaceModel:
 
         self.setup_bcs()
 
-        self.stokes_solver = StokesSolver(z, T, approximation, bcs=self.stokes_bcs, mu=mu, cartesian=True, free_surface_dt=self.dt, iterative_2d=iterative_2d)
+        self.stokes_solver = StokesSolver(z, T, self.approximation, bcs=self.stokes_bcs, mu=mu, cartesian=True, free_surface_dt=self.dt, iterative_2d=iterative_2d)
 
         self.error = 0
 
@@ -73,14 +72,12 @@ class FreeSurfaceModel:
             self.output_file = File(f"{self.name}_freesurface_D{float(self.D/self.L0)}_mu{float(mu)}_nx{self.nx}_dt{float(self.dt/self.tau0)}tau.pvd")
             self.write_file()
 
-    def setup_mesh(self):
+    def setup_mesh(self, nx):
         # Set up geometry:
         self.D = 3e6  # Depth of domain in m
         self.L = self.D  # Length of the domain in m
-        lam_dimensional = self.D/2  # wavelength of load in m
         self.L0 = self.D  # characteristic length scale for scaling the equations
-        self.lam = lam_dimensional/self.L0  # dimensionless lambda
-        self.nx = 80
+        self.nx = nx
         ny = self.nx
         self.left_id, self.right_id, self.bottom_id, self.top_id = 1, 2, 3, 4  # Boundary IDs
         return RectangleMesh(self.nx, ny, self.L/self.L0, self.D/self.L0)  # Rectangle mesh generated via firedrake
@@ -88,11 +85,19 @@ class FreeSurfaceModel:
     def setup_function_space(self, V, W):
         return MixedFunctionSpace([V, W, W])  # Mixed function space.
 
+    def initialise_wavenumber(self):
+        lam_dimensional = self.D/2  # wavelength of load in m
+        self.lam = lam_dimensional/self.L0  # dimensionless lambda
+        self.kk = Constant(2 * pi / self.lam)  # wavenumber (dimensionless)
+
     def initialise_temperature(self, Q):
         return Function(Q, name="Temperature").assign(0)  # Setup a dummy function for temperature
 
+    def initialise_approximation(self):
+        Ra = Constant(0)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
+        self.approximation = BoussinesqApproximation(Ra)
+
     def initialise_free_surfaces(self):
-        self.kk = Constant(2 * pi / self.lam)  # wavenumber (dimensionless)
         self.F0 = Constant(1000 / self.L0)  # initial free surface amplitude (dimensionless)
         self.stokes_vars[2].interpolate(self.F0 * cos(self.kk * self.X[0]))  # Initial free surface condition
         self.eta_analytical = Function(self.stokes_vars[2], name="eta analytical")
