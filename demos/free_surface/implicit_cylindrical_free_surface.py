@@ -5,6 +5,7 @@ from test_viscous_surface import run_benchmark
 
 
 class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
+    # Free surface relaxation test in a cylindrical domain.
 
     name = "implicit-cylindrical-iterative"
     bottom_free_surface = False
