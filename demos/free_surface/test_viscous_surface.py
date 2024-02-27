@@ -57,8 +57,8 @@ def run_benchmark(model):
 
 
 @pytest.fixture
-def expected_errors(coupling):
-    return np.loadtxt(base / f"expected-errors-{coupling}-free-surface-coupling.dat")
+def expected_errors():
+    return np.load(base / "expected_errors.npz")
 
 
 cases = [("explicit", [1.4, 1.1, 1.0]),
@@ -79,6 +79,7 @@ cases = [("explicit", [1.4, 1.1, 1.0]),
 @pytest.mark.parametrize("coupling,expected_convergence", cases)
 def test_free_surface(coupling, expected_convergence, expected_errors):
 
+    expected_errors = expected_errors[coupling]
     errors = np.loadtxt(base / f"errors-{coupling}-free-surface-coupling.dat")
 
     # check that norm(q) is the same as previously run
