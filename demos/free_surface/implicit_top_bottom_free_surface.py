@@ -1,9 +1,9 @@
 from gadopt import *
-from implicit_free_surface import FreeSurfaceModel
+from implicit_free_surface import ImplicitFreeSurfaceModel
 from test_viscous_surface import run_benchmark
 
 
-class TopBottomFreeSurfaceModel(FreeSurfaceModel):
+class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
 
     name = "implicit-both"
     bottom_free_surface = True
@@ -20,8 +20,13 @@ class TopBottomFreeSurfaceModel(FreeSurfaceModel):
             alpha = dt_factor / 2
             self.stokes_solver.F += alpha * self.stokes_solver.test[0][1] * (self.stokes_solver.stokes_vars[0][1] - 0)*dx
 
-    def setup_function_space(self, V, W):
-        return MixedFunctionSpace([V, W, W, W])  # Mixed function space with bottom free surface.
+    def setup_function_space(self):
+        self.Z = MixedFunctionSpace([self.V, self.W, self.W, self.W])  # Mixed function space with bottom free surface.
+
+    def setup_variables(self):
+        super().setup_variables()
+        # Rename zeta for output:
+        self.stokes_vars[3].rename("zeta")
 
     def initialise_free_surfaces(self):
         super().initialise_free_surfaces()
@@ -52,4 +57,4 @@ class TopBottomFreeSurfaceModel(FreeSurfaceModel):
 
 
 if __name__ == "__main__":
-    run_benchmark(TopBottomFreeSurfaceModel)
+    run_benchmark(TopBottomImplicitFreeSurfaceModel)
