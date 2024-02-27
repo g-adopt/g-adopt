@@ -8,8 +8,8 @@ all: $(cases) $(parallel)
 
 $(cases): 
 	echo "running $@ free surface coupling "
-	tsp -N 1 -f python3 $@_viscous_surface.py
+	tsp -N 1 -f python3 $@_free_surface.py
 
 $(parallel):
 	echo "running $@ free surface coupling "
-	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $@_viscous_surface.py
+	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $@_free_surface.py
