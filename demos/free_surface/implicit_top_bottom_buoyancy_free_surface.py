@@ -1,14 +1,14 @@
 from gadopt import *
-from implicit_top_bottom_free_surface import TopBottomFreeSurfaceModel
+from implicit_top_bottom_free_surface import TopBottomImplicitFreeSurfaceModel
 from test_viscous_surface import run_benchmark
 
 
-class BuoyancyTopBottomFreeSurfaceModel(TopBottomFreeSurfaceModel):
+class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceModel):
 
     name = "implicit-buoyancy"
     bottom_free_surface = True
 
-    def __init__(self, dt_factor, nx=320, do_write=True, iterative_2d=False):
+    def __init__(self, dt_factor, nx=320, do_write=False, iterative_2d=False):
 
         super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d)
 
@@ -17,13 +17,13 @@ class BuoyancyTopBottomFreeSurfaceModel(TopBottomFreeSurfaceModel):
         self.lam = lam_dimensional/self.L0  # dimensionless lambda
         self.kk = Constant(2 * pi / self.lam)  # wavenumber (dimensionless)
 
-    def initialise_temperature(self, Q):
+    def initialise_temperature(self):
         self.alpha = 2e-5
         self.Q_temp_scale = 1
         self.forcing_depth = 0.5
         width = (1/self.nx)
         delta = exp(-pow((self.X[1]-self.forcing_depth)/width, 2)) / (width * sqrt(pi))
-        return Function(Q, name="Temperature").interpolate(delta * self.Q_temp_scale * cos(self.kk * self.X[0]))  # Initialise temperature field
+        self.T = Function(self.Q, name="Temperature").interpolate(delta * self.Q_temp_scale * cos(self.kk * self.X[0]))  # Initialise temperature field
 
     def initialise_approximation(self):
         Ra = Constant(1)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
@@ -57,4 +57,4 @@ class BuoyancyTopBottomFreeSurfaceModel(TopBottomFreeSurfaceModel):
 
 
 if __name__ == "__main__":
-    run_benchmark(BuoyancyTopBottomFreeSurfaceModel)
+    run_benchmark(BuoyancyTopBottomImplicitFreeSurfaceModel)
