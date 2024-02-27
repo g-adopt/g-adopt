@@ -177,7 +177,7 @@ class StokesSolver:
                 # Add free surface time derivative term
                 # Multiply by theta to keep the block system symmetric for the implicit coupling case
                 # (N.b. we already have two equations from StokesEquations)
-                self.F += self.equations[2+i].mass_term(self.test[2+i], self.free_surface_theta*(self.eta[i]-self.eta_old[i])/free_surface_dt)
+                self.F += self.equations[2+i].mass_term(self.test[2+i], self.free_surface_theta*(self.eta[i]-self.eta_old[i])/self.free_surface_dt)
 
         if self.solver_parameters is None:
             if self.linear:
