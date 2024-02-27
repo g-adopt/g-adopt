@@ -17,6 +17,7 @@ enabled_cases = {
 }
 
 longtest_cases = [
+    "smooth/cylindrical/free_surface",
     "smooth/spherical/free_slip",
     "smooth/spherical/zero_slip",
 ]

@@ -162,31 +162,3 @@ def model(level, k, nn, do_write=False):
     l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error)*ds(top_id)))
 
     return l2error_u, l2error_p, l2error_eta, l2anal_u, l2anal_p, l2anal_eta
-
-
-if __name__ == "__main__":
-    # default case run with nx = 80 for four dt factors
-    dt_factors = 2 / (2**np.arange(2))
-    levels = [2**i for i in [1, 2, 3]]
-    # Rerun with iterative solvers
-    errors = np.array([model(l, 2, 1) for l in levels])
-    # errors = np.array([model(3, 2, 4, dtf) for dtf in dt_factors])
-    log(errors)
-    log("u errors", errors[:, 0])
-    # use the highest resolution analytical solutions as the reference in scaling
-    ref = errors[:, 0][-1]
-    relative_errors = errors[:, 0] / ref
-    convergence = np.log2(relative_errors[:-1] / relative_errors[1:])
-    log("u convergence:", convergence)
-
-    log("p errors", errors[:, 1])
-    ref = errors[:, 1][-1]
-    relative_errors = errors[:, 1] / ref
-    convergence = np.log2(relative_errors[:-1] / relative_errors[1:])
-    log("p convergence:", convergence)
-
-    log("eta errors", errors[:, 2])
-    ref = errors[:, 2][-1]
-    relative_errors = errors[:, 2] / ref
-    convergence = np.log2(relative_errors[:-1] / relative_errors[1:])
-    log("eta convergence:", convergence)

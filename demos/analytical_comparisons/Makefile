@@ -1,11 +1,11 @@
-cases := smooth/cylindrical/free_slip smooth/cylindrical/zero_slip smooth/cylindrical/free_surface delta/cylindrical/free_slip delta/cylindrical/zero_slip delta/cylindrical/free_slip_dpc delta/cylindrical/zero_slip_dpc
-spherical_cases := smooth/spherical/free_slip smooth/spherical/zero_slip
+cases := smooth/cylindrical/free_slip smooth/cylindrical/zero_slip delta/cylindrical/free_slip delta/cylindrical/zero_slip delta/cylindrical/free_slip_dpc delta/cylindrical/zero_slip_dpc
+long_cases := smooth/cylindrical/free_surface smooth/spherical/free_slip smooth/spherical/zero_slip
 
-.PHONY: all longtest longtest_output $(cases) $(spherical_cases) clean
+.PHONY: all longtest longtest_output $(cases) $(long_cases) clean
 
 all: $(cases)
 
-longtest: $(spherical_cases)
+longtest: $(long_cases)
 
 $(cases): analytical.py
 	echo "running analytical $@" >&2
@@ -13,7 +13,7 @@ $(cases): analytical.py
 
 .ONESHELL:
 SHELL = /bin/bash
-$(spherical_cases): analytical.py clean
+$(long_cases): analytical.py clean
 	exec {out}<> <(:) # create new named FD
 	qsub -W depend=on:$$(python3 analytical.py count $@) -N sentinel -W block=true -l ncpus=1,walltime=00:00:30,wd -q normal -P $(project) -- /bin/true >&"$$out" &
 	read -u "$$out" sjob
