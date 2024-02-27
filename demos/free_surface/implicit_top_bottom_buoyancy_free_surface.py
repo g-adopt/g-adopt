@@ -8,9 +8,9 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
     name = "implicit-buoyancy"
     bottom_free_surface = True
 
-    def __init__(self, dt_factor, nx=320, do_write=False, iterative_2d=False):
+    def __init__(self, dt_factor, nx=320, do_write=False, iterative_2d=False, cartesian=True):
 
-        super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d)
+        super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d, cartesian=cartesian)
 
     def initialise_wavenumber(self):
         lam_dimensional = self.D  # wavelength of load in m
@@ -54,6 +54,9 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
         self.eta_analytical.interpolate(exp(-self.time/self.tau_plus) * cos(self.kk * self.X[0]) * ((self.F0-self.M)*(self.tau_eta - self.tau_minus)-self.gamma * (self.G0-self.N)*self.tau_eta)/(self.tau_plus-self.tau_minus)-exp(-self.time/self.tau_minus) * cos(self.kk * self.X[0]) * ((self.F0-self.M)*(self.tau_eta - self.tau_plus)-self.gamma * (self.G0-self.N)*self.tau_eta)/(self.tau_plus-self.tau_minus) + self.M * cos(self.kk*self.X[0]))
 
         self.zeta_analytical.interpolate(exp(-self.time/self.tau_plus) * cos(self.kk * self.X[0]) * ((self.G0-self.N)*(self.tau_zeta - self.tau_minus)-self.gamma * (self.F0-self.M)*self.tau_zeta)/(self.tau_plus-self.tau_minus)-exp(-self.time/self.tau_minus) * cos(self.kk * self.X[0]) * ((self.G0-self.N)*(self.tau_zeta - self.tau_plus)-self.gamma * (self.F0-self.M)*self.tau_zeta)/(self.tau_plus-self.tau_minus) + self.N * cos(self.kk*self.X[0]))
+
+    def absorption_penalty(self):
+        self.penalty = 0.1 * self.dt_factor / 2
 
 
 if __name__ == "__main__":

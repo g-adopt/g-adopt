@@ -8,11 +8,12 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
     name = "implicit"
     bottom_free_surface = False
 
-    def __init__(self, dt_factor, nx=80, do_write=False, iterative_2d=False):
+    def __init__(self, dt_factor, nx=80, do_write=False, iterative_2d=False, cartesian=True):
         self.do_write = do_write
         self.iterative_2d = iterative_2d
+        self.cartesian = cartesian
 
-        super().__init__(dt_factor, nx=nx, do_write=do_write)
+        super().__init__(dt_factor, nx=nx, do_write=do_write, cartesian=cartesian)
 
     def setup_function_space(self):
         self.Z = MixedFunctionSpace([self.V, self.W, self.W])  # Mixed function space for velocity, pressure and eta.
@@ -42,10 +43,12 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
         }
 
     def setup_solver(self):
-        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs, mu=self.mu, cartesian=True, free_surface_dt=self.dt, iterative_2d=self.iterative_2d)
+        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs, mu=self.mu, cartesian=self.cartesian,
+                                          free_surface_dt=self.dt, iterative_2d=self.iterative_2d, nullspace=self.Z_nullspace,
+                                          transpose_nullspace=self.Z_nullspace, near_nullspace=self.Z_near_nullspace)
 
     def calculate_error(self):
-        local_error = assemble(pow(self.stokes_vars[2]-self.eta_analytical, 2)*ds(self.top_id))
+        local_error = assemble(pow(self.stokes_vars[2]-self.eta_analytical, 2)*self.ds(self.top_id))
         self.error += local_error*self.dt
 
     def write_file(self):

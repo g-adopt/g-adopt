@@ -3,7 +3,7 @@ parallel := implicit_top_bottom_buoyancy implicit_cylindrical
 
 ncpus := 8
 
-all: $(cases) $(parallel) $(old_cases)
+all: $(cases) $(parallel)
 
 
 $(cases): 
@@ -12,4 +12,4 @@ $(cases):
 
 $(parallel):
 	echo "running $@ free surface coupling "
-	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $@_viscous_surface.py
+	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $@_free_surface.py

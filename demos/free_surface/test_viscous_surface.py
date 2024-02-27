@@ -12,7 +12,10 @@ def run_benchmark(model):
         iterative = False
     else:
         dtf_start = 2
-        iterative = True
+        if model.name == 'implicit-cylindrical-iterative':
+            iterative = False  # Cylinder cases already default to iterative so don't need to test this again!
+        else:
+            iterative = True
 
     dt_factors = dtf_start / (2**np.arange(4))
 

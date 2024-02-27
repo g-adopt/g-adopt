@@ -8,17 +8,18 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     name = "implicit-both"
     bottom_free_surface = True
 
-    def __init__(self, dt_factor, nx=80, do_write=True, iterative_2d=False):
+    def __init__(self, dt_factor, nx=80, do_write=True, iterative_2d=False, cartesian=True):
+        self.dt_factor = dt_factor
         self.rho_bottom = 2
         self.zeta_error = 0
-        super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d)
+        super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d, cartesian=cartesian)
 
         if iterative_2d:
             # Schur complement splitting leads to a nullspace in the velocity block.
             # Adding a small absorption term bringing the vertical velocity to zero removes this nullspace
             # and does not effect convergence provided that this term is small compared with the overall numerical error.
-            alpha = dt_factor / 2
-            self.stokes_solver.F += alpha * self.stokes_solver.test[0][1] * (self.stokes_solver.stokes_vars[0][1] - 0)*dx
+            self.absorption_penalty()
+            self.stokes_solver.F += self.penalty * self.stokes_solver.test[0][1] * (self.stokes_solver.stokes_vars[0][1] - 0)*dx
 
     def setup_function_space(self):
         self.Z = MixedFunctionSpace([self.V, self.W, self.W, self.W])  # Mixed function space with bottom free surface.
@@ -45,15 +46,18 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
 
     def calculate_error(self):
         super().calculate_error()
-        zeta_local_error = assemble(pow(self.stokes_vars[3]-self.zeta_analytical, 2)*ds(self.bottom_id))
+        zeta_local_error = assemble(pow(self.stokes_vars[3]-self.zeta_analytical, 2)*self.ds(self.bottom_id))
         self.zeta_error += zeta_local_error*self.dt
 
     def calculate_final_error(self):
         super().calculate_final_error()
-        self.final_zeta_error = pow(self.zeta_error, 0.5)/self.L
+        self.final_zeta_error = pow(self.zeta_error, 0.5)/self.L0
 
     def write_file(self):
         self.output_file.write(self.stokes_vars[0], self.stokes_vars[1], self.stokes_vars[2], self.stokes_vars[3], self.eta_analytical, self.zeta_analytical)
+
+    def absorption_penalty(self):
+        self.penalty = self.dt_factor / 2
 
 
 if __name__ == "__main__":
