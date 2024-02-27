@@ -4,6 +4,8 @@ from test_viscous_surface import run_benchmark
 
 
 class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
+    # Test case from Section 3.1.1 of `An implicit free surface algorithm
+    # for geodynamical simulations', Kramer et al 2012.
 
     name = "implicit"
     bottom_free_surface = False

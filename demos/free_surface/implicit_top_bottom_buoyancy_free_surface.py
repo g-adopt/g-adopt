@@ -4,6 +4,8 @@ from test_viscous_surface import run_benchmark
 
 
 class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceModel):
+    # Test case from Section 3.1.3 of `An implicit free surface algorithm
+    # for geodynamical simulations', Kramer et al 2012.
 
     name = "implicit-buoyancy"
     bottom_free_surface = True
@@ -38,7 +40,10 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
         self.zeta_analytical = Function(self.stokes_vars[3], name="zeta analytical")
 
     def update_analytical_free_surfaces(self):
-        # analytical function
+        # We use the more complicated analytical expression because the wavelength for this test case is the same
+        # as the depth of the domain, in order to minimise the spatial error without having to refine the grid too much.
+        # In earlier cases we had lambda = D/2 so the additional terms in the analytical expression had negligible effect.
+
         self.delta_rho = self.rho_bottom - self.rho0
         self.M = self.alpha * self.Q_temp_scale * (-self.kk * 1 * sinh(self.kk*self.forcing_depth) + self.kk * self.forcing_depth * cosh(self.kk*(1-self.forcing_depth))*sinh(self.kk * 1) + sinh(self.kk*(1-self.forcing_depth))*sinh(self.kk * 1))/(sinh(self.kk*1)*sinh(self.kk*1))
         self.N = self.alpha * (self.rho0 / self.delta_rho) * self.Q_temp_scale * (self.kk * 1 * sinh(self.kk*self.forcing_depth)*cosh(self.kk*1) - self.kk * self.forcing_depth * cosh(self.kk*self.forcing_depth)*sinh(self.kk * 1) + sinh(self.kk*self.forcing_depth)*sinh(self.kk * 1))/(sinh(self.kk*1)*sinh(self.kk*1))
