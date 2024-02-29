@@ -25,10 +25,7 @@ class FreeSurfaceTerm(BaseTerm):
         free_surface_id = self.term_kwargs['free_surface_id']
 
         # Multiply by constant factor to keep the block system symmetric for the implicit coupling case
-        if 'theta' in self.term_kwargs:
-            prefactor = self.term_kwargs['theta']
-        else:
-            prefactor = 1
+        prefactor = self.term_kwargs.get('theta', 1)
 
         u = fields['velocity']
         psi = test
