@@ -36,6 +36,11 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def rho_field(self, p, T):
+        "UFL expression for density"
+        pass
+
+    @abc.abstractmethod
     def rho_continuity(self):
         "UFL expression for density in mass continuity equation (=1 for incompressible"
         pass
@@ -88,6 +93,9 @@ class BoussinesqApproximation(BaseApproximation):
 
     def buoyancy(self, p, T):
         return self.Ra * self.g * self.alpha * self.rho * T
+
+    def rho_field(self, p, T):
+        return self.rho * (1 - self.alpha * T)
 
     def rho_continuity(self):
         return 1

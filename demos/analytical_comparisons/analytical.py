@@ -18,6 +18,12 @@ cases = {
                 "k": [2, 8],
                 "n": [1, 4],
             },
+            "free_surface": {
+                "cores": [4, 16, 24],
+                "levels": [2**i for i in [1, 2, 3]],
+                "k": [2, 8],
+                "n": [1, 4],
+            },
         },
         "spherical": {
             "free_slip": {
@@ -87,6 +93,8 @@ def run_subcommand(args):
         from smooth_cylindrical_freeslip import model
     elif args.case == "smooth/cylindrical/zero_slip":
         from smooth_cylindrical_zeroslip import model
+    elif args.case == "smooth/cylindrical/free_surface":
+        from smooth_cylindrical_freesurface import model
     elif args.case == "delta/cylindrical/free_slip":
         from delta_cylindrical_freeslip import model
     elif args.case == "delta/cylindrical/zero_slip":
