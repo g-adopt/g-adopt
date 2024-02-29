@@ -176,10 +176,7 @@ class StokesSolver:
 
             c = 0  # Counter for free surfaces (N.b. we already have two equations from StokesEquations)
             for id, value in free_surface_dict.items():
-                if 'exterior_density' in value:
-                    exterior_density = value['exterior_density']
-                else:
-                    exterior_density = 0
+                exterior_density = value.get('exterior_density', 0)
 
                 # Define free surface variables for timestepping
                 eta.append(self.stokes_vars[2+c])
