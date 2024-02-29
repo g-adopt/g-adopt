@@ -12,9 +12,8 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     direct = False
     iterative = True
 
-    def __init__(self, dt_factor, do_write=True, **kwargs):
-        self.cartesian = False
-        super().__init__(dt_factor, do_write=do_write, cartesian=self.cartesian)
+    def __init__(self, dt_factor, **kwargs):
+        super().__init__(dt_factor, cartesian=False, **kwargs)
 
     def setup_mesh(self):
         # Set up geometry:

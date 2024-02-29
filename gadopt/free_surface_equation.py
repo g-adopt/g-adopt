@@ -21,7 +21,6 @@ class FreeSurfaceTerm(BaseTerm):
     Free Surface term: u \dot n
     """
     def residual(self, test, trial, trial_lagged, fields, bcs):
-        assert 'free_surface_id' in self.term_kwargs
         free_surface_id = self.term_kwargs['free_surface_id']
 
         # Multiply by constant factor to keep the block system symmetric for the implicit coupling case

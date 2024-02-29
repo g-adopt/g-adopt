@@ -12,12 +12,12 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     direct = True
     iterative = True
 
-    def __init__(self, dt_factor, nx=80, do_write=True, iterative_2d=False, cartesian=True):
+    def __init__(self, dt_factor, **kwargs):
         self.rho_bottom = 2
         self.zeta_error = 0
-        super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d, cartesian=cartesian)
+        super().__init__(dt_factor, **kwargs)
 
-        if iterative_2d:
+        if self.iterative_2d:
             # Schur complement splitting leads to a nullspace in the velocity block.
             # Adding a small absorption term bringing the vertical velocity to zero removes this nullspace
             # and does not effect convergence provided that this term is small compared with the overall numerical error.

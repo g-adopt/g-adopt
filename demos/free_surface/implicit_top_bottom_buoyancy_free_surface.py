@@ -12,9 +12,9 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
     direct = True
     iterative = True
 
-    def __init__(self, dt_factor, nx=320, do_write=False, iterative_2d=False, cartesian=True):
+    def __init__(self, dt_factor, nx=320, **kwargs):
 
-        super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d, cartesian=cartesian)
+        super().__init__(dt_factor, nx=nx, **kwargs)
 
     def initialise_wavenumber(self):
         lam_dimensional = self.D  # wavelength of load in m
@@ -30,7 +30,7 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
         self.T = Function(self.Q, name="Temperature").interpolate(delta * self.Q_temp_scale * cos(self.kk * self.X[0]))  # Initialise temperature field
 
     def initialise_approximation(self):
-        Ra = Constant(1)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
+        Ra = Constant(1)  # Rayleigh number
         self.approximation = BoussinesqApproximation(Ra, alpha=self.alpha)
 
     def initialise_free_surfaces(self):
