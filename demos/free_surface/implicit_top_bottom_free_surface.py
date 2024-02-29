@@ -1,6 +1,6 @@
 from gadopt import *
 from implicit_free_surface import ImplicitFreeSurfaceModel
-from test_viscous_surface import run_benchmark
+from test_free_surface import run_benchmark
 
 
 class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
@@ -9,9 +9,10 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
 
     name = "implicit-both"
     bottom_free_surface = True
+    direct = True
+    iterative = True
 
     def __init__(self, dt_factor, nx=80, do_write=True, iterative_2d=False, cartesian=True):
-        self.dt_factor = dt_factor
         self.rho_bottom = 2
         self.zeta_error = 0
         super().__init__(dt_factor, nx=nx, do_write=do_write, iterative_2d=iterative_2d, cartesian=cartesian)
@@ -20,7 +21,7 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
             # Schur complement splitting leads to a nullspace in the velocity block.
             # Adding a small absorption term bringing the vertical velocity to zero removes this nullspace
             # and does not effect convergence provided that this term is small compared with the overall numerical error.
-            self.absorption_penalty()
+            self.absorption_penalty(dt_factor)
             self.stokes_solver.F += self.penalty * self.stokes_solver.test[0][1] * (self.stokes_solver.stokes_vars[0][1] - 0)*dx
 
     def setup_function_space(self):
@@ -58,8 +59,8 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     def write_file(self):
         self.output_file.write(self.stokes_vars[0], self.stokes_vars[1], self.stokes_vars[2], self.stokes_vars[3], self.eta_analytical, self.zeta_analytical)
 
-    def absorption_penalty(self):
-        self.penalty = self.dt_factor / 2
+    def absorption_penalty(self, dt_factor):
+        self.penalty = dt_factor / 2
 
 
 if __name__ == "__main__":

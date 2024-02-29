@@ -1,6 +1,6 @@
 from gadopt import *
 from implicit_top_bottom_free_surface import TopBottomImplicitFreeSurfaceModel
-from test_viscous_surface import run_benchmark
+from test_free_surface import run_benchmark
 
 
 class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceModel):
@@ -9,6 +9,8 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
 
     name = "implicit-buoyancy"
     bottom_free_surface = True
+    direct = True
+    iterative = True
 
     def __init__(self, dt_factor, nx=320, do_write=False, iterative_2d=False, cartesian=True):
 
@@ -60,8 +62,8 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
 
         self.zeta_analytical.interpolate(exp(-self.time/self.tau_plus) * cos(self.kk * self.X[0]) * ((self.G0-self.N)*(self.tau_zeta - self.tau_minus)-self.gamma * (self.F0-self.M)*self.tau_zeta)/(self.tau_plus-self.tau_minus)-exp(-self.time/self.tau_minus) * cos(self.kk * self.X[0]) * ((self.G0-self.N)*(self.tau_zeta - self.tau_plus)-self.gamma * (self.F0-self.M)*self.tau_zeta)/(self.tau_plus-self.tau_minus) + self.N * cos(self.kk*self.X[0]))
 
-    def absorption_penalty(self):
-        self.penalty = 0.1 * self.dt_factor / 2
+    def absorption_penalty(self, dt_factor):
+        self.penalty = 0.1 * dt_factor / 2
 
 
 if __name__ == "__main__":

@@ -36,6 +36,11 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def rho_field(self, p, T):
+        "UFL expression for density"
+        pass
+
+    @abc.abstractmethod
     def rho_continuity(self):
         "UFL expression for density in mass continuity equation (=1 for incompressible"
         pass

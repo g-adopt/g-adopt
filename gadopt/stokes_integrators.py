@@ -95,8 +95,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
     null_space = [V_nullspace, p_nullspace]
 
     # If free surface unknowns, add dummy free surface nullspace
-    for i in range(len(stokes_funcspace)-2):
-        null_space.append(stokes_funcspace[2+i])
+    null_space += stokes_funcspace[2:]
 
     return fd.MixedVectorSpaceBasis(Z, null_space)
 

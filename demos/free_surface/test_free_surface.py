@@ -9,51 +9,32 @@ def run_benchmark(model):
     # Run default case run for four dt factors
     if model.name == 'explicit':
         dtf_start = 1
-        iterative = False
     else:
         dtf_start = 2
-        if model.name == 'implicit-cylindrical-iterative':
-            iterative = False  # Cylinder cases already default to iterative so don't need to test this again!
-        else:
-            iterative = True
-
     dt_factors = dtf_start / (2**np.arange(4))
 
-    errors = []
-    errors_zeta = []
+    for iterative in [False, True]:
+        errors = []
+        errors_zeta = []
+        if iterative and not model.iterative:
+            continue
+        if not iterative and not model.direct:
+            continue
 
-    for dtf in dt_factors:
-        simulation = model(dtf)
-        simulation.run_simulation()
-        errors.append(simulation.final_error)
-
-        if simulation.bottom_free_surface:
-            errors_zeta.append(simulation.final_zeta_error)
-
-    if simulation.bottom_free_surface:
-        np.savetxt(f"errors-{model.name}-top-free-surface-coupling.dat", errors)
-        np.savetxt(f"errors-{model.name}-bottom-free-surface-coupling.dat", errors_zeta)
-    else:
-        np.savetxt(f"errors-{model.name}-free-surface-coupling.dat", errors)
-
-    if iterative:
-        # Rerun with iterative solvers
-        errors_iterative = []
-        errors_zeta_iterative = []
-
+        prefix = f"errors-{model.name}"
+        if iterative:
+            prefix += "-iterative"
         for dtf in dt_factors:
-            simulation = model(dtf, iterative_2d=True)
+            simulation = model(dtf, iterative_2d=iterative)
             simulation.run_simulation()
-            errors_iterative.append(simulation.final_error)
-
+            errors.append(simulation.final_error)
             if simulation.bottom_free_surface:
-                errors_zeta_iterative.append(simulation.final_zeta_error)
-
+                errors_zeta.append(simulation.final_zeta_error)
         if simulation.bottom_free_surface:
-            np.savetxt(f"errors-{model.name}-iterative-top-free-surface-coupling.dat", errors_iterative)
-            np.savetxt(f"errors-{model.name}-iterative-bottom-free-surface-coupling.dat", errors_zeta_iterative)
+            np.savetxt(f"{prefix}-top-free-surface-coupling.dat", errors)
+            np.savetxt(f"{prefix}-bottom-free-surface-coupling.dat", errors_zeta)
         else:
-            np.savetxt(f"errors-{model.name}-iterative-free-surface-coupling.dat", errors_iterative)
+            np.savetxt(f"{prefix}-free-surface-coupling.dat", errors)
 
 
 @pytest.fixture
@@ -89,6 +70,4 @@ def test_free_surface(coupling, expected_convergence, expected_errors):
     ref = errors[-1]
     relative_errors = errors / ref
     convergence = np.log2(relative_errors[:-1] / relative_errors[1:])
-    print(f"{coupling} convergence:", convergence)
-    print()
     assert np.allclose(convergence, expected_convergence, rtol=1e-1)

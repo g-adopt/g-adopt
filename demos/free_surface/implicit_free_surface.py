@@ -1,6 +1,6 @@
 from gadopt import *
 from explicit_free_surface import ExplicitFreeSurfaceModel
-from test_viscous_surface import run_benchmark
+from test_free_surface import run_benchmark
 
 
 class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
@@ -9,6 +9,8 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
 
     name = "implicit"
     bottom_free_surface = False
+    direct = True
+    iterative = True
 
     def __init__(self, dt_factor, nx=80, do_write=False, iterative_2d=False, cartesian=True):
         self.do_write = do_write
