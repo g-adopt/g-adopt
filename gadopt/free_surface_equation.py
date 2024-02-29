@@ -45,7 +45,6 @@ class FreeSurfaceEquation(BaseEquation):
 
     def mass_term(self, test, trial):
         r"""Return the UFL for the mass term \int test * trial * ds for the free surface time derivative term integrated over the free surface."""
-        assert 'free_surface_id' in self.kwargs
         free_surface_id = self.kwargs['free_surface_id']
 
         assert 'k' in self.kwargs
