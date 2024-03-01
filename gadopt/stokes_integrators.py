@@ -96,8 +96,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
     null_space = [V_nullspace, p_nullspace]
 
     # If free surface unknowns, add dummy free surface nullspace
-    for i in range(len(stokes_funcspace)-2):
-        null_space.append(stokes_funcspace[2+i])
+    null_space += stokes_funcspace[2:]
 
     return fd.MixedVectorSpaceBasis(Z, null_space)
 
@@ -230,10 +229,7 @@ class StokesSolver:
 
         c = 0  # Counter for free surfaces (N.b. we already have two equations from StokesEquations)
         for id, value in self.free_surface_dict.items():
-            if 'exterior_density' in value:
-                exterior_density = value['exterior_density']
-            else:
-                exterior_density = 0
+            exterior_density = value.get('exterior_density', 0)
 
             # Define free surface variables for timestepping
             self.eta.append(self.stokes_vars[2+c])

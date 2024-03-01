@@ -21,14 +21,10 @@ class FreeSurfaceTerm(BaseTerm):
     Free Surface term: u \dot n
     """
     def residual(self, test, trial, trial_lagged, fields, bcs):
-        assert 'free_surface_id' in self.term_kwargs
         free_surface_id = self.term_kwargs['free_surface_id']
 
         # Multiply by constant factor to keep the block system symmetric for the implicit coupling case
-        if 'theta' in self.term_kwargs:
-            prefactor = self.term_kwargs['theta']
-        else:
-            prefactor = 1
+        prefactor = self.term_kwargs.get('theta', 1)
 
         u = fields['velocity']
         psi = test
@@ -48,10 +44,8 @@ class FreeSurfaceEquation(BaseEquation):
 
     def mass_term(self, test, trial):
         r"""Return the UFL for the mass term \int test * trial * ds for the free surface time derivative term integrated over the free surface."""
-        assert 'free_surface_id' in self.kwargs
         free_surface_id = self.kwargs['free_surface_id']
 
-        assert 'k' in self.kwargs
         k = self.kwargs['k']
         n = FacetNormal(self.mesh)
 

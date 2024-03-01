@@ -1,18 +1,19 @@
 from gadopt import *
 from gadopt.utility import CombinedSurfaceMeasure
 from implicit_free_surface import ImplicitFreeSurfaceModel
-from test_viscous_surface import run_benchmark
+from test_free_surface import run_benchmark
 
 
 class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     # Free surface relaxation test in a cylindrical domain.
 
-    name = "implicit-cylindrical-iterative"
+    name = "implicit-cylindrical"
     bottom_free_surface = False
+    direct = False
+    iterative = True
 
-    def __init__(self, dt_factor, do_write=True):
-        self.cartesian = False
-        super().__init__(dt_factor, do_write=do_write, cartesian=self.cartesian)
+    def __init__(self, dt_factor, **kwargs):
+        super().__init__(dt_factor, cartesian=False, **kwargs)
 
     def setup_mesh(self):
         # Set up geometry:

@@ -19,7 +19,7 @@ cases = {
                 "n": [1, 4],
             },
             "free_surface": {
-                "cores": [24, 48, 96],
+                "cores": [4, 16, 24],
                 "levels": [2**i for i in [1, 2, 3]],
                 "k": [2, 8],
                 "n": [1, 4],

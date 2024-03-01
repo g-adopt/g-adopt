@@ -1,6 +1,6 @@
 from gadopt import *
 from gadopt.utility import upward_normal
-from test_viscous_surface import run_benchmark
+from test_free_surface import run_benchmark
 
 
 class ExplicitFreeSurfaceModel:
@@ -9,8 +9,10 @@ class ExplicitFreeSurfaceModel:
 
     name = "explicit"
     bottom_free_surface = False
+    direct = True
+    iterative = False
 
-    def __init__(self, dt_factor, nx=80, do_write=False, cartesian=True):
+    def __init__(self, dt_factor, nx=80, do_write=False, cartesian=True, **kwargs):
         self.nx = nx
         self.do_write = do_write
         self.cartesian = cartesian
@@ -127,9 +129,7 @@ class ExplicitFreeSurfaceModel:
 
     def setup_solver(self):
         # Set up the stokes solver
-        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs, mu=self.mu, cartesian=self.cartesian,
-                                          free_surface_dt=self.dt, nullspace=self.Z_nullspace, transpose_nullspace=self.Z_nullspace,
-                                          near_nullspace=self.Z_near_nullspace)
+        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs, mu=self.mu, cartesian=self.cartesian)
 
         # Setup remaining free surface parameters needed for explicit coupling
         eta_eq = FreeSurfaceEquation(self.W, self.W, free_surface_id=self.top_id, k=upward_normal(self.mesh, cartesian=self.cartesian))  # Initialise the separate free surface equation for explicit coupling
