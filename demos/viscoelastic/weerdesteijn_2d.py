@@ -144,9 +144,8 @@ class Weerdesteijn2d:
         self.u_.rename("Incremental Displacement")
         self.p_.rename("Pressure")
         # Create output file and select output_frequency:
-        self.filename = "2d_weerdesteijn/"
         if self.do_write:
-            self.output_file = File(self.filename+"out.pvd")
+            self.output_file = File(f"{self.name}/out.pvd")
 
         self.setup_bcs()
 
@@ -246,7 +245,7 @@ class Weerdesteijn2d:
                     checkpoint.save_function(self.deviatoric_stress, name="Deviatoric stress")
 
                 if MPI.COMM_WORLD.rank == 0:
-                    np.savetxt("displacement-weerdesteijn-2d.dat", self.displacement_min_array)
+                    np.savetxt(f"displacement-{self.name}.dat", self.displacement_min_array)
 
 
 if __name__ == "__main__":
