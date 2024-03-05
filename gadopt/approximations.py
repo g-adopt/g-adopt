@@ -243,6 +243,9 @@ class SmallDisplacementViscoelasticApproximation(BaseApproximation):
         print("hello viscoelastic approx")
         return -self.g * self.density_perturbation()
 
+    def rho_field(self, p, T):
+        return self.background_density + self.density_perturbation
+
     def rho_continuity(self):
         return 1
 
