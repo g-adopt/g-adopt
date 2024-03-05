@@ -6,7 +6,7 @@ import numpy as np
 
 
 class Weerdesteijn2d:
-    name = "weerdesteijn_2d"
+    name = "weerdesteijn-2d"
     vertical_component = 1
 
     def __init__(self, dx=5e3, nz=80, short_simulation=False, do_write=False, **kwargs):
@@ -226,7 +226,7 @@ class Weerdesteijn2d:
 
             # Compute diagnostics:
             bc_displacement = DirichletBC(self.displacement.function_space(), 0, self.top_id)
-            displacement_z_min = self.displacement.dat.data_ro_with_halos[bc_displacement.nodes, 1].min(initial=0)
+            displacement_z_min = self.displacement.dat.data_ro_with_halos[bc_displacement.nodes, self.vertical_component].min(initial=0)
             displacement_min = self.displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
             log("Greatest (-ve) displacement", displacement_min)
             self.displacement_min_array.append([float(self.time/self.year_in_seconds), displacement_min])
