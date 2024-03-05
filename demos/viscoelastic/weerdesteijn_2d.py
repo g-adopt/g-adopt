@@ -238,7 +238,7 @@ class Weerdesteijn2d:
                 if self.do_write:
                     self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity)
 
-                with CheckpointFile(self.filename+"chk.h5", "w") as checkpoint:
+                with CheckpointFile(f"{self.name}-chk.h5", "w") as checkpoint:
                     checkpoint.save_function(self.u_, name="Incremental Displacement")
                     checkpoint.save_function(self.p_, name="Pressure")
                     checkpoint.save_function(self.displacement, name="Displacement")

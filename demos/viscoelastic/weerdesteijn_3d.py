@@ -16,13 +16,13 @@ class Weerdesteijn3d(Weerdesteijn2d):
         return Mesh("./aspect_box_refined_surface.msh", name="surface_mesh")
 
     def initialise_r(self):
-        return pow(pow(X[0], 2) + pow(X[1], 2), 0.5)
+        return pow(pow(self.X[0], 2) + pow(self.X[1], 2), 0.5)
 
     def setup_bcs(self):
         super().setup_bcs()
-        self.stokes_bcs[self.bottom_id] = {'uz': 0},
-        self.stokes_bcs[3] = {'uy': 0},
-        self.stokes_bcs[4] = {'uy': 0},
+        self.stokes_bcs[self.bottom_id] = {'uz': 0}
+        self.stokes_bcs[3] = {'uy': 0}
+        self.stokes_bcs[4] = {'uy': 0}
 
 
 if __name__ == "__main__":
