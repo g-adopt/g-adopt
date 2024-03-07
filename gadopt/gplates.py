@@ -33,6 +33,12 @@ class GPlatesFunctionalityMixin:
             self.gplates_connector.get_plate_velocities(
                 self.boundary_coords, model_time)
         )
+        # At this point the values are updated.
+        # However, it is not clear on the tape that these values have changed
+        # For this reason I define a new function, initiated with the new values
+        # And then assign our Function with those values
+        function_updated = fd.Function(self.function_space(), val=self.dat.data, name=f"function_gplts_{model_time:.2f}")
+        self.assign(function_updated)
 
 
 class GplatesFunction(GPlatesFunctionalityMixin, fd.Function):
