@@ -1,20 +1,23 @@
 from gadopt import *
-from gadopt.gplates import pyGplatesConnector
+from gadopt.gplates import GplatesFunction, pyGplatesConnector
 
 rmin, rmax = 1.22, 2.22
 
 
 def forward():
-    # see if there are any checkpointfiles
-    state_id = find_latest_id()
-
     # make sure the mesh is generated
-    if state_id is None:
-        generate_mesh()
+    generate_mesh()
 
     # Load mesh
-    with CheckpointFile(f"./states_{0 if state_id is None else state_id}.h5", "r") as f:
+    # If initialising start timestepping_history with zero
+    # If restarting, then load the information from CheckpointFile
+    with CheckpointFile("./simulation_states.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
+        try:
+            timestepping_history = f.get_timestepping_history(
+                mesh, name="Temperature")
+        except RuntimeError:
+            timestepping_history = {"index": [0], "time": [0.0], "delta_t": [1e-9]}
 
     bottom_id, top_id = "bottom", "top"
 
@@ -46,19 +49,42 @@ def forward():
     H_int = Constant(10.0)  # Internal heating
     Ra = Constant(5.0e6)  # Rayleigh number
     Di = Constant(0.5)  # Dissipation number.
-    delta_t = Constant(1.0e-9)  # Initial time step
+    delta_t = Constant(timestepping_history.get("delta_t")[-1])  # Initial time step
 
     # Initialise temperature field
-    if state_id is None:
-        old_indices, old_times = [0], [0.]
+    if timestepping_history.get("index")[-1] == 0:
         T_initialise(T, ((1.0 - (T0*exp(Di) - T0)) * (rmax-r)))
     else:
-        with CheckpointFile(f"./states_{find_latest_id()}.h5", mode="r") as f:
-            old_indices, old_times = f.get_timesteps(mesh, name="Temperature")
-            T.interpolate(f.load_function(mesh, name="Temperature", idx=old_indices[-1]))
+        with CheckpointFile("./simulation_states.h5", mode="r") as f:
+            T.interpolate(
+                f.load_function(
+                    mesh,
+                    name="Temperature",
+                    idx=timestepping_history.get("index")[-1]
+                )
+            )
+
+    # Initiating a plate reconstruction model
+    plate_receonstion_model = pyGplatesConnector(
+        rotation_filenames=[
+            './gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot'],
+        topology_filenames=[
+            './gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
+            './gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
+            './gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
+        nseeds=1e5,
+        nneighbours=4,
+        geologic_zero=409,
+        delta_time=0.9
+    )
 
     # Top velocity boundary condition
-    gplates_velocities = Function(V, name="GPlates_Velocity")
+    gplates_velocities = GplatesFunction(
+        V,
+        gplates_connector=plate_receonstion_model,
+        top_boundary_marker=top_id,
+        name="GPlates_Velocity"
+    )
 
     # Compressible reference state:
     rho_0 = 1.0
@@ -104,19 +130,6 @@ def forward():
     stokes_solver.solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
 
-    # Initiating a plate reconstruction model
-    pl_rec_model = pyGplatesConnector(
-        rotation_filenames=[
-            './gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot'],
-        topology_filenames=[
-            './gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
-            './gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
-            './gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
-        dbc=stokes_solver.strong_bcs[0],
-        geologic_zero=409,
-        delta_time=1.0
-    )
-
     # Write output files in VTK format:
     u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
     u.rename("Velocity")  # rename the fields
@@ -131,33 +144,28 @@ def forward():
     averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
 
     # logging diagnostic
-    plog = ParameterLog(f"params_{0 if state_id is None else state_id + 1}.log", mesh)
+    plog = ParameterLog("params.log", mesh)
     plog.log_str("timestep time dt u_rms t_dev_avg")
 
     # number of timesteps
-    num_timestep = old_indices[-1]
+    num_timestep = timestepping_history.get("index")[-1]
 
     # Period for dumping solutions
     dumping_period = 10
     pvd_period = 50
 
     # non-dimensionalised time for present geologic day (0)
-    ndtime_now = pl_rec_model.geotime2ndtime(0)
+    ndtime_now = plate_receonstion_model.geotime2ndtime(0)
 
-    # what index will we use for checkpointing
-    new_state_id = 0 if state_id is None else state_id + 1
+    # paraview files
+    paraview_file = File("ouput.pvd", mode='a')
 
-    # A checkpoint file for storing data
-    with CheckpointFile(f"states_{new_state_id}.h5", mode="w") as chkpoint_file:
-        chkpoint_file.save_mesh(mesh)
-    paraview_file = File(f"visual_{new_state_id}/output.pvd")
-
-    time = old_times[-1]
+    time = timestepping_history.get("time")[-1]
 
     # Now perform the time loop:
     while time < ndtime_now:
         # Update surface velocities
-        pl_rec_model.assign_plate_velocities(time)
+        gplates_velocities.update_plate_reconstruction(time)
 
         # Solve Stokes system:
         stokes_solver.solve()
@@ -181,7 +189,6 @@ def forward():
 
         # Write output:
         if num_timestep % pvd_period == 0:
-
             # compute radially averaged temperature profile
             averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
             # compute deviation from layer average
@@ -189,8 +196,13 @@ def forward():
             paraview_file.write(u, p, T, T_dev)
 
         if num_timestep % dumping_period == 0:
-            with CheckpointFile(f"states_{new_state_id}.h5", mode="a") as chkpoint_file:
-                chkpoint_file.save_function(T, name="Temperature", idx=num_timestep, timetag=time)
+            with CheckpointFile("./simulation_states.h5", mode="a") as chkpoint_file:
+                chkpoint_file.save_function(
+                    T,
+                    name="Temperature",
+                    idx=num_timestep,
+                    timestepping_info={"time": time, "delta_t": delta_t}
+                )
 
         # Log diagnostics:
         plog.log_str(f"{num_timestep} {time} {float(dt)} "
@@ -199,6 +211,9 @@ def forward():
 
 
 def generate_mesh():
+    import os
+    if os.path.isfile("./simulation_state.h5"):
+        return
 
     # Set up geometry:
     ref_level, nlayers = 7, 64
@@ -230,7 +245,7 @@ def generate_mesh():
         extrusion_type="radial",
     )
 
-    with CheckpointFile("states_0.h5", mode="w") as fi:
+    with CheckpointFile("simulation_states.h5", mode="w") as fi:
         fi.save_mesh(mesh)
 
 
@@ -245,7 +260,7 @@ def T_initialise(T, average):
     phi = atan2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol to Zhong)
     l, m, eps_c, eps_s = 6, 4, 0.02, 0.02
     Plm = Function(T.function_space(), name="P_lm")
-    cos_phi = interpolate(cos(phi), T.function_space())
+    cos_phi = assemble(interpolate(cos(phi), T.function_space()))
     Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
     Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
     if m == 0:
@@ -294,17 +309,6 @@ def mu_constructor(T, u):
     mu_plast = mu_star + (sigma_y / epsii)
     mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
     return mu
-
-
-def find_latest_id():
-    import glob
-
-    file_names = glob.glob("states_[0-9]*.h5")
-    if len(file_names) != 0:
-        file_names = sorted(file_names, key=lambda x: int(x.split("_")[-1].split(".")[0]))
-        return int(file_names[-1].split("_")[-1].split(".")[0])
-    else:
-        return None
 
 
 if __name__ == "__main__":
