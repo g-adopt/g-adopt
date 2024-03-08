@@ -240,7 +240,6 @@ class SmallDisplacementViscoelasticApproximation(BaseApproximation):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
         # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
-        print("hello viscoelastic approx")
         return -self.g * self.density_perturbation()
 
     def rho_field(self, p, T):

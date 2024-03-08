@@ -44,9 +44,13 @@ Field[1].PointsList = {1};
 // SizeMin -o----------------/
 //          |                |    |
 //        Point         DistMin  DistMax
+
+// Uncomment below for default refinement wtih 5 km resolution near ice load but this 
+// can be set in the command line using -setnumber refined_dx 5
+// refined_dx = 5;
 Field[2] = Threshold;
 Field[2].InField = 1;
-Field[2].SizeMin = lc / 40;
+Field[2].SizeMin = refined_dx*km;
 Field[2].SizeMax = lc;
 Field[2].DistMin = 450*km;
 Field[2].DistMax = 900*km;
@@ -83,4 +87,5 @@ Mesh.MeshSizeFromCurvature = 0;
 // fields better - in particular size fields with large element size gradients:
 
 Mesh.Algorithm = 5;
-
+Mesh 2;
+Save Sprintf("weerdesteijn_box_refined_surface_%gkm.msh", refined_dx);

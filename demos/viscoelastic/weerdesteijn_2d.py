@@ -9,10 +9,11 @@ class Weerdesteijn2d:
     name = "weerdesteijn-2d"
     vertical_component = 1
 
-    def __init__(self, dx=5e3, nz=80, short_simulation=False, do_write=False, **kwargs):
+    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, short_simulation=False, do_write=False, **kwargs):
         # Set up geometry:
-        self.dx = 10e3  # horizontal grid resolution
+        self.dx = dx  # horizontal grid resolution in m
         self.L = 1500e3  # length of the domain in m
+        self.dt_years = dt_years
         self.short_simulation = short_simulation
         self.do_write = do_write
         self.LOAD_CHECKPOINT = False
@@ -27,9 +28,7 @@ class Weerdesteijn2d:
         viscosity_values = [1e40, 1e21, 1e21, 2e21, 0]
 
         self.nx = round(self.L/self.dx)
-
         self.D = self.radius_values[0]-self.radius_values[-1]
-        nz = 80
         self.dz = self.D / nz  # because of extrusion need to define dz after
         self.nz = round(self.D/self.dz)
 
@@ -96,12 +95,12 @@ class Weerdesteijn2d:
         if self.short_simulation:
             self.dt = Constant(2.5 * self.year_in_seconds)  # Initial time-step
         else:
-            self.dt = Constant(50 * self.year_in_seconds)
+            self.dt = Constant(self.dt_years * self.year_in_seconds)
 
         if short_simulation:
             self.Tend = Constant(200 * self.year_in_seconds)
         else:
-            self.Tend = Constant(110e3 * self.year_in_seconds)
+            self.Tend = Constant(Tend_years * self.year_in_seconds)
 
         self.max_timesteps = round(self.Tend/self.dt)
         log("max timesteps", self.max_timesteps)
@@ -206,7 +205,15 @@ class Weerdesteijn2d:
             2: {'ux': 0},
         }
 
+    def checkpoint_filename(self):
+        return f"{self.name}-chk.h5"
+
+    def displacement_filename(self):
+        return f"displacement-{self.name}.dat"
+
     def run_simulation(self):
+        checkpoint_filename = self.checkpoint_filename()
+        displacement_filename = self.displacement_filename()
 
         for timestep in range(1, self.max_timesteps+1):
             if self.short_simulation:
@@ -238,14 +245,14 @@ class Weerdesteijn2d:
                 if self.do_write:
                     self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity)
 
-                with CheckpointFile(f"{self.name}-chk.h5", "w") as checkpoint:
+                with CheckpointFile(checkpoint_filename, "w") as checkpoint:
                     checkpoint.save_function(self.u_, name="Incremental Displacement")
                     checkpoint.save_function(self.p_, name="Pressure")
                     checkpoint.save_function(self.displacement, name="Displacement")
                     checkpoint.save_function(self.deviatoric_stress, name="Deviatoric stress")
 
                 if MPI.COMM_WORLD.rank == 0:
-                    np.savetxt(f"displacement-{self.name}.dat", self.displacement_min_array)
+                    np.savetxt(displacement_filename, self.displacement_min_array)
 
 
 if __name__ == "__main__":
