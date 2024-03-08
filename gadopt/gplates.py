@@ -29,7 +29,7 @@ class GPlatesFunctionalityMixin:
                 velocities. This should be non-dimensionalised time.
         """
         # Assuming `self` is a Firedrake Function instance,
-        self.dat.data[self.dbc.nodes, :] = (
+        self.dat.data_with_halos[self.dbc.nodes, :] = (
             self.gplates_connector.get_plate_velocities(
                 self.boundary_coords, model_time)
         )
@@ -37,7 +37,7 @@ class GPlatesFunctionalityMixin:
         # However, it is not clear on the tape that these values have changed
         # For this reason I define a new function, initiated with the new values
         # And then assign our Function with those values
-        function_updated = fd.Function(self.function_space(), val=self.dat.data, name=f"function_gplts_{model_time:.2f}")
+        function_updated = fd.Function(self.function_space(), val=self)
         self.assign(function_updated)
 
 
@@ -319,7 +319,7 @@ class pyGplatesConnector(object):
             topology_features=self.topology_features,
             rotation_model=self.rotation_model,
             time=round(self.reconstruction_time, 0),
-            delta_time=pyGplatesConnector.delta_t)
+            delta_time=self.delta_time)
 
         seeds_u = np.array([i.to_xyz() for i in seeds_u]) *\
             ((1e-2 * pyGplatesConnector.velocity_non_dim_factor) / (self.scaling_factor * pyGplatesConnector.yrs2sec))
