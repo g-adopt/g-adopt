@@ -1,10 +1,7 @@
 from gadopt import *
 from gadopt.inverse import *
-from gadopt.gplates import pyGplatesConnector
-from pyadjoint import stop_annotating
+from gadopt.gplates import GplatesFunction, pyGplatesConnector
 import numpy as np
-from wrappers import collect_garbage
-from firedrake.adjoint_utils import blocks
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -28,16 +25,9 @@ LinearSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 LinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 NonlinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 
-blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
-blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
-
 # timer decorator for fwd and derivative calls.
-ReducedFunctional.__call__ = collect_garbage(
-    timer_decorator(ReducedFunctional.__call__)
-)
-ReducedFunctional.derivative = collect_garbage(
-    timer_decorator(ReducedFunctional.derivative)
-)
+ReducedFunctional.__call__ = timer_decorator(ReducedFunctional.__call__)
+ReducedFunctional.derivative = timer_decorator(ReducedFunctional.derivative)
 
 
 def __main__():
@@ -46,16 +36,18 @@ def __main__():
 
 def my_taylor_test():
     Tic, reduced_functional = forward_problem()
+    log("Reduced Functional Repeat: ", reduced_functional([Tic]))
     Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
     Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
-    minconv = taylor_test(reduced_functional, Tic, Delta_temp)
+    _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-@collect_garbage
 def forward_problem():
     # Set up geometry:
-    rmin, rmax = 1.22, 2.22
+    # rmax = 2.22
+    rmin = 1.222
 
+    # Enable writing intermediary adjoint fields to disk
     enable_disk_checkpointing()
 
     # Load mesh
@@ -96,8 +88,26 @@ def forward_problem():
     # Initial time step
     delta_t = Constant(1.0e-6)
 
+    # Initiating a plate reconstruction model
+    pl_rec_model = pyGplatesConnector(
+        rotation_filenames=[
+            '../../gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot'],
+        topology_filenames=[
+            '../../gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
+            '../../gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
+            '../../gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
+        nseeds=10000,
+        geologic_zero=409,
+        delta_time=1.0
+    )
+
     # Top velocity boundary condition
-    gplates_velocities = Function(V, name="GPlates_Velocity")
+    gplates_velocities = GplatesFunction(
+        V,
+        name="GPlates_Velocity",
+        gplates_connector=pl_rec_model,
+        top_boundary_marker=top_id,
+    )
 
     # Setup Equations Stokes related constants
     Ra = Constant(2.0e7)  # Rayleigh number
@@ -154,24 +164,11 @@ def forward_problem():
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-3
 
-    # Initiating a plate reconstruction model
-    pl_rec_model = pyGplatesConnector(
-        rotation_filenames=[
-            '../../gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot'],
-        topology_filenames=[
-            '../../gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
-            '../../gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
-            '../../gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
-        dbc=stokes_solver.strong_bcs[0],
-        geologic_zero=409,
-        delta_time=1.0
-    )
-
     # non-dimensionalised time for present geologic day (0)
     ndtime_now = pl_rec_model.geotime2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = pl_rec_model.geotime2ndtime(25.)
+    time = pl_rec_model.geotime2ndtime(2.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -198,16 +195,11 @@ def forward_problem():
 
     # Now perform the time loop:
     while time < ndtime_now:
-        if timestep_index % 2 == 0:
-            # Update surface velocities
-            pl_rec_model.assign_plate_velocities(time)
-            # Surface velocities should be considered as a new block if the
-            #   content has changed. This happens when the updated
-            #   reconstruction time is the one as requested time
-            gplates_velocities.create_block_variable()
+        # Update surface velocities
+        gplates_velocities.update_plate_reconstruction(time)
 
-            # Solve Stokes sytem
-            stokes_solver.solve()
+        # Solve Stokes sytem
+        stokes_solver.solve()
 
         # Make sure we are not going past present day
         if ndtime_now - time < float(delta_t):
