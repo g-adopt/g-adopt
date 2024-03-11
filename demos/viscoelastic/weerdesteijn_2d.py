@@ -39,13 +39,12 @@ class Weerdesteijn2d:
         self.setup_mesh()
         self.X = SpatialCoordinate(self.mesh)
 
-        self.bottom_id, self.top_id = "bottom", "top"  # Boundary IDs
 
         # Set up function spaces - currently using the bilinear Q2Q1 element pair:
         V = VectorFunctionSpace(self.mesh, "CG", 2)  # Displacement function space (vector)
         W = FunctionSpace(self.mesh, "CG", 1)  # Pressure function space (scalar)
         M = MixedFunctionSpace([V, W])  # Mixed function space.
-        TP1 = TensorFunctionSpace(self.mesh, "DG", 2)
+        TP1 = TensorFunctionSpace(self.mesh, "DG", 1)
 
         m = Function(M)  # a field over the mixed function space M.
         # Function to store the solutions:
@@ -72,6 +71,9 @@ class Weerdesteijn2d:
         log("Number of Velocity DOF:", V.dim())
         log("Number of Pressure DOF:", W.dim())
         log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
+        
+        # Timing info:
+        self.stokes_stage = PETSc.Log.Stage("stokes_solve")
 
         self.rho_ice = 931
         self.g = 9.8125  # there is also a list but Aspect doesnt use...
@@ -162,6 +164,7 @@ class Weerdesteijn2d:
         self.displacement_min_array = []
 
     def setup_mesh(self):
+        self.bottom_id, self.top_id = "bottom", "top"  # Boundary IDs for extruded meshes
         if self.LOAD_CHECKPOINT:
             with CheckpointFile(checkpoint_file, 'r') as afile:
                 self.mesh = afile.load_mesh("surface_mesh_extruded")
@@ -227,7 +230,7 @@ class Weerdesteijn2d:
 
             self.ice_load.interpolate(self.ramp * self.rho_ice * self.g * self.Hice * self.disc)
 
-            self.stokes_solver.solve()
+            with self.stokes_stage: self.stokes_solver.solve()
 
             self.time.assign(self.time+self.dt)
 
