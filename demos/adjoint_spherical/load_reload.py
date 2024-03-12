@@ -7,126 +7,85 @@ from tfinterpy.idw import IDW
 # Quadrature degree:
 dx = dx(degree=6)
 
+# Global parameters that will be used by all
+rmin = 1.22
+rmax = 2.22
+ref_level = 7
+nlayers = 64
 
-def map_tomography_model():
-    LLNL_model = seismic_model(
-        fi_name=("./NEW_TEMP_lin_LLNLG3G_SLB_Q5_mt512_smooth_2.0_101.sph")
-    )
 
-    # Set up geometry:
-    rmin, rmax, ref_level, nlayers = 1.22, 2.22, 7, 64
+def __main__():
+    # generate and write out mesh
+    mesh_finame = generate_spherical_mesh("spherical_mesh.h5")
 
-    # Variable radial resolution
-    # Initiating layer heights with 1.
-    resolution_func = np.ones((nlayers))
+    # load the mesh
+    with CheckpointFile(mesh_finame, mode="r") as fi:
+        mesh = fi.load_mesh("firedrake_default_extruded")
 
-    # A gaussian shaped function
-    def gaussian(center, c, a):
-        return a * np.exp(
-            -((np.linspace(rmin, rmax, nlayers) - center) ** 2) / (2 * c**2)
-        )
+    # Reference temperature field
+    Tobs = load_tomography_model(
+        mesh,
+        fi_name="./NEW_TEMP_lin_LLNLG3G_SLB_Q5_mt512_smooth_2.0_101.sph")
 
-    # building the resolution function
-    for idx, r_0 in enumerate([rmin, rmax, rmax - 660 / 6370]):
-        # gaussian radius
-        c = 0.15
-        # how different is the high res area from low res
-        res_amplifier = 5.0
-        resolution_func *= 1 / (1 + gaussian(center=r_0, c=c, a=res_amplifier))
-
-    # Construct a CubedSphere mesh and then extrude into a sphere - note that unlike cylindrical case, popping is done internally here:
-    mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
-    mesh = ExtrudedMesh(
-        mesh2d,
-        layers=nlayers,
-        layer_height=(rmax - rmin) * resolution_func / np.sum(resolution_func),
-        extrusion_type="radial",
-    )
-
-    # Set up function spaces - currently using the bilinear Q2Q1 element pair:
-    V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-    Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
-
-    Q1 = FunctionSpace(mesh, "CG", 1)
-    Qlayer = FunctionSpace(mesh2d, "CG", 1)
-
-    Told = Function(Q, name="NewTemp")
-    Tlayer = Function(Qlayer, name="LayerAverage")
-
-    # Initialise from checkpoint:
-    tic_dc = DumbCheckpoint("Temperature_State_0", mode=FILE_READ)
-    tic_dc.load(Told, name="Temperature")
-    tic_dc.close()
-
-    r = Function(V, name="SpatialCoordinates").interpolate(SpatialCoordinate(mesh))
-    rmag = Function(Q, name="Rmag").interpolate(sqrt(SpatialCoordinate(mesh) ** 2))
-    ref_temperature = Function(Q, name="ReferenceTemperature")
-    ref_temperatureQ1 = Function(Q1, name="ReferenceTemperature")
-    average_temperature = Function(Q1, name="AverageTemperature")
-
-    vnodes = nlayers * 2 + 1
-
-    rads = np.array([np.average(rmag.dat.data[i::vnodes]) for i in range(vnodes)])
-    LLNL_model.load_seismic_data(rads=rads)
-    LLNL_model.setup_mesh(r.dat.data[0::vnodes])
-
-    #
-    for i in range(vnodes):
-        ref_temperature.dat.data[i::vnodes] = LLNL_model.fill_layer(i)
-
-    ref_temperatureQ1.project(
-        ref_temperature,
-        solver_parameters={
-            "snes_type": "ksponly",
-            "ksp_type": "gmres",
-            "pc_type": "sor",
-            "mat_type": "aij",
-            "ksp_rtol": 1e-12,
-        },
-    )
-
-    Rmin_area = assemble(Constant(1.0, domain=mesh2d) * dx)  # area of CMB
-
-    def layer_average(T):
-        vnodes = nlayers + 1
-        hnodes = Qlayer.dim()  # n/o Q2 nodes in each horizontal layer
-        assert hnodes * vnodes == Q1.dim()
-        for i in range(vnodes):
-            Tlayer.dat.data[:] = T.dat.data_ro[i::vnodes]
-            # NOTE: this integral is performed on mesh2d, which always has r=Rmin, but we normalize
-            average_temperature.dat.data[i::vnodes] = assemble(Tlayer * dx) / Rmin_area
-        return average_temperature
-
-    # Function for viscosity
-    mu_function = Function(Q, name="Viscosity")
-
-    r1d = np.linspace(rmin, rmax, vnodes)
-    terra_mu = np.loadtxt("mu_2_lith.visc_smoothened.rad")
-    terra_rad = np.linspace(rmax, rmin, terra_mu.shape[0])
-    dists, inds = KDTree(terra_rad).query(r1d, k=2)
-    mu_1d = np.sum(1/dists * terra_mu[inds], axis=1)/np.sum(1/dists, axis=1)
-    mu_1d[dists[:, 0] <= 1e-6] = terra_mu[inds[dists[:, 0] <= 1e-5, 0]]
+    # Average of temperature field
+    Taverage = Function(Tobs.function_space(), name="Taverage")
 
     # Calculate the layer average of the initial state
-    averager = LayerAveraging(
-        mesh, r1d, cartesian=False, quad_degree=6
-    )
-    averager.extrapolate_layer_average(mu_function, mu_1d)
+    averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
+    averager.extrapolate_layer_average(
+        Taverage, averager.get_layer_average(Tobs))
 
-    with CheckpointFile("Adjoint_CheckpointFile.h5", mode="w") as fi:
+    # Write out the file
+    with CheckpointFile("linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5", mode="w") as fi:
         fi.save_mesh(mesh)
-        fi.save_function(Told, name="Temperature")
-        fi.save_function(ref_temperatureQ1, name="ReferenceTemperature")
-        fi.save_function(layer_average(ref_temperatureQ1), name="AverageTemperature")
-        fi.save_function(mu_function, name="mu1viscosity")
+        fi.save_function(Tobs, name="Tobs")
+        fi.save_function(Taverage, name="AverageTemperature")
 
-    File("./output/Output.pvd").write(Told, ref_temperature, average_temperature)
-    File("./output/viscosity.pvd").write(mu_function)
+    # File("./AdjointInput.pvd").write(Tobs, Taverage)
+    # vnodes = nlayers * 2 + 1
+    # rad_profile = np.array([np.average(rad.dat.data[i::vnodes])
+    #                        for i in range(vnodes)])
+    # # Function for viscosity
+    # mu_function = Function(Q, name="Viscosity")
+    # terra_mu = np.loadtxt("mu_2_lith.visc_smoothened.rad")
+    # terra_rad = np.linspace(rmax, rmin, terra_mu.shape[0])
+    # dists, inds = KDTree(terra_rad).query(rad_profile, k=2)
+    # mu_1d = np.sum(1/dists * terra_mu[inds], axis=1)/np.sum(1/dists, axis=1)
+    # mu_1d[dists[:, 0] <= 1e-6] = terra_mu[inds[dists[:, 0] <= 1e-6, 0]]
 
 
-def make_sample_mesh():
+def load_tomography_model(mesh, fi_name):
+    # Loading temperature model
+    LLNL_model = seismic_model(fi_name=fi_name)
+
+    # Set up function spaces
+    V = VectorFunctionSpace(mesh, "CG", 1)
+    Q = FunctionSpace(mesh, "CG", 1)
+
+    # tomography based temperature
+    Tobs = Function(T.function_space(), name="Tobs")
+
+    # radius and coordinates
+    r = Function(V).interpolate(SpatialCoordinate(mesh))
+    rad = Function(Q).interpolate(sqrt(SpatialCoordinate(mesh) ** 2))
+
+    # knowing how many extrusion layers we have
+    vnodes = nlayers + 1
+    rad_profile = np.array([np.average(rad.dat.data[i::vnodes])
+                           for i in range(vnodes)])
+
+    # load seismic tomogrpahy based temperature model
+    LLNL_model.load_seismic_data(rads=rad_profile)
+    LLNL_model.setup_mesh(r.dat.data[0::vnodes])
+
+    # Assigning values to each layer
+    for i in range(vnodes):
+        Tobs.dat.data[i::vnodes] = LLNL_model.fill_layer(i)
+
+
+def generate_spherical_mesh(mesh_filename):
     # Set up geometry:
-    rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 16
+
     resolution_func = np.ones((nlayers))
 
     # A gaussian shaped function
@@ -153,8 +112,10 @@ def make_sample_mesh():
         extrusion_type="radial",
     )
 
-    with CheckpointFile("mesh.h5", "w") as fi:
+    with CheckpointFile(mesh_filename, "w") as fi:
         fi.save_mesh(mesh=mesh)
+
+    return mesh_finame
 
 
 def rcf2sphfile_array_pyshtools(fname, lmax_calc=None):
@@ -184,7 +145,8 @@ def rcf2sphfile_array_pyshtools(fname, lmax_calc=None):
             f_id.readline()
         line = f_id.readline()
         if line != "# Spherical Harmonics\n":
-            raise Exception(f'Error! Expect "# Spherical Harmonics". Got: {line}')
+            raise Exception(
+                f'Error! Expect "# Spherical Harmonics". Got: {line}')
         for ir in range(nr):
             line = f_id.readline()
             if line[0] != str("#"):
@@ -201,7 +163,8 @@ def rcf2sphfile_array_pyshtools(fname, lmax_calc=None):
                             [l, l],
                             [m, -m],
                         )
-            sph_all[ir, :, :, :] = clm.coeffs[:, : lmax_calc + 1, : lmax_calc + 1]
+            sph_all[ir, :, :, :] = clm.coeffs[:,
+                                              : lmax_calc + 1, : lmax_calc + 1]
     return rshl, sph_all
 
 
@@ -283,9 +246,11 @@ class seismic_model(object):
 
     def load_seismic_data(self, rads, k=2):
         self.rads = rads
-        rshl, sph = rcf2sphfile_array_pyshtools(fname=self.fi_name, lmax_calc=None)
+        rshl, sph = rcf2sphfile_array_pyshtools(
+            fname=self.fi_name, lmax_calc=None)
 
-        rshl = np.array([1 / 2890e3 * r + (2.22 - 1 / 2890e3 * 6370e3) for r in rshl])
+        rshl = np.array(
+            [1 / 2890e3 * r + (2.22 - 1 / 2890e3 * 6370e3) for r in rshl])
         tree = KDTree(rshl[:, np.newaxis])
 
         dists, inds = tree.query(np.asarray(self.rads)[:, np.newaxis], k=k)
@@ -304,4 +269,4 @@ class seismic_model(object):
 
 
 if __name__ == "__main__":
-    map_tomography_model()
+    __main__()
