@@ -12,9 +12,9 @@ class SpadaCylindrical2d(Weerdesteijn2d):
 
     def setup_mesh(self):
         # Set up geometry:
-        self.rmin = self.radius_values[-1]/self.D
+        self.rmin = self.radius_values[-1] #/self.D
         log(self.rmin)
-        self.rmax = self.radius_values[0]/self.D
+        self.rmax = self.radius_values[0] #/self.D
         log(self.rmax)
         # Construct a circle mesh and then extrude into a cylinder:
         radius_earth = 6371e3
@@ -23,13 +23,14 @@ class SpadaCylindrical2d(Weerdesteijn2d):
         log("target surface resolution = ", self.dx)
         log("actual surface resolution = ", surface_dx)
         self.setup_surface_mesh()
-        self.mesh = ExtrudedMesh(self.surface_mesh, layers=self.nz, extrusion_type='radial')
+        dz = self.D / self.nz 
+        self.mesh = ExtrudedMesh(self.surface_mesh, layers=self.nz, layer_height=dz, extrusion_type='radial')
         self.bottom_id, self.top_id = "bottom", "top"
     
     def initialise_background_field(self, field, background_values):
         print("hello background field")
         print(self.D)
-        r = sqrt((self.D*self.X[0])**2 + (self.D*self.X[1])**2)-self.radius_values[0]
+        r = sqrt(self.X[0]**2 + self.X[1]**2)-self.radius_values[0]
         rfunc = Function(self.M.sub(1)).interpolate(r)
         File("rfunc.pvd").write(rfunc)
         for i in range(0, len(background_values)-1):
@@ -45,7 +46,7 @@ class SpadaCylindrical2d(Weerdesteijn2d):
         self.surface_mesh = CircleManifoldMesh(self.ncells, radius=self.rmin, degree=2, name='surface_mesh')
 
     def setup_ice_load(self):
-        self.Hice = 1000 / self.D  # nondimensional ice load
+        self.Hice = 1000   
 
         # Disc ice load but with a smooth transition given by a tanh profile
         disc_halfwidth = (2*pi/360) * 10  # Disk half width in radians
@@ -73,12 +74,12 @@ class SpadaCylindrical2d(Weerdesteijn2d):
         self.Z_near_nullspace = create_stokes_nullspace(self.M, closed=False, rotational=True, translations=[0, 1])
 
     def checkpoint_filename(self):
-        return "checkcylinder.h5" #{self.name}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years-chk.h5"
+        return f"{self.name}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years-chk.h5"
 
     def displacement_filename(self):
         return f"displacement-{self.name}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years.dat"
 
 
 if __name__ == "__main__":
-    simulation = SpadaCylindrical2d(dx=1000*1e3, nz=40,cartesian=False,do_write=True)
+    simulation = SpadaCylindrical2d(dx=500*1e3, nz=80,cartesian=False,do_write=True)
     simulation.run_simulation()
