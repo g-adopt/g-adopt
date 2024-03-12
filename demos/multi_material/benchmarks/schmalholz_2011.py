@@ -47,6 +47,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (1e6, 6.6e5)
+    domain_origin = (0, 0)
     mesh_file = "benchmarks/schmalholz_2011.msh"
 
     # The following two lists must be ordered such that, unpacking from the end, each
@@ -79,6 +80,9 @@ class Simulation:
         3: {"uy": 0},
         4: {"uy": 0},
     }
+
+    # Stokes nullspace
+    stokes_nullspace_args = {}
 
     # Timestepping objects
     dt = 1e11

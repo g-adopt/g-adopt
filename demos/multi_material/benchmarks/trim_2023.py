@@ -14,13 +14,14 @@ class Simulation:
     name = "Trim_2023"
 
     # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 1
+    level_set_func_space_deg = 2
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (1, 1)
-    mesh_elements = (512, 512)
+    domain_origin = (0, 0)
+    mesh_elements = (256, 256)
 
     # Parameters to initialise level sets
     slope = 0
@@ -32,7 +33,12 @@ class Simulation:
     # of the signed-distance level set.
     isd_params = [(slope, intercept)]
     initialise_signed_distance = [
-        partial(isd.isd_simple_curve, domain_dimensions[0], isd.straight_line)
+        partial(
+            isd.isd_simple_curve,
+            domain_origin[0],
+            domain_dimensions[0],
+            isd.straight_line,
+        )
     ]
 
     # Material ordering must follow the logic implemented in the above two lists. In
@@ -62,6 +68,9 @@ class Simulation:
     temp_bc_top = RaB / Ra * C0_1
     temp_bcs = {3: {"T": temp_bc_bot}, 4: {"T": temp_bc_top}}
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
+
+    # Stokes nullspace
+    stokes_nullspace_args = {}
 
     # Timestepping objects
     dt = 1e-6
@@ -94,7 +103,7 @@ class Simulation:
 
         temperature.interpolate(
             (
-                -fd.pi**3
+                -(fd.pi**3)
                 * (λ**2 + 1) ** 2
                 / λ**3
                 * fd.cos(fd.pi * x / λ)

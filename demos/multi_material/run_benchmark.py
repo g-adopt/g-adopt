@@ -54,7 +54,10 @@ try:
     mesh = fd.Mesh(Simulation.mesh_file)
 except AttributeError:
     mesh = fd.RectangleMesh(
-        *Simulation.mesh_elements, *Simulation.domain_dimensions, quadrilateral=True
+        *Simulation.mesh_elements,
+        *[sum(z) for z in zip(Simulation.domain_origin, Simulation.domain_dimensions)],
+        *Simulation.domain_origin,
+        quadrilateral=True,
     )
 
 # Set up Stokes function spaces corresponding to the Q2Q1 Taylor-Hood element
@@ -99,9 +102,14 @@ for ls, isd, params in zip(
 # Set up fields that depend on the material interface
 func_space_interp = fd.FunctionSpace(mesh, "CG", level_set_func_space_deg)
 
-ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
-    Simulation, level_set, func_space_interp
-)
+if "Trim_2023" in Simulation.name:
+    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
+        Simulation, level_set, func_space_interp, method="arithmetic"
+    )
+else:
+    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
+        Simulation, level_set, func_space_interp
+    )
 
 viscosity_ufl = ga.field_interface(
     level_set,
@@ -147,7 +155,9 @@ energy_solver = ga.EnergySolver(
     ga.ImplicitMidpoint,
     bcs=Simulation.temp_bcs,
 )
-stokes_nullspace = ga.create_stokes_nullspace(func_space_stokes)
+stokes_nullspace = ga.create_stokes_nullspace(
+    func_space_stokes, **Simulation.stokes_nullspace_args
+)
 stokes_solver = ga.StokesSolver(
     stokes_function,
     temperature,
@@ -168,7 +178,7 @@ reini_params = {
     "tstep": 1e-2,
     "tstep_alg": ga.eSSPRKs3p3,
     "frequency": 5,
-    "iterations": 1,
+    "iterations": 0 if "Trim_2023" in Simulation.name else 1,
 }
 
 # Set up level-set solvers
@@ -226,8 +236,6 @@ while time_now < Simulation.time_end:
     dt.assign(t_adapt.update_timestep())
 
     # Solve energy system
-    if "Trim_2023" in Simulation.name:
-        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
     energy_solver.solve(t=time_now, update_forcings=update_forcings)
 
     for ls_solv in level_set_solver:

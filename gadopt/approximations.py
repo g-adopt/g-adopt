@@ -121,6 +121,9 @@ class BoussinesqApproximation(BaseApproximation):
     def energy_source(self, u):
         return self.rho * self.H
 
+    def density(self, p, T):
+        return self.rho - self.buoyancy(p, T) / self.g
+
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """

@@ -38,6 +38,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (2.8e6, 8e5)
+    domain_origin = (0, 0)
     mesh_file = "benchmarks/crameri_2012.msh"
 
     # Parameters to initialise level sets
@@ -55,8 +56,18 @@ class Simulation:
         (top_interface_deflection, domain_dimensions[0], top_material_interface_y),
     ]
     initialise_signed_distance = [
-        partial(isd.isd_simple_curve, domain_dimensions[0], isd.straight_line),
-        partial(isd.isd_simple_curve, domain_dimensions[0], isd.cosine_curve),
+        partial(
+            isd.isd_simple_curve,
+            domain_origin[0],
+            domain_dimensions[0],
+            isd.straight_line,
+        ),
+        partial(
+            isd.isd_simple_curve,
+            domain_origin[0],
+            domain_dimensions[0],
+            isd.cosine_curve,
+        ),
     ]
 
     # Material ordering must follow the logic implemented in the above two lists. In
@@ -77,6 +88,9 @@ class Simulation:
     # Boundary conditions
     temp_bcs = None
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"ux": 0, "uy": 0}, 4: {"uy": 0}}
+
+    # Stokes nullspace
+    stokes_nullspace_args = {}
 
     # Timestepping objects
     dt = 1e10

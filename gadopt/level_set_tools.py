@@ -398,7 +398,7 @@ def field_interface(level_set: list, material_value: list, method: str):
     return field_interface_recursive(level_set.copy(), material_value, method)
 
 
-def density_RaB(Simulation, level_set: list, func_space_interp):
+def density_RaB(Simulation, level_set: list, func_space_interp, method="sharp"):
     """Sets up buoyancy-related fields.
 
     Assigns UFL expressions to buoyancy-related fields based on the way the Material
@@ -431,7 +431,7 @@ def density_RaB(Simulation, level_set: list, func_space_interp):
         dens_diff = field_interface(
             level_set,
             [material.density - ref_dens for material in Simulation.materials],
-            method="sharp",
+            method=method,
         )
         density.interpolate(dens_diff + ref_dens)
         dimensionless = False
@@ -441,7 +441,7 @@ def density_RaB(Simulation, level_set: list, func_space_interp):
         RaB_ufl = field_interface(
             level_set,
             [Simulation.Ra * material.B for material in Simulation.materials],
-            method="sharp",
+            method=method,
         )
         RaB.interpolate(RaB_ufl)
         dimensionless = True
@@ -451,7 +451,7 @@ def density_RaB(Simulation, level_set: list, func_space_interp):
         RaB_ufl = field_interface(
             level_set,
             [material.RaB for material in Simulation.materials],
-            method="sharp",
+            method=method,
         )
         RaB.interpolate(RaB_ufl)
         dimensionless = True

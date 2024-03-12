@@ -31,6 +31,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (5e5, 5e5)
+    domain_origin = (0, 0)
     mesh_elements = (128, 128)
 
     # Parameters to initialise level sets
@@ -62,6 +63,9 @@ class Simulation:
     # Boundary conditions
     temp_bcs = None
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
+
+    # Stokes nullspace
+    stokes_nullspace_args = {}
 
     # Timestepping objects
     dt = 1e11

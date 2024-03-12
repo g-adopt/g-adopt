@@ -40,6 +40,7 @@ class Simulation:
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (3e6, 7.5e5)
+    domain_origin = (0, 0)
     mesh_file = "benchmarks/schmeling_2008.msh"
 
     # Parameters to initialise level sets
@@ -52,7 +53,7 @@ class Simulation:
     # of the signed-distance level set.
     isd_params = [(interface_slope, material_interface_y), None]
     initialise_signed_distance = [
-        partial(isd.isd_simple_curve, domain_dimensions[0], isd.straight_line),
+        partial(isd.isd_simple_curve, domain_origin[0], domain_dimensions[0], isd.straight_line),
         isd.isd_schmeling,
     ]
 
@@ -74,6 +75,9 @@ class Simulation:
     # Boundary conditions
     temp_bcs = None
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
+
+    # Stokes nullspace
+    stokes_nullspace_args = {}
 
     # Timestepping objects
     dt = 1e11
