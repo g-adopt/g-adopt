@@ -17,6 +17,7 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
+import gc
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -25,6 +26,18 @@ log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper
 def log(*args):
     """Log output to stdout from root processor only"""
     PETSc.Sys.Print(*args)
+
+
+# TBD: This should know about the communicator
+# Wrapper to run garbage collection
+def collect_garbage(func):
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        gc.collect()
+        PETSc.garbage_cleanup()
+        return result
+
+    return wrapper
 
 
 class ParameterLog:
