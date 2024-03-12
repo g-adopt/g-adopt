@@ -17,9 +17,6 @@ class Weerdesteijn2d:
         self.short_simulation = short_simulation
         self.do_write = do_write
         self.LOAD_CHECKPOINT = LOAD_CHECKPOINT
-        log("checkpoint", self.LOAD_CHECKPOINT)
-        log("checkpoint filename", checkpoint_file)
-        log("Tstart", Tstart)
 
         # layer properties from spada et al 2011
         self.radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
@@ -34,15 +31,14 @@ class Weerdesteijn2d:
         self.D = self.radius_values[0]-self.radius_values[-1]
         self.dz = self.D / nz  # because of extrusion need to define dz after
         self.nz = round(self.D/self.dz)
-        
+
         if LOAD_CHECKPOINT:
-            if checkpoint_file == None:
+            if checkpoint_file is None:
                 raise TypeError("Please provide a checkpoint .h5 file for loading simulation data.")
             self.checkpoint_file = checkpoint_file
 
         self.setup_mesh()
         self.X = SpatialCoordinate(self.mesh)
-
 
         # Set up function spaces - currently using the bilinear Q2Q1 element pair:
         V = VectorFunctionSpace(self.mesh, "CG", 2)  # Displacement function space (vector)
@@ -75,7 +71,7 @@ class Weerdesteijn2d:
         log("Number of Velocity DOF:", V.dim())
         log("Number of Pressure DOF:", W.dim())
         log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
-        
+
         # Timing info:
         self.stokes_stage = PETSc.Log.Stage("stokes_solve")
 
@@ -118,6 +114,7 @@ class Weerdesteijn2d:
         self.dump_period = round(self.dt_out / self.dt)
         log("dump_period", self.dump_period)
         log("dt", self.dt.values()[0])
+        log(f"Simulation start time {Tstart} years")
 
         self.ice_load = Function(W)
 
