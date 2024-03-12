@@ -9,14 +9,17 @@ class Weerdesteijn2d:
     name = "weerdesteijn-2d"
     vertical_component = 1
 
-    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, short_simulation=False, do_write=False, **kwargs):
+    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, short_simulation=False, do_write=False, LOAD_CHECKPOINT=False, checkpoint_file=None, Tstart=0, **kwargs):
         # Set up geometry:
         self.dx = dx  # horizontal grid resolution in m
         self.L = 1500e3  # length of the domain in m
         self.dt_years = dt_years
         self.short_simulation = short_simulation
         self.do_write = do_write
-        self.LOAD_CHECKPOINT = False
+        self.LOAD_CHECKPOINT = LOAD_CHECKPOINT
+        log("checkpoint", self.LOAD_CHECKPOINT)
+        log("checkpoint filename", checkpoint_file)
+        log("Tstart", Tstart)
 
         # layer properties from spada et al 2011
         self.radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
@@ -31,10 +34,11 @@ class Weerdesteijn2d:
         self.D = self.radius_values[0]-self.radius_values[-1]
         self.dz = self.D / nz  # because of extrusion need to define dz after
         self.nz = round(self.D/self.dz)
-
-        LOAD_CHECKPOINT = False
-
-        checkpoint_file = ".h5"
+        
+        if LOAD_CHECKPOINT:
+            if checkpoint_file == None:
+                raise TypeError("Please provide a checkpoint .h5 file for loading simulation data.")
+            self.checkpoint_file = checkpoint_file
 
         self.setup_mesh()
         self.X = SpatialCoordinate(self.mesh)
@@ -89,10 +93,9 @@ class Weerdesteijn2d:
         # Timestepping parameters
         self.year_in_seconds = Constant(3600 * 24 * 365.25)
 
-        if self.LOAD_CHECKPOINT:
-            self.time = Constant(110e3 * self.year_in_seconds)  # this needs to be changed!
-        else:
-            self.time = Constant(0.0)
+        if self.LOAD_CHECKPOINT and Tstart == 0:
+            raise ValueError("If loading from checkpoint please provide a start time")
+        self.time = Constant(Tstart * self.year_in_seconds)
 
         if self.short_simulation:
             self.dt = Constant(2.5 * self.year_in_seconds)  # Initial time-step
@@ -104,7 +107,7 @@ class Weerdesteijn2d:
         else:
             self.Tend = Constant(Tend_years * self.year_in_seconds)
 
-        self.max_timesteps = round(self.Tend/self.dt)
+        self.max_timesteps = round((self.Tend - Tstart*self.year_in_seconds)/self.dt)
         log("max timesteps", self.max_timesteps)
 
         if short_simulation:
@@ -166,7 +169,7 @@ class Weerdesteijn2d:
     def setup_mesh(self):
         self.bottom_id, self.top_id = "bottom", "top"  # Boundary IDs for extruded meshes
         if self.LOAD_CHECKPOINT:
-            with CheckpointFile(checkpoint_file, 'r') as afile:
+            with CheckpointFile(self.checkpoint_file, 'r') as afile:
                 self.mesh = afile.load_mesh("surface_mesh_extruded")
         else:
             surface_mesh = self.setup_surface_mesh()
