@@ -32,7 +32,7 @@ class Simulation:
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (5e5, 5e5)
     domain_origin = (0, 0)
-    mesh_elements = (128, 128)
+    mesh_elements = (64, 64)
 
     # Parameters to initialise level sets
     ref_vertex_x = 2e5

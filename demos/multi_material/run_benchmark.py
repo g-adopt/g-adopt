@@ -196,7 +196,7 @@ t_adapt = ga.TimestepAdaptor(
 )
 time_output = fd.Function(func_space_pres, name="Time")
 time_now, step, dump_counter = 0, 0, 0
-output_file = fd.File(
+output_file = fd.output.VTKFile(
     f"{Simulation.name}/output.pvd".lower(), target_degree=level_set_func_space_deg
 )
 
