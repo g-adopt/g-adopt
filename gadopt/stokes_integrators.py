@@ -131,6 +131,7 @@ class StokesSolver:
 
         self.solver_kwargs = kwargs
         self.stokes_vars = fd.split(self.solution)  # For default stokes this is a tuple of (velocity, pressure)
+        self.stokes_subfunctions = self.solution.subfunctions  # For default stokes this is a tuple of (velocity, pressure)
         self.k = upward_normal(self.Z.mesh(), cartesian)
         self.quad_degree = quad_degree
 
@@ -361,7 +362,7 @@ class ViscoelasticStokesSolver(StokesSolver):
         super().solve()
 
         # Update deviatoric stress for the timestep that has just been solved for
-        self.deviatoric_stress.interpolate(2 * self.effective_viscosity * fd.sym(fd.grad(self.stokes_vars[0])) + self.prefactor_prestress * self.deviatoric_stress)
+        self.deviatoric_stress.interpolate(2 * self.effective_viscosity * fd.sym(fd.grad(self.stokes_subfunctions[0])) + self.prefactor_prestress * self.deviatoric_stress)
         # Update history stress term for using as a RHS explicit forcing in the next timestep
         self.previous_stress.interpolate(self.prefactor_prestress * self.deviatoric_stress)
-        self.displacement.interpolate(self.displacement+self.stokes_vars[0])
+        self.displacement.interpolate(self.displacement+self.stokes_subfunctions[0])

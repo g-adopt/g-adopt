@@ -4,6 +4,7 @@ from gadopt import *
 from mpi4py import MPI
 import numpy as np
 from gadopt.utility import vertical_component as vc
+from gadopt.utility import CombinedSurfaceMeasure
 
 class Weerdesteijn2d:
     name = "weerdesteijn-2d"
@@ -37,6 +38,7 @@ class Weerdesteijn2d:
             self.checkpoint_file = checkpoint_file
 
         self.setup_mesh()
+        self.disk_checkpointing()
         self.X = SpatialCoordinate(self.mesh)
 
         # Set up function spaces - currently using the bilinear Q2Q1 element pair:
@@ -45,6 +47,7 @@ class Weerdesteijn2d:
         M = MixedFunctionSpace([V, W])  # Mixed function space.
         self.M = M
         TP1 = TensorFunctionSpace(self.mesh, "DG", 2)
+        R = FunctionSpace(self.mesh, "R", 0)
 
         m = Function(M)  # a field over the mixed function space M.
         # Function to store the solutions:
@@ -66,7 +69,7 @@ class Weerdesteijn2d:
 
         self.u_old = Function(V, name="u old")
         self.u_old.assign(self.u_)
-        self.vertical_displacement = Function(V.sub(0), name="vertical displacement")  # Function to store vertical displacement for output 
+        self.vertical_displacement = Function(V.sub(1), name="vertical displacement")  # Function to store vertical displacement for output 
 
         # Output function space information:
         log("Number of Velocity DOF:", V.dim())
@@ -93,7 +96,7 @@ class Weerdesteijn2d:
 
         if self.LOAD_CHECKPOINT and Tstart == 0:
             raise ValueError("If loading from checkpoint please provide a start time")
-        self.time = Constant(Tstart * self.year_in_seconds)
+        self.time = Function(R).assign(Tstart * self.year_in_seconds)
 
         if self.short_simulation:
             self.dt = Constant(2.5 * self.year_in_seconds)  # Initial time-step
@@ -102,7 +105,7 @@ class Weerdesteijn2d:
         else:
             self.dt = Constant(self.dt_years * self.year_in_seconds)
             self.Tend = Constant(Tend_years * self.year_in_seconds)
-            self.dt_out = Constant(10e3 * self.year_in_seconds)
+            self.dt_out = Constant(50 * self.year_in_seconds)
 
         self.max_timesteps = round((self.Tend - Tstart*self.year_in_seconds)/self.dt)
         log("max timesteps", self.max_timesteps)
@@ -116,6 +119,8 @@ class Weerdesteijn2d:
         self.ice_load = Function(W)
         self.setup_ice_load()
         self.update_ice_load()
+
+        self.setup_control()
 
         approximation = SmallDisplacementViscoelasticApproximation(self.density, self.displacement, g=self.g)
 
@@ -153,8 +158,9 @@ class Weerdesteijn2d:
             self.dz = self.D / self.nz  # because of extrusion need to define dz after
             surface_mesh = self.setup_surface_mesh()
             self.mesh = ExtrudedMesh(surface_mesh, self.nz, layer_height=self.dz)
+
             self.mesh.coordinates.dat.data[:, self.vertical_component] -= self.D
-            X = SpatialCoordinate(self.mesh)
+            '''X = SpatialCoordinate(self.mesh)
 
             # rescale vertical resolution
             a = Constant(4)
@@ -167,10 +173,17 @@ class Weerdesteijn2d:
             scaled_z_coordinates = [X[i] for i in range(self.vertical_component)]
             scaled_z_coordinates.append(depth_c*z_scaled + (self.D - depth_c)*Cs)
             f = Function(Vc).interpolate(as_vector(scaled_z_coordinates))
-            self.mesh.coordinates.assign(f)
+            self.mesh.coordinates.assign(f)'''
+
+        
+        self.ds = CombinedSurfaceMeasure(self.mesh, degree=6)
 
     def setup_surface_mesh(self):
         return IntervalMesh(self.nx, self.L, name="surface_mesh")
+
+    def disk_checkpointing(self):
+        #For non adjoint runs ignore disk checkpointing
+        pass
 
     def initialise_background_field(self, field, background_values):
         for i in range(0, len(background_values)-1):
@@ -193,7 +206,7 @@ class Weerdesteijn2d:
         k_disc = 2*pi/(8*self.dx)  # wavenumber for disk 2pi / lambda
         r = self.initialise_r()
         self.disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-        self.ramp = Constant(0)
+        self.ramp = Constant(0, domain=self.mesh)
     
     def update_ice_load(self):
         self.update_ramp()
@@ -211,6 +224,10 @@ class Weerdesteijn2d:
     
     def initialise_r(self):
         return self.X[0]
+    
+    def setup_control(self):
+        # For non adjoint runs ignore controls
+        pass
 
     def setup_bcs(self):
         # Setup boundary conditions
@@ -259,7 +276,7 @@ class Weerdesteijn2d:
             # Write output:
             if timestep % self.dump_period == 0:
                 log("timestep", timestep)
-                log("time", self.time.values()[0])
+            #    log("time", self.time.values()[0])
                 if self.do_write:
                     self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity, self.vertical_displacement)
 
