@@ -29,6 +29,14 @@ class Air(ga.Material):
 
 
 class Simulation:
+    """Compositional benchmark.
+    Crameri, F., Schmeling, H., Golabek, G. J., Duretz, T., Orendt, R.,
+    Buiter, S. J. H., ... & Tackley, P. J. (2012).
+    A comparison of numerical surface topography calculations in geodynamic modelling:
+    an evaluation of the 'sticky air' method.
+    Geophysical Journal International, 189(1), 38-54.
+    """
+
     name = "Crameri_2012"
 
     # Degree of the function space on which the level-set function is defined.

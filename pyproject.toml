@@ -17,7 +17,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-testing = ["assess", "pandas"]
+testing = ["assess", "pandas", "shapely"]
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]

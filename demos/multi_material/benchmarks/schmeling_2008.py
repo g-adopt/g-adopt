@@ -30,6 +30,13 @@ class Air(ga.Material):
 
 
 class Simulation:
+    """Compositional benchmark.
+    Schmeling, H., Babeyko, A. Y., Enns, A., Faccenna, C., Funiciello, F., Gerya, T.,
+    ... & Van Hunen, J. (2008).
+    A benchmark comparison of spontaneous subduction models—Towards a free surface.
+    Physics of the Earth and Planetary Interiors, 171(1-4), 198-223.
+    """
+
     name = "Schmeling_2008"
 
     # Degree of the function space on which the level-set function @classmethod

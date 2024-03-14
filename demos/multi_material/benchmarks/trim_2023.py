@@ -11,6 +11,12 @@ import gadopt as ga
 
 
 class Simulation:
+    """Thermochemical benchmark.
+    Trim, S. J., Butler, S. L., McAdam, S. S., & Spiteri, R. J. (2023).
+    Manufacturing an exact solution for 2D thermochemical mantle convection models.
+    Geochemistry, Geophysics, Geosystems, 24(4), e2022GC010807.
+    """
+
     name = "Trim_2023"
 
     # Degree of the function space on which the level-set function is defined.
@@ -119,6 +125,8 @@ class Simulation:
     def internal_heating_rate(cls, int_heat_rate, simu_time):
         node_coords_x, node_coords_y = ga.node_coordinates(int_heat_rate)
 
+        # flib can be obtained from
+        # https://github.com/seantrim/exact-thermochem-solution
         analytical_values = []
         for coord_x, coord_y in zip(node_coords_x, node_coords_y):
             analytical_values.append(

@@ -1,4 +1,4 @@
-cases := gerya_2003
+cases := gerya_2003 robey_2019
 
 ncpus := 8
 

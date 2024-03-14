@@ -22,6 +22,13 @@ class DenseMaterial(ga.Material):
 
 
 class Simulation:
+    """Compositional benchmark.
+    Gerya, T. V., & Yuen, D. A. (2003).
+    Characteristics-based marker-in-cell method with conservative finite-differences
+    schemes for modeling geological flows with strongly variable transport properties.
+    Physics of the Earth and Planetary Interiors, 140(4), 293-318.
+    """
+
     name = "Gerya_2003"
 
     # Degree of the function space on which the level-set function is defined.

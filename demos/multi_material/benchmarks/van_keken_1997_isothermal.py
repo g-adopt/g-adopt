@@ -9,6 +9,13 @@ import gadopt as ga
 
 
 class Simulation:
+    """Compositional benchmark.
+    Van Keken, P. E., King, S. D., Schmeling, H., Christensen, U. R., Neumeister, D.,
+    & Doin, M. P. (1997).
+    A comparison of methods for the modeling of thermochemical convection.
+    Journal of Geophysical Research: Solid Earth, 102(B10), 22477-22495.
+    """
+
     name = "van_Keken_1997_isothermal_isoviscous"
 
     # Degree of the function space on which the level-set function is defined.

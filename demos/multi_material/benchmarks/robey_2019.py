@@ -10,6 +10,14 @@ import gadopt as ga
 
 
 class Simulation:
+    """Thermochemical benchmark.
+    Robey, J. M., & Puckett, E. G. (2019).
+    Implementation of a volume-of-fluid method in a finite element code with
+    applications to thermochemical convection in a density stratified fluid in the
+    Earth's mantle.
+    Computers & Fluids, 190, 217-253.
+    """
+
     name = "Robey_2019"
 
     # Degree of the function space on which the level-set function is defined.
@@ -20,7 +28,7 @@ class Simulation:
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dimensions = (3, 1)
     domain_origin = (0, 0)
-    mesh_elements = (192, 64)
+    mesh_elements = (96, 32)
 
     # Parameters to initialise level sets
     material_interface_y = 0.5

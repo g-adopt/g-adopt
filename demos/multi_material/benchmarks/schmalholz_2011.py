@@ -38,6 +38,12 @@ class Lithosphere(ga.Material):
 
 
 class Simulation:
+    """Compositional benchmark.
+    Schmalholz, S. M. (2011).
+    A simple analytical solution for slab detachment.
+    Earth and Planetary Science Letters, 304(1-2), 45-54.
+    """
+
     name = "Schmalholz_2011"
 
     # Degree of the function space on which the level-set function is defined.

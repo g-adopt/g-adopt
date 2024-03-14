@@ -1,5 +1,7 @@
+import abc
 from dataclasses import dataclass, fields
-from typing import Optional, Union
+from numbers import Number
+from typing import Optional
 
 import firedrake as fd
 
@@ -29,9 +31,9 @@ class Material:
           A string to notify how the buoyancy term is calculated.
     """
 
-    density: Optional[Union[int, float]] = None
-    B: Optional[Union[int, float]] = None
-    RaB: Optional[Union[int, float]] = None
+    density: Optional[Number] = None
+    B: Optional[Number] = None
+    RaB: Optional[Number] = None
 
     def __post_init__(self):
         """Checks instance field values.
@@ -43,7 +45,7 @@ class Material:
         count_None = 0
         for field_var in fields(self):
             field_var_value = getattr(self, field_var.name)
-            if isinstance(field_var_value, (int, float)):
+            if isinstance(field_var_value, Number):
                 self.density_B_RaB = field_var.name
             elif field_var_value is None:
                 count_None += 1
@@ -98,7 +100,14 @@ class ReinitialisationTerm(BaseTerm):
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
 
-    def residual(self, test, trial, trial_lagged, fields: dict, bcs: dict):
+    def residual(
+        self,
+        test: fd.ufl_expr.Argument,
+        trial: fd.ufl_expr.Argument,
+        trial_lagged: fd.ufl_expr.Argument,
+        fields: dict,
+        bcs: dict,
+    ) -> fd.ufl.core.expr.Expr:
         """Residual contribution expressed through UFL.
 
         Args:
@@ -168,13 +177,13 @@ class LevelSetSolver:
 
     def __init__(
         self,
-        level_set,
-        velocity,
-        tstep,
-        tstep_alg,
+        level_set: fd.Function,
+        velocity: fd.ufl.tensors.ListTensor,
+        tstep: fd.Constant,
+        tstep_alg: abc.ABCMeta,
         subcycles: int,
         reini_params: dict,
-        solver_params: dict | None = None,
+        solver_params: Optional[dict] = None,
     ):
         """Initialises the solver instance.
 
@@ -243,7 +252,7 @@ class LevelSetSolver:
 
         self.subcycles = subcycles
 
-    def gradient_L2_proj(self):
+    def gradient_L2_proj(self) -> fd.variational_solver.LinearVariationalSolver:
         """Constructs a projection solver.
 
         Projects the level-set gradient from a discontinuous function space to the
@@ -285,7 +294,7 @@ class LevelSetSolver:
         """
         self.proj_solver.solve()
 
-    def solve(self, step):
+    def solve(self, step: int):
         """Updates the level-set function.
 
         Calls advection and reinitialisation solvers within a subcycling loop.
@@ -311,7 +320,9 @@ class LevelSetSolver:
                 self.ls_ts.solution_old.assign(self.level_set)
 
 
-def field_interface_recursive(level_set: list, material_value: list, method: str):
+def field_interface_recursive(
+    level_set: list, material_value: list, method: str
+) -> fd.ufl.core.expr.Expr:
     """Sets physical property expressions for each material.
 
     Ensures that the correct expression is assigned to each material based on the
@@ -325,7 +336,7 @@ def field_interface_recursive(level_set: list, material_value: list, method: str
         material_value:
           A list of physical property values applicable to each material.
         method:
-          A string specifying how to handle property transitions between materials.
+          A string specifying the nature of property transitions between materials.
 
     Returns:
         A UFL expression to calculate physical property values throughout the domain.
@@ -378,7 +389,9 @@ def field_interface_recursive(level_set: list, material_value: list, method: str
                 )
 
 
-def field_interface(level_set: list, material_value: list, method: str):
+def field_interface(
+    level_set: list, material_value: list, method: str
+) -> fd.ufl.core.expr.Expr:
     """Executes field_interface_recursive with a modified argument.
 
     Calls field_interface_recursive using a copy of the level-set list to ensure the
@@ -390,7 +403,7 @@ def field_interface(level_set: list, material_value: list, method: str):
         material_value:
           A list of physical property values applicable to each material.
         method:
-          A string specifying how to handle property transitions between materials.
+          A string specifying the nature of property transitions between materials.
 
     Returns:
         A UFL expression to calculate physical property values throughout the domain.
@@ -398,7 +411,19 @@ def field_interface(level_set: list, material_value: list, method: str):
     return field_interface_recursive(level_set.copy(), material_value, method)
 
 
-def density_RaB(Simulation, level_set: list, func_space_interp, method="sharp"):
+def density_RaB(
+    Simulation,
+    level_set: list,
+    func_space_interp: fd.functionspaceimpl.WithGeometry,
+    method: Optional[str] = "sharp",
+) -> tuple[
+    fd.Constant,
+    fd.Constant | fd.ufl.core.expr.Expr,
+    fd.Function,
+    fd.Constant | fd.ufl.core.expr.Expr,
+    fd.Function,
+    bool,
+]:
     """Sets up buoyancy-related fields.
 
     Assigns UFL expressions to buoyancy-related fields based on the way the Material
@@ -411,6 +436,9 @@ def density_RaB(Simulation, level_set: list, func_space_interp, method="sharp"):
           A list of level-set UFL functions.
         func_space_interp:
           A continuous UFL function space where material fields are calculated.
+        method:
+          An optional string specifying the nature of property transitions between
+          materials.
 
     Returns:
         A tuple containing the reference density field, the density difference field,

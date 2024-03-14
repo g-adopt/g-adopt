@@ -93,10 +93,10 @@ class BoussinesqApproximation(BaseApproximation):
         self.Ra = ensure_constant(Ra)
         self.rho = ensure_constant(rho)
         self.alpha = ensure_constant(alpha)
-        self.T0 = ensure_constant(T0)
+        self.T0 = T0
         self.g = ensure_constant(g)
         self._kappa = ensure_constant(kappa)
-        self.RaB = ensure_constant(RaB)
+        self.RaB = RaB
         self.delta_rho = ensure_constant(delta_rho)
         self.H = ensure_constant(H)
 
