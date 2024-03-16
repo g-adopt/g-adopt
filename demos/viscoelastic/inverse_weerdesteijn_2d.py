@@ -5,15 +5,16 @@ from weerdesteijn_2d import Weerdesteijn2d
 from gadopt.inverse import *
 import numpy as np
 
+
 class InverseWeerdesteijn2d(Weerdesteijn2d):
-    name = f"inverse-weerdesteijn-2d"
+    name = "inverse-weerdesteijn-2d"
     vertical_component = 1
     ADJOINT = True
 
     def __init__(self, **kwargs):
         self.tape = get_working_tape()
         self.tape.clear_tape()
-        super().__init__(**kwargs)
+        super().__init__(vertical_squashing=False, **kwargs)
 
 #    def disk_checkpointing(self):
 #        enable_disk_checkpointing()
@@ -22,7 +23,7 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
     def setup_control(self):
         print("hi control")
         self.control = Control(self.viscosity)
-    
+
     def update_ramp(self):
         self.ramp.assign(Constant(1))
 
@@ -31,7 +32,6 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
 
     def displacement_filename(self):
         return f"displacement-{self.name}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years.dat"
-    
 
     def run_inverse(self):
         adj_visc_file = File(f"{self.name}/adj_viscosity.pvd")
@@ -41,12 +41,11 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
         for i, block in enumerate(self.tape._blocks):
             print("Block {:2d}: {:}".format(i, type(block)))
 
-        print("J", self.J) 
+        print("J", self.J)
         # Defining the object for pyadjoint
         reduced_functional = ReducedFunctional(self.J, self.control)
         log("new J", reduced_functional(self.viscosity))
 #        reduced_functional.derivative()
-         
         h = Function(self.viscosity)
         h.dat.data[:] = 1e21*np.random.random(h.dat.data_ro.shape)
 
@@ -57,7 +56,6 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
 #        self.J.block_variable.adj_value = 1.0
         # Timing info:
 #        self.adjoint_stage = PETSc.Log.Stage("adjoint")
-         
 #        with self.adjoint_stage: self.tape.evaluate_adj()
 
     def setup_objective_function(self):
@@ -65,8 +63,9 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
         k_disc = 2*pi/(8*self.dx)  # wavenumber for disk 2pi / lambda
         r = self.initialise_r()
         disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-        self.J = assemble(disc*self.displacement[1] *self.ds(self.top_id))
+        self.J = assemble(disc*self.displacement[1] * self.ds(self.top_id))
         print(self.J)
+
 
 if __name__ == "__main__":
     simulation = InverseWeerdesteijn2d(dx=10e3, nz=80, Tend_years=5000, do_write=True)

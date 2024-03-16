@@ -1,4 +1,4 @@
-from firedrake import CheckpointFile, TestFunction, TrialFunction, Function, solve, dot, assemble, ds
+from firedrake import CheckpointFile, TestFunction, TrialFunction, Function, solve, dot, assemble
 import firedrake.utils
 from firedrake.adjoint import *  # noqa: F401
 from pathlib import Path

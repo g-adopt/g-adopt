@@ -6,11 +6,13 @@ import numpy as np
 from gadopt.utility import vertical_component as vc
 from gadopt.utility import CombinedSurfaceMeasure
 
+
 class Weerdesteijn2d:
     name = "weerdesteijn-2d"
     vertical_component = 1
 
-    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, short_simulation=False, do_write=False, LOAD_CHECKPOINT=False, checkpoint_file=None, Tstart=0, cartesian=True,**kwargs):
+    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, short_simulation=False, do_write=False, LOAD_CHECKPOINT=False,
+                 checkpoint_file=None, Tstart=0, cartesian=True, vertical_squashing=True, **kwargs):
         # Set up geometry:
         self.dx = dx  # horizontal grid resolution in m
         self.nz = nz
@@ -19,7 +21,8 @@ class Weerdesteijn2d:
         self.short_simulation = short_simulation
         self.do_write = do_write
         self.LOAD_CHECKPOINT = LOAD_CHECKPOINT
-        self.cartesian=cartesian
+        self.cartesian = cartesian
+        self.vertical_squashing = vertical_squashing
 
         # layer properties from spada et al 2011
         self.radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
@@ -69,7 +72,7 @@ class Weerdesteijn2d:
 
         self.u_old = Function(V, name="u old")
         self.u_old.assign(self.u_)
-        self.vertical_displacement = Function(V.sub(1), name="vertical displacement")  # Function to store vertical displacement for output 
+        self.vertical_displacement = Function(V.sub(1), name="vertical displacement")  # Function to store vertical displacement for output
 
         # Output function space information:
         log("Number of Velocity DOF:", V.dim())
@@ -90,7 +93,7 @@ class Weerdesteijn2d:
 
         self.density = Function(W, name="density")
         self.initialise_background_field(self.density, density_values)
-        
+
         # Timestepping parameters
         self.year_in_seconds = Constant(3600 * 24 * 365.25)
 
@@ -114,7 +117,7 @@ class Weerdesteijn2d:
         log("dump_period", self.dump_period)
         log("dt", self.dt.values()[0])
         log(f"Simulation start time {Tstart} years")
-        
+
         # Initialise ice loading
         self.ice_load = Function(W)
         self.setup_ice_load()
@@ -125,13 +128,13 @@ class Weerdesteijn2d:
         approximation = SmallDisplacementViscoelasticApproximation(self.density, self.displacement, g=self.g)
 
         self.setup_bcs()
-        
+
         self.setup_nullspaces()
 
         self.stokes_solver = ViscoelasticStokesSolver(m, self.viscosity, self.shear_modulus, self.density,
                                                       self.deviatoric_stress, self.displacement, approximation,
                                                       self.dt, bcs=self.stokes_bcs, cartesian=self.cartesian,
-                                                      nullspace=self.Z_nullspace, transpose_nullspace=self.Z_nullspace, 
+                                                      nullspace=self.Z_nullspace, transpose_nullspace=self.Z_nullspace,
                                                       near_nullspace=self.Z_near_nullspace)
 
         self.prefactor_prestress = Function(W, name='prefactor prestress').interpolate(self.stokes_solver.prefactor_prestress)
@@ -160,29 +163,29 @@ class Weerdesteijn2d:
             self.mesh = ExtrudedMesh(surface_mesh, self.nz, layer_height=self.dz)
 
             self.mesh.coordinates.dat.data[:, self.vertical_component] -= self.D
-            '''X = SpatialCoordinate(self.mesh)
 
-            # rescale vertical resolution
-            a = Constant(4)
-            b = Constant(0)
-            depth_c = 500.0
-            z_scaled = X[self.vertical_component] / self.D
-            Cs = (1.-b) * sinh(a*z_scaled) / sinh(a) + b*(tanh(a*(z_scaled + 0.5))/(2*tanh(0.5*a)) - 0.5)
-            Vc = self.mesh.coordinates.function_space()
+            if self.vertical_squashing:
+                # rescale vertical resolution
+                X = SpatialCoordinate(self.mesh)
+                a = Constant(4)
+                b = Constant(0)
+                depth_c = 500.0
+                z_scaled = X[self.vertical_component] / self.D
+                Cs = (1.-b) * sinh(a*z_scaled) / sinh(a) + b*(tanh(a*(z_scaled + 0.5))/(2*tanh(0.5*a)) - 0.5)
+                Vc = self.mesh.coordinates.function_space()
 
-            scaled_z_coordinates = [X[i] for i in range(self.vertical_component)]
-            scaled_z_coordinates.append(depth_c*z_scaled + (self.D - depth_c)*Cs)
-            f = Function(Vc).interpolate(as_vector(scaled_z_coordinates))
-            self.mesh.coordinates.assign(f)'''
+                scaled_z_coordinates = [X[i] for i in range(self.vertical_component)]
+                scaled_z_coordinates.append(depth_c*z_scaled + (self.D - depth_c)*Cs)
+                f = Function(Vc).interpolate(as_vector(scaled_z_coordinates))
+                self.mesh.coordinates.assign(f)
 
-        
         self.ds = CombinedSurfaceMeasure(self.mesh, degree=6)
 
     def setup_surface_mesh(self):
         return IntervalMesh(self.nx, self.L, name="surface_mesh")
 
     def disk_checkpointing(self):
-        #For non adjoint runs ignore disk checkpointing
+        # For non adjoint runs ignore disk checkpointing
         pass
 
     def initialise_background_field(self, field, background_values):
@@ -190,7 +193,7 @@ class Weerdesteijn2d:
             field.interpolate(conditional(self.X[self.vertical_component] >= self.radius_values[i+1] - self.radius_values[0],
                               conditional(self.X[self.vertical_component] <= self.radius_values[i] - self.radius_values[0],
                               background_values[i], field), field))
-    
+
     def setup_ice_load(self):
         if self.short_simulation:
             self.T1_load = 100 * self.year_in_seconds
@@ -200,14 +203,14 @@ class Weerdesteijn2d:
             self.Hice = 1000
 
         self.T2_load = 100e3 * self.year_in_seconds
-        
+
         # Disc ice load but with a smooth transition given by a tanh profile
         disc_radius = 100e3
         k_disc = 2*pi/(8*self.dx)  # wavenumber for disk 2pi / lambda
         r = self.initialise_r()
         self.disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
         self.ramp = Constant(0, domain=self.mesh)
-    
+
     def update_ice_load(self):
         self.update_ramp()
         self.ice_load.interpolate(self.ramp * self.rho_ice * self.g * self.Hice * self.disc)
@@ -221,10 +224,10 @@ class Weerdesteijn2d:
                                          0)
                                          )
                              )
-    
+
     def initialise_r(self):
         return self.X[0]
-    
+
     def setup_control(self):
         # For non adjoint runs ignore controls
         pass
@@ -237,7 +240,7 @@ class Weerdesteijn2d:
             1: {'ux': 0},
             2: {'ux': 0},
         }
-    
+
     def setup_nullspaces(self):
         # Nullspaces and near-nullspaces:
         self.Z_nullspace = None  # Default: don't add nullspace for now
@@ -248,7 +251,6 @@ class Weerdesteijn2d:
 
     def displacement_filename(self):
         return f"displacement-testcylinderchanges-{self.name}.dat"
-    
 
     def run_simulation(self):
         checkpoint_filename = self.checkpoint_filename()
@@ -260,10 +262,6 @@ class Weerdesteijn2d:
             with self.stokes_stage: self.stokes_solver.solve()
 
             self.time.assign(self.time+self.dt)
-
-  #          bc_displacement = DirichletBC(self.displacement.function_space(), 0, self.top_id)
-  #          displacement_z_min = self.displacement.dat.data_ro_with_halos[bc_displacement.nodes, self.vertical_component].min(initial=0)
-  #          displacement_min = self.displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
 
             # Compute diagnostics:
             self.vertical_displacement.interpolate(vc(self.displacement, cartesian=self.cartesian))
@@ -288,7 +286,7 @@ class Weerdesteijn2d:
 
                 if MPI.COMM_WORLD.rank == 0:
                     np.savetxt(displacement_filename, self.displacement_min_array)
-    
+
 
 if __name__ == "__main__":
     simulation = Weerdesteijn2d()
