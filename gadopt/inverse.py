@@ -1,11 +1,11 @@
-from firedrake import CheckpointFile
+from firedrake import CheckpointFile, TestFunction, TrialFunction, Function, solve, dot, assemble, ds
 import firedrake.utils
 from firedrake.adjoint import *  # noqa: F401
 from pathlib import Path
 from mpi4py import MPI
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
-from gadopt.utility import InteriorBC
+from gadopt.utility import InteriorBC, CombinedSurfaceMeasure
 from pyadjoint import Block
 
 # emulate the previous behaviour of firedrake_adjoint by automatically
@@ -371,6 +371,7 @@ class RieszL2BoundaryRepresentation:
         v = TestFunction(Q)
         g = TrialFunction(Q)
         bc = InteriorBC(Q, 0, bids)
+        ds = CombinedSurfaceMeasure(v.function_space().mesh(), degree=6)
         self.M = assemble(dot(v, g)*ds(bids), bcs=bc)
 
     def __call__(self, value):
