@@ -108,7 +108,7 @@ class Weerdesteijn2d:
         else:
             self.dt = Constant(self.dt_years * self.year_in_seconds)
             self.Tend = Constant(Tend_years * self.year_in_seconds)
-            self.dt_out = Constant(50 * self.year_in_seconds)
+            self.dt_out = Constant(10e3 * self.year_in_seconds)
 
         self.max_timesteps = round((self.Tend - Tstart*self.year_in_seconds)/self.dt)
         log("max timesteps", self.max_timesteps)
@@ -209,7 +209,7 @@ class Weerdesteijn2d:
         k_disc = 2*pi/(8*self.dx)  # wavenumber for disk 2pi / lambda
         r = self.initialise_r()
         self.disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-        self.ramp = Constant(0, domain=self.mesh)
+        self.ramp = Constant(0) #, domain=self.mesh)
 
     def update_ice_load(self):
         self.update_ramp()
