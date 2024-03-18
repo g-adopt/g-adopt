@@ -35,23 +35,49 @@ def __main__():
     averager.extrapolate_layer_average(
         Taverage, averager.get_layer_average(Tobs))
 
+    # setting up the viscosity function
+    mu = viscosity_function(mesh)
+
     # Write out the file
     with CheckpointFile("linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5", mode="w") as fi:
         fi.save_mesh(mesh)
         fi.save_function(Tobs, name="Tobs")
         fi.save_function(Taverage, name="AverageTemperature")
+        fi.save_function(mu, name="Viscosity")
 
-    # File("./AdjointInput.pvd").write(Tobs, Taverage)
-    # vnodes = nlayers * 2 + 1
-    # rad_profile = np.array([np.average(rad.dat.data[i::vnodes])
-    #                        for i in range(vnodes)])
-    # # Function for viscosity
-    # mu_function = Function(Q, name="Viscosity")
-    # terra_mu = np.loadtxt("mu_2_lith.visc_smoothened.rad")
-    # terra_rad = np.linspace(rmax, rmin, terra_mu.shape[0])
-    # dists, inds = KDTree(terra_rad).query(rad_profile, k=2)
-    # mu_1d = np.sum(1/dists * terra_mu[inds], axis=1)/np.sum(1/dists, axis=1)
-    # mu_1d[dists[:, 0] <= 1e-6] = terra_mu[inds[dists[:, 0] <= 1e-6, 0]]
+    # Output for visualisation
+    output = File("./linear_LLNL.pvd")
+    output.write(Tobs, Taverage, mu)
+
+
+def viscosity_function(mesh):
+    # Set up function spaces
+    V = VectorFunctionSpace(mesh, "CG", 2)
+    Q = FunctionSpace(mesh, "CG", 2)
+
+    # tomography based temperature
+    viscosity = Function(Q, name="Viscosity")
+
+    # radius and coordinates
+    r = Function(V).interpolate(SpatialCoordinate(mesh))
+    rad = Function(Q).interpolate(sqrt(SpatialCoordinate(mesh) ** 2))
+
+    # knowing how many extrusion layers we have
+    vnodes = nlayers * 2 + 1
+    rad_profile = np.array([np.average(rad.dat.data[i::vnodes])
+                           for i in range(vnodes)])
+
+    terra_mu = np.loadtxt("./ARCHIVE/mu_2_lith.visc_smoothened.rad")
+    terra_rad = np.linspace(rmax, rmin, terra_mu.shape[0])
+    dists, inds = KDTree(terra_rad).query(rad_profile, k=2)
+    mu_1d = np.sum(1/dists * terra_mu[inds], axis=1)/np.sum(1/dists, axis=1)
+    mu_1d[dists[:, 0] <= 1e-6] = terra_mu[inds[dists[:, 0] <= 1e-6, 0]]
+
+    averager = LayerAveraging(mesh, r1d=rad_profile, cartesian=False, quad_degree=6)
+    averager.extrapolate_layer_average(
+        viscosity, mu_1d)
+
+    return viscosity
 
 
 def load_tomography_model(mesh, fi_name):
@@ -63,7 +89,7 @@ def load_tomography_model(mesh, fi_name):
     Q = FunctionSpace(mesh, "CG", 1)
 
     # tomography based temperature
-    Tobs = Function(T.function_space(), name="Tobs")
+    Tobs = Function(Q, name="Tobs")
 
     # radius and coordinates
     r = Function(V).interpolate(SpatialCoordinate(mesh))
@@ -81,6 +107,8 @@ def load_tomography_model(mesh, fi_name):
     # Assigning values to each layer
     for i in range(vnodes):
         Tobs.dat.data[i::vnodes] = LLNL_model.fill_layer(i)
+
+    return Tobs
 
 
 def generate_spherical_mesh(mesh_filename):
@@ -115,7 +143,7 @@ def generate_spherical_mesh(mesh_filename):
     with CheckpointFile(mesh_filename, "w") as fi:
         fi.save_mesh(mesh=mesh)
 
-    return mesh_finame
+    return mesh_filename
 
 
 def rcf2sphfile_array_pyshtools(fname, lmax_calc=None):
@@ -253,13 +281,18 @@ class seismic_model(object):
             [1 / 2890e3 * r + (2.22 - 1 / 2890e3 * 6370e3) for r in rshl])
         tree = KDTree(rshl[:, np.newaxis])
 
+        epsilon = 1e-10  # A small value to prevent division by zero
+
         dists, inds = tree.query(np.asarray(self.rads)[:, np.newaxis], k=k)
 
+        # Add epsilon to dists to avoid division by zero
         self.sph = np.einsum(
             "i, iklm->iklm",
-            1 / np.sum(1 / dists, axis=1),
-            np.einsum("ij, ijklm->iklm", 1 / dists, sph[inds]),
+            1 / np.sum(1 / (dists + epsilon), axis=1),  # Add epsilon here
+            np.einsum("ij, ijklm->iklm", 1 / (dists + epsilon), sph[inds]),  # And here
         )
+
+        # Handle the case for very small distances separately
         self.sph[dists[:, 0] < 1e-6] = sph[inds[dists[:, 0] < 1e-6, 0]]
 
         self.lmax = self.sph[0].shape[1] - 1

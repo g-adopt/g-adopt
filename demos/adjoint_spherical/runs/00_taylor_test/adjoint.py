@@ -2,6 +2,8 @@ from gadopt import *
 from gadopt.inverse import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
 import numpy as np
+from wrappers import collect_garbage
+from firedrake.adjoint_utils import blocks
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -25,9 +27,20 @@ LinearSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 LinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 NonlinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 
+blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
+blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
+
 # timer decorator for fwd and derivative calls.
-ReducedFunctional.__call__ = timer_decorator(ReducedFunctional.__call__)
-ReducedFunctional.derivative = timer_decorator(ReducedFunctional.derivative)
+ReducedFunctional.__call__ = collect_garbage(
+    timer_decorator(ReducedFunctional.__call__)
+)
+ReducedFunctional.derivative = collect_garbage(
+    timer_decorator(ReducedFunctional.derivative)
+)
+
+# Set up geometry:
+rmax = 2.22
+rmin = 1.222
 
 
 def __main__():
@@ -37,23 +50,19 @@ def __main__():
 def my_taylor_test():
     Tic, reduced_functional = forward_problem()
     log("Reduced Functional Repeat: ", reduced_functional([Tic]))
-    Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
-    Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
-    _ = taylor_test(reduced_functional, Tic, Delta_temp)
+    reduced_functional.derivative()
+    # Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
+    # Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
+    # _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
-
+@collect_garbage
 def forward_problem():
-    # Set up geometry:
-    # rmax = 2.22
-    rmin = 1.222
-
     # Enable writing intermediary adjoint fields to disk
     enable_disk_checkpointing()
 
     # Load mesh
     with CheckpointFile("../../Adjoint_CheckpointFile.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
-        T_initial_guess = f.load_function(mesh, name="Temperature")  # initial guess
         Tobs = f.load_function(mesh, name="ReferenceTemperature")  # reference tomography temperature
         Tave = f.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
         mu_function = f.load_function(mesh, name="mu1viscosity")  # viscosity function
@@ -79,7 +88,6 @@ def forward_problem():
 
     # Set up temperature field and initialise:
     Tic = Function(Q1, name="Tic")
-    Tic.interpolate(T_initial_guess)
     T = Function(Q, name="Temperature")
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
@@ -87,6 +95,7 @@ def forward_problem():
 
     # Initial time step
     delta_t = Constant(1.0e-6)
+    Tic.interpolate(((1.0 - (T0*exp(Di) - T0)) * (rmax-r)))
 
     # Initiating a plate reconstruction model
     pl_rec_model = pyGplatesConnector(
@@ -149,7 +158,7 @@ def forward_problem():
         T, u, approximation, delta_t,
         ImplicitMidpoint, bcs=temp_bcs, su_advection=True)
     energy_solver.fields['source'] = rhobar * H_int
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu_function,
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                                  cartesian=False, constant_jacobian=True,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
@@ -157,18 +166,18 @@ def forward_problem():
     # tweaking solver parameters
     energy_solver.solver_parameters['ksp_converged_reason'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-4
-    stokes_solver.solver_parameters['snes_rtol'] = 1e-3
+    stokes_solver.solver_parameters['snes_rtol'] = 1e-2
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-4
+    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-3
     stokes_solver.solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-3
+    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
 
     # non-dimensionalised time for present geologic day (0)
     ndtime_now = pl_rec_model.geotime2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = pl_rec_model.geotime2ndtime(2.)
+    time = pl_rec_model.geotime2ndtime(25.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -195,11 +204,12 @@ def forward_problem():
 
     # Now perform the time loop:
     while time < ndtime_now:
-        # Update surface velocities
-        gplates_velocities.update_plate_reconstruction(time)
+        if timestep_index % 2 == 0:
+            # Update surface velocities
+            gplates_velocities.update_plate_reconstruction(time)
 
-        # Solve Stokes sytem
-        stokes_solver.solve()
+            # Solve Stokes sytem
+            stokes_solver.solve()
 
         # Make sure we are not going past present day
         if ndtime_now - time < float(delta_t):
@@ -211,6 +221,20 @@ def forward_problem():
         # Updating time
         time += float(delta_t)
         timestep_index += 1
+
+
+    class PreFunctionalCallBack:
+        def __init__(self):
+            self.iter_idx = 0
+            self.Tic_file = File('initial_condition.pvd')
+            self.Tic_copy = Function(Tic.function_space(), name="InitTemperature")
+
+        def __call__(self, controls):
+            # output current control (temperature initial condition)
+            self.Tic_copy.assign(controls)
+            self.Tic_file.write(self.Tic_copy)
+
+            self.iter_idx += 1
 
     # Define the component terms of the overall objective functional
     smoothing = assemble(dot(grad(Tic - Tave), grad(Tic - Tave)) * dx)
@@ -230,7 +254,7 @@ def forward_problem():
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
-    return Tic, ReducedFunctional(objective, control)
+    return Tic, ReducedFunctional(objective, control, eval_cb_pre=PreFunctionalCallBack())
 
 
 def mu_constructor(T, u):
@@ -273,6 +297,26 @@ def mu_constructor(T, u):
     mu_plast = mu_star + (sigma_y / epsii)
     mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
     return mu
+
+
+def T_initialise(T, average):
+    import scipy
+    import math
+    # Initial condition for T:
+    # Evaluate P_lm node-wise using scipy lpmv
+    X = SpatialCoordinate(T.ufl_domain())
+    r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
+    theta = atan2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
+    phi = atan2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol to Zhong)
+    l, m, eps_c, eps_s = 6, 4, 0.02, 0.02
+    Plm = Function(T.function_space(), name="P_lm")
+    cos_phi = assemble(interpolate(cos(phi), T.function_space()))
+    Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
+    Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
+    if m == 0:
+        Plm.assign(Plm/math.sqrt(2))
+    T.interpolate(average +
+                  (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
 
 
 if __name__ == "__main__":
