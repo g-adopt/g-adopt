@@ -29,16 +29,12 @@ class GPlatesFunctionalityMixin:
                 velocities. This should be non-dimensionalised time.
         """
         # Assuming `self` is a Firedrake Function instance,
-        self.dat.data[self.dbc.nodes, :] = (
-            self.gplates_connector.get_plate_velocities(
-                self.boundary_coords, model_time)
-        )
+        self.dat.data_with_halos[self.dbc.nodes, 0] = 0.0
+        self.dat.data_with_halos[self.dbc.nodes, 1] = model_time
+
         # At this point the values are updated.
-        # However, it is not clear on the tape that these values have changed
-        # For this reason I define a new function, initiated with the new values
-        # And then assign our Function with those values
-        function_updated = fd.Function(self.function_space(), val=self.dat.data, name=f"function_gplts_{model_time:.2f}")
-        self.assign(function_updated)
+        # So we have to make sure it is shown correctly on tape
+        self.create_block_variable()
 
 
 class GplatesFunction(GPlatesFunctionalityMixin, fd.Function):
@@ -164,7 +160,7 @@ class pyGplatesConnector(object):
         # geologic_zero is the same as model_time=0
         self.geologic_zero = geologic_zero
 
-        # time window for velocity interpolations
+        # time velocity interpolations
         self.delta_time = delta_time
 
         # seeds are equidistantial points generate on a sphere
@@ -218,16 +214,16 @@ class pyGplatesConnector(object):
         # stretch the dimensionalised time by plate_scaling_factor
         requested_reconstruction_time = self.ndtime2geotime(ndtime=model_time)
 
+        # Raising an error if the user is asking for invalid time
         if requested_reconstruction_time < 0:
             raise Exception(
                 ("pyGplates: geologic time is being negative!"
                  f"maximum: {self.geologic_zero/(pyGplatesConnector.time_dim_factor/pyGplatesConnector.myrs2sec/self.scaling_factor)}")
             )
 
-        log(f"pyGplates: Time {requested_reconstruction_time}.")
-
-        # only calculate new velocities if, either it's the first time step, or there has been more than delta_time since last calculation
-        # velocities are stored in cache
+        # Only calculate new velocities if, either it's the first time step,
+        # or it has been longer than {delta_time} since last calculation
+        # The boundary condition gets updated here
         if self.reconstruction_time is None or abs(requested_reconstruction_time - self.reconstruction_time) > self.delta_time:
             self.reconstruction_time = requested_reconstruction_time
             self.interpolated_u = self._interpolate_seeds_u(target_coords)
@@ -316,7 +312,7 @@ class pyGplatesConnector(object):
             velocity_domain_features=self.velocity_domain_features,
             topology_features=self.topology_features,
             rotation_model=self.rotation_model,
-            time=self.reconstruction_time,
+            time=round(self.reconstruction_time, 0),
             delta_time=self.delta_time)
 
         seeds_u = np.array([i.to_xyz() for i in seeds_u]) *\
