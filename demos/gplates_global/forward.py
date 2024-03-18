@@ -96,6 +96,8 @@ def forward():
     alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)
     cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
     chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
+    mu_ref = Function(Q, name="Viscosity")
+    assign_1d_profile(mu_ref, "mu2_radial.rad")
 
     approximation = TruncatedAnelasticLiquidApproximation(
         Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
@@ -118,10 +120,10 @@ def forward():
 
     energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs, su_advection=True)
     energy_solver.fields['source'] = rhobar * H_int
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu_constructor(T, u),
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu_ref,
                                  cartesian=False,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
+                                 near_nullspace=Z_near_nullspace, constant_jacobian=True)
 
     # Modifying default solver tolerances
     energy_solver.solver_parameters['ksp_rtol'] = 1e-4
@@ -309,6 +311,53 @@ def mu_constructor(T, u):
     mu_plast = mu_star + (sigma_y / epsii)
     mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
     return mu
+
+
+def assign_1d_profile(q, one_d_filename):
+    """
+    Assign a one-dimensional profile to a Function `q` from a file.
+
+    The function reads a one-dimensional radial viscosity profile from a file, broadcasts
+    the read array to all processes, and then interpolates this
+    array onto the function space of `q`.
+
+    Args:
+        q (firedrake.Function): The function onto which the 1D profile will be assigned.
+        one_d_filename (str): The path to the file containing the 1D radial viscosity profile.
+
+    Returns:
+        None: This function does not return a value. It directly modifies the input function `q`.
+
+    Note:
+        - This function is designed to be run in parallel with MPI.
+        - The input file should contain an array of viscosity values.
+        - It assumes that the function space of `q` is defined on a radial mesh.
+        - `rmax` and `rmin` should be defined before this function is called, representing
+          the maximum and minimum radial bounds for the profile.
+    """
+    import numpy as np
+    from firedrake.ufl_expr import extract_unique_domain
+    from scipy.interpolate import interp1d
+    # find the mesh
+    mesh = extract_unique_domain(q)
+
+    visc = None
+    rshl = None
+    # read the input file
+    if mesh.comm.rank == 0:
+        # The root process reads the file
+        rshl, visc = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+
+    # Broadcast the entire 'visc' array to all processes
+    visc = mesh.comm.bcast(visc, root=0)
+    # Similarly, broadcast 'rshl' if needed (assuming all processes need it)
+    rshl = mesh.comm.bcast(rshl, root=0)
+
+    element_family = q.function_space().ufl_element()
+    X = Function(VectorFunctionSpace(mesh=mesh, family=element_family)).interpolate(SpatialCoordinate(mesh))
+    rad = Function(q.function_space()).interpolate(sqrt(X**2))
+    averager = LayerAveraging(mesh, cartesian=False)
+    averager.extrapolate_layer_average(q, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
 
 
 if __name__ == "__main__":
