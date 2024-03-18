@@ -4,7 +4,7 @@ from gadopt import *
 from weerdesteijn_2d import Weerdesteijn2d
 from gadopt.inverse import *
 import numpy as np
-
+from gadopt.utility import InteriorBC
 
 class InverseWeerdesteijn2d(Weerdesteijn2d):
     name = "inverse-weerdesteijn-2d"
@@ -22,7 +22,7 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
 
     def setup_control(self):
         print("hi control")
-        self.control = Control(self.viscosity)
+        self.control = Control(self.ice_load)
 
     def update_ramp(self):
         self.ramp.assign(Constant(1))
@@ -36,6 +36,14 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
     def run_inverse(self):
         adj_visc_file = File(f"{self.name}/adj_viscosity.pvd")
         self.tape.add_block(DiagnosticBlock(adj_visc_file, self.viscosity))
+        
+        adj_iceload_file = File(f"{self.name}/adj_iceload.pvd")
+        converter = RieszL2BoundaryRepresentation(self.ice_load.function_space(), self.top_id) # convert to surface L2 representation
+        self.tape.add_block(DiagnosticBlock(adj_iceload_file, self.ice_load, riesz_options={'riesz_representation': converter}))
+        
+        adj_iceload_file_woutconversion = File(f"{self.name}/adj_iceload_woutL2surf.pvd")
+        self.tape.add_block(DiagnosticBlock(adj_iceload_file_woutconversion, self.ice_load))
+        
         self.run_simulation()
         self.setup_objective_function()
         for i, block in enumerate(self.tape._blocks):
@@ -44,15 +52,14 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
         print("J", self.J)
         # Defining the object for pyadjoint
         reduced_functional = ReducedFunctional(self.J, self.control)
-        log("new J", reduced_functional(self.viscosity))
-#        reduced_functional.derivative()
+        log("new J", reduced_functional([self.ice_load]))
+        reduced_functional.derivative()
         h = Function(self.viscosity)
-        h.dat.data[:] = 1e21*np.random.random(h.dat.data_ro.shape)
-
+        h.dat.data[:] = 1000*10*1000*np.random.random(h.dat.data_ro.shape)
 #        print(type(self.viscosity))
 #        print(type(h))
 #        print(h.dat.data)
-        taylor_test(reduced_functional, self.viscosity, h)
+        taylor_test(reduced_functional, self.ice_load, h)
 #        self.J.block_variable.adj_value = 1.0
         # Timing info:
 #        self.adjoint_stage = PETSc.Log.Stage("adjoint")
@@ -63,7 +70,7 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
         k_disc = 2*pi/(8*self.dx)  # wavenumber for disk 2pi / lambda
         r = self.initialise_r()
         disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-        self.J = assemble(disc*self.displacement[1] * self.ds(self.top_id))
+        self.J = assemble(disc*dot(self.displacement[1], self.displacement[1]) * self.ds(self.top_id))
         print(self.J)
 
 

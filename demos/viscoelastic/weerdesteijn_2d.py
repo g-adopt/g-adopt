@@ -50,7 +50,7 @@ class Weerdesteijn2d:
         M = MixedFunctionSpace([V, W])  # Mixed function space.
         self.M = M
         TP1 = TensorFunctionSpace(self.mesh, "DG", 2)
-        R = FunctionSpace(self.mesh, "R", 0)
+        self.R = FunctionSpace(self.mesh, "R", 0)
 
         m = Function(M)  # a field over the mixed function space M.
         # Function to store the solutions:
@@ -99,7 +99,7 @@ class Weerdesteijn2d:
 
         if self.LOAD_CHECKPOINT and Tstart == 0:
             raise ValueError("If loading from checkpoint please provide a start time")
-        self.time = Function(R).assign(Tstart * self.year_in_seconds)
+        self.time = Function(self.R).assign(Tstart * self.year_in_seconds)
 
         if self.short_simulation:
             self.dt = Constant(2.5 * self.year_in_seconds)  # Initial time-step
@@ -122,8 +122,8 @@ class Weerdesteijn2d:
         self.ice_load = Function(W)
         self.setup_ice_load()
         self.update_ice_load()
-
         self.setup_control()
+
 
         approximation = SmallDisplacementViscoelasticApproximation(self.density, self.displacement, g=self.g)
 
@@ -209,7 +209,7 @@ class Weerdesteijn2d:
         k_disc = 2*pi/(8*self.dx)  # wavenumber for disk 2pi / lambda
         r = self.initialise_r()
         self.disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-        self.ramp = Constant(0) #, domain=self.mesh)
+        self.ramp = Constant(0, domain=self.mesh)
 
     def update_ice_load(self):
         self.update_ramp()
@@ -257,7 +257,7 @@ class Weerdesteijn2d:
         displacement_filename = self.displacement_filename()
 
         for timestep in range(1, self.max_timesteps+1):
-            self.update_ice_load()
+    #        self.update_ice_load()
 
             with self.stokes_stage: self.stokes_solver.solve()
 
