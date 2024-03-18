@@ -29,16 +29,12 @@ class GPlatesFunctionalityMixin:
                 velocities. This should be non-dimensionalised time.
         """
         # Assuming `self` is a Firedrake Function instance,
-        self.dat.data_with_halos[self.dbc.nodes, :] = (
-            self.gplates_connector.get_plate_velocities(
-                self.boundary_coords, model_time)
-        )
+        self.dat.data_with_halos[self.dbc.nodes, 0] = 0.0
+        self.dat.data_with_halos[self.dbc.nodes, 1] = model_time
+
         # At this point the values are updated.
-        # However, it is not clear on the tape that these values have changed
-        # For this reason I define a new function, initiated with the new values
-        # And then assign our Function with those values
-        function_updated = fd.Function(self.function_space(), val=self)
-        self.assign(function_updated)
+        # So we have to make sure it is shown correctly on tape
+        self.create_block_variable()
 
 
 class GplatesFunction(GPlatesFunctionalityMixin, fd.Function):
