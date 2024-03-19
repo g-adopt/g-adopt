@@ -124,7 +124,6 @@ class Weerdesteijn2d:
         self.update_ice_load()
         self.setup_control()
 
-
         approximation = SmallDisplacementViscoelasticApproximation(self.density, self.displacement, g=self.g)
 
         self.setup_bcs()
@@ -206,10 +205,14 @@ class Weerdesteijn2d:
 
         # Disc ice load but with a smooth transition given by a tanh profile
         disc_radius = 100e3
-        k_disc = 2*pi/(8*self.dx)  # wavenumber for disk 2pi / lambda
+        disc_dx = 5e3
+        k_disc = 2*pi/(8*disc_dx)  # wavenumber for disk 2pi / lambda
         r = self.initialise_r()
         self.disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-        self.ramp = Constant(0, domain=self.mesh)
+        self.setup_ramp()
+
+    def setup_ramp(self):
+        self.ramp = Constant(0)
 
     def update_ice_load(self):
         self.update_ramp()
@@ -247,17 +250,17 @@ class Weerdesteijn2d:
         self.Z_near_nullspace = None  # Default: don't add nullspace for now
 
     def checkpoint_filename(self):
-        return f"{self.name}-testcyldinderchanges-chk.h5"
+        return f"{self.name}-chk.h5"
 
     def displacement_filename(self):
-        return f"displacement-testcylinderchanges-{self.name}.dat"
+        return f"displacement-{self.name}.dat"
 
     def run_simulation(self):
         checkpoint_filename = self.checkpoint_filename()
         displacement_filename = self.displacement_filename()
 
         for timestep in range(1, self.max_timesteps+1):
-    #        self.update_ice_load()
+            self.update_ice_load()
 
             with self.stokes_stage: self.stokes_solver.solve()
 

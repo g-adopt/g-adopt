@@ -4,7 +4,7 @@ from gadopt import *
 from weerdesteijn_2d import Weerdesteijn2d
 from gadopt.inverse import *
 import numpy as np
-from gadopt.utility import InteriorBC
+
 
 class InverseWeerdesteijn2d(Weerdesteijn2d):
     name = "inverse-weerdesteijn-2d"
@@ -24,8 +24,23 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
         print("hi control")
         self.control = Control(self.ice_load)
 
+    def setup_ramp(self):
+        # Seems like you need domain for constant but I thought this had
+        # depreciated?
+        self.ramp = Constant(1, domain=self.mesh)
+
+    def setup_ice_load(self):
+        super().setup_ice_load()
+        # Only update the ice load at initial times
+        self.ice_load.interpolate(self.ramp * self.rho_ice * self.g * self.Hice * self.disc)
+
     def update_ramp(self):
-        self.ramp.assign(Constant(1))
+        # already initialised with 1 for instantaneous loading
+        pass
+
+    def update_ice_load(self):
+        # interpolating ice load at each timestep breaks adjoint (and is probably not 'adjointable')
+        pass
 
     def checkpoint_filename(self):
         return f"{self.name}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years-chk.h5"
@@ -34,18 +49,20 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
         return f"displacement-{self.name}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years.dat"
 
     def run_inverse(self):
+        # Add outputs for initial sensitivities
         adj_visc_file = File(f"{self.name}/adj_viscosity.pvd")
         self.tape.add_block(DiagnosticBlock(adj_visc_file, self.viscosity))
-        
+
         adj_iceload_file = File(f"{self.name}/adj_iceload.pvd")
-        converter = RieszL2BoundaryRepresentation(self.ice_load.function_space(), self.top_id) # convert to surface L2 representation
+        converter = RieszL2BoundaryRepresentation(self.ice_load.function_space(), self.top_id)  # convert to surface L2 representation
         self.tape.add_block(DiagnosticBlock(adj_iceload_file, self.ice_load, riesz_options={'riesz_representation': converter}))
-        
+
         adj_iceload_file_woutconversion = File(f"{self.name}/adj_iceload_woutL2surf.pvd")
         self.tape.add_block(DiagnosticBlock(adj_iceload_file_woutconversion, self.ice_load))
-        
+
         self.run_simulation()
         self.setup_objective_function()
+
         for i, block in enumerate(self.tape._blocks):
             print("Block {:2d}: {:}".format(i, type(block)))
 
@@ -75,5 +92,5 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
 
 
 if __name__ == "__main__":
-    simulation = InverseWeerdesteijn2d(dx=10e3, nz=80, Tend_years=5000, do_write=True)
+    simulation = InverseWeerdesteijn2d(dx=10e3, nz=80, Tend_years=500, do_write=True)
     simulation.run_inverse()
