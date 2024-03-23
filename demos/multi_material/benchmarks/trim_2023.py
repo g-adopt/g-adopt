@@ -81,8 +81,8 @@ class Simulation:
     # Timestepping objects
     dt = 1e-6
     subcycles = 1
-    time_end = 0.01
     dump_period = 1e-4
+    time_end = 0.01
 
     # Diagnostic objects
     diag_fields = {
@@ -145,19 +145,22 @@ class Simulation:
         int_heat_rate.dat.data[:] = analytical_values
 
     @classmethod
-    def diagnostics(cls, simu_time, variables):
+    def steady_state_condition(cls, velocity, velocity_old):
+        pass
+
+    @classmethod
+    def diagnostics(cls, simu_time, geo_diag):
         λ = cls.domain_dimensions[0]
         rms_velocity_analytical = (
             fd.pi * fd.sqrt(λ**2 + 1) / 2 / λ * abs(cls.f(simu_time))
         )
-        entrainment = ga.entrainment(
-            variables["level_set"][0], cls.material_area, cls.entrainment_height
-        )
 
         cls.diag_fields["output_time"].append(simu_time)
-        cls.diag_fields["rms_velocity"].append(ga.rms_velocity(variables["velocity"]))
+        cls.diag_fields["rms_velocity"].append(geo_diag.u_rms())
         cls.diag_fields["rms_velocity_analytical"].append(rms_velocity_analytical)
-        cls.diag_fields["entrainment"].append(entrainment)
+        cls.diag_fields["entrainment"].append(
+            geo_diag.entrainment(0, cls.material_area, cls.entrainment_height)
+        )
 
     @classmethod
     def save_and_plot(cls):

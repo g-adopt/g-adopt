@@ -11,10 +11,9 @@ import gadopt as ga
 def write_output(dump_counter, checkpoint_fields=None):
     """Write diagnostics to the output file and optionally generate a checkpoint."""
     time_output.assign(time_now)
-    if dimensionless:
-        RaB.interpolate(RaB_ufl)
-    else:
-        density.interpolate(dens_diff + ref_dens)
+    RaB.interpolate(RaB_ufl) if dimensionless else density.interpolate(
+        dens_diff + ref_dens
+    )
     viscosity.interpolate(viscosity_ufl)
     if "Trim_2023" in Simulation.name:
         Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
@@ -113,7 +112,10 @@ else:
 
 viscosity_ufl = ga.field_interface(
     level_set,
-    [material.viscosity(velocity=velocity_ufl) for material in Simulation.materials],
+    [
+        material.viscosity(velocity_ufl, temperature)
+        for material in Simulation.materials
+    ],
     method="sharp" if "Schmalholz_2011" in Simulation.name else "geometric",
 )
 viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
@@ -192,7 +194,11 @@ level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solv
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
-    dt, velocity_ufl, func_space_vel, target_cfl=Simulation.subcycles * 0.6
+    dt,
+    velocity_ufl,
+    func_space_vel,
+    target_cfl=Simulation.subcycles * 0.6,
+    maximum_timestep=Simulation.dump_period,
 )
 time_output = fd.Function(func_space_pres, name="Time")
 time_now, step, dump_counter = 0, 0, 0
@@ -203,18 +209,18 @@ output_file = fd.output.VTKFile(
 # Fields to include in checkpoints
 checkpoint_fields = {"Level set": level_set[0], "Temperature": temperature}
 
-# Fields used to calculate simulation diagnostics
-diagnostic_fields = {
+# Objects used to calculate simulation diagnostics
+diag_vars = {
     "epsilon": epsilon,
     "level_set": level_set,
     "level_set_grad_proj": level_set_grad_proj,
-    "velocity": velocity_ufl,
-    "pressure": pressure_ufl,
     "density": density,
     "viscosity": viscosity,
-    "temperature": temperature,
     "int_heat_rate": int_heat_rate,
 }
+geo_diag = ga.GeodynamicalDiagnostics(
+    velocity_ufl, pressure_ufl, temperature, bottom_id=3, top_id=4, diag_vars=diag_vars
+)
 
 # Function to be coupled with the energy solver
 if "Trim_2023" in Simulation.name:
@@ -223,16 +229,17 @@ else:
     update_forcings = None
 
 # Perform the time loop
-while time_now < Simulation.time_end:
+while True:
     if time_now >= dump_counter * Simulation.dump_period:  # Write to output file
         dump_counter = write_output(dump_counter)
 
-    Simulation.diagnostics(time_now, diagnostic_fields)
+    Simulation.diagnostics(time_now, geo_diag)
 
     # Update time and timestep
-    t_adapt.maximum_timestep = min(
-        Simulation.dump_period, Simulation.time_end - time_now
-    )
+    if Simulation.time_end is not None:
+        t_adapt.maximum_timestep = min(
+            Simulation.dump_period, Simulation.time_end - time_now
+        )
     dt.assign(t_adapt.update_timestep())
 
     # Solve energy system
@@ -247,9 +254,17 @@ while time_now < Simulation.time_end:
     # Increment simulation time and time-loop step counter
     time_now += float(dt)
     step += 1
+
+    # Check if simulation has completed
+    end_time = Simulation.time_end is not None and time_now >= Simulation.time_end
+    steady = Simulation.steady_state_condition(
+        velocity, stokes_solver.solution_old.subfunctions[0]
+    )
+    if end_time or steady:
+        break
 # Write final simulation state to output file and generate checkpoint
 dump_counter = write_output(dump_counter, checkpoint_fields)
 # Calculate final simulation diagnostics
-Simulation.diagnostics(time_now, diagnostic_fields)
+Simulation.diagnostics(time_now, geo_diag)
 # Save post-processing fields and produce graphs
 Simulation.save_and_plot()

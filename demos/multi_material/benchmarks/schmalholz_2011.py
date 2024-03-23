@@ -93,8 +93,8 @@ class Simulation:
     # Timestepping objects
     dt = 1e11
     subcycles = 1
-    time_end = 25e6 * 365.25 * 8.64e4
     dump_period = 5e5 * 365.25 * 8.64e4
+    time_end = 25e6 * 365.25 * 8.64e4
 
     # Diagnostic objects
     diag_fields = {"normalised_time": [], "slab_necking": []}
@@ -114,9 +114,13 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, variables):
-        epsilon = float(variables["epsilon"])
-        level_set = variables["level_set"][0]
+    def steady_state_condition(cls, velocity, velocity_old):
+        pass
+
+    @classmethod
+    def diagnostics(cls, simu_time, geo_diag):
+        epsilon = float(geo_diag.diag_vars["epsilon"])
+        level_set = geo_diag.diag_vars["level_set"][0]
         level_set_data = level_set.dat.data_ro_with_halos
         coords_data = (
             fd.Function(

@@ -60,7 +60,12 @@ class Simulation:
     # of the signed-distance level set.
     isd_params = [(interface_slope, material_interface_y), None]
     initialise_signed_distance = [
-        partial(isd.isd_simple_curve, domain_origin[0], domain_dimensions[0], isd.straight_line),
+        partial(
+            isd.isd_simple_curve,
+            domain_origin[0],
+            domain_dimensions[0],
+            isd.straight_line,
+        ),
         isd.isd_schmeling,
     ]
 
@@ -100,8 +105,12 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, variables):
-        level_set = variables["level_set"][1]
+    def steady_state_condition(cls, velocity, velocity_old):
+        pass
+
+    @classmethod
+    def diagnostics(cls, simu_time, geo_diag):
+        level_set = geo_diag.diag_vars["level_set"][1]
         function_space = level_set.function_space()
 
         depth_per_core = fd.Function(function_space).interpolate(

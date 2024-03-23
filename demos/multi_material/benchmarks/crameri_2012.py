@@ -103,8 +103,8 @@ class Simulation:
     # Timestepping objects
     dt = 1e10
     subcycles = 1
-    time_end = 1e5 * 365.25 * 8.64e4
     dump_period = 2e3 * 365.25 * 8.64e4
+    time_end = 1e5 * 365.25 * 8.64e4
 
     # Diagnostic objects
     diag_fields = {
@@ -119,13 +119,17 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, variables):
+    def steady_state_condition(cls, velocity, velocity_old):
+        pass
+
+    @classmethod
+    def diagnostics(cls, simu_time, geo_diag):
         max_topography_analytical = (
             cls.top_interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
         )
 
-        epsilon = float(variables["epsilon"])
-        level_set = variables["level_set"][1]
+        epsilon = float(geo_diag.diag_vars["epsilon"])
+        level_set = geo_diag.diag_vars["level_set"][1]
         level_set_data = level_set.dat.data_ro_with_halos
         coords_data = (
             fd.Function(

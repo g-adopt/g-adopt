@@ -40,7 +40,12 @@ class Simulation:
         (interface_deflection, 2 * domain_dimensions[0], material_interface_y)
     ]
     initialise_signed_distance = [
-        partial(isd.isd_simple_curve, domain_origin[0], domain_dimensions[0], isd.cosine_curve)
+        partial(
+            isd.isd_simple_curve,
+            domain_origin[0],
+            domain_dimensions[0],
+            isd.cosine_curve,
+        )
     ]
 
     # Material ordering must follow the logic implemented in the above two lists. In
@@ -72,8 +77,8 @@ class Simulation:
     # Timestepping objects
     dt = 1
     subcycles = 1
-    time_end = 2000
     dump_period = 10
+    time_end = 2000
 
     # Diagnostic objects
     diag_fields = {"output_time": [], "rms_velocity": [], "entrainment": []}
@@ -89,12 +94,16 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, variables):
+    def steady_state_condition(cls, velocity, velocity_old):
+        pass
+
+    @classmethod
+    def diagnostics(cls, simu_time, geo_diag):
         cls.diag_fields["output_time"].append(simu_time)
-        cls.diag_fields["rms_velocity"].append(ga.rms_velocity(variables["velocity"]))
+        cls.diag_fields["rms_velocity"].append(geo_diag.u_rms())
         cls.diag_fields["entrainment"].append(
-            ga.entrainment(
-                variables["level_set"][0],
+            geo_diag.entrainment(
+                0,
                 cls.diag_params["domain_dim_x"]
                 * cls.diag_params["material_interface_y"],
                 cls.diag_params["entrainment_height"],

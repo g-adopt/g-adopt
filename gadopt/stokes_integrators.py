@@ -107,6 +107,7 @@ class StokesSolver:
         self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
                                          compressible=approximation.compressible)
         self.solution = z
+        self.solution_old = None
         self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
@@ -195,4 +196,5 @@ class StokesSolver:
     def solve(self):
         if not self._solver_setup:
             self.setup_solver()
+        self.solution_old = self.solution.copy(deepcopy=True)
         self.solver.solve()

@@ -454,6 +454,7 @@ def density_RaB(
     # Identify if the governing equations are written in dimensional form or not and
     # define accordingly relevant variables for the buoyancy term
     if all(material.density_B_RaB == "density" for material in Simulation.materials):
+        dimensionless = False
         RaB_ufl = fd.Constant(1)
         ref_dens = fd.Constant(Simulation.reference_material.density)
         dens_diff = field_interface(
@@ -462,31 +463,26 @@ def density_RaB(
             method=method,
         )
         density.interpolate(dens_diff + ref_dens)
-        dimensionless = False
-    elif all(material.density_B_RaB == "B" for material in Simulation.materials):
-        ref_dens = fd.Constant(1)
-        dens_diff = fd.Constant(1)
-        RaB_ufl = field_interface(
-            level_set,
-            [Simulation.Ra * material.B for material in Simulation.materials],
-            method=method,
-        )
-        RaB.interpolate(RaB_ufl)
-        dimensionless = True
-    elif all(material.density_B_RaB == "RaB" for material in Simulation.materials):
-        ref_dens = fd.Constant(1)
-        dens_diff = fd.Constant(1)
-        RaB_ufl = field_interface(
-            level_set,
-            [material.RaB for material in Simulation.materials],
-            method=method,
-        )
-        RaB.interpolate(RaB_ufl)
-        dimensionless = True
     else:
-        raise ValueError(
-            "All materials must be initialised using the same buoyancy-related "
-            "variable."
-        )
+        dimensionless = True
+        ref_dens = fd.Constant(1)
+        dens_diff = fd.Constant(1)
+        if all(material.density_B_RaB == "B" for material in Simulation.materials):
+            RaB_ufl = field_interface(
+                level_set,
+                [Simulation.Ra * material.B for material in Simulation.materials],
+                method=method,
+            )
+        elif all(material.density_B_RaB == "RaB" for material in Simulation.materials):
+            RaB_ufl = field_interface(
+                level_set,
+                [material.RaB for material in Simulation.materials],
+                method=method,
+            )
+        else:
+            raise ValueError(
+                "All materials must share a common buoyancy-defining parameter."
+            )
+        RaB.interpolate(RaB_ufl)
 
     return ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless
