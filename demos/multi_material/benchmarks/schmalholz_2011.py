@@ -24,8 +24,8 @@ class Lithosphere(ga.Material):
     visc_bounds: ClassVar[Tuple[float, float]] = (1e21, 1e25)
 
     @classmethod
-    def viscosity(cls, *args, **kwargs):
-        strain_rate = fd.sym(fd.grad(kwargs["velocity"]))
+    def viscosity(cls, velocity, *args, **kwargs):
+        strain_rate = fd.sym(fd.grad(velocity))
         strain_rate_sec_inv = fd.sqrt(fd.inner(strain_rate, strain_rate) / 2 + 1e-99)
 
         return fd.min_value(

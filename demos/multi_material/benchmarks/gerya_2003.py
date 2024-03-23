@@ -77,8 +77,8 @@ class Simulation:
     # Timestepping objects
     dt = 1e11
     subcycles = 1
-    time_end = 9.886e6 * 365.25 * 8.64e4
     dump_period = 1e5 * 365.25 * 8.64e4
+    time_end = 9.886e6 * 365.25 * 8.64e4
 
     # Diagnostic objects
     diag_fields = {"output_time": [], "block_area": []}
