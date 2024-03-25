@@ -165,7 +165,8 @@ class Weerdesteijn2d:
             # Create output file
             self.output_file = File(f"{self.name}/out_dtout{dt_out_years}a.pvd")
             self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity, self.vertical_displacement)
-            self.setup_displacement_vom_output()
+
+        self.setup_displacement_vom_output()
 
         # Now perform the time loop:
         self.displacement_min_array = []
