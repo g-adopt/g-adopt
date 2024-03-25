@@ -45,6 +45,8 @@ class BaseEquation(ABC):
 
         self.dx = firedrake.dx(domain=self.mesh, degree=quad_degree)
 
+        self.kwargs = kwargs
+
         # self._terms stores the actual instances of the BaseTerm-classes in self.terms
         self._terms = []
         for TermClass in self.terms:
@@ -52,6 +54,7 @@ class BaseEquation(ABC):
 
     def mass_term(self, test, trial):
         r"""Return the UFL for the mass term \int test * trial * dx typically used in the time term."""
+
         return firedrake.inner(test, trial) * self.dx
 
     def residual(self, test, trial, trial_lagged=None, fields=None, bcs=None):

@@ -36,6 +36,11 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def rho_field(self, p, T):
+        "UFL expression for density"
+        pass
+
+    @abc.abstractmethod
     def rho_continuity(self):
         "UFL expression for density in mass continuity equation (=1 for incompressible"
         pass
@@ -88,6 +93,9 @@ class BoussinesqApproximation(BaseApproximation):
 
     def buoyancy(self, p, T):
         return self.Ra * self.g * self.alpha * self.rho * T
+
+    def rho_field(self, p, T):
+        return self.rho * (1 - self.alpha * T)
 
     def rho_continuity(self):
         return 1
@@ -208,3 +216,48 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
+
+
+class SmallDisplacementViscoelasticApproximation(BaseApproximation):
+
+    """Small Displacement Viscoelastic approximation:
+
+    Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
+    compressible = False
+
+    def __init__(self, background_density, displacement, g=1):
+        """
+        :arg kappa, g, rho, alpha:  Diffusivity, gravitational acceleration, reference density and thermal expansion coefficient
+                                    Normally kept at 1 when non-dimensionalised."""
+        self.g = ensure_constant(g)
+        self.background_density = background_density  # This is a field
+        self.displacement = displacement  # This is a field
+
+    def density_perturbation(self):
+        return -inner(self.displacement, grad(self.background_density))
+
+    def buoyancy(self, p, T):
+        # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
+        # accounts for advection of density in the absence of an evolution equation for temperature
+        # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
+        return -self.g * self.density_perturbation()
+
+    def rho_field(self, p, T):
+        return self.background_density + self.density_perturbation
+
+    def rho_continuity(self):
+        return 1
+
+    def rhocp(self):
+        return 1
+
+    def kappa(self):
+        return 0
+
+    Tbar = 0
+
+    def linearized_energy_sink(self, u):
+        return 0
+
+    def energy_source(self, u):
+        return 0
