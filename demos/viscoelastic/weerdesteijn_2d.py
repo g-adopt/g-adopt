@@ -11,8 +11,8 @@ class Weerdesteijn2d:
     name = "weerdesteijn-2d"
     vertical_component = 1
 
-    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, short_simulation=False, do_write=False, LOAD_CHECKPOINT=False,
-                 checkpoint_file=None, Tstart=0, cartesian=True, vertical_squashing=True, **kwargs):
+    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, dt_out_years=10e3, short_simulation=False, do_write=False, LOAD_CHECKPOINT=False, LOAD_MESH=False,
+                 LOAD_VISCOSITY=False, checkpoint_file=None, Tstart=0, cartesian=True, vertical_squashing=True, low_viscosity_region=False, **kwargs):
         # Set up geometry:
         self.dx = dx  # horizontal grid resolution in m
         self.nz = nz
@@ -21,8 +21,11 @@ class Weerdesteijn2d:
         self.short_simulation = short_simulation
         self.do_write = do_write
         self.LOAD_CHECKPOINT = LOAD_CHECKPOINT
+        self.LOAD_MESH = LOAD_MESH
+        self.LOAD_VISCOSITY = LOAD_VISCOSITY
         self.cartesian = cartesian
         self.vertical_squashing = vertical_squashing
+        self.low_viscosity_region = low_viscosity_region
 
         # layer properties from spada et al 2011
         self.radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
@@ -31,11 +34,11 @@ class Weerdesteijn2d:
 
         shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11, 0]
 
-        viscosity_values = [1e40, 1e21, 1e21, 2e21, 0]
+        viscosity_values = self.viscosity_values()
 
         self.D = self.radius_values[0]-self.radius_values[-1]
 
-        if LOAD_CHECKPOINT:
+        if LOAD_CHECKPOINT or LOAD_MESH or LOAD_VISCOSITY:
             if checkpoint_file is None:
                 raise TypeError("Please provide a checkpoint .h5 file for loading simulation data.")
             self.checkpoint_file = checkpoint_file
@@ -85,8 +88,12 @@ class Weerdesteijn2d:
         self.rho_ice = 931
         self.g = 9.8125  # there is also a list but Aspect doesnt use...
 
-        self.viscosity = Function(W, name="viscosity")
-        self.initialise_background_field(self.viscosity, viscosity_values)
+        if self.LOAD_VISCOSITY:
+            with CheckpointFile(checkpoint_file, 'r') as afile:
+                self.viscosity = afile.load_function(self.mesh, name="Updated viscosity")
+        else:
+            self.viscosity = Function(W, name="viscosity")
+            self.initialise_background_field(self.viscosity, viscosity_values)
 
         self.shear_modulus = Function(W, name="shear modulus")
         self.initialise_background_field(self.shear_modulus, shear_modulus_values)
@@ -108,7 +115,7 @@ class Weerdesteijn2d:
         else:
             self.dt = Constant(self.dt_years * self.year_in_seconds)
             self.Tend = Constant(Tend_years * self.year_in_seconds)
-            self.dt_out = Constant(10e3 * self.year_in_seconds)
+            self.dt_out = Constant(dt_out_years * self.year_in_seconds)
 
         self.max_timesteps = round((self.Tend - Tstart*self.year_in_seconds)/self.dt)
         log("max timesteps", self.max_timesteps)
@@ -122,6 +129,17 @@ class Weerdesteijn2d:
         self.ice_load = Function(W)
         self.setup_ice_load()
         self.update_ice_load()
+        File("ice.pvd").write(self.ice_load)
+        # Add low viscosity region
+        if low_viscosity_region:
+            r = self.initialise_r()
+            self.viscosity.interpolate(conditional(r < 100e3,
+                                                   conditional(self.X[self.vertical_component] < -70e3,
+                                                               conditional(self.X[self.vertical_component] > -170e3, 1e-4, self.viscosity),
+                                                               self.viscosity),
+                                                   self.viscosity)
+                                       )
+
         self.setup_control()
 
         approximation = SmallDisplacementViscoelasticApproximation(self.density, self.displacement, g=self.g)
@@ -130,7 +148,7 @@ class Weerdesteijn2d:
 
         self.setup_nullspaces()
 
-        self.stokes_solver = ViscoelasticStokesSolver(m, self.viscosity, self.shear_modulus, self.density,
+        self.stokes_solver = ViscoelasticStokesSolver(m, 1e23*self.viscosity, self.shear_modulus, self.density,
                                                       self.deviatoric_stress, self.displacement, approximation,
                                                       self.dt, bcs=self.stokes_bcs, cartesian=self.cartesian,
                                                       nullspace=self.Z_nullspace, transpose_nullspace=self.Z_nullspace,
@@ -144,7 +162,7 @@ class Weerdesteijn2d:
             self.u_.rename("Incremental Displacement")
             self.p_.rename("Pressure")
             # Create output file
-            self.output_file = File(f"{self.name}/out.pvd")
+            self.output_file = File(f"{self.name}_dtout{dt_out_years}a/out.pvd")
             self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity, self.vertical_displacement)
 
         # Now perform the time loop:
@@ -152,7 +170,7 @@ class Weerdesteijn2d:
 
     def setup_mesh(self):
         self.bottom_id, self.top_id = "bottom", "top"  # Boundary IDs for extruded meshes
-        if self.LOAD_CHECKPOINT:
+        if self.LOAD_CHECKPOINT or self.LOAD_MESH or self.LOAD_VISCOSITY:
             with CheckpointFile(self.checkpoint_file, 'r') as afile:
                 self.mesh = afile.load_mesh("surface_mesh_extruded")
         else:
@@ -186,6 +204,9 @@ class Weerdesteijn2d:
     def disk_checkpointing(self):
         # For non adjoint runs ignore disk checkpointing
         pass
+
+    def viscosity_values(self):
+        return [1e17, 0.01, 0.01, 0.02, 0]
 
     def initialise_background_field(self, field, background_values):
         for i in range(0, len(background_values)-1):

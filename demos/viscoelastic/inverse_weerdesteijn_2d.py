@@ -9,7 +9,6 @@ import numpy as np
 class InverseWeerdesteijn2d(Weerdesteijn2d):
     name = "inverse-weerdesteijn-2d"
     vertical_component = 1
-    ADJOINT = True
 
     def __init__(self, **kwargs):
         self.tape = get_working_tape()
@@ -63,24 +62,21 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
         self.run_simulation()
         self.setup_objective_function()
 
-        for i, block in enumerate(self.tape._blocks):
-            print("Block {:2d}: {:}".format(i, type(block)))
+        # All done with the forward run, stop annotating anything else to the tape
+        pause_annotation()
 
-        print("J", self.J)
-        # Defining the object for pyadjoint
-        reduced_functional = ReducedFunctional(self.J, self.control)
-        log("new J", reduced_functional([self.ice_load]))
-        reduced_functional.derivative()
-        h = Function(self.viscosity)
-        h.dat.data[:] = 1000*10*1000*np.random.random(h.dat.data_ro.shape)
-#        print(type(self.viscosity))
-#        print(type(h))
-#        print(h.dat.data)
-        taylor_test(reduced_functional, self.ice_load, h)
-#        self.J.block_variable.adj_value = 1.0
-        # Timing info:
-#        self.adjoint_stage = PETSc.Log.Stage("adjoint")
-#        with self.adjoint_stage: self.tape.evaluate_adj()
+        self.reduced_functional = ReducedFunctional(self.J, self.control, eval_cb_post=self.eval_cb)
+
+        self.run_rf_check()
+        self.run_taylor_test()
+        self.calculate_derivative()
+
+        self.run_optimisation()
+
+        # If we're performing mulitple successive optimisations, we want
+        # to ensure the annotations are switched back on for the next code
+        # to use them
+        continue_annotation()
 
     def setup_objective_function(self):
         disc_radius = 500e3
@@ -89,6 +85,24 @@ class InverseWeerdesteijn2d(Weerdesteijn2d):
         disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
         self.J = assemble(disc*dot(self.displacement[1], self.displacement[1]) * self.ds(self.top_id))
         print(self.J)
+
+    def run_rf_check(self):
+        log("J", self.J)
+        log("new J", reduced_functional([self.viscosity]))
+
+    def calculate_derivative(self):
+        self.reduced_functional.derivative()
+
+    def run_taylor_test(self):
+        h = Function(self.viscosity)
+        h.dat.data[:] = 1e21*np.random.random(h.dat.data_ro.shape)
+        taylor_test(self.reduced_functional, self.viscosity, h)
+
+    def eval_cb(self, J, m):
+        pass
+
+    def run_optimisation(self):
+        pass
 
 
 if __name__ == "__main__":
