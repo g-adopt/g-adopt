@@ -2,6 +2,7 @@
 
 from gadopt import *
 from weerdesteijn_2d import Weerdesteijn2d
+import pandas as pd
 
 
 class SpadaCylindrical2d(Weerdesteijn2d):
@@ -38,7 +39,7 @@ class SpadaCylindrical2d(Weerdesteijn2d):
         field.interpolate(conditional(r < -self.D, background_values[-2], field))
 
     def setup_surface_mesh(self):
-        self.surface_mesh = CircleManifoldMesh(self.ncells, radius=self.rmin, degree=2, name='surface_mesh')
+        self.surface_mesh = CircleManifoldMesh(self.ncells, radius=self.rmin, degree=1, name='surface_mesh')
 
     def setup_ice_load(self):
         self.Hice = 1000
@@ -74,7 +75,29 @@ class SpadaCylindrical2d(Weerdesteijn2d):
     def displacement_filename(self):
         return f"displacement-{self.name}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years.dat"
 
+    def setup_displacement_vom_output(self):
+        self.displacement_vom_matplotlib_df = pd.DataFrame()
+
+        self.output_resolution_radians = (2*pi/360) * 0.5  # 0.5 degrees resolution
+        self.output_nnodes = round(pi / self.output_resolution_radians)
+
+        self.surface_nodes = []
+        self.setup_surface_nodes_vom_output()
+
+        if self.mesh.comm.rank == 0:
+            self.displacement_vom_matplotlib_df['surface_points'] = self.surface_nodes
+        surface_VOM = VertexOnlyMesh(self.mesh, self.surface_nodes, missing_points_behaviour='warn')
+        DG0_vom = VectorFunctionSpace(surface_VOM, "DG", 0)
+        self.displacement_vom = Function(DG0_vom)
+
+        DG0_vom_input_ordering = VectorFunctionSpace(surface_VOM.input_ordering, "DG", 0)
+        self.displacement_vom_input = Function(DG0_vom_input_ordering)
+
+    def setup_surface_nodes_vom_output(self):
+        for i in range(self.output_nnodes):
+            self.surface_nodes.append([self.rmax*sin(i*self.output_resolution_radians), self.rmax*cos(i*self.output_resolution_radians)])
+
 
 if __name__ == "__main__":
-    simulation = SpadaCylindrical2d(dx=500*1e3, nz=80, cartesian=False, do_write=True)
+    simulation = SpadaCylindrical2d(dx=500*1e3, nz=80, cartesian=False, do_write=True, dt_out_years=50, Tend_years=100)
     simulation.run_simulation()

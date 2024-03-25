@@ -5,6 +5,7 @@ from mpi4py import MPI
 import numpy as np
 from gadopt.utility import vertical_component as vc
 from gadopt.utility import CombinedSurfaceMeasure
+import pandas as pd
 
 
 class Weerdesteijn2d:
@@ -162,8 +163,9 @@ class Weerdesteijn2d:
             self.u_.rename("Incremental Displacement")
             self.p_.rename("Pressure")
             # Create output file
-            self.output_file = File(f"{self.name}_dtout{dt_out_years}a/out.pvd")
+            self.output_file = File(f"{self.name}/out_dtout{dt_out_years}a.pvd")
             self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity, self.vertical_displacement)
+            self.setup_displacement_vom_output()
 
         # Now perform the time loop:
         self.displacement_min_array = []
@@ -276,6 +278,33 @@ class Weerdesteijn2d:
     def displacement_filename(self):
         return f"displacement-{self.name}.dat"
 
+    def setup_displacement_vom_output(self):
+        self.displacement_vom_matplotlib_df = pd.DataFrame()
+        surface_nodes = []
+        surface_nx = round(self.L / (0.5*self.dx))
+
+        for i in range(surface_nx):
+            surface_nodes.append([i*0.5*self.dx, 0])
+
+        if self.mesh.comm.rank == 0:
+            self.displacement_vom_matplotlib_df['surface_points'] = surface_nodes
+        surface_VOM = VertexOnlyMesh(self.mesh, surface_nodes, missing_points_behaviour='warn')
+        DG0_vom = VectorFunctionSpace(surface_VOM, "DG", 0)
+        self.displacement_vom = Function(DG0_vom)
+
+        DG0_vom_input_ordering = VectorFunctionSpace(surface_VOM.input_ordering, "DG", 0)
+        self.displacement_vom_input = Function(DG0_vom_input_ordering)
+
+    def displacement_vom_out(self):
+        self.displacement_vom.interpolate(self.displacement)
+        self.displacement_vom_input.interpolate(self.displacement_vom)
+        if self.mesh.comm.rank == 0:
+            log("check min displacement", self.displacement_vom_input.dat.data[:, 1].min(initial=0))
+            log("check arg min displacement", self.displacement_vom_input.dat.data[:, 1].argmin())
+            for i in range(self.mesh.geometric_dimension()):
+                self.displacement_vom_matplotlib_df[f'displacement{i}_vom_array_{float(self.time/self.year_in_seconds):.0f}years'] = self.displacement_vom_input.dat.data[:, i]
+            self.displacement_vom_matplotlib_df.to_csv(f"{self.name}/surface_displacement_arrays.csv")
+
     def run_simulation(self):
         checkpoint_filename = self.checkpoint_filename()
         displacement_filename = self.displacement_filename()
@@ -307,6 +336,8 @@ class Weerdesteijn2d:
                     checkpoint.save_function(self.p_, name="Pressure")
                     checkpoint.save_function(self.displacement, name="Displacement")
                     checkpoint.save_function(self.deviatoric_stress, name="Deviatoric stress")
+
+                self.displacement_vom_out()
 
                 if MPI.COMM_WORLD.rank == 0:
                     np.savetxt(displacement_filename, self.displacement_min_array)
