@@ -166,7 +166,7 @@ class Weerdesteijn2d:
             self.output_file = File(f"{self.name}/out_dtout{dt_out_years}a.pvd")
             self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity, self.vertical_displacement)
 
-        self.setup_displacement_vom_output()
+            self.setup_displacement_vom_output()
 
         # Now perform the time loop:
         self.displacement_min_array = []
@@ -325,6 +325,9 @@ class Weerdesteijn2d:
             log("Greatest (-ve) displacement", displacement_min)
             self.displacement_min_array.append([float(self.time/self.year_in_seconds), displacement_min])
 
+            if self.do_write and timestep == 1:
+                # Write out the elastic displacement
+                self.displacement_vom_out()
             # Write output:
             if timestep % self.dump_period == 0:
                 log("timestep", timestep)
@@ -332,13 +335,13 @@ class Weerdesteijn2d:
                 if self.do_write:
                     self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity, self.vertical_displacement)
 
+                    self.displacement_vom_out()
+
                 with CheckpointFile(checkpoint_filename, "w") as checkpoint:
                     checkpoint.save_function(self.u_, name="Incremental Displacement")
                     checkpoint.save_function(self.p_, name="Pressure")
                     checkpoint.save_function(self.displacement, name="Displacement")
                     checkpoint.save_function(self.deviatoric_stress, name="Deviatoric stress")
-
-                self.displacement_vom_out()
 
                 if MPI.COMM_WORLD.rank == 0:
                     np.savetxt(displacement_filename, self.displacement_min_array)
