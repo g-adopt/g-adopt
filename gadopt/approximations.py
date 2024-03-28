@@ -134,7 +134,7 @@ class BoussinesqApproximation(BaseApproximation):
       g:         gravitational acceleration
       RaB:       compositional Rayleigh number; product of the Rayleigh and buoyancy numbers
       delta_rho: compositional density difference from the reference density
-      kappa_ref: thermal diffusivity
+      kappa:     thermal diffusivity
       H:         internal heating rate
 
     Note:
@@ -148,15 +148,15 @@ class BoussinesqApproximation(BaseApproximation):
 
     def __init__(
         self,
-        *,
         Ra: Function | Number,
+        *,
         rho: Function | Number = 1,
         alpha: Function | Number = 1,
         T0: Function | Number = 0,
         g: Function | Number = 1,
         RaB: Function | Number = 0,
         delta_rho: Function | Number = 1,
-        kappa_ref: Function | Number = 1,
+        kappa: Function | Number = 1,
         H: Function | Number = 0,
     ):
         self.Ra = ensure_constant(Ra)
@@ -164,7 +164,7 @@ class BoussinesqApproximation(BaseApproximation):
         self.alpha = ensure_constant(alpha)
         self.T0 = T0
         self.g = ensure_constant(g)
-        self.kappa_ref = ensure_constant(kappa_ref)
+        self.kappa_ref = ensure_constant(kappa)
         self.RaB = RaB
         self.delta_rho = ensure_constant(delta_rho)
         self.H = ensure_constant(H)
@@ -182,7 +182,7 @@ class BoussinesqApproximation(BaseApproximation):
         return 1
 
     def kappa(self):
-        return self.thermal_diffusivity
+        return self.kappa_ref
 
     def linearized_energy_sink(self, u):
         return 0
