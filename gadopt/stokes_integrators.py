@@ -151,6 +151,7 @@ class StokesSolver:
         self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
                                          compressible=approximation.compressible)
         self.solution = z
+        self.solution_old = None
         self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.solver_parameters = solver_parameters
@@ -200,7 +201,11 @@ class StokesSolver:
             if INFO >= log_level:
                 self.solver_parameters['snes_monitor'] = None
 
-            if self.mesh.topological_dimension() == 2 and cartesian:
+            if (
+                self.mesh.topological_dimension() == 2
+                and self.Z.dof_count[0] < 1e6
+                and cartesian
+            ):
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
@@ -241,4 +246,5 @@ class StokesSolver:
         """Solves the system."""
         if not self._solver_setup:
             self.setup_solver()
+        self.solution_old = self.solution.copy(deepcopy=True)
         self.solver.solve()
