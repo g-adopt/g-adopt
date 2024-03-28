@@ -46,15 +46,17 @@ class Simulation:
 
     name = "Schmalholz_2011"
 
-    # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    restart_from_checkpoint = 0
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dimensions = (1e6, 6.6e5)
+    domain_dims = (1e6, 6.6e5)
     domain_origin = (0, 0)
     mesh_file = "benchmarks/schmalholz_2011.msh"
+
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 2
 
     # The following two lists must be ordered such that, unpacking from the end, each
     # pair of arguments enables initialising a level set whose 0-contour corresponds to
@@ -91,9 +93,10 @@ class Simulation:
     stokes_nullspace_args = {}
 
     # Timestepping objects
-    dt = 1e11
+    initial_timestep = 1e11
     subcycles = 1
     dump_period = 5e5 * 365.25 * 8.64e4
+    checkpoint_period = 5
     time_end = 25e6 * 365.25 * 8.64e4
 
     # Diagnostic objects
@@ -131,26 +134,20 @@ class Simulation:
         )
 
         mask_ls_outside = (
-            (coords_data[:, 0] <= cls.domain_dimensions[0] / 2)
+            (coords_data[:, 0] <= cls.domain_dims[0] / 2)
+            & (coords_data[:, 1] < cls.domain_dims[1] - cls.lithosphere_thickness - 2e4)
             & (
                 coords_data[:, 1]
-                < cls.domain_dimensions[1] - cls.lithosphere_thickness - 2e4
-            )
-            & (
-                coords_data[:, 1]
-                > cls.domain_dimensions[1] - cls.lithosphere_thickness - cls.slab_length
+                > cls.domain_dims[1] - cls.lithosphere_thickness - cls.slab_length
             )
             & (level_set_data < 0.5)
         )
         mask_ls_inside = (
-            (coords_data[:, 0] <= cls.domain_dimensions[0] / 2)
+            (coords_data[:, 0] <= cls.domain_dims[0] / 2)
+            & (coords_data[:, 1] < cls.domain_dims[1] - cls.lithosphere_thickness - 2e4)
             & (
                 coords_data[:, 1]
-                < cls.domain_dimensions[1] - cls.lithosphere_thickness - 2e4
-            )
-            & (
-                coords_data[:, 1]
-                > cls.domain_dimensions[1] - cls.lithosphere_thickness - cls.slab_length
+                > cls.domain_dims[1] - cls.lithosphere_thickness - cls.slab_length
             )
             & (level_set_data >= 0.5)
         )
@@ -187,11 +184,11 @@ class Simulation:
                     hor_coord_interface = (
                         ls_dist * hor_coord_outside + (1 - ls_dist) * hor_coord_inside
                     )
-                    min_width = cls.domain_dimensions[0] - 2 * hor_coord_interface
+                    min_width = cls.domain_dims[0] - 2 * hor_coord_interface
                 else:
-                    min_width = cls.domain_dimensions[0] - 2 * hor_coord_outside
+                    min_width = cls.domain_dims[0] - 2 * hor_coord_outside
             else:
-                min_width = cls.domain_dimensions[0] - 2 * hor_coord_outside
+                min_width = cls.domain_dims[0] - 2 * hor_coord_outside
         else:
             min_width = np.inf
 

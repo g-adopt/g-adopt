@@ -19,15 +19,17 @@ class Simulation:
 
     name = "van_Keken_1997_thermochemical"
 
-    # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    restart_from_checkpoint = 0
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dimensions = (2, 1)
+    domain_dims = (2, 1)
     domain_origin = (0, 0)
     mesh_elements = (2048, 1024)
+
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 2
 
     # Parameters to initialise level sets
     material_interface_y = 0.025
@@ -42,7 +44,7 @@ class Simulation:
         partial(
             isd.isd_simple_curve,
             domain_origin[0],
-            domain_dimensions[0],
+            domain_dims[0],
             isd.straight_line,
         )
     ]
@@ -69,16 +71,17 @@ class Simulation:
     stokes_nullspace_args = {}
 
     # Timestepping objects
-    dt = 1e-6
+    initial_timestep = 1e-6
     subcycles = 1
     dump_period = 1e-4
+    checkpoint_period = 5
     time_end = 0.05
 
     # Diagnostic objects
     diag_fields = {"output_time": [], "rms_velocity": [], "entrainment": []}
     entrainment_height = 0.2
     diag_params = {
-        "domain_dim_x": domain_dimensions[0],
+        "domain_dim_x": domain_dims[0],
         "material_interface_y": material_interface_y,
         "entrainment_height": entrainment_height,
     }
@@ -88,17 +91,15 @@ class Simulation:
         mesh_coords = fd.SpatialCoordinate(temperature.function_space().mesh())
 
         u0 = (
-            cls.domain_dimensions[0] ** (7 / 3)
-            / (1 + cls.domain_dimensions[0] ** 4) ** (2 / 3)
+            cls.domain_dims[0] ** (7 / 3)
+            / (1 + cls.domain_dims[0] ** 4) ** (2 / 3)
             * (cls.Ra / 2 / fd.sqrt(fd.pi)) ** (2 / 3)
         )
         v0 = u0
-        Q = 2 * fd.sqrt(cls.domain_dimensions[0] / fd.pi / u0)
+        Q = 2 * fd.sqrt(cls.domain_dims[0] / fd.pi / u0)
         Tu = fd.erf((1 - mesh_coords[1]) / 2 * fd.sqrt(u0 / mesh_coords[0])) / 2
         Tl = 1 - 1 / 2 * fd.erf(
-            mesh_coords[1]
-            / 2
-            * fd.sqrt(u0 / (cls.domain_dimensions[0] - mesh_coords[0]))
+            mesh_coords[1] / 2 * fd.sqrt(u0 / (cls.domain_dims[0] - mesh_coords[0]))
         )
         Tr = 1 / 2 + Q / 2 / fd.sqrt(fd.pi) * fd.sqrt(
             v0 / (mesh_coords[1] + 1)
@@ -106,7 +107,7 @@ class Simulation:
         Ts = 1 / 2 - Q / 2 / fd.sqrt(fd.pi) * fd.sqrt(
             v0 / (2 - mesh_coords[1])
         ) * fd.exp(
-            -((cls.domain_dimensions[0] - mesh_coords[0]) ** 2)
+            -((cls.domain_dims[0] - mesh_coords[0]) ** 2)
             * v0
             / (8 - 4 * mesh_coords[1])
         )

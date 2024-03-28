@@ -31,15 +31,17 @@ class Simulation:
 
     name = "Gerya_2003"
 
-    # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    restart_from_checkpoint = 0
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dimensions = (5e5, 5e5)
+    domain_dims = (5e5, 5e5)
     domain_origin = (0, 0)
     mesh_elements = (64, 64)
+
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 2
 
     # Parameters to initialise level sets
     ref_vertex_x = 2e5
@@ -75,9 +77,10 @@ class Simulation:
     stokes_nullspace_args = {}
 
     # Timestepping objects
-    dt = 1e11
+    initial_timestep = 1e11
     subcycles = 1
     dump_period = 1e5 * 365.25 * 8.64e4
+    checkpoint_period = 5
     time_end = 9.886e6 * 365.25 * 8.64e4
 
     # Diagnostic objects

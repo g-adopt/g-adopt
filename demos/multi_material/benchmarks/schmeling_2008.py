@@ -39,16 +39,18 @@ class Simulation:
 
     name = "Schmeling_2008"
 
-    # Degree of the function space on which the level-set function @classmethod
-    # is defined.cls
-    level_set_func_space_deg = 2
+    restart_from_checkpoint = 0
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dimensions = (3e6, 7.5e5)
+    domain_dims = (3e6, 7.5e5)
     domain_origin = (0, 0)
     mesh_file = "benchmarks/schmeling_2008.msh"
+
+    # Degree of the function space on which the level-set function @classmethod
+    # is defined.cls
+    level_set_func_space_deg = 2
 
     # Parameters to initialise level sets
     material_interface_y = 7e5
@@ -63,7 +65,7 @@ class Simulation:
         partial(
             isd.isd_simple_curve,
             domain_origin[0],
-            domain_dimensions[0],
+            domain_dims[0],
             isd.straight_line,
         ),
         isd.isd_schmeling,
@@ -92,10 +94,11 @@ class Simulation:
     stokes_nullspace_args = {}
 
     # Timestepping objects
-    dt = 1e11
+    initial_timestep = 1e11
     subcycles = 1
-    time_end = 6e7 * 365.25 * 8.64e4
     dump_period = 8e5 * 365.25 * 8.64e4
+    checkpoint_period = 5
+    time_end = 6e7 * 365.25 * 8.64e4
 
     # Diagnostic objects
     diag_fields = {"output_time": [], "slab_tip_depth": []}
@@ -116,7 +119,7 @@ class Simulation:
         depth_per_core = fd.Function(function_space).interpolate(
             fd.conditional(
                 level_set >= 0.5,
-                cls.domain_dimensions[1] - function_space.mesh().coordinates[1],
+                cls.domain_dims[1] - function_space.mesh().coordinates[1],
                 np.nan,
             )
         )

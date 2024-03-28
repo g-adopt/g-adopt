@@ -18,15 +18,17 @@ class Simulation:
 
     name = "van_Keken_1997_isothermal_isoviscous"
 
-    # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    restart_from_checkpoint = 0
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dimensions = (0.9142, 1)
+    domain_dims = (0.9142, 1)
     domain_origin = (0, 0)
     mesh_elements = (256, 256)
+
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 2
 
     # Parameters to initialise level sets
     material_interface_y = 0.2
@@ -36,15 +38,10 @@ class Simulation:
     # the entire interface between a given material and the remainder of the numerical
     # domain. By convention, the material thereby isolated occupies the positive side
     # of the signed-distance level set.
-    isd_params = [
-        (interface_deflection, 2 * domain_dimensions[0], material_interface_y)
-    ]
+    isd_params = [(interface_deflection, 2 * domain_dims[0], material_interface_y)]
     initialise_signed_distance = [
         partial(
-            isd.isd_simple_curve,
-            domain_origin[0],
-            domain_dimensions[0],
-            isd.cosine_curve,
+            isd.isd_simple_curve, domain_origin[0], domain_dims[0], isd.cosine_curve
         )
     ]
 
@@ -75,16 +72,17 @@ class Simulation:
     stokes_nullspace_args = {}
 
     # Timestepping objects
-    dt = 1
+    initial_timestep = 1
     subcycles = 1
     dump_period = 10
+    checkpoint_period = 5
     time_end = 2000
 
     # Diagnostic objects
     diag_fields = {"output_time": [], "rms_velocity": [], "entrainment": []}
     entrainment_height = 0.2
     diag_params = {
-        "domain_dim_x": domain_dimensions[0],
+        "domain_dim_x": domain_dims[0],
         "material_interface_y": material_interface_y,
         "entrainment_height": entrainment_height,
     }

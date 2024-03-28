@@ -45,15 +45,17 @@ class Simulation:
 
     name = "Tosi_2015"
 
-    # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    restart_from_checkpoint = 0
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dimensions = (1, 1)
+    domain_dims = (1, 1)
     domain_origin = (0, 0)
     mesh_elements = (128, 128)
+
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 2
 
     # Parameters to initialise level sets
     material_interface_y = 0.5
@@ -68,7 +70,7 @@ class Simulation:
         partial(
             isd.isd_simple_curve,
             domain_origin[0],
-            domain_dimensions[0],
+            domain_dims[0],
             isd.straight_line,
         )
     ]
@@ -98,11 +100,12 @@ class Simulation:
     stokes_nullspace_args = {}
 
     # Timestepping objects
-    dt = 1e-6
+    initial_timestep = 1e-6
     subcycles = 1
     dump_period = 1e-3
-    time_end = None
+    checkpoint_period = 5
     steady_state_threshold = 1e-6
+    time_end = None
 
     # Diagnostic objects
     diag_fields = {

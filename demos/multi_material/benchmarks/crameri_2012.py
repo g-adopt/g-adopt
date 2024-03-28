@@ -39,15 +39,17 @@ class Simulation:
 
     name = "Crameri_2012"
 
-    # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    restart_from_checkpoint = 0
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dimensions = (2.8e6, 8e5)
+    domain_dims = (2.8e6, 8e5)
     domain_origin = (0, 0)
     mesh_file = "benchmarks/crameri_2012.msh"
+
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 2
 
     # Parameters to initialise level sets
     bottom_material_interface_y = 6e5
@@ -61,20 +63,14 @@ class Simulation:
     # of the signed-distance level set.
     isd_params = [
         (bottom_interface_slope, bottom_material_interface_y),
-        (top_interface_deflection, domain_dimensions[0], top_material_interface_y),
+        (top_interface_deflection, domain_dims[0], top_material_interface_y),
     ]
     initialise_signed_distance = [
         partial(
-            isd.isd_simple_curve,
-            domain_origin[0],
-            domain_dimensions[0],
-            isd.straight_line,
+            isd.isd_simple_curve, domain_origin[0], domain_dims[0], isd.straight_line
         ),
         partial(
-            isd.isd_simple_curve,
-            domain_origin[0],
-            domain_dimensions[0],
-            isd.cosine_curve,
+            isd.isd_simple_curve, domain_origin[0], domain_dims[0], isd.cosine_curve
         ),
     ]
 
@@ -101,9 +97,10 @@ class Simulation:
     stokes_nullspace_args = {}
 
     # Timestepping objects
-    dt = 1e10
+    initial_timestep = 1e10
     subcycles = 1
     dump_period = 2e3 * 365.25 * 8.64e4
+    checkpoint_period = 5
     time_end = 1e5 * 365.25 * 8.64e4
 
     # Diagnostic objects

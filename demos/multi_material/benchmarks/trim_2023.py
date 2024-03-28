@@ -19,15 +19,17 @@ class Simulation:
 
     name = "Trim_2023"
 
-    # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
+    restart_from_checkpoint = 0
 
     # Mesh resolution should be sufficient to capture eventual small-scale dynamics
     # in the neighbourhood of material interfaces tracked by the level-set approach.
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dimensions = (1, 1)
+    domain_dims = (1, 1)
     domain_origin = (0, 0)
     mesh_elements = (256, 256)
+
+    # Degree of the function space on which the level-set function is defined.
+    level_set_func_space_deg = 2
 
     # Parameters to initialise level sets
     slope = 0
@@ -40,10 +42,7 @@ class Simulation:
     isd_params = [(slope, intercept)]
     initialise_signed_distance = [
         partial(
-            isd.isd_simple_curve,
-            domain_origin[0],
-            domain_dimensions[0],
-            isd.straight_line,
+            isd.isd_simple_curve, domain_origin[0], domain_dims[0], isd.straight_line
         )
     ]
 
@@ -79,9 +78,10 @@ class Simulation:
     stokes_nullspace_args = {}
 
     # Timestepping objects
-    dt = 1e-6
+    initial_timestep = 1e-6
     subcycles = 1
     dump_period = 1e-4
+    checkpoint_period = 5
     time_end = 0.01
 
     # Diagnostic objects
@@ -91,7 +91,7 @@ class Simulation:
         "rms_velocity_analytical": [],
         "entrainment": [],
     }
-    material_area = domain_dimensions[0] * intercept
+    material_area = domain_dims[0] * intercept
     entrainment_height = 0.5
 
     @classmethod
@@ -104,7 +104,7 @@ class Simulation:
 
     @classmethod
     def initialise_temperature(cls, temperature):
-        λ = cls.domain_dimensions[0]
+        λ = cls.domain_dims[0]
         x, y = fd.SpatialCoordinate(temperature.function_space().mesh())
 
         temperature.interpolate(
@@ -134,7 +134,7 @@ class Simulation:
                     coord_x,
                     coord_y,
                     float(simu_time),
-                    cls.domain_dimensions[0],
+                    cls.domain_dims[0],
                     cls.k,
                     cls.intercept,
                     cls.Ra,
@@ -150,7 +150,7 @@ class Simulation:
 
     @classmethod
     def diagnostics(cls, simu_time, geo_diag):
-        λ = cls.domain_dimensions[0]
+        λ = cls.domain_dims[0]
         rms_velocity_analytical = (
             fd.pi * fd.sqrt(λ**2 + 1) / 2 / λ * abs(cls.f(simu_time))
         )
