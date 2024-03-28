@@ -1,6 +1,4 @@
-"""
-A module with utitity functions for gadopt
-"""
+"""Utility functions for G-ADOPT"""
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh

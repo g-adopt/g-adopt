@@ -1,7 +1,10 @@
-from .momentum_equation import StokesEquations
-from .utility import upward_normal, ensure_constant
-from .utility import log_level, INFO, DEBUG, depends_on
+from typing import Optional
+
 import firedrake as fd
+
+from .approximations import BaseApproximation
+from .momentum_equation import StokesEquations
+from .utility import DEBUG, INFO, depends_on, ensure_constant, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -33,6 +36,7 @@ iterative_stokes_solver_parameters = {
         "Mp_pc_type": "sor",
     }
 }
+"""Default solver parameters for iterative solvers"""
 
 direct_stokes_solver_parameters = {
     "mat_type": "aij",
@@ -40,6 +44,7 @@ direct_stokes_solver_parameters = {
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
 }
+"""Default solver parameters for direct solvers"""
 
 newton_stokes_solver_parameters = {
     "snes_type": "newtonls",
@@ -48,19 +53,31 @@ newton_stokes_solver_parameters = {
     "snes_atol": 1e-10,
     "snes_rtol": 1e-5,
 }
+"""Default solver parameters for non-linear systems"""
 
 
-def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None):
-    """
-    Create nullspace for the mixed Stokes system.
+def create_stokes_nullspace(
+    Z: fd.functionspaceimpl.WithGeometry,
+    closed: bool = True,
+    rotational: bool = False,
+    translations: Optional[list[int]] = None
+) -> fd.nullspace.MixedVectorSpaceBasis:
+    """Create a null space for the mixed Stokes system.
 
-    :arg closed: if closed include constant pressure nullspace
-    :arg rotational: if rotational include all rotational modes
-    :translations: list of dimensions (0 to dim-1) corresponding to translations to include
+    Arguments:
+      Z: Firedrake mixed function space associated with the Stokes system
+      closed: Whether to include a constant pressure null space
+      rotational: Whether to include all rotational modes
+      translations: List of translations to include
+
+    Returns:
+      A Firedrake mixed vector space basis incorporating the null space components
+
     """
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
     V, W = Z.subfunctions
+
     if rotational:
         if dim == 2:
             rotV = fd.Function(V).interpolate(fd.as_vector((-X[1], X[0])))
@@ -74,6 +91,7 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
             raise ValueError("Unknown dimension")
     else:
         basis = []
+
     if translations:
         for tdim in translations:
             vec = [0] * dim
@@ -95,12 +113,38 @@ def create_stokes_nullspace(Z, closed=True, rotational=False, translations=None)
 
 
 class StokesSolver:
+    """Solves the Stokes system.
+
+    Arguments:
+      z: Firedrake function representing the mixed Stokes system
+      T: Firedrake function representing the temperature
+      approximation: Approximation describing the system of equations
+      bcs: Dictionary of identifier-value pairs specifying boundary conditions
+      mu: Firedrake function representing dynamic viscosity
+      quad_degree: Quadrature degree. Default value is `2p + 1`, where
+                     p is the polynomial degree of the trial space
+      cartesian: Whether to use Cartesian coordinates
+      solver_parameters: Dictionary of solver parameters provided to PETSc
+      J: Firedrake function representing the Jacobian of the system
+      constant_jacobian: Whether the Jacobian of the system is constant
+
+    """
     name = 'Stokes'
 
-    def __init__(self, z, T, approximation, bcs=None, mu=1,
-                 quad_degree=6, cartesian=True, solver_parameters=None,
-                 closed=True, rotational=False, J=None, constant_jacobian=False,
-                 **kwargs):
+    def __init__(
+        self,
+        z: fd.Function,
+        T: fd.Function,
+        approximation: BaseApproximation,
+        bcs: Optional[dict[int, dict[str, int | float]]] = None,
+        mu: fd.Function | int | float = 1,
+        quad_degree: int = 6,
+        cartesian: bool = True,
+        solver_parameters: Optional[dict[str, str | float]] = None,
+        J: Optional[fd.Function] = None,
+        constant_jacobian: bool = False,
+        **kwargs
+    ):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
@@ -175,6 +219,7 @@ class StokesSolver:
         self._solver_setup = False
 
     def setup_solver(self):
+        """Sets up the solver."""
         if self.constant_jacobian:
             z_tri = fd.TrialFunction(self.Z)
             F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
@@ -198,6 +243,7 @@ class StokesSolver:
         self._solver_setup = True
 
     def solve(self):
+        """Solves the system."""
         if not self._solver_setup:
             self.setup_solver()
         self.solution_old = self.solution.copy(deepcopy=True)

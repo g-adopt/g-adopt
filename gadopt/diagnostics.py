@@ -1,5 +1,5 @@
 from firedrake import (
-    Constant, FacetNormal, SpatialCoordinate,
+    Constant, FacetNormal, Function, SpatialCoordinate,
     assemble, conditional, dot, ds, dx, grad, norm, sqrt,
 )
 from firedrake.ufl_expr import extract_unique_domain
@@ -8,7 +8,40 @@ from .utility import CombinedSurfaceMeasure
 
 
 class GeodynamicalDiagnostics:
-    def __init__(self, u, p, T, bottom_id, top_id, diag_vars={}, degree=4):
+    """Typical simulation diagnostics used in geodynamical simulations.
+
+    Arguments:
+      u:         Firedrake function for the velocity
+      p:         Firedrake function for the pressure
+      T:         Firedrake function for the temperature
+      bottom_id: bottom boundary identifier
+      top_id:    top boundary identifier
+      diag_vars: dictionary containing additional diagnostic-related functions
+      degree:    degree of the polynomial approximation
+      
+    Note:
+      All the diagnostics are returned as a float value.
+
+    Functions:
+      u_rms: Root-mean squared velocity
+      u_rms_top: Root-mean squared velocity along the top boundary
+      Nu_top: Nusselt number at the top boundary
+      Nu_bottom: Nusselt number at the bottom boundary
+      T_avg: Average temperature in the domain
+      entrainment: Proportion of material entrained into a target region
+
+    """
+
+    def __init__(
+        self,
+        u: Function,
+        p: Function,
+        T: Function,
+        bottom_id: int,
+        top_id: int,
+        diag_vars: dict = {},
+        degree: int = 4
+    ):
         mesh = extract_unique_domain(u)
 
         self.u = u
@@ -34,7 +67,7 @@ class GeodynamicalDiagnostics:
     def u_rms(self):
         return norm(self.u) / sqrt(self.domain_volume)
 
-    def u_rms_top(self):
+    def u_rms_top(self) -> float:
         return sqrt(assemble(dot(self.u, self.u) * self.ds_t))
 
     def Nu_top(self):

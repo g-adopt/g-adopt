@@ -1,0 +1,23 @@
+authors:
+- family-names: Gibson
+  given-names: Angus
+- family-names: Davies
+  given-names: Rhodri
+- family-names: Kramer
+  given-names: Stephan
+- family-names: Ghelichkhan
+  given-names: Sia
+- family-names: Turner
+  given-names: Ruby
+- family-names: Duvernay
+  given-names: Thomas
+- family-names: Scott
+  given-names: Will
+cff-version: 1.2.0
+date-released: '2024-02-07'
+doi: 10.5281/zenodo.5644391
+message: If you use this software, please cite it as below.
+repository-code: https://github.com/g-adopt/g-adopt
+title: G-ADOPT
+type: software
+version: v2.2.0
