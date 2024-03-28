@@ -49,7 +49,7 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def buoyancy(self, p: Function, T: Function) -> nn.core.expr.Expr:
+    def buoyancy(self, p: Function, T: Function) -> ufl.core.expr.Expr:
         """Defines the buoyancy force.
 
         Returns:

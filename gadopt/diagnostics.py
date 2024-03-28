@@ -18,7 +18,7 @@ class GeodynamicalDiagnostics:
       top_id:    top boundary identifier
       diag_vars: dictionary containing additional diagnostic-related functions
       degree:    degree of the polynomial approximation
-      
+
     Note:
       All the diagnostics are returned as a float value.
 
