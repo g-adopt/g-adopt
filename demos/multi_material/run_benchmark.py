@@ -58,7 +58,8 @@ Simulation = importlib.import_module(args.benchmark).Simulation
 
 if Simulation.restart_from_checkpoint:  # Restore mesh and key functions
     with fd.CheckpointFile(
-        f"trim_2023/checkpoint_{Simulation.restart_from_checkpoint}.h5", "r"
+        f"{Simulation.name}/checkpoint_{Simulation.restart_from_checkpoint}.h5".lower(),
+        "r",
     ) as h5_check:
         mesh = h5_check.load_mesh("firedrake_default")
 
@@ -212,6 +213,7 @@ stokes_solver = ga.StokesSolver(
     bcs=Simulation.stokes_bcs,
     mu=viscosity_ufl,
     quad_degree=None,
+    solver_parameters="direct",
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )

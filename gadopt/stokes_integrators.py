@@ -1,3 +1,4 @@
+from numbers import Number
 from typing import Optional
 
 import firedrake as fd
@@ -34,7 +35,7 @@ iterative_stokes_solver_parameters = {
         "Mp_ksp_rtol": 1e-5,
         "Mp_ksp_type": "cg",
         "Mp_pc_type": "sor",
-    }
+    },
 }
 """Default solver parameters for iterative solvers"""
 
@@ -60,7 +61,7 @@ def create_stokes_nullspace(
     Z: fd.functionspaceimpl.WithGeometry,
     closed: bool = True,
     rotational: bool = False,
-    translations: Optional[list[int]] = None
+    translations: Optional[list[int]] = None,
 ) -> fd.nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
 
@@ -122,28 +123,30 @@ class StokesSolver:
       bcs: Dictionary of identifier-value pairs specifying boundary conditions
       mu: Firedrake function representing dynamic viscosity
       quad_degree: Quadrature degree. Default value is `2p + 1`, where
-                     p is the polynomial degree of the trial space
+                   p is the polynomial degree of the trial space
       cartesian: Whether to use Cartesian coordinates
-      solver_parameters: Dictionary of solver parameters provided to PETSc
+      solver_parameters: Either a dictionary of PETSc solver parameters or a string
+                         specifying a default set of parameters defined in G-ADOPT
       J: Firedrake function representing the Jacobian of the system
       constant_jacobian: Whether the Jacobian of the system is constant
 
     """
-    name = 'Stokes'
+
+    name = "Stokes"
 
     def __init__(
         self,
         z: fd.Function,
         T: fd.Function,
         approximation: BaseApproximation,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-        mu: fd.Function | int | float = 1,
+        bcs: Optional[dict[int, dict[str, Number]]] = None,
+        mu: fd.Function | Number = 1,
         quad_degree: int = 6,
         cartesian: bool = True,
-        solver_parameters: Optional[dict[str, str | float]] = None,
+        solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
-        **kwargs
+        **kwargs,
     ):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
@@ -193,7 +196,19 @@ class StokesSolver:
         for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
-        if self.solver_parameters is None:
+        if isinstance(self.solver_parameters, str):
+            match self.solver_parameters:
+                case "iterative":
+                    self.solver_parameters = iterative_stokes_solver_parameters
+                case "direct":
+                    self.solver_parameters = direct_stokes_solver_parameters
+                case "newton":
+                    self.solver_parameters = newton_stokes_solver_parameters
+                case _:
+                    raise ValueError(
+                        f"Solver type '{self.solver_parameters}' not implemented."
+                    )
+        elif self.solver_parameters is None:
             if self.linear:
                 self.solver_parameters = {"snes_type": "ksponly"}
             else:
@@ -201,11 +216,7 @@ class StokesSolver:
             if INFO >= log_level:
                 self.solver_parameters['snes_monitor'] = None
 
-            if (
-                self.mesh.topological_dimension() == 2
-                and self.Z.dof_count[0] < 1e6
-                and cartesian
-            ):
+            if self.mesh.topological_dimension() == 2 and cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
