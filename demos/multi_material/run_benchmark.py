@@ -289,11 +289,11 @@ while True:
     # Calculate simulation diagnostics
     Simulation.diagnostics(time_now, geo_diag)
 
-    # Write to checkpoint file
-    if time_now >= dump_counter * Simulation.checkpoint_period * Simulation.dump_period:
-        write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter)
     # Write to output file and increment dump counter
     if time_now >= dump_counter * Simulation.dump_period:
+        # Write to checkpoint file
+        if dump_counter % Simulation.checkpoint_period == 0:
+            write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter)
         write_output(output_file)
         dump_counter += 1
 

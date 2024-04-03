@@ -13,7 +13,8 @@ import gadopt as ga
 
 @dataclass
 class Mantle(ga.Material):
-    def viscosity(self, *args, **kwargs):
+    @staticmethod
+    def viscosity(*args, **kwargs):
         return 1e21
 
 
