@@ -19,8 +19,8 @@ Q = FunctionSpace(mesh, "CG", 2)
 temp = Function(Q, name="Temperature")
 controls = [Control(temp)]
 
-# TODO: initialise
-Simulation.initialise_temperature(temp)
+# # TODO: initialise
+# Simulation.initialise_temperature(temp)
 
 # Set up function spaces and functions used in the level-set approach
 LS = FunctionSpace(mesh, "DQ", Simulation.level_set_func_space_deg)
@@ -80,7 +80,7 @@ int_heat_rate = Function(
 ).interpolate(int_heat_rate_ufl)
 
 # Timestep object
-timestep = Constant(1e-7)
+timestep = Constant(1e-9)
 
 # Set up energy and Stokes solvers
 approximation = BoussinesqApproximation(
@@ -112,7 +112,7 @@ stokes_solver = StokesSolver(
     bcs=Simulation.stokes_bcs,
     mu=viscosity_ufl,
     quad_degree=None,
-    solver_parameters="direct",
+    solver_parameters="newton",
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )
@@ -154,7 +154,7 @@ diag_vars = {
 update_forcings = None
 # Perform the time loop
 step = 0
-for step in range(4):
+for step in range(5):
     output_file.write(u_, p_, temp, *level_set, viscosity)
 
     # Solve Stokes system
@@ -167,7 +167,10 @@ for step in range(4):
         ls_solv.solve(step)
     viscosity.interpolate(viscosity_ufl)
 
-
+objective = assemble(0.5 * level_set[0] ** 2 * dx)
+print(objective)
 rf = ReducedFunctional(
-    assemble(0.5 * level_set[0] ** 2 * dx),
+    objective,
     controls)
+print(rf([temp, *level_set]))
+print(rf([temp, *level_set]))
