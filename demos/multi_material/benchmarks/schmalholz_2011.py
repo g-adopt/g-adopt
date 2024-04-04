@@ -58,7 +58,7 @@ class Simulation:
     mesh_file = "benchmarks/schmalholz_2011.msh"
     mesh_vert_res = 4e3
     mesh_fine_layer_min_x = 4.2e5
-    mesh_fine_layer_thickness = 1.6e5
+    mesh_fine_layer_width = 1.6e5
     mesh_fine_layer_hor_res = 1e3
 
     # Degree of the function space on which the level-set function is defined.
@@ -140,23 +140,19 @@ class Simulation:
             recombine=True,
         )  # Horizontal resolution: 10 km
 
-        line_2 = line_1 + 1
-        num_layers = int(cls.mesh_fine_layer_thickness / cls.mesh_fine_layer_hor_res)
+        num_layers = int(cls.mesh_fine_layer_width / cls.mesh_fine_layer_hor_res)
         gmsh.model.geo.extrude(
-            [(1, line_2)],
-            cls.mesh_fine_layer_thickness,
+            [(1, line_1 + 1)],
+            cls.mesh_fine_layer_width,
             0,
             0,
             numElements=[num_layers],
             recombine=True,
         )
 
-        line_6 = line_2 + 4
         gmsh.model.geo.extrude(
-            [(1, line_6)],
-            cls.domain_dims[0]
-            - cls.mesh_fine_layer_min_x
-            - cls.mesh_fine_layer_thickness,
+            [(1, line_1 + 5)],
+            cls.domain_dims[0] - cls.mesh_fine_layer_min_x - cls.mesh_fine_layer_width,
             0,
             0,
             numElements=[42],
@@ -164,6 +160,14 @@ class Simulation:
         )  # Horizontal resolution: 10 km
 
         gmsh.model.geo.synchronize()
+
+        gmsh.model.addPhysicalGroup(1, [line_1], tag=1)
+        gmsh.model.addPhysicalGroup(1, [line_1 + 9], tag=2)
+        gmsh.model.addPhysicalGroup(1, [line_1 + i for i in [2, 6, 10]], tag=3)
+        gmsh.model.addPhysicalGroup(1, [line_1 + i for i in [3, 7, 11]], tag=4)
+
+        gmsh.model.addPhysicalGroup(2, [5, 9, 13], tag=1)
+
         gmsh.model.mesh.generate(2)
 
         gmsh.write(cls.mesh_file)
