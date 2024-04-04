@@ -68,8 +68,9 @@ class Simulation:
         4: {"ux": 0, "uy": 0},
     }
 
-    # Stokes nullspace
+    # Stokes solver options
     stokes_nullspace_args = {}
+    stokes_solver_params = None
 
     # Timestepping objects
     initial_timestep = 1

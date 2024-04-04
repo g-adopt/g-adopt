@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Tuple
 
 import firedrake as fd
+import gmsh
 import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -55,6 +56,10 @@ class Simulation:
     domain_dims = (1e6, 6.6e5)
     domain_origin = (0, 0)
     mesh_file = "benchmarks/schmalholz_2011.msh"
+    mesh_vert_res = 4e3
+    mesh_fine_layer_min_x = 4.2e5
+    mesh_fine_layer_thickness = 1.6e5
+    mesh_fine_layer_hor_res = 1e3
 
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2
@@ -90,8 +95,9 @@ class Simulation:
         4: {"uy": 0},
     }
 
-    # Stokes nullspace
+    # Stokes solver options
     stokes_nullspace_args = {}
+    stokes_solver_params = None
 
     # Timestepping objects
     initial_timestep = 1e11
@@ -112,6 +118,56 @@ class Simulation:
         / g
         / slab_length
     ) ** Lithosphere.stress_exponent
+
+    @classmethod
+    def generate_mesh(cls):
+        gmsh.initialize()
+        gmsh.model.add("mesh")
+
+        point_1 = gmsh.model.geo.addPoint(*cls.domain_origin, 0, cls.mesh_vert_res)
+        point_2 = gmsh.model.geo.addPoint(
+            cls.domain_origin[0], cls.domain_dims[1], 0, cls.mesh_vert_res
+        )
+
+        line_1 = gmsh.model.geo.addLine(point_1, point_2)
+
+        gmsh.model.geo.extrude(
+            [(1, line_1)],
+            cls.mesh_fine_layer_min_x,
+            0,
+            0,
+            numElements=[42],
+            recombine=True,
+        )  # Horizontal resolution: 10 km
+
+        line_2 = line_1 + 1
+        num_layers = int(cls.mesh_fine_layer_thickness / cls.mesh_fine_layer_hor_res)
+        gmsh.model.geo.extrude(
+            [(1, line_2)],
+            cls.mesh_fine_layer_thickness,
+            0,
+            0,
+            numElements=[num_layers],
+            recombine=True,
+        )
+
+        line_6 = line_2 + 4
+        gmsh.model.geo.extrude(
+            [(1, line_6)],
+            cls.domain_dims[0]
+            - cls.mesh_fine_layer_min_x
+            - cls.mesh_fine_layer_thickness,
+            0,
+            0,
+            numElements=[42],
+            recombine=True,
+        )  # Horizontal resolution: 10 km
+
+        gmsh.model.geo.synchronize()
+        gmsh.model.mesh.generate(2)
+
+        gmsh.write(cls.mesh_file)
+        gmsh.finalize()
 
     @classmethod
     def initialise_temperature(cls, temperature):

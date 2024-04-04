@@ -1,6 +1,8 @@
-import argparse
-import importlib
+from argparse import ArgumentParser
 from functools import partial
+from importlib import import_module
+from pathlib import Path
+from subprocess import run
 
 import firedrake as fd
 from mpi4py import MPI
@@ -51,10 +53,10 @@ def write_output(output_file):
 
 
 # Import Simulation class
-parser = argparse.ArgumentParser()
+parser = ArgumentParser()
 parser.add_argument("benchmark")
 args = parser.parse_args()
-Simulation = importlib.import_module(args.benchmark).Simulation
+Simulation = import_module(args.benchmark).Simulation
 
 if Simulation.restart_from_checkpoint:  # Restore mesh and key functions
     with fd.CheckpointFile(
@@ -90,7 +92,13 @@ if Simulation.restart_from_checkpoint:  # Restore mesh and key functions
 else:  # Initialise mesh and key functions
     # Set up geometry; boundary mapping: {1: left, 2: right, 3: bottom, 4: top}
     try:
-        mesh = fd.Mesh(Simulation.mesh_file)
+        mesh_path = Path(Simulation.mesh_file)
+        if not mesh_path.exists():
+            if mesh_path.with_suffix(".geo").exists():
+                run(["gmsh", "-2", str(mesh_path.with_suffix(".geo"))])
+            else:
+                Simulation.generate_mesh()
+        mesh = fd.Mesh(str(mesh_path))
     except AttributeError:
         mesh = fd.RectangleMesh(
             *Simulation.mesh_elements,
@@ -213,7 +221,7 @@ stokes_solver = ga.StokesSolver(
     bcs=Simulation.stokes_bcs,
     mu=viscosity_ufl,
     quad_degree=None,
-    solver_parameters="direct",
+    solver_parameters=Simulation.stokes_solver_params,
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )

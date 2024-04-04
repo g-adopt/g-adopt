@@ -74,8 +74,9 @@ class Simulation:
     temp_bcs = {3: {"T": temp_bc_bot}, 4: {"T": temp_bc_top}}
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
-    # Stokes nullspace
+    # Stokes solver options
     stokes_nullspace_args = {}
+    stokes_solver_params = None
 
     # Timestepping objects
     initial_timestep = 1e-6
