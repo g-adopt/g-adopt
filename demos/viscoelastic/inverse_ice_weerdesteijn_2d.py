@@ -7,7 +7,7 @@ from gadopt.inverse import *
 
 
 class InverseIceWeerdesteijn2d(InverseWeerdesteijn2d):
-    name = "inverse-ice-weerdesteijn-2d_5ka"
+    name = "inverse-ice-weerdesteijn-2d_5ka_actually5ka"
     vertical_component = 1
 
     def __init__(self, **kwargs):
@@ -16,15 +16,16 @@ class InverseIceWeerdesteijn2d(InverseWeerdesteijn2d):
         checkpoint_file = "./weerdesteijn-instant-ice-dx5km-nz160-dt50years-low-viscosityFalse-chk.h5"
         super().__init__(LOAD_MESH=True, checkpoint_file=checkpoint_file, **kwargs)
 
-#    def disk_checkpointing(self):
-#        enable_disk_checkpointing()
-#        self.mesh = checkpointable_mesh(self.mesh)
+   # def disk_checkpointing(self):
+   #     enable_disk_checkpointing()
+   #     self.mesh = checkpointable_mesh(self.mesh)
+    
     def setup_ice_load(self):
         super().setup_ice_load()
         # Redefine ice load in terms of a normalised ice thickness
         self.normalised_ice_thickness = Function(self.ice_load.function_space(), name="normalised ice thickness")
         # Only update the ice load at initial times
-        self.ice_load.interpolate(self.normalised_ice_thickness * self.rho_ice * self.g * self.Hice * self.disc)
+        self.ice_load.interpolate(self.normalised_ice_thickness * self.rho_ice * self.g * self.Hice)
 
     def setup_control(self):
         self.control = Control(self.normalised_ice_thickness)
@@ -80,7 +81,7 @@ class InverseIceWeerdesteijn2d(InverseWeerdesteijn2d):
 
 
 if __name__ == "__main__":
-    simulation = InverseIceWeerdesteijn2d(dx=5e3, nz=160, Tend_years=500, do_write=True)
+    simulation = InverseIceWeerdesteijn2d(dx=5e3, nz=160, Tend_years=5000, do_write=True)
     simulation.run_inverse()
 
 #    optimised_simulation = InstantIceLoadWeerdesteijn2d(dx=5e3, nz=160, Tend_years=5000, LOAD_VISCOSITY=True, checkpoint_file=f"{simulation.name}/updated-viscosity-iteration{simulation.c}.h5")

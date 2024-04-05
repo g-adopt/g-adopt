@@ -4,16 +4,16 @@ from gadopt import *
 from mpi4py import MPI
 import numpy as np
 from gadopt.utility import vertical_component as vc
-from gadopt.utility import CombinedSurfaceMeasure
+from gadopt.utility import CombinedSurfaceMeasure, step_func
 import pandas as pd
-
+from decimal import Decimal
 
 class Weerdesteijn2d:
     name = "weerdesteijn-2d"
     vertical_component = 1
 
     def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, dt_out_years=10e3, short_simulation=False, do_write=False, LOAD_CHECKPOINT=False, LOAD_MESH=False,
-                 LOAD_VISCOSITY=False, checkpoint_file=None, Tstart=0, cartesian=True, vertical_squashing=True, low_viscosity_region=False, **kwargs):
+                 LOAD_VISCOSITY=False, checkpoint_file=None, Tstart=0, cartesian=True, vertical_squashing=True, vertical_tanh_width=5e3, low_viscosity_region=False, **kwargs):
         # Set up geometry:
         self.dx = dx  # horizontal grid resolution in m
         self.nz = nz
@@ -26,6 +26,7 @@ class Weerdesteijn2d:
         self.LOAD_VISCOSITY = LOAD_VISCOSITY
         self.cartesian = cartesian
         self.vertical_squashing = vertical_squashing
+        self.vertical_tanh_width = vertical_tanh_width
         self.low_viscosity_region = low_viscosity_region
 
         # layer properties from spada et al 2011
@@ -95,6 +96,7 @@ class Weerdesteijn2d:
         else:
             self.viscosity = Function(W, name="viscosity")
             self.initialise_background_field(self.viscosity, viscosity_values)
+            self.setup_heterogenous_viscosity()
 
         self.shear_modulus = Function(W, name="shear modulus")
         self.initialise_background_field(self.shear_modulus, shear_modulus_values)
@@ -166,8 +168,7 @@ class Weerdesteijn2d:
             self.output_file = File(f"{self.name}/out_dtout{dt_out_years}a.pvd")
             self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity, self.vertical_displacement)
 
-            self.setup_displacement_vom_output()
-
+#            self.setup_displacement_vom_output()
         # Now perform the time loop:
         self.displacement_min_array = []
 
@@ -209,13 +210,28 @@ class Weerdesteijn2d:
         pass
 
     def viscosity_values(self):
-        return [1e17, 0.01, 0.01, 0.02, 0]
+        return [1e2, 0.01, 0.01, 0.02, 0]
 
     def initialise_background_field(self, field, background_values):
-        for i in range(0, len(background_values)-1):
-            field.interpolate(conditional(self.X[self.vertical_component] >= self.radius_values[i+1] - self.radius_values[0],
-                              conditional(self.X[self.vertical_component] <= self.radius_values[i] - self.radius_values[0],
-                              background_values[i], field), field))
+        profile = background_values[0]
+        sharpness = 1 / self.vertical_tanh_width
+        depth = self.initialise_depth()
+        for i in range(1, len(background_values)-1):
+            centre = self.radius_values[i] - self.radius_values[0]
+            mag = background_values[i] - background_values[i-1]
+            profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
+    
+        field.interpolate(profile)
+
+            #field.interpolate(conditional(self.X[self.vertical_component] >= self.radius_values[i+1] - self.radius_values[0],
+             #                 conditional(self.X[self.vertical_component] <= self.radius_values[i] - self.radius_values[0],
+              #                background_values[i], field), field))
+
+    def setup_heterogenous_viscosity(self):
+        pass
+
+    def initialise_depth(self):
+        return self.X[1]
 
     def setup_ice_load(self):
         if self.short_simulation:
@@ -277,7 +293,7 @@ class Weerdesteijn2d:
         return f"{self.name}-chk.h5"
 
     def displacement_filename(self):
-        return f"displacement-{self.name}.dat"
+        return f"displacement-{self.name}-nz{self.nz}-tanhvert-tanh2.5km.dat"
 
     def setup_displacement_vom_output(self):
         self.displacement_vom_matplotlib_df = pd.DataFrame()
@@ -325,9 +341,9 @@ class Weerdesteijn2d:
             log("Greatest (-ve) displacement", displacement_min)
             self.displacement_min_array.append([float(self.time/self.year_in_seconds), displacement_min])
 
-            if self.do_write and timestep == 1:
+#            if self.do_write and timestep == 1:
                 # Write out the elastic displacement
-                self.displacement_vom_out()
+#                self.displacement_vom_out()
             # Write output:
             if timestep % self.dump_period == 0:
                 log("timestep", timestep)
@@ -335,7 +351,7 @@ class Weerdesteijn2d:
                 if self.do_write:
                     self.output_file.write(self.u_, self.u_old, self.displacement, self.p_, self.stokes_solver.previous_stress, self.shear_modulus, self.viscosity, self.density, self.prefactor_prestress, self.effective_viscosity, self.vertical_displacement)
 
-                    self.displacement_vom_out()
+    #                self.displacement_vom_out()
 
                 with CheckpointFile(checkpoint_filename, "w") as checkpoint:
                     checkpoint.save_function(self.u_, name="Incremental Displacement")
@@ -348,5 +364,5 @@ class Weerdesteijn2d:
 
 
 if __name__ == "__main__":
-    simulation = Weerdesteijn2d()
+    simulation = Weerdesteijn2d(nz=320)
     simulation.run_simulation()

@@ -3,7 +3,7 @@
 from gadopt import *
 from weerdesteijn_2d import Weerdesteijn2d
 import pandas as pd
-
+from gadopt.utility import CombinedSurfaceMeasure
 
 class SpadaCylindrical2d(Weerdesteijn2d):
     name = "spada-cylindrical-2d"
@@ -22,24 +22,21 @@ class SpadaCylindrical2d(Weerdesteijn2d):
         surface_dx = 2 * pi * radius_earth / self.ncells
         log("target surface resolution = ", self.dx)
         log("actual surface resolution = ", surface_dx)
-        self.setup_surface_mesh()
         dz = self.D / self.nz
-        self.mesh = ExtrudedMesh(self.surface_mesh, layers=self.nz, layer_height=dz, extrusion_type='radial')
         self.bottom_id, self.top_id = "bottom", "top"
+        if self.LOAD_CHECKPOINT or self.LOAD_MESH or self.LOAD_VISCOSITY:
+            with CheckpointFile(self.checkpoint_file, 'r') as afile:
+                self.mesh = afile.load_mesh("surface_mesh_extruded")
+        else:
+            self.setup_surface_mesh()
+            self.mesh = ExtrudedMesh(self.surface_mesh, layers=self.nz, layer_height=dz, extrusion_type='radial')
+        self.ds = CombinedSurfaceMeasure(self.mesh, degree=6)
 
-    def initialise_background_field(self, field, background_values):
-        r = sqrt(self.X[0]**2 + self.X[1]**2)-self.radius_values[0]
-        for i in range(0, len(background_values)-1):
-            field.interpolate(conditional(r >= self.radius_values[i+1] - self.radius_values[0],
-                              conditional(r <= self.radius_values[i] - self.radius_values[0],
-                              background_values[i], field), field))
-
-        # Catches cases where mesh just sticking above z=0 surface by 1e-9 and below depth of mantle...
-        field.interpolate(conditional(r > 0, background_values[0], field))
-        field.interpolate(conditional(r < -self.D, background_values[-2], field))
+    def initialise_depth(self):
+        return sqrt(self.X[0]**2 + self.X[1]**2)-self.radius_values[0]
 
     def setup_surface_mesh(self):
-        self.surface_mesh = CircleManifoldMesh(self.ncells, radius=self.rmin, degree=1, name='surface_mesh')
+        self.surface_mesh = CircleManifoldMesh(self.ncells, radius=self.rmin, degree=2, name='surface_mesh')
 
     def setup_ice_load(self):
         self.Hice = 1000

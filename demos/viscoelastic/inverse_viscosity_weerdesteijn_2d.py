@@ -34,7 +34,7 @@ class InverseViscosityWeerdesteijn2d(InverseWeerdesteijn2d):
         with CheckpointFile(self.checkpoint_file, 'r') as afile:
             self.target_displacement = afile.load_function(self.mesh, name="Displacement")
         self.J = assemble((self.displacement[1] - self.target_displacement[1])**2 / (self.L*1000) * self.ds(self.top_id))
-        print(self.J)
+        log(self.J)
 
     def run_rf_check(self):
         pass
