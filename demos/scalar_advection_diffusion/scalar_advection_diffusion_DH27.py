@@ -38,7 +38,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     velocity = as_vector((a, 0))
     u = Function(V).interpolate(velocity)
     if do_write:
-        File('u.pvd').write(u)
+        VTKFile('u.pvd').write(u)
 
     # the diffusivity
     h = 1/5  # coarsest grid size
@@ -50,7 +50,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
 
     # We declare the output filename, and write out the initial condition. ::
     if do_write:
-        outfile = File("advdif_DH2.7_CG1_Pe"+str(Pe)+"_SU.pvd")
+        outfile = VTKFile("advdif_DH2.7_CG1_Pe"+str(Pe)+"_SU.pvd")
         outfile.write(q)
 
     # time period and time step

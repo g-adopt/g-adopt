@@ -55,11 +55,11 @@ q = Function(Q).assign(q_init)
 
 # We declare the output filename, and write out the initial condition. ::
 
-outfile = File("CG_SUadv_q.pvd")
+outfile = VTKFile("CG_SUadv_q.pvd")
 outfile.write(q)
 
 
-u_outfile = File("CG_SUadv_u.pvd")
+u_outfile = VTKFile("CG_SUadv_u.pvd")
 u_outfile.write(u)
 # We will run for time :math:`2\pi`, a full rotation.  We take 600 steps, giving
 # a timestep close to the CFL limit.  Finally, we define the inflow boundary
@@ -81,7 +81,7 @@ energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advect
 
 # Get nubar (additional SU diffusion) for plotting
 nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
-nubar_outfile = File("CG_SUadv_nubar.pvd")
+nubar_outfile = VTKFile("CG_SUadv_nubar.pvd")
 nubar_outfile.write(nubar)
 
 # Here is the time stepping loop, with an output every 20 steps.
