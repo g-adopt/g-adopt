@@ -16,6 +16,10 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 
+dependencies = [
+  "vtk"
+]
+
 [project.optional-dependencies]
 testing = ["assess", "pandas"]
 optimisation = ["pyroltrilinos"]
