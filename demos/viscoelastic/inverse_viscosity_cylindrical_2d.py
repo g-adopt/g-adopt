@@ -4,16 +4,21 @@ from gadopt import *
 # from weerdesteijn_instanticeload_2d import InstantIceLoadWeerdesteijn2d
 from inverse_cylindrical_2d import InverseCylindrical2d
 from gadopt.inverse import *
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("--alpha_smoothing", default=0.1, type=float, help="smoothing factor", required=False)
 
 
 class InverseViscosityCylindrical2d(InverseCylindrical2d):
-    name = "inverse-viscosity-cylindrical-Jvel-scipy-2d_smooth0.1"
+    name = "inverse-viscosity-cylindrical-Jvel-scipy-2d"
     vertical_component = 1
 
-    def __init__(self, LOAD_ice=False, **kwargs):
+    def __init__(self, alpha_smoothing=0.1, LOAD_ice=False, **kwargs):
         self.tape = get_working_tape()
         self.tape.clear_tape()
-        checkpoint_file = "./forward-cylindrical-heterogenousviscosity-dx250km-nz80-dt50years-chk.h5"
+        self.alpha_smoothing = alpha_smoothing
+        self.name = f"{self.name}-smooth{alpha_smoothing}"
+        checkpoint_file = "./forward-cylindrical-heterogenousviscosity-minvisc1e-3-dx250km-nz80-dt50years-chk.h5"
         super().__init__(LOAD_MESH=True, checkpoint_file=checkpoint_file, **kwargs)
 
 #    def disk_checkpointing(self):
@@ -43,8 +48,8 @@ class InverseViscosityCylindrical2d(InverseCylindrical2d):
         max_inc_disp_tangential = 0.1/self.dt_years
         n = FacetNormal(self.mesh)
         # Define the component terms of the overall objective functional
-        damping = assemble((self.viscosity - self.reference_viscosity) ** 2 /circumference * self.ds)
-        smoothing = assemble(dot(grad(self.viscosity-self.reference_viscosity), grad(self.viscosity - self.reference_viscosity)) / circumference * self.ds)
+        damping = assemble((self.viscosity - self.reference_viscosity) ** 2 /circumference * dx)
+        smoothing = assemble(dot(grad(self.viscosity-self.reference_viscosity), grad(self.viscosity - self.reference_viscosity)) / circumference * self.dx)
 
 #        misfit = assemble(dot(n, (self.u_ - self.target_incremental_displacement)/self.dt_years)**2 / (circumference * max_inc_disp**2) * self.ds(self.top_id))
         target_velocity = self.target_incremental_displacement/self.dt_years
@@ -60,11 +65,11 @@ class InverseViscosityCylindrical2d(InverseCylindrical2d):
        
        #velocity_error = (self.u_-self.target_incremental_displacement)/self.dt_years
         #misfit = assemble(dot(velocity_error, velocity_error) / (circumference * max_inc_disp**2) * self.ds(self.top_id))
-        normal_misfit = assemble(dot(normal_velocity_error, normal_velocity_error) / (circumference * max_inc_disp_normal**2) * self.ds(self.top_id))
-        tangential_misfit = assemble(dot(tangential_velocity_error, tangential_velocity_error) / (circumference * max_inc_disp_tangential**2) * self.ds(self.top_id))
+        epsilon = 1e-3
+        normal_misfit = assemble(dot(normal_velocity_error, normal_velocity_error) / (circumference * (epsilon**2 + dot(target_normal_velocity, target_normal_velocity) )) * self.ds(self.top_id))
+        tangential_misfit = assemble(dot(tangential_velocity_error, tangential_velocity_error) / (circumference * (epsilon**2 + dot(target_normal_velocity, target_normal_velocity) )) * self.ds(self.top_id))
         alpha_damping = 0.1
-        alpha_smoothing = 0.1
-        self.J = normal_misfit + tangential_misfit + alpha_smoothing * smoothing #+ alpha_damping * damping
+        self.J = normal_misfit + tangential_misfit + self.alpha_smoothing * smoothing #+ alpha_damping * damping
         log(self.J)
 
     def run_rf_check(self):
@@ -137,7 +142,7 @@ class InverseViscosityCylindrical2d(InverseCylindrical2d):
         self.c += 1
 
 if __name__ == "__main__":
-    simulation = InverseViscosityCylindrical2d(dx=100*1e3, nz=80, Tend_years=10000,dt_out_years=1000,vertical_tanh_width=40e3, do_write=True,heterogenous_viscosity=False)
+    simulation = InverseViscosityCylindrical2d(dx=100*1e3, nz=80, Tend_years=10000,dt_out_years=1000,vertical_tanh_width=40e3, do_write=True,heterogenous_viscosity=False,alpha_smoothing=args.alpha_smoothing)
     simulation.run_inverse()
 
 #    optimised_simulation = InstantIceLoadWeerdesteijn2d(dx=5e3, nz=160, Tend_years=5000, LOAD_VISCOSITY=True, checkpoint_file=f"{simulation.name}/updated-viscosity-iteration{simulation.c}.h5")

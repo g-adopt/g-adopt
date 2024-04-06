@@ -5,7 +5,7 @@ from spada_cylindrical_2d import SpadaCylindrical2d
 from gadopt.utility import bivariate_gaussian
 
 class ForwardCylindrical2d(SpadaCylindrical2d):
-    name = "forward-cylindrical-heterogenousviscosity"
+    name = "forward-cylindrical-heterogenousviscosity-minvisc1e-3"
     vertical_component = 1
 
     def __init__(self, heterogenous_viscosity=True, **kwargs):
@@ -34,7 +34,7 @@ class ForwardCylindrical2d(SpadaCylindrical2d):
         antarctica_x, antarctica_y = -2e6, -5.5e6
 
         low_viscosity_antarctica = bivariate_gaussian(self.X[0], self.X[1], antarctica_x, antarctica_y, 1.5e6, 0.5e6, -0.4)
-        self.heterogenous_viscosity_field.interpolate(0.0001*low_viscosity_antarctica + self.viscosity * (1-low_viscosity_antarctica))
+        self.heterogenous_viscosity_field.interpolate(0.001*low_viscosity_antarctica + self.viscosity * (1-low_viscosity_antarctica))
         
         llsvp1_x, llsvp1_y = 3.5e6, 0
         llsvp1 = bivariate_gaussian(self.X[0], self.X[1], llsvp1_x, llsvp1_y, 0.75e6, 1e6, 0)
