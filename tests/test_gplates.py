@@ -1,4 +1,6 @@
 import pickle
+from pathlib import Path
+
 from gadopt import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
 
@@ -18,15 +20,18 @@ def test_gplates():
 
     V = VectorFunctionSpace(mesh, "CG", 2)
 
+    b = Path(__file__).parent.resolve()
+    data_base = b / "../demos/gplates_global/gplates_files"
+
     # compute surface velocities
     rec_model = pyGplatesConnector(
         rotation_filenames=[
-            '../demos/gplates_global/gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot',
+            str(data_base / 'Zahirovic2022_CombinedRotations_fixed_crossovers.rot'),
         ],
         topology_filenames=[
-            '../demos/gplates_global/gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
-            '../demos/gplates_global/gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
-            '../demos/gplates_global/gplates_files/Zahirovic2022_InactiveDeformation.gpmlz',
+            str(data_base / 'Zahirovic2022_PlateBoundaries.gpmlz'),
+            str(data_base / 'Zahirovic2022_ActiveDeformation.gpmlz'),
+            str(data_base / 'Zahirovic2022_InactiveDeformation.gpmlz'),
         ],
         nseeds=1e5,
         nneighbours=4,
@@ -43,7 +48,7 @@ def test_gplates():
         surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
 
     # Loading reference plate velocities
-    with open('test_gplates.pkl', 'rb') as file:
+    with open(b / 'test_gplates.pkl', 'rb') as file:
         ref_surface_rms = pickle.load(file)
 
     np.testing.assert_allclose(surface_rms, ref_surface_rms)
