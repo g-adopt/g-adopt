@@ -72,24 +72,28 @@ def forward():
                 )
             )
 
-    # Initiating a plate reconstruction model
-    plate_receonstion_model = pyGplatesConnector(
+    plate_reconstruction_model = pyGplatesConnector(
         rotation_filenames=[
-            './gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot'],
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/optimisation/1000_0_rotfile_MantleOptimised.rot"
+        ],
         topology_filenames=[
-            './gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
-            './gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
-            './gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
-        nseeds=1e5,
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/250-0_plate_boundaries.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/410-250_plate_boundaries.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Convergence.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Divergence.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Topologies.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Transforms.gpml",
+        ],
         nneighbours=4,
-        oldest_age=409,
-        delta_t=0.9
+        nseeds=1e5,
+        oldest_age=10000,
+        delta_t=1.0
     )
 
     # Top velocity boundary condition
     gplates_velocities = GplatesFunction(
         V,
-        gplates_connector=plate_receonstion_model,
+        gplates_connector=plate_reconstruction_model,
         top_boundary_marker=top_id,
         name="GPlates_Velocity"
     )
@@ -104,8 +108,13 @@ def forward():
     alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)
     cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
     chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
+
+    # constructing viscosity
+    # reference background 1d viscosiry
     mu_ref = Function(Q, name="Viscosity")
     assign_1d_profile(mu_ref, "mu2_radial.rad")
+    # temperature and strain-rate dependence added to it
+    mu = mu_constructor(mu_ref, T_avg, T, u)
 
     approximation = TruncatedAnelasticLiquidApproximation(
         Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
@@ -128,10 +137,10 @@ def forward():
 
     energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs, su_advection=True)
     energy_solver.fields['source'] = rhobar * H_int
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu_ref,
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
                                  cartesian=False,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace, constant_jacobian=True)
+                                 near_nullspace=Z_near_nullspace)
 
     # Modifying default solver tolerances
     energy_solver.solver_parameters['ksp_rtol'] = 1e-4
@@ -177,6 +186,9 @@ def forward():
         # Update surface velocities
         gplates_velocities.update_plate_reconstruction(time)
 
+        # compute radially averaged temperature profile to update viscosity
+        averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
+
         # Solve Stokes system:
         stokes_solver.solve()
 
@@ -199,8 +211,6 @@ def forward():
 
         # Write output:
         if num_timestep % pvd_period == 0:
-            # compute radially averaged temperature profile
-            averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
             # compute deviation from layer average
             T_dev.assign(T-T_avg)
             paraview_file.write(u, p, T, T_dev)
@@ -277,40 +287,28 @@ def T_initialise(T, average):
                   (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
 
 
-def mu_constructor(T, u):
-    def step_func(r, center, mag, increasing=True, sharpness=30):
-        """
-        A step function designed to control viscosity jumps:
-        input:
-          r: is the radius array
-          center: radius of the jump
-          increasing: if True, the jump happens towards lower r, otherwise jump happens at higher r
-          sharpness: how sharp should the jump should be (larger numbers = sharper).
-        """
-        if increasing:
-            sign = 1
-        else:
-            sign = -1
-        return mag * (0.5 * (1 + tanh(sign*(r-center)*sharpness)))
+def mu_constructor(mu_radial, Tave, T, u):
+    """Constructing a temperature strain-rate dependent velocity
 
-    # a constant mu
-    mu_lin = 2.0
+        This uses Arrhenius law for temperature dependent viscosity
+        \eta = A exp(-E/R * T) = A * exp(-E/R * Tave) * exp(-E/R * (T - Tave))
+                               = 1d_field * exp(-ln(delta_mu_T) * (T - Tave))
 
-    # coordinates
-    X = SpatialCoordinate(T.ufl_domain())
-    r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
+    Args:
+        mu_radial (firedrake.Form): radial viscosity profile
+        T (_type_): Temperature
+        Tave (_type_): Average temperature
+        u (_type_): velocity
 
-    # Depth dependence: for the lower mantle increase we
-    # multiply the profile with a linear function
-    for line, step in zip([5.*(rmax-r), 1., 1.],
-                          [step_func(r, 1.992, 30, False),
-                           step_func(r, 2.078, 10, False),
-                           step_func(r, 2.2, 10, True)]):
-        mu_lin += line*step
+    Returns:
+        firedrake.BaseForm: temperature and strain-rate dependent viscosity
+    """
 
     # Adding temperature dependence:
     delta_mu_T = Constant(100.)
-    mu_lin *= exp(-ln(delta_mu_T) * T)
+    mu_lin = mu_radial * exp(-ln(delta_mu_T) * (T - Tave))
+
+    # Strain-Rate Dependence
     mu_star, sigma_y = Constant(1.0), 5.0e5 + 2.5e6*(rmax-r)
     epsilon = sym(grad(u))  # strain-rate
     epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
