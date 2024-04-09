@@ -81,7 +81,7 @@ u, p = z.subfunctions  # Do this first to extract individual velocity and pressu
 u.rename("Velocity")
 p.rename("Pressure")
 # Create output file and select output_frequency:
-output_file = File("output.pvd")
+output_file = VTKFile("output.pvd")
 dump_period = 1
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4

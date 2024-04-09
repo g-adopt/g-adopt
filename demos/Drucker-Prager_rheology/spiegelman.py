@@ -175,8 +175,8 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     u_.rename("Velocity")
     p_.rename("Pressure")
     # Create output file and select output_frequency:
-    output_file = File(os.path.join(output_dir, "output.pvd"))
-    picard_file = File(os.path.join(output_dir, 'picard.pvd'))
+    output_file = VTKFile(os.path.join(output_dir, "output.pvd"))
+    picard_file = VTKFile(os.path.join(output_dir, 'picard.pvd'))
 
     # Construct the Jacobian stabilisation form as in Fraters '19
     #

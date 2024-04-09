@@ -92,7 +92,7 @@ stokes_solver = StokesSolver(
 )
 
 # Create output file and select output_frequency
-output_file = File("vtu-files/output.pvd")
+output_file = VTKFile("vtu-files/output.pvd")
 dump_period = 10
 
 # Now perform the time loop:
