@@ -15,9 +15,8 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent"
 ]
-
 dependencies = [
-  "vtk"
+  "vtk>=9.0.1"
 ]
 
 [project.optional-dependencies]
