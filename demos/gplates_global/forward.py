@@ -111,7 +111,8 @@ def forward():
 
     # constructing viscosity
     # reference background 1d viscosiry
-    mu_ref = Function(Q, name="Viscosity")
+    mu_ref = Function(Q, name="mu2_radial")
+    mu_function = Function(Q, name="Viscosity")
     assign_1d_profile(mu_ref, "mu2_radial.rad")
     # temperature and strain-rate dependence added to it
     mu = mu_constructor(mu_ref, T_avg, T, u)
@@ -150,12 +151,12 @@ def forward():
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
 
     # Write output files in VTK format:
-    u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
-    u.rename("Velocity")  # rename the fields
-    p.rename("Pressure")
+    u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
+    u_.rename("Velocity")  # rename the fields
+    p_.rename("Pressure")
 
     # diagnostics
-    gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+    gd = GeodynamicalDiagnostics(u_, p_, T, bottom_id, top_id)
 
     # adaptive time-stepper
     t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
@@ -164,14 +165,14 @@ def forward():
 
     # logging diagnostic
     plog = ParameterLog("params.log", mesh)
-    plog.log_str("timestep time dt u_rms t_dev_avg")
+    plog.log_str("timestep time age dt u_rms t_dev_avg")
 
     # number of timesteps
     num_timestep = timestepping_history.get("index")[-1]
 
     # Period for dumping solutions
     dumping_period = 10
-    pvd_period = 50
+    pvd_period = 100
 
     # non-dimensionalised time for present geologic day (0)
     ndtime_now = plate_receonstion_model.age2ndtime(0)
@@ -179,12 +180,12 @@ def forward():
     # paraview files
     paraview_file = File("ouput.pvd", mode='a')
 
-    time = timestepping_history.get("time")[-1]
+    time = plate_reconstruction_model.age2ndtime(-100.0) if num_timestep == 0 else timestepping_history.get("time")[-1]
 
     # Now perform the time loop:
     while time < ndtime_now:
         # Update surface velocities
-        gplates_velocities.update_plate_reconstruction(time)
+        gplates_velocities.update_plate_reconstruction(max(time, 0))
 
         # compute radially averaged temperature profile to update viscosity
         averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
@@ -213,7 +214,8 @@ def forward():
         if num_timestep % pvd_period == 0:
             # compute deviation from layer average
             T_dev.assign(T-T_avg)
-            paraview_file.write(u, p, T, T_dev)
+            mu_function.interpolate(mu)
+            paraview_file.write(u_, T_dev, mu_function)
 
         if num_timestep % dumping_period == 0:
             with CheckpointFile("./simulation_states.h5", mode="a") as chkpoint_file:
@@ -223,9 +225,15 @@ def forward():
                     idx=num_timestep,
                     timestepping_info={"time": time, "delta_t": delta_t}
                 )
+                chkpoint_file.save_function(
+                    z,
+                    name="Stokes",
+                    idx=num_timestep,
+                    timestepping_info={"time": time, "delta_t": delta_t}
+                )
 
         # Log diagnostics:
-        plog.log_str(f"{num_timestep} {time} {float(dt)} "
+        plog.log_str(f"{num_timestep} {time} {plate_reconstruction_model.ndtime2age(time)} {float(dt)} "
                      f"{gd.u_rms()} {gd.T_avg()}")
     plog.close()
 
