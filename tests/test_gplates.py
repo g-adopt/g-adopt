@@ -1,6 +1,7 @@
 import pickle
 from gadopt import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
+from pathlib import Path
 
 
 def test_gplates():
@@ -18,6 +19,9 @@ def test_gplates():
 
     V = VectorFunctionSpace(mesh, "CG", 2)
 
+    # where gplate files are located
+    gplates_files = Path(__file__).parent / "demos/gplates_global/gplates_files"
+
     # compute surface velocities
     rec_model = pyGplatesConnector(
         rotation_filenames=[
@@ -30,8 +34,8 @@ def test_gplates():
         ],
         nseeds=1e5,
         nneighbours=4,
-        geologic_zero=409,
-        delta_time=1.0
+        oldest_age=409,
+        delta_t=1.0
     )
 
     gplates_function = GplatesFunction(V, gplates_connector=rec_model, top_boundary_marker="top")
@@ -39,7 +43,7 @@ def test_gplates():
     surface_rms = []
 
     for t in np.arange(409, 0, -50):
-        gplates_function.update_plate_reconstruction(rec_model.geotime2ndtime(t))
+        gplates_function.update_plate_reconstruction(rec_model.age2ndtime(t))
         surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
 
     # Loading reference plate velocities

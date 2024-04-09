@@ -1,5 +1,7 @@
 from gadopt import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
+import scipy
+import math
 
 rmin, rmax = 1.22, 2.22
 
@@ -80,8 +82,8 @@ def forward():
             './gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
         nseeds=1e5,
         nneighbours=4,
-        geologic_zero=409,
-        delta_time=0.9
+        oldest_age=409,
+        delta_t=0.9
     )
 
     # Top velocity boundary condition
@@ -163,7 +165,7 @@ def forward():
     pvd_period = 50
 
     # non-dimensionalised time for present geologic day (0)
-    ndtime_now = plate_receonstion_model.geotime2ndtime(0)
+    ndtime_now = plate_receonstion_model.age2ndtime(0)
 
     # paraview files
     paraview_file = File("ouput.pvd", mode='a')
@@ -219,8 +221,8 @@ def forward():
 
 
 def generate_mesh():
-    import os
-    if os.path.isfile("./simulation_state.h5"):
+    from pathlib import Path
+    if Path("simulation_state.h5").exists():
         return
 
     # Set up geometry:
@@ -258,8 +260,6 @@ def generate_mesh():
 
 
 def T_initialise(T, average):
-    import scipy
-    import math
     # Initial condition for T:
     # Evaluate P_lm node-wise using scipy lpmv
     X = SpatialCoordinate(T.ufl_domain())
