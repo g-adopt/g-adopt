@@ -2,6 +2,7 @@ from gadopt import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
 import scipy
 import math
+from firedrake.__future__ import interpolate
 
 rmin, rmax = 1.22, 2.22
 
@@ -311,6 +312,10 @@ def mu_constructor(mu_radial, Tave, T, u):
     Returns:
         firedrake.BaseForm: temperature and strain-rate dependent viscosity
     """
+
+    # coordinates
+    X = SpatialCoordinate(T.ufl_domain())
+    r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 
     # Adding temperature dependence:
     delta_mu_T = Constant(100.)
