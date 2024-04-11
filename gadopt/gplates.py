@@ -32,7 +32,7 @@ class GPlatesFunctionalityMixin:
                 return
 
         # Assuming `self` is a Firedrake Function instance,
-        self.dat.data[self.dbc.nodes, :] = (
+        self.dat.data_with_halos[self.dbc.nodes, :] = (
             self.gplates_connector.get_plate_velocities(
                 self.boundary_coords, ndtime)
         )
