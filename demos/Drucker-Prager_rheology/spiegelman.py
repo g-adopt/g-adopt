@@ -91,9 +91,10 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
             "ksp_type": "preonly",
             "ksp_converged_reason": None,
             "pc_type": "python",
-            "pc_python_type": "gadopt.VariableMassInvPC",
-            "Mp_ksp_type": "cg",
-            "Mp_pc_type": "sor",
+            "pc_python_type": "firedrake.MassInvPC",
+            "Mp_pc_type": "ksp",
+            "Mp_ksp_ksp_type": "cg",
+            "Mp_ksp_pc_type": "sor",
         }
     }
 
