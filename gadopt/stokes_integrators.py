@@ -243,3 +243,18 @@ class StokesSolver:
         if not self._solver_setup:
             self.setup_solver()
         self.solver.solve()
+
+    def compute_force_on_surface(self, n):
+        """Compute force exerted on surfaces identified by n
+
+        Args:
+            n ( a rank 1 fd.Function): a unit vector identifiying
+            the surface the force is being calculated for
+
+        Returns:
+            a rank 0 fd.Function: force acting on n
+        """
+        u, p, *epsilon = self.solution.subfunctions
+        sigma = -p * fd.Identity(2) + self.mu * 2 * fd.sym(fd.grad(u))
+        force = fd.Function(p.function_space(), name="force")
+        return force.interpolate(fd.dot(fd.dot(sigma, n), n))
