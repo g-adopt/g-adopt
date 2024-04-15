@@ -479,6 +479,24 @@ class StokesSolver:
 
         self.solver.solve()
 
+    def force_on_boundary(self, subdomain_id: int | str) -> fd.Function:
+        """Computes the force acting on a boundary.
+
+        Arguments:
+          subdomain_id: The subdomain ID of a physical boundary.
+
+        Returns:
+          The force acting on the boundary.
+
+        """
+        if not hasattr(self, 'BoundaryNormalStressSolvers'):
+            self.BoundaryNormalStressSolvers = {}
+
+        if subdomain_id not in self.BoundaryNormalStressSolvers:
+            self.BoundaryNormalStressSolvers[subdomain_id] = BoundaryNormalStressSolver(self, subdomain_id, self.solver_parameters)
+
+        return self.BoundaryNormalStressSolvers[subdomain_id].solve()
+
 
 def ala_right_nullspace(
         W: fd.functionspaceimpl.WithGeometry,
@@ -643,3 +661,141 @@ class ViscoelasticStokesSolver(StokesSolver):
         u_sub = self.solution.subfunctions[0]
         self.stress_old.interpolate(self.approximation.prefactor_prestress(self.dt) * self.approximation.stress(u_sub, self.stress_old, self.dt))
         self.displacement.interpolate(self.displacement+u_sub)
+
+
+class BoundaryNormalStressSolver:
+    r"""A class for calculating surface forces acting on a boundary.
+
+    This solver computes topography on boundaries using the equation:
+
+    $$
+    h = \frac{\sigma_{rr}}{g \delta \rho}
+    $$
+
+    where $\sigma_{rr}$ is defined as:
+
+    $$
+    \sigma_{rr} = [-p I + 2 * \mu (\nabla u + \nabla u^T)] \cdot \hat{n} \cdot \hat{n}
+    $$
+
+    Instead of assuming a unit normal vector $\hat{n}$, this solver uses `FacetNormal`
+    from Firedrake to accurately determine the normal vectors, which is particularly
+    useful for complex meshes like icosahedron meshes in spherical simulations.
+
+    Arguments:
+        stokes_solver (StokesSolver): The Stokes solver providing the necessary fields for calculating stress.
+        subdomain_id (str | int): The subdomain ID of a physical boundary.
+        solver_parameters (Optional[dict[str, str | Number]]): Optional dictionary of parameters for the variational problem.
+    """
+
+    # Direct solve parameters for dynamic topography
+    direct_solve_parameters = {
+        "mat_type": "aij",
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    }
+    # Iterative solve parameters
+    iterative_solver_parameters = {
+        "mat_type": "aij",
+        "snes_type": "ksponly",
+        "ksp_type": "gmres",
+        "ksp_rtol": 1e-5,
+        "pc_type": "sor",
+    }
+
+    name = "BoundaryNormalStressSolver"
+
+    def __init__(self,
+                 stokes_solver: StokesSolver,
+                 subdomain_id: int | str,
+                 solver_parameters: Optional[dict[str, str | Number]] = None):
+        # pressure and velocity together with viscosity are needed
+        self.u, self.p, *self.eta = stokes_solver.solution.subfunctions
+
+        # geometry
+        self.mesh = stokes_solver.mesh
+        self.dim = self.mesh.geometric_dimension()
+
+        # approximation tells us if we need to consider compressible formulation or not
+        self.approximation = stokes_solver.approximation
+
+        # Domain id that we want to use for boundary force
+        self.subdomain_id = subdomain_id
+
+        # Set solver parameters based on the dimension of the problem
+        if solver_parameters is None:
+            if self.dim == 3:
+                self.solver_parameters = BoundaryNormalStressSolver.iterative_solver_parameters
+            else:
+                self.solver_parameters = BoundaryNormalStressSolver.direct_solve_parameters
+        else:
+            self.solver_parameters = solver_parameters
+
+        # when to know the solver
+        self._solver_is_set_up = False
+
+    def solve(self):
+        """
+        Solves a linear system for the force and applies necessary boundary conditions.
+
+        Returns:
+            The modified force after solving the linear system and applying boundary conditions.
+        """
+        # Solve a linear system
+        if not self._solver_is_set_up:
+            self.setup_solver()
+
+        # Solve for the force
+        self.solver.solve()
+
+        # Take the average out
+        vave = fd.assemble(self.force * self.ds)
+        self.force.assign(self.force - vave)
+
+        # Re-apply the zero condition everywhere except for the
+        self.interior_null_bc.apply(self.force)
+
+        return self.force
+
+    def setup_solver(self):
+        # Define the solution in the pressure function space (Q)
+        # Because the pressure field (p) needs to have a lower dimension than the velocity field (u)
+        Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
+        self.force = fd.Function(Q, name=f"force_{self.subdomain_id}")
+
+        # Normal vector
+        n = fd.FacetNormal(self.mesh)
+
+        # Test and trial functions
+        phi = fd.TestFunction(Q)
+        v = fd.TrialFunction(Q)
+
+        # Stress with pressure
+        stress_with_pressure = (
+            self.approximation.stress(self.u)
+            - self.p * fd.Identity(self.dim)
+        )
+
+        # Surface integral for extruded mesh is different
+        extruded_mesh = self.mesh.extruded
+        # Choosing surfce integral
+        if extruded_mesh and self.subdomain_id in ["top", "bottom"]:
+            self.ds = {"top": fd.ds_t, "bottom": fd.ds_b}.get(self.subdomain_id)
+        else:
+            self.ds = fd.ds(self.subdomain_id)
+
+        # Setting up the variational problem
+        a = phi * v * self.ds
+        L = - phi * fd.dot(fd.dot(stress_with_pressure, n), n) * self.ds
+
+        # Setting up boundary condition, problem and solver
+        # The field is only meaningful on the boundary, so set zero everywhere else
+        self.interior_null_bc = InteriorBC(Q, 0., [self.subdomain_id])
+
+        # problem and solver
+        self.problem = fd.LinearVariationalProblem(a, L, self.force,
+                                                   bcs=self.interior_null_bc,
+                                                   constant_jacobian=True)
+        self.solver = fd.LinearVariationalSolver(self.problem, solver_parameters=self.solver_parameters)
+        self._solver_is_set_up = True

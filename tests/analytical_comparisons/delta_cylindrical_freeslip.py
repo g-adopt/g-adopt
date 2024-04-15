@@ -89,6 +89,11 @@ def model(level, nn, do_write=False):
     # and the RHS == 0.
     stokes_solver.solve()
 
+    # calculating surface normal stress given the solution of the stokes problem
+    ns_solver = BoundaryNormalStressSolver(stokes_solver, top_id, solver_parameters=_project_solver_parameters)
+    ns_ = ns_solver.solve()
+    in_bc = InteriorBC(W, 0.0, top_id)  # interior BC for normal stress as we are only checking at the surface
+
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
     rot = as_vector((-X[1], X[0]))
@@ -123,20 +128,35 @@ def model(level, nn, do_write=False):
     p_anal.interpolate(marker*p_anal_lower + (1-marker)*p_anal_upper)
     p_error = Function(Q1DG, name="PressureError").assign(pdg-p_anal)
 
+    # compute ns_ analytical and error (note we are using the same space as pressure)
+    nsdg = interpolate(ns_, Q1DG)
+    ns_anal_upper = Function(Q1DG, name="AnalyticalNormalStressUpper")
+    ns_anal_lower = Function(Q1DG, name="AnalyticalNormalStressLower")
+    ns_anal = Function(Q1DG, name="AnalyticalNormalStress")
+    ns_anal_upper.dat.data[:] = [-solution_upper.radial_stress_cartesian(xyi) for xyi in pxy.dat.data]
+    ns_anal_lower.dat.data[:] = [-solution_lower.radial_stress_cartesian(xyi) for xyi in pxy.dat.data]
+    ns_anal.interpolate(marker * ns_anal_lower + (1 - marker) * ns_anal_upper)
+    in_bc.apply(ns_anal)
+    ns_error = Function(Q1DG, name="NormalStressError").assign(nsdg - p_anal)
+
     if do_write:
         # Write output files in VTK format:
         u_.rename("Velocity")
         p_.rename("Pressure")
         u_file = VTKFile("fs_velocity_{}.pvd".format(level))
         p_file = VTKFile("fs_pressure_{}.pvd".format(level))
+        ns_file = VTKFile("fs_normalstress_{}.pvd".format(level))
 
         # Write output:
         u_file.write(u_, u_anal, u_error)
         p_file.write(p_, p_anal, p_error)
+        ns_file.write(ns_, ns_anal, ns_error)
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*dx))
+    l2anal_ns = numpy.sqrt(assemble(dot(ns_anal, ns_anal)*ds_t))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*dx))
+    l2error_ns = numpy.sqrt(assemble(dot(ns_error, ns_error)*ds_t))
 
-    return l2error_u, l2error_p, l2anal_u, l2anal_p
+    return l2error_u, l2error_p, l2anal_ns, l2anal_u, l2anal_p, l2error_ns
