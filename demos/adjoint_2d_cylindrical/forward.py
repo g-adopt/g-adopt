@@ -145,7 +145,7 @@ def run_forward():
     )
 
     # Create output file and select output_frequency
-    output_file = File("vtu-files/output.pvd")
+    output_file = VTKFile("vtu-files/output.pvd")
     dump_period = 10
 
     # Split and rename the velocity and pressure functions

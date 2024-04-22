@@ -15,6 +15,9 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent"
 ]
+dependencies = [
+  "vtk>=9.0.1"
+]
 
 [project.optional-dependencies]
 testing = ["assess", "pandas", "shapely"]
