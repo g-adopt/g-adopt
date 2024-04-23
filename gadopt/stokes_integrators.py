@@ -30,11 +30,10 @@ iterative_stokes_solver_parameters = {
         "ksp_rtol": 1e-4,
         "ksp_max_it": 200,
         "pc_type": "python",
-        "pc_python_type": "firedrake.MassInvPC",
-        "Mp_pc_type": "ksp",
-        "Mp_ksp_ksp_rtol": 1e-5,
-        "Mp_ksp_ksp_type": "cg",
-        "Mp_ksp_pc_type": "sor",
+        "pc_python_type": "gadopt.VariableMassInvPC",
+        "Mp_ksp_rtol": 1e-5,
+        "Mp_ksp_type": "cg",
+        "Mp_pc_type": "sor",
     }
 }
 """Default solver parameters for iterative solvers"""
