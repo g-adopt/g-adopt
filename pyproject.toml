@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-testing = ["assess", "pandas", "shapely"]
+testing = ["assess", "gmsh", "pandas", "shapely"]
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]

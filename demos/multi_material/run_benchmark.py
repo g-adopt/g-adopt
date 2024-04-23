@@ -94,10 +94,11 @@ else:  # Initialise mesh and key functions
     try:
         mesh_path = Path(Simulation.mesh_file)
         if not mesh_path.exists():
-            if mesh_path.with_suffix(".geo").exists():
-                run(["gmsh", "-2", str(mesh_path.with_suffix(".geo"))])
-            else:
-                Simulation.generate_mesh()
+            if MPI.COMM_WORLD.rank == 0:
+                if mesh_path.with_suffix(".geo").exists():
+                    run(["gmsh", "-2", str(mesh_path.with_suffix(".geo"))])
+                else:
+                    Simulation.generate_mesh()
         mesh = fd.Mesh(str(mesh_path))
     except AttributeError:
         mesh = fd.RectangleMesh(

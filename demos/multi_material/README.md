@@ -10,7 +10,7 @@ Isostatic relaxation of a topography cosine perturbation using the sticky-air ap
 - Sticky air
 
 **benchmarks.gerya_2003**
-Sinking of a hard rectangular block into a medium with a lower viscosity.
+Sinking of a hard rectangular block into a lower-viscosity medium.
 - Compositional buoyancy
 
 **benchmarks.robey_2019**

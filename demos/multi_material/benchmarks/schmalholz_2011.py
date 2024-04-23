@@ -56,10 +56,10 @@ class Simulation:
     domain_dims = (1e6, 6.6e5)
     domain_origin = (0, 0)
     mesh_file = "benchmarks/schmalholz_2011.msh"
-    mesh_vert_res = 4e3
+    mesh_vert_res = 1.5e4
     mesh_fine_layer_min_x = 4.2e5
     mesh_fine_layer_width = 1.6e5
-    mesh_fine_layer_hor_res = 1e3
+    mesh_fine_layer_hor_res = 8e3
 
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2
@@ -136,9 +136,9 @@ class Simulation:
             cls.mesh_fine_layer_min_x,
             0,
             0,
-            numElements=[42],
+            numElements=[21],
             recombine=True,
-        )  # Horizontal resolution: 10 km
+        )  # Horizontal resolution: 20 km
 
         num_layers = int(cls.mesh_fine_layer_width / cls.mesh_fine_layer_hor_res)
         gmsh.model.geo.extrude(
@@ -155,9 +155,9 @@ class Simulation:
             cls.domain_dims[0] - cls.mesh_fine_layer_min_x - cls.mesh_fine_layer_width,
             0,
             0,
-            numElements=[42],
+            numElements=[21],
             recombine=True,
-        )  # Horizontal resolution: 10 km
+        )  # Horizontal resolution: 20 km
 
         gmsh.model.geo.synchronize()
 
