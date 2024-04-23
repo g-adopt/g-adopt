@@ -1,14 +1,10 @@
 from .momentum_equation import StokesEquations
 from .free_surface_equation import FreeSurfaceEquation
-from .utility import upward_normal, ensure_constant, InteriorBC
-from .utility import log_level, INFO, DEBUG, depends_on
+from .approximations import BaseApproximation
+from .utility import upward_normal, ensure_constant, InteriorBC, DEBUG, INFO, depends_on, log_level
 from typing import Optional
-
 import firedrake as fd
 
-from .approximations import BaseApproximation
-from .momentum_equation import StokesEquations
-from .utility import DEBUG, INFO, depends_on, ensure_constant, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
