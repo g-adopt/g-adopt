@@ -151,7 +151,7 @@ class Weerdesteijn2d:
 
         self.setup_nullspaces()
 
-        self.stokes_solver = ViscoelasticStokesSolver(m, 1e23*self.viscosity, self.shear_modulus, self.density,
+        self.stokes_solver = ViscoelasticStokesSolver(m, 1e23*10**self.viscosity, self.shear_modulus, self.density,
                                                       self.deviatoric_stress, self.displacement, approximation,
                                                       self.dt, bcs=self.stokes_bcs, cartesian=self.cartesian,
                                                       nullspace=self.Z_nullspace, transpose_nullspace=self.Z_nullspace,
@@ -321,16 +321,24 @@ class Weerdesteijn2d:
             for i in range(self.mesh.geometric_dimension()):
                 self.displacement_vom_matplotlib_df[f'displacement{i}_vom_array_{float(self.time/self.year_in_seconds):.0f}years'] = self.displacement_vom_input.dat.data[:, i]
             self.displacement_vom_matplotlib_df.to_csv(f"{self.name}/surface_displacement_arrays.csv")
+    
+    def integrated_time_misfit(self, timestep):
+        pass
 
     def run_simulation(self):
         checkpoint_filename = self.checkpoint_filename()
         displacement_filename = self.displacement_filename()
-
+        objective_checkpoint_file = CheckpointFile(f"{self.name}-disp-incdisp.h5", "w")
+        objective_checkpoint_file.save_mesh(self.mesh)
         for timestep in range(1, self.max_timesteps+1):
             self.update_ice_load()
 
             with self.stokes_stage: self.stokes_solver.solve()
 
+            # Storing displacement and incremental displacement to be used in the objective 
+            objective_checkpoint_file.save_function(self.u_, name="Incremental Displacement", idx=timestep)
+            objective_checkpoint_file.save_function(self.displacement, name="Displacement", idx=timestep)
+            self.integrated_time_misfit(timestep)
             self.time.assign(self.time+self.dt)
 
             # Compute diagnostics:
@@ -362,6 +370,7 @@ class Weerdesteijn2d:
                 if MPI.COMM_WORLD.rank == 0:
                     np.savetxt(displacement_filename, self.displacement_min_array)
 
+        objective_checkpoint_file.close()
 
 if __name__ == "__main__":
     simulation = Weerdesteijn2d(nz=320)
