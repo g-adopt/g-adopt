@@ -22,7 +22,7 @@ V = VectorFunctionSpace(mesh, "CG", 1)
 x, y = SpatialCoordinate(mesh)
 velocity = as_vector((cos(30*pi/180), sin(30*pi/180)))
 u = Function(V).interpolate(velocity)
-File('advdif_DH219_u.pvd').write(u)
+VTKFile('advdif_DH219_u.pvd').write(u)
 
 # the diffusivity based on a chosen grid Peclet number
 Pe = 1e1  # This seems very high so presumably diffusion added from SU dominates.
@@ -36,7 +36,7 @@ q = Function(Q).interpolate(q_init)
 
 # We declare the output filename, and write out the initial condition. ::
 
-outfile = File("advdif_DH219_skew_CG1_Pe"+str(Pe)+"_SU.pvd")
+outfile = VTKFile("advdif_DH219_skew_CG1_Pe"+str(Pe)+"_SU.pvd")
 outfile.write(q)
 
 # time period and time step
@@ -56,7 +56,7 @@ energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advect
 
 # Get nubar (additional SU diffusion) for plotting
 nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
-nubar_outfile = File("advdof_DH219_skew_CG1_Pe"+str(Pe)+"_SU_nubar.pvd")
+nubar_outfile = VTKFile("advdof_DH219_skew_CG1_Pe"+str(Pe)+"_SU_nubar.pvd")
 nubar_outfile.write(nubar)
 
 t = 0.0

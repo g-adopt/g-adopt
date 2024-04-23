@@ -1,5 +1,5 @@
 from gadopt import *
-from gadopt.gplates import pyGplatesConnector
+from gadopt.gplates import GplatesFunction, pyGplatesConnector
 
 # Set up geometry:
 rmin, rmax, ref_level, nlayers = 1.22, 2.22, 5, 16
@@ -14,29 +14,37 @@ mesh = ExtrudedMesh(
 )
 
 V = VectorFunctionSpace(mesh, "CG", 2)
-u = Function(V, name="velocity")
-dbc = DirichletBC(V, u, "top")
 
 # compute surface velocities
-rec_model = pyGplatesConnector(
+plate_reconstruction_model = pyGplatesConnector(
     rotation_filenames=[
-        './gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot',
+        "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/optimisation/1000_0_rotfile_MantleOptimised.rot"
     ],
     topology_filenames=[
-        './gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
-        './gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
-        './gplates_files/Zahirovic2022_InactiveDeformation.gpmlz',
+        "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/250-0_plate_boundaries.gpml",
+        "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/410-250_plate_boundaries.gpml",
+        "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Convergence.gpml",
+        "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Divergence.gpml",
+        "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Topologies.gpml",
+        "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Transforms.gpml",
     ],
-    dbc=dbc,
-    geologic_zero=409,
-    delta_time=1.0
+    nneighbours=4,
+    nseeds=1000,
+    oldest_age=10000,
+    delta_t=1.0
 )
 
-plog = ParameterLog('plt_rec_test.log', mesh)
-plog.log_str("geologic time, u_rms")
+# Top velocity boundary condition
+gplates_velocities = GplatesFunction(
+    V,
+    gplates_connector=plate_reconstruction_model,
+    top_boundary_marker="top",
+    name="GPlates_Velocity"
+)
 
-for t in np.arange(409, 0, -50):
-    rec_model.assign_plate_velocities(rec_model.geotime2ndtime(t))
-    plog.log_str(f"{t}, {sqrt(assemble(inner(u, u) * ds_t))}")
+myfile = VTKFile("Velocities.pvd")
 
-plog.close()
+for t in np.arange(1000, 0, -50):
+    gplates_velocities.update_plate_reconstruction(plate_reconstruction_model.age2ndtime(t))
+    gplates_velocities.assign(gplates_velocities / pyGplatesConnector.velocity_dimDcmyr)
+    myfile.write(gplates_velocities)
