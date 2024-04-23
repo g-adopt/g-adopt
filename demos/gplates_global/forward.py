@@ -87,7 +87,8 @@ def forward():
         ],
         nneighbours=4,
         nseeds=1e5,
-        oldest_age=10000,
+        scaling_factor=1.7,
+        oldest_age=1000,
         delta_t=1.0
     )
 
@@ -176,18 +177,18 @@ def forward():
     pvd_period = 100
 
     # non-dimensionalised time for present geologic day (0)
-    ndtime_now = plate_receonstion_model.age2ndtime(0)
+    ndtime_now = plate_reconstruction_model.age2ndtime(0)
 
     # paraview files
-    paraview_file = File("ouput.pvd", mode='a')
+    paraview_file = VTKFile("output.pvd")
 
-    time = plate_reconstruction_model.age2ndtime(-100.0) if num_timestep == 0 else timestepping_history.get("time")[-1]
-
+    time = plate_reconstruction_model.age2ndtime(1100.0) if num_timestep == 0 else timestepping_history.get("time")[-1]
+    log(f"non-dimensional time is {time}")
     # Now perform the time loop:
     while time < ndtime_now:
         # Update surface velocities
-        gplates_velocities.update_plate_reconstruction(max(time, 0))
-
+        gplates_velocities.update_plate_reconstruction(max(time, 0.))
+        log(f"Plate Reconstruction is update for {plate_reconstruction_model.age2ndtime(max(time, 0))}")
         # compute radially averaged temperature profile to update viscosity
         averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
@@ -220,17 +221,19 @@ def forward():
 
         if num_timestep % dumping_period == 0:
             with CheckpointFile("./simulation_states.h5", mode="a") as chkpoint_file:
+                log(f"Dumped Temperature {num_timestep} at time  {time}")
                 chkpoint_file.save_function(
                     T,
                     name="Temperature",
                     idx=num_timestep,
-                    timestepping_info={"time": time, "delta_t": delta_t}
+                    timestepping_info={"time": float(time), "delta_t": float(delta_t)}
                 )
+                log(f"Dumped Stokes {num_timestep} at time  {time}")
                 chkpoint_file.save_function(
                     z,
                     name="Stokes",
                     idx=num_timestep,
-                    timestepping_info={"time": time, "delta_t": delta_t}
+                    timestepping_info={"time": float(time), "delta_t": float(delta_t)}
                 )
 
         # Log diagnostics:
@@ -245,7 +248,7 @@ def generate_mesh():
         return
 
     # Set up geometry:
-    ref_level, nlayers = 8, 128
+    ref_level, nlayers = 7, 64
 
     # Variable radial resolution
     # Initiating layer heights with 1.
