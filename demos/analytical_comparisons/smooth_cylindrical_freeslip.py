@@ -111,8 +111,8 @@ def model(level, k, nn, do_write=False):
         # Write output files in VTK format:
         u_.rename("Velocity")
         p_.rename("Pressure")
-        u_file = File("fs_velocity_{}.pvd".format(level))
-        p_file = File("fs_pressure_{}.pvd".format(level))
+        u_file = VTKFile("fs_velocity_{}.pvd".format(level))
+        p_file = VTKFile("fs_pressure_{}.pvd".format(level))
 
         # Write output:
         u_file.write(u_, u_anal, u_error)

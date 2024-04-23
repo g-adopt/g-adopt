@@ -1,4 +1,5 @@
 from firedrake import *
+from firedrake.output import VTKFile
 from .time_stepper import CrankNicolsonRK, ImplicitMidpoint, BackwardEuler
 from .limiter import VertexBasedP1DGLimiter
 from .utility import log, ParameterLog, TimestepAdaptor, LayerAveraging, timer_decorator, InteriorBC
