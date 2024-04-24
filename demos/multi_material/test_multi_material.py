@@ -36,7 +36,31 @@ diagnostics = {
                 - 0.83
             ),
             operator.le,
-            0.005,
+            0.002,
+        ),
+    ],
+    "schmeling_2008": [
+        (
+            lambda data: abs(
+                np.asarray(data["output_time"])[
+                    np.asarray(data["slab_tip_depth"]) >= 600
+                ].min()
+                - 43
+            ),
+            operator.le,
+            0.1,
+        ),
+    ],
+    "trim_2023": [
+        (
+            lambda data: abs(
+                np.asarray(data["rms_velocity"])[
+                    np.asarray(data["output_time"]) <= 2.5e-3
+                ].max()
+                - 155
+            ),
+            operator.le,
+            4,
         ),
     ],
 }

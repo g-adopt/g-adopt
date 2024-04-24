@@ -192,7 +192,7 @@ class Simulation:
             ax.plot(
                 cls.diag_fields["output_time"],
                 cls.diag_fields["slab_tip_depth"],
-                colour="black",
+                color="black",
                 label="Conservative level set",
             )
 
