@@ -26,7 +26,7 @@ class Simulation:
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dims = (2, 1)
     domain_origin = (0, 0)
-    mesh_elements = (2048, 1024)
+    mesh_elements = (128, 64)
 
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2
@@ -67,8 +67,9 @@ class Simulation:
     temp_bcs = {3: {"T": 1}, 4: {"T": 0}}
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
-    # Stokes nullspace
+    # Stokes solver options
     stokes_nullspace_args = {}
+    stokes_solver_params = None
 
     # Timestepping objects
     initial_timestep = 1e-6

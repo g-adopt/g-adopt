@@ -16,7 +16,7 @@ class Simulation:
     Journal of Geophysical Research: Solid Earth, 102(B10), 22477-22495.
     """
 
-    name = "van_Keken_1997_isothermal_isoviscous"
+    name = "van_Keken_1997_isothermal"
 
     restart_from_checkpoint = 0
 
@@ -25,7 +25,7 @@ class Simulation:
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dims = (0.9142, 1)
     domain_origin = (0, 0)
-    mesh_elements = (256, 256)
+    mesh_elements = (128, 128)
 
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2

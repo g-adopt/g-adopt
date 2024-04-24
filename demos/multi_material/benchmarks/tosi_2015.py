@@ -52,7 +52,7 @@ class Simulation:
     # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
     domain_dims = (1, 1)
     domain_origin = (0, 0)
-    mesh_elements = (128, 128)
+    mesh_elements = (64, 64)
 
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2

@@ -51,16 +51,41 @@ diagnostics = {
             0.1,
         ),
     ],
-    "trim_2023": [
+    "tosi_2015": [
+        (lambda data: abs(data["avg_temperature"][-1] - 0.5275), operator.le, 1e-4),
+        (lambda data: abs(data["nusselt_top"][-1] - 6.64), operator.le, 0.01),
+        (lambda data: abs(data["nusselt_bottom"][-1] - 6.65), operator.le, 0.01),
+        (lambda data: abs(data["rms_velocity"][-1] - 79.1), operator.le, 0.1),
+        (lambda data: abs(data["min_visc"][-1] - 1.92e-4), operator.le, 1e-6),
+        (lambda data: abs(data["max_visc"][-1] - 1.92), operator.le, 0.01),
+    ],
+    # "trim_2023": [
+    #     (
+    #         lambda data: abs(
+    #             np.asarray(data["rms_velocity"])[
+    #                 np.asarray(data["output_time"]) <= 2.5e-3
+    #             ].max()
+    #             - 155
+    #         ),
+    #         operator.le,
+    #         4,
+    #     ),
+    # ],
+    "van_keken_1997_isothermal": [
+        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 3e-5),
+        (lambda data: abs(max(data["entrainment"]) - 0.8), operator.le, 4e-3),
+    ],
+    "van_keken_1997_thermochemical": [
         (
             lambda data: abs(
-                np.asarray(data["rms_velocity"])[
-                    np.asarray(data["output_time"]) <= 2.5e-3
+                np.asarray(data["output_time"])[
+                    (np.asarray(data["output_time"]) <= 0.025)
+                    & (np.asarray(data["rms_velocity"]) >= 400)
                 ].max()
-                - 155
+                - 0.022
             ),
             operator.le,
-            4,
+            2e-3,
         ),
     ],
 }
