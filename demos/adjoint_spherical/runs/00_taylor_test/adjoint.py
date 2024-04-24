@@ -18,6 +18,7 @@ iterative_solver_parameters = {
     "pc_type": "sor",
     "mat_type": "aij",
     "ksp_rtol": 1e-12,
+    "ksp_atol": 1e-10,
 }
 
 LinearSolver.DEFAULT_SNES_PARAMETERS = {"snes_type": "ksponly"}
@@ -55,8 +56,10 @@ def my_taylor_test():
     # Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
     # _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
+
 @collect_garbage
 def forward_problem():
+    # Section:
     # Enable writing intermediary adjoint fields to disk
     enable_disk_checkpointing()
 
@@ -65,7 +68,6 @@ def forward_problem():
         mesh = f.load_mesh("firedrake_default_extruded")
         Tobs = f.load_function(mesh, name="ReferenceTemperature")  # reference tomography temperature
         Tave = f.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
-        mu_function = f.load_function(mesh, name="mu1viscosity")  # viscosity function
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
@@ -89,6 +91,9 @@ def forward_problem():
     # Set up temperature field and initialise:
     Tic = Function(Q1, name="Tic")
     T = Function(Q, name="Temperature")
+    mu = Function(Q, name="mu2_radial")
+    assign_1d_profile(mu_ref, "../../../gplates_global/mu2_radial.rad")
+
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
     H_int = Constant(10.0)  # Internal heating
@@ -97,29 +102,35 @@ def forward_problem():
     delta_t = Constant(1.0e-6)
     Tic.interpolate(((1.0 - (T0*exp(Di) - T0)) * (rmax-r)))
 
-    # Initiating a plate reconstruction model
     pl_rec_model = pyGplatesConnector(
         rotation_filenames=[
-            '../../gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot'],
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/optimisation/1000_0_rotfile_MantleOptimised.rot"
+        ],
         topology_filenames=[
-            '../../gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
-            '../../gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
-            '../../gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
-        nseeds=10000,
-        geologic_zero=409,
-        delta_time=1.0
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/250-0_plate_boundaries.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/410-250_plate_boundaries.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Convergence.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Divergence.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Topologies.gpml",
+            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Transforms.gpml",
+        ],
+        nneighbours=4,
+        nseeds=1e5,
+        scaling_factor=1.7,
+        oldest_age=1000,
+        delta_t=1.0
     )
 
     # Top velocity boundary condition
     gplates_velocities = GplatesFunction(
         V,
-        name="GPlates_Velocity",
         gplates_connector=pl_rec_model,
         top_boundary_marker=top_id,
+        name="GPlates_Velocity"
     )
 
     # Setup Equations Stokes related constants
-    Ra = Constant(2.0e7)  # Rayleigh number
+    Ra = Constant(2.0e6)  # Rayleigh number
     Di = Constant(0.5)  # Dissipation number.
 
     # Compressible reference state:
@@ -136,13 +147,20 @@ def forward_problem():
         Ra, Di, rho=rhobar, Tbar=Tbar,
         alpha=alphabar, chi=chibar, cp=cpbar)
 
-    # Nullspaces and near-nullspaces:
+    # Section: Setting up nullspaces
+    # Nullspaces for stokes contains only a constant nullspace for pressure, as the top boundary is
+    # imposed. The nullspace is generate with closed=True(for pressure) and rotational=False
+    # as there are no rotational nullspace for velocity.
+    # .. note: For compressible formulations we only provide `transpose_nullspace`
     Z_nullspace = create_stokes_nullspace(
         Z, closed=True, rotational=False)
+    # The near nullspaces gor gamg always include rotational and translational modes
     Z_near_nullspace = create_stokes_nullspace(
         Z, closed=False, rotational=True, translations=[0, 1, 2])
 
+    # Section: Setting boundary conditions
     # Temperature boundary conditions (constant)
+    # for the top and bottom boundaries
     temp_bcs = {
         bottom_id: {'T': 1.0 - (T0*exp(Di) - T0)},
         top_id: {'T': 0.0},
@@ -158,9 +176,9 @@ def forward_problem():
         T, u, approximation, delta_t,
         ImplicitMidpoint, bcs=temp_bcs, su_advection=True)
     energy_solver.fields['source'] = rhobar * H_int
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
                                  cartesian=False, constant_jacobian=True,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                                 transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
 
     # tweaking solver parameters
@@ -174,10 +192,10 @@ def forward_problem():
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
 
     # non-dimensionalised time for present geologic day (0)
-    ndtime_now = pl_rec_model.geotime2ndtime(0.)
+    ndtime_now = pl_rec_model.age2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = pl_rec_model.geotime2ndtime(25.)
+    time = pl_rec_model.age2ndtime(10.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -204,12 +222,11 @@ def forward_problem():
 
     # Now perform the time loop:
     while time < ndtime_now:
-        if timestep_index % 2 == 0:
-            # Update surface velocities
-            gplates_velocities.update_plate_reconstruction(time)
+        # Update surface velocities
+        gplates_velocities.update_plate_reconstruction(time)
 
-            # Solve Stokes sytem
-            stokes_solver.solve()
+        # Solve Stokes sytem
+        stokes_solver.solve()
 
         # Make sure we are not going past present day
         if ndtime_now - time < float(delta_t):
@@ -222,39 +239,14 @@ def forward_problem():
         time += float(delta_t)
         timestep_index += 1
 
-
-    class PreFunctionalCallBack:
-        def __init__(self):
-            self.iter_idx = 0
-            self.Tic_file = File('initial_condition.pvd')
-            self.Tic_copy = Function(Tic.function_space(), name="InitTemperature")
-
-        def __call__(self, controls):
-            # output current control (temperature initial condition)
-            self.Tic_copy.assign(controls)
-            self.Tic_file.write(self.Tic_copy)
-
-            self.iter_idx += 1
-
-    # Define the component terms of the overall objective functional
-    smoothing = assemble(dot(grad(Tic - Tave), grad(Tic - Tave)) * dx)
-    norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
-    norm_obs = assemble(Tobs**2 * dx)
-
     # Temperature misfit between solution and observation
-    t_misfit = assemble((T - Tobs) ** 2 * dx)
-
-    # Assembling the objective
-    objective = (
-        t_misfit +
-        0.01 * (norm_obs * smoothing / norm_smoothing)
-    )
+    objective = assemble((T - Tobs) ** 2 * dx)
 
     log(f"Value of objective: {objective}")
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
-    return Tic, ReducedFunctional(objective, control, eval_cb_pre=PreFunctionalCallBack())
+    return Tic, ReducedFunctional(objective, control)
 
 
 def mu_constructor(T, u):
@@ -317,6 +309,52 @@ def T_initialise(T, average):
         Plm.assign(Plm/math.sqrt(2))
     T.interpolate(average +
                   (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
+
+
+def assign_1d_profile(q, one_d_filename):
+    """
+    Assign a one-dimensional profile to a Function `q` from a file.
+
+    The function reads a one-dimensional radial viscosity profile from a file, broadcasts
+    the read array to all processes, and then interpolates this
+    array onto the function space of `q`.
+
+    Args:
+        q (firedrake.Function): The function onto which the 1D profile will be assigned.
+        one_d_filename (str): The path to the file containing the 1D radial viscosity profile.
+
+    Returns:
+        None: This function does not return a value. It directly modifies the input function `q`.
+
+    Note:
+        - This function is designed to be run in parallel with MPI.
+        - The input file should contain an array of viscosity values.
+        - It assumes that the function space of `q` is defined on a radial mesh.
+        - `rmax` and `rmin` should be defined before this function is called, representing
+          the maximum and minimum radial bounds for the profile.
+    """
+    from firedrake.ufl_expr import extract_unique_domain
+    from scipy.interpolate import interp1d
+    # find the mesh
+    mesh = extract_unique_domain(q)
+
+    visc = None
+    rshl = None
+    # read the input file
+    if mesh.comm.rank == 0:
+        # The root process reads the file
+        rshl, visc = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+
+    # Broadcast the entire 'visc' array to all processes
+    visc = mesh.comm.bcast(visc, root=0)
+    # Similarly, broadcast 'rshl' if needed (assuming all processes need it)
+    rshl = mesh.comm.bcast(rshl, root=0)
+
+    element_family = q.function_space().ufl_element()
+    X = Function(VectorFunctionSpace(mesh=mesh, family=element_family)).interpolate(SpatialCoordinate(mesh))
+    rad = Function(q.function_space()).interpolate(sqrt(X**2))
+    averager = LayerAveraging(mesh, cartesian=False)
+    averager.extrapolate_layer_average(q, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
 
 
 if __name__ == "__main__":
