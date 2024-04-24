@@ -2,7 +2,6 @@ from gadopt import *
 from gadopt.inverse import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
 import numpy as np
-from wrappers import collect_garbage
 from firedrake.adjoint_utils import blocks
 
 # Quadrature degree:
@@ -63,11 +62,13 @@ def forward_problem():
     # Enable writing intermediary adjoint fields to disk
     enable_disk_checkpointing()
 
-    # Load mesh
-    with CheckpointFile("../../Adjoint_CheckpointFile.h5", "r") as f:
+    with CheckpointFile("../../spherical_mesh.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
-        Tobs = f.load_function(mesh, name="ReferenceTemperature")  # reference tomography temperature
-        Tave = f.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
+
+    # Load mesh
+    with CheckpointFile("../../linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5", "r") as fi:
+        Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
+        Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
@@ -92,7 +93,7 @@ def forward_problem():
     Tic = Function(Q1, name="Tic")
     T = Function(Q, name="Temperature")
     mu = Function(Q, name="mu2_radial")
-    assign_1d_profile(mu_ref, "../../../gplates_global/mu2_radial.rad")
+    assign_1d_profile(mu, "../../../gplates_global/mu2_radial.rad")
 
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
@@ -104,19 +105,19 @@ def forward_problem():
 
     pl_rec_model = pyGplatesConnector(
         rotation_filenames=[
-            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/optimisation/1000_0_rotfile_MantleOptimised.rot"
+            "../../../gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/optimisation/1000_0_rotfile_MantleOptimised.rot"
         ],
         topology_filenames=[
-            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/250-0_plate_boundaries.gpml",
-            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/410-250_plate_boundaries.gpml",
-            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Convergence.gpml",
-            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Divergence.gpml",
-            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Topologies.gpml",
-            "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Transforms.gpml",
+            "../../../gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/250-0_plate_boundaries.gpml",
+            "../../../gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/410-250_plate_boundaries.gpml",
+            "../../../gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Convergence.gpml",
+            "../../../gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Divergence.gpml",
+            "../../../gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Topologies.gpml",
+            "../../../gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Transforms.gpml",
         ],
         nneighbours=4,
         nseeds=1e5,
-        scaling_factor=1.7,
+        scaling_factor=1.0,
         oldest_age=1000,
         delta_t=1.0
     )
