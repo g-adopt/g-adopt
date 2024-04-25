@@ -93,7 +93,7 @@ diagnostics = {
 
 @pytest.mark.parametrize("bench_name,bench_diagnostics", diagnostics.items())
 def test_multi_material(bench_name, bench_diagnostics):
-    diag_file = np.load(base / bench_name / "output.npz", allow_pickle=True)
+    diag_file = np.load(base / bench_name / "output_0_check.npz", allow_pickle=True)
     for diag_function, diag_operator, diag_threshold in bench_diagnostics:
         diag_data = diag_file["diag_fields"][()]
         assert diag_operator(diag_function(diag_data), diag_threshold)
