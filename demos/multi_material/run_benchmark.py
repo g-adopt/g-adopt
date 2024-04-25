@@ -336,7 +336,7 @@ while True:
         # Calculate final simulation diagnostics
         Simulation.diagnostics(time_now, geo_diag)
         # Save post-processing fields and produce graphs
-        Simulation.save_and_plot()
+        Simulation.plot_diagnostics()
 
         # Write final simulation state to checkpoint file
         write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter)

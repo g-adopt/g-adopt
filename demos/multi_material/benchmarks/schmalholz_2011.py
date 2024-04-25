@@ -258,11 +258,15 @@ class Simulation:
         cls.diag_fields["normalised_time"].append(simu_time / cls.characteristic_time)
         cls.diag_fields["slab_necking"].append(min_width_global / cls.slab_width)
 
-    @classmethod
-    def save_and_plot(cls):
         if MPI.COMM_WORLD.rank == 0:
-            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+            np.savez(
+                f"{cls.name.lower()}/output_{Simulation.restart_from_checkpoint}_check",
+                diag_fields=cls.diag_fields,
+            )
 
+    @classmethod
+    def plot_diagnostics(cls):
+        if MPI.COMM_WORLD.rank == 0:
             slab_necking_schmalholz = loadmat("data/DET_FREE_NEW_TOP_R100.mat")
 
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)

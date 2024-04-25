@@ -163,11 +163,15 @@ class Simulation:
             geo_diag.entrainment(0, cls.material_area, cls.entrainment_height)
         )
 
-    @classmethod
-    def save_and_plot(cls):
         if MPI.COMM_WORLD.rank == 0:
-            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+            np.savez(
+                f"{cls.name.lower()}/output_{Simulation.restart_from_checkpoint}_check",
+                diag_fields=cls.diag_fields,
+            )
 
+    @classmethod
+    def plot_diagnostics(cls):
+        if MPI.COMM_WORLD.rank == 0:
             fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
 
             ax[0].set_ylim(0, 250)

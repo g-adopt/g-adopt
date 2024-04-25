@@ -136,11 +136,15 @@ class Simulation:
             )
         )
 
-    @classmethod
-    def save_and_plot(cls):
         if MPI.COMM_WORLD.rank == 0:
-            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+            np.savez(
+                f"{cls.name.lower()}/output_{Simulation.restart_from_checkpoint}_check",
+                diag_fields=cls.diag_fields,
+            )
 
+    @classmethod
+    def plot_diagnostics(cls):
+        if MPI.COMM_WORLD.rank == 0:
             rms_vel_schmeling = np.loadtxt("data/HSvrms4800.dat")
             entr_schmeling = np.loadtxt("data/HSentr4800.dat")
             rms_vel_van_keken = np.loadtxt("data/pvk120_003.vrms.dat")

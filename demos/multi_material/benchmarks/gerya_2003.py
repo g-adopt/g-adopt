@@ -104,11 +104,15 @@ class Simulation:
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e6)
         cls.diag_fields["block_area"].append(block_area / 1e10)
 
-    @classmethod
-    def save_and_plot(cls):
         if MPI.COMM_WORLD.rank == 0:
-            np.savez(f"{cls.name.lower()}/output", diag_fields=cls.diag_fields)
+            np.savez(
+                f"{cls.name.lower()}/output_{Simulation.restart_from_checkpoint}_check",
+                diag_fields=cls.diag_fields,
+            )
 
+    @classmethod
+    def plot_diagnostics(cls):
+        if MPI.COMM_WORLD.rank == 0:
             fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
 
             ax.grid()
