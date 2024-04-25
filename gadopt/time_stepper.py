@@ -1,6 +1,6 @@
 """Timestepper implementation, mostly copied from Thetis."""
 import operator
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 from numbers import Number
 from typing import Any, Optional
 
@@ -346,22 +346,26 @@ class AbstractRKScheme(ABC):
     Currently only explicit or diagonally implicit schemes are supported.
     """
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def a(self):
         """Runge-Kutta matrix :math:`a_{i,j}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def b(self):
         """weights :math:`b_{i}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def c(self):
         """nodes :math:`c_{i}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def cfl_coeff(self):
         """CFL number of the scheme
 
@@ -386,7 +390,7 @@ class AbstractRKScheme(ABC):
         self.is_dirk = np.diag(self.a).all()
 
 
-class ForwardEulerAbstract(AbstractRKScheme):
+class ForwardEuler(ERKGeneric, AbstractRKScheme):
     """
     Forward Euler method
     """
@@ -396,7 +400,7 @@ class ForwardEulerAbstract(AbstractRKScheme):
     cfl_coeff = 1.0
 
 
-class ERKLSPUM2Abstract(AbstractRKScheme):
+class ERKLSPUM2(ERKGeneric, AbstractRKScheme):
     """
     ERKLSPUM2, 3-stage, 2nd order Explicit Runge Kutta method
 
@@ -414,7 +418,7 @@ class ERKLSPUM2Abstract(AbstractRKScheme):
     cfl_coeff = 1.2
 
 
-class ERKLPUM2Abstract(AbstractRKScheme):
+class ERKLPUM2(ERKGeneric, AbstractRKScheme):
     """
     ERKLPUM2, 3-stage, 2nd order
     Explicit Runge Kutta method
@@ -433,7 +437,7 @@ class ERKLPUM2Abstract(AbstractRKScheme):
     cfl_coeff = 2.0
 
 
-class ERKMidpointAbstract(AbstractRKScheme):
+class ERKMidpoint(ERKGeneric, AbstractRKScheme):
     a = [[0.0, 0.0],
          [0.5, 0.0]]
     b = [0.0, 1.0]
@@ -441,7 +445,7 @@ class ERKMidpointAbstract(AbstractRKScheme):
     cfl_coeff = 1.0
 
 
-class SSPRK33Abstract(AbstractRKScheme):
+class SSPRK33(ERKGeneric, AbstractRKScheme):
     r"""
     3rd order Strong Stability Preserving Runge-Kutta scheme, SSP(3,3).
 
@@ -465,7 +469,7 @@ class SSPRK33Abstract(AbstractRKScheme):
     cfl_coeff = 1.0
 
 
-class BackwardEulerAbstract(AbstractRKScheme):
+class BackwardEuler(DIRKGeneric, AbstractRKScheme):
     """
     Backward Euler method
     """
@@ -475,7 +479,7 @@ class BackwardEulerAbstract(AbstractRKScheme):
     cfl_coeff = CFL_UNCONDITIONALLY_STABLE
 
 
-class ImplicitMidpointAbstract(AbstractRKScheme):
+class ImplicitMidpoint(DIRKGeneric, AbstractRKScheme):
     r"""
     Implicit midpoint method, second order.
 
@@ -494,9 +498,9 @@ class ImplicitMidpointAbstract(AbstractRKScheme):
     cfl_coeff = CFL_UNCONDITIONALLY_STABLE
 
 
-class CrankNicolsonAbstract(AbstractRKScheme):
+class CrankNicolsonRK(DIRKGeneric, AbstractRKScheme):
     """
-    Crack-Nicolson scheme
+    Crank-Nicolson scheme
     """
     a = [[0.0, 0.0],
          [0.5, 0.5]]
@@ -505,7 +509,7 @@ class CrankNicolsonAbstract(AbstractRKScheme):
     cfl_coeff = CFL_UNCONDITIONALLY_STABLE
 
 
-class DIRK22Abstract(AbstractRKScheme):
+class DIRK22(DIRKGeneric, AbstractRKScheme):
     r"""
     2-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
 
@@ -534,7 +538,7 @@ class DIRK22Abstract(AbstractRKScheme):
     cfl_coeff = CFL_UNCONDITIONALLY_STABLE
 
 
-class DIRK23Abstract(AbstractRKScheme):
+class DIRK23(DIRKGeneric, AbstractRKScheme):
     r"""
     2-stage, 3rd order Diagonally Implicit Runge Kutta method
 
@@ -563,7 +567,7 @@ class DIRK23Abstract(AbstractRKScheme):
     cfl_coeff = CFL_UNCONDITIONALLY_STABLE
 
 
-class DIRK33Abstract(AbstractRKScheme):
+class DIRK33(DIRKGeneric, AbstractRKScheme):
     """
     3-stage, 3rd order, L-stable Diagonally Implicit Runge Kutta method
 
@@ -584,7 +588,7 @@ class DIRK33Abstract(AbstractRKScheme):
     cfl_coeff = CFL_UNCONDITIONALLY_STABLE
 
 
-class DIRK43Abstract(AbstractRKScheme):
+class DIRK43(DIRKGeneric, AbstractRKScheme):
     """
     4-stage, 3rd order, L-stable Diagonally Implicit Runge Kutta method
 
@@ -603,7 +607,7 @@ class DIRK43Abstract(AbstractRKScheme):
     cfl_coeff = CFL_UNCONDITIONALLY_STABLE
 
 
-class DIRKLSPUM2Abstract(AbstractRKScheme):
+class DIRKLSPUM2(DIRKGeneric, AbstractRKScheme):
     """
     DIRKLSPUM2, 3-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
 
@@ -621,7 +625,7 @@ class DIRKLSPUM2Abstract(AbstractRKScheme):
     cfl_coeff = 4.34  # NOTE for linear problems, nonlin => 3.82
 
 
-class DIRKLPUM2Abstract(AbstractRKScheme):
+class DIRKLPUM2(DIRKGeneric, AbstractRKScheme):
     """
     DIRKLPUM2, 3-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
 
@@ -637,59 +641,3 @@ class DIRKLPUM2Abstract(AbstractRKScheme):
     b = [1.0/3.0, 1.0/3.0, 1.0/3.0]
     c = [2.0/11.0, 69.0/154.0, 67.0/77.0]
     cfl_coeff = 4.34  # NOTE for linear problems, nonlin => 3.09
-
-
-class ERKLSPUM2(ERKGeneric, ERKLSPUM2Abstract):
-    pass
-
-
-class ERKLPUM2(ERKGeneric, ERKLPUM2Abstract):
-    pass
-
-
-class ERKMidpoint(ERKGeneric, ERKMidpointAbstract):
-    pass
-
-
-class ERKEuler(ERKGeneric, ForwardEulerAbstract):
-    pass
-
-
-class SSPRK33(ERKGeneric, SSPRK33Abstract):
-    pass
-
-
-class BackwardEuler(DIRKGeneric, BackwardEulerAbstract):
-    pass
-
-
-class ImplicitMidpoint(DIRKGeneric, ImplicitMidpointAbstract):
-    pass
-
-
-class CrankNicolsonRK(DIRKGeneric, CrankNicolsonAbstract):
-    pass
-
-
-class DIRK22(DIRKGeneric, DIRK22Abstract):
-    pass
-
-
-class DIRK23(DIRKGeneric, DIRK23Abstract):
-    pass
-
-
-class DIRK33(DIRKGeneric, DIRK33Abstract):
-    pass
-
-
-class DIRK43(DIRKGeneric, DIRK43Abstract):
-    pass
-
-
-class DIRKLSPUM2(DIRKGeneric, DIRKLSPUM2Abstract):
-    pass
-
-
-class DIRKLPUM2(DIRKGeneric, DIRKLPUM2Abstract):
-    pass
