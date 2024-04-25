@@ -59,18 +59,18 @@ diagnostics = {
         (lambda data: abs(data["min_visc"][-1] - 1.92e-4), operator.le, 1e-6),
         (lambda data: abs(data["max_visc"][-1] - 1.92), operator.le, 0.01),
     ],
-    # "trim_2023": [
-    #     (
-    #         lambda data: abs(
-    #             np.asarray(data["rms_velocity"])[
-    #                 np.asarray(data["output_time"]) <= 2.5e-3
-    #             ].max()
-    #             - 155
-    #         ),
-    #         operator.le,
-    #         4,
-    #     ),
-    # ],
+    "trim_2023": [
+        (
+            lambda data: abs(
+                np.asarray(data["rms_velocity"])[
+                    np.asarray(data["output_time"]) <= 2.5e-3
+                ].max()
+                - 155
+            ),
+            operator.le,
+            4,
+        ),
+    ],
     "van_keken_1997_isothermal": [
         (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 3e-5),
         (lambda data: abs(max(data["entrainment"]) - 0.8), operator.le, 4e-3),
