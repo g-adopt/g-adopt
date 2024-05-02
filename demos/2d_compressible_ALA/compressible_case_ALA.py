@@ -55,7 +55,8 @@ FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 
 
 # Nullspaces and near-nullspaces:
-Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
+Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False, ala_approximation=approximation, top_subdomain_id=top_id)
+Z_transpose_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # Write output files in VTK format:
 u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -94,7 +95,8 @@ stokes_bcs = {
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              cartesian=True, constant_jacobian=True,
-                             transpose_nullspace=Z_nullspace)
+                             nullspace=Z_nullspace,
+                             transpose_nullspace=Z_transpose_nullspace)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)
