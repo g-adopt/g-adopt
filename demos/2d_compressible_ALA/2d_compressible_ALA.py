@@ -157,10 +157,18 @@ T = Function(Q, name="Temperature")
 T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
 FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 
-# This problem has a constant pressure nullspace, handled identically to our
-# previous tutorial.
+# This problem has a non-constant pressure nullspace (vertical, decreasing with depth)
+# for the right nullspace, and a constant nullspace for the transpose (left) nullspace.
+# These are obtained very similarly to our previous tutorial. In case of right nullspace,
+# this is done by additionally providing the approximation object and subdomain marker
+# for the top boundary (where the pressure nullspace is referenced at). See the
+# visualise_ALA_p_nullspace demo for more details.
 
-Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
+Z_nullspace = create_stokes_nullspace(
+    Z, closed=True, rotational=False,
+    ala_approximation=approximation, top_subdomain_id=top_id)
+Z_nullspace_transpose = create_stokes_nullspace(
+    Z, closed=True, rotational=False)
 
 # Boundary conditions are next specified.
 
@@ -203,7 +211,7 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             transpose_nullspace=Z_nullspace,
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace_transpose,
                              constant_jacobian=True)
 # -
 
