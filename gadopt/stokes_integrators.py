@@ -10,7 +10,7 @@ from typing import Optional
 
 import firedrake as fd
 
-from .approximations import BaseApproximation
+from .approximations import BaseApproximation, AnelasticLiquidApproximation
 from .momentum_equation import StokesEquations
 from .utility import DEBUG, INFO, depends_on, ensure_constant, log_level, upward_normal
 
@@ -114,6 +114,8 @@ def create_stokes_nullspace(
     closed: bool = True,
     rotational: bool = False,
     translations: Optional[list[int]] = None,
+    ala_approximation: Optional[AnelasticLiquidApproximation] = None,
+    top_subdomain_id: Optional[str | int] = None,
 ) -> fd.nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
 
@@ -122,11 +124,16 @@ def create_stokes_nullspace(
       closed: Whether to include a constant pressure null space
       rotational: Whether to include all rotational modes
       translations: List of translations to include
+      ala_approximation: AnelasticLiquidApproximation for calculating right nullspace
 
     Returns:
       A Firedrake mixed vector space basis incorporating the null space components
 
     """
+    # ala_approximation and top_subdomaion_id are both needed when calculating rigt nullspace for ala
+    if (ala_approximation is None) != (top_subdomain_id is None):
+        raise ValueError("Both ala_approximation and top_subdomain_id must be provided, or both must be None.")
+
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
     V, W = Z.subfunctions
@@ -158,7 +165,12 @@ def create_stokes_nullspace(
         V_nullspace = V
 
     if closed:
-        p_nullspace = fd.VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
+        if ala_approximation:
+            p = ala_right_nullspace(W=W, approximation=ala_approximation, top_subdomain_id=top_subdomain_id)
+            p_nullspace = fd.VectorSpaceBasis([p], comm=Z.mesh().comm)
+            p_nullspace.orthonormalize()
+        else:
+            p_nullspace = fd.VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
     else:
         p_nullspace = W
 
@@ -314,3 +326,37 @@ class StokesSolver:
             self.setup_solver()
         self.solution_old = self.solution.copy(deepcopy=True)
         self.solver.solve()
+
+
+def ala_right_nullspace(
+        W: fd.functionspaceimpl.WithGeometry,
+        approximation: AnelasticLiquidApproximation,
+        top_subdomain_id: str | int):
+    r"""
+        Trying to solve the equation:
+            $$ - \nabla p + g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p = 0 $$
+        Taking the divergence:
+            $$ - \nabla \cdot(\nabla p) + \nabla \cdot(g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) $$
+        And then testing it with q:
+            $$ - q * \nabla \cdot(\nabla p) * dx + q * \nabla \cdot(g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) * dx $$
+        Doing integration by parts:
+            $$ - \nabla \cdot( q * \nabla(p)) * dx + \nabla(q). \nabla(p) * dx + \nabla \cdot(q * g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) * dx - \nabla(q) . (g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) * dx $$
+
+        Dropping the boundary condition terms:
+        $$ \nabla(q) \cdot \nabla(p) * dx - \nabla q \cdot (g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) * dx $$
+        returns p: pressure nullspace
+    """
+    W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
+    q = fd.TestFunction(W)
+    p = fd.Function(W, name="pressure_nullspace")
+
+    bc = fd.DirichletBC(W, 1., top_subdomain_id)
+    F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
+    F += (
+        - fd.inner(
+            fd.grad(q),
+            fd.as_vector((0, 1)) * approximation.Di * approximation.cp0 / approximation.cv0 / approximation.gamma0 * approximation.g * approximation.rho * approximation.chi * p) * fd.dx
+    )
+
+    fd.solve(F == 0, p, bcs=bc)
+    return p
