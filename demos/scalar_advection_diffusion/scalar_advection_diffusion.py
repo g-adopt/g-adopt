@@ -28,7 +28,7 @@ u = Function(V).interpolate(velocity)
 kappa = Constant(1e-4)
 
 # Plot velocity
-u_outfile = File("CG_SUadvdiff_u.pvd")
+u_outfile = VTKFile("CG_SUadvdiff_u.pvd")
 u_outfile.write(u)
 
 # Set up the initial conditions (similar to the scalar advection example)
@@ -49,7 +49,7 @@ q = Function(Q).interpolate(q_init)
 
 # We declare the output filename, and write out the initial condition. ::
 
-outfile = File("CG_SUadvdiff_q.pvd")
+outfile = VTKFile("CG_SUadvdiff_q.pvd")
 outfile.write(q)
 
 # time period and time step
@@ -69,7 +69,7 @@ energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advect
 
 # Get nubar (additional SU diffusion) for plotting
 nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
-nubar_outfile = File("CG_SUadvdiff_nubar.pvd")
+nubar_outfile = VTKFile("CG_SUadvdiff_nubar.pvd")
 nubar_outfile.write(nubar)
 
 # Here is the time stepping loop, with an output every 20 steps.

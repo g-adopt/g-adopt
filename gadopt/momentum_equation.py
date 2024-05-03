@@ -1,32 +1,38 @@
-from .equations import BaseTerm, BaseEquation
-from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
-from firedrake import avg, sym, Identity, jump
-from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
-from firedrake import FacetArea, CellVolume
-r"""
-This module contains the classes for the momentum equation and its terms.
+r"""Derived terms and associated equations for the Stokes system.
 
-NOTE: for all terms, the residual() method returns the residual as it would be on the RHS of the equation, i.e.:
+All terms are considered as if they were on the right-hand side of the equation, leading
+to the following UFL expression returned by the `residual` method:
 
   dq/dt = \sum term.residual()
 
-This sign-convention is for compatibility with Thetis' timeintegrators. In general, however we like to think about
-the terms as they are on the LHS. Therefore in the residual methods below we assemble in F as it would be on the LHS:
+This sign convention ensures compatibility with Thetis's time integrators. In general,
+however, we like to think about the terms as they are on the left-hand side. Therefore,
+in the residual methods below, we first sum the terms in the variable `F` as if they
+were on the left-hand side, i.e.
 
-  dq/dt + F(q) = 0
+  dq/dt + F(q) = 0,
 
-and at the very end "return -F".
+and then return `-F`.
+
 """
+
+from typing import Optional
+
+import firedrake as fd
+from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
+from firedrake import avg, sym, Identity, jump
+from firedrake import FacetArea, CellVolume
+
+from .equations import BaseTerm, BaseEquation
+from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
 
 
 class ViscosityTerm(BaseTerm):
+    r"""Viscosity term `-\nabla \cdot (\mu \nabla u)` in the momentum equation.
 
-    r"""
-    Viscosity term :math:`-\nabla \cdot (\mu \nabla u)`
+    Using the symmetric interior penalty method, the weak form becomes
 
-    Using the symmetric interior penalty method the weak form becomes
-
-    .. math::
+    ```
         -\int_\Omega \nabla \cdot (\mu \nabla u) \phi dx
         =& \int_\Omega \mu (\nabla \phi) \cdot (\nabla u) dx \\
         &- \int_{\mathcal{I}\cup\mathcal{I}_v} \text{jump}(\phi \textbf{n})
@@ -34,14 +40,14 @@ class ViscosityTerm(BaseTerm):
         - \int_{\mathcal{I}\cup\mathcal{I}_v} \text{jump}(u \textbf{n})
         \cdot \text{avg}(\mu  \nabla \phi) dS \\
         &+ \int_{\mathcal{I}\cup\mathcal{I}_v} \sigma \text{avg}(\mu) \text{jump}(u \textbf{n}) \cdot
-            \text{jump}(\phi \textbf{n}) dS
+            \text{jump}(\phi \textbf{n}) dS,
+    ```
 
-    where :math:`\sigma` is a penalty parameter,
-    see Epshteyn and Riviere (2007).
+    where `\sigma` is a penalty parameter (see Epshteyn and Riviere, 2007).
 
-    Epshteyn and Riviere (2007). Estimation of penalty parameters for symmetric
-    interior penalty Galerkin methods. Journal of Computational and Applied
-    Mathematics, 206(2):843-872. http://dx.doi.org/10.1016/j.cam.2006.08.029
+    Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty parameters for symmetric
+    interior penalty Galerkin methods. Journal of Computational and Applied Mathematics,
+    206(2), 843-872.
 
     """
     def residual(self, test, trial, trial_lagged, fields, bcs):
@@ -188,22 +194,37 @@ class MomentumSourceTerm(BaseTerm):
 
 
 class MomentumEquation(BaseEquation):
-    """
-    Momentum equation with advection, viscosity, pressure gradient, source term, and coriolis.
-    """
-
+    """Momentum equation with viscosity, pressure gradient, and source terms."""
     terms = [ViscosityTerm, PressureGradientTerm, MomentumSourceTerm]
 
 
 class ContinuityEquation(BaseEquation):
-    """
-    Continuity equation: div(u) = 0
-    """
-
+    """Mass continuity equation with a single divergence term."""
     terms = [DivergenceTerm]
 
 
-def StokesEquations(test_space, trial_space, quad_degree=None, **kwargs):
-    mom_eq = MomentumEquation(test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs)
-    cty_eq = ContinuityEquation(test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs)
+def StokesEquations(
+    test_space: fd.functionspaceimpl.WithGeometry,
+    trial_space: fd.functionspaceimpl.WithGeometry,
+    quad_degree: Optional[int] = None,
+    **kwargs,
+) -> list[BaseEquation]:
+    """Stokes system involving the momentum and mass continuity equations.
+
+    Arguments:
+      test_space: Firedrake function space of the test function
+      trial_space: Firedrake function space of the trial function
+      quad_degree: Quadrature degree. Default value is `2p + 1`, where
+                     p is the polynomial degree of the trial space
+
+    Returns:
+      A list of equation instances for the Stokes system.
+
+    """
+    mom_eq = MomentumEquation(
+        test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs
+    )
+    cty_eq = ContinuityEquation(
+        test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs
+    )
     return [mom_eq, cty_eq]
