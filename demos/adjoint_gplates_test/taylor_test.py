@@ -10,8 +10,6 @@ from mpi4py import MPI
 import numpy as np
 import sys
 
-from cases import cases
-
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
@@ -182,14 +180,4 @@ def rectangle_taylor_test(case):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        for case_name in cases:
-            minconv = rectangle_taylor_test(case_name)
-            print(f"case: {case_name}, result: {minconv}")
-    else:
-        case_name = sys.argv[1]
-        minconv = rectangle_taylor_test(case_name)
-
-        if MPI.COMM_WORLD.Get_rank() == 0:
-            with open(f"{case_name}.conv", "w") as f:
-                f.write(f"{minconv}")
+    rectangle_taylor_test("Tobs")
