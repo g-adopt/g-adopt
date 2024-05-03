@@ -4,6 +4,7 @@ import warnings
 
 import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
+from pyadjoint.tape import annotate_tape
 
 import pygplates
 
@@ -34,7 +35,8 @@ class GPlatesFunctionalityMixin:
 
         # At this point the values are updated.
         # So we have to make sure it is shown correctly on tape
-        self.create_block_variable()
+        if annotate_tape():
+            self.create_block_variable()
 
 
 class GplatesFunction(GPlatesFunctionalityMixin, fd.Function):
