@@ -1,6 +1,7 @@
 import warnings
 import firedrake as fd
 import numpy as np
+from .utility import log
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape
 from scipy.spatial import cKDTree
@@ -30,7 +31,7 @@ class GPlatesFunctionalityMixin:
         if self.gplates_connector.reconstruction_age is not None:
             if abs(self.gplates_connector.ndtime2age(ndtime) - self.gplates_connector.reconstruction_age) < self.gplates_connector.delta_t:
                 return
-
+        log(f"updating with {ndtime}.")
         # Assuming `self` is a Firedrake Function instance,
         self.dat.data_with_halos[self.dbc.nodes, :] = (
             self.gplates_connector.get_plate_velocities(

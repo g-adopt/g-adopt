@@ -27,16 +27,16 @@ LinearSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 LinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 NonlinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 
-blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
-blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
+# blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
+# blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
 
-# timer decorator for fwd and derivative calls.
-ReducedFunctional.__call__ = collect_garbage(
-    timer_decorator(ReducedFunctional.__call__)
-)
-ReducedFunctional.derivative = collect_garbage(
-    timer_decorator(ReducedFunctional.derivative)
-)
+# # timer decorator for fwd and derivative calls.
+# ReducedFunctional.__call__ = collect_garbage(
+#     timer_decorator(ReducedFunctional.__call__)
+# )
+# ReducedFunctional.derivative = collect_garbage(
+#     timer_decorator(ReducedFunctional.derivative)
+# )
 
 # Set up geometry:
 rmax = 2.22
@@ -50,25 +50,26 @@ def __main__():
 def my_taylor_test():
     Tic, reduced_functional = forward_problem()
     log("Reduced Functional Repeat: ", reduced_functional([Tic]))
-    reduced_functional.derivative()
+    # reduced_functional.derivative()
     # Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
     # Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
     # _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-@collect_garbage
+# @collect_garbage
 def forward_problem():
+    generate_mesh()
     # Section:
     # Enable writing intermediary adjoint fields to disk
     enable_disk_checkpointing()
 
-    with CheckpointFile("../../spherical_mesh.h5", "r") as f:
+    with CheckpointFile("simulation_states.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
 
-    # Load mesh
-    with CheckpointFile("../../linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5", "r") as fi:
-        Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
-        Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
+    # # Load mesh
+    # with CheckpointFile("../../linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5", "r") as fi:
+    #     Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
+    #     Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
@@ -92,8 +93,8 @@ def forward_problem():
     # Set up temperature field and initialise:
     Tic = Function(Q1, name="Tic")
     T = Function(Q, name="Temperature")
-    mu = Function(Q, name="mu2_radial")
-    assign_1d_profile(mu, "../../../gplates_global/mu2_radial.rad")
+    mu = Function(Q, name="mu2_radial").assign(1.0)
+    # assign_1d_profile(mu, "../../../gplates_global/mu2_radial.rad")
 
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
@@ -131,7 +132,7 @@ def forward_problem():
     )
 
     # Setup Equations Stokes related constants
-    Ra = Constant(2.0e6)  # Rayleigh number
+    Ra = Constant(2.0e2)  # Rayleigh number
     Di = Constant(0.5)  # Dissipation number.
 
     # Compressible reference state:
@@ -179,6 +180,7 @@ def forward_problem():
     energy_solver.fields['source'] = rhobar * H_int
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
                                  cartesian=False, constant_jacobian=True,
+                                 nullspace=Z_nullspace,
                                  transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
 
@@ -196,7 +198,7 @@ def forward_problem():
     ndtime_now = pl_rec_model.age2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = pl_rec_model.age2ndtime(10.)
+    time = pl_rec_model.age2ndtime(90.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -220,28 +222,35 @@ def forward_problem():
 
     # timestep counter
     timestep_index = 0
+    objective = 0
 
+    ndtime_onemillion = pl_rec_model.age2ndtime(10.0)
+    delta_t.assign(ndtime_now - ndtime_onemillion)
     # Now perform the time loop:
     while time < ndtime_now:
         # Update surface velocities
         gplates_velocities.update_plate_reconstruction(time)
 
         # Solve Stokes sytem
-        stokes_solver.solve()
+        # stokes_solver.solve()
+
+        component = assemble(dot(u_ - gplates_velocities, u_ - gplates_velocities) * dx)
+
+        objective += component
 
         # Make sure we are not going past present day
         if ndtime_now - time < float(delta_t):
             delta_t.assign(ndtime_now - time)
 
         # Temperature system:
-        energy_solver.solve()
+        # energy_solver.solve()
 
         # Updating time
         time += float(delta_t)
         timestep_index += 1
 
-    # Temperature misfit between solution and observation
-    objective = assemble((T - Tobs) ** 2 * dx)
+        if timestep_index > 3:
+            break
 
     log(f"Value of objective: {objective}")
 
@@ -356,6 +365,45 @@ def assign_1d_profile(q, one_d_filename):
     rad = Function(q.function_space()).interpolate(sqrt(X**2))
     averager = LayerAveraging(mesh, cartesian=False)
     averager.extrapolate_layer_average(q, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
+
+
+def generate_mesh():
+    from pathlib import Path
+    if Path("simulation_state.h5").exists():
+        return
+
+    # Set up geometry:
+    ref_level, nlayers = 5, 16
+
+    # Variable radial resolution
+    # Initiating layer heights with 1.
+    resolution_func = np.ones((nlayers))
+
+    # A gaussian shaped function
+    def gaussian(center, c, a):
+        return a * np.exp(
+            -((np.linspace(rmin, rmax, nlayers) - center) ** 2) / (2 * c**2)
+        )
+
+    # building the resolution function
+    for idx, r_0 in enumerate([rmin, rmax, rmax - 660 / 6370]):
+        # gaussian radius
+        c = 0.15
+        # how different is the high res area from low res
+        res_amplifier = 5.0
+        resolution_func *= 1 / (1 + gaussian(center=r_0, c=c, a=res_amplifier))
+
+    # Construct a CubedSphere mesh and then extrude into a sphere - note that unlike cylindrical case, popping is     done internally here:
+    mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
+    mesh = ExtrudedMesh(
+        mesh2d,
+        layers=nlayers,
+        layer_height=(rmax - rmin) * resolution_func / np.sum(resolution_func),
+        extrusion_type="radial",
+    )
+
+    with CheckpointFile("simulation_states.h5", mode="w") as fi:
+        fi.save_mesh(mesh)
 
 
 if __name__ == "__main__":
