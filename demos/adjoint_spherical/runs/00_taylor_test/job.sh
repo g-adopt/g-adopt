@@ -1,7 +1,7 @@
 #PBS -N RobinBegins   
 #PBS -P xd2
 #PBS -q normalsr 
-#PBS -l walltime=24:00:00
+#PBS -l walltime=10:00:00
 #PBS -l mem=6500GB
 #PBS -l ncpus=1352
 #PBS -l jobfs=5200GB

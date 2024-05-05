@@ -84,6 +84,7 @@ def forward_problem():
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Initial Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
+    R = FunctionSpace(mesh, "R", 0) # Function space for constants 
 
     # Test functions and functions to hold solutions:
     v, w = TestFunctions(Z)
@@ -93,15 +94,15 @@ def forward_problem():
     # Set up temperature field and initialise:
     Tic = Function(Q1, name="Tic")
     T = Function(Q, name="Temperature")
-    mu = Function(Q, name="mu2_radial").assign(1.0)
-    # assign_1d_profile(mu, "../../../gplates_global/mu2_radial.rad")
+    mu = Function(W, name="Viscosity")
+    assign_1d_profile(mu, "../../../gplates_global/mu2_radial.rad")
 
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
     H_int = Constant(10.0)  # Internal heating
 
     # Initial time step
-    delta_t = Constant(1.0e-6)
+    delta_t = Function(R, name="delta_t").assign(3.0e-6)
     Tic.interpolate(((1.0 - (T0*exp(Di) - T0)) * (rmax-r)))
 
     pl_rec_model = pyGplatesConnector(
@@ -132,7 +133,7 @@ def forward_problem():
     )
 
     # Setup Equations Stokes related constants
-    Ra = Constant(2.0e2)  # Rayleigh number
+    Ra = Constant(1.0e2)  # Rayleigh number
     Di = Constant(0.5)  # Dissipation number.
 
     # Compressible reference state:
@@ -198,7 +199,7 @@ def forward_problem():
     ndtime_now = pl_rec_model.age2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = pl_rec_model.age2ndtime(90.)
+    time = pl_rec_model.age2ndtime(10.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -222,38 +223,41 @@ def forward_problem():
 
     # timestep counter
     timestep_index = 0
-    objective = 0
 
-    ndtime_onemillion = pl_rec_model.age2ndtime(10.0)
-    delta_t.assign(ndtime_now - ndtime_onemillion)
+    terms = 0
+
     # Now perform the time loop:
     while time < ndtime_now:
         # Update surface velocities
+        log(f"Calculting plates at {pl_rec_model.ndtime2age(time)}")
         gplates_velocities.update_plate_reconstruction(time)
 
         # Solve Stokes sytem
-        # stokes_solver.solve()
+        stokes_solver.solve()
 
-        component = assemble(dot(u_ - gplates_velocities, u_ - gplates_velocities) * dx)
-
-        objective += component
-
+        # # Make sure we are not going past present day
+        # if ndtime_now - time < float(delta_t):
+        #     delta_t.assign(ndtime_now - time)
         # Make sure we are not going past present day
-        if ndtime_now - time < float(delta_t):
+        if timestep_index == 2:
             delta_t.assign(ndtime_now - time)
+        log(delta_t.dat.data)
+
+        terms += assemble(1e5 * delta_t * dx(mesh))
 
         # Temperature system:
-        # energy_solver.solve()
+        energy_solver.solve()
 
         # Updating time
         time += float(delta_t)
+        if timestep_index == 2:
+            break
         timestep_index += 1
 
-        if timestep_index > 3:
-            break
+    objective = terms 
 
     log(f"Value of objective: {objective}")
-
+    
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
     return Tic, ReducedFunctional(objective, control)
@@ -345,27 +349,29 @@ def assign_1d_profile(q, one_d_filename):
     """
     from firedrake.ufl_expr import extract_unique_domain
     from scipy.interpolate import interp1d
-    # find the mesh
-    mesh = extract_unique_domain(q)
+    
+    with stop_annotating():
+        # find the mesh
+        mesh = extract_unique_domain(q)
 
-    visc = None
-    rshl = None
-    # read the input file
-    if mesh.comm.rank == 0:
-        # The root process reads the file
-        rshl, visc = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+        visc = None
+        rshl = None
+        # read the input file
+        if mesh.comm.rank == 0:
+            # The root process reads the file
+            rshl, visc = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
 
-    # Broadcast the entire 'visc' array to all processes
-    visc = mesh.comm.bcast(visc, root=0)
-    # Similarly, broadcast 'rshl' if needed (assuming all processes need it)
-    rshl = mesh.comm.bcast(rshl, root=0)
+        # Broadcast the entire 'visc' array to all processes
+        visc = mesh.comm.bcast(visc, root=0)
+        # Similarly, broadcast 'rshl' if needed (assuming all processes need it)
+        rshl = mesh.comm.bcast(rshl, root=0)
 
-    element_family = q.function_space().ufl_element()
-    X = Function(VectorFunctionSpace(mesh=mesh, family=element_family)).interpolate(SpatialCoordinate(mesh))
-    rad = Function(q.function_space()).interpolate(sqrt(X**2))
-    averager = LayerAveraging(mesh, cartesian=False)
-    averager.extrapolate_layer_average(q, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
-
+        element_family = q.function_space().ufl_element()
+        X = Function(VectorFunctionSpace(mesh=mesh, family=element_family)).interpolate(SpatialCoordinate(mesh))
+        rad = Function(q.function_space()).interpolate(sqrt(X**2))
+        averager = LayerAveraging(mesh, cartesian=False)
+        averager.extrapolate_layer_average(q, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
+    q.create_block_variable() 
 
 def generate_mesh():
     from pathlib import Path
