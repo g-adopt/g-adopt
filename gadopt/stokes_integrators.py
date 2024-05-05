@@ -4,7 +4,7 @@ import firedrake as fd
 
 from .approximations import BaseApproximation
 from .momentum_equation import StokesEquations
-from .utility import DEBUG, INFO, depends_on, ensure_constant, log_level, upward_normal
+from .utility import DEBUG, INFO, depends_on, ensure_constant, log_level, upward_normal, InteriorBC
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -243,3 +243,67 @@ class StokesSolver:
         if not self._solver_setup:
             self.setup_solver()
         self.solver.solve()
+
+
+class dynamic_topography_solver:
+    def __init__(self,
+                 stokes_solver: StokesSolver,
+                 subdomain_id: int | str):
+        """Compute deviatoric normal stress on surface(s) identified by subdomain_ids
+
+        Args:
+            force: Firedrake Function to which the deviatoric
+                   normal stress field should beinterpolate into
+            subdomain_id: list of markers for the surfaces this field should apply to
+
+        Returns:
+            force
+        """
+
+        # pressure and velocity together with viscosity are needed
+        self.u = stokes_solver.u
+        self.p = stokes_solver.p
+        self.mu = stokes_solver.mu
+
+        mesh = force.function_space().mesh()
+        n = fd.FacetNormal(mesh)
+
+        # function space of the solution
+        Q = force.function_space()
+
+        # Test and Trial Functions
+        phi = fd.TestFunction(Q)
+        v = fd.TrialFunction(Q)
+
+        # Stress, compressible formulation has an additional term
+        stress = -p * fd.Identity(2) + mu * 2 * fd.sym(fd.grad(u))
+        compressible = self.approximation.compressible
+        if compressible:
+            stress -= 2/3 * mu * self.Identity(self.dim) * fd.div(u)
+
+        # Surface integral for extruded mesh is different
+        # Are we dealing with extruded mesh
+        extruded_mesh = mesh.extruded
+
+        # Building matrix
+        if extruded_mesh and subdomain_id in ["top", "bottom"]:
+            ds = {"top": fd.ds_t, "bottom": fd.ds_b}.get(id)
+        else:
+            ds = fd.ds(id)
+        a = phi * v * ds
+        L = - phi * fd.dot(fd.dot(stress, n), n) * ds
+
+        v = fd.Function(Q)
+
+        interior_null_bc = InteriorBC(Q, 0., subdomain_id)
+        # Solve a linear system
+        fd.solve(
+            a == L,
+            v,
+            bcs=interior_null_bc,
+        )
+
+        vave = fd.assemble(v * ds)
+        force.assign(v - vave)
+        interior_null_bc.apply(force)
+        return force

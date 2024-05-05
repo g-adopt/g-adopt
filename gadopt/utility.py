@@ -2,7 +2,7 @@
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement
+from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
 import ufl
 import finat.ufl
@@ -44,6 +44,7 @@ class ParameterLog:
 class TimestepAdaptor:
     """
     Computes timestep based on CFL condition for provided velocity field"""
+
     def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
         """
         :arg dt_const:      Constant whose value will be updated by the timestep adaptor
@@ -445,6 +446,13 @@ def timer_decorator(func):
         log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
         return result
     return wrapper
+
+
+class InteriorBC(DirichletBC):
+    """DirichletBC applied to anywhere that is *not* on the specified boundary"""
+    @ utils.cached_property
+    def nodes(self):
+        return np.array(list(set(range(self._function_space.node_count)) - set(super().nodes)))
 
 
 def absv(u):
