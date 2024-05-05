@@ -3,6 +3,7 @@ from gadopt.inverse import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
 import numpy as np
 from firedrake.adjoint_utils import blocks
+from pyadjoint import stop_annotating 
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -17,7 +18,6 @@ iterative_solver_parameters = {
     "pc_type": "sor",
     "mat_type": "aij",
     "ksp_rtol": 1e-12,
-    "ksp_atol": 1e-10,
 }
 
 LinearSolver.DEFAULT_SNES_PARAMETERS = {"snes_type": "ksponly"}
@@ -27,16 +27,16 @@ LinearSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 LinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 NonlinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 
-# blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
-# blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
+blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
+blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
 
-# # timer decorator for fwd and derivative calls.
-# ReducedFunctional.__call__ = collect_garbage(
-#     timer_decorator(ReducedFunctional.__call__)
-# )
-# ReducedFunctional.derivative = collect_garbage(
-#     timer_decorator(ReducedFunctional.derivative)
-# )
+# timer decorator for fwd and derivative calls.
+ReducedFunctional.__call__ = collect_garbage(
+    timer_decorator(ReducedFunctional.__call__)
+)
+ReducedFunctional.derivative = collect_garbage(
+    timer_decorator(ReducedFunctional.derivative)
+)
 
 # Set up geometry:
 rmax = 2.22
@@ -50,26 +50,24 @@ def __main__():
 def my_taylor_test():
     Tic, reduced_functional = forward_problem()
     log("Reduced Functional Repeat: ", reduced_functional([Tic]))
-    # reduced_functional.derivative()
-    # Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
-    # Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
-    # _ = taylor_test(reduced_functional, Tic, Delta_temp)
+    Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
+    Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
+    _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-# @collect_garbage
+@collect_garbage
 def forward_problem():
-    generate_mesh()
     # Section:
     # Enable writing intermediary adjoint fields to disk
     enable_disk_checkpointing()
 
-    with CheckpointFile("simulation_states.h5", "r") as f:
+    with CheckpointFile("../../spherical_mesh.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
 
-    # # Load mesh
-    # with CheckpointFile("../../linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5", "r") as fi:
-    #     Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
-    #     Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
+    # Load mesh
+    with CheckpointFile("../../linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5", "r") as fi:
+        Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
+        Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
@@ -102,8 +100,8 @@ def forward_problem():
     H_int = Constant(10.0)  # Internal heating
 
     # Initial time step
-    delta_t = Function(R, name="delta_t").assign(3.0e-6)
-    Tic.interpolate(((1.0 - (T0*exp(Di) - T0)) * (rmax-r)))
+    delta_t = Function(R, name="delta_t").assign(2.0e-6)
+    Tic.assign(Tobs)
 
     pl_rec_model = pyGplatesConnector(
         rotation_filenames=[
@@ -133,7 +131,7 @@ def forward_problem():
     )
 
     # Setup Equations Stokes related constants
-    Ra = Constant(1.0e2)  # Rayleigh number
+    Ra = Constant(1.0e7)  # Rayleigh number
     Di = Constant(0.5)  # Dissipation number.
 
     # Compressible reference state:
@@ -199,7 +197,7 @@ def forward_problem():
     ndtime_now = pl_rec_model.age2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = pl_rec_model.age2ndtime(10.)
+    time = pl_rec_model.age2ndtime(5.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -224,40 +222,39 @@ def forward_problem():
     # timestep counter
     timestep_index = 0
 
-    terms = 0
-
     # Now perform the time loop:
     while time < ndtime_now:
-        # Update surface velocities
-        log(f"Calculting plates at {pl_rec_model.ndtime2age(time)}")
-        gplates_velocities.update_plate_reconstruction(time)
+        if timestep_index % 2 == 0:
+            # Update surface velocities
+            gplates_velocities.update_plate_reconstruction(time)
 
-        # Solve Stokes sytem
-        stokes_solver.solve()
+            # Solve Stokes sytem
+            stokes_solver.solve()
 
-        # # Make sure we are not going past present day
-        # if ndtime_now - time < float(delta_t):
-        #     delta_t.assign(ndtime_now - time)
         # Make sure we are not going past present day
-        if timestep_index == 2:
+        if ndtime_now - time < float(delta_t):
+            log(f"delta_t is {delta_t.dat.data[0]}, and is changing to")
             delta_t.assign(ndtime_now - time)
-        log(delta_t.dat.data)
-
-        terms += assemble(1e5 * delta_t * dx(mesh))
+            log(f"{delta_t.dat.data[0]}")
+        # Make sure we are not going past present day
 
         # Temperature system:
         energy_solver.solve()
 
         # Updating time
         time += float(delta_t)
-        if timestep_index == 2:
-            break
         timestep_index += 1
 
-    objective = terms 
+    # Temperature misfit between solution and observation
+    t_misfit = assemble((T - Tobs) ** 2 * dx)
+
+    # Assembling the objective
+    objective = (
+        t_misfit 
+    )
 
     log(f"Value of objective: {objective}")
-    
+
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
     return Tic, ReducedFunctional(objective, control)
