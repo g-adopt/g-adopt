@@ -4,6 +4,7 @@ from firedrake import sqrt, Function, FiniteElement, TensorProductElement, Funct
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import op2, VectorElement
 from firedrake.__future__ import Interpolator
+import firedrake as fd
 import ufl
 import finat.ufl
 import time
@@ -15,6 +16,9 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
+from typing import Optional
+from numbers import Number
+
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -44,6 +48,7 @@ class ParameterLog:
 class TimestepAdaptor:
     """
     Computes timestep based on CFL condition for provided velocity field"""
+
     def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
         """
         :arg dt_const:      Constant whose value will be updated by the timestep adaptor
@@ -300,6 +305,113 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
 
     constructor = VectorFunctionSpace if vector else FunctionSpace
     return constructor(mesh, elt, **kwargs)
+
+
+class DiffusiveSmoothingSolver:
+    def __init__(
+            self,
+            function_space: fd.FunctionSpace,
+            wavelength: Number,
+            bcs: Optional[dict[int, dict[str, int | float]]] = None,
+            K: fd.Function | Number = 1,
+            quad_degree: int = 6,
+            solver_parameters: Optional[dict[str, str | float]] = None,
+            **kwargs):
+        """A class to perform diffusive smoothing using a diffusion solver.
+
+        This class provides functionality to solve a diffusion equation for smoothing
+        a Scalar Function.
+
+        Args:
+            function_space (firedrake.FunctionSpace): The function space to solve the diffusion equation.
+            wavelength (Number): The wavelength or time duration for diffusion.
+            bcs (Optional[dict[int, dict[str, int | float]]]): Boundary conditions to impose on the solution.
+            K (Union[firedrake.Function, Number], optional): Diffusion tensor. Defaults to 1.
+            quad_degree (int, optional): Quadrature degree for integrations. Defaults to 6.
+            solver_parameters (Optional[dict[str, Union[str, float]]], optional): Solver parameters for the solver. Defaults to None.
+            **kwargs: Additional keyword arguments to pass to the solver.
+
+        Attributes:
+            function_space (firedrake.FunctionSpace): The function space to solve the diffusion equation.
+            rhs (firedrake.Function): The right-hand side for the diffusion equation.
+            u (firedrake.Function): The solution of the diffusion problem.
+            mesh (firedrake.Mesh): The mesh to solve the problem on.
+            delta_t (Number): The wavelength or time duration for diffusion.
+            bcs (Optional[dict[int, dict[str, int | float]]]): Boundary conditions to impose on the solution.
+            quad_degree (int): Quadrature degree for integrations.
+            solver_parameters (Optional[dict[str, Union[str, float]]]): Solver parameters for the solver.
+            K (Union[firedrake.Function, Number]): Diffusion tensor.
+            solver_kwargs (dict): Additional keyword arguments to pass to the solver.
+            _solver_is_setup (bool): Flag indicating if the solver is set up.
+
+        """
+        self.function_space = function_space  # function space to solve the diffusion equation
+        self.rhs = fd.Function(function_space, name="smoothing-rhs")  # RHS for diffusion euqation
+        self.u = fd.Function(function_space, name="smoothed")  # solution of the diffusion problem
+        self.mesh = function_space.mesh()  # mesh to solve the problem on
+        self.wavelength = wavelength  # wavelength or in this case how much time we should let it diffuse
+        self.bcs = bcs  # boundary conditions to impose on the solution
+        self.quad_degree = quad_degree  # quadrature degree for integrations
+        self.solver_parameters = solver_parameters  # solver parameters to pass on to solve
+        self.K = K  # diffusion tensor, default is 1
+        self.solver_kwargs = kwargs  # optional parameters to pass to solver
+        self._solver_is_setup = False
+
+    def action(self, T: fd.Function):
+        """Apply smoothing action.
+
+        Args:
+            T (firedrake.Function): The input field to be smoothed.
+
+        Returns:
+            firedrake.Function: The smoothed field.
+
+        """
+        if not self._solver_is_setup:
+            self._setup_smoothing_solver()
+
+        # TODO: make sure you change it to interpolate
+        self.rhs.assign(T)
+        self.solver.solve()
+
+        return self.u
+
+    def _setup_smoothing_solver(self):
+        """Set up the solver for diffusive smoothing."""
+
+        trial = fd.TrialFunction(self.function_space)
+        test = fd.TestFunction(self.function_space)
+        dx = fd.dx(degree=self.quad_degree)
+
+        # In case diffusion is anisotropic
+        K_avg = fd.assemble(fd.inner(self.K, self.K) * dx(self.mesh)) / fd.assemble(1 * dx(self.mesh))
+
+        self.delta_t = self.wavelength ** 2 / (4 * K_avg)
+
+        # building the bilinear form
+        a = test * trial * dx + self.delta_t * fd.inner(self.K * fd.grad(test), fd.grad(trial)) * dx
+
+        def ds(subdomain_id):
+            if self.mesh.extruded and isinstance(subdomain_id, str):
+                return {"top": fd.ds_t(degree=self.quad_degree), "bottom": fd.ds_b(degree=self.quad_degree)}[subdomain_id]
+            else:
+                return fd.ds(subdomain_id)
+        bcs = []
+        # for boundary conditions set, we have flux at the boundaries
+        for subdomain_id, bc in self.bcs.items():
+            for bc_type, value in bc.items():
+                if bc_type == 'T':
+                    bcs.append(fd.DirichletBC(self.function_space, value, subdomain_id))
+                    a -= self.delta_t * test * fd.inner(fd.grad(trial), fd.FacetNormal(self.mesh)) * ds(subdomain_id)
+                else:
+                    raise ValueError("Boundary conditions other that Dirichlet are not supported.")
+
+        L = test * self.rhs * dx
+
+        self.problem = fd.LinearVariationalProblem(a=a, L=L, u=self.u, bcs=bcs, constant_jacobian=True)
+        self.solver = fd.LinearVariationalSolver(self.problem, solver_parameters=self.solver_parameters, **self.solver_kwargs)
+
+        self._solver_is_setup = True
 
 
 class LayerAveraging:
