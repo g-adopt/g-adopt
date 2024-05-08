@@ -1,3 +1,4 @@
+from numbers import Number
 from typing import Optional
 
 import firedrake as fd
@@ -141,7 +142,7 @@ class StokesSolver:
         mu: fd.Function | int | float = 1,
         quad_degree: int = 6,
         cartesian: bool = True,
-        solver_parameters: Optional[dict[str, str | float]] = None,
+        solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
         **kwargs
@@ -193,18 +194,32 @@ class StokesSolver:
         for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
-        if self.solver_parameters is None:
+        if not isinstance(self.solver_parameters, dict):
             if self.linear:
                 self.solver_parameters = {"snes_type": "ksponly"}
             else:
                 self.solver_parameters = newton_stokes_solver_parameters.copy()
-            if INFO >= log_level:
-                self.solver_parameters['snes_monitor'] = None
 
-            if self.mesh.topological_dimension() == 2 and cartesian:
+            if INFO >= log_level:
+                self.solver_parameters["snes_monitor"] = None
+
+            if isinstance(self.solver_parameters, str):
+                match self.solver_parameters:
+                    case "iterative":
+                        self.solver_parameters.update(
+                            iterative_stokes_solver_parameters
+                        )
+                    case "direct":
+                        self.solver_parameters.update(direct_stokes_solver_parameters)
+                    case _:
+                        raise ValueError(
+                            f"Solver type '{self.solver_parameters}' not implemented."
+                        )
+            elif self.mesh.topological_dimension() == 2 and cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
+
                 if DEBUG >= log_level:
                     self.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
                     self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
