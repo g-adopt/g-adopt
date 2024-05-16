@@ -226,7 +226,7 @@ def generate_mesh():
         return
 
     # Set up geometry:
-    ref_level, nlayers = 7, 64
+    ref_level, nlayers = 6, 32
 
     # Variable radial resolution
     # Initiating layer heights with 1.
