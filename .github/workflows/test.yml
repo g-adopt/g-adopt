@@ -52,9 +52,11 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt update
-          sudo apt install -y task-spooler time
+          sudo apt install -y task-spooler time git-lfs
           tsp -S 48
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Install Python dependencies
         run: |

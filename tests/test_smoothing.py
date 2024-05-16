@@ -3,14 +3,16 @@ Test case for smoothing
 """
 import pytest
 import numpy as np
+from pathlib import Path
 from gadopt import *
 
 
 # Fixture for loading cylindrical field data
 @pytest.fixture
 def load_field():
+    checkpoint_base = Path(__file__).parent / "../demos/adjoint_2d_cylindrical"
     # Start with a previously-initialised temperature field
-    with CheckpointFile("../demos/adjoint_2d_cylindrical/Checkpoint230.h5", mode="r") as f:
+    with CheckpointFile(str(checkpoint_base.resolve() / "Checkpoint230.h5"), mode="r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
         T = f.load_function(mesh, "Temperature")
 
