@@ -29,7 +29,7 @@ def obtain_Muller_2022_SE(download_path: str | Path, download_mode: bool = False
         if not all_files_present:
             cache_plate_reconstruction_model(
                 url=muller_url,
-                download_dir=download_path,
+                download_path=download_path,
                 files_2_extract=[filename for filenames in plate_reconstruction_files.values() for filename in filenames]
             )
     else:
@@ -61,7 +61,7 @@ def cache_plate_reconstruction_model(url: str, download_path: str | Path, files_
         fname=filename
     )
 
-    files_2_extract = [Path(filename_wo_extension) / fi for fi in files_2_extract]
+    files_2_extract = [str(Path(filename_wo_extension) / fi) for fi in files_2_extract]
 
     # Unzip the downloaded file
     with zipfile.ZipFile(zip_path, 'r') as zipfi:

@@ -8,7 +8,7 @@ from scipy.spatial import cKDTree
 import pygplates
 
 __all__ = [
-    "GplatesFunction",
+    "GplatesVelocityFunction",
     "pyGplatesConnector"
 ]
 
@@ -43,11 +43,11 @@ class GPlatesFunctionalityMixin:
             self.create_block_variable()
 
 
-class GplatesFunction(GPlatesFunctionalityMixin, fd.Function):
+class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
     """Extends `firedrake.Function` to incorporate velocities calculated by
     Gplates, coming from plate tectonics reconstion.
 
-    `GplatesFunction` is designed to associate a Firedrake function with a GPlates
+    `GplatesVelocityFunction` is designed to associate a Firedrake function with a GPlates
     connector, allowing the integration of plate tectonics reconstructions. This is particularly
     useful when setting "top" boundary condition for the Stokes systems when performing
     data assimilation (sequential or adjoint).
@@ -61,7 +61,7 @@ class GplatesFunction(GPlatesFunctionalityMixin, fd.Function):
             tectonics data.
 
     Args:
-        function_space: The function space on which the GplatesFunction is defined.
+        function_space: The function space on which the GplatesVelocityFunction is defined.
         gplates_connector: An instance of a pyGplatesConnector, used to integrate
             GPlates functionality or data. See Documentation for pyGplatesConnector.
         top_boundary_marker (defaults to "top"): marker for the top boundary.
@@ -77,7 +77,7 @@ class GplatesFunction(GPlatesFunctionalityMixin, fd.Function):
 
     Example:
         >>> # Assuming necessary imports and setup are done
-        >>> gplates_function = GplatesFunction(V,
+        >>> gplates_function = GplatesVelocityFunction(V,
         ...                                    gplates_connector=pl_rec_model,
         ...                                    name="GplateVelocity")
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
@@ -133,7 +133,7 @@ class pyGplatesConnector(object):
     #   this is just to avoid division by zero when weighted averaging
     epsilon_distance = 1e-8
 
-    def __init__(self, rotation_filenames, topology_filenames, oldest_age, delta_t=1., scaling_factor=1.0, nseeds=1000, nneighbours=3):
+    def __init__(self, rotation_filenames, topology_filenames, oldest_age, delta_t=1., scaling_factor=1.0, nseeds=1e5, nneighbours=4):
         """An interface to pygplates, used for updating top Dirichlet boundary conditions
         using plate tectonic reconstructions.
 
@@ -150,8 +150,10 @@ class pyGplatesConnector(object):
             oldest_age (float): The oldest age present in the plate reconstruction model.
             delta_t (Optional[float]): The t window range outside which plate velocities are updated.
             scaling_factor (Optional[float]): Scaling factor for surface velocities.
-            nseeds (Optional[int]): Number of seed points used in the Fibonacci sphere generation.
-            nneighbours (Optional[int]): Number of neighboring points to consider in velocity calculations.
+            nseeds (Optional[int]): Number of seed points used in the Fibonacci sphere generation. Higher
+                    seed point numbers result in finer representation of boundaries in pygpaltes. Notice that
+                    the finer velocity variations will then result in more challenging Stokes solves.
+            nneighbours (Optional[int]): Number of neighboring points when interpolating velocity for each grid point. Default is 4.
 
         Examples:
             >>> connector = pyGplatesConnector(rotation_filenames, topology_filenames, oldest_age)
@@ -311,26 +313,30 @@ class pyGplatesConnector(object):
         seeds_u = np.array([i.to_xyz() for i in seeds_u]) *\
             ((pyGplatesConnector.velocity_dimDcmyr) / self.scaling_factor)
 
+        # if pyGplates does not find a plate id for a point, assings NaN to the velocity
+        # here we make sure we only use velocities that are not NaN.
+        non_nan_values = ~np.isnan(seeds_u[:, 0])
+
         # generate a KD-tree of the seeds points that have a numerical value
-        tree = cKDTree(data=self.seeds[seeds_u[:, 0] == seeds_u[:, 0], :], leafsize=16)
+        tree = cKDTree(data=self.seeds[non_nan_values, :], leafsize=16)
 
         # find the neighboring points
         dists, idx = tree.query(x=target_coords, k=self.nneighbours)
 
-        # Use np.where to avoid division by zero
-        # Replace 0 distances with np.finfo(float).eps to avoid division
-        # by zero while keeping original zeros intact for later use
-        safe_dists = np.where(dists == 0, np.finfo(float).eps, dists)
+        # Use np.where to avoid division by very small values
+        # Replace tiny distances with pyGplatesConnector.epsilon_distance to avoid division
+        # by tiny values while keeping original distances intact for later use
+        safe_dists = np.where(dists < pyGplatesConnector.epsilon_distance, pyGplatesConnector.epsilon_distance, dists)
 
         # Then, calculate the weighted average using safe_dists
         res_u = np.einsum(
             'i, ij->ij',
             1/np.sum(1/safe_dists, axis=1),
-            np.einsum('ij, ijk ->ik', 1/safe_dists, seeds_u[seeds_u[:, 0] == seeds_u[:, 0]][idx])
+            np.einsum('ij, ijk ->ik', 1/safe_dists, seeds_u[non_nan_values][idx])
         )
-
+        close_points_mask = dists[:, 0] < pyGplatesConnector.epsilon_distance
         # Now handle the case where points are too close to each other:
-        res_u[dists[:, 0] <= pyGplatesConnector.epsilon_distance, :] = seeds_u[seeds_u[:, 0] == seeds_u[:, 0]][idx[dists[:, 0] <= pyGplatesConnector.epsilon_distance, 0]]
+        res_u[close_points_mask, :] = seeds_u[non_nan_values][idx[close_points_mask, 0]]
 
         return res_u
 
