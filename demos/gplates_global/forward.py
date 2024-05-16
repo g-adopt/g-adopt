@@ -1,5 +1,6 @@
 from gadopt import *
-from gadopt.gplates import GplatesFunction, pyGplatesConnector
+from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector
+from gadopt.gplatefiles import obtain_Muller_2022_SE
 import scipy
 import math
 
@@ -72,14 +73,13 @@ def forward():
                 )
             )
 
+    # Getting the relevant filenames for plate reconstruction
+    muller_2022_files = obtain_Muller_2022_SE("./gplates_files")
+
     # Initiating a plate reconstruction model
     plate_receonstion_model = pyGplatesConnector(
-        rotation_filenames=[
-            './gplates_files/Zahirovic2022_CombinedRotations_fixed_crossovers.rot'],
-        topology_filenames=[
-            './gplates_files/Zahirovic2022_PlateBoundaries.gpmlz',
-            './gplates_files/Zahirovic2022_ActiveDeformation.gpmlz',
-            './gplates_files/Zahirovic2022_InactiveDeformation.gpmlz'],
+        rotation_filenames=muller_2022_files["rotation_files"],
+        topology_filenames=muller_2022_files["topology_filenames"],
         nseeds=1e5,
         nneighbours=4,
         oldest_age=409,
@@ -87,7 +87,7 @@ def forward():
     )
 
     # Top velocity boundary condition
-    gplates_velocities = GplatesFunction(
+    gplates_velocities = GplatesVelocityFunction(
         V,
         gplates_connector=plate_receonstion_model,
         top_boundary_marker=top_id,
