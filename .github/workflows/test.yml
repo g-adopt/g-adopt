@@ -59,6 +59,7 @@ jobs:
           lfs: true
       - name: Explicit LFS checkout
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git lfs checkout
 
       - name: Install Python dependencies
