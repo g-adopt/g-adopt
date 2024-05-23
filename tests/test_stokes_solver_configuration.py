@@ -1,5 +1,5 @@
 import firedrake as fd
-import numpy as np
+import pytest
 
 from gadopt.approximations import BoussinesqApproximation
 from gadopt.stokes_integrators import (
@@ -81,13 +81,7 @@ def test_solver_parameters_argument():
             solver_parameters=solver_parameters,
         )
 
-        np.testing.assert_equal(stokes_solver.solver_parameters, expected_value)
+        assert stokes_solver.solver_parameters == expected_value
 
-    np.testing.assert_raises(
-        ValueError,
-        StokesSolver,
-        stokes_function,
-        temperature,
-        approximation,
-        solver_parameters="",
-    )
+    with pytest.raises(ValueError):
+        StokesSolver(stokes_function, temperature, approximation, solver_parameters="")
