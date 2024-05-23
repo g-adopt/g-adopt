@@ -3,7 +3,7 @@ from gadopt.inverse import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
 import numpy as np
 from firedrake.adjoint_utils import blocks
-from pyadjoint import stop_annotating 
+from pyadjoint import stop_annotating
 from pathlib import Path
 from pykdtree.kdtree import KDTree
 from pyshtools import SHCoeffs
@@ -45,10 +45,8 @@ ReducedFunctional.derivative = collect_garbage(
 # Set up geometry:
 rmax = 2.208
 rmin = 1.208
-
-
-def __main__():
-    my_taylor_test()
+ref_level = 7
+nlayers = 64
 
 
 def conduct_inversion():
@@ -60,9 +58,9 @@ def conduct_inversion():
     T_ub = Function(Tic.function_space(), name="Upper bound temperature")
     T_lb.assign(0.0)
     T_ub.assign(1.0)
-    
+
     minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
-    
+
     # Establish a LinMore Optimiser
     optimiser = LinMoreOptimiser(
         minimisation_problem,
@@ -89,16 +87,13 @@ def forward_problem():
     # Enable writing intermediary adjoint fields to disk
     enable_disk_checkpointing()
 
-
     base_path = Path(__file__).resolve()
-
-    with CheckpointFile(str(base_path / "spherical_mesh.h5"), "r") as f:
-        mesh = f.load_mesh("firedrake_default_extruded")
 
     # Load mesh
     with CheckpointFile(str(base_path / "linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5"), "r") as fi:
+        mesh = f.load_mesh("firedrake_default_extruded")
         Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
-        Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
+        # Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
@@ -113,7 +108,7 @@ def forward_problem():
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Initial Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
-    R = FunctionSpace(mesh, "R", 0) # Function space for constants 
+    R = FunctionSpace(mesh, "R", 0)  # Function space for constants
 
     # Test functions and functions to hold solutions:
     v, w = TestFunctions(Z)
@@ -138,8 +133,8 @@ def forward_problem():
     plate_reconstruction_files = get_plate_reconstruction_info()
 
     plate_reconstruction_model = pyGplatesConnector(
-        rotation_filenames=plate_rec_files["rotation_filenames"],
-        topology_filenames=plate_rec_files["topology_filenames"],
+        rotation_filenames=plate_reconstruction_files["rotation_filenames"],
+        topology_filenames=plate_reconstruction_files["topology_filenames"],
         nneighbours=4,
         nseeds=1e5,
         scaling_factor=1.0,
@@ -275,7 +270,7 @@ def forward_problem():
 
     # Assembling the objective
     objective = (
-        t_misfit 
+        t_misfit
     )
 
     # All done with the forward run, stop annotating anything else to the tape
@@ -307,7 +302,7 @@ def assign_1d_profile(q, one_d_filename):
     """
     from firedrake.ufl_expr import extract_unique_domain
     from scipy.interpolate import interp1d
-    
+
     with stop_annotating():
         # find the mesh
         mesh = extract_unique_domain(q)
@@ -329,33 +324,33 @@ def assign_1d_profile(q, one_d_filename):
         rad = Function(q.function_space()).interpolate(sqrt(X**2))
         averager = LayerAveraging(mesh, cartesian=False)
         averager.extrapolate_layer_average(q, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
-    q.create_block_variable() 
+    q.create_block_variable()
 
 
 def get_plate_reconstruction_info():
-    plate_rec_files = {}
+    plate_reconstruction_files = {}
 
     base_path = Path(__file__).resolve()
 
     # rotation filenames
-    plate_rec_files["rotation_filenames"] = [
-        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/optimisation/1000_0_rotfile_MantleOptimised.rot") 
+    plate_reconstruction_files["rotation_filenames"] = [
+        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/optimisation/1000_0_rotfile_MantleOptimised.rot")
     ]
 
     # topology filenames
-    plate_rec_files["topology_filenames"] = [
-            str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/250-0_plate_boundaries.gpml"),
-            str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/410-250_plate_boundaries.gpml"),
-            str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Convergence.gpml"),
-            str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Divergence.gpml"),
-            str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Topologies.gpml"),
-            str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Transforms.gpml"),
+    plate_reconstruction_files["topology_filenames"] = [
+        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/250-0_plate_boundaries.gpml"),
+        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/410-250_plate_boundaries.gpml"),
+        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Convergence.gpml"),
+        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Divergence.gpml"),
+        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Topologies.gpml"),
+        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Transforms.gpml"),
     ]
 
-    return plate_rec_files
+    return plate_reconstruction_files
 
 
-def generate_reference_fields(ref_level=7, nlayers=64):
+def generate_reference_fields():
     base_path = Path(__file__).resolve()
 
     # mesh file
@@ -374,7 +369,7 @@ def generate_reference_fields(ref_level=7, nlayers=64):
     # Reference temperature field
     Tobs = load_tomography_model(
         mesh,
-        fi_name=)
+        fi_name=str(sph_file_path))
 
     # Average of temperature field
     Taverage = Function(Tobs.function_space(), name="Taverage")
@@ -405,8 +400,8 @@ def viscosity_function(mesh):
     viscosity = Function(Q, name="Viscosity")
 
     # radius and coordinates
-    r = Function(V).interpolate(SpatialCoordinate(mesh))
-    rad = Function(Q).interpolate(sqrt(SpatialCoordinate(mesh) ** 2))
+    X = Function(V).interpolate(SpatialCoordinate(mesh))
+    rad = Function(Q).interpolate(sqrt(X[0] ** 2 + X[1]**2 + X[2] ** 2))
 
     # knowing how many extrusion layers we have
     vnodes = nlayers * 2 + 1
@@ -438,8 +433,8 @@ def load_tomography_model(mesh, fi_name):
     Tobs = Function(Q, name="Tobs")
 
     # radius and coordinates
-    r = Function(V).interpolate(SpatialCoordinate(mesh))
-    rad = Function(Q).interpolate(sqrt(SpatialCoordinate(mesh) ** 2))
+    X = Function(V).interpolate(SpatialCoordinate(mesh))
+    rad = Function(Q).interpolate(sqrt(X[0] ** 2 + X[1]**2 + X[2]**2))
 
     # knowing how many extrusion layers we have
     vnodes = nlayers + 1
@@ -647,5 +642,6 @@ class seismic_model(object):
         self.target_mesh = coords
 
 
-if __name__ == "__main__":
-    __main__()
+# if __name__ == "__main__":
+#     generate_reference_fields()
+#     conduct_taylor_test()
