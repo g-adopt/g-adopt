@@ -56,6 +56,8 @@ def conduct_inversion():
     T_lb.assign(0.0)
     T_ub.assign(1.0)
 
+    minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
+
     minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
 
     # Establish a LinMore Optimiser
@@ -217,7 +219,7 @@ def forward_problem():
     ndtime_now = plate_reconstruction_model.age2ndtime(0.)
 
     # non-dimensionalised time for 10 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(25.)
+    time = plate_reconstruction_model.age2ndtime(35.)
 
     # Write output files in VTK format:
     u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
@@ -657,5 +659,5 @@ def first_call_value(predefined_value):
 
 
 if __name__ == "__main__":
-    # generate_reference_fields()
-    conduct_taylor_test()
+    generate_reference_fields()
+    conduct_inversion()
