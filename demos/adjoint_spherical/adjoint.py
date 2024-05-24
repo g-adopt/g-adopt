@@ -12,9 +12,6 @@ from tfinterpy.idw import IDW
 # Quadrature degree:
 dx = dx(degree=6)
 
-# Quadrature degree:
-dx = dx(degree=6)
-
 # Projection solver parameters for nullspaces:
 iterative_solver_parameters = {
     "snes_type": "ksponly",
