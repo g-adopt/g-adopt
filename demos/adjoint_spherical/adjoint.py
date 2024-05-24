@@ -64,8 +64,10 @@ def conduct_inversion():
         minimisation_parameters,
         checkpoint_dir="optimisation_checkpoint",
     )
-    # Add the callback function to optimisation
-    optimiser.add_callback(callback)
+
+    # # Add the callback function to optimisation
+    # optimiser.add_callback(callback)
+
     # run the optimisation
     optimiser.run()
 
@@ -78,7 +80,7 @@ def conduct_taylor_test():
     _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-# @collect_garbage
+@collect_garbage
 def forward_problem():
     # Section:
     # Enable writing intermediary adjoint fields to disk
@@ -251,10 +253,7 @@ def forward_problem():
 
         # Make sure we are not going past present day
         if ndtime_now - time < float(delta_t):
-            log(f"delta_t is {delta_t.dat.data[0]}, and is changing to")
             delta_t.assign(ndtime_now - time)
-            log(f"{delta_t.dat.data[0]}")
-        # Make sure we are not going past present day
 
         # Temperature system:
         energy_solver.solve()
@@ -270,9 +269,9 @@ def forward_problem():
     objective = (
         t_misfit
     )
-
+    log(f"Objective {objective}")
     # We want to avoid a second call to objective functional with the same value
-    first_call_decorator = first_call_predefined_value(predefined_value=objetive)
+    first_call_decorator = first_call_value(predefined_value=objective)
     ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
 
     # All done with the forward run, stop annotating anything else to the tape
@@ -658,5 +657,5 @@ def first_call_value(predefined_value):
 
 
 if __name__ == "__main__":
-    generate_reference_fields()
+    # generate_reference_fields()
     conduct_taylor_test()
