@@ -81,17 +81,17 @@ def conduct_taylor_test():
     _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-@collect_garbage
+# @collect_garbage
 def forward_problem():
     # Section:
     # Enable writing intermediary adjoint fields to disk
     enable_disk_checkpointing()
 
-    base_path = Path(__file__).resolve()
+    base_path = Path(__file__).resolve().parent
 
     # Load mesh
-    with CheckpointFile(str(base_path / "linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5"), "r") as fi:
-        mesh = f.load_mesh("firedrake_default_extruded")
+    with CheckpointFile(str(base_path / "input_data/NEW_TEMP_lin_LLNLG3G_SLB_Q5_mt512_smooth_2.0_101.h5"), "r") as fi:
+        mesh = fi.load_mesh("firedrake_default_extruded")
         Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
         # Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
 
@@ -119,7 +119,8 @@ def forward_problem():
     Tic = Function(Q1, name="Tic")
     T = Function(Q, name="Temperature")
     mu = Function(W, name="Viscosity")
-    assign_1d_profile(mu, str(base_path.parents[1] / "gplates_global/mu2_radial.rad"))
+
+    assign_1d_profile(mu, str(base_path.parent / "gplates_global/mu2_radial.rad"))
 
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
@@ -351,13 +352,13 @@ def get_plate_reconstruction_info():
 
 
 def generate_reference_fields():
-    base_path = Path(__file__).resolve()
+    base_path = Path(__file__).resolve().parent
 
     # mesh file
     mesh_path = base_path / "spherical_mesh.h5"
 
     # sph file
-    sph_file_path = base_path / "NEW_TEMP_lin_LLNLG3G_SLB_Q5_mt512_smooth_2.0_101.sph"
+    sph_file_path = base_path / "input_data/NEW_TEMP_lin_LLNLG3G_SLB_Q5_mt512_smooth_2.0_101.sph"
 
     # generate and write out mesh
     generate_spherical_mesh(str(base_path / "spherical_mesh.h5"))
@@ -384,11 +385,10 @@ def generate_reference_fields():
         fi.save_mesh(mesh)
         fi.save_function(Tobs, name="Tobs")
         fi.save_function(Taverage, name="AverageTemperature")
-        fi.save_function(mu, name="Viscosity")
 
     # Output for visualisation
-    output = File(str(sph_file_pathj.with_suffix(".pvd")))
-    output.write(Tobs, Taverage, mu)
+    output = VTKFile(str(sph_file_path.with_suffix(".pvd")))
+    output.write(Tobs, Taverage)
 
 
 def viscosity_function(mesh):
@@ -440,10 +440,9 @@ def load_tomography_model(mesh, fi_name):
     vnodes = nlayers + 1
     rad_profile = np.array([np.average(rad.dat.data[i::vnodes])
                            for i in range(vnodes)])
-
     # load seismic tomogrpahy based temperature model
     LLNL_model.load_seismic_data(rads=rad_profile)
-    LLNL_model.setup_mesh(r.dat.data[0::vnodes])
+    LLNL_model.setup_mesh(X.dat.data[0::vnodes])
 
     # Assigning values to each layer
     for i in range(vnodes):
@@ -642,6 +641,6 @@ class seismic_model(object):
         self.target_mesh = coords
 
 
-# if __name__ == "__main__":
-#     generate_reference_fields()
-#     conduct_taylor_test()
+if __name__ == "__main__":
+    generate_reference_fields()
+    conduct_taylor_test()
