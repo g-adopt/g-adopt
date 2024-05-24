@@ -271,6 +271,10 @@ def forward_problem():
         t_misfit
     )
 
+    # We want to avoid a second call to objective functional with the same value
+    first_call_decorator = first_call_predefined_value(predefined_value=objetive)
+    ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
+
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
     return Tic, ReducedFunctional(objective, control)
@@ -636,6 +640,21 @@ class seismic_model(object):
 
     def setup_mesh(self, coords):
         self.target_mesh = coords
+
+
+def first_call_value(predefined_value):
+    def decorator(func):
+        has_been_called = False
+
+        def wrapper(self, *args, **kwargs):
+            nonlocal has_been_called
+            if not has_been_called:
+                has_been_called = True
+                return predefined_value
+            return func(self, *args, **kwargs)
+
+        return wrapper
+    return decorator
 
 
 if __name__ == "__main__":
