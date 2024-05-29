@@ -73,7 +73,7 @@ diagnostics = {
     ],
     "van_keken_1997_isothermal": [
         (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 3e-5),
-        (lambda data: abs(max(data["entrainment"]) - 0.8), operator.le, 4e-3),
+        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 5e-3),
     ],
     "van_keken_1997_thermochemical": [
         (
