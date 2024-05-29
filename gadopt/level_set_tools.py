@@ -486,3 +486,32 @@ def density_RaB(
         RaB.interpolate(RaB_ufl)
 
     return ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless
+
+
+def entrainment(
+    level_set: fd.Function, material_area: Number, entrainment_height: Number
+):
+    """Calculates entrainment diagnostic.
+
+    Determines the proportion of a material that is located above a given height.
+
+    Args:
+        level_set:
+          A level-set UFL function.
+        material_area:
+          An integer or a float representing the total area occupied by a material.
+        entrainment_height:
+          An integer or a float representing the height above which the entrainment
+          diagnostic is determined.
+
+    Returns:
+        A float corresponding to the calculated entrainment diagnostic.
+    """
+    mesh_coords = fd.SpatialCoordinate(level_set.function_space().mesh())
+    target_region = mesh_coords[1] >= entrainment_height
+    material_entrained = fd.conditional(level_set < 0.5, 1, 0)
+
+    return (
+        fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
+        / material_area
+    )

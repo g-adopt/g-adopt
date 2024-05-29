@@ -134,21 +134,17 @@ class Simulation:
         return fd.norm(velocity - velocity_old) < cls.steady_state_threshold
 
     @classmethod
-    def diagnostics(cls, simu_time, geo_diag):
+    def diagnostics(cls, simu_time, geo_diag, diag_vars):
         cls.diag_fields["output_time"].append(simu_time)
         cls.diag_fields["avg_temperature"].append(geo_diag.T_avg())
         cls.diag_fields["nusselt_top"].append(geo_diag.Nu_top())
         cls.diag_fields["nusselt_bottom"].append(geo_diag.Nu_bottom())
         cls.diag_fields["rms_velocity"].append(geo_diag.u_rms())
         cls.diag_fields["min_visc"].append(
-            geo_diag.T.comm.allreduce(
-                geo_diag.diag_vars["viscosity"].dat.data.min(), MPI.MIN
-            )
+            geo_diag.T.comm.allreduce(diag_vars["viscosity"].dat.data.min(), MPI.MIN)
         )
         cls.diag_fields["max_visc"].append(
-            geo_diag.T.comm.allreduce(
-                geo_diag.diag_vars["viscosity"].dat.data.max(), MPI.MAX
-            )
+            geo_diag.T.comm.allreduce(diag_vars["viscosity"].dat.data.max(), MPI.MAX)
         )
 
         if MPI.COMM_WORLD.rank == 0:

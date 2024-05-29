@@ -97,12 +97,12 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, geo_diag):
+    def diagnostics(cls, simu_time, geo_diag, diag_vars):
         cls.diag_fields["output_time"].append(simu_time)
         cls.diag_fields["rms_velocity"].append(geo_diag.u_rms())
         cls.diag_fields["entrainment"].append(
-            geo_diag.entrainment(
-                0,
+            ga.entrainment(
+                diag_vars["level_set"][0],
                 cls.diag_params["domain_dim_x"]
                 * cls.diag_params["material_interface_y"],
                 cls.diag_params["entrainment_height"],

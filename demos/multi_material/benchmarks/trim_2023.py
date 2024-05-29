@@ -150,7 +150,7 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, geo_diag):
+    def diagnostics(cls, simu_time, geo_diag, diag_vars):
         λ = cls.domain_dims[0]
         rms_velocity_analytical = (
             fd.pi * fd.sqrt(λ**2 + 1) / 2 / λ * abs(cls.f(simu_time))
@@ -160,7 +160,9 @@ class Simulation:
         cls.diag_fields["rms_velocity"].append(geo_diag.u_rms())
         cls.diag_fields["rms_velocity_analytical"].append(rms_velocity_analytical)
         cls.diag_fields["entrainment"].append(
-            geo_diag.entrainment(0, cls.material_area, cls.entrainment_height)
+            ga.entrainment(
+                diag_vars["level_set"][0], cls.material_area, cls.entrainment_height
+            )
         )
 
         if MPI.COMM_WORLD.rank == 0:

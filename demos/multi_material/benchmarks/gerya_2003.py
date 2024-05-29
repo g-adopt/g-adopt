@@ -96,8 +96,8 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, geo_diag):
-        level_set = geo_diag.diag_vars["level_set"][0]
+    def diagnostics(cls, simu_time, geo_diag, diag_vars):
+        level_set = diag_vars["level_set"][0]
 
         block_area = fd.assemble(fd.conditional(level_set >= 0.5, 1, 0) * fd.dx)
 

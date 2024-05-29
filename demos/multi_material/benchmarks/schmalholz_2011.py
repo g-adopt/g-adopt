@@ -182,9 +182,9 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, geo_diag):
-        epsilon = float(geo_diag.diag_vars["epsilon"])
-        level_set = geo_diag.diag_vars["level_set"][0]
+    def diagnostics(cls, simu_time, geo_diag, diag_vars):
+        epsilon = float(diag_vars["epsilon"])
+        level_set = diag_vars["level_set"][0]
         level_set_data = level_set.dat.data_ro_with_halos
         coords_data = (
             fd.Function(

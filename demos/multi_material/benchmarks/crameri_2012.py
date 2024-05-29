@@ -121,13 +121,13 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, geo_diag):
+    def diagnostics(cls, simu_time, geo_diag, diag_vars):
         max_topography_analytical = (
             cls.top_interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
         )
 
-        epsilon = float(geo_diag.diag_vars["epsilon"])
-        level_set = geo_diag.diag_vars["level_set"][1]
+        epsilon = float(diag_vars["epsilon"])
+        level_set = diag_vars["level_set"][1]
         level_set_data = level_set.dat.data_ro_with_halos
         coords_data = (
             fd.Function(

@@ -283,7 +283,7 @@ diag_vars = {
     "int_heat_rate": int_heat_rate,
 }
 geo_diag = ga.GeodynamicalDiagnostics(
-    velocity_ufl, pressure_ufl, temperature, bottom_id=3, top_id=4, diag_vars=diag_vars
+    velocity_ufl, pressure_ufl, temperature, bottom_id=3, top_id=4
 )
 
 # Function to be coupled with the energy solver
@@ -296,7 +296,7 @@ else:
 step = 0
 while True:
     # Calculate simulation diagnostics
-    Simulation.diagnostics(time_now, geo_diag)
+    Simulation.diagnostics(time_now, geo_diag, diag_vars)
 
     # Write to output file and increment dump counter
     if time_now >= dump_counter * Simulation.dump_period:
@@ -334,7 +334,7 @@ while True:
     )
     if end_time or steady:
         # Calculate final simulation diagnostics
-        Simulation.diagnostics(time_now, geo_diag)
+        Simulation.diagnostics(time_now, geo_diag, diag_vars)
         # Save post-processing fields and produce graphs
         Simulation.plot_diagnostics()
 

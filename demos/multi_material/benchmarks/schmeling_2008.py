@@ -113,8 +113,8 @@ class Simulation:
         pass
 
     @classmethod
-    def diagnostics(cls, simu_time, geo_diag):
-        level_set = geo_diag.diag_vars["level_set"][1]
+    def diagnostics(cls, simu_time, geo_diag, diag_vars):
+        level_set = diag_vars["level_set"][1]
         function_space = level_set.function_space()
 
         depth_per_core = fd.Function(function_space).interpolate(
