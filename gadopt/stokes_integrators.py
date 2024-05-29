@@ -232,6 +232,8 @@ class StokesSolver:
 
     def setup_solver(self):
         """Sets up the solver."""
+        # mu used in MassInvPC:
+        mu_over_rho = self.mu / self.approximation.rho_continuity()
         if self.constant_jacobian:
             z_tri = fd.TrialFunction(self.Z)
             F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
@@ -242,7 +244,7 @@ class StokesSolver:
             self.solver = fd.LinearVariationalSolver(self.problem,
                                                      solver_parameters=self.solver_parameters,
                                                      options_prefix=self.name,
-                                                     appctx={"mu": self.mu},
+                                                     appctx={"mu": mu_over_rho},
                                                      **self.solver_kwargs)
         else:
             self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
@@ -250,7 +252,7 @@ class StokesSolver:
             self.solver = fd.NonlinearVariationalSolver(self.problem,
                                                         solver_parameters=self.solver_parameters,
                                                         options_prefix=self.name,
-                                                        appctx={"mu": self.mu},
+                                                        appctx={"mu": mu_over_rho},
                                                         **self.solver_kwargs)
         self._solver_setup = True
 
