@@ -168,7 +168,8 @@ def forward_problem():
     # We use TALA for approximation
     approximation = TruncatedAnelasticLiquidApproximation(
         Ra, Di, rho=rhobar, Tbar=Tbar,
-        alpha=alphabar, chi=chibar, cp=cpbar)
+        alpha=alphabar, chi=chibar, cp=cpbar,
+        cartesian=False)
 
     # Section: Setting up nullspaces
     # Nullspaces for stokes contains only a constant nullspace for pressure, as the top boundary is
