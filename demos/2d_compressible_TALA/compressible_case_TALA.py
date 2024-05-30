@@ -41,7 +41,9 @@ alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)
 cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
 chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
 
-approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar)
+approximation = TruncatedAnelasticLiquidApproximation(
+    Ra, Di, cartesian=True, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar
+)
 
 time = 0.0
 steady_state_tolerance = 1e-9
@@ -93,9 +95,14 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=True, constant_jacobian=True,
-                             transpose_nullspace=Z_nullspace)
+stokes_solver = StokesSolver(
+    z,
+    T,
+    approximation,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    transpose_nullspace=Z_nullspace,
+)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)

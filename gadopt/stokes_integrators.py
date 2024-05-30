@@ -138,10 +138,10 @@ class StokesSolver:
         z: fd.Function,
         T: fd.Function,
         approximation: BaseApproximation,
+        *,
         bcs: dict[int, dict[str, int | float]] = {},
         mu: fd.Function | int | float = 1,
         quad_degree: int = 6,
-        cartesian: bool = True,
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
@@ -161,7 +161,7 @@ class StokesSolver:
 
         self.solver_kwargs = kwargs
         u, p = fd.split(self.solution)
-        self.k = upward_normal(self.Z.mesh(), cartesian)
+        self.k = upward_normal(self.Z.mesh(), approximation.cartesian)
         self.fields = {
             'velocity': u,
             'pressure': p,
@@ -216,7 +216,7 @@ class StokesSolver:
                         raise ValueError(
                             f"Solver type '{solver_parameters}' not implemented."
                         )
-            elif self.mesh.topological_dimension() == 2 and cartesian:
+            elif self.mesh.topological_dimension() == 2 and approximation.cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)

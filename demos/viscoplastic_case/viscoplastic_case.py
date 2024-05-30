@@ -32,7 +32,7 @@ t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_toleranc
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(100)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = BoussinesqApproximation(Ra, cartesian=True)
 # Rheology:
 gamma_T, gamma_Z = Constant(ln(10**5)), Constant(ln(10))
 mu_star, sigma_y = Constant(0.001), Constant(1.0)
@@ -81,9 +81,15 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                             cartesian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
+stokes_solver = StokesSolver(
+    z,
+    T,
+    approximation,
+    bcs=stokes_bcs,
+    mu=mu,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)

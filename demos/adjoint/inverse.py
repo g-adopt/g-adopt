@@ -65,7 +65,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
     p.rename("Pressure")
 
     Ra = Constant(1e6)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
+    approximation = BoussinesqApproximation(Ra, cartesian=True)
 
     # Define time stepping parameters:
     max_timesteps = 80

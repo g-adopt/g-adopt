@@ -55,7 +55,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
                   (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
 
     Ra = Constant(7e3)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
+    approximation = BoussinesqApproximation(Ra, cartesian=False)
     mu = exp(4.605170185988092 * (0.5 - T))
 
     delta_t = Constant(delta_t)  # Initial time-step
@@ -81,10 +81,16 @@ def model(ref_level, nlayers, delta_t, steps=None):
     energy_solver.solver_parameters['ksp_view'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-7
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                                 cartesian=False,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
+    stokes_solver = StokesSolver(
+        z,
+        T,
+        approximation,
+        bcs=stokes_bcs,
+        mu=mu,
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+        near_nullspace=Z_near_nullspace,
+    )
 
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_monitor_true_residual'] = None

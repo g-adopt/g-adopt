@@ -128,6 +128,9 @@ class BoussinesqApproximation(BaseApproximation):
 
     Arguments:
       Ra:    Rayleigh number
+      cartesian:
+        - True: gravity is assumed to point in the negative z-direction
+        - False: gravity is assumed to point radially inward
       kappa: thermal diffusivity
       g:     gravitational acceleration
       rho:   reference density
@@ -145,12 +148,15 @@ class BoussinesqApproximation(BaseApproximation):
     def __init__(
         self,
         Ra: Function | Number,
+        *,
+        cartesian: bool,
         kappa: Function | Number = 1,
         g: Function | Number = 1,
         rho: Function | Number = 1,
-        alpha: Function | Number = 1
+        alpha: Function | Number = 1,
     ):
         self.Ra = ensure_constant(Ra)
+        self.cartesian = cartesian
         self.thermal_diffusivity = ensure_constant(kappa)
         self.g = ensure_constant(g)
         self.rho = ensure_constant(rho)
@@ -186,9 +192,6 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
       Di: Dissipation number
       mu: dynamic viscosity
       H:  volumetric heat production
-      cartesian:
-        - True: gravity is assumed to point in the negative z-direction
-        - False: gravity is assumed to point radially inward
 
     Keyword Arguments:
       kappa (Number): thermal diffusivity
@@ -204,12 +207,19 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, mu: Number = 1, H: Optional[Number] = None, cartesian: bool = True, **kwargs):
+    def __init__(
+        self,
+        Ra: Number,
+        Di: Number,
+        *,
+        mu: Number = 1,
+        H: Optional[Number] = None,
+        **kwargs,
+    ):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.mu = mu
         self.H = H
-        self.cartesian = cartesian
 
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
@@ -264,16 +274,19 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     """
     compressible = True
 
-    def __init__(self,
-                 Ra: Number,
-                 Di: Number,
-                 Tbar: Function | Number = 0,
-                 chi: Function | Number = 1,
-                 cp: Function | Number = 1,
-                 gamma0: Function | Number = 1,
-                 cp0: Function | Number = 1,
-                 cv0: Function | Number = 1,
-                 **kwargs):
+    def __init__(
+        self,
+        Ra: Number,
+        Di: Number,
+        *,
+        Tbar: Function | Number = 0,
+        chi: Function | Number = 1,
+        cp: Function | Number = 1,
+        gamma0: Function | Number = 1,
+        cp0: Function | Number = 1,
+        cv0: Function | Number = 1,
+        **kwargs,
+    ):
         super().__init__(Ra, Di, **kwargs)
         self.Tbar = Tbar
         # Equation of State:

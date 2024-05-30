@@ -61,7 +61,7 @@ dt = T/600.0
 # the choice of units is up to the user. We use the diagonaly implicit DIRK33 Runge-Kutta
 # method for timestepping. 'T' means that the boundary conditions will be applied strongly
 # by the energy solver.
-approximation = BoussinesqApproximation(Ra=1, kappa=kappa)
+approximation = BoussinesqApproximation(Ra=1, cartesian=True, kappa=kappa)
 q_top = 1.0
 q_bottom = 0.0
 bcs = {3: {'T': q_bottom}, 4: {'T': q_top}}

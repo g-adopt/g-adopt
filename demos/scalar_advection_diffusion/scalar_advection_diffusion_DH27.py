@@ -65,7 +65,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
 
     # Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
     # the choice of units is up to the user.
-    approximation = BoussinesqApproximation(Ra=1, kappa=kappa)
+    approximation = BoussinesqApproximation(Ra=1, cartesian=True, kappa=kappa)
     approximation.energy_source = Constant(1)  # Provide a source term to force the equations.
 
     energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=su_advection)

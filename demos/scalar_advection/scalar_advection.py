@@ -74,7 +74,7 @@ q_in = Constant(1.0)
 # Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
 # the choice of units is up to the user. We set the diffusiviy to zero for pure advection.
 # We also apply weak boundary conditions on inflow regions.
-approximation = BoussinesqApproximation(Ra=1, kappa=Constant(0))
+approximation = BoussinesqApproximation(Ra=1, cartesian=True, kappa=Constant(0))
 bc_in = {'q': q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)

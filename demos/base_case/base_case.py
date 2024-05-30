@@ -31,7 +31,7 @@ delta_t = Constant(1e-6)  # Initial time-step
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e4)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = BoussinesqApproximation(Ra, cartesian=True)
 
 time = 0.0
 steady_state_tolerance = 1e-9
@@ -73,9 +73,15 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=True, constant_jacobian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
+stokes_solver = StokesSolver(
+    z,
+    T,
+    approximation,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)

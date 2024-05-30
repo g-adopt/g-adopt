@@ -200,7 +200,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
 
     # SCK:
     T = 0
-    approximation = BoussinesqApproximation(0)
+    approximation = BoussinesqApproximation(0, cartesian=True)
     bcs = {left_id: {'ux': 1}, right_id: {'ux': -1}, bottom_id: {'uy': 0}}
     picard_solver = StokesSolver(z, T, approximation, mu=mu_nl,
                                  bcs=bcs, solver_parameters=initial_picard_solver_parameters)

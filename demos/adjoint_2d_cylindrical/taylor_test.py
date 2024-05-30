@@ -78,7 +78,7 @@ def annulus_taylor_test(case):
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
     Ra = Constant(1e7)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
+    approximation = BoussinesqApproximation(Ra, cartesian=False)
 
     # Define time stepping parameters:
     max_timesteps = 200
@@ -162,7 +162,6 @@ def annulus_taylor_test(case):
         approximation,
         mu=mu,
         bcs=stokes_bcs,
-        cartesian=False,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
