@@ -8,8 +8,7 @@ class GeodynamicalDiagnostics:
     """Typical simulation diagnostics used in geodynamical simulations.
 
     Arguments:
-      u:         Firedrake function for the velocity
-      p:         Firedrake function for the pressure
+      z:         Firedrake function for the mixed Stokes function space
       T:         Firedrake function for the temperature
       bottom_id: bottom boundary identifier.
       top_id:    top boundary identifier.
@@ -30,16 +29,14 @@ class GeodynamicalDiagnostics:
 
     def __init__(
         self,
-        u: Function,
-        p: Function,
+        z: Function,
         T: Function,
         bottom_id: int,
         top_id: int,
         degree: int = 4
     ):
-        self.mesh = extract_unique_domain(u)
-        self.u = u
-        self.p = p
+        self.mesh = extract_unique_domain(z)
+        self.u, self.p, *_ = z.subfunctions
         self.T = T
 
         self.dx = firedrake.dx(degree=degree)
