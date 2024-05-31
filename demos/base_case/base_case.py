@@ -361,7 +361,7 @@ for timestep in range(0, timesteps):
 
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
-                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max()} {gd.Nu_top()} "
+                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
                  f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} ")
 
     # Leave if steady-state has been achieved:
