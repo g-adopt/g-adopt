@@ -1,90 +1,117 @@
-from gadopt import *
-from mpi4py import MPI
+# Compressible (TALA) 2-D mantle convection problem in a square box
+# =======================================================
+#
+# We next highlight the ease at which simulations can be updated to
+# incorporate more realistic physical approximations. We first account
+# for compressibility, under the Truncated Anelastic Liquid Approximation (TALA),
+# simulating a well-established 2-D benchmark case from King et al. (2010).
+# Boundary conditions and material properties are otherwise identical to the
+# previous tutorial. 
+#
+# Governing equations
+# -------------------
+#
+# The equations governing mantle convection under TALA are modified
+# in comparison to those that assume the Bousinessq approximation.
+# Rhodri to specify them here. 
+#
+# Weak formulation
+# ----------------
+#
+# For the finite element discretisation of these equations, we follow
+# the approach in our previous example. The resulting weak forms are derived
+# by multiplying the aforementioned governing equations with appropriate test
+# functions and integrating over the domain.
+#
+# As can be seen, these equations differ appreciably from the incompressible
+# approximations that have been utilised thus far, with important updates to all
+# three governing equations. Despite this, the changes required to incorporate these
+# equations, within UFL and G-ADOPT, are minimal. 
+#
+# Solution procedure
+# ------------------
+#
+# For temporal integration, we once again use an implicit mid-point scheme.
+# Again, we solve for velocity and pressure, $\vec{u}$ and
+# $p$, in a separate step before solving for temperature $T$. 
+#
+# This example
+# ------------
+#
+# In this example, we simulate compressible convection, for an isoviscous material
+# under TALA. We specify Ra=10^5 and a dissipation number Di=0.5. 
+# The model is heated from below (T=XX), cooled from the top (T=0) in an
+# enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
+# conditions on all boundaries).
+#
+# As with all examples, the first step is to import the gadopt module, which
+# provides access to Firedrake and associated functionality.
 
-# Set up geometry:
-nx, ny = 40, 40
+from gadopt import *
+
+# We next set up the mesh, function spaces and specify functions to hold our solutions,
+# in a way that is identical to our previous tutorial.
+
+# +
+nx, ny = 40, 40  # Number of cells in x and y directions.
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
-# Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
-# Function to store the solutions:
-z = Function(Z)  # a field over the mixed function space Z.
+z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
+z.subfunctions[0].rename("Velocity")
+z.subfunctions[1].rename("Pressure")
+# - 
 
-# Output function space information:
-log("Number of Velocity DOF:", V.dim())
-log("Number of Pressure DOF:", W.dim())
-log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
-log("Number of Temperature DOF:", Q.dim())
-
-# Set up temperature field and initialise:
+# We next specify the important constants for this problem, including those associated with the
+# compressible reference state. Note that for ease of extension, we specify these as functions,
+# allowing for spatial variability
 X = SpatialCoordinate(mesh)
-T = Function(Q, name="Temperature")
-T0 = Constant(0.091)  # Non-dimensional surface temperature
-Di = Constant(0.5)  # Dissipation number.
-T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
-
-# Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(1e5)  # Rayleigh number
-
-# Compressible reference state:
-gruneisen = 1.0
-rhobar = Function(Q, name="CompRefDensity").interpolate(exp(((1.0 - X[1]) * Di) / gruneisen))
+Di = Constant(0.5)  # Dissipation number.
+T0 = Constant(0.091)  # Non-dimensional surface temperature
+rhobar = Function(Q, name="CompRefDensity").interpolate(exp((1.0 - X[1]) * Di))
 Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)
-# why do we have these as functions?
 alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)
 cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
 chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
 
+# These fields are used to set up our Truncated Anelastic Liquid Approximation and to initialise
+# the Full temperature field.
+
 approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar)
 
-time = 0.0
-steady_state_tolerance = 1e-9
-max_timesteps = 20000
-kappa = Constant(1.0)  # Thermal diffusivity
+# As with the previous example, we set up a *Timestep Adaptor*,
+# for controlling the time-step length (via a CFL
+# criterion) as the simulation advances in time. For the latter,
+# we specify the initial time, initial timestep $\Delta t$, and number of
+# timesteps. Given the low Ra, a steady-state tolerance is also specified,
+# allowing the simulation to exit when a steady-state has been achieved.
 
+time = 0.0  # Initial time
+delta_t = Constant(1e-6)  # Initial time-step
+timesteps = 20000  # Maximum number of timesteps
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+steady_state_tolerance = 1e-9
+
+# We next set up and initialise our Temperature field. Note that here, we take into consideration
+# the non-dimensional surface temperature, T0. The full temperature field is also initialised.
+
+T = Function(Q, name="Temperature")
+T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
 FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 
+# This problem has a constant pressure nullspace which we handle identically
+# to our previous tutorial.
 
-# Nullspaces and near-nullspaces:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
-# Write output files in VTK format:
-u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
-# Next rename for output:
-u.rename("Velocity")
-p.rename("Pressure")
-# Create output file and select output_frequency:
-output_file = VTKFile("output.pvd")
-ref_file = VTKFile('reference_state.pvd')
-dump_period = 100
-# Frequency of checkpoint files:
-checkpoint_period = dump_period * 4
-
-delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-
-
-# Open file for logging diagnostic output:
-plog = ParameterLog('params.log', mesh)
-plog.log_str(
-    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_base "
-    "nu_top energy avg_t rate_work_g rate_viscous energy_2"
-)
-
-gd = GeodynamicalDiagnostics(u, p, FullT, bottom_id, top_id)
-
-
-temp_bcs = {
-    bottom_id: {'T': 1.0 - (T0*exp(Di) - T0)},
-    top_id: {'T': 0.0},
-}
-
+# Boundary conditions are next specified.
 stokes_bcs = {
     bottom_id: {'uy': 0},
     top_id: {'uy': 0},
@@ -92,20 +119,41 @@ stokes_bcs = {
     right_id: {'ux': 0},
 }
 
+temp_bcs = {
+    bottom_id: {'T': 1.0 - (T0*exp(Di) - T0)},
+    top_id: {'T': 0.0},
+}
+
+# We next set up our output, in VTK format, including a file
+# that exclusively allows us to visualise the reference state.
+
+output_file = VTKFile("output.pvd")
+ref_file = VTKFile('reference_state.pvd')
+output_frequency = 50
+
+# We next open a file for logging and calculate our diagnostic outputs.
+
+# +
+plog = ParameterLog('params.log', mesh)
+plog.log_str(
+    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_base "
+    "nu_top energy avg_t rate_work_g rate_viscous energy_2")
+
+gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
+# - 
+
+# We now solve the variational problem
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              cartesian=True, constant_jacobian=True,
                              transpose_nullspace=Z_nullspace)
 
-checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
-checkpoint_file.save_mesh(mesh)
-
 # Now perform the time loop:
-for timestep in range(0, max_timesteps):
+for timestep in range(0, timesteps):
 
     # Write output:
-    if timestep % dump_period == 0:
-        output_file.write(u, p, T, FullT)
+    if timestep % output_frequency == 0:
+        output_file.write(*z.subfunctions, T, FullT)
         ref_file.write(rhobar, Tbar, alphabar, cpbar, chibar)
 
     dt = t_adapt.update_timestep()
@@ -118,15 +166,7 @@ for timestep in range(0, max_timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    u_rms = gd.u_rms()
-    u_rms_surf = gd.u_rms_top()
-    bcu = DirichletBC(u.function_space(), 0, top_id)
-    ux_max = u.dat.data_ro_with_halos[bcu.nodes, 0].max(initial=0)
-    ux_max = u.comm.allreduce(ux_max, MPI.MAX)  # Maximum Vx at surface
-    nusselt_number_top = gd.Nu_top()
-    nusselt_number_base = gd.Nu_bottom()
-    energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
-    average_temperature = gd.T_avg()
+    energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))    
     rate_work_against_gravity = assemble(approximation.work_against_gravity(u, T)*dx)
     rate_viscous_dissipation = assemble(approximation.viscous_dissipation(u)*dx)
     energy_conservation_2 = abs(rate_work_against_gravity - rate_viscous_dissipation)
@@ -135,12 +175,12 @@ for timestep in range(0, max_timesteps):
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {u_rms} {u_rms_surf} {ux_max} "
-                 f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {average_temperature} "
+    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
+                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
+                 f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
                  f"{rate_work_against_gravity} {rate_viscous_dissipation} "
-                 f"{energy_conservation_2}")
-
+                 f"{energy_conservation_2}")                 
+    
     # Calculate Full T:
     FullT.assign(T+Tbar)
 
@@ -149,15 +189,34 @@ for timestep in range(0, max_timesteps):
         log("Steady-state achieved -- exiting time-step loop")
         break
 
-    # Checkpointing:
-    if timestep % checkpoint_period == 0:
-        checkpoint_file.save_function(T, name="Temperature", idx=timestep)
-        checkpoint_file.save_function(z, name="Stokes", idx=timestep)
+# At the end of the simulation, once a steady-state has been achieved, we close our logging file
+# and checkpoint steady state temperature and Stokes solution fields to disk. These can later be
+# used to restart a simulation, if required.
 
+# +
 plog.close()
-checkpoint_file.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
+# -
+
+# We can visualise the final temperature field using Firedrake's
+# built-in plotting functionality.
+
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+# fig, axes = plt.subplots()
+# collection = tripcolor(T, axes=axes, cmap='coolwarm')
+# fig.colorbar(collection);
+
+# The same can be done for the final Full temperature field.
+
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+# fig, axes = plt.subplots()
+# collection = tripcolor(FullT, axes=axes, cmap='coolwarm')
+# fig.colorbar(collection);
+
+

@@ -204,6 +204,31 @@ z.subfunctions[1].rename("Pressure")
 # log("Number of Temperature DOF:", Q.dim())
 # -
 
+# The Rayleigh number for this problem is defined. The viscosity and thermal
+# diffusivity are left at their default values (both = 1). We note that viscosity
+# could also be a Function, if we wanted spatial variation, and will
+# return to this in a subsequent notebook.  These Ra is required to
+# create an *Approximation* representing the physical
+# setup of the problem (options include Boussinesq, Extended
+# Boussinesq, Truncated Anelastic Liquid and Anelastic Liquid), and a
+# *Timestep Adaptor*, for controlling the time-step length (via a CFL
+# criterion) as the simulation advances in time. For the latter,
+# we specify the initial time, initial timestep $\Delta t$, and number of
+# timesteps. Given the low Ra, a steady-state tolerance is also specified,
+# allowing the simulation to exit when a steady-state has been achieved.
+
+# +
+Ra = Constant(1e4)  # Rayleigh number
+approximation = BoussinesqApproximation(Ra)
+
+time = 0.0  # Initial time
+delta_t = Constant(1e-6)  # Initial time-step
+timesteps = 20000  # Maximum number of timesteps
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+
+steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
+# -
+
 # Mantle convection is an initial and boundary-value problem. We
 # assume the initial temperature distribution to be prescribed by
 #
@@ -228,31 +253,6 @@ T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 # fig, axes = plt.subplots()
 # collection = tripcolor(T, axes=axes, cmap='coolwarm')
 # fig.colorbar(collection);
-# -
-
-# The Rayleigh number for this problem is defined. The viscosity and thermal
-# diffusivity are left at their default values (both = 1). We note that viscosity
-# could also be a Function, if we wanted spatial variation, and will
-# return to this in a subsequent notebook.  These Ra is required to
-# create an *Approximation* representing the physical
-# setup of the problem (options include Boussinesq, Extended
-# Boussinesq, Truncated Anelastic Liquid and Anelastic Liquid), and a
-# *Timestep Adaptor*, for controlling the time-step length (via a CFL
-# criterion) as the simulation advances in time. For the latter,
-# we specify the initial time, initial timestep $\Delta t$, and number of
-# timesteps. Given the low Ra, a steady-state tolerance is also specified,
-# allowing the simulation to exit when a steady-state has been achieved.
-
-# +
-Ra = Constant(1e4)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
-
-time = 0.0  # Initial time
-delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20000  # Maximum number of timesteps
-t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-
-steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
 # -
 
 # With closed boundaries, and no constraint on pressure anywhere in
