@@ -151,7 +151,7 @@ from gadopt import *
 
 # We will set up the problem using a bilinear quadrilateral element
 # pair (Q2-Q1) for velocity and pressure, with Q2 elements for
-# temperature. 
+# temperature.
 #
 # We first need a mesh: for simple domains such as the unit square,
 # Firedrake provides built-in meshing functions. As such, the
@@ -163,7 +163,7 @@ from gadopt import *
 # and 4 to the $y=1$ plane. We name these `left`, `right`, `bottom` and `top`,
 # respectively.
 
-nx, ny = 40, 40  # Number of cells in x and y directions. 
+nx, ny = 40, 40  # Number of cells in x and y directions.
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
@@ -241,7 +241,7 @@ T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 # criterion) as the simulation advances in time. For the latter,
 # we specify the initial time, initial timestep $\Delta t$, and number of
 # timesteps. Given the low Ra, a steady-state tolerance is also specified,
-# allowing the simulation to exit when a steady-state has been achieved. 
+# allowing the simulation to exit when a steady-state has been achieved.
 
 # +
 Ra = Constant(1e4)  # Rayleigh number
@@ -252,7 +252,7 @@ delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
-steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state. 
+steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
 # -
 
 # With closed boundaries, and no constraint on pressure anywhere in
