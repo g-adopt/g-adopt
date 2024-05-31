@@ -189,7 +189,7 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # parts – velocity and pressure – is obtained with `split`. For later
 # visualisation, we rename the subfunctions of z Velocity and Pressure.
 
-z = Function(Z)  # a field over the mixed function space Z.
+z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
