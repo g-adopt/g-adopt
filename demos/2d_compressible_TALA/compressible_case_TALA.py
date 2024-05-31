@@ -6,14 +6,14 @@
 # for compressibility, under the Truncated Anelastic Liquid Approximation (TALA),
 # simulating a well-established 2-D benchmark case from King et al. (2010).
 # Boundary conditions and material properties are otherwise identical to the
-# previous tutorial. 
+# previous tutorial.
 #
 # Governing equations
 # -------------------
 #
 # The equations governing mantle convection under TALA are modified
 # in comparison to those that assume the Bousinessq approximation.
-# Rhodri to specify them here. 
+# Rhodri to specify them here.
 #
 # Weak formulation
 # ----------------
@@ -26,20 +26,20 @@
 # As can be seen, these equations differ appreciably from the incompressible
 # approximations that have been utilised thus far, with important updates to all
 # three governing equations. Despite this, the changes required to incorporate these
-# equations, within UFL and G-ADOPT, are minimal. 
+# equations, within UFL and G-ADOPT, are minimal.
 #
 # Solution procedure
 # ------------------
 #
 # For temporal integration, we once again use an implicit mid-point scheme.
 # Again, we solve for velocity and pressure, $\vec{u}$ and
-# $p$, in a separate step before solving for temperature $T$. 
+# $p$, in a separate step before solving for temperature $T$.
 #
 # This example
 # ------------
 #
 # In this example, we simulate compressible convection, for an isoviscous material
-# under TALA. We specify Ra=10^5 and a dissipation number Di=0.5. 
+# under TALA. We specify Ra=10^5 and a dissipation number Di=0.5.
 # The model is heated from below (T=XX), cooled from the top (T=0) in an
 # enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
 # conditions on all boundaries).
@@ -66,7 +66,7 @@ z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
-# - 
+# -
 
 # We next specify the important constants for this problem, including those associated with the
 # compressible reference state. Note that for ease of extension, we specify these as functions,
@@ -140,7 +140,7 @@ plog.log_str(
     "nu_top energy avg_t rate_work_g rate_viscous energy_2")
 
 gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
-# - 
+# -
 
 # We now solve the variational problem
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
@@ -166,7 +166,7 @@ for timestep in range(0, timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))    
+    energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
     rate_work_against_gravity = assemble(approximation.work_against_gravity(u, T)*dx)
     rate_viscous_dissipation = assemble(approximation.viscous_dissipation(u)*dx)
     energy_conservation_2 = abs(rate_work_against_gravity - rate_viscous_dissipation)
@@ -179,9 +179,9 @@ for timestep in range(0, timesteps):
                  f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
                  f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
                  f"{rate_work_against_gravity} {rate_viscous_dissipation} "
-                 f"{energy_conservation_2}")                 
-    
-    # Calculate Full T:
+                 f"{energy_conservation_2}")
+
+    # Calculate Full T
     FullT.assign(T+Tbar)
 
     # Leave if steady-state has been achieved:
@@ -218,5 +218,3 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # fig, axes = plt.subplots()
 # collection = tripcolor(FullT, axes=axes, cmap='coolwarm')
 # fig.colorbar(collection);
-
-
