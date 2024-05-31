@@ -93,11 +93,13 @@ approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=T
 # timesteps. Given the low Ra, a steady-state tolerance is also specified,
 # allowing the simulation to exit when a steady-state has been achieved.
 
+# +
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-steady_state_tolerance = 1e-9
+steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
+# -
 
 # We next set up and initialise our Temperature field. Note that here, we take into consideration
 # the non-dimensional surface temperature, T0. The full temperature field is also initialised.
@@ -112,6 +114,7 @@ FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # Boundary conditions are next specified.
+# +
 stokes_bcs = {
     bottom_id: {'uy': 0},
     top_id: {'uy': 0},
@@ -123,6 +126,7 @@ temp_bcs = {
     bottom_id: {'T': 1.0 - (T0*exp(Di) - T0)},
     top_id: {'T': 0.0},
 }
+# -
 
 # We next set up our output, in VTK format, including a file
 # that exclusively allows us to visualise the reference state.
@@ -142,13 +146,16 @@ plog.log_str(
 gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
 # -
 
-# We now solve the variational problem
+# We now setup and solve the variational problem
+# +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=True, constant_jacobian=True,
-                             transpose_nullspace=Z_nullspace)
 
-# Now perform the time loop:
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                             cartesian=True, constant_jacobian=True)
+# -
+
+# Now initiate the time loop.
 for timestep in range(0, timesteps):
 
     # Write output:
