@@ -1,5 +1,4 @@
 from gadopt import *
-from mpi4py import MPI
 
 # Set up geometry:
 a, b, c = 1.0079, 0.6283, 1.0
@@ -60,7 +59,7 @@ checkpoint_period = dump_period * 4
 plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms u_rms_top ux_max nu_top nu_base energy avg_t")
 
-gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 
 temp_bcs = {
     bottom_id: {'T': 1.0},
@@ -106,9 +105,7 @@ for timestep in range(0, max_timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    bcu = DirichletBC(u.function_space(), 0, top_id)
-    ux_max = u.dat.data_ro_with_halos[bcu.nodes, 0].max(initial=0)
-    ux_max = u.comm.allreduce(ux_max, MPI.MAX)  # Maximum Vx at surface
+    ux_max = gd.ux_max(top_id)
     nusselt_number_top = gd.Nu_top()
     nusselt_number_base = gd.Nu_bottom()
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
