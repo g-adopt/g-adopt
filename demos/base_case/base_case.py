@@ -1,9 +1,7 @@
 # Idealised 2-D mantle convection problem in a square box
 # =======================================================
 #
-# In this tutorial, we examine the slow creeping motion of Earth’s
-# mantle over geological timescales. We start with an idealised 2-D
-# problem.
+# In this tutorial, we examine an idealised 2-D problem in square box.
 #
 # Governing equations
 # -------------------
@@ -11,9 +9,8 @@
 # The equations governing mantle convection are derived from the
 # conservation laws of mass, momentum and energy.  The simplest
 # mathematical formulation assumes incompressibility and the
-# Boussinesq approximation (e.g. McKenzie et al., 1973), under which
-# the non–dimensional momentum and continuity equations are given
-# by:
+# Boussinesq approximation, under which the non–dimensional
+# momentum and continuity equations are given by:
 #
 # $$\nabla \cdot \mathbb{\sigma} + Ra_0 \ T \ \hat{k} = 0,$$
 # $$\nabla \cdot \vec{u} = 0$$
@@ -110,12 +107,12 @@
 #
 # is interpolated between the temperature solutions $T^n$ and
 # $T^{n+1}$ at the beginning and end of the $n+1$-th time step using a
-# parameter $0\leq\theta\leq 1$.  In this example we use a
-# Crank-Nicolson scheme, where $\theta = 0.5$.
+# parameter $0\leq\theta\leq 1$.  In this example we use an
+# implicit mid-point scheme, where $\theta = 0.5$.
 #
 # To simplify we will solve for velocity and pressure, $\vec{u}$ and
-# $p$, in a separate step before solving for the new temperature
-# $T^{n+1}$. Since these weak equations need to hold for all test
+# $p$, in a separate step before solving for temperature
+# $T$. Since these weak equations need to hold for all test
 # functions $\vec{v}\in V$ and $w\in W$ we can equivalently write,
 # using a single residual functional $F_{\text{Stokes}}$:
 #
@@ -134,39 +131,39 @@
 # symmetry between the $\nabla p$ and $\nabla\cdot u$ terms. This
 # combined weak form that we simultaneously solve for a velocity $u\in
 # V$ and pressure $p\in W$ is referred to as a mixed problem, and the
-# combined solution $(u, p)$ is said to be found in the mixed function
+# combined solution $(\vec{u}, p)$ is said to be found in the mixed function
 # space $V\oplus W$.
 #
 # This example
 # ------------
 #
 # Firedrake provides a complete framework for solving finite element
-# problems, highlighted by previous notebooks and herein with the most
+# problems, highlighted herein with the most
 # basic mantle dynamics problem - isoviscous, incompressible
 # convection, heated from below (T=1), cooled from the top (T=0) in an
 # enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
-# conditions on all boudaries), from Blankenbach et al. (1989). Let's
-# get started!
+# conditions on all boundaries), from Blankenbach et al. (1989).
+#
+# Let's get started! The first step is to import the gadopt module, which
+# provides access to Firedrake and associated functionality.
 
 from gadopt import *
-from mpi4py import MPI
 
-# We have set up the problem using a bilinear quadrilateral element
+# We will set up the problem using a bilinear quadrilateral element
 # pair (Q2-Q1) for velocity and pressure, with Q2 elements for
-# temperature. Firedrake user code is written in Python, so the first
-# step, illustrated above, is to import the Firedrake module.
+# temperature.
 #
-# We next need a mesh: for simple domains such as the unit square,
+# We first need a mesh: for simple domains such as the unit square,
 # Firedrake provides built-in meshing functions. As such, the
-# following code defines the mesh, with 20 quadrilateral elements in x
+# following code defines the mesh, with 40 quadrilateral elements in x
 # and y directions. We also tag boundary IDs.  Boundaries are
 # automatically tagged by the built-in meshes supported by
 # Firedrake. For the `UnitSquareMesh` being used here, tag 1
-# corresponds to the plane $x=0$; 2 to $x=1$; 3 to $y=0$; and 4 to
-# $y=1$. We name these `left`, `right`, `bottom` and `top`,
+# corresponds to the plane $x=0$; 2 to the $x=1$ plane; 3 to the $y=0$ plane;
+# and 4 to the $y=1$ plane. We name these `left`, `right`, `bottom` and `top`,
 # respectively.
 
-nx, ny = 40, 40
+nx, ny = 40, 40  # Number of cells in x and y directions.
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
@@ -189,16 +186,48 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
 # We also specify functions to hold our solutions: z in the mixed
 # function space, noting that a symbolic representation of the two
-# parts – velocity and pressure – is obtained with `split`.
+# parts – velocity and pressure – is obtained with `split`. For later
+# visualisation, we rename the subfunctions of z Velocity and Pressure.
 
-z = Function(Z)  # a field over the mixed function space Z.
+z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
+z.subfunctions[0].rename("Velocity")
+z.subfunctions[1].rename("Pressure")
 
-# Output function space information:
-log("Number of Velocity DOF:", V.dim())
-log("Number of Pressure DOF:", W.dim())
-log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
-log("Number of Temperature DOF:", Q.dim())
+# We can output function space information, for example the number of degrees
+# of freedom (DOF) using log, a utility provided by gadopt.
+
+# + tags=["active-ipynb"]
+# log("Number of Velocity DOF:", V.dim())
+# log("Number of Pressure DOF:", W.dim())
+# log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
+# log("Number of Temperature DOF:", Q.dim())
+# -
+
+# The Rayleigh number for this problem is defined. The viscosity and thermal
+# diffusivity are left at their default values (both = 1). We note that viscosity
+# could also be a Function, if we wanted spatial variation, and will
+# return to this in a subsequent notebook.  These Ra is required to
+# create an *Approximation* representing the physical
+# setup of the problem (options include Boussinesq, Extended
+# Boussinesq, Truncated Anelastic Liquid and Anelastic Liquid), and a
+# *Timestep Adaptor*, for controlling the time-step length (via a CFL
+# criterion) as the simulation advances in time. For the latter,
+# we specify the initial time, initial timestep $\Delta t$, and number of
+# timesteps. Given the low Ra, a steady-state tolerance is also specified,
+# allowing the simulation to exit when a steady-state has been achieved.
+
+# +
+Ra = Constant(1e4)  # Rayleigh number
+approximation = BoussinesqApproximation(Ra)
+
+time = 0.0  # Initial time
+delta_t = Constant(1e-6)  # Initial time-step
+timesteps = 20000  # Maximum number of timesteps
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+
+steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
+# -
 
 # Mantle convection is an initial and boundary-value problem. We
 # assume the initial temperature distribution to be prescribed by
@@ -207,7 +236,7 @@ log("Number of Temperature DOF:", Q.dim())
 #
 # In the following code, we first obtain symbolic expressions for
 # coordinates in the physical mesh and subsequently use these to
-# initialize the old temperature field.  This is where Firedrake
+# initialize the temperature field.  This is where Firedrake
 # transforms a symbolic operation into a numerical computation for the
 # first time: the `interpolate` method generates C code that evaluates
 # this expression at the nodes of $T$.
@@ -226,29 +255,6 @@ T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 # fig.colorbar(collection);
 # -
 
-# The Rayleigh number for this problem is defined in addition to the
-# initial timestep $\Delta t$. The viscosity and thermal diffusivity
-# are left at their default values (both = 1). We note that viscosity
-# could also be a Function, if we wanted spatial variation, and will
-# return to this in Part 2 of this notebook below.  These constants
-# are used to create an *Approximation* representing the physical
-# setup of the problem (options include Boussinesq, Extended
-# Boussinesq, Truncated Anelastic Liquid and Anelastic Liquid), and a
-# *Timestep Adaptor*, for controlling the time-step length (via a CFL
-# criterion) as the simulation advances in time.
-
-# +
-delta_t = Constant(1e-6)  # Initial time-step
-
-Ra = Constant(1e4)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
-
-time = 0.0
-steady_state_tolerance = 1e-9
-max_timesteps = 20000
-kappa = Constant(1.0)  # Thermal diffusivity
-# -
-
 # With closed boundaries, and no constraint on pressure anywhere in
 # the domain, this problem has a constant pressure nullspace and we
 # must ensure that our solver removes this space. To do so, we build a
@@ -258,80 +264,85 @@ kappa = Constant(1.0)  # Thermal diffusivity
 # 'closed' keyword handles the constant pressure nullspace, whilst the
 # 'rotational' keyword deals with rotational modes, which, for
 # example, manifest in an a annulus domain with free slip top and
-# bottom boundaries (as we will see in the next tutorial).
+# bottom boundaries (as we will see in a later tutorial).
 
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
-# Write output files in VTK format:
-u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
-# Next rename for output:
-u.rename("Velocity")
-p.rename("Pressure")
-# Create output file and select output_frequency:
-output_file = VTKFile("output.pvd")
-dump_period = 50
-# Frequency of checkpoint files:
-checkpoint_period = dump_period * 4
-
-# Open file for logging diagnostic output:
-plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
-
-gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
-t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-
-# We specify strong Dirichlet boundary conditions for velocity and
+# We next specify strong Dirichlet boundary conditions for velocity and
 # temperature. The user must provide the part of the mesh at which
 # each boundary condition applies.  Note how boundary conditions have
 # the granularity to be applied to the $x$ and $y$ components of the
 # velocity field only, if desired.
 
 # +
-temp_bcs = {
-    bottom_id: {'T': 1.0},
-    top_id: {'T': 0.0},
-}
-
 stokes_bcs = {
     bottom_id: {'uy': 0},
     top_id: {'uy': 0},
     left_id: {'ux': 0},
     right_id: {'ux': 0},
 }
+
+temp_bcs = {
+    bottom_id: {'T': 1.0},
+    top_id: {'T': 0.0},
+}
+# -
+
+# We next set up our output, in VTK format. To do so, we create the output file
+# and specify the output_frequency in timesteps.
+
+output_file = VTKFile("output.pvd")
+output_frequency = 50
+
+# Next, we open a file for logging diagnostic output and provide the header. We will be outputting
+# the timestep number, the time, the timestep size, the L2 norm of the change in temperature between
+# consequtive timesteps, the RMS velocity, the RMS velocity at the surface of the domain, the maximum
+# x-component of velocity at the domains surface, the surface Nusselt number, the basal Nusselt number,
+# the difference between surface and bottom Nusselt numbers (energy_conservation) and the average temperature
+# across the domain. These are computed using the GeodynamicalDiagnostics class, which takes in the Stokes (z)
+# and temperature functions, alongside bottom and top boundary IDs.
+
+# +
+plog = ParameterLog('params.log', mesh)
+plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
+
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 # -
 
 # We finally come to solving the variational problem, with solver
 # objects for the energy and Stokes systems created. For the energy
 # system we pass in the solution field T, velocity u, the physical
 # approximation, time step, temporal discretisation approach
-# (i.e. implicit middle point, being equivalent to the Crank Nicolson
-# scheme outlined above) and boundary conditions. For the Stokes
+# (i.e. implicit middle point), and temperature boundary conditions. For the Stokes
 # system, we pass in the solution fields z, Temperature, the physical
-# approximation, boundary conditions and the nullspace
-# object. Solution of the two variational problems is undertaken by
-# PETSc.
+# approximation, boundary conditions and the nullspace object.
+#
+# Given that this model is isoviscous, we can speed up the simulation by specifying a
+# constant Jacobian (preventing uneccesary matrix re-assembly).
+# We note that solution of the two variational problems is undertaken by PETSc.
 
+# +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=True, constant_jacobian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 
-checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
-checkpoint_file.save_mesh(mesh)
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                             cartesian=True, constant_jacobian=True)
+# -
 
 # We can now initiate the time-loop, with the Stokes and energy
 # systems solved seperately. These `solve` calls once again convert
 # symbolic mathematics into computation. In the time loop, set here to
-# run for 500 time-steps, we compute the RMS velocity and surface
-# Nusselt number for diagnostic purposes, and print these results
-# every 50 timesteps.
+# run for a maximum of 20000 time-steps, we output in VTK format every 50 timesteps.
+# The timestep itself is updated, using the update_timestep function, with diagnostics logged via the log utility
+# at every timestep. At the end of each time step, we calculate the L2-norm of
+# the change in temperature and, once this drops below the steady_state_tolerance specified above,
+# we exit the timeloop.
 
-# +
-for timestep in range(0, max_timesteps):
+for timestep in range(0, timesteps):
 
     # Write output:
-    if timestep % dump_period == 0:
-        output_file.write(u, p, T)
+    if timestep % output_frequency == 0:
+        output_file.write(*z.subfunctions, T)
 
     dt = t_adapt.update_timestep()
     time += dt
@@ -343,35 +354,39 @@ for timestep in range(0, max_timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    bcu = DirichletBC(u.function_space(), 0, top_id)
-    ux_max = u.dat.data_ro_with_halos[bcu.nodes, 0].max(initial=0)
-    ux_max = u.comm.allreduce(ux_max, MPI.MAX)  # Maximum Vx at surface
-    nusselt_number_top = gd.Nu_top()
-    nusselt_number_base = gd.Nu_bottom()
-    energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
+    energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} {gd.u_rms_top()} {ux_max} "
-                 f"{nusselt_number_top} {nusselt_number_base} "
-                 f"{energy_conservation} {gd.T_avg()} ")
+    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
+                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
+                 f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} ")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
         log("Steady-state achieved -- exiting time-step loop")
         break
 
-    # Checkpointing:
-    if timestep % checkpoint_period == 0:
-        checkpoint_file.save_function(T, name="Temperature", idx=timestep)
-        checkpoint_file.save_function(z, name="Stokes", idx=timestep)
+# At the end of the simulation, once a steady-state has been achieved, we close our logging file
+# and checkpoint steady state temperature and Stokes solution fields to disk. These can later be
+# used to restart a simulation, if required.
 
+# +
 plog.close()
-checkpoint_file.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
+# -
+
+# We can visualise the final temperature field using Firedrake's
+# built-in plotting functionality.
+
+# + tags=["active-ipynb"]
+# fig, axes = plt.subplots()
+# collection = tripcolor(T, axes=axes, cmap='coolwarm')
+# fig.colorbar(collection);
+# -
