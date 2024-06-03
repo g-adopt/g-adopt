@@ -65,6 +65,8 @@ approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=T
 # we specify the initial time, initial timestep $\Delta t$, and number of
 # timesteps. Given the low Ra, a steady-state tolerance is also specified,
 # allowing the simulation to exit when a steady-state has been achieved.
+# The steady-state tolerance specified here is tight, and can be increased
+# to speed up the simulation, as required.
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
@@ -80,7 +82,7 @@ T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(p
 FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 
 # This problem has a constant pressure nullspace, handled identically to our
-# previous tutorials:
+# previous tutorials.
 
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
@@ -101,7 +103,7 @@ temp_bcs = {
 # -
 
 # We next set up our output, in VTK format, including a file
-# that exclusively allows us to visualise the reference state.
+# that allows us to visualise the reference state.
 # We also open a file for logging and calculate our diagnostic outputs.
 
 # +
