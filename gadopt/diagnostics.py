@@ -1,8 +1,9 @@
 from firedrake import (
-    Constant, FacetNormal, Function,
+    Constant, DirichletBC, FacetNormal, Function,
     assemble, dot, ds, dx, grad, norm, sqrt,
 )
 from firedrake.ufl_expr import extract_unique_domain
+from mpi4py import MPI
 
 from .utility import CombinedSurfaceMeasure
 
@@ -11,8 +12,7 @@ class GeodynamicalDiagnostics:
     """Typical simulation diagnostics used in geodynamical simulations.
 
     Arguments:
-      u:         Firedrake function for the velocity
-      p:         Firedrake function for the pressure
+      z:         Firedrake function for the mixed Stokes function space
       T:         Firedrake function for the temperature
       bottom_id: bottom boundary identifier
       top_id:    top boundary identifier
@@ -27,13 +27,13 @@ class GeodynamicalDiagnostics:
       Nu_top: Nusselt number at the top boundary
       Nu_bottom: Nusselt number at the bottom boundary
       T_avg: Average temperature in the domain
+      ux_max: Maximum velocity (optionally over a given boundary)
 
     """
 
     def __init__(
         self,
-        u: Function,
-        p: Function,
+        z: Function,
         T: Function,
         bottom_id: int,
         top_id: int,
@@ -41,8 +41,7 @@ class GeodynamicalDiagnostics:
     ):
         mesh = extract_unique_domain(u)
 
-        self.u = u
-        self.p = p
+        self.u, self.p, *_ = z.subfunctions
         self.T = T
 
         self.dx = dx(domain=mesh, degree=degree)
@@ -74,3 +73,12 @@ class GeodynamicalDiagnostics:
 
     def T_avg(self):
         return assemble(self.T * self.dx) / self.domain_volume
+
+    def ux_max(self, boundary_id=None) -> float:
+        ux_data = self.u.dat.data_ro_with_halos[:, 0]
+
+        if boundary_id:
+            bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
+            ux_data = ux_data[bcu.nodes]
+
+        return self.u.comm.allreduce(ux_data.max(initial=0), MPI.MAX)
