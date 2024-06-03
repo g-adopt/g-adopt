@@ -234,8 +234,8 @@ for timestep in range(0, timesteps):
 
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
-                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
-                 f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
+                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_bottom()} "
+                 f"{gd.Nu_top()} {energy_conservation} {gd.T_avg()} "
                  f"{rate_work_against_gravity} {rate_viscous_dissipation} "
                  f"{energy_conservation_2}")
 
