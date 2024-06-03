@@ -231,9 +231,7 @@ class LevelSetSolver:
         )
         self.proj_solver = self.gradient_L2_proj()
 
-        self.reini_params = (
-            reini_params_default if reini_params is None else reini_params
-        )
+        self.reini_params = reini_params or reini_params_default
         reini_fields = {"level_set_grad": self.level_set_grad_proj, "epsilon": epsilon}
 
         ls_eq = ScalarAdvectionEquation(func_space, func_space)
