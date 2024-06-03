@@ -386,7 +386,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # built-in plotting functionality.
 
 # + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
 # collection = tripcolor(T, axes=axes, cmap='coolwarm')
 # fig.colorbar(collection);
+# -
