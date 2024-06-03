@@ -146,7 +146,7 @@ class Simulation:
         int_heat_rate.dat.data[:] = analytical_values
 
     @classmethod
-    def steady_state_condition(cls, velocity, velocity_old):
+    def steady_state_condition(cls, stokes_solver):
         pass
 
     @classmethod

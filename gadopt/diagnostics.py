@@ -39,7 +39,7 @@ class GeodynamicalDiagnostics:
         top_id: int,
         degree: int = 4,
     ):
-        mesh = extract_unique_domain(u)
+        mesh = extract_unique_domain(z)
 
         self.u, self.p, *_ = z.subfunctions
         self.T = T

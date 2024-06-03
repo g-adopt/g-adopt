@@ -120,7 +120,7 @@ class Simulation:
         fd.DirichletBC(temperature.function_space(), 0, 4).apply(temperature)
 
     @classmethod
-    def steady_state_condition(cls, velocity, velocity_old):
+    def steady_state_condition(cls, stokes_solver):
         pass
 
     @classmethod

@@ -130,7 +130,10 @@ class Simulation:
         )
 
     @classmethod
-    def steady_state_condition(cls, velocity, velocity_old):
+    def steady_state_condition(cls, stokes_solver):
+        velocity = stokes_solver.solution.subfunctions[0]
+        velocity_old = stokes_solver.solution_old.subfunctions[0]
+
         return fd.norm(velocity - velocity_old) < cls.steady_state_threshold
 
     @classmethod

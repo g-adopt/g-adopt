@@ -40,8 +40,7 @@ def write_output(output_file):
 
     output_file.write(
         time_output,
-        velocity,
-        pressure,
+        *stokes_function.subfunctions,
         temperature,
         *level_set,
         *level_set_grad_proj,
@@ -146,10 +145,10 @@ else:  # Initialise mesh and key functions
     dump_counter = 0
 
 # Extract velocity and pressure from the Stokes function
-velocity_ufl, pressure_ufl = fd.split(stokes_function)  # UFL expressions
-velocity, pressure = stokes_function.subfunctions  # Associated Firedrake functions
-velocity.rename("Velocity")
-pressure.rename("Pressure")
+velocity, pressure = fd.split(stokes_function)  # UFL expressions
+# Associated Firedrake functions
+stokes_function.subfunctions[0].rename("Velocity")
+stokes_function.subfunctions[1].rename("Pressure")
 
 # Set up fields that depend on the material interface
 func_space_interp = fd.FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
@@ -165,10 +164,7 @@ else:
 
 viscosity_ufl = ga.field_interface(
     level_set,
-    [
-        material.viscosity(velocity_ufl, temperature)
-        for material in Simulation.materials
-    ],
+    [material.viscosity(velocity, temperature) for material in Simulation.materials],
     method="sharp" if "Schmalholz_2011" in Simulation.name else "geometric",
 )
 viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
@@ -190,7 +186,8 @@ else:
     ).interpolate(int_heat_rate_ufl)
 
 # Timestep object
-timestep = fd.Constant(Simulation.initial_timestep)
+real_func_space = fd.FunctionSpace(mesh, "R", 0)
+timestep = fd.Function(real_func_space).assign(Simulation.initial_timestep)
 
 # Set up energy and Stokes solvers
 approximation = ga.BoussinesqApproximation(
@@ -206,7 +203,7 @@ approximation = ga.BoussinesqApproximation(
 )
 energy_solver = ga.EnergySolver(
     temperature,
-    velocity_ufl,
+    velocity,
     approximation,
     timestep,
     ga.ImplicitMidpoint,
@@ -230,29 +227,22 @@ stokes_solver = ga.StokesSolver(
 # Solve initial Stokes system
 stokes_solver.solve()
 
-# Parameters involved in level-set reinitialisation
-reini_params = {
-    "epsilon": epsilon,
-    "tstep": 1e-2,
-    "tstep_alg": ga.eSSPRKs3p3,
-    "frequency": 5,
-    "iterations": 0 if "Trim_2023" in Simulation.name else 1,
-}
-
 # Set up level-set solvers
 level_set_solver = [
     ga.LevelSetSolver(
-        ls, velocity_ufl, timestep, ga.eSSPRKs10p3, Simulation.subcycles, reini_params
+        ls, velocity, timestep, ga.eSSPRKs10p3, Simulation.subcycles, epsilon
     )
     for ls in level_set
 ]
 level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solver]
+if "Trim_2023" in Simulation.name:
+    level_set_solver.reini_params["iterations"] = 0
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
     timestep,
-    velocity_ufl,
-    velocity.function_space(),
+    velocity,
+    stokes_function.subfunctions[0].function_space(),
     target_cfl=Simulation.subcycles * 0.6,
     maximum_timestep=Simulation.dump_period,
 )
@@ -283,7 +273,7 @@ diag_vars = {
     "int_heat_rate": int_heat_rate,
 }
 geo_diag = ga.GeodynamicalDiagnostics(
-    velocity_ufl, pressure_ufl, temperature, bottom_id=3, top_id=4
+    stokes_function, temperature, bottom_id=3, top_id=4
 )
 
 # Function to be coupled with the energy solver
@@ -329,9 +319,7 @@ while True:
 
     # Check if simulation has completed
     end_time = Simulation.time_end is not None and time_now >= Simulation.time_end
-    steady = Simulation.steady_state_condition(
-        velocity, stokes_solver.solution_old.subfunctions[0]
-    )
+    steady = Simulation.steady_state_condition(stokes_solver)
     if end_time or steady:
         # Calculate final simulation diagnostics
         Simulation.diagnostics(time_now, geo_diag, diag_vars)

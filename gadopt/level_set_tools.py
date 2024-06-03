@@ -7,6 +7,16 @@ import firedrake as fd
 
 from .equations import BaseEquation, BaseTerm
 from .scalar_equation import ScalarAdvectionEquation
+from .time_stepper import eSSPRKs3p3
+
+
+# Parameters involved in level-set reinitialisation
+reini_params_default = {
+    "tstep": 1e-2,
+    "tstep_alg": eSSPRKs3p3,
+    "frequency": 5,
+    "iterations": 1,
+}
 
 
 @dataclass(kw_only=True)
@@ -157,12 +167,12 @@ class LevelSetSolver:
         mesh:
           The UFL mesh where values of the level set function exist.
         level_set:
-          The UFL function for the level set.
+          The Firedrake function for the level set.
         func_space_lsgp:
           The UFL function space where values of the projected level-set gradient are
           calculated.
         level_set_grad_proj:
-          The UFL function for the projected level-set gradient.
+          The Firedrake function for the projected level-set gradient.
         proj_solver:
           An integer or a float representing the reference density.
         reini_params:
@@ -182,22 +192,25 @@ class LevelSetSolver:
         tstep: fd.Constant,
         tstep_alg: abc.ABCMeta,
         subcycles: int,
-        reini_params: dict,
+        epsilon: fd.Constant,
+        reini_params: Optional[dict] = None,
         solver_params: Optional[dict] = None,
     ):
         """Initialises the solver instance.
 
         Args:
             level_set:
-              The UFL function for the level set.
+              The Firedrake function for the level set.
             velocity:
               The UFL expression for the velocity.
             tstep:
-              A UFL constant for the simulation time step.
+              The Firedrake function over the Real space for the simulation time step.
             tstep_alg:
               The class for the timestepping algorithm used in the advection solver.
             subcycles:
               An integer specifying the number of advection solves to perform.
+            epsilon:
+              A UFL constant denoting the thickness of the hyperbolic tangent profile.
             reini_params:
               A dictionary containing parameters used in the reinitialisation approach.
             solver_params:
@@ -218,11 +231,10 @@ class LevelSetSolver:
         )
         self.proj_solver = self.gradient_L2_proj()
 
-        self.reini_params = reini_params
-        reini_fields = {
-            "level_set_grad": self.level_set_grad_proj,
-            "epsilon": reini_params["epsilon"],
-        }
+        self.reini_params = (
+            reini_params_default if reini_params is None else reini_params
+        )
+        reini_fields = {"level_set_grad": self.level_set_grad_proj, "epsilon": epsilon}
 
         ls_eq = ScalarAdvectionEquation(func_space, func_space)
         reini_eq = ReinitialisationEquation(func_space, func_space)
@@ -242,11 +254,11 @@ class LevelSetSolver:
             tstep / subcycles,
             solver_parameters=solver_params,
         )
-        self.reini_ts = reini_params["tstep_alg"](
+        self.reini_ts = self.reini_params["tstep_alg"](
             reini_eq,
             self.level_set,
             reini_fields,
-            reini_params["tstep"],
+            self.reini_params["tstep"],
             solver_parameters=solver_params,
         )
 
@@ -497,7 +509,7 @@ def entrainment(
 
     Args:
         level_set:
-          A level-set UFL function.
+          A level-set Firedrake function.
         material_area:
           An integer or a float representing the total area occupied by a material.
         entrainment_height:
