@@ -1,5 +1,5 @@
 from firedrake import (
-    Constant, FacetNormal, Function,
+    Constant, DirichletBC, FacetNormal, Function,
     assemble, dot, ds, dx, grad, norm, sqrt,
 )
 from firedrake.ufl_expr import extract_unique_domain
