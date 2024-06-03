@@ -58,7 +58,7 @@ checkpoint_file.save_function(Taverage, name="Average Temperature", idx=0)
 checkpoint_file.save_function(T, name="Temperature", idx=0)
 
 Ra = Constant(1e6)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = BoussinesqApproximation(Ra, cartesian=True)
 
 delta_t = Constant(4e-6)  # Constant time step
 max_timesteps = 80

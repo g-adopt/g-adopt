@@ -37,7 +37,7 @@ r = sqrt(X[0]**2 + X[1]**2)
 T.interpolate(rmax - r + 0.02*cos(4*atan2(X[1], X[0])) * sin((r - rmin) * pi))
 
 Ra = Constant(1e5)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = BoussinesqApproximation(Ra, cartesian=False)
 
 delta_t = Constant(1e-7)  # Initial time-step
 
@@ -74,10 +74,16 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=False, constant_jacobian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             near_nullspace=Z_near_nullspace)
+stokes_solver = StokesSolver(
+    z,
+    T,
+    approximation,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+    near_nullspace=Z_near_nullspace,
+)
 
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
