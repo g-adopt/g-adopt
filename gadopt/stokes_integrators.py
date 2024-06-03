@@ -62,7 +62,7 @@ def create_stokes_nullspace(
     Z: fd.functionspaceimpl.WithGeometry,
     closed: bool = True,
     rotational: bool = False,
-    translations: Optional[list[int]] = None
+    translations: Optional[list[int]] = None,
 ) -> fd.nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
 
@@ -124,22 +124,24 @@ class StokesSolver:
       bcs: Dictionary of identifier-value pairs specifying boundary conditions
       mu: Firedrake function representing dynamic viscosity
       quad_degree: Quadrature degree. Default value is `2p + 1`, where
-                     p is the polynomial degree of the trial space
+                   p is the polynomial degree of the trial space
       cartesian: Whether to use Cartesian coordinates
-      solver_parameters: Dictionary of solver parameters provided to PETSc
+      solver_parameters: Either a dictionary of PETSc solver parameters or a string
+                         specifying a default set of parameters defined in G-ADOPT
       J: Firedrake function representing the Jacobian of the system
       constant_jacobian: Whether the Jacobian of the system is constant
 
     """
-    name = 'Stokes'
+
+    name = "Stokes"
 
     def __init__(
         self,
         z: fd.Function,
         T: fd.Function,
         approximation: BaseApproximation,
-        bcs: dict[int, dict[str, int | float]] = {},
-        mu: fd.Function | int | float = 1,
+        bcs: dict[int, dict[str, Number]] = {},
+        mu: fd.Function | Number = 1,
         quad_degree: int = 6,
         cartesian: bool = True,
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
@@ -153,6 +155,7 @@ class StokesSolver:
         self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
                                          compressible=approximation.compressible)
         self.solution = z
+        self.solution_old = None
         self.approximation = approximation
         self.mu = ensure_constant(mu)
         self.J = J
@@ -226,8 +229,8 @@ class StokesSolver:
                     self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
                 elif INFO >= log_level:
                     self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-        # solver is setup only last minute
-        # so people can overwrite parameters we've setup here
+
+        # solver object is set up later to permit editing default solver parameters
         self._solver_setup = False
 
     def setup_solver(self):
@@ -258,4 +261,5 @@ class StokesSolver:
         """Solves the system."""
         if not self._solver_setup:
             self.setup_solver()
+        self.solution_old = self.solution.copy(deepcopy=True)
         self.solver.solve()
