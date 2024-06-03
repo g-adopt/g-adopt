@@ -4,13 +4,21 @@ from numbers import Number
 from typing import Optional
 
 import firedrake as fd
+from firedrake.ufl_expr import extract_unique_domain
 
 from .equations import BaseEquation, BaseTerm
 from .scalar_equation import ScalarAdvectionEquation
 from .time_stepper import eSSPRKs3p3
 
 
-# Parameters involved in level-set reinitialisation
+# Default solver options for level-set advection and reinitialisation
+solver_params_default = {
+    "mat_type": "aij",
+    "ksp_type": "preonly",
+    "pc_type": "bjacobi",
+    "sub_pc_type": "ilu",
+}
+# Default parameters used to set up level-set reinitialisation
 reini_params_default = {
     "tstep": 1e-2,
     "tstep_alg": eSSPRKs3p3,
@@ -217,50 +225,34 @@ class LevelSetSolver:
               A dictionary containing solver parameters used in the advection and
               reinitialisation approaches.
         """
-        func_space = level_set.function_space()
-        self.mesh = func_space.mesh()
         self.level_set = level_set
-        ls_fields = {"velocity": velocity}
+        self.tstep = tstep
+        self.tstep_alg = tstep_alg
+        self.subcycles = subcycles
+
+        self.reini_params = reini_params or reini_params_default
+        self.solver_params = solver_params or solver_params_default
+
+        self.mesh = extract_unique_domain(level_set)
+        self.func_space = level_set.function_space()
 
         self.func_space_lsgp = fd.VectorFunctionSpace(
-            self.mesh, "CG", func_space.finat_element.degree
+            self.mesh, "CG", self.func_space.finat_element.degree
         )
         self.level_set_grad_proj = fd.Function(
             self.func_space_lsgp,
             name=f"Level-set gradient (projection) #{level_set.name()[-1]}",
         )
+
         self.proj_solver = self.gradient_L2_proj()
 
-        self.reini_params = reini_params or reini_params_default
-        reini_fields = {"level_set_grad": self.level_set_grad_proj, "epsilon": epsilon}
+        self.ls_fields = {"velocity": velocity}
+        self.reini_fields = {
+            "level_set_grad": self.level_set_grad_proj,
+            "epsilon": epsilon,
+        }
 
-        ls_eq = ScalarAdvectionEquation(func_space, func_space)
-        reini_eq = ReinitialisationEquation(func_space, func_space)
-
-        if solver_params is None:
-            solver_params = {
-                "mat_type": "aij",
-                "ksp_type": "preonly",
-                "pc_type": "bjacobi",
-                "sub_pc_type": "ilu",
-            }
-
-        self.ls_ts = tstep_alg(
-            ls_eq,
-            self.level_set,
-            ls_fields,
-            tstep / subcycles,
-            solver_parameters=solver_params,
-        )
-        self.reini_ts = self.reini_params["tstep_alg"](
-            reini_eq,
-            self.level_set,
-            reini_fields,
-            self.reini_params["tstep"],
-            solver_parameters=solver_params,
-        )
-
-        self.subcycles = subcycles
+        self.solvers_ready = False
 
     def gradient_L2_proj(self) -> fd.variational_solver.LinearVariationalSolver:
         """Constructs a projection solver.
@@ -295,6 +287,7 @@ class LevelSetSolver:
             "pc_type": "lu",
             "pc_factor_mat_solver_type": "mumps",
         }
+
         return fd.LinearVariationalSolver(problem, solver_parameters=solver_params)
 
     def update_level_set_gradient(self, *args, **kwargs):
@@ -303,6 +296,23 @@ class LevelSetSolver:
         Can be used as a callback.
         """
         self.proj_solver.solve()
+
+    def set_up_solvers(self):
+        """Sets up the time steppers for advection and reinitialisation."""
+        self.ls_ts = self.tstep_alg(
+            ScalarAdvectionEquation(self.func_space, self.func_space),
+            self.level_set,
+            self.ls_fields,
+            self.tstep / self.subcycles,
+            solver_parameters=self.solver_params,
+        )
+        self.reini_ts = self.reini_params["tstep_alg"](
+            ReinitialisationEquation(self.func_space, self.func_space),
+            self.level_set,
+            self.reini_fields,
+            self.reini_params["tstep"],
+            solver_parameters=self.solver_params,
+        )
 
     def solve(self, step: int):
         """Updates the level-set function.
@@ -315,6 +325,10 @@ class LevelSetSolver:
             step:
               An integer representing the current simulation step.
         """
+        if not self.solvers_ready:
+            self.set_up_solvers()
+            self.solvers_ready = True
+
         for subcycle in range(self.subcycles):
             self.ls_ts.advance(0)
 
