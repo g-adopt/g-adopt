@@ -1,6 +1,15 @@
 from firedrake import (
-    Constant, DirichletBC, FacetNormal, Function,
-    assemble, dot, ds, dx, grad, norm, sqrt,
+    Constant,
+    DirichletBC,
+    FacetNormal,
+    Function,
+    assemble,
+    dot,
+    ds,
+    dx,
+    grad,
+    norm,
+    sqrt,
 )
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
