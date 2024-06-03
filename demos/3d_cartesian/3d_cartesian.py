@@ -1,4 +1,4 @@
-# Idealised 3-D mantle convection problem.
+# Idealised 3-D mantle convection problem
 # =======================================================
 #
 # In this tutorial we highlight the ease at which simulations can be examined in different
