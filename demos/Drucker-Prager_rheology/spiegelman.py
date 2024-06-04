@@ -11,14 +11,13 @@
 # stabilisation of the Jacobian as advocated in Fraters et al. (2019).
 #
 # As with all examples, the first step is to import the gadopt module, which
-# provides access to Firedrake and associated functionality.
+# provides access to Firedrake and associated functionality. We also firedrake, so that we can later control
+# how PETSc handles failing solvers, and os.path and sys for running a suite of models.
 
 from gadopt import *
-from firedrake.petsc import PETSc
 import firedrake
 import os.path
 import sys
-PETSc.Sys.popErrorHandler()
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -35,7 +34,6 @@ mu2 = Constant(1e21/mu0)  # lower layer visc. (isovisc.)
 
 H1 = 0.75
 r, h, ww = 0.02, 1/12, 1/6
-log = PETSc.Sys.Print
 
 
 def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
@@ -43,19 +41,33 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     log('\n')
     log('\n')
     log('WRITING TO:', output_dir)
-    mesh = RectangleMesh(nx, ny, 4, 1, quadrilateral=True)  # Square mesh generated via firedrake
+
+    # We first need a mesh: for simple domains such as the rectangle,
+    # Firedrake provides built-in meshing functions. As such, the
+    # following code defines the mesh, with nx and ny quadrilateral elements in x
+    # and y directions, respectively. We also tag boundary IDs.  Boundaries are
+    # automatically tagged by the built-in meshes supported by
+    # Firedrake. For the `RectangleMesh` being used here, tag 1
+    # corresponds to the plane $x=0$; 2 to the $x=1$ plane; 3 to the $y=0$ plane;
+    # and 4 to the $y=1$ plane. We name these `left`, `right`, `bottom` and `top`,
+    # respectively. Our mesh has an aspect ratio of 4 (Lx=4; Ly=1).
+
+    mesh = RectangleMesh(nx, ny, 4, 1, quadrilateral=True)  # Rectangular mesh generated via firedrake
     left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # noqa: F841 Boundary IDs
 
-    # Set up function spaces - currently using the bilinear Q2Q1 element pair:
+    # We next set up function spaces, and specify functions to hold our solutions. We use a bilinear Q2Q1
+    # finite element pair for the Stokes system, as with our previous examples.
+
+    # +
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
-    # Test functions and functions to hold solutions:
-    v, w = TestFunctions(Z)
+
     z = Function(Z)  # A field over the mixed function space Z.
     u, p = split(z)  # Returns symbolic UFL expression for u and p
     z.subfunctions[0].rename("Velocity")
     z.subfunctions[1].rename("Pressure")
+    # -
 
     # Functions to interpolate expression into for output:
     mu_f = Function(W, name="Viscosity")
@@ -257,9 +269,9 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     try:
         newton_solver.solve()
     except firedrake.exceptions.ConvergenceError:
-        # ignore_solver failures, so we still get final output
-        # Most of the cases will not actually converge to the specified
-        # very tight tolerances, so we always perform the max. n/o iterations
+        # Ignore_solver failures, so we still get final output.
+        # Most cases will not actually converge to the specified
+        # tight tolerances, so we always perform the max. n/o iterations
         pass
 
     mu_f.interpolate(mu)
@@ -284,7 +296,7 @@ if __name__ == "__main__":
         for ui, mui in zip([2.5e-3, 5e-3, 12.5e-3], [1e23, 1e24, 5e24]):
             # 50 initial Picard iterations is used in the graph (which cuts off after 50 iterations)
             # to obtain the converge of a pure Picard solve, i.e. the subsequent Newton solve is
-            # ignored in that case
+            # ignored in that case.
             for picard_iterations in [50, 0, 5, 15, 25]:
                 for stab in [False, True]:
                     spiegelman(Constant(ui/year), Constant(mui/mu0), nx, ny, picard_iterations, stabilisation=stab)
