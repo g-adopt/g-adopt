@@ -70,7 +70,7 @@ material_interface_y = 0.025  # Vertical shift of the interface along the y axis
 isd_params = (interface_slope, material_interface_y)
 
 # Shapely LineString representation of the material interface
-interface_x = np.linspace(0, lx, 1000)
+interface_x = np.linspace(0, lx, 1000)  # Enough points to capture the interface shape
 interface_y = straight_line(interface_x, *isd_params)
 line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
 sl.prepare(line_string)
@@ -131,13 +131,14 @@ t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )
 
-# This problem has a constant pressure nullspace, handled identically to our previous
-# tutorials.
+# This problem has a constant pressure nullspace, which corresponds to the default case
+# handled in G-ADOPT.
 
 Z_nullspace = create_stokes_nullspace(Z)
 
 # Boundary conditions are specified next: free slip on all sides, heating from below,
-# and cooling from above.
+# and cooling from above. No boundary conditions are required for level set, as the
+# numerical domain is closed.
 
 stokes_bcs = {
     bottom_id: {"uy": 0},
@@ -182,7 +183,7 @@ plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
-material_area = material_interface_y * lx  # Quantity of tracked material
+material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
@@ -239,7 +240,7 @@ while True:
     # Advect level set
     level_set_solver.solve(step)
 
-    # Calculate material entrainment
+    # Calculate proportion of material entrained above a given height
     buoy_entr = entrainment(psi, material_area, entrainment_height)
 
     # Log diagnostics
