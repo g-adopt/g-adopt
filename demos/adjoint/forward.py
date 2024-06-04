@@ -1,71 +1,114 @@
-"""
-This runs the forward portion of the adjoint test case, to generate the reference
-final condition, and synthetic forcing (surface velocity observations).
-"""
+# Generating Reference Fields for Adjoint Inversion
+# =================================================
+#
+# This tutorial explains how to run the forward portion of the adjoint test case to generate the reference final condition and synthetic forcing (surface velocity observations).
+#
+# We will follow a similar structure to the base demo, focusing on generating the necessary fields for the adjoint inversion. Let's get started.
 
+# Setting Up the Domain
+# ----------------------
+# First, we define the domain extents and discretisation. We create a 1D interval mesh and extrude it along the y-axis to form a 2D mesh. This mesh will serve as the basis for our simulation.
+
+# +
+# Define the domain extents and discretisation.
 from gadopt import *
-import numpy as np
-
-# Domain extents
 x_max = 1.0
 y_max = 1.0
-
-# Number of intervals along x direction
 disc_n = 150
 
-# Interval mesh in x direction, to be extruded along y
+# Create a 1D interval mesh and extrude it along the y-axis to form a 2D mesh.
 mesh1d = IntervalMesh(disc_n, length_or_left=0.0, right=x_max)
 mesh = ExtrudedMesh(
     mesh1d, layers=disc_n, layer_height=y_max / disc_n, extrusion_type="uniform"
 )
 
-# write out the mesh
-with CheckpointFile("mesh.h5", mode="w") as fi:
-    fi.save_mesh(mesh)
-
+# Define boundary IDs for later use.
 bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
+# -
 
-# Set up function spaces for the Q2Q1 pair
+# Defining Function Spaces
+# -------------------------
+# We set up the function spaces for velocity (Q2), pressure (Q1), and temperature (Q2). These function spaces will be used to define the solution fields for our simulation.
+
+# +
+# Set up function spaces for velocity (Q2), pressure (Q1), and temperature (Q2).
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
-Z = MixedFunctionSpace([V, W])
+Z = MixedFunctionSpace([V, W])  # Mixed function space for Stokes problem.
 
-z = Function(Z)  # A field over the mixed function space Z
-u, p = z.subfunctions  # Symbolic UFL expressions for u and p
+# Define functions for the solution fields.
+z = Function(Z)
+u, p = z.subfunctions
 u.rename("Velocity")
 p.rename("Pressure")
 
+# Define the initial temperature field. This field represents a synthetic mantle temperature distribution.
 T = Function(Q, name="Temperature")
 X = SpatialCoordinate(mesh)
+# -
+
+# For the initial temperature field we use a mathematical expression:
+# $$ T(x, y) = 0.5 \left( \text{erf}\left((1 - y) \cdot 3.0\right) + \text{erf}\left(-y \cdot 3.0\right) + 1 \right) + 0.1 \exp \left( -0.5 \left( \frac{(x - 0.5)^2 + (y - 0.2)^2}{0.1^2} \right) \right) $$
+# The first two term of this equation represent the 1-D radial profile, with to error functions that represent the thermal boundary layers, and a gaussian anamoly close to the mantle. This initial state is chosen, such that after 80 time steps we would have a temperature field representing a plume-like structure in the domain.
+
+# +
 T.interpolate(
     0.5 * (erf((1 - X[1]) * 3.0) + erf(-X[1] * 3.0) + 1) +
     0.1 * exp(-0.5 * ((X - as_vector((0.5, 0.2))) / Constant(0.1)) ** 2)
 )
+# -
 
+# Calculating the Layer Average
+# ------------------------------
+# We calculate the layer average of the initial state. This average temperature will serve as a regularisation constraint in the inversion process.
+
+# +
+# Calculate the layer average of the initial state.
 Taverage = Function(Q1, name="Average Temperature")
-
-# Calculate the layer average of the initial state
 averager = LayerAveraging(
-    mesh, np.linspace(0, 1.0, 150 * 2), cartesian=True, quad_degree=6
+    mesh, cartesian=True, quad_degree=6
 )
 averager.extrapolate_layer_average(Taverage, averager.get_layer_average(T))
+# -
 
-checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
+# Checkpointing of fields
+# ----
+# We checkpoint the velocity field and temperature initially and finally to capture the essential states of our simulation. This allows us to retrieve these states later using the indices and timestepping history, which are crucial for the adjoint inversion process. By saving the initial state, we can compare it against the final state to see how the system evolved, which is analogous to how seismic tomography uses initial models to interpret Earth's interior after simulation.
+
+#+
+# Save the initial temperature and average temperature to a checkpoint file.
+checkpoint_file = CheckpointFile("adjoint-demo-checkpoint-state.h5", "w")
 checkpoint_file.save_mesh(mesh)
 checkpoint_file.save_function(Taverage, name="Average Temperature", idx=0)
 checkpoint_file.save_function(T, name="Temperature", idx=0)
+# -
 
-Ra = Constant(1e6)  # Rayleigh number
+
+# Physical Setup
+# ----------------
+# We define the Rayleigh number and physical approximation for the Boussinesq approximation. This sets up the basic physical parameters for our simulation.
+
+# +
+# Define the Rayleigh number and physical approximation.
+Ra = Constant(1e6)
 approximation = BoussinesqApproximation(Ra)
 
-delta_t = Constant(4e-6)  # Constant time step
-max_timesteps = 80
+# Define the time step and maximum number of timesteps.
+delta_t = Constant(4e-6)
+timesteps = 80
 
+# Create a nullspace object for the Stokes problem to remove constant pressure modes.
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
+# -
 
-# Free-slip velocity boundary condition on all sides
+# Boundary Conditions
+# ---------------------
+# We specify the boundary conditions for the Stokes and temperature problems. These conditions are crucial for ensuring the physical realism of our simulation.
+
+# +
+# Define boundary conditions for the Stokes and temperature problems.
 stokes_bcs = {
     bottom_id: {"uy": 0},
     top_id: {"uy": 0},
@@ -76,7 +119,14 @@ temp_bcs = {
     bottom_id: {"T": 1.0},
     top_id: {"T": 0.0},
 }
+# -
 
+# Solvers
+# ---------
+# We set up solvers for the energy and Stokes systems. These solvers will be used to advance the simulation in time and solve the governing equations.
+
+# +
+# Define solvers for the energy and Stokes systems.
 energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
@@ -90,22 +140,24 @@ stokes_solver = StokesSolver(
     transpose_nullspace=Z_nullspace,
     constant_jacobian=True,
 )
+# -
 
-# Create output file and select output_frequency
-output_file = VTKFile("vtu-files/output.pvd")
-dump_period = 10
+# Time Loop
+# ----------
+# We perform the time loop to solve the forward problem. During this loop, we solve the Stokes and energy systems, save the velocity field for later use, and periodically output the results.
 
-# Now perform the time loop:
-for timestep in range(0, max_timesteps):
+# +
+# Perform the time loop to solve the forward problem.
+for timestep in range(0, timesteps):
     stokes_solver.solve()
     energy_solver.solve()
 
-    # Storing velocity to be used in the objective F
-    checkpoint_file.save_function(u, name="Velocity", idx=timestep)
+    # Store the velocity field for use in the adjoint problem.
+    checkpoint_file.save_function(u, name="Velocity", idx=timestep, timestepping_info={"index": float(timestep), "delta_t": float(delta_t)})
 
-    if timestep % dump_period == 0 or timestep == max_timesteps - 1:
-        output_file.write(u, p, T)
-
-# Save the reference final temperature
-checkpoint_file.save_function(T, name="Temperature", idx=max_timesteps - 1)
+# Save the final temperature field to the checkpoint file.
+checkpoint_file.save_function(T, name="Temperature", idx=timesteps - 1)
 checkpoint_file.close()
+# -
+
+# This concludes the forward simulation to generate reference fields for the adjoint inversion. The final temperature field, after being convected forward for 80 timesteps, serves as the reference temperature field, analogous to a seismic tomography image, which allows us to study plume formation and other mantle dynamics features.

@@ -25,13 +25,14 @@ def rectangle_taylor_test(case):
         case (str): name of the objective functional term
             either of "damping", "smooothing", "Tobs", "uobs"
     """
+    checkpoint_file = Path(__file__).resolve().parent / "adjoint-demo-checkpoint-state.h5"
 
     # Clear the tape of any previous operations to ensure
     # the adjoint reflects the forward problem we solve here
     tape = get_working_tape()
     tape.clear_tape()
 
-    with CheckpointFile("mesh.h5", "r") as f:
+    with CheckpointFile(str(checkpoint_file), "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
@@ -61,7 +62,7 @@ def rectangle_taylor_test(case):
     Tic = Function(Q1, name="Initial Temperature")
     Taverage = Function(Q1, name="Average Temperature")
 
-    checkpoint_file = CheckpointFile("Checkpoint_State.h5", "r")
+    checkpoint_file = CheckpointFile(str(checkpoint_file), "r")
     # Initialise the control
     Tic.project(
         checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
