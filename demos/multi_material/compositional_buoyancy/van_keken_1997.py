@@ -222,7 +222,7 @@ level_set_solver.reini_params["tstep"] *= 20
 # attained.
 
 # +
-step = 0  #  A counter to keep track of looping
+step = 0  # A counter to keep track of looping
 output_counter = 0  # A counter to keep track of outputting
 time_end = 2000
 while True:
