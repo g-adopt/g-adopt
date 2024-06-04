@@ -1,6 +1,18 @@
-# Runs Spiegelman et al. (2016) cases at eta1=1e23,1e24, and 5e24 Pa s and, resp., U0=2.5,5 and 12.5 mm/yr
+# Highly non-linear visco-plastic 2-D case
+# ========================================
+#
+# To illustrate the changes necessary to explore a challenging non-linear problem,
+# we consider here the non-linear benchmark case of Spiegelman et al. (2016), with a strain-rate
+# and pressure-dependent Drucker-Prager rheology. This case solves the Stokes system only,
+# with no time-dependence.
+#
+# This tutorial runs Spiegelman et al. (2016) cases at eta1=1e23,1e24, and 5e24 Pa s and, resp., U0=2.5,5 and 12.5 mm/yr
 # at specified nx, ny resolution with variable number of initial Picard iterations and with or without
-# stabilisation of the Jacobian as advocated in Fraters et al. (2019)
+# stabilisation of the Jacobian as advocated in Fraters et al. (2019).
+#
+# As with all examples, the first step is to import the gadopt module, which
+# provides access to Firedrake and associated functionality.
+
 from gadopt import *
 from firedrake.petsc import PETSc
 import firedrake
@@ -40,8 +52,10 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
     # Test functions and functions to hold solutions:
     v, w = TestFunctions(Z)
-    z = Function(Z)  # a field over the mixed function space Z.
+    z = Function(Z)  # A field over the mixed function space Z.
     u, p = split(z)  # Returns symbolic UFL expression for u and p
+    z.subfunctions[0].rename("Velocity")
+    z.subfunctions[1].rename("Pressure")
 
     # Functions to interpolate expression into for output:
     mu_f = Function(W, name="Viscosity")
@@ -51,11 +65,6 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     # z_nl is used in the Picard linearisation
     z_nl = Function(Z)
     u_nl, p_nl = split(z_nl)
-
-    # Output function space information:
-    log("Number of Velocity DOF:", V.dim())
-    log("Number of Pressure DOF:", W.dim())
-    log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
 
     X = SpatialCoordinate(mesh)
     x = X[0]
@@ -171,10 +180,6 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     mu_nl = eta(epsii_nl, p_nl)
 
     # Write output files in VTK format:
-    u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
-    # Next rename for output:
-    u_.rename("Velocity")
-    p_.rename("Pressure")
     # Create output file and select output_frequency:
     output_file = VTKFile(os.path.join(output_dir, "output.pvd"))
     picard_file = VTKFile(os.path.join(output_dir, 'picard.pvd'))
@@ -228,7 +233,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     # this defines Picard iteration 0
     mu_f.interpolate(mu)
     epsii_f.interpolate(epsii)
-    picard_file.write(u_, p_, mu_f, epsii_f)
+    picard_file.write(*z.subfunctions, mu_f, epsii_f)
 
     # output file with Picard residuals
     f_picard = open(os.path.join(output_dir, 'picard.txt'), 'w')
@@ -246,7 +251,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         z_nl.assign(z)
         mu_f.interpolate(mu)
         epsii_f.interpolate(epsii)
-        picard_file.write(u_, p_, mu_f, epsii_f)
+        picard_file.write(*z.subfunctions, mu_f, epsii_f)
     f_picard.close()
 
     try:
@@ -260,7 +265,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     mu_f.interpolate(mu)
     epsii_f.interpolate(epsii)
     alpha_SPD_f.interpolate(alpha_SPD)
-    output_file.write(u_, p_, mu_f, epsii_f, alpha_SPD_f)
+    output_file.write(*z.subfunctions, mu_f, epsii_f, alpha_SPD_f)
 
 
 if __name__ == "__main__":
