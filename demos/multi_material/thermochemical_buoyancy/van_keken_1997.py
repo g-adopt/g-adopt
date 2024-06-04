@@ -4,41 +4,10 @@
 # Rationale
 # ---------
 #
-# One may wish to simulate a geodynamical flow involving multiple physical phases. A
-# possible approach is to approximate phases as immiscible and forming a single fluid
-# whose dynamics can still be described as a single-phase Stokes flow. Under this
-# approximation, it is common to refer to immiscible phases as materials and to the
-# resulting simulations as multi-material. In such simulations, each material occupies
-# part of the numerical domain and is characterised by its own physical properties,
-# such as density and viscosity. Along material boundaries, physical properties are
-# averaged according to a chosen mathematical scheme.
-#
-# Numerical approach
-# ------------------
-#
-# To model the coexistence of multiple materials in the numerical domain, we employ an
-# interface-capturing approach called the conservative level-set method. Level-set
-# methods associate each material interface to a mathematical field representing a
-# measure of distance from that interface. In the conservative level-set approach, the
-# classic signed-distance function, $\phi$, employed in the level-set method is
-# transformed into a smooth step function, $\psi$, according to
-#
-# $$\psi(\mathbf{x}, t) = \frac{1}{2} \left[
-# \mathrm{tanh} \left( \frac{\phi(\mathbf{x}, t)}{2\epsilon} \right) + 1
-# \right]$$
-#
-# Throughout the simulation, the level-set field is advected with the flow:
-#
-# $$\frac{\partial \psi}{\partial t} + \nabla \cdot \left( \mathbf{u}\psi \right) = 0$$
-#
-# Advection of the level set deteriorates the shape of the initial profile. To maintain
-# the profile as the simulation proceeds, a reinitialisation procedure is employed. We
-# choose the equation proposed in Parameswaran and Mandal (2023):
-#
-# $$\frac{\partial \psi}{\partial \tau_{n}} = \theta \left[
-# -\psi \left( 1 - \psi \right) \left( 1 - 2\psi \right)
-# + \epsilon \left( 1 - 2\psi \right) \lvert\grad\psi\rvert
-# \right]$$
+# Our previous tutorial introduced multi-material simulations in G-ADOPT by
+# investigating compositional effects on buoyancy. We extend that tutorial to include
+# thermal effects, thereby simulating thermochemical convection, which is, for example,
+# essential to modelling Earth's mantle evolution.
 #
 # This example
 # ------------
@@ -155,26 +124,21 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # time-step length (via a CFL criterion) as the simulation advances in time. We specify
 # the initial time, initial time step $\Delta t$, and output frequency (in time units).
 
-# +
 time_now = 0  # Initial time
 delta_t = Function(R).assign(1e-6)  # Initial time step
 output_frequency = 1e-4  # Frequency (based on simulation time) at which to output
 t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )
-# -
 
 # This problem has a constant pressure nullspace, handled identically to our previous
 # tutorials.
 
-# +
 Z_nullspace = create_stokes_nullspace(Z)
-# -
 
 # Boundary conditions are specified next: free slip on all sides, heating from below,
 # and cooling from above.
 
-# +
 stokes_bcs = {
     bottom_id: {"uy": 0},
     top_id: {"uy": 0},
@@ -182,7 +146,6 @@ stokes_bcs = {
     right_id: {"ux": 0},
 }
 temp_bcs = {bottom_id: {"T": 1}, top_id: {"T": 0}}
-# -
 
 # We move on to initialising the temperature field.
 
@@ -302,12 +265,13 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_function(psi, name="Level set")
 # -
 
-# We can visualise the final temperature field using Firedrake's built-in plotting
-# functionality.
+# We can visualise the final temperature and level set fields using Firedrake's
+# built-in plotting functionality.
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
-# collection = tricontour(psi, axes=axes, levels=[0.5])
+# collection = tripcolor(T, axes=axes, cmap="coolwarm")
+# tricontour(psi, axes=axes, levels=[0.5])
 # fig.colorbar(collection);
 # -

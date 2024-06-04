@@ -31,9 +31,11 @@
 #
 # $$\frac{\partial \psi}{\partial t} + \nabla \cdot \left( \mathbf{u}\psi \right) = 0$$
 #
-# Advection of the level set deteriorates the shape of the initial profile. To maintain
-# the profile as the simulation proceeds, a reinitialisation procedure is employed. We
-# choose the equation proposed in Parameswaran and Mandal (2023):
+# Advection of the level set modifies the shape of the initial profile. In other words,
+# the signed-distance property underpinning the smooth step function is lost. To
+# maintain the original profile as the simulation proceeds, a reinitialisation
+# procedure is employed. We choose the equation proposed in Parameswaran and Mandal
+# (2023):
 #
 # $$\frac{\partial \psi}{\partial \tau_{n}} = \theta \left[
 # -\psi \left( 1 - \psi \right) \left( 1 - 2\psi \right)
@@ -155,33 +157,27 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # time-step length (via a CFL criterion) as the simulation advances in time. We specify
 # the initial time, initial time step $\Delta t$, and output frequency (in time units).
 
-# +
 time_now = 0  # Initial time
 delta_t = Function(R).assign(1)  # Initial time step
 output_frequency = 10  # Frequency (based on simulation time) at which to output
 t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )
-# -
 
 # This problem has a constant pressure nullspace, handled identically to our previous
 # tutorials.
 
-# +
 Z_nullspace = create_stokes_nullspace(Z)
-# -
 
 # Boundary conditions are specified next: no slip at the top and bottom and free slip
 # on the left and ride sides.
 
-# +
 stokes_bcs = {
-    bottom_id: {"ux": 0, "uy": 0},
-    top_id: {"ux": 0, "uy": 0},
+    bottom_id: {"u": 0},
+    top_id: {"u": 0},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
-# -
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
 # that uses the XML-based VTK file format. We also open a file for logging and
@@ -270,12 +266,11 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_function(psi, name="Level set")
 # -
 
-# We can visualise the final temperature field using Firedrake's built-in plotting
+# We can visualise the final level-set field using Firedrake's built-in plotting
 # functionality.
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
-# collection = tricontour(psi, axes=axes, levels=[0.5])
-# fig.colorbar(collection);
+# tricontour(psi, axes=axes, levels=[0.5])
 # -
