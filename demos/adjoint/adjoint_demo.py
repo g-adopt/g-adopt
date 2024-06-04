@@ -16,8 +16,8 @@
 
 # +
 # Importing gadopt
-import numpy as np
 from gadopt import *
+from gadopt.inverse import *
 checkpoint_filename = "adjoint-demo-checkpoint-state.h5"
 # Opening the checkpoint file and loading the mesh
 checkpoint_file = CheckpointFile(checkpoint_filename, mode="r")
@@ -71,7 +71,6 @@ checkpoint_file.close()
 # To turn on adjoint, one simply starts by importing
 # the inverse module to enable all taping functionality from pyadjoint.
 
-from gadopt.inverse import *
 
 # Doing so will turn all Firedrake's objects to overloaded types, in a way
 # that any UFL operation will be annotated and added to the tape, unless
@@ -166,25 +165,14 @@ u_misfit = 0.0
 T.project(Tic, bcs=energy_solver.strong_bcs)
 
 # Populate the tape by running the forward simulation.
-for timestep in range(timesteps-2, timesteps):
+# For learning+tweaking purposes, feel free to change e.g., 0 -> timesteps - 3
+for time_idx in range(0, timesteps):
     stokes_solver.solve()
     energy_solver.solve()
     # Update the accumulated surface velocity misfit using the observed value.
     with CheckpointFile(checkpoint_filename, mode="r") as fi:
-        uobs = fi.load_function(mesh, name="Velocity", idx=timestep)
+        uobs = fi.load_function(mesh, name="Velocity", idx=time_idx)
     u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
-# -
-
-# Pausing Annotation
-# ==================
-#
-# At this point, we have completed annotating the tape with the necessary information from running the forward simulation. To prevent further annotations during subsequent operations, we stop the annotation process. This ensures that no additional solves are unnecessarily recorded, keeping the tape focused only on the essential steps.
-#
-# We can then print the contents of the tape to verify what has been recorded.
-
-# +
-# Pause the annotation to stop recording further operations
-pause_annotation()
 # -
 
 # Defining the Objective Functional
@@ -244,10 +232,15 @@ norm_u_surface = assemble(dot(uobs, uobs) * ds_t)
 # Temperature misfit between solution and observation
 t_misfit = assemble((T - Tobs) ** 2 * dx)
 
+# Weighting terms
+alpha_u = 1e-1
+alpha_d = 1e-2
+alpha_s = 1e-1
+
 # Define the overall objective functional
 objective = (
     t_misfit +
-    alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface) +
+    alpha_u * (norm_obs * u_misfit / timesteps / norm_u_surface) +
     alpha_d * (norm_obs * damping / norm_damping) +
     alpha_s * (norm_obs * smoothing / norm_smoothing)
 )
@@ -263,6 +256,18 @@ objective = (
 # +
 # Define the object for pyadjoint
 reduced_functional = ReducedFunctional(objective, control)
+# -
+
+# Pausing Annotation
+# ==================
+#
+# At this point, we have completed annotating the tape with the necessary information from running the forward simulation. To prevent further annotations during subsequent operations, we stop the annotation process. This ensures that no additional solves are unnecessarily recorded, keeping the tape focused only on the essential steps.
+#
+# We can then print the contents of the tape to verify what has been recorded.
+
+# +
+# Pause the annotation to stop recording further operations
+pause_annotation()
 # -
 
 # Verification of Gradients: Taylor Remainder Convergence Test
@@ -284,6 +289,7 @@ reduced_functional = ReducedFunctional(objective, control)
 
 # + tags=["active-ipynb"]
 # # Define the perturbation in the initial temperature field
+# import numpy as np
 # Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
 # Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
 #
@@ -330,5 +336,7 @@ optimiser = LinMoreOptimiser(
     checkpoint_dir="optimisation_checkpoint",
 )
 
+# Restore from last possible checkpoint
+# optimiser.restore()
 # Run the optimisation
 optimiser.run()
