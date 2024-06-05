@@ -84,7 +84,7 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
 # We now provide initial conditions for the level-set field. To this end, we use the
-# `shapely`` library to represent the initial location of the material interface and
+# `shapely` library to represent the initial location of the material interface and
 # derive the signed-distance function. Finally, we apply the transformation to obtain a
 # smooth step function profile.
 
