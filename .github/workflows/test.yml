@@ -74,7 +74,7 @@ jobs:
           cd flib/Python
           rm *.so
           source create_library.sh
-          cp *.so ../../demos/multi_material
+          cp *.so ../../tests/multi_material
         shell: bash
 
       - name: Run test
