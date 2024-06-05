@@ -261,9 +261,13 @@ reduced_functional = ReducedFunctional(objective, control)
 #
 # At this point, we have completed annotating the tape with the necessary information from running the forward simulation. To prevent further annotations during subsequent operations, we stop the annotation process. This ensures that no additional solves are unnecessarily recorded, keeping the tape focused only on the essential steps.
 #
-# We can then print the contents of the tape to verify what has been recorded.
+# We can then print the contents of the tape to verify that the content of it is not empty.
 
 pause_annotation()
+
+# + tags=["active-ipynb"]
+# print(tape.get_blocks())
+# -
 
 # Verification of Gradients: Taylor Remainder Convergence Test
 # ----------------------
