@@ -8,23 +8,25 @@
 # This demonstration involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the initial state of a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we run a forward mantle convection simulation and record all relevant fields (velocity and temperature) at each time step.
 #
 # We have pre-run this simulation and stored the checkpoint file on our servers. These fields serve as benchmarks for evaluating our inverse problem's performance. To download the reference benchmark checkpoint file, click
-# <a href="https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5" download> here </a>, or alternatively, execute the following command in a terminal:
+# [here](https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5"), or alternatively, execute the following command in a terminal:
 #
 # ```wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5```
 
 # The fields from the reference simulation are stored under the names "Temperature" and "Velocity". To retrieve the timestepping information, we can use the following code:
 
 # +
-# Importing gadopt
 from gadopt import *
 from gadopt.inverse import *
+
+# Open the checkpoint file and load the mesh from it
 checkpoint_filename = "adjoint-demo-checkpoint-state.h5"
-# Opening the checkpoint file and loading the mesh
 checkpoint_file = CheckpointFile(checkpoint_filename, mode="r")
 mesh = checkpoint_file.load_mesh("firedrake_default_extruded")
+
 # boundary markers from extruded mesh
 bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
-# Retrieving the timestepping information for the Velocity and Temperature functions
+
+# Retrieve the timestepping information for the Velocity and Temperature functions
 temperature_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Temperature")
 velocity_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Velocity")
 # -
@@ -83,7 +85,7 @@ tape = get_working_tape()
 # clear the tape from any previous annotation
 tape.clear_tape()
 # -
-# + tags=[active-ipynb]
+# + tags=["active-ipynb"]
 # # print all the blocks
 # print(tape.get_blocks())
 # -
@@ -156,7 +158,6 @@ with CheckpointFile(checkpoint_filename, mode="r") as fi:
 # surface observable of plate velocities.
 
 # +
-# control
 control = Control(Tic)
 
 u_misfit = 0.0
@@ -253,10 +254,7 @@ objective = (
 #
 # To define the reduced functional, we provide the class with an objective (which is an overloaded UFL object) and the control. Both of these are essential for formulating the reduced functional.
 
-# +
-# Define the object for pyadjoint
 reduced_functional = ReducedFunctional(objective, control)
-# -
 
 # Pausing Annotation
 # ==================
@@ -265,10 +263,7 @@ reduced_functional = ReducedFunctional(objective, control)
 #
 # We can then print the contents of the tape to verify what has been recorded.
 
-# +
-# Pause the annotation to stop recording further operations
 pause_annotation()
-# -
 
 # Verification of Gradients: Taylor Remainder Convergence Test
 # ============================================================

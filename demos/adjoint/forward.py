@@ -85,7 +85,6 @@ checkpoint_file.save_function(Taverage, name="Average Temperature", idx=0)
 checkpoint_file.save_function(T, name="Temperature", idx=0)
 # -
 
-
 # Physical Setup
 # ----------------
 # We define the Rayleigh number and physical approximation for the Boussinesq approximation. This sets up the basic physical parameters for our simulation.
