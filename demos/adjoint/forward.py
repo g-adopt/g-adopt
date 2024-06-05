@@ -77,7 +77,7 @@ averager.extrapolate_layer_average(Taverage, averager.get_layer_average(T))
 # ----
 # We checkpoint the velocity field and temperature initially and finally to capture the essential states of our simulation. This allows us to retrieve these states later using the indices and timestepping history, which are crucial for the adjoint inversion process. By saving the initial state, we can compare it against the final state to see how the system evolved, which is analogous to how seismic tomography uses initial models to interpret Earth's interior after simulation.
 
-#+
+# +
 # Save the initial temperature and average temperature to a checkpoint file.
 checkpoint_file = CheckpointFile("adjoint-demo-checkpoint-state.h5", "w")
 checkpoint_file.save_mesh(mesh)

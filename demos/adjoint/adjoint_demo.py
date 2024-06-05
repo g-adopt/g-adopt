@@ -16,7 +16,6 @@
 
 # +
 # Importing gadopt
-import numpy as np
 from gadopt import *
 from gadopt.inverse import *
 checkpoint_filename = "adjoint-demo-checkpoint-state.h5"
@@ -290,6 +289,7 @@ pause_annotation()
 
 # + tags=["active-ipynb"]
 # # Define the perturbation in the initial temperature field
+# import numpy as np
 # Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
 # Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
 #

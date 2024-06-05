@@ -8,6 +8,7 @@ from gadopt.inverse import *
 from mpi4py import MPI
 import numpy as np
 import sys
+from pathlib import Path
 
 from cases import cases
 
