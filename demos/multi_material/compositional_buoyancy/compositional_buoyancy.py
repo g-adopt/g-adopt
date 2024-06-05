@@ -87,8 +87,8 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 # smooth step function profile.
 
 # +
-import numpy as np
-import shapely as sl
+import numpy as np  # noqa: E402
+import shapely as sl  # noqa: E402
 
 
 def cosine_curve(x, amplitude, wavelength, vertical_shift):
@@ -133,11 +133,17 @@ epsilon = Constant(min_mesh_edge_length / 4)
 psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # -
 
-# We next define materials present in the simulation. Here, the problem is
-# non-dimensionalised and can be described by the product of the expressions for the
-# Rayleigh and buoyancy numbers, RaB, which is also referred to as compositional
-# Rayleigh number. Therefore, we provide a value for thermal and compositional Rayleigh
-# numbers to define our approximation.
+# We next define materials present in the simulation using the `Material` class. Here,
+# the problem is non-dimensionalised and can be described by the product of the
+# expressions for the Rayleigh and buoyancy numbers, RaB, which is also referred to as
+# compositional Rayleigh number. Therefore, we provide a value for thermal and
+# compositional Rayleigh numbers to define our approximation. Material fields, such as
+# RaB, are created using the `field_interface` function, which generates a unique field
+# over the numerical domain based on the level-set field(s) and values or expressions
+# associated with each material. At the interface between two materials, the transition
+# between values or expressions can be represented as sharp or diffuse, with the latter
+# using averaging schemes, such as arithmetic, geometric, and harmonic means.
+
 
 # +
 buoyant_material = Material(RaB=-1)  # Vertical direction is flipped in the benchmark
@@ -162,7 +168,7 @@ delta_t = Function(R).assign(1)  # Initial time step
 output_frequency = 10  # Frequency (based on simulation time) at which to output
 t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
-)
+)  # Current level-set advection requires a CFL condition that should not exceed 0.6.
 
 # This problem has a constant pressure nullspace, which corresponds to the default case
 # handled in G-ADOPT.
@@ -197,7 +203,9 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # Here, we set up the variational problem for the Stokes and level-set systems. The
 # former depends on the approximation defined above, and the level-set system includes
-# both advection and reinitialisation.
+# both advection and reinitialisation. Subcycling is available for level-set advection
+# and is mainly useful when the problem at hand involves multiple CFL conditions, with
+# the CFL for level-set advection being the most restrictive.
 
 # +
 stokes_solver = StokesSolver(

@@ -16,8 +16,11 @@
 # convection presented in van Keken et al. (1997). Inside a 2-D domain heated from
 # below, a denser material sits at the bottom boundary beneath a lighter material.
 # Whilst the compositional stratification is stable, heat transfer from the boundary
-# generates positive buoyancy in the denser material, allowing thin layers of material
-# to be entrained in the convective circulation.
+# generates positive buoyancy in the denser material, allowing thin tendrils to be
+# entrained in the convective circulation. To resolve these tendrils using the
+# level-set approach, significant mesh refinement is needed, making the simulation
+# computationally expensive. This tutorial will be updated once the development of
+# adaptive mesh refinement in Firedrake is complete.
 
 # As with all examples, the first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
@@ -55,8 +58,8 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 # smooth step function profile.
 
 # +
-import numpy as np
-import shapely as sl
+import numpy as np  # noqa: E402
+import shapely as sl  # noqa: E402
 
 
 def straight_line(x, slope, intercept):
@@ -100,11 +103,16 @@ epsilon = Constant(min_mesh_edge_length / 4)
 psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # -
 
-# We next define materials present in the simulation. Here, the problem is
-# non-dimensionalised and can be described by the product of the expressions for the
-# Rayleigh and buoyancy numbers, RaB, which is also referred to as compositional
-# Rayleigh number. Therefore, we provide a value for thermal and compositional Rayleigh
-# numbers to define our approximation.
+# We next define materials present in the simulation using the `Material` class. Here,
+# the problem is non-dimensionalised and can be described by the product of the
+# expressions for the Rayleigh and buoyancy numbers, RaB, which is also referred to as
+# compositional Rayleigh number. Therefore, we provide a value for thermal and
+# compositional Rayleigh numbers to define our approximation. Material fields, such as
+# RaB, are created using the `field_interface` function, which generates a unique field
+# over the numerical domain based on the level-set field(s) and values or expressions
+# associated with each material. At the interface between two materials, the transition
+# between values or expressions can be represented as sharp or diffuse, with the latter
+# using averaging schemes, such as arithmetic, geometric, and harmonic means.
 
 # +
 dense_material = Material(RaB=4.5e5)
@@ -129,7 +137,7 @@ delta_t = Function(R).assign(1e-6)  # Initial time step
 output_frequency = 1e-4  # Frequency (based on simulation time) at which to output
 t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
-)
+)  # Current level-set advection requires a CFL condition that should not exceed 0.6.
 
 # This problem has a constant pressure nullspace, which corresponds to the default case
 # handled in G-ADOPT.
@@ -189,7 +197,10 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # Here, we set up the variational problem for the Stokes, energy, and level-set
 # systems. The Stokes and energy systems depend on the approximation defined above,
-# and the level-set system includes both advection and reinitialisation.
+# and the level-set system includes both advection and reinitialisation. Subcycling is
+# available for level-set advection and is mainly useful when the problem at hand
+# involves multiple CFL conditions, with the CFL for level-set advection being the most
+# restrictive.
 
 # +
 energy_solver = EnergySolver(
@@ -217,7 +228,7 @@ level_set_solver.reini_params["tstep"] *= 20
 # +
 step = 0  # A counter to keep track of looping
 output_counter = 0  # A counter to keep track of outputting
-time_end = 0.05
+time_end = 0.02  # Will be changed to 0.05 once mesh adaptivity is available
 while True:
     # Write output
     if time_now >= output_counter * output_frequency:
