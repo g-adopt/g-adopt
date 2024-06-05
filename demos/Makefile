@@ -10,7 +10,7 @@ longtest: $(long_cases)
 
 longtest_output: $(long_cases)
 
-convert_demos: $(foreach case,$(demo_cases),$(case)/$(case).ipynb)
+convert_demos: $(foreach case,$(demo_cases),$(case)/$(case).ipynb) multi_material/compositional_buoyancy/compositional_buoyancy.ipynb multi_material/thermochemical_buoyancy/thermochemical_buoyancy.ipynb
 
 # sort to remove duplicates which define both short and long tests
 $(sort $(cases) $(long_cases)):
