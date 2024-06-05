@@ -1,24 +1,21 @@
 from argparse import ArgumentParser
 from importlib import import_module
 
-import firedrake as fd
 from mpi4py import MPI
 
-import gadopt as ga
-import gadopt.inverse as gai
+from gadopt import *
+from gadopt.inverse import *
 
 
 def callback():
-    initial_misfit = fd.assemble(
-        (ls_control[0].block_variable.checkpoint.restore() - ls_ini_forw[0]) ** 2
-        * fd.dx
+    initial_misfit = assemble(
+        (ls_control[0].block_variable.checkpoint.restore() - ls_ini_forw[0]) ** 2 * dx
     )
-    final_misfit = fd.assemble(
-        (level_set[0].block_variable.checkpoint.restore() - ls_final_forw[0]) ** 2
-        * fd.dx
+    final_misfit = assemble(
+        (level_set[0].block_variable.checkpoint.restore() - ls_final_forw[0]) ** 2 * dx
     )
 
-    ga.log(f"Initial misfit; {initial_misfit}\nFinal misfit: {final_misfit}")
+    log(f"Initial misfit; {initial_misfit}\nFinal misfit: {final_misfit}")
 
 
 def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
@@ -48,8 +45,7 @@ def write_output(output_file):
 
     output_file.write(
         time_output,
-        velocity,
-        pressure,
+        *stokes_function.subfunctions,
         temperature,
         *level_set,
         *level_set_grad_proj,
@@ -66,7 +62,10 @@ parser.add_argument("benchmark")
 args = parser.parse_args()
 Simulation = import_module(args.benchmark).Simulation
 
-with fd.CheckpointFile(
+tape = get_working_tape()
+tape.clear_tape()
+
+with CheckpointFile(
     f"{Simulation.name}/checkpoint_{Simulation.restart_from_checkpoint}.h5".lower(),
     "r",
 ) as h5_check:
@@ -77,6 +76,7 @@ with fd.CheckpointFile(
     stokes_function = h5_check.load_function(mesh, "Stokes", idx=dump_counter)
     temperature = h5_check.load_function(mesh, "Temperature", idx=dump_counter)
 
+    func_space_control = FunctionSpace(mesh, "CG", 1)
     ls_ini_forw = []
     ls_final_forw = []
     ls_control = []
@@ -89,11 +89,14 @@ with fd.CheckpointFile(
                 h5_check.load_function(mesh, f"Level set #{i}", idx=dump_counter)
             )
             ls_control.append(
+                Function(func_space_control, name=f"Level set control #{i}")
+            )
+            ls_control[i].project(
                 h5_check.load_function(mesh, f"Level set #{i}", idx=dump_counter)
             )
-
-            level_set.append(fd.Function(ls_control[i].function_space()))
-            level_set[i].rename(f"Level set #{i}")
+            level_set.append(
+                Function(ls_final_forw[i].function_space(), name=f"Level set #{i}")
+            )
             level_set[i].project(ls_control[i], bcs=None)
 
             i += 1
@@ -102,47 +105,45 @@ with fd.CheckpointFile(
 
 # Thickness of the hyperbolic tangent profile in the conservative level-set approach
 local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+epsilon = Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
 
 time_now = time_output.dat.data[0]
 
 # Extract velocity and pressure from the Stokes function
-velocity_ufl, pressure_ufl = fd.split(stokes_function)  # UFL expressions
-velocity, pressure = stokes_function.subfunctions  # Associated Firedrake functions
-velocity.rename("Velocity")
-pressure.rename("Pressure")
+velocity, pressure = split(stokes_function)  # UFL expressions
+# Associated Firedrake functions
+stokes_function.subfunctions[0].rename("Velocity")
+stokes_function.subfunctions[1].rename("Pressure")
 
 # Set up fields that depend on the material interface
-func_space_interp = fd.FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
-ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
+func_space_interp = FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
+ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = density_RaB(
     Simulation, level_set, func_space_interp
 )
 
-viscosity_ufl = ga.field_interface(
+viscosity_ufl = field_interface(
     level_set,
-    [
-        material.viscosity(velocity_ufl, temperature)
-        for material in Simulation.materials
-    ],
+    [material.viscosity(velocity, temperature) for material in Simulation.materials],
     method="sharp" if "Schmalholz_2011" in Simulation.name else "geometric",
 )
-viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
+viscosity = Function(func_space_interp, name="Viscosity")
+viscosity.interpolate(viscosity_ufl)
 
-int_heat_rate_ufl = ga.field_interface(
+int_heat_rate_ufl = field_interface(
     level_set,
     [material.internal_heating_rate() for material in Simulation.materials],
     method="geometric",
 )
-int_heat_rate = fd.Function(
-    func_space_interp, name="Internal heating rate"
-).interpolate(int_heat_rate_ufl)
+int_heat_rate = Function(func_space_interp, name="Internal heating rate")
+int_heat_rate.interpolate(int_heat_rate_ufl)
 
 # Timestep object
-real_func_space = fd.FunctionSpace(mesh, "R", 0)
-timestep = fd.Function(real_func_space).assign(Simulation.initial_timestep)
+real_func_space = FunctionSpace(mesh, "R", 0)
+timestep = Function(real_func_space)
+timestep.assign(Simulation.initial_timestep)
 
 # Set up energy and Stokes solvers
-approximation = ga.BoussinesqApproximation(
+approximation = BoussinesqApproximation(
     Simulation.Ra,
     rho=ref_dens,
     alpha=1,
@@ -153,18 +154,18 @@ approximation = ga.BoussinesqApproximation(
     kappa=1,
     H=int_heat_rate_ufl,
 )
-energy_solver = ga.EnergySolver(
+energy_solver = EnergySolver(
     temperature,
-    velocity_ufl,
+    velocity,
     approximation,
     timestep,
-    ga.ImplicitMidpoint,
+    ImplicitMidpoint,
     bcs=Simulation.temp_bcs,
 )
-stokes_nullspace = ga.create_stokes_nullspace(
+stokes_nullspace = create_stokes_nullspace(
     stokes_function.function_space(), **Simulation.stokes_nullspace_args
 )
-stokes_solver = ga.StokesSolver(
+stokes_solver = StokesSolver(
     stokes_function,
     temperature,
     approximation,
@@ -176,40 +177,26 @@ stokes_solver = ga.StokesSolver(
     transpose_nullspace=stokes_nullspace,
 )
 
-# Solve initial Stokes system
-stokes_solver.solve()
-
-# Parameters involved in level-set reinitialisation
-reini_params = {
-    "epsilon": epsilon,
-    "tstep": 1e-2,
-    "tstep_alg": ga.eSSPRKs3p3,
-    "frequency": 5,
-    "iterations": 1,
-}
-
 # Set up level-set solvers
 level_set_solver = [
-    ga.LevelSetSolver(
-        ls, velocity_ufl, timestep, ga.eSSPRKs10p3, Simulation.subcycles, reini_params
-    )
+    LevelSetSolver(ls, velocity, timestep, eSSPRKs10p3, Simulation.subcycles, epsilon)
     for ls in level_set
 ]
 level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solver]
 
 # Time-loop objects
-t_adapt = ga.TimestepAdaptor(
+t_adapt = TimestepAdaptor(
     timestep,
-    velocity_ufl,
-    velocity.function_space(),
+    velocity,
+    stokes_function.subfunctions[0].function_space(),
     target_cfl=Simulation.subcycles * 0.6,
     maximum_timestep=Simulation.dump_period,
 )
-output_file = fd.output.VTKFile(
+output_file = output.VTKFile(
     f"{Simulation.name}/output_{Simulation.restart_from_checkpoint}_check.pvd".lower(),
     target_degree=Simulation.level_set_func_space_deg,
 )
-checkpoint_file = fd.CheckpointFile(
+checkpoint_file = CheckpointFile(
     f"{Simulation.name}/checkpoint_{Simulation.restart_from_checkpoint + 1}.h5".lower(),
     mode="w",
 )
@@ -258,9 +245,7 @@ while True:
 
     # Check if simulation has completed
     end_time = Simulation.time_end is not None and time_now >= Simulation.time_end
-    steady = Simulation.steady_state_condition(
-        velocity, stokes_solver.solution_old.subfunctions[0]
-    )
+    steady = Simulation.steady_state_condition(stokes_solver)
     if end_time or steady:
         # Write final simulation state to checkpoint file
         write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter)
@@ -270,24 +255,32 @@ while True:
 
         break
 
-objective = fd.assemble((level_set[0] - ls_final_forw[0]) ** 2 * fd.dx)
+objective = assemble((level_set[0] - ls_final_forw[0]) ** 2 * dx)
 
-reduced_functional = gai.ReducedFunctional(objective, gai.Control(ls_control[0]))
+reduced_functional = ReducedFunctional(objective, Control(ls_control[0]))
 
-ls_lower_bound = fd.Function(ls_control[0].function_space()).assign(0)
-ls_upper_bound = fd.Function(ls_control[0].function_space()).assign(1)
+pause_annotation()
 
-minimisation_problem = gai.MinimizationProblem(
+ls_lower_bound = Function(ls_control[0].function_space())
+ls_lower_bound.assign(0)
+ls_upper_bound = Function(ls_control[0].function_space())
+ls_upper_bound.assign(1)
+
+minimisation_problem = MinimizationProblem(
     reduced_functional, bounds=(ls_lower_bound, ls_upper_bound)
 )
 
-optimiser = gai.LinMoreOptimiser(minimisation_problem, gai.minimisation_parameters)
+optimiser = LinMoreOptimiser(
+    minimisation_problem,
+    minimisation_parameters,
+    checkpoint_dir="optimisation_checkpoint",
+)
 optimiser.add_callback(callback)
 optimiser.run()
 
 solution = optimiser.rol_solver.rolvector.dat[0]
 solution.rename("solution")
-solution_file = fd.output.VTKFile(
+solution_file = output.VTKFile(
     f"{Simulation.name}/solution.pvd".lower(),
     target_degree=Simulation.level_set_func_space_deg,
 )
