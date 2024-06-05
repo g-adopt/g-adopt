@@ -34,24 +34,26 @@
 # Advection of the level set modifies the shape of the initial profile. In other words,
 # the signed-distance property underpinning the smooth step function is lost. To
 # maintain the original profile as the simulation proceeds, a reinitialisation
-# procedure is employed. We choose the equation proposed in Parameswaran and Mandal
-# (2023):
+# procedure is employed. We choose the equation proposed in [Parameswaran and Mandal
+# (2023)](https://www.sciencedirect.com/science/article/pii/S0997754622001364):
 #
 # $$\frac{\partial \psi}{\partial \tau_{n}} = \theta \left[
 # -\psi \left( 1 - \psi \right) \left( 1 - 2\psi \right)
-# + \epsilon \left( 1 - 2\psi \right) \lvert\grad\psi\rvert
+# + \epsilon \left( 1 - 2\psi \right) \lvert\nabla\psi\rvert
 # \right]$$
 #
 # This example
 # ------------
 #
-# Here, we consider the isoviscous Rayleigh-Taylor instability presented in van Keken
-# et al. (1997). Inside a 2-D domain, a buoyant, lighter material sits beneath a denser
-# material. The initial material interface promotes the development of a rising
-# instability on the domain's left-hand side, and further smaller-scale convective
-# dynamics take place throughout the remainder of the simulation.
+# Here, we consider the isoviscous Rayleigh-Taylor instability presented in [van Keken
+# et al. (1997)](https://agupubs.onlinelibrary.wiley.com/doi/abs/10.1029/97JB01353).
+# Inside a 2-D domain, a buoyant, lighter material sits beneath a denser material. The
+# initial material interface promotes the development of a rising instability on the
+# domain's left-hand side, and further smaller-scale convective dynamics take place
+# throughout the remainder of the simulation. We describe below how to implement this
+# problem using G-ADOPT.
 
-# As with all examples, the first step is to import the gadopt module, which
+# As with all examples, the first step is to import the `gadopt` package, which
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
@@ -81,8 +83,8 @@ T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
-# We now provide initial conditions for the level set field. To this end, we use the
-# shapely library to represent the initial location of the material interface and
+# We now provide initial conditions for the level-set field. To this end, we use the
+# `shapely`` library to represent the initial location of the material interface and
 # derive the signed-distance function. Finally, we apply the transformation to obtain a
 # smooth step function profile.
 
@@ -159,9 +161,10 @@ RaB = field_interface(
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # -
 
-# As with the previous examples, we set up a *Timestep Adaptor* for controlling the
-# time-step length (via a CFL criterion) as the simulation advances in time. We specify
-# the initial time, initial time step $\Delta t$, and output frequency (in time units).
+# As with the previous examples, we set up an instance of the `TimestepAdaptor` class
+# for controlling the time-step length (via a CFL criterion) whilst the simulation
+# advances in time. We specify the initial time, initial time step $\Delta t$, and
+# output frequency (in time units).
 
 time_now = 0  # Initial time
 delta_t = Function(R).assign(1)  # Initial time step
@@ -170,8 +173,8 @@ t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )  # Current level-set advection requires a CFL condition that should not exceed 0.6.
 
-# This problem has a constant pressure nullspace, which corresponds to the default case
-# handled in G-ADOPT.
+# This problem setup has a constant pressure nullspace, which corresponds to the
+# default case handled in G-ADOPT.
 
 Z_nullspace = create_stokes_nullspace(Z)
 
@@ -187,8 +190,9 @@ stokes_bcs = {
 }
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
-# that uses the XML-based VTK file format. We also open a file for logging and
-# instantiate G-ADOPT geodynamical diagnostic utility.
+# that uses the XML-based VTK file format. We also open a file for logging, instantiate
+# G-ADOPT geodynamical diagnostic utility, and define some parameters specific to this
+# problem.
 
 # +
 output_file = VTKFile("output.pvd")
@@ -197,15 +201,16 @@ plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
 # Here, we set up the variational problem for the Stokes and level-set systems. The
-# former depends on the approximation defined above, and the level-set system includes
-# both advection and reinitialisation. Subcycling is available for level-set advection
-# and is mainly useful when the problem at hand involves multiple CFL conditions, with
-# the CFL for level-set advection being the most restrictive.
+# former depends on the approximation defined above, and the latter includes both
+# advection and reinitialisation components. Subcycling is available for level-set
+# advection and is mainly useful when the problem at hand involves multiple CFL
+# conditions, with the CFL for level-set advection being the most restrictive.
 
 # +
 stokes_solver = StokesSolver(
@@ -281,5 +286,6 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
+# axes.set_aspect("equal")
 # tricontour(psi, axes=axes, levels=[0.5])
 # -
