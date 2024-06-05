@@ -7,7 +7,7 @@
 #
 # This demonstration involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the initial state of a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we run a forward mantle convection simulation and record all relevant fields (velocity and temperature) at each time step.
 #
-# We have pre-run this simulation and stored the checkpoint file on our servers. These fields serve as benchmarks for evaluating our inverse problem's performance. To download the reference benchmark checkpoint file, click
+# We have pre-run this simulation by running `forward.py`, and stored the checkpoint file on our servers. These fields serve as benchmarks for evaluating our inverse problem's performance. To download the reference benchmark checkpoint file, click
 # [here](https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5"), or alternatively, execute the following command in a terminal:
 #
 # ```wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5```
@@ -177,7 +177,7 @@ for time_idx in range(0, timesteps):
 # -
 
 # Defining the Objective Functional
-# =================================
+# ---------------------------------
 #
 # Now that all the calculations are in place, we need to define *the objective functional*.
 # The objective functional is our way of expressing what is our goal for this optimisation.
@@ -248,7 +248,7 @@ objective = (
 # -
 
 # Defining the Reduced Functional and Optimisation Method
-# ===============================
+# ----------------------
 #
 # In optimisation terminology, a reduced functional is a functional that takes a given value for the control and outputs the value of the objective functional defined for it. It does this without explicitly depending on all the intermediary state variables, hence the name "reduced".
 #
@@ -257,7 +257,7 @@ objective = (
 reduced_functional = ReducedFunctional(objective, control)
 
 # Pausing Annotation
-# ==================
+# ----------------------
 #
 # At this point, we have completed annotating the tape with the necessary information from running the forward simulation. To prevent further annotations during subsequent operations, we stop the annotation process. This ensures that no additional solves are unnecessarily recorded, keeping the tape focused only on the essential steps.
 #
@@ -266,7 +266,7 @@ reduced_functional = ReducedFunctional(objective, control)
 pause_annotation()
 
 # Verification of Gradients: Taylor Remainder Convergence Test
-# ============================================================
+# ----------------------
 #
 # A fundamental tool for verifying gradients is the Taylor remainder convergence test. This test helps ensure that the gradients computed by our optimisation algorithm are accurate. For the reduced functional, $J(T_{ic})$, and its derivative, $\frac{\mathrm{d} J}{\mathrm{d} T_{ic}}$, the Taylor remainder convergence test can be expressed as:
 #
@@ -295,7 +295,7 @@ pause_annotation()
 # The `taylor_test` function computes the Taylor remainder and verifies that the convergence rate is close to the theoretical value of $O(2.0)$. This ensures that our gradients are accurate and reliable for optimisation.
 
 # Running the inversion
-# ========
+# ------------------------
 # In the final section, we run the optimisation method. First, we define lower and upper bounds for the optimisation problem to guide the optimisation method towards the solution.
 #
 # For this simple problem, we perform a bounded nonlinear optimisation where the temperature is only permitted to lie in the range [0, 1]. This means that the optimisation problem should not search for solutions beyond these values.
@@ -315,7 +315,7 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # -
 
 # Using the LinMore Optimiser
-# ===========================
+# ---------------------------
 #
 # In this study, we employ the trust region method of Lin and Moré (1999) implemented in ROL (Rapid Optimization Library). Lin-Moré is a truncated Newton method, which involves the repeated application of an iterative algorithm to approximately solve Newton’s equations (Dembo and Steihaug, 1983).
 #
