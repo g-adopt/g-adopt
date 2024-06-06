@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-testing = ["assess", "gmsh", "openpyxl", "pandas", "shapely"]
+demos = ["assess", "gmsh", "jupytext", "openpyxl", "pandas", "pyvista", "shapely"]
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]

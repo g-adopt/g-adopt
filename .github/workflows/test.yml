@@ -60,7 +60,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           . /home/firedrake/firedrake/bin/activate
-          python3 -m pip install .[testing,optimisation]
+          python3 -m pip install .[demos,optimisation]
 
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v4
