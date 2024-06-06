@@ -29,17 +29,17 @@
 
 from gadopt import *
 
-# We next set up the mesh and function spaces and specify functions to hold our
-# solutions, as in our previous tutorials. This time, however, we use the GMSH library
-# to generate the mesh, allowing us to increase mesh resolution at the top and bottom
-# boundaries.
+# For this problem, it is useful to define a mesh with non-uniform refinement. To this
+# end, we use the GMSH library to generate a mesh file in a format compatible with
+# Firedrake. We specifically increase vertical resolution at the top and bottom
+# boundaries of the domain.
 
 # +
 import gmsh
 
 lx, ly = 2, 1  # Domain dimensions in x and y directions
-mesh_hor_res = lx / 100
-mesh_file = "mesh.msh"
+mesh_hor_res = lx / 100  # Uniform horizontal mesh resolution
+mesh_file = "mesh.msh"  # Output mesh file
 
 gmsh.initialize()
 gmsh.model.add("mesh")
@@ -74,7 +74,12 @@ gmsh.model.mesh.generate(2)
 
 gmsh.write(mesh_file)
 gmsh.finalize()
+# -
 
+# We next set up the mesh and function spaces and specify functions to hold our
+# solutions, as in our previous tutorials.
+
+# +
 mesh = Mesh(mesh_file)  # Load the GMSH mesh using Firedrake
 
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
