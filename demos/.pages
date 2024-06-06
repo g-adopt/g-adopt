@@ -1,0 +1,9 @@
+nav:
+  - index.md
+  - Base case: base_case.ipynb
+  - Compressible (ALA): 2d_compressible_ALA.ipynb
+  - Compressible (TALA): 2d_compressible_TALA.ipynb
+  - Viscoplastic: viscoplastic_case.ipynb
+  - 3D Cartesian: 3d_cartesian.ipynb
+  - Compositional: compositional_buoyancy.ipynb
+  - Thermochemical: thermochemical_buoyancy.ipynb
