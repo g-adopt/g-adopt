@@ -142,9 +142,8 @@ class EnergySolver:
                                    solver_parameters=self.solver_parameters)
         self._solver_setup = True
 
-    def solve(self):
+    def solve(self, t=0, update_forcings=None):
         """Advances solver."""
         if not self._solver_setup:
             self.setup_solver()
-        t = 0  # not used atm
-        self.ts.advance(t)
+        self.ts.advance(t, update_forcings)
