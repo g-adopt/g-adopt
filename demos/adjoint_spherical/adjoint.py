@@ -375,6 +375,20 @@ def generate_reference_fields():
         mesh,
         fi_name=str(sph_file_path))
 
+    temp_bcs = {
+        "bottom": {'T': 1.0},
+        "top": {'T': 0.0},
+    }
+
+    # Adding Smoothing to Tobs
+    smoother = DiffusiveSmoothingSolver(
+        function_space=Tobs.function_space(),
+        wavelength=0.05,
+        bcs=temp_bcs,
+    )
+    # acting smoothing on Tobs
+    Tobs.assign(smoother.action(Tobs))
+
     # Average of temperature field
     Taverage = Function(Tobs.function_space(), name="Taverage")
 

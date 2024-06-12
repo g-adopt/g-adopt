@@ -320,7 +320,7 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
 
 
 class DiffusiveSmoothingSolver:
-    direct_stokes_solver_parameters = {
+    direct_solver_parameters = {
         "snes_type": "ksponly",
         "mat_type": "aij",
         "ksp_type": "preonly",
@@ -445,9 +445,9 @@ class DiffusiveSmoothingSolver:
         if self.solver_parameters is None:
             self.solver_parameters = {"snes_type": "ksponly"}
             if self.mesh.topological_dimension() == 2:
-                self.solver_parameters.update(DiffusiveSmoothingSolver.direct_stokes_solver_parameters)
+                self.solver_parameters.update(DiffusiveSmoothingSolver.direct_solver_parameters)
             else:
-                self.solver_parameters.update(DiffusiveSmoothingSolver.iterative_stokes_solver_parameters)
+                self.solver_parameters.update(DiffusiveSmoothingSolver.iterative_solver_parameters)
 
 
 class LayerAveraging:

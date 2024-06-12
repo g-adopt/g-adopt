@@ -2,7 +2,7 @@ from firedrake import *
 from firedrake.output import VTKFile
 from .time_stepper import CrankNicolsonRK, ImplicitMidpoint
 from .limiter import VertexBasedP1DGLimiter
-from .utility import log, ParameterLog, TimestepAdaptor, LayerAveraging, timer_decorator, collect_garbage
+from .utility import log, ParameterLog, TimestepAdaptor, LayerAveraging, timer_decorator, collect_garbage, DiffusiveSmoothingSolver
 from .diagnostics import GeodynamicalDiagnostics
 from .momentum_equation import StokesEquations
 from .scalar_equation import EnergyEquation
