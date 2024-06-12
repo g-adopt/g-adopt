@@ -3,12 +3,12 @@
 #
 # Introduction
 # ------------
-# In this tutorial, we will demonstrate how to perform an inversion to recover the initial temperature field of an idealised mantle convection simulation using G-ADOPT.
+# In this tutorial, we will demonstrate how to perform an inversion to recover the initial temperature field of an idealised mantle convection simulation using G-ADOPT. This tutorial is published as the first synthetic experiment in *Ghelichkhan et al. (2024)*. The full inversion showcased in the publication involves a total number of 80 timesteps. For the tutorial here we start with only 5 timesteps to go through the basics.
 #
 # The tutorial involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the initial state of a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we run a forward mantle convection simulation and record all relevant fields (velocity and temperature) at each time step.
 #
 # We have pre-run this simulation by running `forward.py`, and stored model output as a checkpoint file on our servers. These fields serve as benchmarks for evaluating our inverse problem's performance. To download the reference benchmark checkpoint file, click
-# [here](https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5"), or alternatively, execute the following command in a terminal:
+# [here](https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5), or alternatively, execute the following command in a terminal:
 #
 # ```wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5```
 
@@ -55,6 +55,7 @@ checkpoint_file.close()
 
 # + tags=["active-ipynb"]
 # import pyvista as pv
+# VTKFile("./visualisation_vtk.pvd").write(Tobs, Tic_ref)
 # dataset = pv.read('./visualisation_vtk.pvd')
 # # Create a plotter object
 # plotter = pv.Plotter()
@@ -167,8 +168,10 @@ u_misfit = 0.0
 T.project(Tic, bcs=energy_solver.strong_bcs)
 
 # Populate the tape by running the forward simulation.
-# For learning+tweaking purposes, feel free to change e.g., 0 -> timesteps - 3
-for time_idx in range(0, timesteps):
+# For the purpose of this tutorial, we only invert for a total duration of 5 time-steps. This makes
+# all the steps much shorter to run and feasible to cover in one session. Feel free to change the initial
+# time-step to `0` instead of `timesteps - 5`.
+for time_idx in range(timesteps - 5, timesteps):
     stokes_solver.solve()
     energy_solver.solve()
     # Update the accumulated surface velocity misfit using the observed value.
@@ -332,6 +335,11 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # violating the bounds, are inactive. These properties make the algorithm a robust and efficient method for solving bound-constrained
 # optimisation problems.
 #
+# To our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`. Here, we set the number of iterations to only 10, as opposed to the default 100.
+
+minimisation_parameters["Status Test"] = 10
+
+#
 # A notable feature of this optimisation approach in ROL is its checkpointing capability. For every iteration, all information necessary to restart the optimisation from that iteration is saved in the specified `checkpoint_dir`.
 
 # +
@@ -341,8 +349,36 @@ optimiser = LinMoreOptimiser(
     minimisation_parameters,
     checkpoint_dir="optimisation_checkpoint",
 )
+# -
 
+# For sake of book-keeping the simulation, we have also implement a user-defined way of
+# recording information that might be used to check the optimisation performance. This
+# callback function will be executed at the end of each iteration. Here, we write out
+# the control field, i.e., the reconstructed intial temperature field, at the end of
+# each iteration.  To access the last value of *an overloaded object* we should access the `.block_variable.checkpoint` method as bellow.
+
+# +
+solutions_vtk = VTKFile("solutions.pvd")
+solution_container = Function(mesh, Tic.function_space(), name="Solutions")
+
+
+def callback():
+    solution_container.assign(Tic.block_variable.checkpoint)
+    solutions_vtk.write(solution_container)
+    final_temperature_misfit = assemble(
+        (T.block_variable.checkpoint.restore() - Tobs) ** 2 * dx
+    )
+
+    log(f"Terminal Temperature Misfit: {final_temperature_misfit}")
+
+
+optimiser.add_callback(callback)
 # Restore from last possible checkpoint
 # optimiser.restore()
 # Run the optimisation
 optimiser.run()
+# -
+
+# At this point a total number of 10 iterations are performed. For the example
+# case here with 5 timesteps this should be enough. Here we can look at the solution
+# and visually compare it by looking at the
