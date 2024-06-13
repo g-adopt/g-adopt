@@ -57,19 +57,30 @@ def conduct_inversion():
     T_ub.assign(1.0)
 
     minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
+    minimisation_parameters["Status Test"] = 2
 
     minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
 
-    # Establish a LinMore Optimiser
+    # Start a LinMore Optimiser
     optimiser = LinMoreOptimiser(
         minimisation_problem,
         minimisation_parameters,
         checkpoint_dir="optimisation_checkpoint",
     )
 
-    # # Add the callback function to optimisation
-    # optimiser.add_callback(callback)
+    visualisation_path = find_last_checkpoint().resolve().parents[2] / "visual.pvd"
 
+    vtk_file = VTKFile(str(visualisation_path))
+    control_container = Function(Tic.function_space(), name="Initial Temperature")
+
+
+    def callback():
+        control_container.assign(Tic.block_variable.checkpoint.restore())
+        vtk_file.write(control_container)
+
+
+    #     
+    optimiser.add_callback(callback) 
     # run the optimisation
     optimiser.run()
 
@@ -90,11 +101,14 @@ def forward_problem():
 
     base_path = Path(__file__).resolve().parent
 
+    # Finding if there is a last checkpoint and if we can use it
+    last_checkpoint_path = find_last_checkpoint()
+
     # Load mesh
     with CheckpointFile(str(base_path / "input_data/NEW_TEMP_lin_LLNLG3G_SLB_Q5_mt512_smooth_2.0_101.h5"), "r") as fi:
         mesh = fi.load_mesh("firedrake_default_extruded")
         Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
-        # Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
+        Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
@@ -119,9 +133,13 @@ def forward_problem():
     # Set up temperature field and initialise:
     Tic = Function(Q1, name="Tic")
     T = Function(Q, name="Temperature")
-    mu = Function(W, name="Viscosity")
 
-    assign_1d_profile(mu, str(base_path.parent / "gplates_global/mu2_radial.rad"))
+    # The axi-symmetric radial profile
+    mu_radial = Function(W, name="Viscosity")
+    assign_1d_profile(mu_radial, str(base_path.parent / "gplates_global/mu2_radial.rad"))
+    
+    # Add temperature dependency
+    mu = mu_constructor(mu_radial, Tave, T)
 
     T0 = Constant(0.091)  # Non-dimensional surface temperature
     Di = Constant(0.5)  # Dissipation number.
@@ -129,7 +147,12 @@ def forward_problem():
 
     # Initial time step
     delta_t = Function(R, name="delta_t").assign(2.0e-6)
-    Tic.assign(Tobs)
+    
+    if last_checkpoint_path is not None:
+        with CheckpointFile(str(last_checkpoint_path), "r") as fi:
+            Tic.assign(fi.load_function(mesh, name="dat_0"))
+    else:
+        Tic.assign(Tobs)
 
     # getting the filenames for the reconstruction model
     plate_reconstruction_files = get_plate_reconstruction_info()
@@ -201,7 +224,7 @@ def forward_problem():
         ImplicitMidpoint, bcs=temp_bcs, su_advection=True)
     energy_solver.fields['source'] = rhobar * H_int
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                                 cartesian=False, constant_jacobian=True,
+                                 cartesian=False,
                                  nullspace=Z_nullspace,
                                  transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
@@ -264,6 +287,7 @@ def forward_problem():
         # Updating time
         time += float(delta_t)
         timestep_index += 1
+        break
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - Tobs) ** 2 * dx)
@@ -671,6 +695,51 @@ def first_call_value(predefined_value):
 
         return wrapper
     return decorator
+
+
+def find_last_checkpoint():
+    try:
+        checkpoint_dir = Path.cwd().resolve() / "copy_optimisation_checkpoint"
+        solution_dir = sorted(list(checkpoint_dir.glob("[0-9]*")), key=lambda x: int(str(x).split("/")[-1]))[-1]
+        solution_path = solution_dir / "solution_checkpoint.h5"
+    except Exception:
+        solution_path = None 
+    return solution_path 
+
+
+def mu_constructor(mu_radial, Tave, T):
+    """Constructing a temperature strain-rate dependent velocity
+
+        This uses Arrhenius law for temperature dependent viscosity
+        \eta = A exp(-E/R * T) = A * exp(-E/R * Tave) * exp(-E/R * (T - Tave))
+                               = 1d_field * exp(-ln(delta_mu_T) * (T - Tave))
+
+    Args:
+        mu_radial (firedrake.Form): radial viscosity profile
+        T (_type_): Temperature
+        Tave (_type_): Average temperature
+        u (_type_): velocity
+
+    Returns:
+        firedrake.BaseForm: temperature and strain-rate dependent viscosity
+    """
+
+    # Adding temperature dependence:
+    delta_mu_T = Constant(100.)
+    mu_lin = mu_radial * exp(-ln(delta_mu_T) * (T - Tave))
+
+    ## coordinates
+    # X = SpatialCoordinate(T.ufl_domain())
+    # r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
+
+    ## Strain-Rate Dependence
+    # mu_star, sigma_y = Constant(1.0), 5.0e5 + 2.5e6*(rmax-r)
+    # epsilon = sym(grad(u))  # strain-rate
+    # epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
+    # mu_plast = mu_star + (sigma_y / epsii)
+    # mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
+    return mu_lin
+
 
 
 if __name__ == "__main__":
