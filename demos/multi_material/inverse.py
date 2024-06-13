@@ -1,5 +1,4 @@
 from importlib import import_module
-import pdb
 from pathlib import Path
 from gadopt import *
 from gadopt.inverse import *
@@ -10,9 +9,9 @@ Simulation = import_module("benchmarks.schmalholz_2011").Simulation
 checkpoint_path = Path(__file__).resolve().parent / "schmalholz_2011/checkpoint_1.h5"
 with CheckpointFile(str(checkpoint_path), "r",) as fi:
     mesh = fi.load_mesh("firedrake_default")
-    time_now_dump = fi.load_function(mesh, "Time", idx=25)
-    timestep_dump = fi.load_function(mesh, "Time step", idx=25)
     level_set_obs = fi.load_function(mesh, "Level set #0", idx=25)
+    level_set_obs.rename("Level set Reference")
+
 
 # Velocity and Pressure
 V = VectorFunctionSpace(mesh, "CG", 2)
@@ -35,9 +34,13 @@ z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 
 # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-# local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-# epsilon = Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
-epsilon = Constant(3867.21543934)
+local_min_mesh_size = mesh.cell_sizes.dat.data.min()
+epsilon = Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+# epsilon = Constant(3867.21543934)
+
+R = FunctionSpace(mesh, "R", 0)
+timestep = Function(R, name="timestep")
+timestep.assign(1e5)
 
 # Set up fields that depend on the material interface
 ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = density_RaB(
@@ -73,17 +76,17 @@ approximation = BoussinesqApproximation(
 
 energy_solver = EnergySolver(
     T,
-    un,
+    u,
     approximation,
     timestep,
     ImplicitMidpoint,
     bcs=Simulation.temp_bcs,
 )
 stokes_nullspace = create_stokes_nullspace(
-    stokes_function.function_space(), **Simulation.stokes_nullspace_args
+    z.function_space(), **Simulation.stokes_nullspace_args
 )
 stokes_solver = StokesSolver(
-    stokes_function,
+    z,
     T,
     approximation,
     bcs=Simulation.stokes_bcs,
@@ -96,28 +99,40 @@ stokes_solver = StokesSolver(
 
 # Set up level-set solvers
 ls_solver = LevelSetSolver(level_set, u, timestep, eSSPRKs10p3, Simulation.subcycles, epsilon)
-# level_set_solver[0].reini_params["tstep"] *= 10
-# level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solver]
-
-update_forcings = None
+ls_solver.reini_params["tstep"] *= 10
 
 # Perform the time loop
 step = 0
-while True:
+time_now = Function(R, name="time")
+time_now.assign(0.)
+
+for i in range(0, 100):
     # Solve Stokes system
     stokes_solver.solve()
 
     # Solve energy system
-    energy_solver.solve(t=float(time_now), update_forcings=update_forcings)
+    energy_solver.solve(t=float(time_now))
 
     # Advect each level set
     ls_solver.solve(step)
 
+    time_now.assign(time_now + timestep)
+
     step += 1
 
+
+# Defining the objective functional
 objective = assemble((level_set - level_set_obs) ** 2 * dx)
 
+log(f"Value of the objective from forward {objective}")
+
+# We do not want to annotate anymore
+stop_annotating()
+
+#
 reduced_functional = ReducedFunctional(objective, control)
+log(f"Value of the reduced functional call {reduced_functional([level_set])}")
+
 # reduced_functional.derivative()
 #
 # ls_lower_bound = Function(ls_control[0].function_space()).assign(0)
