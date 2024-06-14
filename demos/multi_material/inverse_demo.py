@@ -1,3 +1,4 @@
+import numpy as np
 from gadopt import *
 from gadopt.inverse import *
 
@@ -85,10 +86,13 @@ while True:
 objective = assemble((psi - psi_obs) ** 2 * dx)
 log(f"\n\n{objective}\n\n")
 
-reduced_functional = ReducedFunctional(objective, Control(psi_obs))
+reduced_functional = ReducedFunctional(objective, Control(psi))
 log(f"\n\n{reduced_functional(psi_obs)}\n\n")
 
-perturbation = [Function(psi.function_space()).interpolate(0.5)]
+#
+perturbation = Function(psi.function_space(), name="Delta_LS")
+perturbation.dat.data[:] = np.random.random(perturbation.dat.data.shape)
+
 log(taylor_test(reduced_functional, psi_obs, perturbation))
 
 # psi_lower_bound = Function(psi_obs.function_space()).assign(0)
