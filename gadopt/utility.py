@@ -5,7 +5,6 @@ from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_val
 from firedrake import op2, VectorElement
 from firedrake.__future__ import Interpolator
 import firedrake as fd
-from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import finat.ufl
 import time
@@ -115,7 +114,7 @@ def vertical_component(u, cartesian):
     if cartesian:
         return u[u.ufl_shape[0]-1]
     else:
-        n = upward_normal(extract_unique_domain(u), cartesian)
+        n = upward_normal(u.ufl_domain(), cartesian)
         return dot(n, u)
 
 
@@ -602,7 +601,7 @@ def absv(u):
 
 
 def su_nubar(u, J, Pe):
-    """SU stabilisation viscosity as a function of velocity, Jacobian and grid Peclet number"""
+    """SU stabilisation viscosity as a function of velocity, Jaciobian and grid Peclet number"""
     # SU(PG) ala Donea & Huerta:
     # Columns of Jacobian J are the vectors that span the quad/hex
     # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
@@ -613,13 +612,3 @@ def su_nubar(u, J, Pe):
     beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
 
     return dot(absv(dot(u, J)), beta_pe)/2
-
-
-def node_coordinates(function):
-    """Extract mesh coordinates and interpolate them onto the relevant function space"""
-    func_space = function.function_space()
-    mesh_coords = SpatialCoordinate(func_space.mesh())
-
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]

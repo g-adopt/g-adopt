@@ -78,9 +78,6 @@ class EnergySolver:
             self.fields['absorption_coefficient'] = sink
 
         if su_advection:
-            if not is_continuous(self.Q):
-                raise TypeError("SU advection requires a continuous function space.")
-
             log("Using SU advection")
             # SU(PG) ala Donea & Huerta:
             # Columns of Jacobian J are the vectors that span the quad/hex
@@ -142,8 +139,9 @@ class EnergySolver:
                                    solver_parameters=self.solver_parameters)
         self._solver_setup = True
 
-    def solve(self, t=0, update_forcings=None):
+    def solve(self):
         """Advances solver."""
         if not self._solver_setup:
             self.setup_solver()
-        self.ts.advance(t, update_forcings)
+        t = 0  # not used atm
+        self.ts.advance(t)
