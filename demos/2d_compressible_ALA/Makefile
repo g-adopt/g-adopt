@@ -2,7 +2,7 @@ all: params.log
 
 ncpus := 4
 
-params.log: compressible_case_ALA.py
+params.log: 2d_compressible_ALA.py
 	echo "running $<" >&2
 	/usr/bin/time --format="$< finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 

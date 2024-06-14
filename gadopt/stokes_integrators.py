@@ -1,3 +1,4 @@
+from numbers import Number
 from typing import Optional
 
 import firedrake as fd
@@ -30,10 +31,11 @@ iterative_stokes_solver_parameters = {
         "ksp_rtol": 1e-4,
         "ksp_max_it": 200,
         "pc_type": "python",
-        "pc_python_type": "gadopt.VariableMassInvPC",
-        "Mp_ksp_rtol": 1e-5,
-        "Mp_ksp_type": "cg",
-        "Mp_pc_type": "sor",
+        "pc_python_type": "firedrake.MassInvPC",
+        "Mp_pc_type": "ksp",
+        "Mp_ksp_ksp_rtol": 1e-5,
+        "Mp_ksp_ksp_type": "cg",
+        "Mp_ksp_pc_type": "sor",
     }
 }
 """Default solver parameters for iterative solvers"""
@@ -60,7 +62,7 @@ def create_stokes_nullspace(
     Z: fd.functionspaceimpl.WithGeometry,
     closed: bool = True,
     rotational: bool = False,
-    translations: Optional[list[int]] = None
+    translations: Optional[list[int]] = None,
 ) -> fd.nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
 
@@ -122,28 +124,30 @@ class StokesSolver:
       bcs: Dictionary of identifier-value pairs specifying boundary conditions
       mu: Firedrake function representing dynamic viscosity
       quad_degree: Quadrature degree. Default value is `2p + 1`, where
-                     p is the polynomial degree of the trial space
+                   p is the polynomial degree of the trial space
       cartesian: Whether to use Cartesian coordinates
-      solver_parameters: Dictionary of solver parameters provided to PETSc
+      solver_parameters: Either a dictionary of PETSc solver parameters or a string
+                         specifying a default set of parameters defined in G-ADOPT
       J: Firedrake function representing the Jacobian of the system
       constant_jacobian: Whether the Jacobian of the system is constant
 
     """
-    name = 'Stokes'
+
+    name = "Stokes"
 
     def __init__(
         self,
         z: fd.Function,
         T: fd.Function,
         approximation: BaseApproximation,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-        mu: fd.Function | int | float = 1,
+        bcs: dict[int, dict[str, Number]] = {},
+        mu: fd.Function | Number = 1,
         quad_degree: int = 6,
         cartesian: bool = True,
-        solver_parameters: Optional[dict[str, str | float]] = None,
+        solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
-        **kwargs
+        **kwargs,
     ):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
@@ -151,9 +155,9 @@ class StokesSolver:
         self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
                                          compressible=approximation.compressible)
         self.solution = z
+        self.solution_old = None
         self.approximation = approximation
         self.mu = ensure_constant(mu)
-        self.solver_parameters = solver_parameters
         self.J = J
         self.constant_jacobian = constant_jacobian
         self.linear = not depends_on(self.mu, self.solution)
@@ -192,29 +196,47 @@ class StokesSolver:
         for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
-        if self.solver_parameters is None:
+        if isinstance(solver_parameters, dict):
+            self.solver_parameters = solver_parameters
+        else:
             if self.linear:
                 self.solver_parameters = {"snes_type": "ksponly"}
             else:
                 self.solver_parameters = newton_stokes_solver_parameters.copy()
-            if INFO >= log_level:
-                self.solver_parameters['snes_monitor'] = None
 
-            if self.mesh.topological_dimension() == 2 and cartesian:
+            if INFO >= log_level:
+                self.solver_parameters["snes_monitor"] = None
+
+            if isinstance(solver_parameters, str):
+                match solver_parameters:
+                    case "direct":
+                        self.solver_parameters.update(direct_stokes_solver_parameters)
+                    case "iterative":
+                        self.solver_parameters.update(
+                            iterative_stokes_solver_parameters
+                        )
+                    case _:
+                        raise ValueError(
+                            f"Solver type '{solver_parameters}' not implemented."
+                        )
+            elif self.mesh.topological_dimension() == 2 and cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
+
                 if DEBUG >= log_level:
                     self.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
                     self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
                 elif INFO >= log_level:
                     self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-        # solver is setup only last minute
-        # so people can overwrite parameters we've setup here
+
+        # solver object is set up later to permit editing default solver parameters
         self._solver_setup = False
 
     def setup_solver(self):
         """Sets up the solver."""
+        # mu used in MassInvPC:
+        mu_over_rho = self.mu / self.approximation.rho_continuity()
         if self.constant_jacobian:
             z_tri = fd.TrialFunction(self.Z)
             F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
@@ -225,7 +247,7 @@ class StokesSolver:
             self.solver = fd.LinearVariationalSolver(self.problem,
                                                      solver_parameters=self.solver_parameters,
                                                      options_prefix=self.name,
-                                                     appctx={"mu": self.mu},
+                                                     appctx={"mu": mu_over_rho},
                                                      **self.solver_kwargs)
         else:
             self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
@@ -233,7 +255,7 @@ class StokesSolver:
             self.solver = fd.NonlinearVariationalSolver(self.problem,
                                                         solver_parameters=self.solver_parameters,
                                                         options_prefix=self.name,
-                                                        appctx={"mu": self.mu},
+                                                        appctx={"mu": mu_over_rho},
                                                         **self.solver_kwargs)
         self._solver_setup = True
 
@@ -241,4 +263,5 @@ class StokesSolver:
         """Solves the system."""
         if not self._solver_setup:
             self.setup_solver()
+        self.solution_old = self.solution.copy(deepcopy=True)
         self.solver.solve()
