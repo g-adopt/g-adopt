@@ -1,8 +1,6 @@
 import numpy as np
 import shapely as sl
-
 from gadopt import *
-from gadopt.inverse import *
 
 
 def cosine_curve(x, amplitude, wavelength, vertical_shift):
@@ -104,6 +102,7 @@ level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsil
 step = 0
 output_counter = 0
 time_end = 1000
+
 while True:
     if time_now >= output_counter * output_frequency:
         output_file.write(*z.subfunctions, T, psi)
@@ -128,12 +127,3 @@ with CheckpointFile("forward_checkpoint.h5", "w") as final_checkpoint:
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
     final_checkpoint.save_function(psi, name="Level set")
-
-objective = assemble(inner(psi, psi) * dx)
-log(f"\n\n{objective}\n\n")
-
-reduced_functional = ReducedFunctional(objective, Control(psi))
-log(f"\n\n{reduced_functional(psi)}\n\n")
-
-perturbation = [Function(K).interpolate(0.5)]
-log(taylor_test(reduced_functional, psi, perturbation))
