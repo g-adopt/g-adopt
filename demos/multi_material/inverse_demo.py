@@ -24,7 +24,15 @@ R = FunctionSpace(mesh, "R", 0)
 u, p = split(z)
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
-psi = Function(psi_obs.function_space(), name="Level set").project(psi_obs)
+# psi ctrl is our control variable
+psi_ctr = Function(psi_obs.function_space(), name="Control Level set")
+control = Control(psi_ctr)
+psi_ctr.project(psi_obs)
+
+
+# psi is the state variable, dependent on the ctrl
+psi = Function(psi_obs.function_space(), name="Level set")
+psi.assign(psi_ctr)
 
 min_mesh_edge_length = min(lx / nx, ly / ny)
 epsilon = Constant(min_mesh_edge_length / 4)
@@ -86,7 +94,7 @@ while True:
 objective = assemble((psi - psi_obs) ** 2 * dx)
 log(f"\n\n{objective}\n\n")
 
-reduced_functional = ReducedFunctional(objective, Control(psi))
+reduced_functional = ReducedFunctional(objective, control)
 log(f"\n\n{reduced_functional(psi_obs)}\n\n")
 
 #
