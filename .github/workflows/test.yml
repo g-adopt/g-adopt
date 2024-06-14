@@ -57,12 +57,28 @@ jobs:
           curl https://www.earthbyte.org/download/9079/ -o ./pygplates_0.36.0_py310_ubuntu-22.04.deb
           sudo apt install -y --fix-broken ./pygplates_0.36.0_py310_ubuntu-22.04.deb
           ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.10/site-packages/
+
       - uses: actions/checkout@v4
 
       - name: Install Python dependencies
         run: |
           . /home/firedrake/firedrake/bin/activate
-          python3 -m pip install .[testing,optimisation]
+          python3 -m pip install .[demos,optimisation]
+
+      - name: Check out repository linked to Trim et al. (2023)
+        uses: actions/checkout@v4
+        with:
+          repository: seantrim/exact-thermochem-solution
+          path: ./flib
+
+      - name: Compile flib (Trim et al., 2023)
+        run: |
+          . /home/firedrake/firedrake/bin/activate
+          cd flib/Python
+          rm *.so
+          source create_library.sh
+          cp *.so ../../demos/multi_material
+        shell: bash
 
       - name: Run test
         id: run_tests

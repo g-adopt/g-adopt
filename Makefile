@@ -1,4 +1,4 @@
-.PHONY: lint test longtest
+.PHONY: lint test longtest longtest_output convert_demos
 
 lint:
 	@echo "Linting module code"
@@ -14,3 +14,7 @@ longtest:
 
 longtest_output:
 	$(MAKE) -C demos longtest_output
+
+# convert demo Python scripts to executed notebooks
+convert_demos:
+	$(MAKE) -C demos convert_demos
