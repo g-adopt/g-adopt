@@ -72,7 +72,8 @@ jobs:
       - name: Get Muller et al 2022 plate reconstructions
         run: |
           download_dir=demos/gplates_global/gplates_files/
-          s3cmd --config=$(eval echo ~$USER)/.s3cfg/gadopt.key get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip ${download_dir}
+          mkdir -p $download_dir
+          s3cmd --config=$(eval echo ~$USER)/.s3cfg/gadopt.key get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip $download_dir
           cd ${dowload_dir}
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
         shell: bash
