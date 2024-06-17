@@ -56,7 +56,7 @@ jobs:
           tsp -S 48
           mkdir -p ~/.s3cfg
           echo "${{secrets.S3CONFIG}}" > ~/.s3cfg/gadopt.key
-          s3cmd --config=./.s3cfg get s3://gadopt/github-actions/pygplates_0.36.0_py310_ubuntu-22.04.deb
+          s3cmd --config=~/.s3cfg/gadopt.key get s3://gadopt/github-actions/pygplates_0.36.0_py310_ubuntu-22.04.deb
           sudo apt install -y --fix-broken ./pygplates_0.36.0_py310_ubuntu-22.04.deb
           ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.10/site-packages/
 
