@@ -52,7 +52,7 @@ jobs:
       - name: Install prerequisites
         run: |
           sudo apt update
-          sudo apt install -y task-spooler time s3cmd
+          sudo apt install -y task-spooler time s3cmd unzip
           tsp -S 48
           HOME_DIR=$(eval echo ~$USER)
           mkdir -p $HOME_DIR/.s3cfg
@@ -71,10 +71,10 @@ jobs:
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
-          download_dir=demos/gplates_global/gplates_files/
-          mkdir -p $download_dir
-          s3cmd --config=$(eval echo ~$USER)/.s3cfg/gadopt.key get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip $download_dir
-          cd ${dowload_dir}
+          cd demos/gplates_global/
+          mkdir -v gplates_files/
+          s3cmd --config=$(eval echo ~$USER)/.s3cfg/gadopt.key get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip ./gplates_files/
+          cd gplates_files
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
         shell: bash
 
