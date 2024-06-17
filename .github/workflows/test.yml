@@ -50,15 +50,16 @@ jobs:
 
     steps:
       - name: Install prerequisites
+        env:
+          S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           sudo apt update
           sudo apt install -y task-spooler time s3cmd unzip
           tsp -S 48
-          HOME_DIR=$(eval echo ~$USER)
-          mkdir -p $HOME_DIR/.s3cfg
-          echo "${{secrets.S3CONFIG}}" > $HOME_DIR/.s3cfg/config
-          chmod 600 $HOME_DIR/.s3cfg/config
-          s3cmd --config=$HOME_DIR/.s3cfg/gadopt.key get s3://gadopt/github-actions/pygplates_0.36.0_py310_ubuntu-22.04.deb
+          mkdir -p $HOME/.s3cfg
+          echo "${S3CONFIG}" > $HOME/.s3cfg/config
+          chmod 600 $HOME/.s3cfg/config
+          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/pygplates_0.36.0_py310_ubuntu-22.04.deb
           sudo apt install -y --fix-broken ./pygplates_0.36.0_py310_ubuntu-22.04.deb
           ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.10/site-packages/
 
@@ -72,8 +73,8 @@ jobs:
       - name: Get Muller et al 2022 plate reconstructions
         run: |
           cd demos/gplates_global/
-          mkdir -v gplates_files/
-          s3cmd --config=$(eval echo ~$USER)/.s3cfg/gadopt.key get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip ./gplates_files/
+          mkdir gplates_files/
+          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip ./gplates_files/
           cd gplates_files
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
         shell: bash
