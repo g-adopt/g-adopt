@@ -3,8 +3,7 @@ import pickle
 from pathlib import Path
 import pytest
 from gadopt import *
-from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector
-from gadopt.gplatefiles import obtain_Muller_2022_SE
+from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, obtain_Muller_2022_SE
 
 
 @pytest.fixture(scope="module")
