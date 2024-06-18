@@ -315,7 +315,10 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     Compressible approximation. Includes linear dependence of density on pressure (chi)
     """
 
+    def dbuoyancydp(self, p, T: ufl.core.expr.Expr):
+        return -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi
+
     def buoyancy(self, p, T):
-        pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
+        pressure_part = self.dbuoyancydp(p, T) * p
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
