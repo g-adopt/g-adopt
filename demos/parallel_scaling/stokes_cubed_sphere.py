@@ -2,9 +2,6 @@ from gadopt import *
 import scipy.special
 import math
 
-# Quadrature degree:
-_dx = dx(degree=6)
-
 
 def model(ref_level, nlayers, delta_t, steps=None):
     # Set up geometry:

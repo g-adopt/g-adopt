@@ -20,7 +20,10 @@ Installation
 G-ADOPT is available on PyPI as `gadopt`, and requires a working
 [Firedrake](https://www.firedrakeproject.org/) installation. To bring
 in the optional nonlinear optimisation dependencies, install the
-`gadopt[optimisation]` variant.
+`gadopt[optimisation]` variant. See [the G-ADOPT
+website](https://gadopt.org/install/) for more detailed installation
+instructions, including directions for getting started with the demo
+notebooks.
 
 Citing
 ------

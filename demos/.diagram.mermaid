@@ -1,0 +1,38 @@
+graph TD
+  base[Base]
+
+  subgraph physical[Physical]
+  ala[ALA] --> tala[TALA]
+  viscoplastic[Viscoplastic]
+  end
+
+  subgraph dimension[Dimension]
+  cartesian_3d[3D Cartesian]
+  end
+
+  subgraph geometry[Geometry]
+  cylindrical_2d[2D Cylindrical] --> spherical_3d[3D Spherical]
+  end
+
+  subgraph multimaterial[Multi-material]
+  isothermal["2-Material (isothermal)"] --> thermochemical["2-Material (thermochemical)"]
+  end
+
+  subgraph adjoint[Adjoint]
+  inverse[Inverse]
+  end
+
+  base --> physical
+  base --> dimension
+  base --> geometry
+  base --> multimaterial
+  base ~~~ adjoint
+
+  click base "base_case"
+  click ala "2d_compressible_ALA"
+  click tala "2d_compressible_TALA"
+  click viscoplastic "viscoplastic_case"
+  click cartesian_3d "3d_cartesian"
+  click cylindrical_2d "2d_cylindrical"
+  click isothermal "compositional_buoyancy"
+  click thermochemical "thermochemical_buoyancy"

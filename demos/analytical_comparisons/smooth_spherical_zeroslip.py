@@ -2,9 +2,6 @@ from gadopt import *
 import numpy
 import assess
 
-# Quadrature degree:
-_dx = dx(degree=6)
-
 # Projection solver parameters for nullspaces:
 _project_solver_parameters = {
     "snes_type": "ksponly",
@@ -92,17 +89,17 @@ def model(level, l, mm, k, do_write=False):
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
     rot = as_vector((0, X[2], -X[1]))
-    coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
+    coef = assemble(dot(rot, u_)*dx) / assemble(dot(rot, rot)*dx)
     u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
     rot = as_vector((-X[2], 0, X[0]))
-    coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
+    coef = assemble(dot(rot, u_)*dx) / assemble(dot(rot, rot)*dx)
     u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
     rot = as_vector((-X[1], X[0], 0))
-    coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
+    coef = assemble(dot(rot, u_)*dx) / assemble(dot(rot, rot)*dx)
     u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
 
     # removing constant nullspace from pressure
-    coef = assemble(p_ * _dx)/assemble(Constant(1.0)*_dx(domain=mesh))
+    coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
     # compute u analytical and error
@@ -128,9 +125,9 @@ def model(level, l, mm, k, do_write=False):
         u_file.write(u_, u_anal, u_error)
         p_file.write(p_, p_anal, p_error)
 
-    l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*_dx))
-    l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*_dx))
-    l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*_dx))
-    l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*_dx))
+    l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*dx))
+    l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*dx))
+    l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*dx))
+    l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*dx))
 
     return l2error_u, l2error_p, l2anal_u, l2anal_p
