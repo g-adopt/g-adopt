@@ -499,23 +499,17 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
         - This is designed to read a file with one process and distribute in parallel with MPI.
         - The input file should contain an array of radius and an array of values, seperated by comma.
     """
-    # find the mesh
     mesh = extract_unique_domain(function)
 
-    # read the input file
     if mesh.comm.rank == 0:
-        # The root process reads the file
         rshl, visc = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
     else:
         visc = None
         rshl = None
 
-    # Broadcast the entire 'visc' array to all processes
     visc = mesh.comm.bcast(visc, root=0)
-    # Similarly, broadcast 'rshl' if needed (assuming all processes need it)
     rshl = mesh.comm.bcast(rshl, root=0)
 
-    # Coordinates
     X = SpatialCoordinate(mesh)
 
     if cartesian:
