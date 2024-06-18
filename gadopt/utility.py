@@ -16,7 +16,6 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
-from scipy.interpolate import interp1d
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -479,38 +478,37 @@ def node_coordinates(function):
     ]
 
 
-def assign_1d_profile(function: Function, one_d_filename: str, cartesian: bool, r1d=None):
+def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: bool):
     """
-    Assign a one-dimensional profile to a Function `q` from a file.
+    Assign a one-dimensional profile to a Function `function` from a file.
 
-    The function reads a one-dimensional radial viscosity profile together with the
-    radius input for the profile, from a file, broadcasts the read array to all
-    processes, and then interpolates this array onto the function space of `q`.
+    The function reads a one-dimensional profile (e.g., viscosity) together with the
+    radius input for the profile, from a file, broadcasts the two arrays to all
+    processes, and then interpolates this array onto the function space of `function`.
 
     Args:
-        q (Function): The function onto which the 1D profile will be assigned.
-        one_d_filename (str): The path to the file containing the 1D radial viscosity profile.
+        function (Function): The function onto which the 1D profile will be assigned.
+        one_d_filename (str): The path to the file containing the 1D radial profile.
         cartesian (bool): Is the upward direction along z/y(cartesian=True) or radial (cartesian=False)
 
     Returns:
-        None: It directly assigns the input function `function`.
+        None: It directly interpolates the input function `function`.
 
     Note:
         - Note the cartesian flag
         - This is designed to read a file with one process and distribute in parallel with MPI.
-        - The input file should contain an array of radius and an array of viscosity values, seperated by comma.
-        - Make sure radius in the file is consistent with the mesh.
+        - The input file should contain an array of radius and an array of values, seperated by comma.
     """
     # find the mesh
     mesh = extract_unique_domain(function)
-
-    visc = None
-    rshl = None
 
     # read the input file
     if mesh.comm.rank == 0:
         # The root process reads the file
         rshl, visc = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+    else:
+        visc = None
+        rshl = None
 
     # Broadcast the entire 'visc' array to all processes
     visc = mesh.comm.bcast(visc, root=0)
@@ -529,4 +527,5 @@ def assign_1d_profile(function: Function, one_d_filename: str, cartesian: bool, 
     rad = Function(function.function_space()).interpolate(upward_coord)
 
     averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, cartesian=cartesian)
-    averager.extrapolate_layer_average(function, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
+    interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, visc)
+    averager.extrapolate_layer_average(function, interpolated_visc)
