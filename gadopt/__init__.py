@@ -29,6 +29,7 @@ from .utility import (
     log,
     node_coordinates,
     timer_decorator,
+    assign_1d_profile,
 )
 
 PETSc.Sys.popErrorHandler()
