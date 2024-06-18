@@ -111,7 +111,7 @@ def forward():
     cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
     chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
     mu_ref = Function(Q, name="Viscosity")
-    assign_1d_profile(mu_ref, "mu2_radial.rad")
+    interpolate_1d_profile(mu_ref, "mu2_radial.rad")
 
     approximation = TruncatedAnelasticLiquidApproximation(
         Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
