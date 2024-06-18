@@ -76,6 +76,9 @@ def forward():
                 )
             )
 
+    # Prior to running this code files should have been download in "./gplates_files"
+    # If not, download the files from the EarthByte group server on
+    # https://earthbyte.org/webdav/ftp/Data_Collections/Muller_etal_2022_SE/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
     # Getting the relevant filenames for plate reconstruction
     muller_2022_files = obtain_Muller_2022_SE("./gplates_files")
 

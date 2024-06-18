@@ -1,29 +1,13 @@
-import shutil
 import pickle
 from pathlib import Path
-import pytest
 from gadopt import *
-from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector
-from gadopt.gplatefiles import obtain_Muller_2022_SE
-
-
-@pytest.fixture(scope="module")
-def setup_download_path():
-    download_path = Path("test_gplate_files")
-    # Clean up any previous test runs
-    if download_path.exists():
-        shutil.rmtree(download_path)
-    download_path.mkdir(parents=True, exist_ok=True)
-    yield download_path
-    # Clean up after tests
-    if download_path.exists():
-        shutil.rmtree(download_path)
+from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, obtain_Muller_2022_SE
 
 
 def test_obtain_muller_2022_se(setup_download_path):
-    download_path = setup_download_path
+    base_path = Path(__file__).recover().parent / "demos/gplates_global"
     # Attempt to download and access the files
-    plate_reconstruction_files_with_path = obtain_Muller_2022_SE(download_path, download_mode=True)
+    plate_reconstruction_files_with_path = obtain_Muller_2022_SE(base_path)
 
     # Check if the files are downloaded and accessible
     for file_list in plate_reconstruction_files_with_path.values():
@@ -31,7 +15,10 @@ def test_obtain_muller_2022_se(setup_download_path):
             assert Path(file_path).exists(), f"{file_path} does not exist."
 
 
-def test_gplates(setup_download_path):
+def test_gplates():
+
+    base_path = Path(__file__).recover().parent / "demos/gplates_global"
+
     # Set up geometry:
     rmin, rmax, ref_level, nlayers = 1.22, 2.22, 5, 16
 
@@ -46,8 +33,7 @@ def test_gplates(setup_download_path):
 
     V = VectorFunctionSpace(mesh, "CG", 2)
 
-    download_path = setup_download_path
-    mueller_2022_se = obtain_Muller_2022_SE(download_path=download_path, download_mode=True)
+    mueller_2022_se = obtain_Muller_2022_SE(download_path=base_path)
 
     # compute surface velocities
     rec_model = pyGplatesConnector(
