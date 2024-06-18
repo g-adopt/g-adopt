@@ -350,13 +350,14 @@ def ala_right_nullspace(
     q = fd.TestFunction(W)
     p = fd.Function(W, name="pressure_nullspace")
 
+    # Fix the solution at the top boundary
     bc = fd.DirichletBC(W, 1., top_subdomain_id)
+
     F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
-    F += (
-        - fd.inner(
-            fd.grad(q),
-            fd.as_vector((0, 1)) * approximation.Di * approximation.cp0 / approximation.cv0 / approximation.gamma0 * approximation.g * approximation.rho * approximation.chi * p) * fd.dx
-    )
+
+    k = upward_normal(W.mesh(), cartesian=approximation.cartesian)
+
+    F += - fd.inner(fd.grad(q), k * approximation.dbuoyancydp(p, fd.Constant(1.0)) * p) * fd.dx
 
     fd.solve(F == 0, p, bcs=bc)
     return p
