@@ -1,13 +1,13 @@
 import pickle
 from pathlib import Path
+
 from gadopt import *
 from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, obtain_Muller_2022_SE
 
 
-def test_obtain_muller_2022_se(setup_download_path):
-    base_path = Path(__file__).recover().parent / "demos/gplates_global"
-    # Attempt to download and access the files
-    plate_reconstruction_files_with_path = obtain_Muller_2022_SE(base_path)
+def test_obtain_muller_2022_se():
+    gplates_data_path = Path(__file__).resolve().parents[1] / "demos/gplates_global"
+    plate_reconstruction_files_with_path = obtain_Muller_2022_SE(gplates_data_path)
 
     # Check if the files are downloaded and accessible
     for file_list in plate_reconstruction_files_with_path.values():
@@ -16,8 +16,7 @@ def test_obtain_muller_2022_se(setup_download_path):
 
 
 def test_gplates():
-
-    base_path = Path(__file__).recover().parent / "demos/gplates_global"
+    gplates_data_path = Path(__file__).resolve().parents[1] / "demos/gplates_global"
 
     # Set up geometry:
     rmin, rmax, ref_level, nlayers = 1.22, 2.22, 5, 16
@@ -33,7 +32,7 @@ def test_gplates():
 
     V = VectorFunctionSpace(mesh, "CG", 2)
 
-    mueller_2022_se = obtain_Muller_2022_SE(download_path=base_path)
+    mueller_2022_se = obtain_Muller_2022_SE(gplates_data_path)
 
     # compute surface velocities
     rec_model = pyGplatesConnector(
@@ -54,7 +53,8 @@ def test_gplates():
         surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
 
     # Loading reference plate velocities
-    with open(Path(__file__).parent.resolve() / 'test_gplates.pkl', 'rb') as file:
+    test_data_path = Path(__file__).resolve().parent / "data"
+    with open(test_data_path / "test_gplates.pkl", "rb") as file:
         ref_surface_rms = pickle.load(file)
 
     np.testing.assert_allclose(surface_rms, ref_surface_rms)
