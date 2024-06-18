@@ -22,7 +22,7 @@ def test_oned_average_assignment():
     output_fi.close()
     # assign the average to a new function
     p = Function(Q)
-    assign_1d_profile(p, "one_d_test.output", cartesian=True)
+    interpolate_1d_profile(p, "one_d_test.output", cartesian=True)
 
     assert assemble((p-q) ** 2 * dx) < 1e-10
 
