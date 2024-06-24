@@ -12,11 +12,11 @@ class GeodynamicalDiagnostics:
     """Typical simulation diagnostics used in geodynamical simulations. 
 
     Arguments:
-      z:         Firedrake function for mixed Stokes function space (velocity, pressure)
-      T:         Firedrake function for temperature
-      bottom_id: Bottom boundary identifier
-      top_id:    Top boundary identifier
-      degree:    Quadrature degree
+      z:            Firedrake function for mixed Stokes function space (velocity, pressure)
+      T:            Firedrake function for temperature
+      bottom_id:    Bottom boundary identifier
+      top_id:       Top boundary identifier
+      quad_degree:  Quadrature degree
 
     Note:
       All diagnostics are returned as floats.
@@ -37,16 +37,16 @@ class GeodynamicalDiagnostics:
         T: Function,
         bottom_id: int,
         top_id: int,
-        degree: int = 4,
+        quad_degree: int = 4,
     ):
         mesh = extract_unique_domain(z)
 
         self.u, self.p, *_ = z.subfunctions
         self.T = T
 
-        self.dx = dx(domain=mesh, degree=degree)
+        self.dx = dx(domain=mesh, degree=quad_degree)
         self.ds = (
-            CombinedSurfaceMeasure(mesh, degree)
+            CombinedSurfaceMeasure(mesh, quad_degree)
             if T.function_space().extruded
             else ds(mesh)
         )
