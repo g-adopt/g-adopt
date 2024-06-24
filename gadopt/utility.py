@@ -84,8 +84,8 @@ class TimestepAdaptor:
         return float(self.dt_const)
 
 
-def upward_normal(mesh, cartesian):
-    if cartesian:
+def upward_normal(mesh):
+    if mesh.cartesian:
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
@@ -94,11 +94,13 @@ def upward_normal(mesh, cartesian):
         return X/r
 
 
-def vertical_component(u, cartesian):
-    if cartesian:
+def vertical_component(u):
+    mesh = extract_unique_domain(u)
+
+    if mesh.cartesian:
         return u[u.ufl_shape[0]-1]
     else:
-        n = upward_normal(extract_unique_domain(u), cartesian)
+        n = upward_normal(mesh)
         return dot(n, u)
 
 
@@ -308,7 +310,7 @@ class LayerAveraging:
     A manager for computing a vertical profile of horizontal layer averages.
     """
 
-    def __init__(self, mesh, r1d=None, cartesian=True, quad_degree=None):
+    def __init__(self, mesh, r1d=None, quad_degree=None):
         """
         Create the :class:`LayerAveraging` manager.
         :arg mesh: The mesh over which to compute averages.
@@ -316,13 +318,12 @@ class LayerAveraging:
              at which to compute layer averages. If not provided, and
              mesh is extruded, it uses the same layer heights. If mesh
              is not extruded, r1d is required.
-        :kwarg cartesian: Determines whether `r1d` represents depths or radii.
         """
 
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if cartesian:
+        if mesh.cartesian:
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))

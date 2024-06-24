@@ -202,9 +202,6 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
       Di: Dissipation number
       mu: dynamic viscosity
       H:  volumetric heat production
-      cartesian:
-        - True: gravity is assumed to point in the negative z-direction
-        - False: gravity is assumed to point radially inward
 
     Keyword Arguments:
       kappa (Number): thermal diffusivity
@@ -220,12 +217,11 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, mu: Number = 1, H: Optional[Number] = None, cartesian: bool = True, **kwargs):
+    def __init__(self, Ra: Number, Di: Number, mu: Number = 1, H: Optional[Number] = None, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.mu = mu
         self.H = H
-        self.cartesian = cartesian
 
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
@@ -235,7 +231,7 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
         return phi * self.Di / self.Ra
 
     def work_against_gravity(self, u, T):
-        w = vertical_component(u, self.cartesian)
+        w = vertical_component(u)
         return self.Di * self.alpha * self.rho * self.g * w * T
 
     def linearized_energy_sink(self, u):
@@ -268,9 +264,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
       alpha (Number): reference thermal expansion coefficient
       mu (Number):    viscosity used in viscous dissipation
       H (Number):     volumetric heat production - default 0
-      cartesian (bool):
-        - True: gravity points in negative z-direction
-        - False: gravity points radially inward
       kappa (Number):  diffusivity
       g (Number):      gravitational acceleration
 
@@ -305,7 +298,7 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         return self.rho * self.cp
 
     def linearized_energy_sink(self, u):
-        w = vertical_component(u, self.cartesian)
+        w = vertical_component(u)
         return self.Di * self.rho * self.alpha * w
 
 
