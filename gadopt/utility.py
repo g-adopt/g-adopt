@@ -497,29 +497,25 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
     Note:
         - Note the cartesian flag
         - This is designed to read a file with one process and distribute in parallel with MPI.
-        - The input file should contain an array of radius and an array of values, seperated by comma.
+        - The input file should contain an array of radius and an array of values, separated by a comma.
     """
     mesh = extract_unique_domain(function)
 
     if mesh.comm.rank == 0:
-        rshl, visc = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+        rshl, one_d_data = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
     else:
-        visc = None
+        one_d_data = None
         rshl = None
 
-    visc = mesh.comm.bcast(visc, root=0)
+    one_d_data = mesh.comm.bcast(one_d_data, root=0)
     rshl = mesh.comm.bcast(rshl, root=0)
 
     X = SpatialCoordinate(mesh)
 
-    if cartesian:
-        # if in a two-dimensional problem: y otherwise z is the direction
-        upward_coord = X[1] if len(X) == 2 else X[2]
-    else:
-        upward_coord = sqrt(X**2)
+    upward_coord = vertical_component(X, cartesian=cartesian)
 
     rad = Function(function.function_space()).interpolate(upward_coord)
 
     averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, cartesian=cartesian)
-    interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, visc)
+    interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
