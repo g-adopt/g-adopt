@@ -101,6 +101,7 @@ from gadopt import *
 # +
 nx, ny = 40, 40  # Number of cells in x and y directions.
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
+mesh.cartesian = True
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -202,7 +203,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              transpose_nullspace=Z_nullspace,
-                             cartesian=True, constant_jacobian=True)
+                             constant_jacobian=True)
 # -
 
 # Next initiate the time loop, which runs until a steady-state solution has been attained:

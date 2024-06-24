@@ -144,6 +144,9 @@ else:  # Initialise mesh and key functions
     time_now = 0
     dump_counter = 0
 
+# Whether we start from checkpoint or not, we annotate our mesh as cartesian
+mesh.cartesian = True
+
 # Extract velocity and pressure from the Stokes function
 velocity, pressure = fd.split(stokes_function)  # UFL expressions
 # Associated Firedrake functions

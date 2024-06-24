@@ -39,6 +39,7 @@ def run_forward():
     # Start with a previously-initialised temperature field
     with CheckpointFile("Checkpoint230.h5", mode="r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
+        mesh.cartesian = False
 
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -103,7 +104,7 @@ def run_forward():
 
     # Calculate the layer average of the initial state
     averager = LayerAveraging(
-        mesh, np.linspace(rmin, rmax, nlayers * 2), cartesian=False, quad_degree=6
+        mesh, np.linspace(rmin, rmax, nlayers * 2), quad_degree=6
     )
     averager.extrapolate_layer_average(Taverage, averager.get_layer_average(T))
 
@@ -137,7 +138,6 @@ def run_forward():
         approximation,
         mu=mu,
         bcs=stokes_bcs,
-        cartesian=False,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,

@@ -23,6 +23,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
         do_write: whether to output the scalar/velocity field
     """
     mesh = UnitSquareMesh(n, n, quadrilateral=True)
+    mesh.cartesian = True
 
     # We set up a function space of bilinear elements for :math:`q`, and
     # a vector-valued continuous function space for our velocity field. ::
