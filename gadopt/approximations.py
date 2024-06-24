@@ -132,11 +132,15 @@ class BoussinesqApproximation(BaseApproximation):
     parameters are typically constant. Viscous dissipation is neglected (Di << 1).
 
     Arguments:
-      Ra:    Rayleigh number
-      kappa: thermal diffusivity
-      g:     gravitational acceleration
-      rho:   reference density
-      alpha: coefficient of thermal expansion
+      Ra:        Rayleigh number
+      rho:       reference density
+      alpha:     coefficient of thermal expansion
+      T0:        reference temperature
+      g:         gravitational acceleration
+      RaB:       compositional Rayleigh number; product of the Rayleigh and buoyancy numbers
+      delta_rho: compositional density difference from the reference density
+      kappa:     thermal diffusivity
+      H:         internal heating rate
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
@@ -150,19 +154,31 @@ class BoussinesqApproximation(BaseApproximation):
     def __init__(
         self,
         Ra: Function | Number,
-        kappa: Function | Number = 1,
-        g: Function | Number = 1,
+        *,
         rho: Function | Number = 1,
-        alpha: Function | Number = 1
+        alpha: Function | Number = 1,
+        T0: Function | Number = 0,
+        g: Function | Number = 1,
+        RaB: Function | Number = 0,
+        delta_rho: Function | Number = 1,
+        kappa: Function | Number = 1,
+        H: Function | Number = 0,
     ):
         self.Ra = ensure_constant(Ra)
-        self.thermal_diffusivity = ensure_constant(kappa)
-        self.g = ensure_constant(g)
         self.rho = ensure_constant(rho)
         self.alpha = ensure_constant(alpha)
+        self.T0 = T0
+        self.g = ensure_constant(g)
+        self.kappa_ref = ensure_constant(kappa)
+        self.RaB = RaB
+        self.delta_rho = ensure_constant(delta_rho)
+        self.H = ensure_constant(H)
 
     def buoyancy(self, p, T):
-        return self.Ra * self.g * self.alpha * self.rho * T
+        return (
+            self.Ra * self.rho * self.alpha * (T - self.T0) * self.g
+            - self.RaB * self.delta_rho * self.g
+        )
 
     def rho_field(self, p, T):
         return self.rho * (1 - self.alpha * T)
@@ -174,13 +190,13 @@ class BoussinesqApproximation(BaseApproximation):
         return 1
 
     def kappa(self):
-        return self.thermal_diffusivity
+        return self.kappa_ref
 
     def linearized_energy_sink(self, u):
         return 0
 
     def energy_source(self, u):
-        return 0
+        return self.rho * self.H
 
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):

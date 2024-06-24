@@ -1,0 +1,16 @@
+nav:
+  - index.md
+  - Base case:
+    - base_case.ipynb
+  - Physical approximation:
+    - 2d_compressible_ALA.ipynb
+    - 2d_compressible_TALA.ipynb
+    - viscoplastic_case.ipynb
+  - Dimension:
+    - 3d_cartesian.ipynb
+  - Geometry:
+    - 2d_cylindrical.ipynb
+    - 3d_spherical.ipynb
+  - Multi-material:
+    - compositional_buoyancy.ipynb
+    - thermochemical_buoyancy.ipynb
