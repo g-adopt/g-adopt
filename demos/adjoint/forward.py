@@ -18,6 +18,7 @@ mesh1d = IntervalMesh(disc_n, length_or_left=0.0, right=x_max)
 mesh = ExtrudedMesh(
     mesh1d, layers=disc_n, layer_height=y_max / disc_n, extrusion_type="uniform"
 )
+mesh.cartesian = True
 
 # write out the mesh
 with CheckpointFile("mesh.h5", mode="w") as fi:
@@ -48,7 +49,7 @@ Taverage = Function(Q1, name="Average Temperature")
 
 # Calculate the layer average of the initial state
 averager = LayerAveraging(
-    mesh, np.linspace(0, 1.0, 150 * 2), cartesian=True, quad_degree=6
+    mesh, np.linspace(0, 1.0, 150 * 2), quad_degree=6
 )
 averager.extrapolate_layer_average(Taverage, averager.get_layer_average(T))
 

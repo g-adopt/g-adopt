@@ -61,6 +61,7 @@ def annulus_taylor_test(case):
 
     with CheckpointFile("Checkpoint230.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
+        mesh.cartesian = False
 
     enable_disk_checkpointing()
 
@@ -162,7 +163,6 @@ def annulus_taylor_test(case):
         approximation,
         mu=mu,
         bcs=stokes_bcs,
-        cartesian=False,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,

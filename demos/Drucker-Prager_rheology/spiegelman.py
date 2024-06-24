@@ -32,6 +32,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     log('\n')
     log('WRITING TO:', output_dir)
     mesh = RectangleMesh(nx, ny, 4, 1, quadrilateral=True)  # Square mesh generated via firedrake
+    mesh.cartesian = True
     left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # noqa: F841 Boundary IDs
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:

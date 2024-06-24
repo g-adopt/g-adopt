@@ -42,6 +42,7 @@ a, b, c = 1.0079, 0.6283, 1.0
 nx, ny, nz = 10, int(b/c * 10), 10
 mesh2d = RectangleMesh(nx, ny, a, b, quadrilateral=True)  # Rectangular 2D mesh
 mesh = ExtrudedMesh(mesh2d, nz)
+mesh.cartesian = True
 bottom_id, top_id, left_id, right_id, front_id, back_id = "bottom", "top", 1, 2, 3, 4
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -156,7 +157,7 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=True, constant_jacobian=True,
+                             constant_jacobian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 # -
