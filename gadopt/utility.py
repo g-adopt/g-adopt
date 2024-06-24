@@ -491,9 +491,6 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
         one_d_filename: The path to the file containing the 1D radial profile
         cartesian: Whether the upward direction is along z/y (True) or radial (False)
 
-    Returns:
-        None: It directly interpolates the input function `function`.
-
     Note:
         - Note the cartesian flag
         - This is designed to read a file with one process and distribute in parallel with MPI.
