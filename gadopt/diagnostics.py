@@ -12,21 +12,21 @@ class GeodynamicalDiagnostics:
     """Typical simulation diagnostics used in geodynamical simulations.
 
     Arguments:
-      z:         Firedrake function for the mixed Stokes function space
+      z:         Firedrake function for the mixed Stokes function space (velocity, pressure)
       T:         Firedrake function for the temperature
       bottom_id: bottom boundary identifier
       top_id:    top boundary identifier
       degree:    degree of the polynomial approximation
 
     Note:
-      All the diagnostics are returned as a float value.
+      All diagnostics are returned as a float value.
 
     Functions:
       u_rms: Root-mean squared velocity
-      u_rms_top: Root-mean squared velocity along the top boundary
-      Nu_top: Nusselt number at the top boundary
-      Nu_bottom: Nusselt number at the bottom boundary
-      T_avg: Average temperature in the domain
+      u_rms_top: Root-mean squared velocity along top boundary
+      Nu_top: Nusselt number at top boundary
+      Nu_bottom: Nusselt number at bottom boundary
+      T_avg: Average temperature in domain
       ux_max: Maximum velocity (optionally over a given boundary)
 
     """
