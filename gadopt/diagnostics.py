@@ -9,17 +9,17 @@ from .utility import CombinedSurfaceMeasure
 
 
 class GeodynamicalDiagnostics:
-    """Typical simulation diagnostics used in geodynamical simulations.
+    """Typical simulation diagnostics used in geodynamical simulations. 
 
     Arguments:
-      z:         Firedrake function for the mixed Stokes function space (velocity, pressure)
-      T:         Firedrake function for the temperature
-      bottom_id: bottom boundary identifier
-      top_id:    top boundary identifier
-      degree:    degree of the polynomial approximation
+      z:         Firedrake function for mixed Stokes function space (velocity, pressure)
+      T:         Firedrake function for temperature
+      bottom_id: Bottom boundary identifier
+      top_id:    Top boundary identifier
+      degree:    Quadrature degree
 
     Note:
-      All diagnostics are returned as a float value.
+      All diagnostics are returned as floats.
 
     Functions:
       u_rms: Root-mean squared velocity
