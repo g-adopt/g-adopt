@@ -1,6 +1,3 @@
-from typing import Optional
-import firedrake as fd
-
 from numbers import Number
 from typing import Optional
 
@@ -265,9 +262,6 @@ class StokesSolver:
                 # (N.b. we already have two equations from StokesEquations)
                 self.F += self.equations[2+i].mass_term(self.test[2+i], free_surface_theta*(eta[i]-eta_old[i])/free_surface_dt)
 
-                
-                
-
         if isinstance(solver_parameters, dict):
             self.solver_parameters = solver_parameters
         else:
@@ -303,9 +297,9 @@ class StokesSolver:
                     self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
                 elif INFO >= log_level:
                     self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-                    
+
                 if self.free_surface:
-                    # Use GADOPT variable mass inverse preconditioner and merge free surface fields with pressure 
+                    # Use GADOPT variable mass inverse preconditioner and merge free surface fields with pressure
                     # field for Schur complement solve
                     self.solver_parameters.update({"pc_python_type": "gadopt.VariableMassInvPC",
                                                    "Mp_ksp_rtol": 1e-5,
@@ -315,7 +309,7 @@ class StokesSolver:
                                                    "pc_fieldsplit_1_fields": '1,'+','.join(str(2+i) for i in range(len(eta)))})
                     for key in ["Mp_ksp_ksp_rtol", "Mp_ksp_ksp_type", "Mp_ksp_pc_type"]:
                         del self.solver_parameters[key]
-                        
+
         # solver object is set up later to permit editing default solver parameters
         self._solver_setup = False
 
