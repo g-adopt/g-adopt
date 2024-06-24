@@ -1,6 +1,6 @@
 from pathlib import Path
+import uuid
 
-import firedrake.utils
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
 from firedrake import CheckpointFile, Function
@@ -291,7 +291,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
     def __getstate__(self):
         """Returns a state tuple suitable for pickling"""
 
-        checkpoint_filename = f"vector_checkpoint_{firedrake.utils._new_uid()}.h5"
+        checkpoint_filename = f"vector_checkpoint_{uuid.uuid4()}.h5"
         checkpoint_path = self._optimiser.checkpoint_dir / checkpoint_filename
         self.save(checkpoint_path)
 
