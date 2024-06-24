@@ -74,6 +74,14 @@ class GeodynamicalDiagnostics:
     def T_avg(self):
         return assemble(self.T * self.dx) / self.domain_volume
 
+    def T_min(self):
+        T_data = self.T.dat.data_ro_with_halos[:]
+        return self.T.comm.allreduce(T_data.min, MPI.MIN)
+
+    def T_max(self):
+        T_data = self.T.dat.data_ro_with_halos[:]
+        return self.T.comm.allreduce(T_data.max, MPI.MAX)
+
     def ux_max(self, boundary_id=None) -> float:
         ux_data = self.u.dat.data_ro_with_halos[:, 0]
 
