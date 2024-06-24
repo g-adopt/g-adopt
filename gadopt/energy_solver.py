@@ -23,11 +23,12 @@ iterative_energy_solver_parameters: dict[str, Any] = {
     "ksp_rtol": 1e-5,
     "pc_type": "sor",
 }
-"""Default iterative solver parameters for solution of energy equation. Configured to use the GMRES Krylov scheme with Successive Over Relaxation (SOR) preconditioning.
-   Note that default energy solver parameters can be augmented or adjusted by accessing the solver_parameter dictionary, for example:
+"""Default iterative solver parameters for solution of energy equation. Configured to use the GMRES Krylov scheme
+   with Successive Over Relaxation (SOR) preconditioning. Note that default energy solver parameters
+   can be augmented or adjusted by accessing the solver_parameter dictionary, for example:
    energy_solver.solver_parameters['ksp_converged_reason'] = None
    energy_solver.solver_parameters['ksp_rtol'] = 1e-4
-   G-ADOPT defaults to iterative solvers in 3-D. 
+   G-ADOPT defaults to iterative solvers in 3-D.
 """
 
 direct_energy_solver_parameters: dict[str, Any] = {
@@ -37,11 +38,13 @@ direct_energy_solver_parameters: dict[str, Any] = {
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
 }
-"""Default direct solver parameters. Configured to use LU factorisation, using the MUMPS library. G-ADOPT defaults to direct solvers in 2-D."""
+"""Default direct solver parameters for solution of energy equation. Configured to use LU factorisation,
+   using the MUMPS library. G-ADOPT defaults to direct solvers in 2-D.
+"""
 
 
 class EnergySolver:
-    """Timestepper and solver for the energy equation. The temperature, T, is updated in place. 
+    """Timestepper and solver for the energy equation. The temperature, T, is updated in place.
 
     Arguments:
       T:                 Firedrake function for temperature
