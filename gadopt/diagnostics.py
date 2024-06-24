@@ -9,7 +9,7 @@ from .utility import CombinedSurfaceMeasure
 
 
 class GeodynamicalDiagnostics:
-    """Typical simulation diagnostics used in geodynamical simulations. 
+    """Typical simulation diagnostics used in geodynamical simulations.
 
     Arguments:
       z:            Firedrake function for mixed Stokes function space (velocity, pressure)
