@@ -125,7 +125,6 @@ class StokesSolver:
       mu: Firedrake function representing dynamic viscosity
       quad_degree: Quadrature degree. Default value is `2p + 1`, where
                    p is the polynomial degree of the trial space
-      cartesian: Whether to use Cartesian coordinates
       solver_parameters: Either a dictionary of PETSc solver parameters or a string
                          specifying a default set of parameters defined in G-ADOPT
       J: Firedrake function representing the Jacobian of the system
@@ -143,7 +142,6 @@ class StokesSolver:
         bcs: dict[int, dict[str, Number]] = {},
         mu: fd.Function | Number = 1,
         quad_degree: int = 6,
-        cartesian: bool = True,
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
@@ -164,7 +162,7 @@ class StokesSolver:
 
         self.solver_kwargs = kwargs
         u, p = fd.split(self.solution)
-        self.k = upward_normal(self.Z.mesh(), cartesian)
+        self.k = upward_normal(self.Z.mesh())
         self.fields = {
             'velocity': u,
             'pressure': p,
@@ -219,7 +217,7 @@ class StokesSolver:
                         raise ValueError(
                             f"Solver type '{solver_parameters}' not implemented."
                         )
-            elif self.mesh.topological_dimension() == 2 and cartesian:
+            elif self.mesh.topological_dimension() == 2 and self.mesh.cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
