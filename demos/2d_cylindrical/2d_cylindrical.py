@@ -147,7 +147,7 @@ ref_file = VTKFile('reference_state.pvd')
 output_frequency = 50
 
 plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t")
+plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t T_min T_max")
 
 gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, degree=6)
 # -
@@ -200,7 +200,7 @@ for timestep in range(0, timesteps):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {gd.T_avg()} ")
+                 f"{energy_conservation} {gd.T_avg()} {gd.T_min()} {gd.T_max()} ")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
