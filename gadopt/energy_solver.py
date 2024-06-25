@@ -23,7 +23,13 @@ iterative_energy_solver_parameters: dict[str, Any] = {
     "ksp_rtol": 1e-5,
     "pc_type": "sor",
 }
-"""Default solver parameters for iterative solvers"""
+"""Default iterative solver parameters for solution of energy equation. Configured to use the GMRES Krylov scheme
+   with Successive Over Relaxation (SOR) preconditioning. Note that default energy solver parameters
+   can be augmented or adjusted by accessing the solver_parameter dictionary, for example:
+   energy_solver.solver_parameters['ksp_converged_reason'] = None
+   energy_solver.solver_parameters['ksp_rtol'] = 1e-4
+   G-ADOPT defaults to iterative solvers in 3-D.
+"""
 
 direct_energy_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
@@ -32,20 +38,22 @@ direct_energy_solver_parameters: dict[str, Any] = {
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
 }
-"""Default solver parameters for direct solvers"""
+"""Default direct solver parameters for solution of energy equation. Configured to use LU factorisation,
+   using the MUMPS library. G-ADOPT defaults to direct solvers in 2-D.
+"""
 
 
 class EnergySolver:
-    """Timestepper solver for the energy equation.
+    """Timestepper and solver for the energy equation. The temperature, T, is updated in place.
 
     Arguments:
-      T:                 Firedrake function for the temperature
-      u:                 Firedrake function for the velocity
+      T:                 Firedrake function for temperature
+      u:                 Firedrake function for velocity
       approximation:     G-ADOPT base approximation describing the system of equations
-      delta_t:           the simulation time step
-      bcs:               dictionary of identifier-value pairs specifying boundary conditions
-      solver_parameters: additional solver parameters provided to PETSc
-      su_advection:      whether to use of the streamline-upwind scheme
+      delta_t:           Simulation time step
+      bcs:               Dictionary of identifier-value pairs specifying boundary conditions
+      solver_parameters: Solver parameters provided to PETSc
+      su_advection:      Boolean specifying whether or not to use the streamline-upwind stabilisation scheme
 
     """
 
@@ -130,12 +138,12 @@ class EnergySolver:
 
         self.timestepper = timestepper
         self.T_old = Function(self.Q)
-        # solver is setup only last minute
-        # so people can overwrite parameters we've setup here
+        # solver is setup only at the end, so users
+        # can overwrite or augment default parameters specified above
         self._solver_setup = False
 
     def setup_solver(self):
-        """Sets up timestepper and associated solver."""
+        """Sets up timestepper and associated solver, using specified solver parameters"""
         self.ts = self.timestepper(self.eq, self.T, self.fields, self.delta_t,
                                    bnd_conditions=self.weak_bcs, solution_old=self.T_old,
                                    strong_bcs=self.strong_bcs,
@@ -143,7 +151,7 @@ class EnergySolver:
         self._solver_setup = True
 
     def solve(self, t=0, update_forcings=None):
-        """Advances solver."""
+        """Advances solver in time."""
         if not self._solver_setup:
             self.setup_solver()
         self.ts.advance(t, update_forcings)
