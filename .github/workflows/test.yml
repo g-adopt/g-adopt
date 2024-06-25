@@ -121,9 +121,9 @@ jobs:
               success["$command"]=No
               echo "$command failed:"
               tsp -c $id | tail -n 10 || true
-              echo $command >> test_output.log
-              tsp -c $id >> test_output.log || true
             fi
+            echo $command >> test_output.log
+            tsp -c $id >> test_output.log || true
           done
 
           # sort by case name
@@ -137,8 +137,8 @@ jobs:
             printf "%s | %s | %s\n" "$case" ${timings["$case"]} ${success["$case"]} >> "$GITHUB_STEP_SUMMARY"
           done
 
-      - name: Upload failed run log
-        if: steps.run_tests.conclusion == 'failure'
+      - name: Upload run log
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v3
         with:
           name: run-log
