@@ -405,7 +405,7 @@ class pyGplatesConnector(object):
                         all_velocities.extend(velocity_vectors)
                     else:
                         warnings.warn("Issues finding plate ids for some of the seeds.", category=RuntimeWarning)
-                        all_velocities.extend([pygplates.Vector3D(np.NaN, np.NaN, np.NaN)])
+                        all_velocities.extend([pygplates.Vector3D(np.nan, np.nan, np.nan)])
 
         return all_velocities
 
