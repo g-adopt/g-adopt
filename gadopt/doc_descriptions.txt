@@ -1,0 +1,134 @@
+- Structure of documentation
+-> Index page with introductory text and list of clickable links underneath, each
+   pointing to the associated G-ADOPT module's API documentation.
+-> Left-side panel with foldable entries. When all folded, it looks similar to the list
+   on the index page. When an entry is unfolded, it reveals its associated items from
+   the documented API.
+-> Each module's page describes the API of that specific module and begins with
+   introductory text to describe the module's purpose.
+
+- User guide
+
+Welcome to G-ADOPT's user guide! In this guide, you will learn how to interact with the
+G-ADOPT library in order to easily tackle numerical problems associated with mantle
+convection, glacial isostatic adjustment, and groundwater. G-ADOPT provides a
+user-friendly interface underpinned by the Unified Form Language (UFL) and Firedrake.
+The Python code you will write using G-ADOPT will reflect the mathematical formulation
+of the numerical problem you wish to tackle and involve limited interaction with the
+corresponding algorithmic structure.
+
+G-ADOPT provides solver classes, such as `StokesSolver` and `EnergySolver`, that form
+the core of the user experience. The promise of the library is simple: instantiate the
+solver classes and call their primary method, for example, `solve` or `advance`, to
+perform the numerical processing.
+
+To create a solver instance, a G-ADOPT approximation is usually required.
+Approximations are class instances that describe the set of mathematical equations
+governing the system's evolution. Instantiating these classes only requires you to
+provide the physical parameters specific to your numerical problem.
+
+Solvers require objects representing the physical variables solved for. In G-ADOPT,
+these variables are stored in Firedrake functions.
+
+- Developer guide
+
+Welcome to G-ADOPT's developer guide! In this guide, you will learn about the internal
+structure of the library and acquire the required knowledge to experiment with and
+contribute to the development of G-ADOPT.
+
+- Index
+
+G-ADOPT comprises several modules that provide a user-friendly API to easily set up
+physical approximations and mathematical solvers. The library currently offers
+dedicated solvers for the Stokes system (including a free surface), the energy
+equation, and the combined advection and reinitialisation of conservative level sets.
+Moreover, G-ADOPT incorporates specialised modules to tackle generic time-integration
+problems and optimised adjoint inversions. Additional helper tools for pre- and
+post-processing are provided and maintained.
+
+
+- Approximations
+
+This module provides classes that emulate physical approximations of fluid dynamics
+systems by exposing methods to calculate specific terms in the corresponding
+mathematical equations. Users instantiate the appropriate class by providing relevant
+parameters and pass the instance to other objects, such as solvers. Under the hood,
+G-ADOPT queries variables and methods from the approximation.
+
+- Diagnostics
+
+This module provides a class to simplify computing of diagnostics typically encountered
+in geodynamical simulations. Users instantiate the class by providing relevant
+parameters and call individual class methods to compute associated diagnostics.
+
+- Energy solver
+
+This module provides a fine-tuned solver class for the energy conservation equation.
+Users instantiate the `EnergySolver` class by providing relevant parameters and call
+the `solve` method to request a solver update.
+
+- Equations
+
+This module contains abstract classes to define the structure of mathematical terms and
+equations within the G-ADOPT library. Users should not interact with these classes;
+instead, please use the solvers provided in other modules.
+
+- Inverse
+
+This module provides classes to perform an adjoint inverse optimisation and checkpoint
+intermediate results. Users instantiate the `LinMoreOptimiser` class by providing
+relevant parameters and call the `run` method to perform the optimisation.
+
+- Level-set tools
+
+This module provides a set of classes and functions enabling multi-material
+capabilities. Users initialise materials by instantiating the `Material` class and
+define the physical properties of material interfaces using `field_interface`. They
+instantiate the `LevelSetSolver` class by providing relevant parameters and call the
+`solve` method to request a solver update. Finally, they may call the `entrainment`
+function to calculate material entrainment in the simulation.
+
+- Limiter
+
+This module provides a class that implements limiting of functions defined on
+discontinuous, linear function spaces. Users instantiate the class by providing
+relevant parameters and call the `apply` method to update the function.
+
+- Momentum equation
+
+This module contains classes implementing mathematical terms and equations that form
+the Stokes system. Users should not interact with these classes; instead, please use
+the solver provided the Stokes-integrators module.
+
+- Preconditioners
+
+This module contains a class that augments a matrix preconditioner by setting the
+symmetric-positive-definite option. Users can provide this class as a `pc_python_type`
+entry to a PETSc solver option dictionary.
+
+- Scalar equations
+
+This module contains classes implementing mathematical terms and equations that form
+the Stokes system. Users should not interact with these classes; instead, please use
+the solver provided the Stokes-integrators module.
+
+- Stokes integrators
+
+This module provides a fine-tuned solver class for the Stokes system of conservation
+equations and a function to automatically set the associated null spaces. Users
+instantiate the `StokesSolver` class by providing relevant parameters and call the
+`solve` method to request a solver update.
+
+- Time-stepper
+
+This module provides several classes to perform integration of time-dependent
+equations. Users choose if they require an explicit or implicit time integrator, and
+they instantiate one of the implemented algorithm class, for example, `ERKEuler`, by
+providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
+`DIRKGeneric`). Then, they call the `advance` method to request a solver update.
+
+- Utility
+
+This module provides several classes and functions to perform a number of pre-, syn-,
+and post-processing tasks. Users incorporate utility as required in their code,
+depending on what they would like to achieve.

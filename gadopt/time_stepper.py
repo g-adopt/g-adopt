@@ -1,6 +1,6 @@
 """Timestepper implementation, mostly copied from Thetis."""
 import operator
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 from numbers import Number
 from typing import Any, Optional
 
@@ -346,22 +346,26 @@ class AbstractRKScheme(ABC):
     Currently only explicit or diagonally implicit schemes are supported.
     """
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def a(self):
         """Runge-Kutta matrix :math:`a_{i,j}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def b(self):
         """weights :math:`b_{i}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def c(self):
         """nodes :math:`c_{i}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def cfl_coeff(self):
         """CFL number of the scheme
 

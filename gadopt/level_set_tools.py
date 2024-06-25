@@ -10,6 +10,14 @@ from .equations import BaseEquation, BaseTerm
 from .scalar_equation import ScalarAdvectionEquation
 from .time_stepper import eSSPRKs3p3
 
+__all__ = [
+    "LevelSetSolver",
+    "Material",
+    "density_RaB",
+    "entrainment",
+    "field_interface",
+]
+
 
 # Default solver options for level-set advection and reinitialisation
 solver_params_default = {
