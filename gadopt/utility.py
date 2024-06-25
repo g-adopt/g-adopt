@@ -483,7 +483,7 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
     Assign a one-dimensional profile to a Function `function` from a file.
 
     The function reads a one-dimensional profile (e.g., viscosity) together with the
-    radius input for the profile, from a file, broadcasts the two arrays to all
+    radius/height input for the profile, from a file, broadcasts the two arrays to all
     processes, and then interpolates this array onto the function space of `function`.
 
     Args:
@@ -494,7 +494,7 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
     Note:
         - Note the cartesian flag
         - This is designed to read a file with one process and distribute in parallel with MPI.
-        - The input file should contain an array of radius and an array of values, separated by a comma.
+        - The input file should contain an array of radius/height and an array of values, separated by a comma.
     """
     mesh = extract_unique_domain(function)
 
