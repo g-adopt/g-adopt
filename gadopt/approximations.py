@@ -59,11 +59,6 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def rho_field(self, p, T):
-        "UFL expression for density"
-        pass
-
-    @abc.abstractmethod
     def rho_continuity(self) -> ufl.core.expr.Expr:
         """Defines density.
 
@@ -124,6 +119,18 @@ class BaseApproximation(abc.ABC):
         """
         pass
 
+    @abc.abstractmethod
+    def free_surface_density(self, p, T) -> ufl.core.expr.Expr:
+        """Defines density used in the interior, beneath the free surface, when calculating a density contrast across
+        the free surface. Depending on the variable_free_surface_density flag this is either set to constant density
+        or a variable density that accounts for changes in temperature, composition etc within the domain.
+
+        Returns:
+          A UFL expression for density beneath the free surface for the external normal stress term in the momentum equation.
+
+        """
+        pass
+
 
 class BoussinesqApproximation(BaseApproximation):
     """Expressions for the Boussinesq approximation.
@@ -141,6 +148,7 @@ class BoussinesqApproximation(BaseApproximation):
       delta_rho: compositional density difference from the reference density
       kappa:     thermal diffusivity
       H:         internal heating rate
+      variable_free_surface_density:         variable free surface density flag
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
@@ -163,6 +171,7 @@ class BoussinesqApproximation(BaseApproximation):
         delta_rho: Function | Number = 1,
         kappa: Function | Number = 1,
         H: Function | Number = 0,
+        variable_free_surface_density: bool = True,
     ):
         self.Ra = ensure_constant(Ra)
         self.rho = ensure_constant(rho)
@@ -173,15 +182,13 @@ class BoussinesqApproximation(BaseApproximation):
         self.RaB = RaB
         self.delta_rho = ensure_constant(delta_rho)
         self.H = ensure_constant(H)
+        self.variable_free_surface_density = variable_free_surface_density
 
     def buoyancy(self, p, T):
         return (
             self.Ra * self.rho * self.alpha * (T - self.T0) * self.g
             - self.RaB * self.delta_rho * self.g
         )
-
-    def rho_field(self, p, T):
-        return self.rho * (1 - self.alpha * T)
 
     def rho_continuity(self):
         return 1
@@ -197,6 +204,12 @@ class BoussinesqApproximation(BaseApproximation):
 
     def energy_source(self, u):
         return self.rho * self.H
+
+    def free_surface_density(self, p, T):
+        if self.variable_free_surface_density:
+            return self.rho - self.buoyancy(p, T) / self.g
+        else:
+            return self.rho
 
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):

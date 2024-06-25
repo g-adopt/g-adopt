@@ -154,7 +154,6 @@ class StokesSolver:
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
         free_surface_dt: Optional[float] = None,
-        free_surface_variable_rho: bool = True,
         free_surface_theta: float = 0.5,
         **kwargs,
     ):
@@ -233,13 +232,14 @@ class StokesSolver:
                 # Add free surface equation
                 self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
                                       free_surface_id=id, free_surface_dt=free_surface_dt, theta=free_surface_theta, k=self.k))
+
+                # Depending on variable_free_surface_density flag provided to approximation the
+                # interior density below the free surface is either set to a constant density or
+                # varies spatially according to the buoyancy field
+                # N.b. constant reference density is needed for analytical cylindrical cases
+                surface_rho = approximation.free_surface_density(self.stokes_vars[1], T)
+
                 # Add free surface stress term
-                if free_surface_variable_rho:
-                    # Use actual density
-                    surface_rho = approximation.rho_field(self.stokes_vars[1], T)
-                else:
-                    # Use reference density (needed for analytical cylindrical cases)
-                    surface_rho = approximation.rho
                 self.weak_bcs[id] = {'normal_stress': (surface_rho - exterior_density) * approximation.g * eta_theta[c]}
 
                 # Set internal dofs to zero to prevent singular matrix for free surface equation

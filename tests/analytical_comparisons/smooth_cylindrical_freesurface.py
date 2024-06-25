@@ -65,7 +65,12 @@ def model(level, k, nn, do_write=False):
 
     T = -r**k/rmax**k*cos(nn*phi)  # RHS
 
-    approximation = BoussinesqApproximation(1)
+    # To get the test to converge to the Assess solutions we need to set the variable density
+    # flag to false. This is probably because the solution is not accounting for buoyancy changes
+    # to affect the height that the free surface relaxes too. With the flag set to True there is an assymetry
+    # in the free surface highs (at hot spots) and free surface lows (cold spots), that does not
+    # occur in the Assess steady state solution
+    approximation = BoussinesqApproximation(1, variable_free_surface_density=False)
     stokes_bcs = {
         bottom_id: {'un': 0},
         top_id: {'free_surface': {}},  # Apply the free surface boundary condition
@@ -79,7 +84,6 @@ def model(level, k, nn, do_write=False):
     log("dt (dimensionless)", dt)
 
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, cartesian=False, free_surface_dt=dt,
-                                 free_surface_variable_rho=False,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
 
