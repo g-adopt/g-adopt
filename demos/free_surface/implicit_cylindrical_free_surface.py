@@ -3,6 +3,11 @@ from gadopt.utility import CombinedSurfaceMeasure
 from implicit_free_surface import ImplicitFreeSurfaceModel
 from test_free_surface import run_benchmark
 
+# N.b. the analytical solution in this test is a guess that the initial free
+# surface topography on the cylinder (a cosine) should decay exponentially in
+# a similar way to the cartesian cases. This seems to hold true for the set of
+# wavenumbers/resolution used here.
+
 
 class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     # Free surface relaxation test in a cylindrical domain.
@@ -47,7 +52,9 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         self.Z_near_nullspace = create_stokes_nullspace(self.Z, closed=False, rotational=True, translations=[0, 1])
 
     def update_analytical_free_surfaces(self):
-        self.eta_analytical.interpolate(exp(-self.time/self.tau0)*self.F0 * cos(self.number_of_lam * atan2(self.X[1], self.X[0])))  # Analytical free surface solution
+        # This is a guess of an analytical free surface solution based on exponential decay that seems to hold for
+        # particular wavenumber / grid resolutions chosen here!
+        self.eta_analytical.interpolate(exp(-self.time/self.tau0)*self.F0 * cos(self.number_of_lam * atan2(self.X[1], self.X[0])))
 
     def setup_output_file(self):
         self.output_file = File(f"{self.name}_rmax{self.rmax}_rmin{self.rmin}_mu{float(self.mu)}_ncells{self.ncells}_nlay{self.nlayers}_dt{float(self.dt/self.tau0)}tau.pvd")

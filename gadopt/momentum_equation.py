@@ -122,7 +122,7 @@ class ViscosityTerm(BaseTerm):
                 # the provided stress = n.(mu.stress_tensor)
                 F += dot(-phi, bc['stress']) * self.ds(id)
             if 'normal_stress' in bc:
-                # add the free surface stress
+                # add the external normal stress
                 normal_stress = bc['normal_stress']
                 F -= dot(-phi, normal_stress * n) * self.ds(id)
 

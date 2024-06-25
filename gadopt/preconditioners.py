@@ -3,7 +3,7 @@ from firedrake.petsc import PETSc
 from .utility import InteriorBC
 
 
-class VariableMassInvPC(fd.PCBase):
+class FreeSurfaceMassInvPC(fd.PCBase):
 
     needs_python_pmat = True
 

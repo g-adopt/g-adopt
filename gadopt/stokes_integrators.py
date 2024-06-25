@@ -79,16 +79,16 @@ def create_stokes_nullspace(
     """
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
-    stokes_funcspace = Z.subfunctions
+    stokes_subspaces = Z.subfunctions
 
     if rotational:
         if dim == 2:
-            rotV = fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector((-X[1], X[0])))
+            rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((-X[1], X[0])))
             basis = [rotV]
         elif dim == 3:
-            x_rotV = fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector((0, -X[2], X[1])))
-            y_rotV = fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector((X[2], 0, -X[0])))
-            z_rotV = fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector((-X[1], X[0], 0)))
+            x_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((0, -X[2], X[1])))
+            y_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((X[2], 0, -X[0])))
+            z_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((-X[1], X[0], 0)))
             basis = [x_rotV, y_rotV, z_rotV]
         else:
             raise ValueError("Unknown dimension")
@@ -99,23 +99,23 @@ def create_stokes_nullspace(
         for tdim in translations:
             vec = [0] * dim
             vec[tdim] = 1
-            basis.append(fd.Function(stokes_funcspace[0]).interpolate(fd.as_vector(vec)))
+            basis.append(fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector(vec)))
 
     if basis:
         V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
         V_nullspace.orthonormalize()
     else:
-        V_nullspace = stokes_funcspace[0]
+        V_nullspace = stokes_subspaces[0]
 
     if closed:
         p_nullspace = fd.VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
     else:
-        p_nullspace = stokes_funcspace[1]
+        p_nullspace = stokes_subspaces[1]
 
     null_space = [V_nullspace, p_nullspace]
 
     # If free surface unknowns, add dummy free surface nullspace
-    null_space += stokes_funcspace[2:]
+    null_space += stokes_subspaces[2:]
 
     return fd.MixedVectorSpaceBasis(Z, null_space)
 
@@ -136,6 +136,10 @@ class StokesSolver:
                          specifying a default set of parameters defined in G-ADOPT
       J: Firedrake function representing the Jacobian of the system
       constant_jacobian: Whether the Jacobian of the system is constant
+      free_surface_dt: Timestep for advancing free surface equation
+      free_surface_theta: Timestepping prefactor for free surface equation, where
+                          theta = 0: Forward Euler, theta = 0.5: Crank-Nicolson (default),
+                          or theta = 1: Backward Euler
 
     """
 
@@ -172,17 +176,17 @@ class StokesSolver:
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
-        self.stokes_vars = fd.split(self.solution)  # For default stokes this is a tuple of (velocity, pressure)
+        u, p, *eta = fd.split(self.solution)   # eta is a list of 0, 1 or multiple free surface fields
         self.k = upward_normal(self.Z.mesh(), cartesian)
 
         # Add velocity, pressure and buoyancy term to the fields dictionary
         self.fields = {
-            'velocity': self.stokes_vars[0],
-            'pressure': self.stokes_vars[1],
+            'velocity': u,
+            'pressure': p,
             'viscosity': self.mu,
             'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
                                                    # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
-            'source': approximation.buoyancy(self.stokes_vars[1], T) * self.k,
+            'source': approximation.buoyancy(p, T) * self.k,
             'rho_continuity': approximation.rho_continuity(),
         }
 
@@ -204,6 +208,12 @@ class StokesSolver:
                 elif bc_type == 'uz':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
                 elif bc_type == 'free_surface':
+                    # N.b. stokes_integrators assumes that the order of the bcs matches the order of the
+                    # free surfaces defined in the mixed space. This is not ideal - python dictionaries
+                    # are ordered by insertion only since recently (since 3.7) - so relying on their order
+                    # is fraught and not considered pythonic. At the moment let's consider having more
+                    # than one free surface a bit of a niche case for now, and leave it as is...
+
                     # Copy free surface information to a new dictionary
                     free_surface_dict[id] = value
                     self.free_surface = True
@@ -215,7 +225,6 @@ class StokesSolver:
             if free_surface_dt is None:
                 raise TypeError("Please provide a timestep to advance the free surface, currently free_surface_dt=None.")
 
-            eta = []
             eta_old = []
             eta_theta = []
             self.free_surface_id_list = []
@@ -225,19 +234,18 @@ class StokesSolver:
                 exterior_density = value.get('exterior_density', 0)
 
                 # Define free surface variables for timestepping
-                eta.append(self.stokes_vars[2+c])
                 eta_old.append(fd.split(self.solution_old)[2+c])
                 eta_theta.append((1-free_surface_theta)*eta_old[c] + free_surface_theta*eta[c])
 
                 # Add free surface equation
                 self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
-                                      free_surface_id=id, free_surface_dt=free_surface_dt, theta=free_surface_theta, k=self.k))
+                                      free_surface_id=id, theta=free_surface_theta, k=self.k))
 
                 # Depending on variable_free_surface_density flag provided to approximation the
                 # interior density below the free surface is either set to a constant density or
                 # varies spatially according to the buoyancy field
                 # N.b. constant reference density is needed for analytical cylindrical cases
-                surface_rho = approximation.free_surface_density(self.stokes_vars[1], T)
+                surface_rho = approximation.free_surface_density(p, T)
 
                 # Add free surface stress term
                 self.weak_bcs[id] = {'normal_stress': (surface_rho - exterior_density) * approximation.g * eta_theta[c]}
@@ -303,7 +311,7 @@ class StokesSolver:
                                                    "pc_fieldsplit_1_fields": '1,'+','.join(str(2+i) for i in range(len(eta)))})
 
                     # update keys for GADOPT's variable mass inverse preconditioner
-                    self.solver_parameters["fieldsplit_1"].update({"pc_python_type": "gadopt.VariableMassInvPC",
+                    self.solver_parameters["fieldsplit_1"].update({"pc_python_type": "gadopt.FreeSurfaceMassInvPC",
                                                                    "Mp_ksp_rtol": 1e-5,
                                                                    "Mp_ksp_type": "cg",
                                                                    "Mp_pc_type": "sor",

@@ -142,6 +142,8 @@ class ExplicitFreeSurfaceModel:
         self.eta_timestepper = BackwardEuler(eta_eq, self.eta, eta_fields, self.dt, bnd_conditions=eta_bcs, strong_bcs=eta_strong_bcs)
 
     def update_analytical_free_surfaces(self):
+        # Equation A.4 from Kramer et al., 2012. Here we have a simplified form assuming that the relaxation time scale,
+        # tau = tau0 (see Equation A.7) which is valid for wavelengths << depth (e.g. see Table 2 from Kramer et al 2012).
         self.eta_analytical.interpolate(exp(-self.time/self.tau0)*self.F0 * cos(self.kk * self.X[0]))
 
     def calculate_error(self):

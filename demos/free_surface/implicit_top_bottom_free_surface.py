@@ -20,7 +20,7 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         if self.solver_parameters == 'iterative':
             # Schur complement splitting leads to a nullspace in the velocity block.
             # Adding a small absorption term bringing the vertical velocity to zero removes this nullspace
-            # and does not effect convergence provided that this term is small compared with the overall numerical error.
+            # and does not affect convergence provided that this term is small compared with the overall numerical error.
             self.absorption_penalty(dt_factor)
             self.stokes_solver.F += self.penalty * self.stokes_solver.test[0][1] * (self.stokes_solver.stokes_vars[0][1] - 0)*dx
 
@@ -41,10 +41,15 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         super().setup_bcs()
         # N.b. stokes_integrators assumes that the order of the bcs matches the order of the free surfaces defined in the
         # mixed space, i.e. in this case top_id comes before bottom_id in the dictionary.
+        # This is not ideal - python dictionaries are ordered by insertion only since recently (since 3.7) - so relying on
+        # their order is fraught and not considered pythonic. At the moment let's consider having more than one free surface
+        # a bit of a niche case for now, and leave it as is...
         self.stokes_bcs[self.bottom_id] = {'free_surface': {'exterior_density': self.rho_bottom}}
 
     def update_analytical_free_surfaces(self):
         super().update_analytical_free_surfaces()
+        # Equation A.9 from Kramer et al., 2012. Here we have a simplified form assuming that the relaxation time scale,
+        # tau = tau0 (see Equation A.11) which is valid for wavelengths << depth (e.g. see Table 2 from Kramer et al 2012).
         self.zeta_analytical.interpolate(exp(-self.time/self.tau0)*self.F0 * cos(self.kk * self.X[0]))
 
     def calculate_error(self):

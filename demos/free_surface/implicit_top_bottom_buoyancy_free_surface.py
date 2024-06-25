@@ -47,17 +47,21 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
         # In earlier cases we had lambda = D/2 so the additional terms in the analytical expression had negligible effect.
 
         self.delta_rho = self.rho_bottom - self.rho0
-        self.M = self.alpha * self.Q_temp_scale * (-self.kk * 1 * sinh(self.kk*self.forcing_depth) + self.kk * self.forcing_depth * cosh(self.kk*(1-self.forcing_depth))*sinh(self.kk * 1) + sinh(self.kk*(1-self.forcing_depth))*sinh(self.kk * 1))/(sinh(self.kk*1)*sinh(self.kk*1))
-        self.N = self.alpha * (self.rho0 / self.delta_rho) * self.Q_temp_scale * (self.kk * 1 * sinh(self.kk*self.forcing_depth)*cosh(self.kk*1) - self.kk * self.forcing_depth * cosh(self.kk*self.forcing_depth)*sinh(self.kk * 1) + sinh(self.kk*self.forcing_depth)*sinh(self.kk * 1))/(sinh(self.kk*1)*sinh(self.kk*1))
 
+        # Equation A.21 Kramer et al., 2012
+        self.M = self.alpha * self.Q_temp_scale * (-self.kk * 1 * sinh(self.kk*self.forcing_depth) + self.kk * self.forcing_depth * cosh(self.kk*(1-self.forcing_depth))*sinh(self.kk * 1) + sinh(self.kk*(1-self.forcing_depth))*sinh(self.kk * 1))/(sinh(self.kk*1)*sinh(self.kk*1))
+        # Equation A.22
+        self.N = self.alpha * (self.rho0 / self.delta_rho) * self.Q_temp_scale * (self.kk * 1 * sinh(self.kk*self.forcing_depth)*cosh(self.kk*1) - self.kk * self.forcing_depth * cosh(self.kk*self.forcing_depth)*sinh(self.kk * 1) + sinh(self.kk*self.forcing_depth)*sinh(self.kk * 1))/(sinh(self.kk*1)*sinh(self.kk*1))
+        # Equatons A.11
         self.tau_eta = self.tau0 * (1 * self.kk + sinh(1*self.kk)*cosh(1*self.kk)) / (sinh(1*self.kk)*sinh(1*self.kk))
         self.tau_zeta = self.tau_eta
-
         self.gamma = (1*self.kk*cosh(1*self.kk)+sinh(1*self.kk))/(1*self.kk + sinh(1*self.kk)*cosh(1*self.kk))
 
+        # Equations A.12
         self.tau_plus = 0.5 * (self.tau_eta+self.tau_zeta) + 0.5 * pow(pow(self.tau_eta+self.tau_zeta, 2) - 4*(1-pow(self.gamma, 2))*self.tau_eta*self.tau_zeta, 0.5)
         self.tau_minus = 0.5 * (self.tau_eta+self.tau_zeta) - 0.5 * pow(pow(self.tau_eta+self.tau_zeta, 2) - 4*(1-pow(self.gamma, 2))*self.tau_eta*self.tau_zeta, 0.5)
 
+        # Analytical solutions using F and G given after A.22
         self.eta_analytical.interpolate(exp(-self.time/self.tau_plus) * cos(self.kk * self.X[0]) * ((self.F0-self.M)*(self.tau_eta - self.tau_minus)-self.gamma * (self.G0-self.N)*self.tau_eta)/(self.tau_plus-self.tau_minus)-exp(-self.time/self.tau_minus) * cos(self.kk * self.X[0]) * ((self.F0-self.M)*(self.tau_eta - self.tau_plus)-self.gamma * (self.G0-self.N)*self.tau_eta)/(self.tau_plus-self.tau_minus) + self.M * cos(self.kk*self.X[0]))
 
         self.zeta_analytical.interpolate(exp(-self.time/self.tau_plus) * cos(self.kk * self.X[0]) * ((self.G0-self.N)*(self.tau_zeta - self.tau_minus)-self.gamma * (self.F0-self.M)*self.tau_zeta)/(self.tau_plus-self.tau_minus)-exp(-self.time/self.tau_minus) * cos(self.kk * self.X[0]) * ((self.G0-self.N)*(self.tau_zeta - self.tau_plus)-self.gamma * (self.F0-self.M)*self.tau_zeta)/(self.tau_plus-self.tau_minus) + self.N * cos(self.kk*self.X[0]))
