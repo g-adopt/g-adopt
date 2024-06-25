@@ -16,7 +16,7 @@ class GeodynamicalDiagnostics:
       T:            Firedrake function for temperature
       bottom_id:    Bottom boundary identifier
       top_id:       Top boundary identifier
-      quad_degree:  Quadrature degree
+      quad_degree:  Degree of polynomial quadrature approximation
 
     Note:
       All diagnostics are returned as floats.
