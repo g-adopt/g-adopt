@@ -1,3 +1,22 @@
+# This test is a later addition to the analytical comparisons, as it includes a free surface.
+# For a free surface simulation, if the simulation reaches a steady state, then it must be
+# that the radial velocity at the surface is zero (following the kinematic bc). If that's the
+# case then there is a unique Stokes solution with zero radial (i.e. no normal) flow, and zero
+# tangential stress - given by the assess benchmark with the same forcing rhs. In a free surface
+# simulation, the actual bc that is being imposed is the normal stress being equal to the free
+# surface load (which is just eta scaled by g and rho which are all one here), and therefore the
+# free surface steady state solution should be the same as the normal stress derived from the
+# analytical free-slip case. We should probably at some point derive the actual time-dependent
+# solution here (similar to the Zhong solutions in a box) - and keep in mind that the current
+# test doesn't really test the temporal evolution of the free surface dynamics. Hopefully, it's
+# a good test to have nonetheless!
+
+# Also as noted below to get the test to converge to the Assess solutions we need to set the variable
+# density flag to false. This is probably because the solution is not accounting for buoyancy changes
+# to affect the height that the free surface relaxes too. With the flag set to True there is an assymetry
+# in the free surface highs (at hot spots) and free surface lows (cold spots), that does not
+# occur in the Assess steady state solution
+
 from gadopt import *
 from gadopt.utility import CombinedSurfaceMeasure
 import numpy
@@ -106,10 +125,10 @@ def model(level, k, nn, do_write=False):
         u_.rename("Velocity")
         p_.rename("Pressure")
         eta_.rename("Eta")
-        u_file = File("fs_velocity_{}.pvd".format(level))
-        p_file = File("fs_pressure_{}.pvd".format(level))
-        eta_file = File("fs_eta_{}_theta.pvd".format(level))
-        temp_file = File("fs_temp_{}.pvd".format(level))
+        u_file = VTKFile("fs_velocity_{}.pvd".format(level))
+        p_file = VTKFile("fs_pressure_{}.pvd".format(level))
+        eta_file = VTKFile("fs_eta_{}_theta.pvd".format(level))
+        temp_file = VTKFile("fs_temp_{}.pvd".format(level))
         temp_file.write(Function(W, name="T").interpolate(T), Function(W, name="Density").interpolate(approximation.rho_field(0, T)))
 
     solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
@@ -133,6 +152,10 @@ def model(level, k, nn, do_write=False):
 
     u_old, p_old, eta_old = split(stokes_solver.solution_old)
 
+    u_error = Function(V, name="VelocityError").assign(u_-u_anal)
+    p_error = Function(W, name="PressureError").assign(p_-p_anal)
+    eta_error = Function(W, name="EtaError").assign(eta_-eta_anal)
+
     # Now perform the time loop:
     for timestep in range(1, 20):
 
@@ -144,11 +167,11 @@ def model(level, k, nn, do_write=False):
         maxchange = sqrt(assemble((u - u_old)**2 * dx))
         log("maxchange = ", maxchange)
 
-        u_error = Function(V, name="VelocityError").assign(u_-u_anal)
-        p_error = Function(W, name="PressureError").assign(p_-p_anal)
-        eta_error = Function(W, name="EtaError").assign(eta_-eta_anal)
-
         if do_write:
+            u_error.assign(u_-u_anal)
+            p_error.assign(p_-p_anal)
+            eta_error.assign(eta_-eta_anal)
+
             # Write output:
             u_file.write(u_, u_anal, u_error)
             p_file.write(p_, p_anal, p_error)
@@ -157,6 +180,10 @@ def model(level, k, nn, do_write=False):
         if maxchange < steady_state_tolerance:
             log("Steady-state achieved -- exiting time-step loop")
             break
+
+    u_error.assign(u_-u_anal)
+    p_error.assign(p_-p_anal)
+    eta_error.assign(eta_-eta_anal)
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*_dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*_dx))
