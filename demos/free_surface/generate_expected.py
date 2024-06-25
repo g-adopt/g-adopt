@@ -1,5 +1,5 @@
 import numpy as np
-from test_viscous_surface import cases
+from test_free_surface import cases
 
 results = {}
 for c in cases:

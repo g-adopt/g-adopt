@@ -153,7 +153,6 @@ class StokesSolver:
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
-        iterative_2d: bool = False,
         free_surface_dt: Optional[float] = None,
         free_surface_variable_rho: bool = True,
         free_surface_theta: float = 0.5,
@@ -299,16 +298,16 @@ class StokesSolver:
                     self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
 
                 if self.free_surface:
-                    # Use GADOPT variable mass inverse preconditioner and merge free surface fields with pressure
-                    # field for Schur complement solve
-                    self.solver_parameters.update({"pc_python_type": "gadopt.VariableMassInvPC",
-                                                   "Mp_ksp_rtol": 1e-5,
-                                                   "Mp_ksp_type": "cg",
-                                                   "Mp_pc_type": "sor",
-                                                   "pc_fieldsplit_0_fields": '0',
+                    # merge free surface fields with pressure field for Schur complement solve
+                    self.solver_parameters.update({"pc_fieldsplit_0_fields": '0',
                                                    "pc_fieldsplit_1_fields": '1,'+','.join(str(2+i) for i in range(len(eta)))})
-                    for key in ["Mp_ksp_ksp_rtol", "Mp_ksp_ksp_type", "Mp_ksp_pc_type"]:
-                        del self.solver_parameters[key]
+
+                    # update keys for GADOPT's variable mass inverse preconditioner
+                    self.solver_parameters["fieldsplit_1"].update({"pc_python_type": "gadopt.VariableMassInvPC",
+                                                                   "Mp_ksp_rtol": 1e-5,
+                                                                   "Mp_ksp_type": "cg",
+                                                                   "Mp_pc_type": "sor",
+                                                                   })
 
         # solver object is set up later to permit editing default solver parameters
         self._solver_setup = False

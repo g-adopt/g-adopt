@@ -13,7 +13,7 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
     iterative = True
 
     def __init__(self, dt_factor, iterative_2d=False, **kwargs):
-        self.iterative_2d = iterative_2d
+        self.solver_parameters = 'iterative' if iterative_2d else 'direct'
         super().__init__(dt_factor, **kwargs)
 
     def setup_function_space(self):
@@ -45,7 +45,7 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
 
     def setup_solver(self):
         self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs, mu=self.mu, cartesian=self.cartesian,
-                                          free_surface_dt=self.dt, iterative_2d=self.iterative_2d, nullspace=self.Z_nullspace,
+                                          free_surface_dt=self.dt, solver_parameters=self.solver_parameters, nullspace=self.Z_nullspace,
                                           transpose_nullspace=self.Z_nullspace, near_nullspace=self.Z_near_nullspace)
 
     def calculate_error(self):
