@@ -1,19 +1,14 @@
-cases := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical analytical_comparisons Drucker-Prager_rheology 3d_spherical 3d_cartesian adjoint optimisation_checkpointing scalar_advection_diffusion multi_material
-long_cases := analytical_comparisons parallel_scaling
+cases := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical Drucker-Prager_rheology 3d_spherical 3d_cartesian adjoint multi_material
 demo_cases := base_case 2d_cylindrical 3d_spherical 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 3d_cartesian multi_material/compositional_buoyancy multi_material/thermochemical_buoyancy
 
-.PHONY: all longtest longtest_output convert_demos $(cases) $(long_cases) clean generate
+.PHONY: all convert_demos $(cases) $(demo_cases) clean generate
 
 all: $(cases)
 
-longtest: $(long_cases)
-
-longtest_output: $(long_cases)
-
 convert_demos: $(foreach case,$(demo_cases),$(case)/$(notdir $(case)).ipynb)
 
-# sort to remove duplicates which define both short and long tests
-$(sort $(cases) $(long_cases)):
+# sort to remove duplicates which define both tests and demos
+$(sort $(cases) $(demo_cases)):
 	$(MAKE) -C $@ $(MAKECMDGOALS)
 
 generate:

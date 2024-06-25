@@ -87,8 +87,9 @@ jobs:
           . /home/firedrake/firedrake/bin/activate
           cd flib/Python
           rm *.so
+          sed -i 's/f2py3/f2py/' create_library.sh
           source create_library.sh
-          cp *.so ../../demos/multi_material
+          cp *.so ../../tests/multi_material
         shell: bash
 
       - name: Run test
