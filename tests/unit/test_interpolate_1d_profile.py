@@ -20,6 +20,6 @@ def test_oned_average_assignment(tmp_path):
     output_fi.close()
 
     p = Function(Q)
-    interpolate_1d_profile(p, "one_d_test.output", cartesian=True)
+    interpolate_1d_profile(p, tmp_path / "one_d_test.output", cartesian=True)
 
     assert assemble((p-q) ** 2 * dx) < 1e-10
