@@ -237,10 +237,6 @@ class StokesSolver:
                 eta_old.append(fd.split(self.solution_old)[2+c])
                 eta_theta.append((1-free_surface_theta)*eta_old[c] + free_surface_theta*eta[c])
 
-                # Add free surface equation
-                self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
-                                      free_surface_id=id, theta=free_surface_theta, k=self.k))
-
                 # Depending on variable_free_surface_density flag provided to approximation the
                 # interior density below the free surface is either set to a constant density or
                 # varies spatially according to the buoyancy field
@@ -249,6 +245,17 @@ class StokesSolver:
 
                 # Add free surface stress term
                 self.weak_bcs[id] = {'normal_stress': (surface_rho - exterior_density) * approximation.g * eta_theta[c]}
+
+                # To ensure the top right and bottom left corners of the block matrix remains symmetric we need to
+                # multiply the free surface equation (kinematic bc) with -theta * delta_rho * g. This is similar
+                # to rescaling eta -> eta_tilde in Kramer et al. 2012 (e.g. see block matrix shown in Eq 23)
+                # N.b. in the case where the density contrast across the free surface is spatially variant due to
+                # interior buoyancy changes then the matrix will not be exactly symmetric.
+                prefactor = fd.Constant(-free_surface_theta * (approximation.rho - exterior_density) * approximation.g)
+
+                # Add the free surface equation
+                self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
+                                      prefactor=prefactor, free_surface_id=id, k=self.k))
 
                 # Set internal dofs to zero to prevent singular matrix for free surface equation
                 self.strong_bcs.append(InteriorBC(self.Z.sub(2+c), 0, id))
@@ -265,9 +272,8 @@ class StokesSolver:
         if self.free_surface:
             for i in range(len(eta)):
                 # Add free surface time derivative term
-                # Multiply by theta to keep the block system symmetric for the implicit coupling case
                 # (N.b. we already have two equations from StokesEquations)
-                self.F += self.equations[2+i].mass_term(self.test[2+i], free_surface_theta*(eta[i]-eta_old[i])/free_surface_dt)
+                self.F += self.equations[2+i].mass_term(self.test[2+i], (eta[i]-eta_old[i])/free_surface_dt)
 
         if isinstance(solver_parameters, dict):
             self.solver_parameters = solver_parameters

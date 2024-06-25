@@ -3,7 +3,7 @@ from typing import Optional
 
 import firedrake
 
-from .utility import CombinedSurfaceMeasure
+from .utility import CombinedSurfaceMeasure, ensure_constant
 
 __all__ = ["BaseEquation", "BaseTerm"]
 
@@ -26,6 +26,7 @@ class BaseEquation:
       trial_space: Firedrake function space of the trial function
       quad_degree:
         Quadrature degree. Default value is `2p + 1`, where p the polynomial degree of the trial space
+      prefactor:   Constant prefactor multiplying all terms in the equation
 
     """
     terms = []
@@ -35,6 +36,7 @@ class BaseEquation:
         test_space: firedrake.functionspaceimpl.WithGeometry,
         trial_space: firedrake.functionspaceimpl.WithGeometry,
         quad_degree: Optional[int] = None,
+        prefactor: Optional[int | float | firedrake.Constant] = firedrake.Constant(1),
         **kwargs
     ):
         self.test_space = test_space
@@ -66,6 +68,9 @@ class BaseEquation:
 
         self.dx = firedrake.dx(domain=self.mesh, degree=quad_degree)
 
+        # General prefactor multiplying all terms in the equation
+        self.prefactor = ensure_constant(prefactor)
+
         self.kwargs = kwargs
 
         # self._terms stores the actual instances of the BaseTerm-classes in self.terms
@@ -88,7 +93,7 @@ class BaseEquation:
           The UFL expression associated with the mass term of the equation.
 
         """
-        return firedrake.inner(test, trial) * self.dx
+        return self.prefactor * firedrake.inner(test, trial) * self.dx
 
     def residual(
         self,
@@ -122,7 +127,7 @@ class BaseEquation:
 
         F = 0
         for term in self._terms:
-            F += term.residual(test, trial, trial_lagged, fields, bcs)
+            F += self.prefactor * term.residual(test, trial, trial_lagged, fields, bcs)
 
         return F
 
