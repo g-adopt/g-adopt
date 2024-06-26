@@ -8,9 +8,10 @@ nav:
     - viscoplastic_case.ipynb
   - Dimension:
     - 3d_cartesian.ipynb
-  - Geometry:
+  - Geometry & Boundary Conditions:
     - 2d_cylindrical.ipynb
     - 3d_spherical.ipynb
+    - gplates_global.ipynb
   - Multi-material:
     - compositional_buoyancy.ipynb
     - thermochemical_buoyancy.ipynb

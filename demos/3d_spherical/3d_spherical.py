@@ -25,7 +25,7 @@ import math
 # using the optional keyword argument *degree$=2$*.
 
 # +
-rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 8
+rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
 
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
