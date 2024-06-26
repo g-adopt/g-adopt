@@ -28,6 +28,7 @@ from .utility import (
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,
+    interpolate_1d_profile,
     log,
     node_coordinates,
     timer_decorator,
