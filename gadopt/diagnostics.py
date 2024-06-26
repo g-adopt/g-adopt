@@ -27,6 +27,8 @@ class GeodynamicalDiagnostics:
       Nu_top: Nusselt number at the top boundary
       Nu_bottom: Nusselt number at the bottom boundary
       T_avg: Average temperature in the domain
+      T_min: Minimum temperature in domain
+      T_max: Maximum temperature in domain
       ux_max: Maximum velocity (optionally over a given boundary)
 
     """
@@ -73,6 +75,14 @@ class GeodynamicalDiagnostics:
 
     def T_avg(self):
         return assemble(self.T * self.dx) / self.domain_volume
+
+    def T_min(self):
+        T_data = self.T.dat.data_ro_with_halos[:]
+        return self.T.comm.allreduce(T_data.min(), MPI.MIN)
+
+    def T_max(self):
+        T_data = self.T.dat.data_ro_with_halos[:]
+        return self.T.comm.allreduce(T_data.max(), MPI.MAX)
 
     def ux_max(self, boundary_id=None) -> float:
         ux_data = self.u.dat.data_ro_with_halos[:, 0]
