@@ -59,7 +59,7 @@ jobs:
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
-          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/pygplates_0.36.0_py312_amd64.deb
+          s3cmd --config=$HOME/.s3cfg/config get --skip-existing s3://gadopt/github-actions/pygplates_0.36.0_py312_amd64.deb
           sudo apt install -y --fix-broken ./pygplates_0.36.0_py312_amd64.deb
           ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.*/site-packages/
 
