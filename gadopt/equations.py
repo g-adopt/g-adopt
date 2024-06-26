@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
+from numbers import Number
 from typing import Optional
 
 import firedrake
 
-from .utility import CombinedSurfaceMeasure, ensure_constant
+from .utility import CombinedSurfaceMeasure
 
 __all__ = ["BaseEquation", "BaseTerm"]
 
@@ -36,7 +37,7 @@ class BaseEquation:
         test_space: firedrake.functionspaceimpl.WithGeometry,
         trial_space: firedrake.functionspaceimpl.WithGeometry,
         quad_degree: Optional[int] = None,
-        prefactor: Optional[int | float | firedrake.Constant] = firedrake.Constant(1),
+        prefactor: Optional[Number | firedrake.Constant] = 1,
         **kwargs
     ):
         self.test_space = test_space
@@ -69,7 +70,9 @@ class BaseEquation:
         self.dx = firedrake.dx(domain=self.mesh, degree=quad_degree)
 
         # General prefactor multiplying all terms in the equation
-        self.prefactor = ensure_constant(prefactor)
+        # N.b. setting this to a firedrake constant (i.e. prefactor = Constant(1)) breaks
+        # Drucker-Prager rheology test even though it is being multiplied by 1...
+        self.prefactor = prefactor
 
         self.kwargs = kwargs
 
