@@ -1,11 +1,10 @@
-"""
-A module with utitity functions for gadopt
-"""
+"""Utility functions for G-ADOPT"""
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import op2, VectorElement, DirichletBC, utils, exp, pi
 from firedrake.__future__ import Interpolator
+from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import finat.ufl
 import time
@@ -46,6 +45,7 @@ class ParameterLog:
 class TimestepAdaptor:
     """
     Computes timestep based on CFL condition for provided velocity field"""
+
     def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
         """
         :arg dt_const:      Constant whose value will be updated by the timestep adaptor
@@ -99,7 +99,7 @@ def vertical_component(u, cartesian):
     if cartesian:
         return u[u.ufl_shape[0]-1]
     else:
-        n = upward_normal(u.ufl_domain(), cartesian)
+        n = upward_normal(extract_unique_domain(u), cartesian)
         return dot(n, u)
 
 
@@ -462,7 +462,7 @@ def absv(u):
 
 
 def su_nubar(u, J, Pe):
-    """SU stabilisation viscosity as a function of velocity, Jaciobian and grid Peclet number"""
+    """SU stabilisation viscosity as a function of velocity, Jacobian and grid Peclet number"""
     # SU(PG) ala Donea & Huerta:
     # Columns of Jacobian J are the vectors that span the quad/hex
     # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
@@ -485,11 +485,60 @@ def step_func(r, centre, mag, increasing=True, sharpness=50):
 
 
 def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
-    arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y)  + ((y-mu_y)/sigma_y)**2
+    arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
     numerator = exp(-1/(2*(1-rho**2))*arg)
     if normalised_area:
         denominator = 2*pi*sigma_x*sigma_y*(1-rho**2)**0.5
     else:
         denominator = 1
-        
     return numerator / denominator
+
+
+def node_coordinates(function):
+    """Extract mesh coordinates and interpolate them onto the relevant function space"""
+    func_space = function.function_space()
+    mesh_coords = SpatialCoordinate(func_space.mesh())
+
+    return [
+        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
+    ]
+
+
+def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: bool):
+    """
+    Assign a one-dimensional profile to a Function `function` from a file.
+
+    The function reads a one-dimensional profile (e.g., viscosity) together with the
+    radius/height input for the profile, from a file, broadcasts the two arrays to all
+    processes, and then interpolates this array onto the function space of `function`.
+
+    Args:
+        function: The function onto which the 1D profile will be assigned
+        one_d_filename: The path to the file containing the 1D radial profile
+        cartesian: Whether the upward direction is along z/y (True) or radial (False)
+
+    Note:
+        - Note the cartesian flag
+        - This is designed to read a file with one process and distribute in parallel with MPI.
+        - The input file should contain an array of radius/height and an array of values, separated by a comma.
+    """
+    mesh = extract_unique_domain(function)
+
+    if mesh.comm.rank == 0:
+        rshl, one_d_data = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+    else:
+        one_d_data = None
+        rshl = None
+
+    one_d_data = mesh.comm.bcast(one_d_data, root=0)
+    rshl = mesh.comm.bcast(rshl, root=0)
+
+    X = SpatialCoordinate(mesh)
+
+    upward_coord = vertical_component(X, cartesian=cartesian)
+
+    rad = Function(function.function_space()).interpolate(upward_coord)
+
+    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, cartesian=cartesian)
+    interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
+    averager.extrapolate_layer_average(function, interpolated_visc)

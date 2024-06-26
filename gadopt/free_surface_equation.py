@@ -23,14 +23,11 @@ class FreeSurfaceTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
         free_surface_id = self.term_kwargs['free_surface_id']
 
-        # Multiply by constant factor to keep the block system symmetric for the implicit coupling case
-        prefactor = self.term_kwargs.get('theta', 1)
-
         u = fields['velocity']
         psi = test
         n = self.n
 
-        F = prefactor * psi * dot(u, n) * self.ds(free_surface_id)  # Note this term is already on the RHS
+        F = psi * dot(u, n) * self.ds(free_surface_id)  # Note this term is already on the RHS
 
         return F
 
@@ -45,8 +42,7 @@ class FreeSurfaceEquation(BaseEquation):
     def mass_term(self, test, trial):
         r"""Return the UFL for the mass term \int test * trial * ds for the free surface time derivative term integrated over the free surface."""
         free_surface_id = self.kwargs['free_surface_id']
-
         k = self.kwargs['k']
         n = FacetNormal(self.mesh)
-
-        return dot(n, k) * dot(test, trial) * self.ds(free_surface_id)
+        # self.prefactor is a general prefactor from equations.py that multiplies all terms in an equation
+        return self.prefactor * dot(n, k) * dot(test, trial) * self.ds(free_surface_id)

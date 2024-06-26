@@ -3,7 +3,7 @@ from firedrake.petsc import PETSc
 from .utility import InteriorBC
 
 
-class VariableMassInvPC(fd.PCBase):
+class FreeSurfaceMassInvPC(fd.PCBase):
 
     needs_python_pmat = True
 
@@ -99,8 +99,18 @@ class VariableMassInvPC(fd.PCBase):
 class SPDAssembledPC(fd.AssembledPC):
     """Version of AssembledPC that sets the SPD flag for the matrix.
 
-    For use in the fieldsplit_0 block in combination with gamg."""
-    def initialize(self, pc):
+    For use in the velocity fieldsplit_0 block in combination with gamg.
+    Setting PETSc MatOption MAT_SPD (for Symmetric Positive Definite matrices)
+    at the moment only changes the Krylov method for the eigenvalue
+    estimate in the Chebyshev smoothers to CG.
+
+    """
+    def initialize(self, pc: PETSc.PC):
+        """Initialises the preconditioner.
+
+        Args:
+          pc: PETSc preconditioner.
+        """
         super().initialize(pc)
         mat = self.P.petscmat
         mat.setOption(mat.Option.SPD, True)

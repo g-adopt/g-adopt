@@ -1,12 +1,13 @@
-from firedrake import CheckpointFile, TestFunction, TrialFunction, Function, solve, dot, assemble
-import firedrake.utils
-from firedrake.adjoint import *  # noqa: F401
 from pathlib import Path
-from mpi4py import MPI
+import uuid
+
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
+from firedrake import CheckpointFile, Function, TestFunction, TrialFunction, assemble, dot, solve
+from firedrake.adjoint import *  # noqa: F401
+from mpi4py import MPI
+from pyadjoint import Block, MinimizationProblem
 from gadopt.utility import InteriorBC, CombinedSurfaceMeasure
-from pyadjoint import Block
 
 # emulate the previous behaviour of firedrake_adjoint by automatically
 # starting the tape
@@ -25,20 +26,34 @@ _vector_registry = []
 class ROLSolver(pyadjoint_rol.ROLSolver):
     """A ROLSolver that may use a class other than ROLVector to hold its vectors.
 
-    In the non-checkpointing case, this reduces down to the original ROLSolver class. However,
-    if ROL checkpointing is enabled, every vector within the solver needs to be a
-    CheckpointedROLVector. We can achieve this by overwriting the base ~self.rolvector~
-    member.
-
-    Params:
-        problem (pyadjoint.MinimizationProblem): The minimisation problem to solve.
-        parameters (dict): A dictionary containing the parameters governing ROL.
-        inner_product (Optional[str]): The inner product to use for vector operations.
-        vector_class (Optional[Type[ROLVector]]): The underlying vector class.
-        vector_args (Optional[List[Any]]): Arguments for initialisation of the vector class.
+    In the non-checkpointing case, this reduces down to the original ROLSolver class.
+    However, if ROL checkpointing is enabled, every vector within the solver needs to be
+    a CheckpointedROLVector. We can achieve this by overwriting the base
+    `self.rolvector` member.
     """
 
-    def __init__(self, problem, parameters, inner_product="L2", vector_class=pyadjoint_rol.ROLVector, vector_args=[]):
+    def __init__(
+        self,
+        problem: MinimizationProblem,
+        parameters: dict,
+        inner_product: str = "L2",
+        vector_class=pyadjoint_rol.ROLVector,
+        vector_args: list = [],
+    ):
+        """Initialises the solver instance.
+
+        Args:
+          problem:
+            PyAdjoint minimisation problem to solve.
+          parameters:
+            Dictionary containing the parameters governing ROL.
+          inner_product:
+            String representing the inner product to use for vector operations.
+          vector_class:
+            PyAdjoint ROL vector representing the underlying vector class.
+          vector_args:
+            List of arguments for initialisation of the vector class.
+        """
         super().__init__(problem, parameters)
 
         x = [p.tape_value() for p in self.problem.reduced_functional.controls]
@@ -47,83 +62,6 @@ class ROLSolver(pyadjoint_rol.ROLSolver):
         # we need to recompute these with the new rolvector instance
         self.bounds = self.__get_bounds()
         self.constraints = self.__get_constraints()
-
-
-class CheckpointedROLVector(pyadjoint_rol.ROLVector):
-    """An extension of ROLVector that supports checkpointing to disk.
-
-    The ROLVector itself is the Python-side implementation of the ROL.Vector
-    interface; it defines all the operations ROL may perform on vectors (e.g.,
-    scaling, addition), and links ROL to the underlying Firedrake vectors.
-
-    When the serialisation library hits a ROL.Vector on the C++ side, it will
-    pickle this object, so we provide implementations of ~__getstate__~
-    and ~__setstate__~ that will correctly participate in the serialisation
-    pipeline.
-
-    Params:
-        dat: The underlying Firedrake vector.
-        optimiser (LinMoreOptimiser): The managing optimiser for controlling
-            checkpointing paths.
-    """
-
-    def __init__(self, dat, optimiser, inner_product="L2"):
-        super().__init__(dat, inner_product)
-
-        self._optimiser = optimiser
-
-    def clone(self):
-        dat = []
-        for x in self.dat:
-            dat.append(x._ad_copy())
-        res = CheckpointedROLVector(dat, self._optimiser, inner_product=self.inner_product)
-        res.scale(0.0)
-        return res
-
-    def save(self, checkpoint_path):
-        """Checkpoint the data within this vector to disk.
-
-        Called when this object is pickled as part of the ROL
-        state serialisation.
-        """
-
-        with CheckpointFile(str(checkpoint_path), "w") as f:
-            for i, func in enumerate(self.dat):
-                f.save_function(func, name=f"dat_{i}")
-
-    def load(self, mesh):
-        """Load the checkpointed data for this vector from disk.
-
-        Called by the parent Optimiser after the ROL state has
-        been deserialised. The pickling routine will register
-        this vector within the registry.
-        """
-
-        with CheckpointFile(str(self.checkpoint_path), "r") as f:
-            for i in range(len(self.dat)):
-                self.dat[i] = f.load_function(mesh, name=f"dat_{i}")
-
-    def __setstate__(self, state):
-        """Set the state from the result of unpickling.
-
-        This happens during the restoration of a checkpoint. self.dat needs to be
-        separately set, then self.load() can be called.
-        """
-
-        # initialise C++ state
-        super().__init__(state)
-        self.checkpoint_path, self.inner_product = state
-
-        _vector_registry.append(self)
-
-    def __getstate__(self):
-        """Return a state tuple suitable for pickling"""
-
-        checkpoint_filename = f"vector_checkpoint_{firedrake.utils._new_uid()}.h5"
-        checkpoint_path = self._optimiser.checkpoint_dir / checkpoint_filename
-        self.save(checkpoint_path)
-
-        return (checkpoint_path, self.inner_product)
 
 
 class LinMoreOptimiser:
@@ -191,7 +129,7 @@ class LinMoreOptimiser:
         return self._base_checkpoint_dir / str(self.iteration)
 
     def checkpoint(self):
-        """Checkpoint the current ROL state to disk."""
+        """Checkpoints the current ROL state to disk."""
 
         ROL.serialise_algorithm(self.rol_algorithm, MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
 
@@ -201,9 +139,10 @@ class LinMoreOptimiser:
                 f.save_function(func, name=f"dat_{i}")
 
     def restore(self, iteration=None):
-        """Restore the ROL state from disk.
+        """Restores the ROL state from disk.
 
-        The last stored iteration in `checkpoint_dir` is used unless a given iteration is specifed.
+        The last stored iteration in `checkpoint_dir` is used unless a given iteration
+        is specifed.
         """
         if iteration is not None:
             self.iteration = iteration
@@ -237,7 +176,7 @@ class LinMoreOptimiser:
         _vector_registry.clear()
 
     def run(self):
-        """Run the actual ROL optimisation.
+        """Runs the actual ROL optimisation.
 
         This will continue until the status test flags the optimisation to complete.
         """
@@ -267,9 +206,97 @@ class LinMoreOptimiser:
         self.rol_algorithm.setStatusTest(StatusTest(self.rol_parameters), False)
 
     def add_callback(self, callback):
-        """Add a callback to run after every optimisation iteration."""
+        """Adds a callback to run after every optimisation iteration."""
 
         self.callbacks.append(callback)
+
+
+class CheckpointedROLVector(pyadjoint_rol.ROLVector):
+    """An extension of ROLVector that supports checkpointing to disk.
+
+    The ROLVector itself is the Python-side implementation of the ROL.Vector interface;
+    it defines all the operations ROL may perform on vectors (e.g., scaling, addition)
+    and links ROL to the underlying Firedrake vectors.
+
+    When the serialisation library hits a ROL.Vector on the C++ side, it will pickle
+    this object, so we provide implementations of `__getstate__` and `__setstate__`
+    that will correctly participate in the serialisation pipeline.
+    """
+
+    def __init__(
+        self,
+        dat: Function,
+        optimiser: LinMoreOptimiser,
+        inner_product: str = "L2",
+    ):
+        """Initialises the checkpointed ROL vector instance.
+
+        Args:
+          dat:
+            Firedrake function.
+          optimiser (LinMoreOptimiser):
+            The managing optimiser for controlling checkpointing paths.
+          inner_product:
+            String representing the inner product to use for vector operations.
+        """
+        super().__init__(dat, inner_product)
+
+        self._optimiser = optimiser
+
+    def clone(self):
+        dat = []
+        for x in self.dat:
+            dat.append(x._ad_copy())
+        res = CheckpointedROLVector(
+            dat, self._optimiser, inner_product=self.inner_product
+        )
+        res.scale(0.0)
+        return res
+
+    def save(self, checkpoint_path):
+        """Checkpoints the data within this vector to disk.
+
+        Called when this object is pickled as part of the ROL
+        state serialisation.
+        """
+
+        with CheckpointFile(str(checkpoint_path), "w") as f:
+            for i, func in enumerate(self.dat):
+                f.save_function(func, name=f"dat_{i}")
+
+    def load(self, mesh):
+        """Loads the checkpointed data for this vector from disk.
+
+        Called by the parent Optimiser after the ROL state has
+        been deserialised. The pickling routine will register
+        this vector within the registry.
+        """
+
+        with CheckpointFile(str(self.checkpoint_path), "r") as f:
+            for i in range(len(self.dat)):
+                self.dat[i] = f.load_function(mesh, name=f"dat_{i}")
+
+    def __setstate__(self, state):
+        """Sets the state from the result of unpickling.
+
+        This happens during the restoration of a checkpoint. self.dat needs to be
+        separately set, then self.load() can be called.
+        """
+
+        # initialise C++ state
+        super().__init__(state)
+        self.checkpoint_path, self.inner_product = state
+
+        _vector_registry.append(self)
+
+    def __getstate__(self):
+        """Returns a state tuple suitable for pickling"""
+
+        checkpoint_filename = f"vector_checkpoint_{uuid.uuid4()}.h5"
+        checkpoint_path = self._optimiser.checkpoint_dir / checkpoint_filename
+        self.save(checkpoint_path)
+
+        return (checkpoint_path, self.inner_product)
 
 
 minimisation_parameters = {

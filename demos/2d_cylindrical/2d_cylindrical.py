@@ -1,95 +1,178 @@
+# Idealised 2-D mantle convection problem inside an annulus
+# =====================================================================
+#
+# In this tutorial, we analyse mantle flow in a 2-D annulus domain. We define our domain by the radii
+# of the inner ($r_{\text{min}}$) and outer ($r_{\text{max}}$) boundaries. These are chosen such that
+# the non-dimensional depth of the mantle, $z = r_{\text{max}} - r_{\text{min}} = 1$, and the ratio of
+# the inner and outer radii, $f=r_{\text{min}} / r_{\text{max}} = 0.55$, thus approximating the ratio
+# between the radii of Earth's surface and core-mantle-boundary (CMB). Specifically, we set
+# $r_{\text{min}} = 1.22$ and $r_{\text{max}} = 2.22$.
+#
+# This example focusses on differences between running simulations in a 2-D annulus and 2-D Cartesian domain. These can be summarised as follows:
+# 1. The geometry of the problem - i.e. the computational mesh.
+# 2. The radial direction of gravity (as opposed to the vertical direction in a Cartesian domain).
+# 3. Initialisation of the temperature field in a different domain.
+# 4. With free-slip boundary conditions on both boundaries, this case incorporates a (rotational) velocity nullspace, as well as a pressure nullspace.
+#
+# The example is configured at $Ra = 1e5$. Boundary conditions are free-slip at the surface and base of the domain.
+
+#
+# The first step is to import the gadopt module, which
+# provides access to Firedrake and associated functionality.
+# We also import pyvista, which is used for plotting vtk output.
+
 from gadopt import *
+# + tags=["active-ipynb"]
+# import pyvista as pv
+# -
 
-# Quadrature degree:
-dx = dx(degree=6)
+# We next set up the mesh, function spaces, and specify functions to hold our solutions,
+# as with our previous tutorials.
+#
+# We generate a circular manifold mesh (with 128 elements) and extrude in the radial direction,
+# using the optional keyword argument `extrusion_type`, forming 32 layers. To better represent the
+# curvature of the domain and ensure accuracy of our quadratic representation of velocity, we
+# approximate the curved cylindrical shell domain quadratically, using the optional keyword argument `degree`$=2$.
 
-# Set up geometry:
+# +
 rmin, rmax, ncells, nlayers = 1.22, 2.22, 128, 32
-
-# Construct a circle mesh and then extrude into a cylinder:
-mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
-mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')
+mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
+mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')  # extrude into a cylinder
 bottom_id, top_id = "bottom", "top"
-n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
-domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
 
-
-# Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
-# Test functions and functions to hold solutions:
-z = Function(Z)  # a field over the mixed function space Z.
+z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
+z.subfunctions[0].rename("Velocity")
+z.subfunctions[1].rename("Pressure")
+# -
 
-# Output function space information:
-log("Number of Velocity DOF:", V.dim())
-log("Number of Pressure DOF:", W.dim())
-log("Number of Velocity and Pressure DOF:", V.dim() + W.dim())
-log("Number of Temperature DOF:", Q.dim())
+# We can now visualise the resulting mesh.
 
-# Set up temperature field and initialise:
-T = Function(Q, name="Temperature")
-X = SpatialCoordinate(mesh)
-r = sqrt(X[0]**2 + X[1]**2)
-T.interpolate(rmax - r + 0.02*cos(4*atan2(X[1], X[0])) * sin((r - rmin) * pi))
+# + tags=["active-ipynb"]
+# VTKFile("mesh.pvd").write(Function(V))
+# mesh_data = pv.read("mesh/mesh_0.vtu")
+# edges = mesh_data.extract_all_edges()
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(edges, color="black")
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
+# -
+
+# We next specify the important constants for this problem, and set up the approximation.
 
 Ra = Constant(1e5)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
 
+# As with the previous examples, we set up a *Timestep Adaptor*,
+# for controlling the time-step length (via a CFL
+# criterion) as the simulation advances in time. For the latter,
+# we specify the initial time, initial timestep $\Delta t$, and number of
+# timesteps. Given the low Rayleigh number, a steady-state tolerance is also specified,
+# allowing the simulation to exit when a steady-state has been achieved.
+
+time = 0.0  # Initial time
 delta_t = Constant(1e-7)  # Initial time-step
+timesteps = 20000  # Maximum number of timesteps
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+steady_state_tolerance = 1e-7  # Used to determine if solution has reached a steady state.
 
-# Define time stepping parameters:
-steady_state_tolerance = 1e-7
-max_timesteps = 20000
-time = 0.0
+# We next set up and initialise our Temperature field.
+# We choose the initial temperature distribution to trigger upwelling of 4 equidistant plumes.
+# This initial temperature field is prescribed as:
+#
+# $$T(x,y) = (r_{\text{max}} - r) + A\cos(4 \; atan2\ (y,x))  \sin(r-r_{\text{min}}) \pi)$$
+#
+# where $A=0.02$ is the amplitude of the initial perturbation.
 
-# Nullspaces and near-nullspaces:
+X = SpatialCoordinate(mesh)
+T = Function(Q, name="Temperature")
+r = sqrt(X[0]**2 + X[1]**2)
+T.interpolate(rmax - r + 0.02*cos(4*atan2(X[1], X[0])) * sin((r - rmin) * pi))
+
+# We can plot this initial temperature field:
+
+# + tags=["active-ipynb"]
+# VTKFile("temp.pvd").write(T)
+# temp_data = pv.read("temp/temp_0.vtu")
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(temp_data)
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
+# -
+
+# As noted above, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
+# of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e. this case incorporates a velocity nullspace,
+# as well as a pressure nullspace). These lead to null-modes (eigenvectors) for the linear system, rendering the resulting matrix singular.
+# In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at every iteration. We do that below,
+# setting up a nullspace object as we did in the previous tutorial, albeit speciying the `rotational` keyword argument to be True.
+# This removes the requirement for a user to configure these options, further simplifying the task of setting up a (valid) geodynamical simulation.
+
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
+
+# Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative
+# solver parameters. As noted in our previous 3-D Cartesian tutorial, G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
+# for the velocity block of the Stokes system, to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
+# translational modes.
+
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
-# Write output files in VTK format:
-u, p = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
-# Next rename for output:
-u.rename("Velocity")
-p.rename("Pressure")
-# Create output file and select output_frequency:
-output_file = File("output.pvd")
-dump_period = 50
-# Frequency of checkpoint files:
-checkpoint_period = dump_period * 4
-# Open file for logging diagnostic output:
-plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t")
+# Boundary conditions are next specified. Boundary conditions for temperature are set to $T = 0$ at the surface ($r_{\text{max}}$) and $T = 1$
+# at the base ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries. We incorporate these <b>weakly</b> through
+# the <i>Nitsche</i> approximation. This illustrates a key advantage of the G-ADOPT framework: the user only specifies that the normal component
+# of velocity is zero and all required changes are handled under the hood.
 
-temp_bcs = {
-    bottom_id: {'T': 1.0},
-    top_id: {'T': 0.0},
-}
+# +
 stokes_bcs = {
     bottom_id: {'un': 0},
     top_id: {'un': 0},
 }
 
+temp_bcs = {
+    bottom_id: {'T': 1.0},
+    top_id: {'T': 0.0},
+}
+# -
+
+# We next setup our output, in VTK format.
+# We also open a file for logging and calculate our diagnostic outputs.
+
+# +
+output_file = VTKFile("output.pvd")
+ref_file = VTKFile('reference_state.pvd')
+output_frequency = 50
+
+plog = ParameterLog('params.log', mesh)
+plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t T_min T_max")
+
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, degree=6)
+# -
+
+# We can now setup and solve the variational problem, for both the energy and Stokes equations,
+# passing in the approximation, nullspace and near-nullspace information configured above. We also
+# set the optional `cartesian` keyword argument to False, which ensures that the unit vector points radially,
+# in the direction opposite to gravity.
+
+# +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              cartesian=False, constant_jacobian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
+# -
 
-t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+# We now initiate the time loop, which runs until a steady-state solution has been attained.
 
-checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
-checkpoint_file.save_mesh(mesh)
-
-# Now perform the time loop:
-for timestep in range(0, max_timesteps):
+for timestep in range(0, timesteps):
 
     # Write output:
-    if timestep % dump_period == 0:
-        output_file.write(u, p, T)
+    if timestep % output_frequency == 0:
+        output_file.write(*z.subfunctions, T)
 
     if timestep != 0:
         dt = t_adapt.update_timestep()
@@ -104,37 +187,45 @@ for timestep in range(0, max_timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    u_rms = sqrt(assemble(dot(u, u) * dx)) * sqrt(1./domain_volume)
     f_ratio = rmin/rmax
-    top_scaling = -1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
-    bot_scaling = -0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
-    nusselt_number_top = (assemble(dot(grad(T), n) * ds_t) / assemble(Constant(1.0) * ds_t(domain=mesh))) * top_scaling
-    nusselt_number_base = (assemble(dot(grad(T), n) * ds_b) / assemble(Constant(1.0) * ds_b(domain=mesh))) * bot_scaling
+    top_scaling = 1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
+    bot_scaling = 0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
+    nusselt_number_top = gd.Nu_top() * top_scaling
+    nusselt_number_base = gd.Nu_bottom() * bot_scaling
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
-    average_temperature = assemble(T * dx) / domain_volume
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {u_rms} "
+    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {average_temperature} ")
+                 f"{energy_conservation} {gd.T_avg()} {gd.T_min()} {gd.T_max()} ")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
         log("Steady-state achieved -- exiting time-step loop")
         break
 
-    # Checkpointing:
-    if timestep % checkpoint_period == 0:
-        checkpoint_file.save_function(T, name="Temperature", idx=timestep)
-        checkpoint_file.save_function(z, name="Stokes", idx=timestep)
+# At the end of the simulation, once a steady-state has been achieved, we close our logging file
+# and checkpoint steady state temperature and Stokes solution fields to disk. These can later be
+# used to restart a simulation, if required.
 
+# +
 plog.close()
-checkpoint_file.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
+# -
+
+# We can plot the final steady state temperature field:
+
+# + tags=["active-ipynb"]
+# VTKFile("temp.pvd").write(T)
+# temp_data = pv.read("temp/temp_0.vtu")
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(temp_data)
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)

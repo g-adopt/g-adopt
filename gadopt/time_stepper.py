@@ -1,69 +1,73 @@
-from abc import ABC, abstractmethod, abstractproperty
-import firedrake
+"""Timestepper implementation, mostly copied from Thetis."""
 import operator
-import numpy as np
-from .utility import ensure_constant
+from abc import ABC, abstractmethod, abstractproperty
+from numbers import Number
+from typing import Any, Optional
 
-"""
-Timestepper code, this is mostly copied from Thetis. At the moment explicit RK methods only.
-"""
+import firedrake
+import numpy as np
+
+from .equations import BaseEquation
+from .utility import ensure_constant
 
 
 class TimeIntegratorBase(ABC):
-    """
-    Abstract class that defines the API for all time integrators
-
-    Both :class:`TimeIntegrator` and :class:`CoupledTimeIntegrator` inherit
-    from this class.
-    """
+    """Defines the API for all time integrators."""
 
     @abstractmethod
-    def advance(self, t, update_forcings=None):
-        """
-        Advances equations for one time step
+    def advance(self, t: float, update_forcings: Optional[firedrake.Function] = None):
+        """Advances equations for one time step.
 
-        :arg t: simulation time
-        :type t: float
-        :arg update_forcings: user-defined function that takes the simulation
-            time and updates any time-dependent boundary conditions
+        Arguments:
+          t: Current simulation time
+          update_forcings: Firedrake function used to update any time-dependent boundary conditions
+
         """
         pass
 
     @abstractmethod
     def initialize(self, init_solution):
-        """
-        Initialize the time integrator
+        """Initialises the time integrator.
 
-        :arg init_solution: initial solution
+        Arguments:
+          init_solution: Firedrake function representing the initial solution.
+
         """
         pass
 
 
 class TimeIntegrator(TimeIntegratorBase):
+    """Time integrator object that marches a single equation.
+
+    Args:
+      equation: G-ADOPT equation to integrate
+      solution: Firedrake function representing the equation's solution
+      fields: Dictionary of Firedrake fields passed to the equation
+      dt: Integration time step
+      solution_old: Firedrake function representing the equation's solution
+                      at the previous timestep
+      solver_parameters: Dictionary of solver parameters provided to PETSc
+      strong_bcs: List of Firedrake Dirichlet boundary conditions
+
     """
-    Base class for all time integrator objects that march a single equation
-    """
-    def __init__(self, equation, solution, fields, dt, solution_old=None,
-                 solver_parameters=None, strong_bcs=None):
-        """
-        :arg equation: the equation to solve
-        :type equation: :class:`BaseEquation` object
-        :arg solution: :class:`Function` where solution will be stored
-        :arg fields: Dictionary of fields that are passed to the equation
-        :type fields: dict of :class:`Function` or :class:`Constant` objects
-        :arg float dt: time step in seconds
-        :kwarg solution_old: :class:`Function` where solution at previous timestep
-                             is stored. New one will be created if not provided.
-        :kwarg dict solver_parameters: PETSc solver options
-        :kwarg list strong_bcs: list of DirichletsBCs
-        """
+
+    def __init__(
+        self,
+        equation: BaseEquation,
+        solution: firedrake.Function,
+        fields: dict[str, firedrake.Function | firedrake.Constant],
+        dt: float,
+        solution_old: Optional[firedrake.Function] = None,
+        solver_parameters: Optional[dict[str, Any]] = None,
+        strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
+    ):
         super(TimeIntegrator, self).__init__()
 
         self.equation = equation
         self.test = firedrake.TestFunction(solution.function_space())
         self.solution = solution
         self.fields = fields
-        self.dt = dt
+        self.dt = float(dt)
         self.dt_const = ensure_constant(dt)
         self.solution_old = solution_old or firedrake.Function(solution, name='Old'+solution.name())
 
@@ -84,17 +88,15 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
 
     @abstractmethod
     def get_final_solution(self):
-        """
-        Evaluates the final solution
-        """
+        """Evaluates the final solution"""
         pass
 
     @abstractmethod
     def solve_stage(self, i_stage, t, update_forcings=None):
-        """
-        Solves a single stage of step from t to t+dt.
+        """Solves a single stage of step from t to t+dt.
         All functions that the equation depends on must be at right state
         corresponding to each sub-step.
+
         """
         pass
 
@@ -108,27 +110,33 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
 
 
 class ERKGeneric(RungeKuttaTimeIntegrator):
-    """
-    Generic explicit Runge-Kutta time integrator.
+    """Generic explicit Runge-Kutta time integrator.
 
     Implements the Butcher form. All terms in the equation are treated explicitly.
+
+    Arguments:
+      equation: G-ADOPT equation to solve
+      solution: Firedrake function reperesenting the equation's solution
+      fields: Dictionary of Firedrake fields passed to the equation
+      dt: Integration time step
+      solution_old: Firedrake function representing the equation's solution
+                      at the previous timestep
+      bnd_conditions: Dictionary of boundary conditions passed to the equation
+      solver_parameters: Dictionary of solver parameters provided to PETSc
+      strong_bcs: List of Firedrake Dirichlet boundary conditions
+
     """
-    def __init__(self, equation, solution, fields, dt,
-                 solution_old=None, bnd_conditions=None,
-                 solver_parameters={}, strong_bcs=None):
-        """
-        :arg equation: the equation to solve
-        :type equation: :class:`Equation` object
-        :arg solution: :class:`Function` where solution will be stored
-        :arg fields: Dictionary of fields that are passed to the equation
-        :type fields: dict of :class:`Function` or :class:`Constant` objects
-        :arg float dt: time step in seconds
-        :kwarg solution_old: :class:`Function` where solution at previous timestep
-                             is stored. New one will be created if not provided.
-        :kwarg dict bnd_conditions: Dictionary of boundary conditions passed to the equation
-        :kwarg dict solver_parameters: PETSc solver options
-        :kwarg list strong_bcs: list of DirichletsBCs
-        """
+    def __init__(
+            self,
+            equation: BaseEquation,
+            solution: firedrake.Function,
+            fields: dict[str, firedrake.Function | firedrake.Constant],
+            dt: float,
+            solution_old: Optional[firedrake.Function] = None,
+            bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
+            solver_parameters: Optional[dict[str, Any]] = {},
+            strong_bcs: Optional[list[firedrake.DirichletBC]] = None
+    ):
         super(ERKGeneric, self).__init__(equation, solution, fields, dt,
                                          solution_old, solver_parameters, strong_bcs)
         self._initialized = False
@@ -158,6 +166,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         self.update_solver()
 
     def update_solver(self):
+        """Create solver objects"""
         if self._nontrivial:
             self.solver = []
             for i in range(self.n_stages):
@@ -167,13 +176,11 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
                 self.solver.append(solver)
 
     def initialize(self, solution):
-        """Assigns initial conditions to all required fields."""
         self.solution_old.assign(solution)
         self._initialized = True
 
     def update_solution(self, i_stage):
-        """
-        Computes the solution of the i-th stage
+        """Computes the solution of the i-th stage
 
         Tendencies must have been evaluated first.
 
@@ -183,54 +190,56 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
             self.solution += self.sol_expressions[i_stage]
 
     def solve_tendency(self, i_stage, t, update_forcings=None):
-        """
-        Evaluates the tendency of i-th stage
-        """
+        """Evaluates the tendency of i-th stage"""
         if self._nontrivial:
             if update_forcings is not None:
                 update_forcings(t + self.c[i_stage]*self.dt)
             self.solver[i_stage].solve()
 
     def get_final_solution(self):
-        """Assign final solution to :attr:`self.solution`
-        """
         self.solution.assign(self.solution_old)
         if self._nontrivial:
             self.solution += self.final_sol_expr
         self.solution_old.assign(self.solution)
 
     def solve_stage(self, i_stage, t, update_forcings=None):
-        """Solve i-th stage and assign solution to :attr:`self.solution`."""
         self.update_solution(i_stage)
         self.solve_tendency(i_stage, t, update_forcings)
 
 
 class DIRKGeneric(RungeKuttaTimeIntegrator):
-    """
-    Generic implementation of Diagonally Implicit Runge Kutta schemes.
+    """Generic implementation of Diagonally Implicit Runge Kutta schemes.
 
     All derived classes must define the Butcher tableau coefficients :attr:`a`,
     :attr:`b`, :attr:`c`.
+
+    Arguments:
+      equation: G-ADOPT equation to solve
+      solution: Firedrake function reperesenting the equation's solution
+      fields: Dictionary of Firedrake fields passed to the equation
+      dt: Integration time step
+      solution_old: Firedrake function representing the equation's solution
+                      at the previous timestep
+      bnd_conditions: Dictionary of boundary conditions passed to the equation
+      solver_parameters: Dictionary of solver parameters provided to PETSc
+      strong_bcs: List of Firedrake Dirichlet boundary conditions
+      terms_to_add: Defines which terms of the equation are to be
+                      added to this solver.
+                      Default 'all' implies ['implicit', 'explicit', 'source'].
+
     """
-    def __init__(self, equation, solution, fields, dt,
-                 solution_old=None, bnd_conditions=None,
-                 solver_parameters={}, strong_bcs=None, terms_to_add='all'):
-        """
-        :arg equation: the equation to solve
-        :type equation: :class:`Equation` object
-        :arg solution: :class:`Function` where solution will be stored
-        :arg fields: Dictionary of fields that are passed to the equation
-        :type fields: dict of :class:`Function` or :class:`Constant` objects
-        :arg float dt: time step in seconds
-        :kwarg solution_old: :class:`Function` where solution at previous timestep
-                             is stored. New one will be created if not provided.
-        :kwarg dict bnd_conditions: Dictionary of boundary conditions passed to the equation
-        :kwarg dict solver_parameters: PETSc solver options
-        :kwarg list strong_bcs: list of DirichletsBCs
-        :kwarg terms_to_add: Defines which terms of the equation are to be
-            added to this solver. Default 'all' implies ['implicit', 'explicit', 'source'].
-        :type terms_to_add: 'all' or list of 'implicit', 'explicit', 'source'.
-        """
+    def __init__(
+            self,
+            equation: BaseEquation,
+            solution: firedrake.Function,
+            fields: dict[str, firedrake.Function | firedrake.Constant],
+            dt: float,
+            solution_old: Optional[firedrake.Function] = None,
+            bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
+            solver_parameters: Optional[dict[str, Any]] = {},
+            strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
+            terms_to_add: Optional[str | list[str]] = 'all'
+    ):
         super(DIRKGeneric, self).__init__(equation, solution, fields, dt,
                                           solution_old, solver_parameters, strong_bcs)
         self.solver_parameters.setdefault('snes_type', 'newtonls')
@@ -293,22 +302,19 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                     options_prefix=sname))
 
     def initialize(self, init_cond):
-        """Assigns initial conditions to all required fields."""
         self.solution_old.assign(init_cond)
         self._initialized = True
 
     def update_solution(self, i_stage):
-        """
-        Updates solution to i_stage sub-stage.
+        """Updates solution to i_stage sub-stage.
 
         Tendencies must have been evaluated first.
+
         """
         self.solution.assign(self.solution_old + self.sol_expressions[i_stage])
 
     def solve_tendency(self, i_stage, t, update_forcings=None):
-        """
-        Evaluates the tendency of i-th stage.
-        """
+        """Evaluates the tendency of i-th stage"""
         if i_stage == 0:
             # NOTE solution may have changed in coupled system
             for bci in self.strong_bcs:
@@ -321,11 +327,9 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         self.solver[i_stage].solve()
 
     def get_final_solution(self):
-        """Assign final solution to :attr:`self.solution`"""
         self.solution.assign(self.final_sol_expr)
 
     def solve_stage(self, i_stage, t, update_forcings=None):
-        """Solve i-th stage and assign solution to :attr:`self.solution`."""
         self.solve_tendency(i_stage, t, update_forcings)
         self.update_solution(i_stage)
 
@@ -334,8 +338,7 @@ CFL_UNCONDITIONALLY_STABLE = -1
 
 
 class AbstractRKScheme(ABC):
-    """
-    Abstract class for defining Runge-Kutta schemes.
+    """Abstract class for defining Runge-Kutta schemes.
 
     Derived classes must define the Butcher tableau (arrays :attr:`a`, :attr:`b`,
     :attr:`c`) and the CFL number (:attr:`cfl_coeff`).
@@ -360,10 +363,10 @@ class AbstractRKScheme(ABC):
 
     @abstractproperty
     def cfl_coeff(self):
-        """
-        CFL number of the scheme
+        """CFL number of the scheme
 
         Value 1.0 corresponds to Forward Euler time step.
+
         """
         pass
 
@@ -381,6 +384,25 @@ class AbstractRKScheme(ABC):
 
         self.is_implicit = np.diag(self.a).any()
         self.is_dirk = np.diag(self.a).all()
+
+
+def shu_osher_butcher(α_or_λ, β_or_μ):
+    """
+    Generate arrays composing the Butcher tableau of a Runge-Kutta method from the
+    coefficient arrays of the equivalent, original or modified, Shu-Osher form.
+    Code adapted from RK-Opt written in MATLAB by David Ketcheson.
+    See also Ketcheson, Macdonald, and Gottlieb (2009).
+
+    Function arguments:
+    α_or_λ : array_like, shape (n + 1, n)
+    β_or_μ : array_like, shape (n + 1, n)
+    """
+
+    X = np.identity(α_or_λ.shape[1]) - α_or_λ[:-1]
+    A = np.linalg.solve(X, β_or_μ[:-1])
+    b = np.transpose(β_or_μ[-1] + np.dot(α_or_λ[-1], A))
+    c = np.sum(A, axis=1)
+    return A, b, c
 
 
 class ForwardEulerAbstract(AbstractRKScheme):
@@ -462,6 +484,313 @@ class SSPRK33Abstract(AbstractRKScheme):
     cfl_coeff = 1.0
 
 
+class eSSPRKs3p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [[0.0, 0.0, 0.0], [2 / 3, 0.0, 0.0], [2 / 9, 4 / 9, 0.0]]
+    b = [0.25, 0.1875, 0.5625]
+    c = [0, 2 / 3, 2 / 3]
+    cfl_coeff = 3 / 4
+
+
+class eSSPRKs4p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0],
+        [11 / 20, 0.0, 0.0, 0.0],
+        [11 / 32, 11 / 32, 0.0, 0.0],
+        [55 / 288, 55 / 288, 11 / 36, 0.0],
+    ]
+    b = [0.24517906, 0.13774105, 0.22038567, 0.39669421]
+    c = [0, 11 / 20, 11 / 16, 11 / 16]
+    cfl_coeff = 20 / 11
+
+
+class eSSPRKs5p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.37949799, 0.0, 0.0, 0.0, 0.0],
+        [0.35866028, 0.35866028, 0.0, 0.0, 0.0],
+        [0.23456423, 0.23456423, 0.24819211, 0.0, 0.0],
+        [0.15340527, 0.15340527, 0.16231792, 0.24819211, 0.0],
+    ]
+    b = [0.20992362, 0.1975535, 0.1217419, 0.18614938, 0.28463159]
+    c = [0.0, 0.37949799, 0.71732056, 0.71732057, 0.71732057]
+    cfl_coeff = 2.63506005
+
+
+class eSSPRKs6p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.28422072, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.28422072, 0.28422072, 0.0, 0.0, 0.0, 0.0],
+        [0.23301578, 0.23301578, 0.23301578, 0.0, 0.0, 0.0],
+        [0.16684082, 0.16532461, 0.16532461, 0.20165449, 0.0, 0.0],
+        [0.21178186, 0.102324, 0.10202706, 0.12444738, 0.17540162, 0.0],
+    ]
+    b = [0.21181784, 0.10241434, 0.10198818, 0.12438557, 0.17531451, 0.28407956]
+    c = [0.0, 0.28422072, 0.56844144, 0.69904734, 0.69914453, 0.71598192]
+    cfl_coeff = 3.51839231
+
+
+class eSSPRKs7p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.23333473, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.23333473, 0.23333473, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.23144338, 0.23144338, 0.23144338, 0.0, 0.0, 0.0, 0.0],
+        [0.17322863, 0.17322863, 0.17322863, 0.17464425, 0.0, 0.0, 0.0],
+        [0.13071968, 0.12941249, 0.12941249, 0.13047004, 0.17431545, 0.0, 0.0],
+        [0.16655731, 0.16570664, 0.08421603, 0.08490424, 0.11343693, 0.15184412, 0.0],
+    ]
+    b = [
+        0.16655731,
+        0.16570664,
+        0.08421603,
+        0.08490424,
+        0.11343693,
+        0.15184412,
+        0.23333473,
+    ]
+    c = [0.0, 0.23333473, 0.46666946, 0.69433014, 0.69433014, 0.69433015, 0.76666527]
+    cfl_coeff = 4.28568865
+
+
+class eSSPRKs8p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.19580402, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.19580402, 0.19580402, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.19580402, 0.19580402, 0.19580402, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.15369244, 0.15369244, 0.15369244, 0.15369244, 0.0, 0.0, 0.0, 0.0],
+        [0.11656615, 0.11656615, 0.11656615, 0.11656615, 0.14850516, 0.0, 0.0, 0.0],
+        [
+            0.12960593,
+            0.09738344,
+            0.09738344,
+            0.09738344,
+            0.12406641,
+            0.16358153,
+            0.0,
+            0.0,
+        ],
+        [
+            0.12970594,
+            0.09753214,
+            0.09723632,
+            0.09723632,
+            0.12387897,
+            0.16333439,
+            0.1955082,
+            0.0,
+        ],
+    ]
+    b = [
+        0.1462899,
+        0.12218849,
+        0.12196689,
+        0.10127077,
+        0.09279782,
+        0.1223539,
+        0.14645532,
+        0.14667691,
+    ]
+    c = [
+        0.0,
+        0.19580402,
+        0.39160804,
+        0.58741206,
+        0.61476976,
+        0.61476976,
+        0.70940419,
+        0.90443228,
+    ]
+    cfl_coeff = 5.10714756
+
+
+class eSSPRKs9p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.16666667, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.16666667, 0.16666667, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.16666667, 0.16666667, 0.16666667, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.16666667, 0.16666667, 0.16666667, 0.16666667, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [
+            0.13333333,
+            0.13333333,
+            0.13333333,
+            0.13333333,
+            0.13333333,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [0.14166667, 0.1, 0.1, 0.1, 0.1, 0.125, 0.0, 0.0, 0.0],
+        [
+            0.15,
+            0.12222222,
+            0.06666667,
+            0.06666667,
+            0.06666667,
+            0.08333333,
+            0.11111111,
+            0.0,
+            0.0,
+        ],
+        [
+            0.15,
+            0.12222222,
+            0.06666667,
+            0.06666667,
+            0.06666667,
+            0.08333333,
+            0.11111111,
+            0.16666667,
+            0.0,
+        ],
+    ]
+    b = [
+        0.15,
+        0.12222222,
+        0.06666667,
+        0.06666667,
+        0.06666667,
+        0.08333333,
+        0.11111111,
+        0.16666667,
+        0.16666667,
+    ]
+    c = [
+        0.0,
+        0.16666667,
+        0.33333334,
+        0.50000001,
+        0.66666668,
+        0.66666665,
+        0.66666667,
+        0.66666667,
+        0.83333334,
+    ]
+    cfl_coeff = 6.0
+
+
+class eSSPRKs10p3Abstract(AbstractRKScheme):
+    """Explicit SSP Runge-Kutta method with nondecreasing abscissas.
+    See Isherwood, Grant, and Gottlieb (2018)."""
+
+    a = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.14737756, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.14737756, 0.14737756, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.14737756, 0.14737756, 0.14737756, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.14737756, 0.14737756, 0.14737756, 0.14737756, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [
+            0.11790205,
+            0.11790205,
+            0.11790205,
+            0.11790205,
+            0.11790205,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.10906732,
+            0.10906703,
+            0.10906703,
+            0.10906703,
+            0.10906703,
+            0.13633378,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.11862231,
+            0.11856848,
+            0.08186453,
+            0.08186453,
+            0.08186453,
+            0.10233067,
+            0.11062,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.12708168,
+            0.12704369,
+            0.08137218,
+            0.0577812,
+            0.0577812,
+            0.07222649,
+            0.07807723,
+            0.10402125,
+            0.0,
+            0.0,
+        ],
+        [
+            0.1270886,
+            0.12705062,
+            0.08139469,
+            0.05776149,
+            0.05776149,
+            0.07220186,
+            0.07805061,
+            0.10398578,
+            0.1473273,
+            0.0,
+        ],
+    ]
+    b = [
+        0.1270886,
+        0.12705062,
+        0.08139469,
+        0.05776149,
+        0.05776149,
+        0.07220186,
+        0.07805061,
+        0.10398578,
+        0.1473273,
+        0.14737756,
+    ]
+    c = [
+        0.0,
+        0.14737756,
+        0.29475512,
+        0.44213268,
+        0.58951024,
+        0.58951025,
+        0.68166922,
+        0.69573505,
+        0.70538492,
+        0.85262244,
+    ]
+    cfl_coeff = 6.78529356
+
+
 class BackwardEulerAbstract(AbstractRKScheme):
     """
     Backward Euler method
@@ -493,7 +822,7 @@ class ImplicitMidpointAbstract(AbstractRKScheme):
 
 class CrankNicolsonAbstract(AbstractRKScheme):
     """
-    Crack-Nicolson scheme
+    Crank-Nicolson scheme
     """
     a = [[0.0, 0.0],
          [0.5, 0.5]]
@@ -653,6 +982,38 @@ class ERKEuler(ERKGeneric, ForwardEulerAbstract):
 
 
 class SSPRK33(ERKGeneric, SSPRK33Abstract):
+    pass
+
+
+class eSSPRKs3p3(ERKGeneric, eSSPRKs3p3Abstract):
+    pass
+
+
+class eSSPRKs4p3(ERKGeneric, eSSPRKs4p3Abstract):
+    pass
+
+
+class eSSPRKs5p3(ERKGeneric, eSSPRKs5p3Abstract):
+    pass
+
+
+class eSSPRKs6p3(ERKGeneric, eSSPRKs6p3Abstract):
+    pass
+
+
+class eSSPRKs7p3(ERKGeneric, eSSPRKs7p3Abstract):
+    pass
+
+
+class eSSPRKs8p3(ERKGeneric, eSSPRKs8p3Abstract):
+    pass
+
+
+class eSSPRKs9p3(ERKGeneric, eSSPRKs9p3Abstract):
+    pass
+
+
+class eSSPRKs10p3(ERKGeneric, eSSPRKs10p3Abstract):
     pass
 
 
