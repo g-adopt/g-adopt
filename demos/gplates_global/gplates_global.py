@@ -6,7 +6,7 @@
 # This tutorial builds on the *idealised 3-D spherical shell geometry simulation* and a user should follow that tutorial prior to this.
 #
 # This example focuses on:
-# 1. How to import GPlates functionalities into G-ADOPT.
+# 1. How to import GPlates functionalities into G-ADOPT. For being able to import gadopt.gplates module you need to have a working pyGPlates. For more information on how to build pyGPlates see [EarthByte's page](https://www.earthbyte.org/category/resources/software-workflows/pygplates/).
 # 2. How to set prescribed boundary conditions.
 # 3. How to configure nullspaces in a setup where there are constraints on tangential velocities at the surface.
 # 4. How to load a 1-D radial profile from a file (here, to prescribe a spherically symmetric viscosity)
@@ -122,7 +122,7 @@ muller_2022_files = obtain_Muller_2022_SE("./gplates_files")
 plate_receonstion_model = pyGplatesConnector(
     rotation_filenames=muller_2022_files["rotation_filenames"],
     topology_filenames=muller_2022_files["topology_filenames"],
-    oldest_age=10000,
+    oldest_age=1000,
     nseeds=1e5,
     nneighbours=4,
     delta_t=0.9
