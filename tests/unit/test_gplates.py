@@ -6,7 +6,7 @@ from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, obtain_M
 
 
 def test_obtain_muller_2022_se():
-    gplates_data_path = Path(__file__).resolve().parents[1] / "demos/gplates_global"
+    gplates_data_path = Path(__file__).resolve().parents[2] / "demos/gplates_global"
     plate_reconstruction_files_with_path = obtain_Muller_2022_SE(gplates_data_path)
 
     # Check if the files are downloaded and accessible
@@ -16,7 +16,7 @@ def test_obtain_muller_2022_se():
 
 
 def test_gplates():
-    gplates_data_path = Path(__file__).resolve().parents[1] / "demos/gplates_global"
+    gplates_data_path = Path(__file__).resolve().parents[2] / "demos/gplates_global"
 
     # Set up geometry:
     rmin, rmax, ref_level, nlayers = 1.22, 2.22, 5, 16
