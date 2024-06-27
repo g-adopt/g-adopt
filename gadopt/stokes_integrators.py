@@ -405,8 +405,8 @@ class ViscoelasticStokesSolver(StokesSolver):
 
         super().__init__(z, self.density, approximation, bcs=bcs, mu=self.effective_viscosity,
                          quad_degree=quad_degree, cartesian=cartesian, solver_parameters=solver_parameters,
-                         closed=closed, rotational=rotational, J=J, constant_jacobian=constant_jacobian,
-                         free_surface_dt=free_surface_dt, equations=ViscoelasticEquations, **kwargs)
+                         J=J, constant_jacobian=constant_jacobian, free_surface_dt=free_surface_dt,
+                         equations=ViscoelasticEquations, **kwargs)
 
         scale_mu = fd.Constant(1e10)  # this is a scaling factor roughly size of mantle maxwell time to make sure that solve converges with strong bcs in parallel...
         self.F = (1 / scale_mu)*self.F
@@ -431,9 +431,9 @@ class ViscoelasticStokesSolver(StokesSolver):
             else:
                 exterior_density = 0
             # First, make the displacement term implicit by incorporating
-            # the unknown `incremental displacement' (stokes_vars[0]) that
+            # the unknown `incremental displacement' (u) that
             # we are solving for
-            implicit_displacement = self.stokes_vars[0] + self.displacement
+            implicit_displacement = self.u + self.displacement
             implicit_displacement_up = fd.dot(implicit_displacement, self.k)
             # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
             normal_stress = (self.density - exterior_density) * self.approximation.g * implicit_displacement_up

@@ -366,7 +366,7 @@ class SmallDisplacementViscoelasticApproximation(BaseApproximation):
         # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
         return -self.g * self.density_perturbation()
 
-    def rho_field(self, p, T):
+    def free_surface_density(self, p, T):
         return self.background_density + self.density_perturbation
 
     def rho_continuity(self):
