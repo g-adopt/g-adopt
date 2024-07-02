@@ -1,4 +1,5 @@
 import numpy as np
+
 from gadopt import *
 from gadopt.inverse import *
 
@@ -14,6 +15,9 @@ with CheckpointFile("forward_checkpoint.h5", "r") as forward_check:
     psi_obs = forward_check.load_function(mesh, "Level set")
     psi_obs.rename("Level set observation")
 
+tape = get_working_tape()
+tape.clear_tape()
+
 nx, ny = 40, 40
 lx, ly = 0.9142, 1
 
@@ -24,15 +28,7 @@ R = FunctionSpace(mesh, "R", 0)
 u, p = split(z)
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
-# psi ctrl is our control variable
-psi_ctr = Function(psi_obs.function_space(), name="Control Level set")
-control = Control(psi_ctr)
-psi_ctr.project(psi_obs)
-
-
-# psi is the state variable, dependent on the ctrl
 psi = Function(psi_obs.function_space(), name="Level set")
-psi.assign(psi_ctr)
 
 min_mesh_edge_length = min(lx / nx, ly / ny)
 epsilon = Constant(min_mesh_edge_length / 4)
@@ -70,7 +66,13 @@ stokes_solver = StokesSolver(
 
 subcycles = 1
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
-level_set_solver.reini_params["iterations"] = 0
+# level_set_solver.reini_params["iterations"] = 0
+
+psi_control = Function(psi.function_space(), name="Level-set control")
+with CheckpointFile("forward_checkpoint.h5", "r") as forward_check:
+    psi_control = forward_check.load_function(mesh, "Level set")
+control = Control(psi_control)
+psi.project(psi_control)
 
 step = 0
 output_counter = 100
@@ -92,16 +94,18 @@ while True:
         break
 
 objective = assemble((psi - psi_obs) ** 2 * dx)
-log(f"\n\n{objective}\n\n")
 
 reduced_functional = ReducedFunctional(objective, control)
-log(f"\n\n{reduced_functional(psi_obs)}\n\n")
 
-#
-perturbation = Function(psi.function_space(), name="Delta_LS")
-perturbation.dat.data[:] = np.random.random(perturbation.dat.data.shape)
+pause_annotation()
 
-log(taylor_test(reduced_functional, psi_obs, perturbation))
+log(f"\n\nReduced functional: {reduced_functional(psi_control)}")
+log(f"Objective: {objective}\n\n")
+
+perturbation = Function(psi_control.function_space(), name="Level set perturbation")
+perturbation.dat.data[:] = np.random.default_rng().random(perturbation.dat.data.size)
+
+log(taylor_test(reduced_functional, psi_control, perturbation))
 
 # psi_lower_bound = Function(psi_obs.function_space()).assign(0)
 # psi_upper_bound = Function(psi_obs.function_space()).assign(1)
@@ -115,3 +119,4 @@ log(taylor_test(reduced_functional, psi_obs, perturbation))
 # optimiser.run()
 
 # optimisation_file.write(*optimiser.rol_solver.rolvector.dat)
+
