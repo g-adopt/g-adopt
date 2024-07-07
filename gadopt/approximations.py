@@ -254,14 +254,15 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     Compressible approximation. Excludes linear dependence of density on pressure (chi)
 
     Arguments:
-      Ra: Rayleigh number
-      Di: Dissipation number
-      Tbar:  reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion) - default 0
-      chi:   reference isothermal compressibility
-      cp:    reference specific heat at constant pressure
+      Ra:     Rayleigh number
+      Di:     Dissipation number
+      Tbar:   reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion) - default 0
+      chi:    reference isothermal compressibility
+      cp:     reference specific heat at constant pressure
       gamma0: Gruneisen number (in pressure-dependent buoyancy term)
       cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
       cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+      g :     gravitational acceleration
 
     Keyword Arguments:
       rho (Number):   reference density
@@ -272,7 +273,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         - True: gravity points in negative z-direction
         - False: gravity points radially inward
       kappa (Number):  diffusivity
-      g (Number):      gravitational acceleration
 
     Note:
       The keyword arguments may be depth-dependent, but default to 1 if not supplied.
@@ -295,7 +295,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         # Equation of State:
         self.chi = chi
         self.cp = cp
-        assert 'g' not in kwargs
         self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
     def rho_continuity(self):
