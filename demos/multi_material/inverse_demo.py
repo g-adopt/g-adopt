@@ -6,12 +6,12 @@ from gadopt.inverse import *
 #     optimisation_file.write(psi_obs.block_variable.checkpoint)
 
 
-with CheckpointFile("forward_checkpoint.h5", "r") as forward_check:
-    mesh = forward_check.load_mesh("firedrake_default")
+with CheckpointFile("forward_checkpoint.h5", "r") as fi:
+    mesh = fi.load_mesh("firedrake_default")
 
-    z = forward_check.load_function(mesh, "Stokes")
-    T = forward_check.load_function(mesh, "Temperature")
-    psi_obs = forward_check.load_function(mesh, "Level set")
+    z = fi.load_function(mesh, "Stokes")
+    T = fi.load_function(mesh, "Temperature")
+    psi_obs = fi.load_function(mesh, "Level set")
     psi_obs.rename("Level set observation")
 
 nx, ny = 40, 40
@@ -24,7 +24,10 @@ R = FunctionSpace(mesh, "R", 0)
 u, p = split(z)
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
-psi = Function(psi_obs.function_space(), name="Level set").project(psi_obs)
+psi_ctrl = Function(psi_obs.function_space(), name="Level set ctrl")
+psi_ctrl.assign(psi_obs)
+
+psi = Function(psi_obs.function_space(), name="Level set").assign(psi_ctrl)
 
 min_mesh_edge_length = min(lx / nx, ly / ny)
 epsilon = Constant(min_mesh_edge_length / 4)
@@ -36,7 +39,7 @@ RaB = field_interface([psi], [-1, 0], method="arithmetic")
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 
 time_now = 1000
-delta_t = Function(R).assign(2.5)
+delta_t = Function(R).assign(0.001)
 output_frequency = 10
 
 Z_nullspace = create_stokes_nullspace(z.function_space())
@@ -66,11 +69,10 @@ level_set_solver.reini_params["iterations"] = 0
 
 step = 0
 output_counter = 100
-time_end = 2000
+time_end = 1100
 while True:
-    if time_now >= output_counter * output_frequency:
-        output_file.write(*z.subfunctions, T, psi)
-        output_counter += 1
+    output_file.write(*z.subfunctions, T, psi, psi_obs)
+    output_counter += 1
 
     time_now += float(delta_t)
     step += 1
@@ -83,10 +85,14 @@ while True:
         log("Reached end of simulation -- exiting time-step loop")
         break
 
+    if step > 20:
+        break
+
+
 objective = assemble((psi - psi_obs) ** 2 * dx)
 log(f"\n\n{objective}\n\n")
 
-reduced_functional = ReducedFunctional(objective, Control(psi))
+reduced_functional = ReducedFunctional(objective, Control(psi_ctrl))
 log(f"\n\n{reduced_functional(psi_obs)}\n\n")
 
 #
