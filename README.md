@@ -64,17 +64,17 @@ If you use this software in your work, please cite the software using the follow
     DOI = {10.5194/gmd-15-5127-2022}
     }
     
-   @Article{gmd-17-5057-2024,
-   AUTHOR = {Ghelichkhan, S. and Gibson, A. and Davies, D. R. and Kramer, S. C. and Ham, D. A.},
-   TITLE = {Automatic adjoint-based inversion schemes for geodynamics: reconstructing the evolution of Earth's mantle in space and time},
-   JOURNAL = {Geoscientific Model Development},
-   VOLUME = {17},
-   YEAR = {2024},
-   NUMBER = {13},
-   PAGES = {5057--5086},
-   URL = {https://gmd.copernicus.org/articles/17/5057/2024/},
-   DOI = {10.5194/gmd-17-5057-2024}
-   }
+    @Article{gmd-17-5057-2024,
+    AUTHOR = {Ghelichkhan, S. and Gibson, A. and Davies, D. R. and Kramer, S. C. and Ham, D. A.},
+    TITLE = {Automatic adjoint-based inversion schemes for geodynamics: reconstructing the evolution of Earth's mantle in space and time},
+    JOURNAL = {Geoscientific Model Development},
+    VOLUME = {17},
+    YEAR = {2024},
+    NUMBER = {13},
+    PAGES = {5057--5086},
+    URL = {https://gmd.copernicus.org/articles/17/5057/2024/},
+    DOI = {10.5194/gmd-17-5057-2024}
+    }
    
 </details>
 
