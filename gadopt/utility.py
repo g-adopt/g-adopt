@@ -654,3 +654,13 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
     averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, cartesian=cartesian)
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
+
+
+def node_coordinates(function):
+    """Extract mesh coordinates and interpolate them onto the relevant function space"""
+    func_space = function.function_space()
+    mesh_coords = SpatialCoordinate(func_space.mesh())
+
+    return [
+        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
+    ]
