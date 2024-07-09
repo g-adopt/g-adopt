@@ -18,7 +18,7 @@ export PETSC_DIR="/tmp/firedrake-prefix"
 export PETSC_ARC=""
 export OMP_NUM_THREADS=1
 export LD_PRELOAD=${INTEL_MKL_ROOT}/lib/intel64/libmkl_sequential.so:${INTEL_MKL_ROOT}/lib/intel64/libmkl_core.so:${LD_PRELOAD}
-mpiexec --map-by ppr:1:node -np $PBS_NNODES tar -C $PBS_JOBFS -xf /g/data/xd2/sg8812/FD-IMAGES/fd-prefix-2024_04_08-full-openmpi407-opt-64bitInt-pyop2fixed_update2024Apr24.tar.gz
+mpiexec --map-by ppr:1:node -np $PBS_NNODES tar -C $PBS_JOBFS -xf /g/data/xd2/sg8812/FD-IMAGES/fd-prefix-2024_04_08-full-openmpi407-opt-64bitInt-pyop2fixed_Update13JuneRevert.tar.gz
 mpiexec --map-by ppr:1:node -np $PBS_NNODES ln -s $PBS_JOBFS/firedrake-prefix /tmp/firedrake-prefix
 
 # Setting Python directories

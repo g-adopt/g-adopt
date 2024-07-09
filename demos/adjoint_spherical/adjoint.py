@@ -57,7 +57,7 @@ def conduct_inversion():
     T_ub.assign(1.0)
 
     minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
-    minimisation_parameters["Status Test"] = 2
+    minimisation_parameters["Status Test"] = 20
 
     minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
 
@@ -287,7 +287,6 @@ def forward_problem():
         # Updating time
         time += float(delta_t)
         timestep_index += 1
-        break
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - Tobs) ** 2 * dx)
@@ -303,6 +302,7 @@ def forward_problem():
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
+
     return Tic, ReducedFunctional(objective, control)
 
 
