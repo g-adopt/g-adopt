@@ -5,6 +5,7 @@ from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_val
 from firedrake import op2, VectorElement
 from firedrake.__future__ import Interpolator
 import firedrake as fd
+from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import finat.ufl
 import time
@@ -61,6 +62,7 @@ class ParameterLog:
 class TimestepAdaptor:
     """
     Computes timestep based on CFL condition for provided velocity field"""
+
     def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
         """
         :arg dt_const:      Constant whose value will be updated by the timestep adaptor
@@ -106,7 +108,7 @@ def upward_normal(mesh, cartesian):
         return as_vector([0]*(n-1) + [1])
     else:
         X = SpatialCoordinate(mesh)
-        r = sqrt(dot(X, X))
+        r = sqrt(sum([x ** 2 for x in X]))
         return X/r
 
 
@@ -114,8 +116,8 @@ def vertical_component(u, cartesian):
     if cartesian:
         return u[u.ufl_shape[0]-1]
     else:
-        n = upward_normal(u.ufl_domain(), cartesian)
-        return dot(n, u)
+        n = upward_normal(extract_unique_domain(u), cartesian)
+        return sum([n_i * u_i for n_i, u_i in zip(n, u)])
 
 
 def ensure_constant(f):
@@ -612,3 +614,43 @@ def su_nubar(u, J, Pe):
     beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
 
     return dot(absv(dot(u, J)), beta_pe)/2
+
+
+def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: bool):
+    """
+    Assign a one-dimensional profile to a Function `function` from a file.
+
+    The function reads a one-dimensional profile (e.g., viscosity) together with the
+    radius/height input for the profile, from a file, broadcasts the two arrays to all
+    processes, and then interpolates this array onto the function space of `function`.
+
+    Args:
+        function: The function onto which the 1D profile will be assigned
+        one_d_filename: The path to the file containing the 1D radial profile
+        cartesian: Whether the upward direction is along z/y (True) or radial (False)
+
+    Note:
+        - Note the cartesian flag
+        - This is designed to read a file with one process and distribute in parallel with MPI.
+        - The input file should contain an array of radius/height and an array of values, separated by a comma.
+    """
+    mesh = extract_unique_domain(function)
+
+    if mesh.comm.rank == 0:
+        rshl, one_d_data = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+    else:
+        one_d_data = None
+        rshl = None
+
+    one_d_data = mesh.comm.bcast(one_d_data, root=0)
+    rshl = mesh.comm.bcast(rshl, root=0)
+
+    X = SpatialCoordinate(mesh)
+
+    upward_coord = vertical_component(X, cartesian=cartesian)
+
+    rad = Function(function.function_space()).interpolate(upward_coord)
+
+    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, cartesian=cartesian)
+    interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
+    averager.extrapolate_layer_average(function, interpolated_visc)
