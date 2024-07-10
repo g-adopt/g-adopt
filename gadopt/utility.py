@@ -100,7 +100,7 @@ def vertical_component(u, cartesian):
         return u[u.ufl_shape[0]-1]
     else:
         n = upward_normal(extract_unique_domain(u), cartesian)
-        return sum([n_i*u_i for n_i, u_i in zip(n, u)])
+        return sum([n_i * u_i for n_i, u_i in zip(n, u)])
 
 
 def ensure_constant(f):
