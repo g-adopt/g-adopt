@@ -175,7 +175,7 @@ class StokesSolver:
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
-        u, p, *self.eta = fd.split(self.solution)   # eta is a list of 0, 1 or multiple free surface fields
+        u, p, *eta = fd.split(self.solution)   # eta is a list of 0, 1 or multiple free surface fields
         self.k = upward_normal(self.Z.mesh(), cartesian)
 
         # Add velocity, pressure and buoyancy term to the fields dictionary
@@ -235,7 +235,7 @@ class StokesSolver:
 
                 # Define free surface variables for timestepping
                 self.eta_old.append(fd.Function(self.eta_[c]))
-                eta_theta.append((1-free_surface_theta)*self.eta_old[c] + free_surface_theta*self.eta[c])
+                eta_theta.append((1-free_surface_theta)*self.eta_old[c] + free_surface_theta*eta[c])
 
                 # Depending on variable_free_surface_density flag provided to approximation the
                 # interior density below the free surface is either set to a constant density or
@@ -270,10 +270,10 @@ class StokesSolver:
             self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
 
         if self.free_surface:
-            for i in range(len(self.eta)):
+            for i in range(len(eta)):
                 # Add free surface time derivative term
                 # (N.b. we already have two equations from StokesEquations)
-                self.F += self.equations[2+i].mass_term(self.test[2+i], (self.eta[i]-self.eta_old[i])/free_surface_dt)
+                self.F += self.equations[2+i].mass_term(self.test[2+i], (eta[i]-self.eta_old[i])/free_surface_dt)
 
         if isinstance(solver_parameters, dict):
             self.solver_parameters = solver_parameters
@@ -314,7 +314,7 @@ class StokesSolver:
                 if self.free_surface:
                     # merge free surface fields with pressure field for Schur complement solve
                     self.solver_parameters.update({"pc_fieldsplit_0_fields": '0',
-                                                   "pc_fieldsplit_1_fields": '1,'+','.join(str(2+i) for i in range(len(self.eta)))})
+                                                   "pc_fieldsplit_1_fields": '1,'+','.join(str(2+i) for i in range(len(eta)))})
 
                     # update keys for GADOPT's variable mass inverse preconditioner
                     self.solver_parameters["fieldsplit_1"].update({"pc_python_type": "gadopt.FreeSurfaceMassInvPC",
