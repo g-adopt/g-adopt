@@ -36,7 +36,7 @@ If you use this software in your work, please cite the software using the follow
     
     Davies, D. R., Kramer, S. C., Ghelichkhan, S., & Gibson, A. (2022). Towards automatic finite-element methods for geodynamics via Firedrake. Geoscientific Model Development, 15(13), 5127–5166. doi:10.5194/gmd-15-5127-2022
     
-    Ghelichkhan, S., Gibson, A., Davies, D. R., Kramer, S. C., & Ham, D. A. (2023). Automatic adjoint-based inversion schemes for geodynamics: Reconstructing the evolution of Earth’s mantle in space and time. EGUsphere, 2023, 1–46. doi:10.5194/egusphere-2023-2683 
+    Ghelichkhan, S., Gibson, A., Davies, D. R., Kramer, S. C., & Ham, D. A. (2024). Automatic adjoint-based inversion schemes for geodynamics: reconstructing the evolution of Earth's mantle in space and time. Geoscientific Model Development, 17(13), 5057-5086.
 </details>
 
 <details>
@@ -64,16 +64,18 @@ If you use this software in your work, please cite the software using the follow
     DOI = {10.5194/gmd-15-5127-2022}
     }
     
-    @Article{Ghelichkhan_Automatic_2024,
+    @Article{gmd-17-5057-2024,
     AUTHOR = {Ghelichkhan, S. and Gibson, A. and Davies, D. R. and Kramer, S. C. and Ham, D. A.},
-    TITLE = {Automatic adjoint-based inversion schemes for geodynamics: Reconstructing the evolution of Earth’s mantle in space and time},
-    JOURNAL = {EGUsphere},
-    VOLUME = {2023},
-    YEAR = {2023},
-    PAGES = {1--46},
-    URL = {https://egusphere.copernicus.org/preprints/2023/egusphere-2023-2683/},
-    DOI = {10.5194/egusphere-2023-2683}
+    TITLE = {Automatic adjoint-based inversion schemes for geodynamics: reconstructing the evolution of Earth's mantle in space and time},
+    JOURNAL = {Geoscientific Model Development},
+    VOLUME = {17},
+    YEAR = {2024},
+    NUMBER = {13},
+    PAGES = {5057--5086},
+    URL = {https://gmd.copernicus.org/articles/17/5057/2024/},
+    DOI = {10.5194/gmd-17-5057-2024}
     }
+   
 </details>
 
 

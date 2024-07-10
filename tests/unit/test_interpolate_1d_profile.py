@@ -1,7 +1,44 @@
 from gadopt import *
+from gadopt.utility import vertical_component
 
 
-def test_oned_average_assignment(tmp_path):
+def test_oned_average_assignment_spherical(tmp_path):
+    """ A test case for `interpolate_1d_profile` for 3d spherical mesh
+
+    The test calculates a radius profile, writes it out, and then assigns it
+    and tests if the values end up being the same
+    """
+
+    rmin = 1.208
+    ref_level = 5
+    nlayers = 4
+
+    mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
+    mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+
+    X = SpatialCoordinate(mesh)
+    Q = FunctionSpace(mesh, "CG", 1)
+    q = Function(Q).interpolate(vertical_component(X, cartesian=False))
+
+    averager = LayerAveraging(mesh, None, cartesian=False)
+    q_profile = averager.get_layer_average(q)
+
+    output_fi = ParameterLog(tmp_path / "one_d_test_spherical.output", mesh)
+    output_fi.log_str("\n".join([f"{val}, {val}" for val in q_profile]))
+    output_fi.close()
+
+    p = Function(Q)
+    interpolate_1d_profile(p, tmp_path / "one_d_test_spherical.output", cartesian=False)
+    log(assemble((p-q) ** 2 * dx))
+    assert assemble((p-q) ** 2 * dx) < 1e-10
+
+
+def test_oned_average_assignment_cartesian(tmp_path):
+    """ A test case for `interpolate_1d_profile` for 2d square case
+
+    The test calculates a vertical profile, writes it out, and then assigns it
+    and tests if the values end up being the same
+    """
     n = 10
     mesh = UnitSquareMesh(n, n)
 

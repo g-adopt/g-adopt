@@ -91,7 +91,7 @@ def upward_normal(mesh, cartesian):
         return as_vector([0]*(n-1) + [1])
     else:
         X = SpatialCoordinate(mesh)
-        r = sqrt(dot(X, X))
+        r = sqrt(sum([x ** 2 for x in X]))
         return X/r
 
 
@@ -100,7 +100,7 @@ def vertical_component(u, cartesian):
         return u[u.ufl_shape[0]-1]
     else:
         n = upward_normal(extract_unique_domain(u), cartesian)
-        return dot(n, u)
+        return sum([n_i * u_i for n_i, u_i in zip(n, u)])
 
 
 def ensure_constant(f):
