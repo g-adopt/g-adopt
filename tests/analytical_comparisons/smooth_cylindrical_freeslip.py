@@ -2,9 +2,6 @@ from gadopt import *
 import numpy
 import assess
 
-# Quadrature degree:
-_dx = dx(degree=6)
-
 # Projection solver parameters for nullspaces:
 _project_solver_parameters = {
     "snes_type": "ksponly",
@@ -16,7 +13,7 @@ _project_solver_parameters = {
 
 
 def model(level, k, nn, do_write=False):
-    """The smooth initial condition, cylindrical domain, zero-slip boundary condition model.
+    """The smooth initial condition, cylindrical domain, free-slip boundary condition model.
 
     Args:
         level: refinement level
@@ -63,12 +60,12 @@ def model(level, k, nn, do_write=False):
 
     approximation = BoussinesqApproximation(1)
     stokes_bcs = {
-        bottom_id: {'u': 0},
-        top_id: {'u': 0},
+        bottom_id: {'un': 0},
+        top_id: {'un': 0},
     }
 
     # Nullspaces and near-nullspaces:
-    Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
+    Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
@@ -86,14 +83,14 @@ def model(level, k, nn, do_write=False):
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
     rot = as_vector((-X[1], X[0]))
-    coef = assemble(dot(rot, u_)*_dx) / assemble(dot(rot, rot)*_dx)
+    coef = assemble(dot(rot, u_)*dx) / assemble(dot(rot, rot)*dx)
     u_.project(u_ - rot*coef, solver_parameters=_project_solver_parameters)
 
     # removing constant nullspace from pressure
-    coef = assemble(p_ * _dx)/assemble(Constant(1.0)*_dx(domain=mesh))
+    coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
-    solution = assess.CylindricalStokesSolutionSmoothZeroSlip(int(float(nn)), int(float(k)), nu=float(mu))
+    solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
 
     # compute u analytical and error
     uxy = interpolate(as_vector((X[0], X[1])), V)
@@ -111,16 +108,16 @@ def model(level, k, nn, do_write=False):
         # Write output files in VTK format:
         u_.rename("Velocity")
         p_.rename("Pressure")
-        u_file = VTKFile("zs_velocity_{}.pvd".format(level))
-        p_file = VTKFile("zs_pressure_{}.pvd".format(level))
+        u_file = VTKFile("fs_velocity_{}.pvd".format(level))
+        p_file = VTKFile("fs_pressure_{}.pvd".format(level))
 
         # Write output:
         u_file.write(u_, u_anal, u_error)
         p_file.write(p_, p_anal, p_error)
 
-    l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*_dx))
-    l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*_dx))
-    l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*_dx))
-    l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*_dx))
+    l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*dx))
+    l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*dx))
+    l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*dx))
+    l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*dx))
 
     return l2error_u, l2error_p, l2anal_u, l2anal_p
