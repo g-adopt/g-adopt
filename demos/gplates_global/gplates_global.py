@@ -1,12 +1,14 @@
 # Global mantle convection simulation with sequentially imposed GPlates surface velocities
 # ==========================================
 #
-# In this tutorial, we transition from our idealised 3-D spherical shell geometry simulation to a scenario where surface velocities from a plate reconstruction model are used as the top-surface velocity boundary condition.
+# In this tutorial, we transition from our idealised 3-D spherical shell geometry simulation to a scenario where surface
+# velocities from a plate reconstruction model are used as the top-surface velocity boundary condition.
 # This type of simulation has been extensively used over recent decades to study the spatial and temporal evolution of mantle flow.
 # This tutorial builds on the *idealised 3-D spherical shell geometry simulation* and a user should follow that tutorial prior to this.
 #
 # This example focuses on:
-# 1. How to import GPlates functionalities into G-ADOPT. For being able to import gadopt.gplates module you need to have a working pyGPlates. For more information on how to build pyGPlates see [EarthByte's page](https://www.earthbyte.org/category/resources/software-workflows/pygplates/).
+# 1. How to import GPlates functionalities into G-ADOPT. For being able to import gadopt.gplates module you need to have a working pyGPlates.
+# For more information on how to build pyGPlates see [EarthByte's page](https://www.earthbyte.org/category/resources/software-workflows/pygplates/).
 # 2. How to set prescribed boundary conditions.
 # 3. How to configure nullspaces in a setup where there are constraints on tangential velocities at the surface.
 # 4. How to load a 1-D radial profile from a file (here, to prescribe a spherically symmetric viscosity)
@@ -72,9 +74,10 @@ averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
 # ## Loading a 1-D Axisymmetric Profile for Viscosity
 # ----------
-# Earth's physical properties are primarily characterised by spherically symmetric (depth-dependent) features influenced predominantly by hydrostatic pressure variations.
-# Here, we load a 1-D viscosity profile, as utilised by Ghelichkhan et al. (2021) in *Geophysical Journal International* to model the Earth's evolution during the Cenozoic era.
-# We first set up our viscosity function space. The 1-D profile data is located in the file `./mu2_radial.rad`, and we will use interpolation functionalities provided by G-ADOPT to populate the viscosity field.
+# Earth's physical properties are primarily characterised by spherically symmetric (depth-dependent) features influenced predominantly by hydrostatic
+# pressure variations. Here, we load a 1-D viscosity profile, as utilised by Ghelichkhan et al. (2021) in *Geophysical Journal International* to model
+# Earth's evolution during the Cenozoic era. We first set up our viscosity function space. The 1-D profile data is located in the file `./mu2_radial.rad`,
+# and we will use interpolation functionalities provided by G-ADOPT to populate the viscosity field.
 
 mu = Function(Q, name="Viscosity")
 interpolate_1d_profile(function=mu, one_d_filename="mu2_radial.rad", cartesian=False)
@@ -94,8 +97,8 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 #
 # pyGplates interface in G-ADOPT:
 # ------------------------
-# Next, we define the surface velocities. All GPlates functionalities are accessible through the module `gadopt.gplates`. We will use the interface provided by G-ADOPT for pygplates.
-# Similar to pyGplates, the G-ADOPT interface requires specific files for loading and processing surface velocities
+# Next, we define the surface velocities. All GPlates functionalities are accessible through the module `gadopt.gplates`. We will use the interface
+# provided by G-ADOPT for pygplates. Similar to pyGplates, the G-ADOPT interface requires specific files for loading and processing surface velocities
 # from a reconstruction model. For this tutorial, we will use the study published by Muller et al., 2022.
 # The files can be downloaded from EarthByte's server at:
 # https://earthbyte.org/webdav/ftp/Data_Collections/Muller_etal_2022_SE/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
@@ -128,14 +131,15 @@ plate_receonstion_model = pyGplatesConnector(
     delta_t=0.9
 )
 
-# A plate reconstruction model includes an essential feature for simulations of Earth's mantle in which the distribution of heterogeneity is principally dictated by plate boundaries.
-# This feature depends on the imported data through the plate reconstruction and allows for conversions between
-# *time* (non-dimensional time here) and geologic *age*.
-# To achieve this, you can use `age2ndtime` and `ndtime2age`. For example, the starting time and present-day time are:
+# A plate reconstruction model includes an essential feature for simulations of Earth's mantle in which the distribution of heterogeneity
+# is principally dictated by plate boundaries.This feature depends on the imported data through the plate reconstruction and allows for
+# conversions between *time* (non-dimensional time here) and geologic *age*. To achieve this, you can use `age2ndtime` and `ndtime2age`.
+# For example, the starting time and present-day time are:
 
 # + tags=["active-ipynb"]
 # log(f"Oldest age is {plate_receonstion_model.ndtime2age(0.0)}")  # zero non-dimenional time is the starting time of the model
-# log(f"non-dimensionalised present-day time: {plate_receonstion_model.age2ndtime(0.0)}")  # present-day geologic time, i.e. zero age, is the end time of the simulation.
+# log(f"non-dimensionalised present-day time: {plate_receonstion_model.age2ndtime(0.0)}")  # present-day geologic time, i.e. zero age, is
+# the end time of the simulation.
 # -
 
 # With the plate reconstruction model loaded using `pyGplatesConnector``, we can now generate the velocity field.
@@ -211,8 +215,8 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
 # -
 
 # Before we begin with the time-stepping, we need to know when to stop, which is when we arrive at the present-day.
-# (Fun fact: we cannot reconstruct plate movements in the future.) To achieve this, we define `presentday_ndtime` which tells us when the simulation should end.
-# Note that this tutorial terminates after a number of timesteps, prior to reaching the present-day.
+# (Fun fact: we cannot reconstruct plate movements in the future.) To achieve this, we define `presentday_ndtime` which tells us when the
+# simulation should end. Note that this tutorial terminates after a number of timesteps, prior to reaching the present-day.
 
 # +
 presentday_ndtime = plate_receonstion_model.age2ndtime(0.0)
