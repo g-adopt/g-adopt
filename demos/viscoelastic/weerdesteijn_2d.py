@@ -12,8 +12,8 @@ class Weerdesteijn2d:
     name = "weerdesteijn-2d"
     vertical_component = 1
 
-    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, dt_out_years=10e3, short_simulation=False, do_write=False, LOAD_CHECKPOINT=False, LOAD_MESH=False,
-                 LOAD_VISCOSITY=False, checkpoint_file=None, Tstart=0, cartesian=True, vertical_squashing=True, vertical_tanh_width=5e3, low_viscosity_region=False, **kwargs):
+    def __init__(self, dx=10e3, nz=80, dt_years=50, Tend_years=110e3, dt_out_years=10e3, short_simulation=False, do_write=True, LOAD_CHECKPOINT=False, LOAD_MESH=False,
+                 LOAD_VISCOSITY=False, checkpoint_file=None, Tstart=0, cartesian=True, vertical_squashing=True, vertical_tanh_width=None, low_viscosity_region=False, WRITE_OBJ_CHECKPOINT=False, **kwargs):
         # Set up geometry:
         self.dx = dx  # horizontal grid resolution in m
         self.nz = nz
@@ -28,6 +28,7 @@ class Weerdesteijn2d:
         self.vertical_squashing = vertical_squashing
         self.vertical_tanh_width = vertical_tanh_width
         self.low_viscosity_region = low_viscosity_region
+        self.WRITE_OBJ_CHECKPOINT = WRITE_OBJ_CHECKPOINT
 
         # layer properties from spada et al 2011
         self.radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
@@ -210,22 +211,26 @@ class Weerdesteijn2d:
         pass
 
     def viscosity_values(self):
-        return [1e2, 0.01, 0.01, 0.02, 0]
+        # Log10(viscosity)
+        return [17, -2, -2, -1.698970004, 0]
 
     def initialise_background_field(self, field, background_values):
-        profile = background_values[0]
-        sharpness = 1 / self.vertical_tanh_width
-        depth = self.initialise_depth()
-        for i in range(1, len(background_values)-1):
-            centre = self.radius_values[i] - self.radius_values[0]
-            mag = background_values[i] - background_values[i-1]
-            profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
-    
-        field.interpolate(profile)
+        if self.vertical_tanh_width is None:
+            for i in range(0, len(background_values)-1):
+                field.interpolate(conditional(self.X[self.vertical_component] >= self.radius_values[i+1] - self.radius_values[0],
+                                  conditional(self.X[self.vertical_component] <= self.radius_values[i] - self.radius_values[0],
+                                  background_values[i], field), field))
+        else:
+            profile = background_values[0]
+            sharpness = 1 / self.vertical_tanh_width
+            depth = self.initialise_depth()
+            for i in range(1, len(background_values)-1):
+                centre = self.radius_values[i] - self.radius_values[0]
+                mag = background_values[i] - background_values[i-1]
+                profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
+        
+            field.interpolate(profile)
 
-            #field.interpolate(conditional(self.X[self.vertical_component] >= self.radius_values[i+1] - self.radius_values[0],
-             #                 conditional(self.X[self.vertical_component] <= self.radius_values[i] - self.radius_values[0],
-              #                background_values[i], field), field))
 
     def setup_heterogenous_viscosity(self):
         pass
@@ -293,7 +298,7 @@ class Weerdesteijn2d:
         return f"{self.name}-chk.h5"
 
     def displacement_filename(self):
-        return f"displacement-{self.name}-nz{self.nz}-tanhvert-tanh2.5km.dat"
+        return f"displacement-{self.name}.dat"
 
     def setup_displacement_vom_output(self):
         self.displacement_vom_matplotlib_df = pd.DataFrame()
@@ -336,8 +341,10 @@ class Weerdesteijn2d:
             with self.stokes_stage: self.stokes_solver.solve()
 
             # Storing displacement and incremental displacement to be used in the objective 
-            objective_checkpoint_file.save_function(self.u_, name="Incremental Displacement", idx=timestep)
-            objective_checkpoint_file.save_function(self.displacement, name="Displacement", idx=timestep)
+            if self.WRITE_OBJ_CHECKPOINT:
+                objective_checkpoint_file.save_function(self.u_, name="Incremental Displacement", idx=timestep)
+                objective_checkpoint_file.save_function(self.displacement, name="Displacement", idx=timestep)
+            
             self.integrated_time_misfit(timestep)
             self.time.assign(self.time+self.dt)
 
