@@ -122,7 +122,7 @@ muller_2022_files = obtain_Muller_2022_SE("./gplates_files")
 # This is especially useful for simulations on coarser grids. We generate this by:
 
 # Initiating a plate reconstruction model
-plate_receonstion_model = pyGplatesConnector(
+plate_reconstruction_model = pyGplatesConnector(
     rotation_filenames=muller_2022_files["rotation_filenames"],
     topology_filenames=muller_2022_files["topology_filenames"],
     oldest_age=1000,
@@ -137,8 +137,8 @@ plate_receonstion_model = pyGplatesConnector(
 # For example, the starting time and present-day time are:
 
 # + tags=["active-ipynb"]
-# log(f"Oldest age is {plate_receonstion_model.ndtime2age(0.0)}")  # zero non-dimenional time is the starting time of the model
-# log(f"non-dimensionalised present-day time: {plate_receonstion_model.age2ndtime(0.0)}")  # present-day geologic time, i.e. zero age, is
+# log(f"Oldest age is {plate_reconstruction_model.ndtime2age(0.0)}")  # zero non-dimenional time is the starting time of the model
+# log(f"non-dimensionalised present-day time: {plate_reconstruction_model.age2ndtime(0.0)}")  # present-day geologic time, i.e. zero age, is
 # the end time of the simulation.
 # -
 
@@ -152,7 +152,7 @@ plate_receonstion_model = pyGplatesConnector(
 # Top velocity boundary condition
 gplates_velocities = GplatesVelocityFunction(
     V,
-    gplates_connector=plate_receonstion_model,
+    gplates_connector=plate_reconstruction_model,
     top_boundary_marker=top_id,
     name="GPlates_Velocity"
 )
@@ -164,7 +164,7 @@ gplates_velocities = GplatesVelocityFunction(
 # + tags=["active-ipynb"]
 # vtk_file = VTKFile("gplates_velocity.pvd")
 # for mytime in [200, 100, 0]:
-#     gplates_velocities.update_plate_reconstruction(ndtime=plate_receonstion_model.age2ndtime(mytime))
+#     gplates_velocities.update_plate_reconstruction(ndtime=plate_reconstruction_model.age2ndtime(mytime))
 #     vtk_file.write(gplates_velocities)
 #
 # import pyvista as pv
@@ -219,7 +219,7 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
 # simulation should end. Note that this tutorial terminates after a number of timesteps, prior to reaching the present-day.
 
 # +
-presentday_ndtime = plate_receonstion_model.age2ndtime(0.0)
+presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
 
 for timestep in range(0, timesteps):
     # Write output:
@@ -237,7 +237,7 @@ for timestep in range(0, timesteps):
     time += dt
 
     # updating plate velocities:
-    gplates_velocities.update_plate_reconstruciton(time)
+    gplates_velocities.update_plate_reconstruction(time)
 
     # Solve Stokes sytem:
     stokes_solver.solve()
@@ -255,7 +255,7 @@ for timestep in range(0, timesteps):
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {plate_receonstion_model.ndtime2age(time)} {float(delta_t)} {maxchange} {gd.u_rms()} "
+    plog.log_str(f"{timestep} {time} {plate_reconstruction_model.ndtime2age(time)} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
                  f"{energy_conservation} {gd.T_avg()} {T_dev_avg} ")
 
