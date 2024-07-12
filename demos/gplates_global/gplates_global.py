@@ -45,7 +45,7 @@ approximation = BoussinesqApproximation(Ra)
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20  # Maximum number of timesteps
+timesteps = 5  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 T = Function(Q, name="Temperature")
@@ -90,7 +90,7 @@ interpolate_1d_profile(function=mu, one_d_filename="mu2_radial.rad", cartesian=F
 # we impose the surface velocity as prescribed by a plate tectonic reconstructions and, hence, there is no longer
 # a rotational nullspace. Accordingly, we set the `rotational` argument to `False` when creating the Z_nullspace object.
 
-Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
+Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
 # Notice that near nullspaces remain consistent with the idealised 3-D spherical example, as they are a key aspect of our preconditioning approach.
@@ -119,7 +119,8 @@ muller_2022_files = obtain_Muller_2022_SE("./gplates_files")
 # `nseeds` is the number of points on a sphere used to initially load the plate reconstruction data, and `nneighbours`
 # is the number of nearest points used to interpolate from the seed points to our 3-D mesh.
 # A lower `nseeds * 1/nneighbours` ratio results in a smoother velocity representation at each age, and vice versa.
-# This is especially useful for simulations on coarser grids. We generate this by:
+# This is especially useful for simulations on coarser grids. Given that this tutorial considers a Rayleigh number several
+# orders of magnitude lower than Earth's mantle, we also scale plate velocities using an optional scaling_factor.
 
 # Initiating a plate reconstruction model
 plate_reconstruction_model = pyGplatesConnector(
@@ -128,7 +129,8 @@ plate_reconstruction_model = pyGplatesConnector(
     oldest_age=1000,
     nseeds=1e5,
     nneighbours=4,
-    delta_t=0.9
+    delta_t=0.9,
+    scaling_factor=1000.
 )
 
 # A plate reconstruction model includes an essential feature for simulations of Earth's mantle in which the distribution of heterogeneity
@@ -211,24 +213,25 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              mu=mu, cartesian=False, constant_jacobian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
-
 # -
 
 # Before we begin with the time-stepping, we need to know when to stop, which is when we arrive at the present-day.
-# (Fun fact: we cannot reconstruct plate movements in the future.) To achieve this, we define `presentday_ndtime` which tells us when the
-# simulation should end. Note that this tutorial terminates after a number of timesteps, prior to reaching the present-day.
+# To achieve this, we define `presentday_ndtime` which tells us when the simulation should end.
+# Note that this tutorial terminates after reaching a specified number of timesteps, prior to reaching the present-day.
 
 # +
 presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
 
 for timestep in range(0, timesteps):
+
     # Write output:
     if timestep % output_frequency == 0:
         # Compute radially averaged temperature profile as simulation evolves.
         averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
         # Compute deviation from layer average
         T_dev.assign(T-T_avg)
-        output_file.write(*z.subfunctions, T, T_dev)
+        # Output fields, including viscosity
+        output_file.write(*z.subfunctions, T, T_dev, mu)
 
     if timestep != 0:
         dt = t_adapt.update_timestep()
@@ -249,7 +252,6 @@ for timestep in range(0, timesteps):
     nusselt_number_top = gd.Nu_top() * (rmax*(rmin-rmax)/rmin) * -1.
     nusselt_number_base = gd.Nu_bottom() * (rmin*(rmax-rmin)/rmax)
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
-    T_dev_avg = assemble(T_dev * dx) / domain_volume
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
@@ -257,11 +259,21 @@ for timestep in range(0, timesteps):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {plate_reconstruction_model.ndtime2age(time)} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
-                 f"{energy_conservation} {gd.T_avg()} {T_dev_avg} ")
+                 f"{energy_conservation} {gd.T_avg()} ")
 
     # Do not go over present-day
     if time > presentday_ndtime:
         break
 
+# At the end of the simulation, once a steady-state has been achieved, we close our logging file
+# and checkpoint steady state temperature and Stokes solution fields to disk. These can later be
+# used to restart a simulation, if required.
+
+# +
 plog.close()
+
+with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
+    final_checkpoint.save_mesh(mesh)
+    final_checkpoint.save_function(T, name="Temperature")
+    final_checkpoint.save_function(z, name="Stokes")
 # -
