@@ -14,10 +14,10 @@ authors:
 - family-names: Scott
   given-names: Will
 cff-version: 1.2.0
-date-released: '2024-02-07'
+date-released: '2024-06-11'
 doi: 10.5281/zenodo.5644391
 message: If you use this software, please cite it as below.
 repository-code: https://github.com/g-adopt/g-adopt
 title: G-ADOPT
 type: software
-version: v2.2.0
+version: v2.3.0

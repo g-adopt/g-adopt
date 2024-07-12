@@ -500,6 +500,11 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
 
     if mesh.comm.rank == 0:
         rshl, one_d_data = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+        if rshl[1] < rshl[0]:
+            rshl = rshl[::-1]
+            one_d_data = one_d_data[::-1]
+        if not np.all(np.diff(rshl) > 0):
+            raise ValueError("Data must be strictly monotonous.")
     else:
         one_d_data = None
         rshl = None
@@ -513,6 +518,8 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
 
     rad = Function(function.function_space()).interpolate(upward_coord)
 
-    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, cartesian=cartesian)
+    averager = LayerAveraging(
+        mesh, rshl if mesh.layers is None else None, cartesian=cartesian
+    )
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
