@@ -1,5 +1,4 @@
 import numpy as np
-import shapely as sl
 from gadopt import *
 from gadopt.inverse import *
 
@@ -77,13 +76,13 @@ timesteps = 200
 
 for timestep in range(0, timesteps):
 
-    output_file.write(*z.subfunctions, T, psi, psi_ic)    
-    
+    output_file.write(*z.subfunctions, T, psi, psi_ic)
+
     stokes_solver.solve()
 
     level_set_solver.solve(timestep)
 
-# Now specify objective functional and perform Taylor test:    
+# Now specify objective functional and perform Taylor test:
 objective = assemble((psi - psi_obs) ** 2 * dx)
 reduced_functional = ReducedFunctional(objective, control)
 
@@ -111,19 +110,13 @@ phi_ub.assign(1.0)
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(phi_lb, phi_ub))
 minimisation_parameters["Status Test"] = 20
 
-#
-# A notable feature of this optimisation approach in ROL is its checkpointing capability. For every iteration, all information necessary to restart the optimisation from that iteration is saved in the specified `checkpoint_dir`.
-
-# +
 # Define the LinMore Optimiser class with checkpointing capability
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
     checkpoint_dir="optimisation_checkpoint",
 )
-# -
 
-# +
 solutions_vtk = VTKFile("solutions.pvd")
 solution_container = Function(psi_ic.function_space(), name="Solutions")
 
@@ -134,10 +127,8 @@ def callback():
 #    final_phi_misfit = assemble(
 #        (phi.block_variable.checkpoint.restore() - phi_obs) ** 2 * dx
 #    )
-
 #    log(f"Terminal Phi Misfit: {final_phi_misfit}")
 
 
 optimiser.add_callback(callback)
 optimiser.run()
-# -

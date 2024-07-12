@@ -2,8 +2,10 @@ import numpy as np
 import shapely as sl
 from gadopt import *
 
+
 def cosine_curve(x, amplitude, wavelength, vertical_shift):
     return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
+
 
 nx, ny = 80, 80
 lx, ly = 0.9142, 1
@@ -97,12 +99,11 @@ timesteps = 200
 for timestep in range(0, timesteps):
 
     output_file.write(*z.subfunctions, T, psi)
-    
+
     stokes_solver.solve()
 
     level_set_solver.solve(timestep)
 
-    
 with CheckpointFile("forward_checkpoint.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
