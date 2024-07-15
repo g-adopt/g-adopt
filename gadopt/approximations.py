@@ -234,12 +234,12 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
         phi = inner(stress, grad(u))
         return phi * self.Di / self.Ra
 
-    def work_against_gravity(self, u, T):
-        w = vertical_component(u, self.cartesian)
-        return self.Di * self.alpha * self.rho * self.g * w * T
-
     def linearized_energy_sink(self, u):
-        return self.work_against_gravity(u, 1)
+        w = vertical_component(u, self.cartesian)
+        return self.Di * self.alpha * self.rho * self.g * w
+
+    def work_against_gravity(self, u, T):
+        return self.linearized_energy_sink(u) * T
 
     def energy_source(self, u):
         source = self.viscous_dissipation(u)
@@ -302,10 +302,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
 
     def rhocp(self):
         return self.rho * self.cp
-
-    def linearized_energy_sink(self, u):
-        w = vertical_component(u, self.cartesian)
-        return self.Di * self.rho * self.alpha * w
 
 
 class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
