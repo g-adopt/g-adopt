@@ -26,7 +26,7 @@ import math
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
 
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
-mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
 bottom_id, top_id = "bottom", "top"
 domain_volume = assemble(1*dx(domain=mesh))  # Required for a diagnostic calculation.
 
@@ -49,8 +49,8 @@ timesteps = 5  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 T = Function(Q, name="Temperature")
-T_avg = Function(Q, name='Layer_Averaged_Temp')
-T_dev = Function(Q, name='Temperature_Deviation')
+T_avg = Function(Q, name="Layer_Averaged_Temp")
+T_dev = Function(Q, name="Temperature_Deviation")
 
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
@@ -105,7 +105,7 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # Download and unzip this file into the `./gplates_files` directory. Below, we verify the required paths in this
 # directory and ensure they exist:
 
-muller_2022_files = obtain_Muller_2022_SE("./gplates_files")
+muller_2022_files = obtain_Muller_2022_SE(".")
 
 # + tags=["active-ipynb"]
 # # Printing files that needs to be passed on to pyGplates
@@ -170,12 +170,12 @@ gplates_velocities = GplatesVelocityFunction(
 #     vtk_file.write(gplates_velocities)
 #
 # import pyvista as pv
-# dataset = pv.read('gplates_velocity/gplates_velocity_0.vtu')
+# dataset = pv.read("gplates_velocity/gplates_velocity_0.vtu")
 # # Create a plotter object
 # plotter = pv.Plotter()
 # # Add the dataset to the plotter
-# plotter.add_mesh(dataset, scalars='GPlates_Velocity', cmap='coolwarm')
-# glyphs = dataset.glyph(orient='GPlates_Velocity', scale=1, factor=1e-4)
+# plotter.add_mesh(dataset, scalars="GPlates_Velocity", cmap="coolwarm")
+# glyphs = dataset.glyph(orient="GPlates_Velocity", scale=1, factor=1e-4)
 # # Add glyphs to the plotter
 # plotter.add_mesh(glyphs, color="black", opacity=0.2)
 # # Adjust the camera position
@@ -202,8 +202,8 @@ temp_bcs = {
 output_file = VTKFile("output.pvd")
 output_frequency = 1
 
-plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time age dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg")
+plog = ParameterLog("params.log", mesh)
+plog.log_str("timestep time age dt maxchange u_rms u_rms_top nu_top nu_base energy avg_t")
 
 gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, degree=6)
 
@@ -257,7 +257,8 @@ for timestep in range(0, timesteps):
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {plate_reconstruction_model.ndtime2age(time)} {float(delta_t)} {maxchange} {gd.u_rms()} "
+    plog.log_str(f"{timestep} {time} {plate_reconstruction_model.ndtime2age(time)} {float(delta_t)} "
+                 f"{maxchange} {gd.u_rms()} {gd.u_rms_top()}"
                  f"{nusselt_number_top} {nusselt_number_base} "
                  f"{energy_conservation} {gd.T_avg()} ")
 
