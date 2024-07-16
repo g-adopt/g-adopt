@@ -1,22 +1,33 @@
 # Global mantle convection simulation with sequentially imposed GPlates surface velocities
-# ==========================================
+# ========================================================================================
 #
-# In this tutorial, we transition from our idealised 3-D spherical shell geometry simulation to a scenario where surface
-# velocities from a plate reconstruction model are used as the top-surface velocity boundary condition.
-# This type of simulation has been extensively used over recent decades to study the spatial and temporal evolution of mantle flow.
-# This tutorial builds on the *idealised 3-D spherical shell geometry simulation* and a user should follow that tutorial prior to this.
+# In this tutorial, we transition from our idealised 3-D spherical
+# shell geometry simulation to a scenario where surface velocities
+# from a plate reconstruction model are used as the top-surface
+# velocity boundary condition.  This type of simulation has been
+# extensively used over recent decades to study the spatial and
+# temporal evolution of mantle flow.  This tutorial builds on the
+# *idealised 3-D spherical shell geometry simulation* and a user
+# should follow that tutorial prior to this.
 #
 # This example focuses on:
-# 1. How to import GPlates functionalities into G-ADOPT. For being able to import gadopt.gplates module you need to have a working pyGPlates.
-# For more information on how to build pyGPlates see [EarthByte's page](https://www.earthbyte.org/category/resources/software-workflows/pygplates/).
+# 1. How to import GPlates functionalities into G-ADOPT. For being
+#    able to import gadopt.gplates module you need to have a working
+#    pyGPlates.  For more information on how to build pyGPlates see
+#    [EarthByte's
+#    page](https://www.earthbyte.org/category/resources/software-workflows/pygplates/).
 # 2. How to set prescribed boundary conditions.
-# 3. How to configure nullspaces in a setup where there are constraints on tangential velocities at the surface.
-# 4. How to load a 1-D radial profile from a file (here, to prescribe a spherically symmetric viscosity)
+# 3. How to configure nullspaces in a setup where there are
+#    constraints on tangential velocities at the surface.
+# 4. How to load a 1-D radial profile from a file (here, to prescribe
+#    a spherically symmetric viscosity)
 #
-# Aside from these aspects, the case closely follows the previous 3-D spherical example.
+# Aside from these aspects, the case closely follows the previous 3-D
+# spherical example.
 #
-# Let's begin with the usual import of G-ADOPT, set up of the mesh, function spaces, functions to hold our solutions,
-# material properties, approximations and initial conditions:
+# Let's begin with the usual import of G-ADOPT, set up of the mesh,
+# function spaces, functions to hold our solutions, material
+# properties, approximations and initial conditions:
 
 # +
 from gadopt import *
@@ -73,56 +84,78 @@ averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 # -
 
 # ## Loading a 1-D Axisymmetric Profile for Viscosity
-# ----------
-# Earth's physical properties are primarily characterised by spherically symmetric (depth-dependent) features influenced predominantly by hydrostatic
-# pressure variations. Here, we load a 1-D viscosity profile, as utilised by Ghelichkhan et al. (2021) in *Geophysical Journal International* to model
-# Earth's evolution during the Cenozoic era. We first set up our viscosity function space. The 1-D profile data is located in the file `./mu2_radial.rad`,
-# and we will use interpolation functionalities provided by G-ADOPT to populate the viscosity field.
+#
+# Earth's physical properties are primarily characterised by
+# spherically symmetric (depth-dependent) features influenced
+# predominantly by hydrostatic pressure variations. Here, we load a
+# 1-D viscosity profile, as utilised by Ghelichkhan et al. (2021) in
+# *Geophysical Journal International* to model Earth's evolution
+# during the Cenozoic era. We first set up our viscosity function
+# space. The 1-D profile data is located in the file
+# `./mu2_radial.rad`, and we will use interpolation functionalities
+# provided by G-ADOPT to populate the viscosity field.
 
 mu = Function(Q, name="Viscosity")
 interpolate_1d_profile(function=mu, one_d_filename="mu2_radial.rad", cartesian=False)
 
 # ## Nullspaces:
-# ----------
-# Our idealised 3-D spherical case had free-slip velocity boundary conditions at both top and bottom surfaces.
-# With those boundary conditions, the velocity component of the Stokes equation entails
-# three rotational nullspaces in all three rotational directions. In the example considered herein,
-# we impose the surface velocity as prescribed by a plate tectonic reconstructions and, hence, there is no longer
-# a rotational nullspace. Accordingly, we set the `rotational` argument to `False` when creating the Z_nullspace object.
+#
+# Our idealised 3-D spherical case had free-slip velocity boundary
+# conditions at both top and bottom surfaces.  With those boundary
+# conditions, the velocity component of the Stokes equation entails
+# three rotational nullspaces in all three rotational directions. In
+# the example considered herein, we impose the surface velocity as
+# prescribed by a plate tectonic reconstructions and, hence, there is
+# no longer a rotational nullspace. Accordingly, we set the
+# `rotational` argument to `False` when creating the Z_nullspace
+# object.
 
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
-# Notice that near nullspaces remain consistent with the idealised 3-D spherical example, as they are a key aspect of our preconditioning approach.
+# Notice that near nullspaces remain consistent with the idealised 3-D
+# spherical example, as they are a key aspect of our preconditioning
+# approach.
 #
-# pyGplates interface in G-ADOPT:
-# ------------------------
-# Next, we define the surface velocities. All GPlates functionalities are accessible through the module `gadopt.gplates`. We will use the interface
-# provided by G-ADOPT for pygplates. Similar to pyGplates, the G-ADOPT interface requires specific files for loading and processing surface velocities
-# from a reconstruction model. For this tutorial, we will use the study published by Muller et al., 2022.
+# ## pyGPlates interface in G-ADOPT
+#
+# Next, we define the surface velocities. All GPlates functionalities
+# are accessible through the module `gadopt.gplates`. We will use the
+# interface provided by G-ADOPT for pyGPlates. Similar to pyGPlates,
+# the G-ADOPT interface requires specific files for loading and
+# processing surface velocities from a reconstruction model. For this
+# tutorial, we will use the study published by Muller et al., 2022.
 # The files can be downloaded from EarthByte's server at:
 # https://earthbyte.org/webdav/ftp/Data_Collections/Muller_etal_2022_SE/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
-# Download and unzip this file into the `./gplates_files` directory. Below, we verify the required paths in this
-# directory and ensure they exist:
+# Download and unzip this file into the `./gplates_files`
+# directory. Below, we verify the required paths in this directory and
+# ensure they exist:
 
 muller_2022_files = obtain_Muller_2022_SE(".")
 
 # + tags=["active-ipynb"]
-# # Printing files that needs to be passed on to pyGplates
+# # These are the files that needs to be passed on to pyGPlates
 # print(muller_2022_files)
 # -
 
-# To generate a pyGplatesConnector in G-ADOPT, you need to provide the necessary rotation and topology files.
-# These files describe the plate polygons and their association with the Euler rotation poles at each stage of the reconstruction.
-# Additionally, you need to specify the oldest available age in the model, which for the reconstruction considered here is a billion years.
-# There are optional arguments with default values that can affect how the surface velocities are reconstructed.
-# `nseeds` is the number of points on a sphere used to initially load the plate reconstruction data, and `nneighbours`
-# is the number of nearest points used to interpolate from the seed points to our 3-D mesh.
-# A lower `nseeds * 1/nneighbours` ratio results in a smoother velocity representation at each age, and vice versa.
-# This is especially useful for simulations on coarser grids. Given that this tutorial considers a Rayleigh number several
-# orders of magnitude lower than Earth's mantle, we also scale plate velocities using an optional scaling_factor.
+# To generate a pyGplatesConnector in G-ADOPT, you need to provide the
+# necessary rotation and topology files.  These files describe the
+# plate polygons and their association with the Euler rotation poles
+# at each stage of the reconstruction.  Additionally, you need to
+# specify the oldest available age in the model, which for the
+# reconstruction considered here is a billion years.  There are
+# optional arguments with default values that can affect how the
+# surface velocities are reconstructed.  `nseeds` is the number of
+# points on a sphere used to initially load the plate reconstruction
+# data, and `nneighbours` is the number of nearest points used to
+# interpolate from the seed points to our 3-D mesh.  A lower `nseeds *
+# 1/nneighbours` ratio results in a smoother velocity representation
+# at each age, and vice versa.  This is especially useful for
+# simulations on coarser grids. Given that this tutorial considers a
+# Rayleigh number several orders of magnitude lower than Earth's
+# mantle, we also scale plate velocities using an optional
+# scaling_factor.
 
-# Initiating a plate reconstruction model
 plate_reconstruction_model = pyGplatesConnector(
     rotation_filenames=muller_2022_files["rotation_filenames"],
     topology_filenames=muller_2022_files["topology_filenames"],
@@ -133,23 +166,31 @@ plate_reconstruction_model = pyGplatesConnector(
     scaling_factor=1000.
 )
 
-# A plate reconstruction model includes an essential feature for simulations of Earth's mantle in which the distribution of heterogeneity
-# is principally dictated by plate boundaries.This feature depends on the imported data through the plate reconstruction and allows for
-# conversions between *time* (non-dimensional time here) and geologic *age*. To achieve this, you can use `age2ndtime` and `ndtime2age`.
-# For example, the starting time and present-day time are:
+# A plate reconstruction model includes an essential feature for
+# simulations of Earth's mantle in which the distribution of
+# heterogeneity is principally dictated by plate boundaries.This
+# feature depends on the imported data through the plate
+# reconstruction and allows for conversions between *time*
+# (non-dimensional time here) and geologic *age*. To achieve this, you
+# can use `age2ndtime` and `ndtime2age`.
+#
+# For example, the starting time (zero time) and present-day time (zero age) are:
 
 # + tags=["active-ipynb"]
-# log(f"Oldest age is {plate_reconstruction_model.ndtime2age(0.0)}")  # zero non-dimenional time is the starting time of the model
-# log(f"non-dimensionalised present-day time: {plate_reconstruction_model.age2ndtime(0.0)}")  # present-day geologic time, i.e. zero age, is
-# the end time of the simulation.
+# log(f"Oldest age is {plate_reconstruction_model.ndtime2age(0.0)}")
+# log(f"non-dimensionalised present-day time: {plate_reconstruction_model.age2ndtime(0.0)}")
 # -
 
-# With the plate reconstruction model loaded using `pyGplatesConnector``, we can now generate the velocity field.
-# This is done using `GplatesVelocityFunction`. For all practical purposes, it behaves as a UFL-compatible
-# Function. However, defining it requires two additional arguments. One is the `gplates_connector`, which we defined
-# above, and the second is the subdomain marker of the top boundary in the mesh. Other arguments are identical to a
-# Firedrake Function, meaning at minimum a FunctionSpace should be provided for the Function, which here is `V`,
-# and optionally a name for the function.
+# With the plate reconstruction model loaded using
+# `pyGplatesConnector``, we can now generate the velocity field.  This
+# is done using `GplatesVelocityFunction`. For all practical purposes,
+# it behaves as a UFL-compatible Function. However, defining it
+# requires two additional arguments. One is the `gplates_connector`,
+# which we defined above, and the second is the subdomain marker of
+# the top boundary in the mesh. Other arguments are identical to a
+# Firedrake Function, meaning at minimum a FunctionSpace should be
+# provided for the Function, which here is `V`, and optionally a name
+# for the function.
 
 # Top velocity boundary condition
 gplates_velocities = GplatesVelocityFunction(
@@ -159,9 +200,12 @@ gplates_velocities = GplatesVelocityFunction(
     name="GPlates_Velocity"
 )
 
-# Once this is defined, we can use `gplates_velocities.update_plate_reconstruction(time)` to update the velocity
-# function to a new time. Note that time is non-dimensional. Since `GplatesVelocityFunction` is a Firedrake
-# function for all purposes, it can be easily viewed using VTK functionalities in Firedrake.
+# Once this is defined, we can use
+# `gplates_velocities.update_plate_reconstruction(time)` to update the
+# velocity function to a new time. Note that time is
+# non-dimensional. Since `GplatesVelocityFunction` is a Firedrake
+# function for all purposes, it can be easily viewed using VTK
+# functionalities in Firedrake.
 
 # + tags=["active-ipynb"]
 # vtk_file = VTKFile("gplates_velocity.pvd")
@@ -171,6 +215,7 @@ gplates_velocities = GplatesVelocityFunction(
 #
 # import pyvista as pv
 # dataset = pv.read("gplates_velocity/gplates_velocity_0.vtu")
+#
 # # Create a plotter object
 # plotter = pv.Plotter()
 # # Add the dataset to the plotter
@@ -184,9 +229,12 @@ gplates_velocities = GplatesVelocityFunction(
 # plotter.show()
 # -
 
-# And last but not least, we need to inform our solver of our choice of boundary conditions. This is done by
-# adding it to the `stokes_bcs` dictionary. From there to the end of the simulation, everything works seamlessly
-# by updating `gplates_velocities` via a call to `gplates_velocities.update_plate_reconstruction(time)` within the time loop.
+# And last but not least, we need to inform our solver of our choice
+# of boundary conditions. This is done by adding it to the
+# `stokes_bcs` dictionary. From there to the end of the simulation,
+# everything works seamlessly by updating `gplates_velocities` via a
+# call to `gplates_velocities.update_plate_reconstruction(time)`
+# within the time loop.
 
 # +
 stokes_bcs = {
@@ -215,9 +263,11 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              near_nullspace=Z_near_nullspace)
 # -
 
-# Before we begin with the time-stepping, we need to know when to stop, which is when we arrive at the present-day.
-# To achieve this, we define `presentday_ndtime` which tells us when the simulation should end.
-# Note that this tutorial terminates after reaching a specified number of timesteps, prior to reaching the present-day.
+# Before we begin with the time-stepping, we need to know when to
+# stop, which is when we arrive at the present-day.  To achieve this,
+# we define `presentday_ndtime` which tells us when the simulation
+# should end.  Note that this tutorial terminates after reaching a
+# specified number of timesteps, prior to reaching the present-day.
 
 # +
 presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
@@ -239,7 +289,7 @@ for timestep in range(0, timesteps):
         dt = float(delta_t)
     time += dt
 
-    # updating plate velocities:
+    # Update plate velocities:
     gplates_velocities.update_plate_reconstruction(time)
 
     # Solve Stokes sytem:
@@ -265,10 +315,12 @@ for timestep in range(0, timesteps):
     # Do not go over present-day
     if time > presentday_ndtime:
         break
+# -
 
-# At the end of the simulation, once a steady-state has been achieved, we close our logging file
-# and checkpoint steady state temperature and Stokes solution fields to disk. These can later be
-# used to restart a simulation, if required.
+# At the end of the simulation, once a steady-state has been achieved,
+# we close our logging file and checkpoint steady state temperature
+# and Stokes solution fields to disk. These can later be used to
+# restart a simulation, if required.
 
 # +
 plog.close()
