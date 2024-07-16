@@ -258,7 +258,7 @@ for timestep in range(0, timesteps):
 
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {plate_reconstruction_model.ndtime2age(time)} {float(delta_t)} "
-                 f"{maxchange} {gd.u_rms()} {gd.u_rms_top()}"
+                 f"{maxchange} {gd.u_rms()} {gd.u_rms_top()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
                  f"{energy_conservation} {gd.T_avg()} ")
 
