@@ -15,6 +15,7 @@ jobs:
 
     env:
       OMP_NUM_THREADS: 1
+      GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +24,7 @@ jobs:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           sudo apt update
-          sudo apt install -y xvfb gmsh s3cmd unzip
+          sudo apt install -y xvfb gmsh gh s3cmd unzip
 
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
@@ -62,3 +63,10 @@ jobs:
         with:
           name: notebooks
           path: rendered
+      - name: Trigger documentation build
+        run: |
+          gh api --method POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          /repos/g-adopt/g-adopt.github.io/dispatches \
+          -f "event_type=doc-rebuild" -F "client_payload[run_id]=${{ github.run_id }}"
