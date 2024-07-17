@@ -19,13 +19,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
+        env:
+          S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           sudo apt update
-          sudo apt install -y xvfb gmsh
+          sudo apt install -y xvfb gmsh s3cmd unzip
+
+          mkdir -p $HOME/.s3cfg
+          echo "${S3CONFIG}" > $HOME/.s3cfg/config
+          chmod 600 $HOME/.s3cfg/config
+          s3cmd --config=$HOME/.s3cfg/config get --skip-existing s3://gadopt/github-actions/pygplates_0.36.0_py312_amd64.deb
+          sudo apt install -y --fix-broken ./pygplates_0.36.0_py312_amd64.deb
+          ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.*/site-packages/
+
           . /home/firedrake/firedrake/bin/activate
           python3 -m pip install nbval nbconvert jupytext
           python3 -m pip install .[demos]
           python3 -m ipykernel install --name firedrake --user
+
+      - name: Get Muller et al 2022 plate reconstructions
+        run: |
+          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
+          unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/gplates_global
+
       - name: Convert notebooks
         run: |
           . /home/firedrake/firedrake/bin/activate
