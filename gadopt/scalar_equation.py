@@ -149,12 +149,12 @@ class ScalarDiffusionTerm(BaseTerm):
 
         for id, bc in bcs.items():
             if 'q' in bc:
-                jump_q = q-bc['q']
+                jump_q = trial-bc['q']
                 sigma_ext = sigma * fd.FacetArea(self.mesh)/fd.CellVolume(self.mesh)
                 # this corresponds to the same 3 terms as the dS integrals for DG above:
                 F += 2*sigma_ext*phi*inner(n, dot(diff_tensor, n))*jump_q*self.ds(id)
                 F += -inner(dot(diff_tensor, grad(phi)), n)*jump_q*self.ds(id)
-                F += -inner(phi*n, dot(diff_tensor, grad(q))) * self.ds(id)
+                F += -inner(phi*n, dot(diff_tensor, grad(trial))) * self.ds(id)
                 if 'flux' in bc:
                     raise ValueError("Cannot apply both `q` and `flux` bc on same boundary")
             elif 'flux' in bc:
