@@ -16,7 +16,7 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
-  "vtk>=9.0.1"
+  "vtk>=9.0.1",
 ]
 
 [project.optional-dependencies]
