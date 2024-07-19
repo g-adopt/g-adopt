@@ -220,7 +220,7 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, mu: Number = 1, H: Optional[Number] = None, cartesian: bool = True, **kwargs):
+    def __init__(self, Ra: Number, Di: Number, *, mu: Number = 1, H: Optional[Number] = None, cartesian: bool = True, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.mu = mu
@@ -251,17 +251,13 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
 class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     """Truncated Anelastic Liquid Approximation
 
-    Compressible approximation. Excludes linear dependence of density on pressure (chi)
+    Compressible approximation. Excludes linear dependence of density on pressure.
 
     Arguments:
       Ra:     Rayleigh number
       Di:     Dissipation number
       Tbar:   reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion) - default 0
-      chi:    reference isothermal compressibility
       cp:     reference specific heat at constant pressure
-      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
-      cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
-      cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
       g :     gravitational acceleration
 
     Keyword Arguments:
@@ -275,7 +271,7 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
       kappa (Number):  diffusivity
 
     Note:
-      The keyword arguments may be depth-dependent, but default to 1 if not supplied.
+      Other keyword arguments may be depth-dependent, but default to 1 if not supplied.
 
     """
     compressible = True
@@ -283,19 +279,13 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     def __init__(self,
                  Ra: Number,
                  Di: Number,
+                 *,
                  Tbar: Function | Number = 0,
-                 chi: Function | Number = 1,
                  cp: Function | Number = 1,
-                 gamma0: Function | Number = 1,
-                 cp0: Function | Number = 1,
-                 cv0: Function | Number = 1,
                  **kwargs):
         super().__init__(Ra, Di, **kwargs)
         self.Tbar = Tbar
-        # Equation of State:
-        self.chi = chi
         self.cp = cp
-        self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
     def rho_continuity(self):
         return self.rho
@@ -307,8 +297,29 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
 class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     """Anelastic Liquid Approximation
 
-    Compressible approximation. Includes linear dependence of density on pressure (chi)
+    Compressible approximation. Includes linear dependence of density on pressure.
+
+    Arguments:
+      chi:    reference isothermal compressibility
+      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
+      cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
+      cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+
     """
+
+    def __init__(self,
+                 Ra: Number,
+                 Di: Number,
+                 *,
+                 chi: Function | Number = 1,
+                 gamma0: Function | Number = 1,
+                 cp0: Function | Number = 1,
+                 cv0: Function | Number = 1,
+                 **kwargs):
+        super().__init__(Ra, Di, **kwargs)
+        # Dynamic pressure contribution towards buoyancy
+        self.chi = chi
+        self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
     def buoyancy(self, p, T):
         pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
