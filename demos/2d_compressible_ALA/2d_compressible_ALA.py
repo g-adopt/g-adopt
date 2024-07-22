@@ -56,15 +56,11 @@ Di = Constant(0.5)  # Dissipation number
 T0 = Constant(0.091)  # Non-dimensional surface temperature
 rhobar = Function(Q, name="CompRefDensity").interpolate(exp((1.0 - X[1]) * Di))  # Reference density
 Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)  # Reference temperature
-alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)  # Thermal expansivity
-cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)  # Specific heat capacity
-chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)  # Bulk modulus
-gbar = Function(Q, name="GravitationalAcceleration").assign(1.0)  # Radial gravity
 
 # These fields are used to set up our Anelastic Liquid Approximation. Alongside adding the
 # requirement for specifying the bulk modulus, this is the key change relative to our tutorial under the TALA approximation.
 
-approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar, chi=chibar, g=gbar)
+approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar)
 
 # As with the previous examples, we next set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -124,7 +120,7 @@ temp_bcs = {
 # +
 output_file = VTKFile("output.pvd")
 ref_file = VTKFile('reference_state.pvd')
-output_frequency = 50
+output_frequency = 570
 
 plog = ParameterLog('params.log', mesh)
 plog.log_str(
@@ -154,7 +150,7 @@ for timestep in range(0, timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T, FullT)
-        ref_file.write(rhobar, Tbar, alphabar, cpbar, chibar)
+        ref_file.write(rhobar, Tbar)
 
     dt = t_adapt.update_timestep()
     time += dt
