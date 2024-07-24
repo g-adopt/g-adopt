@@ -33,11 +33,14 @@ from gadopt import *
 # using the optional keyword argument `extrusion_type`, forming 32 layers. To better represent the
 # curvature of the domain and ensure accuracy of our quadratic representation of velocity, we
 # approximate the curved cylindrical shell domain quadratically, using the optional keyword argument `degree`$=2$.
+# Because this problem is not formulated in a Cartesian geometry, we set the `mesh.cartesian`
+# attribute to False. This ensures the correct configuration of a radially inward vertical direction.
 
 # +
 rmin, rmax, ncells, nlayers = 1.22, 2.22, 128, 32
 mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
 mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')  # extrude into a cylinder
+mesh.cartesian = False
 bottom_id, top_id = "bottom", "top"
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -147,21 +150,19 @@ ref_file = VTKFile('reference_state.pvd')
 output_frequency = 50
 
 plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t")
+plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t T_min T_max")
 
 gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, degree=6)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation, nullspace and near-nullspace information configured above. We also
-# set the optional `cartesian` keyword argument to False, which ensures that the unit vector points radially,
-# in the direction opposite to gravity.
+# passing in the approximation, nullspace and near-nullspace information configured above.
 
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=False, constant_jacobian=True,
+                             constant_jacobian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 # -
@@ -200,7 +201,7 @@ for timestep in range(0, timesteps):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {gd.T_avg()} ")
+                 f"{energy_conservation} {gd.T_avg()} {gd.T_min()} {gd.T_max()} ")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:

@@ -45,6 +45,7 @@ class ParameterLog:
 class TimestepAdaptor:
     """
     Computes timestep based on CFL condition for provided velocity field"""
+
     def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
         """
         :arg dt_const:      Constant whose value will be updated by the timestep adaptor
@@ -84,22 +85,24 @@ class TimestepAdaptor:
         return float(self.dt_const)
 
 
-def upward_normal(mesh, cartesian):
-    if cartesian:
+def upward_normal(mesh):
+    if mesh.cartesian:
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
         X = SpatialCoordinate(mesh)
-        r = sqrt(dot(X, X))
+        r = sqrt(sum([x ** 2 for x in X]))
         return X/r
 
 
-def vertical_component(u, cartesian):
-    if cartesian:
+def vertical_component(u):
+    mesh = extract_unique_domain(u)
+
+    if mesh.cartesian:
         return u[u.ufl_shape[0]-1]
     else:
-        n = upward_normal(extract_unique_domain(u), cartesian)
-        return dot(n, u)
+        n = upward_normal(mesh)
+        return sum([n_i * u_i for n_i, u_i in zip(n, u)])
 
 
 def ensure_constant(f):
@@ -308,7 +311,7 @@ class LayerAveraging:
     A manager for computing a vertical profile of horizontal layer averages.
     """
 
-    def __init__(self, mesh, r1d=None, cartesian=True, quad_degree=None):
+    def __init__(self, mesh, r1d=None, quad_degree=None):
         """
         Create the :class:`LayerAveraging` manager.
         :arg mesh: The mesh over which to compute averages.
@@ -316,13 +319,12 @@ class LayerAveraging:
              at which to compute layer averages. If not provided, and
              mesh is extruded, it uses the same layer heights. If mesh
              is not extruded, r1d is required.
-        :kwarg cartesian: Determines whether `r1d` represents depths or radii.
         """
 
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if cartesian:
+        if mesh.cartesian:
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))
@@ -475,3 +477,46 @@ def node_coordinates(function):
     return [
         Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
     ]
+
+
+def interpolate_1d_profile(function: Function, one_d_filename: str):
+    """
+    Assign a one-dimensional profile to a Function `function` from a file.
+
+    The function reads a one-dimensional profile (e.g., viscosity) together with the
+    radius/height input for the profile, from a file, broadcasts the two arrays to all
+    processes, and then interpolates this array onto the function space of `function`.
+
+    Args:
+        function: The function onto which the 1D profile will be assigned
+        one_d_filename: The path to the file containing the 1D radial profile
+
+    Note:
+        - This is designed to read a file with one process and distribute in parallel with MPI.
+        - The input file should contain an array of radius/height and an array of values, separated by a comma.
+    """
+    mesh = extract_unique_domain(function)
+
+    if mesh.comm.rank == 0:
+        rshl, one_d_data = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+        if rshl[1] < rshl[0]:
+            rshl = rshl[::-1]
+            one_d_data = one_d_data[::-1]
+        if not np.all(np.diff(rshl) > 0):
+            raise ValueError("Data must be strictly monotonous.")
+    else:
+        one_d_data = None
+        rshl = None
+
+    one_d_data = mesh.comm.bcast(one_d_data, root=0)
+    rshl = mesh.comm.bcast(rshl, root=0)
+
+    X = SpatialCoordinate(mesh)
+
+    upward_coord = vertical_component(X)
+
+    rad = Function(function.function_space()).interpolate(upward_coord)
+
+    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
+    interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
+    averager.extrapolate_layer_average(function, interpolated_visc)

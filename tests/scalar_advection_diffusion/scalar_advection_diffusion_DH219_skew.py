@@ -10,6 +10,7 @@ from gadopt.time_stepper import DIRK33
 
 nx, ny = 10, 10
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)
+mesh.cartesian = True
 
 # We set up a function space of discontinous bilinear elements for :math:`q`, and
 # a vector-valued continuous function space for our velocity field. ::
