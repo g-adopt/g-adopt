@@ -35,6 +35,7 @@ def model(level, l, mm, k, do_write=False):
     # Construct a cubed sphere mesh and then extrude into a sphere:
     mesh2d = CubedSphereMesh(radius=rmin, refinement_level=level, degree=2)
     mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
+    mesh.cartesian = False
     bottom_id, top_id = "bottom", "top"
 
     # Define geometric quantities
@@ -75,7 +76,6 @@ def model(level, l, mm, k, do_write=False):
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
     stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                                 cartesian=False,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
     # use tighter tolerances than default to ensure convergence:

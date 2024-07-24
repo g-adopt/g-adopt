@@ -81,6 +81,7 @@ gmsh.finalize()
 
 # +
 mesh = Mesh(mesh_file)  # Load the GMSH mesh using Firedrake
+mesh.cartesian = True
 
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
