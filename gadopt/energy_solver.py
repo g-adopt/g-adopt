@@ -51,6 +51,7 @@ class EnergySolver:
       u:                 Firedrake function for velocity
       approximation:     G-ADOPT base approximation describing the system of equations
       delta_t:           Simulation time step
+      timestepper:       Runge-Kutta time integrator implementing an explicit or implicit numerical scheme
       bcs:               Dictionary of identifier-value pairs specifying boundary conditions
       solver_parameters: Solver parameters provided to PETSc
       su_advection:      Boolean specifying whether or not to use the streamline-upwind stabilisation scheme
