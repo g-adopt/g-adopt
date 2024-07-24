@@ -43,17 +43,19 @@ class ParameterLog:
 
 
 class TimestepAdaptor:
+    """Computes timestep based on CFL condition for provided velocity field
+
+    Arguments:
+      dt_const: Constant whose value will be updated by the timestep adaptor
+      u: Velocity to base CFL condition on
+      V: FunctionSpace for reference velocity, usually velocity space
+      target_cfl: CFL number to target with chosen timestep
+      increase_tolerance: Maximum tolerance timestep is allowed to change by
+      maximum_timestep: Maximum allowable timestep
+
     """
-    Computes timestep based on CFL condition for provided velocity field"""
 
     def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
-        """
-        :arg dt_const:      Constant whose value will be updated by the timestep adaptor
-        :arg u:             Velocity to base CFL condition on
-        :arg V:             FunctionSpace for reference velocity, usually velocity space
-        :kwarg target_cfl:  CFL number to target with chosen timestep
-        :kwarg increase_tolerance: Maximum tolerance timestep is allowed to change by
-        :kwarg maximum_timestep:   Maximum allowable timestep"""
         self.dt_const = dt_const
         self.u = u
         self.target_cfl = target_cfl
@@ -213,12 +215,10 @@ def tensor_jump(v, n):
     r"""
     Jump term for vector functions based on the tensor product
 
-    .. math::
-        \text{jump}(\mathbf{u}, \mathbf{n}) = (\mathbf{u}^+ \mathbf{n}^+) +
-        (\mathbf{u}^- \mathbf{n}^-)
+    $$"jump"(bb u, bb n) = (bb u^+ bb n^+) + (bb u^- bb n^-)$$
 
     This is the discrete equivalent of grad(u) as opposed to the
-    vectorial UFL jump operator :meth:`ufl.jump` which represents div(u).
+    vectorial UFL jump operator `ufl.jump` which represents div(u).
     The equivalent of nabla_grad(u) is given by tensor_jump(n, u).
     """
     return outer(v('+'), n('+')) + outer(v('-'), n('-'))
@@ -226,7 +226,7 @@ def tensor_jump(v, n):
 
 def extend_function_to_3d(func, mesh_extruded):
     """
-    Returns a 3D view of a 2D :class:`Function` on the extruded domain.
+    Returns a 3D view of a 2D `Function` on the extruded domain.
     The 3D function resides in V x R function space, where V is the function
     space of the source function. The 3D function shares the data of the 2D
     function.
@@ -248,18 +248,19 @@ def extend_function_to_3d(func, mesh_extruded):
 
 
 class ExtrudedFunction(Function):
-    """
-    A 2D :class:`Function` that provides a 3D view on the extruded domain.
+    """A 2D `Function` that provides a 3D view on the extruded domain.
+
     The 3D function can be accessed as `ExtrudedFunction.view_3d`.
     The 3D function resides in V x R function space, where V is the function
     space of the source function. The 3D function shares the data of the 2D
-    function."""
+    function.
+
+    Arguments:
+      mesh_3d: Extruded 3D mesh where the function will be extended to.
+
+    """
 
     def __init__(self, *args, mesh_3d=None, **kwargs):
-        """
-        Create a 2D :class:`Function` with a 3D view on extruded mesh.
-        :arg mesh_3d: Extruded 3D mesh where the function will be extended to.
-        """
         # create the 2d function
         super().__init__(*args, **kwargs)
         print(*args)
@@ -307,20 +308,18 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
 
 
 class LayerAveraging:
-    """
-    A manager for computing a vertical profile of horizontal layer averages.
-    """
+    """A manager for computing a vertical profile of horizontal layer averages.
 
-    def __init__(self, mesh, r1d=None, quad_degree=None):
-        """
-        Create the :class:`LayerAveraging` manager.
-        :arg mesh: The mesh over which to compute averages.
-        :kwarg r1d: An array of either depth coordinates or radii,
+    Arguments:
+      mesh: The mesh over which to compute averages
+      r1d: An array of either depth coordinates or radii,
              at which to compute layer averages. If not provided, and
              mesh is extruded, it uses the same layer heights. If mesh
              is not extruded, r1d is required.
-        """
 
+    """
+
+    def __init__(self, mesh, r1d=None, quad_degree=None):
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
@@ -402,17 +401,17 @@ class LayerAveraging:
         self.rhs[-1] = assemble(phi * T * self.dx)
 
     def get_layer_average(self, T):
-        """
-        Compute the layer averages of :class:`Function` T at the predefined depths.
-        Returns a numpy array containing the averages.
+        """Compute the layer averages of `Function` T at the predefined depths.
+
+        Returns:
+          A numpy array containing the averages.
         """
 
         self._assemble_rhs(T)
         return solveh_banded(self.mass, self.rhs, lower=True)
 
     def extrapolate_layer_average(self, u, avg):
-        """
-        Given an array of layer averages avg, extrapolate to :class:`Function` u
+        """Given an array of layer averages avg, extrapolate to `Function` u
         """
 
         r = self.r

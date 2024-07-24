@@ -3,14 +3,18 @@ r"""Derived terms and associated equations for the Stokes system.
 All terms are considered as if they were on the right-hand side of the equation, leading
 to the following UFL expression returned by the `residual` method:
 
-  dq/dt = \sum term.residual()
+$$
+  (dq)/dt = sum "term.residual()"
+$$
 
 This sign convention ensures compatibility with Thetis's time integrators. In general,
 however, we like to think about the terms as they are on the left-hand side. Therefore,
 in the residual methods below, we first sum the terms in the variable `F` as if they
 were on the left-hand side, i.e.
 
-  dq/dt + F(q) = 0,
+$$
+  (dq)/dt + F(q) = 0,
+$$
 
 and then return `-F`.
 
@@ -28,22 +32,19 @@ from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge
 
 
 class ViscosityTerm(BaseTerm):
-    r"""Viscosity term `-\nabla \cdot (\mu \nabla u)` in the momentum equation.
+    r"""Viscosity term $-nabla * (mu nabla u)$ in the momentum equation.
 
     Using the symmetric interior penalty method, the weak form becomes
 
-    ```
-        -\int_\Omega \nabla \cdot (\mu \nabla u) \phi dx
-        =& \int_\Omega \mu (\nabla \phi) \cdot (\nabla u) dx \\
-        &- \int_{\mathcal{I}\cup\mathcal{I}_v} \text{jump}(\phi \textbf{n})
-        \cdot \text{avg}(\mu \nabla u) dS
-        - \int_{\mathcal{I}\cup\mathcal{I}_v} \text{jump}(u \textbf{n})
-        \cdot \text{avg}(\mu  \nabla \phi) dS \\
-        &+ \int_{\mathcal{I}\cup\mathcal{I}_v} \sigma \text{avg}(\mu) \text{jump}(u \textbf{n}) \cdot
-            \text{jump}(\phi \textbf{n}) dS,
-    ```
+    $$
+    {:( -int_Omega nabla * (mu grad u) phi dx , = , int_Omega mu (grad phi) * (grad u) dx ),
+      ( , - , int_(cc"I" uu cc"I"_v) "jump"(phi bb n) * "avg"(mu grad u) dS
+          -   int_(cc"I" uu cc"I"_v) "jump"(u bb n) * "avg"(mu grad phi) dS ),
+      ( , + , int_(cc"I" uu cc"I"_v) sigma "avg"(mu) "jump"(u bb n) * "jump"(phi bb n) dS )
+    :}
+    $$
 
-    where `\sigma` is a penalty parameter (see Epshteyn and Riviere, 2007).
+    where σ is a penalty parameter (see Epshteyn and Riviere, 2007).
 
     Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty parameters for symmetric
     interior penalty Galerkin methods. Journal of Computational and Applied Mathematics,

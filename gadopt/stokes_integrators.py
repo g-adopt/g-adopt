@@ -38,23 +38,40 @@ iterative_stokes_solver_parameters = {
         "Mp_ksp_pc_type": "sor",
     }
 }
-"""Default iterative solver parameters for solution of stokes system. We configure the Schur complement approach as
-   described in Section of 4.3 of Davies et al. (2022), using PETSc's fieldsplit preconditioner type, which provides
-   a class of preconditioners for mixed problems that allows a user to apply different preconditioners to different
-   blocks of the system. The fieldsplit_0 entries configure solver options for the velocity block. The linear
-   systems associated with this matrix are solved using a combination of the Conjugate Gradient (cg) method and an
-   algebraic multigrid preconditioner (GAMG). The fieldsplit_1 entries contain solver options for the Schur complement
-   solve itself. For preconditioning, we approximate the Schur complement matrix with a mass matrix scaled by viscosity,
-   with the viscosity provided through the optional mu keyword argument to Stokes solver. Since this preconditioner step
-   involves an iterative solve, the Krylov method used for the Schur complement needs to be of flexible type, and we use
-   FGMRES by default. We note that our default solver parameters can be augmented or adjusted by accessing the
-   solver_parameter dictionary, for example:
+"""Default iterative solver parameters for solution of stokes system.
+
+We configure the Schur complement approach as described in Section of
+4.3 of Davies et al. (2022), using PETSc's fieldsplit preconditioner
+type, which provides a class of preconditioners for mixed problems
+that allows a user to apply different preconditioners to different
+blocks of the system.
+
+The fieldsplit_0 entries configure solver options for the velocity
+block. The linear systems associated with this matrix are solved using
+a combination of the Conjugate Gradient (cg) method and an algebraic
+multigrid preconditioner (GAMG).
+
+The fieldsplit_1 entries contain solver options for the Schur
+complement solve itself. For preconditioning, we approximate the Schur
+complement matrix with a mass matrix scaled by viscosity, with the
+viscosity provided through the optional mu keyword argument to Stokes
+solver. Since this preconditioner step involves an iterative solve,
+the Krylov method used for the Schur complement needs to be of
+flexible type, and we use FGMRES by default.
+
+We note that our default solver parameters can be augmented or
+adjusted by accessing the solver_parameter dictionary, for example:
+
+```
    stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-3
    stokes_solver.solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
    stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
-   G-ADOPT defaults to iterative solvers in 3-D.
+```
+
+Note:
+  G-ADOPT defaults to iterative solvers in 3-D.
 """
 
 direct_stokes_solver_parameters = {
@@ -63,8 +80,12 @@ direct_stokes_solver_parameters = {
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
 }
-"""Default direct solver parameters for solution of Stokes system. Configured to use LU factorisation,
-   using the MUMPS library. G-ADOPT defaults to direct solvers in 2-D.
+"""Default direct solver parameters for solution of Stokes system.
+
+Configured to use LU factorisation, using the MUMPS library.
+
+Note:
+  G-ADOPT defaults to direct solvers in 2-D.
 """
 
 newton_stokes_solver_parameters = {
@@ -74,8 +95,10 @@ newton_stokes_solver_parameters = {
     "snes_atol": 1e-10,
     "snes_rtol": 1e-5,
 }
-"""Default solver parameters for non-linear systems. We use a setup based on Newton's method (newtonls)
-   with a secant line search over the L2-norm of the function.
+"""Default solver parameters for non-linear systems.
+
+We use a setup based on Newton's method (newtonls) with a secant line
+search over the L2-norm of the function.
 """
 
 
