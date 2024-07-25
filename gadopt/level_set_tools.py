@@ -1,3 +1,12 @@
+r"""This module provides a set of classes and functions enabling multi-material
+capabilities. Users initialise materials by instantiating the `Material` class and
+define the physical properties of material interfaces using `field_interface`. They
+instantiate the `LevelSetSolver` class by providing relevant parameters and call the
+`solve` method to request a solver update. Finally, they may call the `entrainment`
+function to calculate material entrainment in the simulation.
+
+"""
+
 import abc
 from dataclasses import dataclass, fields
 from numbers import Number
@@ -9,6 +18,14 @@ from firedrake.ufl_expr import extract_unique_domain
 from .equations import BaseEquation, BaseTerm
 from .scalar_equation import ScalarAdvectionEquation
 from .time_stepper import eSSPRKs3p3
+
+__all__ = [
+    "LevelSetSolver",
+    "Material",
+    "density_RaB",
+    "entrainment",
+    "field_interface",
+]
 
 
 # Default solver options for level-set advection and reinitialisation

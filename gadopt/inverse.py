@@ -1,3 +1,9 @@
+r"""This module provides classes to perform an adjoint inverse optimisation and checkpoint
+intermediate results. Users instantiate the `LinMoreOptimiser` class by providing
+relevant parameters and call the `run` method to perform the optimisation.
+
+"""
+
 from pathlib import Path
 import uuid
 
