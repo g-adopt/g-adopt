@@ -15,12 +15,13 @@ def test_oned_average_assignment_spherical(tmp_path):
 
     mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
     mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+    mesh.cartesian = False
 
     X = SpatialCoordinate(mesh)
     Q = FunctionSpace(mesh, "CG", 1)
-    q = Function(Q).interpolate(vertical_component(X, cartesian=False))
+    q = Function(Q).interpolate(vertical_component(X))
 
-    averager = LayerAveraging(mesh, None, cartesian=False)
+    averager = LayerAveraging(mesh, None)
     q_profile = averager.get_layer_average(q)
 
     output_fi = ParameterLog(tmp_path / "one_d_test_spherical.output", mesh)
@@ -28,7 +29,7 @@ def test_oned_average_assignment_spherical(tmp_path):
     output_fi.close()
 
     p = Function(Q)
-    interpolate_1d_profile(p, tmp_path / "one_d_test_spherical.output", cartesian=False)
+    interpolate_1d_profile(p, tmp_path / "one_d_test_spherical.output")
     log(assemble((p-q) ** 2 * dx))
     assert assemble((p-q) ** 2 * dx) < 1e-10
 
@@ -41,6 +42,7 @@ def test_oned_average_assignment_cartesian(tmp_path):
     """
     n = 10
     mesh = UnitSquareMesh(n, n)
+    mesh.cartesian = True
 
     # because this is not an extruded mesh we have to provide r1d for layer averaging
     y_disc = np.linspace(0.0, 1.0, n+1)
@@ -49,7 +51,7 @@ def test_oned_average_assignment_cartesian(tmp_path):
     Q = FunctionSpace(mesh, "CG", 1)
     q = Function(Q).interpolate(X[1])
 
-    averager = LayerAveraging(mesh, y_disc if mesh.layers is None else None, cartesian=True)
+    averager = LayerAveraging(mesh, y_disc if mesh.layers is None else None)
     q_profile = averager.get_layer_average(q)
 
     output_fi = ParameterLog(tmp_path / "one_d_test.output", mesh)
@@ -57,6 +59,6 @@ def test_oned_average_assignment_cartesian(tmp_path):
     output_fi.close()
 
     p = Function(Q)
-    interpolate_1d_profile(p, tmp_path / "one_d_test.output", cartesian=True)
+    interpolate_1d_profile(p, tmp_path / "one_d_test.output")
 
     assert assemble((p-q) ** 2 * dx) < 1e-10

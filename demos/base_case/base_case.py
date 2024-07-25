@@ -162,9 +162,15 @@ from gadopt import *
 # corresponds to the plane $x=0$; 2 to the $x=1$ plane; 3 to the $y=0$ plane;
 # and 4 to the $y=1$ plane. We name these `left`, `right`, `bottom` and `top`,
 # respectively.
+#
+# On the mesh, we also denote that our geometry is Cartesian, i.e. gravity points
+# in the negative z-direction. This attribute is used by gadopt specifically, not
+# Firedrake. By contrast, a non-Cartesian geometry is assumed to have gravity
+# pointing in the radially inward direction.
 
 nx, ny = 40, 40  # Number of cells in x and y directions.
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
+mesh.cartesian = True
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 # We also need function spaces, which is achieved by associating the
@@ -326,7 +332,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             cartesian=True, constant_jacobian=True)
+                             constant_jacobian=True)
 # -
 
 # We can now initiate the time-loop, with the Stokes and energy

@@ -1,3 +1,11 @@
+r"""This module provides classes that emulate physical approximations of fluid dynamics
+systems by exposing methods to calculate specific terms in the corresponding
+mathematical equations. Users instantiate the appropriate class by providing relevant
+parameters and pass the instance to other objects, such as solvers. Under the hood,
+G-ADOPT queries variables and methods from the approximation.
+
+"""
+
 import abc
 from numbers import Number
 from typing import Optional
@@ -202,9 +210,6 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
       Di: Dissipation number
       mu: dynamic viscosity
       H:  volumetric heat production
-      cartesian:
-        - True: gravity is assumed to point in the negative z-direction
-        - False: gravity is assumed to point radially inward
 
     Keyword Arguments:
       kappa (Number): thermal diffusivity
@@ -220,12 +225,11 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, *, mu: Number = 1, H: Optional[Number] = None, cartesian: bool = True, **kwargs):
+    def __init__(self, Ra: Number, Di: Number, *, mu: Number = 1, H: Optional[Number] = None, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.mu = mu
         self.H = H
-        self.cartesian = cartesian
 
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
@@ -265,9 +269,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
       alpha (Number): reference thermal expansion coefficient
       mu (Number):    viscosity used in viscous dissipation
       H (Number):     volumetric heat production - default 0
-      cartesian (bool):
-        - True: gravity points in negative z-direction
-        - False: gravity points radially inward
       kappa (Number):  diffusivity
 
     Note:
@@ -292,7 +293,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
 
     def rhocp(self):
         return self.rho * self.cp
-
 
 class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     """Anelastic Liquid Approximation
