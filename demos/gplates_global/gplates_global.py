@@ -254,7 +254,7 @@ output_frequency = 1
 plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time age dt maxchange u_rms u_rms_top nu_top nu_base energy avg_t")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, degree=6)
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 

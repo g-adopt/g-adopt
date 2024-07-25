@@ -123,7 +123,7 @@ output_frequency = 1
 plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, degree=6)
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
