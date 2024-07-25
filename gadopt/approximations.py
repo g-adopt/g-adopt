@@ -294,6 +294,7 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     def rhocp(self):
         return self.rho * self.cp
 
+
 class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     """Anelastic Liquid Approximation
 
