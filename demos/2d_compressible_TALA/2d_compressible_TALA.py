@@ -43,8 +43,9 @@ z.subfunctions[1].rename("Pressure")
 
 # We next specify the important constants for this problem, including those associated with the
 # compressible reference state. Note that for ease of extension, we specify these as functions,
-# allowing for spatial variability. Given that we neglect the effect of dynamic pressure on
-# buoyancy in this example, we do not need to specify the bulk modulus (chibar).
+# allowing for spatial variability. The depth-dependent fields considered here are the reference
+# density and reference temperature, which are a function of the Dissipation number. All other
+# reference fields are assumed constant at 1 (and, hence, are not specified).
 
 X = SpatialCoordinate(mesh)
 Ra = Constant(1e5)  # Rayleigh number
@@ -52,13 +53,11 @@ Di = Constant(0.5)  # Dissipation number
 T0 = Constant(0.091)  # Non-dimensional surface temperature
 rhobar = Function(Q, name="CompRefDensity").interpolate(exp((1.0 - X[1]) * Di))  # Reference density
 Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)  # Reference temperature
-alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)  # Thermal expansivity
-cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)  # Specific heat capacity
 
 # These fields are used to set up our Truncated Anelastic Liquid Approximation. Alongside dropping the
 # requirement for specifying the bulk modulus, this is the key change relative to our tutorial under the ALA approximation.
 
-approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar)
+approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar)
 
 # As with the previous examples, we next set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -139,7 +138,7 @@ for timestep in range(0, timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T, FullT)
-        ref_file.write(rhobar, Tbar, alphabar, cpbar)
+        ref_file.write(rhobar, Tbar)
 
     dt = t_adapt.update_timestep()
     time += dt
