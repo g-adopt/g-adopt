@@ -1,4 +1,9 @@
-"""Utility functions for G-ADOPT"""
+r"""This module provides several classes and functions to perform a number of pre-, syn-,
+and post-processing tasks. Users incorporate utility as required in their code,
+depending on what they would like to achieve.
+
+"""
+
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh

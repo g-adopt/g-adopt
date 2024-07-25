@@ -1,4 +1,11 @@
-"""Timestepper implementation, mostly copied from Thetis."""
+r"""This module provides several classes to perform integration of time-dependent
+equations. Users choose if they require an explicit or implicit time integrator, and
+they instantiate one of the implemented algorithm class, for example, `ERKEuler`, by
+providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
+`DIRKGeneric`). Then, they call the `advance` method to request a solver update.
+
+"""
+
 import operator
 from abc import ABC, abstractmethod
 from numbers import Number

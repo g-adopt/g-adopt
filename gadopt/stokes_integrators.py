@@ -1,3 +1,10 @@
+r"""This module provides a fine-tuned solver class for the Stokes system of conservation
+equations and a function to automatically set the associated null spaces. Users
+instantiate the `StokesSolver` class by providing relevant parameters and call the
+`solve` method to request a solver update.
+
+"""
+
 from numbers import Number
 from typing import Optional
 

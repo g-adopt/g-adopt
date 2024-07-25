@@ -1,3 +1,9 @@
+r"""This module provides a fine-tuned solver class for the energy conservation equation.
+Users instantiate the `EnergySolver` class by providing relevant parameters and call
+the `solve` method to request a solver update.
+
+"""
+
 from numbers import Number
 from typing import Any, Optional
 

@@ -18,6 +18,9 @@ $$
 
 and then return `-F`.
 
+Users should not interact with these classes; instead, please use
+the solver provided in the stokes_integrators module.
+
 """
 
 from typing import Optional

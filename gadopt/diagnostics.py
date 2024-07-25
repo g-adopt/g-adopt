@@ -1,3 +1,9 @@
+r"""This module provides a class to simplify computing of diagnostics typically encountered
+in geodynamical simulations. Users instantiate the class by providing relevant
+parameters and call individual class methods to compute associated diagnostics.
+
+"""
+
 from firedrake import (
     Constant, DirichletBC, FacetNormal, Function,
     assemble, dot, ds, dx, grad, norm, sqrt,
