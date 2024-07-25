@@ -239,7 +239,7 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
         return phi * self.Di / self.Ra
 
     def linearized_energy_sink(self, u):
-        w = vertical_component(u, self.cartesian)
+        w = vertical_component(u)
         return self.Di * self.alpha * self.rho * self.g * w
 
     def work_against_gravity(self, u, T):
