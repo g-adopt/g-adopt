@@ -128,11 +128,12 @@ Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - X[1]) 
 alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)  # Thermal expansivity
 cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)  # Specific heat capacity
 chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)  # Bulk modulus
+gbar = Function(Q, name="GravitationalAcceleration").assign(1.0)  # radial gravity
 
 # These fields are used to set up our Truncated Anelastic Liquid Approximation. Alongside dropping the
 # requirement for specifying the bulk modulus, this is the key change relative to our tutorial under the ALA approximation.
 
-approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar, chi=chibar)
+approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar, chi=chibar, g=gbar)
 
 # As with the previous example, we next set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
