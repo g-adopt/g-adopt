@@ -211,11 +211,16 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
       mu: dynamic viscosity
       H:  volumetric heat production
 
-    Keyword Arguments:
-      kappa (Number): thermal diffusivity
-      g (Number):     gravitational acceleration
-      rho (Number):   reference density
-      alpha (Number): coefficient of thermal expansion
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         coefficient of thermal expansion
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         thermal diffusivity
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
@@ -260,16 +265,21 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     Arguments:
       Ra:     Rayleigh number
       Di:     Dissipation number
-      Tbar:   reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion) - default 0
+      Tbar:   reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion)
       cp:     reference specific heat at constant pressure
-      g :     gravitational acceleration
 
-    Keyword Arguments:
-      rho (Number):   reference density
-      alpha (Number): reference thermal expansion coefficient
-      mu (Number):    viscosity used in viscous dissipation
-      H (Number):     volumetric heat production - default 0
-      kappa (Number):  diffusivity
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         reference thermal expansion coefficient
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         diffusivity
+      mu (Number):            viscosity used in viscous dissipation
+      H (Number):             volumetric heat production
 
     Note:
       Other keyword arguments may be depth-dependent, but default to 1 if not supplied.
@@ -301,10 +311,28 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     Compressible approximation. Includes linear dependence of density on pressure.
 
     Arguments:
+      Ra:     Rayleigh number
+      Di:     Dissipation number
       chi:    reference isothermal compressibility
       gamma0: Gruneisen number (in pressure-dependent buoyancy term)
       cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
       cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         reference thermal expansion coefficient
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         diffusivity
+      mu (Number):            viscosity used in viscous dissipation
+      H (Number):             volumetric heat production
+      Tbar (Number):          reference temperature. In the diffusion
+                              term we use Tbar + T (i.e. T is the pertubartion)
+      cp (Number):            reference specific heat at constant pressure
 
     """
 
