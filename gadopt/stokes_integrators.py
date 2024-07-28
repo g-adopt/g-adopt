@@ -124,13 +124,15 @@ def create_stokes_nullspace(
       closed: Whether to include a constant pressure null space
       rotational: Whether to include all rotational modes
       translations: List of translations to include
-      ala_approximation: AnelasticLiquidApproximation for calculating right nullspace
+      ala_approximation: AnelasticLiquidApproximation for calculating (non-constant) right nullspace
+      top_subdomain_id: Boundary id of top surface. Required when providing
+                        ala_approximation.
 
     Returns:
       A Firedrake mixed vector space basis incorporating the null space components
 
     """
-    # ala_approximation and top_subdomaion_id are both needed when calculating rigt nullspace for ala
+    # ala_approximation and top_subdomain_id are both needed when calculating right nullspace for ala
     if (ala_approximation is None) != (top_subdomain_id is None):
         raise ValueError("Both ala_approximation and top_subdomain_id must be provided, or both must be None.")
 
@@ -332,19 +334,60 @@ def ala_right_nullspace(
         W: fd.functionspaceimpl.WithGeometry,
         approximation: AnelasticLiquidApproximation,
         top_subdomain_id: str | int):
-    r"""
-        Trying to solve the equation:
-            $$ - \nabla p + g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p = 0 $$
-        Taking the divergence:
-            $$ - \nabla \cdot(\nabla p) + \nabla \cdot(g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) $$
-        And then testing it with q:
-            $$ - q * \nabla \cdot(\nabla p) * dx + q * \nabla \cdot(g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) * dx $$
-        Doing integration by parts:
-            $$ - \nabla \cdot( q * \nabla(p)) * dx + \nabla(q). \nabla(p) * dx + \nabla \cdot(q * g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) * dx - \nabla(q) . (g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) * dx $$
+    r"""Compute pressure nullspace for Anelastic Liquid Approximation.
 
-        Dropping the boundary condition terms:
-        $$ \nabla(q) \cdot \nabla(p) * dx - \nabla q \cdot (g * Di * \rho * \chi * cp/(cv * \gamma) * \hat{k} * p) * dx $$
-        returns p: pressure nullspace
+        Arguments:
+          W: pressure function space
+          approximation: AnelasticLiquidApproximation with equation parameters
+          top_subdomain_id: boundary id of top surface
+
+        Returns:
+          pressure nullspace solution
+
+        To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
+        which includes a pressure-dependent buoyancy term, we try to solve the equation:
+
+        ```
+             -\nabla p + g \text{Di} \rho \chi \frac{c_p}{c_v \gamma} \hat{k} p = 0
+        ```
+
+        Taking the divergence:
+
+        ```
+            -\nabla \cdot(\nabla p) + \nabla \cdot\left(g \text{Di} \rho \chi \frac{c_p}{c_v \gamma} \hat{k} p\right) = 0,
+        ```
+
+        then testing it with q:
+
+        ```
+            \int_\Omega -q \nabla \cdot(\nabla p) dx + \int_\Omega q \nabla\cdot\left(g\text{Di}\rho\chi\frac{c_p}{c_v \gamma} \hat{k} p\right) dx = 0
+        ```
+
+        followed by integration by parts:
+
+        ```
+            \int_\Gamma -\textbf{n}\cdot q \nabla p ds + \int_\Omega \nabla q \dot \nabla p dx +
+            \int_\Gamma \textbf{n} \cdot\hat{k} q g \text{Di} \rho \chi \frac{c_p}{c_v \gamma} p dx - \int_\Omega \nabla q \cdot \hat{k} g \text{Di}\rho \chi \frac{c_p}{c_v \gamma} p dx = 0,
+        ```
+
+        This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
+        all boundary terms:
+
+        ```
+            \int_\Omega \nabla q \dot \nabla p dx - \int_\Omega \nabla q \cdot \hat{k} g \text{Di}\rho \chi \frac{c_p}{c_v \gamma} p dx = 0.
+        ```
+
+        However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
+        we ended up merely testing the original equation with `\nabla q`). Instead we use the fact that the gradient of the null mode
+        is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
+        any nonzero constant for this surface fixes the arbitrary scalar multiplier of the nullmode. We choose the value of one
+        and apply it as a Dirichlet boundary condition.
+
+        Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
+        since not every test function `v\in V`, the velocity test space, can be written as `v=\nabla(q)` with `q\in W`, the
+        pressure test space, the two terms do not necessarily exactly cancel when tested with `v` instead of `\nabla(q)` as in our
+        final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
+        an improved convergence of the iterative Stokes solver.
     """
     W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
     q = fd.TestFunction(W)
