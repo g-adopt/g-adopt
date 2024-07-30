@@ -15,8 +15,8 @@ class ExplicitFreeSurfaceModel:
     def __init__(self, dt_factor, nx=80, do_write=False, cartesian=True, **kwargs):
         self.nx = nx
         self.do_write = do_write
-        self.cartesian = cartesian
         self.setup_mesh()
+        self.mesh.cartesian = cartesian
 
         # Set up function spaces - currently using the bilinear Q2Q1 element pair:
         self.V = VectorFunctionSpace(self.mesh, "CG", 2)  # Velocity function space (vector)
@@ -129,10 +129,10 @@ class ExplicitFreeSurfaceModel:
 
     def setup_solver(self):
         # Set up the stokes solver
-        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs, mu=self.mu, cartesian=self.cartesian)
+        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs, mu=self.mu)
 
         # Setup remaining free surface parameters needed for explicit coupling
-        eta_eq = FreeSurfaceEquation(self.W, self.W, free_surface_id=self.top_id, k=upward_normal(self.mesh, cartesian=self.cartesian))  # Initialise the separate free surface equation for explicit coupling
+        eta_eq = FreeSurfaceEquation(self.W, self.W, free_surface_id=self.top_id, k=upward_normal(self.mesh))  # Initialise the separate free surface equation for explicit coupling
         eta_fields = {'velocity': self.stokes_vars[0]}
         eta_bcs = {}
         # Apply strong homogenous boundary to interior DOFs to prevent a singular matrix when only integrating the free surface equation over the top surface.

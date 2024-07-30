@@ -102,7 +102,7 @@ def model(level, k, nn, do_write=False):
     dt = Constant(tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, cartesian=False, free_surface_dt=dt,
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, free_surface_dt=dt,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
 
