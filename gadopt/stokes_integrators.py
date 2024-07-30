@@ -322,8 +322,14 @@ class StokesSolver:
             # N.b. constant reference density is needed for analytical cylindrical cases
             surface_rho = self.approximation.free_surface_density(self.p, self.T)
 
+            normal_stress = (surface_rho - exterior_density) * self.approximation.g * self.eta_theta[c]
             # Add free surface stress term
-            self.weak_bcs[id] = {'normal_stress': (surface_rho - exterior_density) * self.approximation.g * self.eta_theta[c]}
+            if 'normal_stress' in self.weak_bcs[id]:
+                # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
+                existing_value = self.weak_bcs[id]['normal_stress']
+                self.weak_bcs[id]['normal_stress'] = existing_value + normal_stress
+            else:
+                self.weak_bcs[id] = {'normal_stress': normal_stress}
 
             # To ensure the top right and bottom left corners of the block matrix remains symmetric we need to
             # multiply the free surface equation (kinematic bc) with -theta * delta_rho * g. This is similar
@@ -434,6 +440,8 @@ class ViscoelasticStokesSolver(StokesSolver):
             # the unknown `incremental displacement' (u) that
             # we are solving for
             implicit_displacement = self.u + self.displacement
+#            implicit_displacement = self.solution_old.subfunctions[0] + self.displacement
+#            implicit_displacement = self.displacement
             implicit_displacement_up = fd.dot(implicit_displacement, self.k)
             # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
             normal_stress = (self.density - exterior_density) * self.approximation.g * implicit_displacement_up
