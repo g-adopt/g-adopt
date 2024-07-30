@@ -1,3 +1,11 @@
+r"""This module provides classes that emulate physical approximations of fluid dynamics
+systems by exposing methods to calculate specific terms in the corresponding
+mathematical equations. Users instantiate the appropriate class by providing relevant
+parameters and pass the instance to other objects, such as solvers. Under the hood,
+G-ADOPT queries variables and methods from the approximation.
+
+"""
+
 import abc
 from numbers import Number
 from typing import Optional
@@ -139,16 +147,16 @@ class BoussinesqApproximation(BaseApproximation):
     parameters are typically constant. Viscous dissipation is neglected (Di << 1).
 
     Arguments:
-      Ra:        Rayleigh number
-      rho:       reference density
-      alpha:     coefficient of thermal expansion
-      T0:        reference temperature
-      g:         gravitational acceleration
-      RaB:       compositional Rayleigh number; product of the Rayleigh and buoyancy numbers
-      delta_rho: compositional density difference from the reference density
-      kappa:     thermal diffusivity
-      H:         internal heating rate
-      variable_free_surface_density:         variable free surface density flag
+      Ra:                            Rayleigh number
+      rho:                           reference density
+      alpha:                         coefficient of thermal expansion
+      T0:                            reference temperature
+      g:                             gravitational acceleration
+      RaB:                           compositional Rayleigh number; product of the Rayleigh and buoyancy numbers
+      delta_rho:                     compositional density difference from the reference density
+      kappa:                         thermal diffusivity
+      H:                             internal heating rate
+      variable_free_surface_density: variable free surface density flag
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
@@ -223,15 +231,17 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
       Di: Dissipation number
       mu: dynamic viscosity
       H:  volumetric heat production
-      cartesian:
-        - True: gravity is assumed to point in the negative z-direction
-        - False: gravity is assumed to point radially inward
 
-    Keyword Arguments:
-      kappa (Number): thermal diffusivity
-      g (Number):     gravitational acceleration
-      rho (Number):   reference density
-      alpha (Number): coefficient of thermal expansion
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         coefficient of thermal expansion
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         thermal diffusivity
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
@@ -241,12 +251,11 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, mu: Number = 1, H: Optional[Number] = None, cartesian: bool = True, **kwargs):
+    def __init__(self, Ra: Number, Di: Number, *, mu: Number = 1, H: Optional[Number] = None, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.mu = mu
         self.H = H
-        self.cartesian = cartesian
 
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
@@ -255,12 +264,12 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
         phi = inner(stress, grad(u))
         return phi * self.Di / self.Ra
 
-    def work_against_gravity(self, u, T):
-        w = vertical_component(u, self.cartesian)
-        return self.Di * self.alpha * self.rho * self.g * w * T
-
     def linearized_energy_sink(self, u):
-        return self.work_against_gravity(u, 1)
+        w = vertical_component(u)
+        return self.Di * self.alpha * self.rho * self.g * w
+
+    def work_against_gravity(self, u, T):
+        return self.linearized_energy_sink(u) * T
 
     def energy_source(self, u):
         source = self.viscous_dissipation(u)
@@ -272,31 +281,29 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
 class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     """Truncated Anelastic Liquid Approximation
 
-    Compressible approximation. Excludes linear dependence of density on pressure (chi)
+    Compressible approximation. Excludes linear dependence of density on pressure.
 
     Arguments:
-      Ra: Rayleigh number
-      Di: Dissipation number
-      Tbar:  reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion) - default 0
-      chi:   reference isothermal compressibility
-      cp:    reference specific heat at constant pressure
-      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
-      cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
-      cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+      Ra:     Rayleigh number
+      Di:     Dissipation number
+      Tbar:   reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion)
+      cp:     reference specific heat at constant pressure
 
-    Keyword Arguments:
-      rho (Number):   reference density
-      alpha (Number): reference thermal expansion coefficient
-      mu (Number):    viscosity used in viscous dissipation
-      H (Number):     volumetric heat production - default 0
-      cartesian (bool):
-        - True: gravity points in negative z-direction
-        - False: gravity points radially inward
-      kappa (Number):  diffusivity
-      g (Number):      gravitational acceleration
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         reference thermal expansion coefficient
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         diffusivity
+      mu (Number):            viscosity used in viscous dissipation
+      H (Number):             volumetric heat production
 
     Note:
-      The keyword arguments may be depth-dependent, but default to 1 if not supplied.
+      Other keyword arguments may be depth-dependent, but default to 1 if not supplied.
 
     """
     compressible = True
@@ -304,20 +311,13 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     def __init__(self,
                  Ra: Number,
                  Di: Number,
+                 *,
                  Tbar: Function | Number = 0,
-                 chi: Function | Number = 1,
                  cp: Function | Number = 1,
-                 gamma0: Function | Number = 1,
-                 cp0: Function | Number = 1,
-                 cv0: Function | Number = 1,
                  **kwargs):
         super().__init__(Ra, Di, **kwargs)
         self.Tbar = Tbar
-        # Equation of State:
-        self.chi = chi
         self.cp = cp
-        assert 'g' not in kwargs
-        self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
     def rho_continuity(self):
         return self.rho
@@ -325,16 +325,51 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     def rhocp(self):
         return self.rho * self.cp
 
-    def linearized_energy_sink(self, u):
-        w = vertical_component(u, self.cartesian)
-        return self.Di * self.rho * self.alpha * w
-
 
 class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     """Anelastic Liquid Approximation
 
-    Compressible approximation. Includes linear dependence of density on pressure (chi)
+    Compressible approximation. Includes linear dependence of density on pressure.
+
+    Arguments:
+      Ra:     Rayleigh number
+      Di:     Dissipation number
+      chi:    reference isothermal compressibility
+      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
+      cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
+      cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         reference thermal expansion coefficient
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         diffusivity
+      mu (Number):            viscosity used in viscous dissipation
+      H (Number):             volumetric heat production
+      Tbar (Number):          reference temperature. In the diffusion
+                              term we use Tbar + T (i.e. T is the pertubartion)
+      cp (Number):            reference specific heat at constant pressure
+
     """
+
+    def __init__(self,
+                 Ra: Number,
+                 Di: Number,
+                 *,
+                 chi: Function | Number = 1,
+                 gamma0: Function | Number = 1,
+                 cp0: Function | Number = 1,
+                 cv0: Function | Number = 1,
+                 **kwargs):
+        super().__init__(Ra, Di, **kwargs)
+        # Dynamic pressure contribution towards buoyancy
+        self.chi = chi
+        self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
     def buoyancy(self, p, T):
         pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p

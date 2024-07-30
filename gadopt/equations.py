@@ -1,3 +1,9 @@
+r"""This module contains abstract classes to define the structure of mathematical terms and
+equations within the G-ADOPT library. Users should not interact with these classes;
+instead, please use the solvers provided in other modules.
+
+"""
+
 from abc import ABC, abstractmethod
 from numbers import Number
 from typing import Optional
