@@ -365,12 +365,8 @@ class StokesSolver:
                     self.solver_parameters.update({"pc_fieldsplit_0_fields": '0',
                                                    "pc_fieldsplit_1_fields": '1,'+','.join(str(2+i) for i in range(len(eta)))})
 
-                    # update keys for GADOPT's variable mass inverse preconditioner
-                    self.solver_parameters["fieldsplit_1"].update({"pc_python_type": "gadopt.FreeSurfaceMassInvPC",
-                                                                   "Mp_ksp_rtol": 1e-5,
-                                                                   "Mp_ksp_type": "cg",
-                                                                   "Mp_pc_type": "sor",
-                                                                   })
+                    # update keys for GADOPT's free surface mass inverse preconditioner
+                    self.solver_parameters["fieldsplit_1"].update({"pc_python_type": "gadopt.FreeSurfaceMassInvPC"})
 
         # solver object is set up later to permit editing default solver parameters specified above
         self._solver_setup = False
@@ -381,7 +377,6 @@ class StokesSolver:
         appctx = {"mu": self.mu / self.approximation.rho_continuity()}
 
         if self.free_surface:
-            appctx["dx"] = self.equations[0].dx
             appctx["free_surface_id_list"] = self.free_surface_id_list
             appctx["ds"] = self.equations[2].ds
 
