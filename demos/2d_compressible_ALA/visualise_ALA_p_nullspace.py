@@ -1,5 +1,6 @@
-# Visualising the right nullspace for stokes system using the anelastic liquid approximation
-# ======================
+# Visualising the right nullspace for Stokes system using the anelastic liquid approximation (ALA)
+# ================================================================================================
+#
 # This tutorial will demonstrate how to compute and provide the right-nullspace for pressure solutions
 # in the Stokes system in G-ADOPT.
 #
@@ -7,21 +8,22 @@
 # This includes all vectors that are mapped to the zero vector by the linear transformation represented by $M$. The dimension of this space, known as the nullity of $M$, indicates the number of linearly independent solutions to the equation $M\mathbf{v} = \mathbf{0}$.
 #
 # Left Nullspace (Transpose Nullspace)
-# -------------------------
+# ------------------------------------
 # The **left nullspace** (or transpose nullspace) of a matrix $M$ is the nullspace of $M^T$, consisting of all vectors $\mathbf{w}$ that satisfy: $M^T\mathbf{w} = \mathbf{0}$.
 # Vectors in the left nullspace are orthogonal to the columns of $M$, meaning each vector $\mathbf{w}$ is orthogonal to every column vector of $M$.
 #
 # Approximations and Equations
-# -------------------------
+# ----------------------------
 # In G-ADOPT, and in general for geodynamic applications, we have three approximations for the Stokes equations. [All the bar'ed variables (e. g., $\bar{\rho}$) are only radially varying].
 #
 # | Approximation | Equations |
-# |--------------- | -----------|
+# | ------------- | --------- |
 # | **(Extended) Boussinesq Approximation** | $$\nabla \cdot u = 0$$ $$\nabla \cdot \mu[\nabla u + (\nabla u) ^ T] - \nabla p = \hat{e}_{r} Ra T$$ |
 # | **Truncated Anelastic Liquid Approximation(TALA)** | $$\nabla \cdot \left(\bar{\rho} u\right) = 0$$ $$\nabla \cdot \mu[\nabla u + (\nabla u) ^ T - (2/3) \nabla \cdot u I] - \nabla p = \bar{g}\bar{\rho}\bar{\alpha}\hat{e}_{r} Ra T$$ |
 # | **Anelastic Liquid Approximation(ALA)** |$$\nabla \cdot \left(\bar{\rho} u\right) = 0$$ $$\nabla \cdot \mu[\nabla u + (\nabla u) ^ T - (2/3) \nabla \cdot u I] - \nabla p + \bar{g} \bar{\rho} \bar{\chi}(D / \gamma_r)(\bar{C_v} / \bar{C_v}) p = \bar{g}\bar{\rho}\bar{\alpha} \hat{e}_{r} Ra T$$ |
 #
-# # Discrete Form and Pressure Nullspaces
+# Discrete Form and Pressure Nullspaces
+# -------------------------------------
 # In its simplest form of the discrete form, which is for the Boussinesq approximation, we have the notation:
 #
 # $$
@@ -60,18 +62,15 @@
 #
 #
 # | Approximation | Discrete Form | (Right) Nullspace | Transpose (Left) Nullspace |
-# |--------------- | --------------- | -------------------- | --------------------|
-# | **Boussinesq Approximation** | $$\begin{pmatrix} A & B ^ T \\ B & 0 \end{pmatrix} \begin{pmatrix}u \\ p\end{pmatrix} = \begin{pmatrix}f \\ 0 \end{pmatrix}$$ | Solution to $B ^ T v = 0$, which in strong form is $\nabla p = 0$, i.e. the nullspace consists of all **constant** pressure solutions | Solution to $B ^ T w = 0$, which in strong form is $\nabla p = 0$, i.e. the transpose nullspace consists of all **constant** pressure solutions.
-# | **Truncated Anelastic Liquid Approximation(TALA)** | $$\begin{pmatrix} A' & B ^ T \\ B_{\rho} & 0 \end{pmatrix} \begin{pmatrix}u \\ p\end{pmatrix} = \begin{pmatrix}f \\ 0\end{pmatrix}$$ | *Like above:* Solution to $B ^ T v = 0$, which in strong form is $\nabla p = 0$, i.e. the nullspace consists of all **constant** pressure solutions. | Solution to $B_p ^ T w = 0$, which in weak form corresponds to $ - \int \nabla p \cdot \bar{\rho} u = 0$ for any $u\in V$, which analytically is $p = C$, i.e. the nullspace consists of all **constant** pressure solutions.
-# | **Anelastic Liquid Approximation(ALA)** | $$\begin{pmatrix} A' & B ^ T + \bar{B}_p \\ B_{\rho} & 0 \end{pmatrix} \begin{pmatrix}u \\ p\end{pmatrix} = \begin{pmatrix}f \\ 0\end{pmatrix}$$ | Solution to $\left[B ^ {T} + \bar{B}_p\right] p = 0$. which in strong form is the solution to  $\nabla p - \bar{g}\bar{\rho} \bar{\chi}(D / \gamma_r)(\bar{C_p} / \bar{C_v}) p \hat{e}_r = 0$ or analytically $p = C \exp(\int_r \bar{g}\bar{\rho} \bar{\chi}(D / \gamma_r)(\bar{C_p} / \bar{C_v})  dr)$ | *Like above:* Solution to $B_p^T w = 0$, which in strong form is $ - \int \nabla p \cdot \bar{\rho} u = 0$  which analytically is $p = C$, i.e. the nullspace consists of all **constant** pressure solutions.
-
+# | ------------- | ------------- | ----------------- | -------------------------- |
+# | **Boussinesq Approximation** | $$\begin{pmatrix} A & B ^ T \\ B & 0 \end{pmatrix} \begin{pmatrix}u \\ p\end{pmatrix} = \begin{pmatrix}f \\ 0 \end{pmatrix}$$ | Solution to $B ^ T v = 0$, which in strong form is $\nabla p = 0$, i.e. the nullspace consists of all **constant** pressure solutions | Solution to $B ^ T w = 0$, which in strong form is $\nabla p = 0$, i.e. the transpose nullspace consists of all **constant** pressure solutions. |
+# | **Truncated Anelastic Liquid Approximation(TALA)** | $$\begin{pmatrix} A' & B ^ T \\ B_{\rho} & 0 \end{pmatrix} \begin{pmatrix}u \\ p\end{pmatrix} = \begin{pmatrix}f \\ 0\end{pmatrix}$$ | *Like above:* Solution to $B ^ T v = 0$, which in strong form is $\nabla p = 0$, i.e. the nullspace consists of all **constant** pressure solutions. | Solution to $B_p ^ T w = 0$, which in weak form corresponds to $ - \int \nabla p \cdot \bar{\rho} u = 0$ for any $u\in V$, which analytically is $p = C$, i.e. the nullspace consists of all **constant** pressure solutions. |
+# | **Anelastic Liquid Approximation(ALA)** | $$\begin{pmatrix} A' & B ^ T + \bar{B}_p \\ B_{\rho} & 0 \end{pmatrix} \begin{pmatrix}u \\ p\end{pmatrix} = \begin{pmatrix}f \\ 0\end{pmatrix}$$ | Solution to $\left[B ^ {T} + \bar{B}_p\right] p = 0$. which in strong form is the solution to  $\nabla p - \bar{g}\bar{\rho} \bar{\chi}(D / \gamma_r)(\bar{C_p} / \bar{C_v}) p \hat{e}_r = 0$ or analytically $p = C \exp(\int_r \bar{g}\bar{\rho} \bar{\chi}(D / \gamma_r)(\bar{C_p} / \bar{C_v})  dr)$ | *Like above:* Solution to $B_p^T w = 0$, which in strong form is $ - \int \nabla p \cdot \bar{\rho} u = 0$  which analytically is $p = C$, i.e. the nullspace consists of all **constant** pressure solutions. |
 #
 # In other words, in most cases the nullspace for pressure consists simply consists of all constant pressure solutions, but with the
 # Anelastic Liquid Approximation, the introduction of the pressure-dependent buoyancy term $B_p$ causes the nullspace solutions to be
 # non-constant. Note that all of this only applies for closed domains, with a no-normal flow condition on all boundaries; If, on
 # the other hand, at any boundary a stress condition is applied, there are no (nontrivial) pressure null modes, and so the nullspace is simply $\{0\}$.
-
-#
 #
 # How does it work in G-ADOPT
 # -------------------------
