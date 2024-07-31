@@ -4,6 +4,7 @@ nav:
     - base_case.ipynb
   - Physical approximation:
     - 2d_compressible_ALA.ipynb
+    - visualise_ALA_p_nullspace.ipynb
     - 2d_compressible_TALA.ipynb
     - viscoplastic_case.ipynb
   - Dimension:
