@@ -399,7 +399,7 @@ def ala_right_nullspace(
 
     F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
 
-    k = upward_normal(W.mesh(), cartesian=approximation.cartesian)
+    k = upward_normal(W.mesh())
 
     F += - fd.inner(fd.grad(q), k * approximation.dbuoyancydp(p, fd.Constant(1.0)) * p) * fd.dx
 

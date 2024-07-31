@@ -89,6 +89,7 @@ from gadopt.stokes_integrators import ala_right_nullspace
 # +
 # Set up geometry:
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)  # Square mesh generated via firedrake
+mesh.cartesian = True
 
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
