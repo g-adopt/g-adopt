@@ -1,5 +1,6 @@
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 import pytest
 
 base = Path(__file__).parent.resolve()
@@ -7,11 +8,11 @@ base = Path(__file__).parent.resolve()
 
 def run_benchmark(model):
     # Run default case run for four dt factors
-    if model.name == 'explicit':
+    if model.name == "explicit":
         dtf_start = 1
     else:
         dtf_start = 2
-    dt_factors = dtf_start / (2**np.arange(4))
+    dt_factors = dtf_start / (2 ** np.arange(4))
 
     for iterative in [False, True]:
         errors = []
@@ -42,24 +43,24 @@ def expected_errors():
     return np.load(base / "expected_errors.npz")
 
 
-cases = [("explicit", [1.4, 1.1, 1.0]),
-         ("implicit", [2.0, 2.0, 2.0]),
-         ("implicit-iterative", [2.0, 2.0, 2.0]),
-         ("implicit-both-top", [2.0, 2.0, 2.0]),
-         ("implicit-both-bottom", [2.0, 2.0, 2.0]),
-         ("implicit-both-iterative-top", [2.0, 2.0, 2.0]),
-         ("implicit-both-iterative-bottom", [2.0, 2.0, 2.0]),
-         ("implicit-buoyancy-top", [2.0, 2.0, 2.0]),
-         ("implicit-buoyancy-bottom", [2.0, 2.0, 2.0]),
-         ("implicit-buoyancy-iterative-top", [2.0, 2.0, 2.0]),
-         ("implicit-buoyancy-iterative-bottom", [2.0, 2.0, 2.0]),
-         ("implicit-cylindrical-iterative", [2.0, 2.0, 2.0]),
-         ]
+cases = [
+    ("explicit", [1.4, 1.1, 1.0]),
+    ("implicit", [2.0, 2.0, 2.0]),
+    ("implicit-iterative", [2.0, 2.0, 2.0]),
+    ("implicit-both-top", [2.0, 2.0, 2.0]),
+    ("implicit-both-bottom", [2.0, 2.0, 2.0]),
+    ("implicit-both-iterative-top", [2.0, 2.0, 2.0]),
+    ("implicit-both-iterative-bottom", [2.0, 2.0, 2.0]),
+    ("implicit-buoyancy-top", [2.0, 2.0, 2.0]),
+    ("implicit-buoyancy-bottom", [2.0, 2.0, 2.0]),
+    ("implicit-buoyancy-iterative-top", [2.0, 2.0, 2.0]),
+    ("implicit-buoyancy-iterative-bottom", [2.0, 2.0, 2.0]),
+    ("implicit-cylindrical-iterative", [2.0, 2.0, 2.0]),
+]
 
 
 @pytest.mark.parametrize("coupling,expected_convergence", cases)
 def test_free_surface(coupling, expected_convergence, expected_errors):
-
     expected_errors = expected_errors[coupling]
     errors = np.loadtxt(base / f"errors-{coupling}-free-surface-coupling.dat")
 

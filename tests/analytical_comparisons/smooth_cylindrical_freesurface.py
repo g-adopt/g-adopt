@@ -89,10 +89,11 @@ def model(level, k, nn, do_write=False):
     # to affect the height that the free surface relaxes too. With the flag set to True there is an assymetry
     # in the free surface highs (at hot spots) and free surface lows (cold spots), that does not
     # occur in the Assess steady state solution
-    approximation = BoussinesqApproximation(1, variable_free_surface_density=False)
+    approximation = BoussinesqApproximation(1)
     stokes_bcs = {
-        bottom_id: {'un': 0},
-        top_id: {'free_surface': {}},  # Apply the free surface boundary condition
+        bottom_id: {"un": 0},
+        # Apply the free surface boundary condition
+        top_id: {"free_surface": {"variable_rho_fs": False}},
     }
 
     rho0 = approximation.rho

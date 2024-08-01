@@ -279,37 +279,47 @@ class StokesSolver:
             self.free_surface_id_list = []
 
             c = 0  # Counter for free surfaces (N.b. we already have two equations from StokesEquations)
-            for id, value in free_surface_dict.items():
-                exterior_density = value.get('exterior_density', 0)
-
+            for free_surface_id, free_surface_params in free_surface_dict.items():
                 # Define free surface variables for timestepping
                 self.eta_old.append(fd.Function(self.eta_[c]))
                 eta_theta.append((1-free_surface_theta)*self.eta_old[c] + free_surface_theta*eta[c])
 
+                # Normal stress #
                 # Depending on variable_free_surface_density flag provided to approximation the
                 # interior density below the free surface is either set to a constant density or
                 # varies spatially according to the buoyancy field
                 # N.b. constant reference density is needed for analytical cylindrical cases
-                surface_rho = approximation.free_surface_density(p, T)
-
-                # Add free surface stress term
-                self.weak_bcs[id] = {'normal_stress': (surface_rho - exterior_density) * approximation.g * eta_theta[c]}
-
+                # Prefactor #
                 # To ensure the top right and bottom left corners of the block matrix remains symmetric we need to
                 # multiply the free surface equation (kinematic bc) with -theta * delta_rho * g. This is similar
                 # to rescaling eta -> eta_tilde in Kramer et al. 2012 (e.g. see block matrix shown in Eq 23)
                 # N.b. in the case where the density contrast across the free surface is spatially variant due to
                 # interior buoyancy changes then the matrix will not be exactly symmetric.
-                prefactor = fd.Constant(-free_surface_theta * (approximation.rho - exterior_density) * approximation.g)
+                normal_stress, prefactor = approximation.free_surface_terms(
+                    p, T, eta_theta[c], free_surface_theta, **free_surface_params
+                )
+
+                # Add free surface stress term
+                self.weak_bcs[free_surface_id] = {"normal_stress": normal_stress}
 
                 # Add the free surface equation
-                self.equations.append(FreeSurfaceEquation(self.Z.sub(2+c), self.Z.sub(2+c), quad_degree=quad_degree,
-                                      prefactor=prefactor, free_surface_id=id, k=self.k))
+                self.equations.append(
+                    FreeSurfaceEquation(
+                        self.Z.sub(2 + c),
+                        self.Z.sub(2 + c),
+                        quad_degree=quad_degree,
+                        prefactor=prefactor,
+                        free_surface_id=free_surface_id,
+                        k=self.k,
+                    )
+                )
 
                 # Set internal dofs to zero to prevent singular matrix for free surface equation
-                self.strong_bcs.append(InteriorBC(self.Z.sub(2+c), 0, id))
+                self.strong_bcs.append(
+                    InteriorBC(self.Z.sub(2 + c), 0, free_surface_id)
+                )
 
-                self.free_surface_id_list.append(id)
+                self.free_surface_id_list.append(free_surface_id)
 
                 c += 1
 
