@@ -3,17 +3,26 @@ r"""Scalar terms and equations (e.g. for temperature and salinity transport).
 All terms are considered as if they were on the right-hand side of the equation, leading
 to the following UFL expression returned by the `residual` method:
 
-  dq/dt = \sum term.residual()
+$$
+  (dq)/dt = sum "term.residual()"
+$$
 
 This sign convention ensures compatibility with Thetis's time integrators. In general,
 however, we like to think about the terms as they are on the left-hand side. Therefore,
 in the residual methods below, we first sum the terms in the variable `F` as if they
 were on the left-hand side, i.e.
 
-  dq/dt + F(q) = 0,
+$$
+  (dq)/dt + F(q) = 0,
+$$
 
 and then return `-F`.
+
+Users should not interact with these classes; instead, please use
+the solver provided in the stokes_integrators module.
+
 """
+
 from typing import Optional
 
 import firedrake as fd
@@ -72,22 +81,19 @@ class ScalarAdvectionTerm(BaseTerm):
 
 
 class ScalarDiffusionTerm(BaseTerm):
-    r"""Scalar diffusion term `-\nabla \cdot (\kappa \nabla q)`.
+    r"""Scalar diffusion term $-nabla * (kappa grad q)$.
 
     Using the symmetric interior penalty method, the weak form becomes
 
-    ```
-        -\int_\Omega \nabla \cdot (\kappa \nabla q) \phi dx
-        =& \int_\Omega \kappa (\nabla \phi) \cdot (\nabla q) dx \\
-        &- \int_{\mathcal{I}\cup\mathcal{I}_v} \text{jump}(\phi \textbf{n})
-        \cdot \text{avg}(\kappa \nabla q) dS
-        - \int_{\mathcal{I}\cup\mathcal{I}_v} \text{jump}(q \textbf{n})
-        \cdot \text{avg}(\kappa  \nabla \phi) dS \\
-        &+ \int_{\mathcal{I}\cup\mathcal{I}_v} \sigma \text{avg}(\kappa) \text{jump}(q \textbf{n}) \cdot
-            \text{jump}(\phi \textbf{n}) dS
-    ```
+    $$
+    {:( -int_Omega nabla * (kappa grad q) phi dx , = , int_Omega kappa (grad phi) * (grad q) dx ),
+      ( , - , int_(cc"I" uu cc"I"_v) "jump"(phi bb n) * "avg"(kappa grad q) dS
+          -   int_(cc"I" uu cc"I"_v) "jump"(q bb n) * "avg"(kappa grad phi) dS ),
+      ( , + , int_(cc"I" uu cc"I"_v) sigma "avg"(kappa) "jump"(q bb n) * "jump"(phi bb n) dS )
+    :}
+    $$
 
-    where `\sigma` is a penalty parameter (see Epshteyn and Riviere, 2007).
+    where σ is a penalty parameter (see Epshteyn and Riviere, 2007).
 
     Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty parameters for symmetric
     interior penalty Galerkin methods. Journal of Computational and Applied Mathematics,

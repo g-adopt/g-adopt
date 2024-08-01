@@ -73,10 +73,10 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         update_plate_reconstruction(ndtime):
             Updates the function values based on plate velocities from GPlates
             for a given model time.
+
             **Note** model time is non-dimensionalised
 
-    Example:
-        >>> # Assuming necessary imports and setup are done
+    Examples:
         >>> gplates_function = GplatesVelocityFunction(V,
         ...                                    gplates_connector=pl_rec_model,
         ...                                    name="GplateVelocity")

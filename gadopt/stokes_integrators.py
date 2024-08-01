@@ -1,3 +1,10 @@
+r"""This module provides a fine-tuned solver class for the Stokes system of conservation
+equations and a function to automatically set the associated null spaces. Users
+instantiate the `StokesSolver` class by providing relevant parameters and call the
+`solve` method to request a solver update.
+
+"""
+
 from numbers import Number
 from typing import Optional
 
@@ -38,7 +45,41 @@ iterative_stokes_solver_parameters = {
         "Mp_ksp_pc_type": "sor",
     }
 }
-"""Default solver parameters for iterative solvers"""
+"""Default iterative solver parameters for solution of stokes system.
+
+We configure the Schur complement approach as described in Section of
+4.3 of Davies et al. (2022), using PETSc's fieldsplit preconditioner
+type, which provides a class of preconditioners for mixed problems
+that allows a user to apply different preconditioners to different
+blocks of the system.
+
+The fieldsplit_0 entries configure solver options for the velocity
+block. The linear systems associated with this matrix are solved using
+a combination of the Conjugate Gradient (cg) method and an algebraic
+multigrid preconditioner (GAMG).
+
+The fieldsplit_1 entries contain solver options for the Schur
+complement solve itself. For preconditioning, we approximate the Schur
+complement matrix with a mass matrix scaled by viscosity, with the
+viscosity provided through the optional mu keyword argument to Stokes
+solver. Since this preconditioner step involves an iterative solve,
+the Krylov method used for the Schur complement needs to be of
+flexible type, and we use FGMRES by default.
+
+We note that our default solver parameters can be augmented or
+adjusted by accessing the solver_parameter dictionary, for example:
+
+```
+   stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+   stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-3
+   stokes_solver.solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
+   stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+   stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
+```
+
+Note:
+  G-ADOPT defaults to iterative solvers in 3-D.
+"""
 
 direct_stokes_solver_parameters = {
     "mat_type": "aij",
@@ -46,7 +87,13 @@ direct_stokes_solver_parameters = {
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
 }
-"""Default solver parameters for direct solvers"""
+"""Default direct solver parameters for solution of Stokes system.
+
+Configured to use LU factorisation, using the MUMPS library.
+
+Note:
+  G-ADOPT defaults to direct solvers in 2-D.
+"""
 
 newton_stokes_solver_parameters = {
     "snes_type": "newtonls",
@@ -55,7 +102,11 @@ newton_stokes_solver_parameters = {
     "snes_atol": 1e-10,
     "snes_rtol": 1e-5,
 }
-"""Default solver parameters for non-linear systems"""
+"""Default solver parameters for non-linear systems.
+
+We use a setup based on Newton's method (newtonls) with a secant line
+search over the L2-norm of the function.
+"""
 
 
 def create_stokes_nullspace(
@@ -115,17 +166,16 @@ def create_stokes_nullspace(
 
 
 class StokesSolver:
-    """Solves the Stokes system.
+    """Solves the Stokes system in place.
 
     Arguments:
-      z: Firedrake function representing the mixed Stokes system
-      T: Firedrake function representing the temperature
-      approximation: Approximation describing the system of equations
+      z: Firedrake function representing mixed Stokes system
+      T: Firedrake function representing temperature
+      approximation: Approximation describing system of equations
       bcs: Dictionary of identifier-value pairs specifying boundary conditions
       mu: Firedrake function representing dynamic viscosity
       quad_degree: Quadrature degree. Default value is `2p + 1`, where
                    p is the polynomial degree of the trial space
-      cartesian: Whether to use Cartesian coordinates
       solver_parameters: Either a dictionary of PETSc solver parameters or a string
                          specifying a default set of parameters defined in G-ADOPT
       J: Firedrake function representing the Jacobian of the system
@@ -143,7 +193,6 @@ class StokesSolver:
         bcs: dict[int, dict[str, Number]] = {},
         mu: fd.Function | Number = 1,
         quad_degree: int = 6,
-        cartesian: bool = True,
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
@@ -164,7 +213,7 @@ class StokesSolver:
 
         self.solver_kwargs = kwargs
         u, p = fd.split(self.solution)
-        self.k = upward_normal(self.Z.mesh(), cartesian)
+        self.k = upward_normal(self.Z.mesh())
         self.fields = {
             'velocity': u,
             'pressure': p,
@@ -219,7 +268,7 @@ class StokesSolver:
                         raise ValueError(
                             f"Solver type '{solver_parameters}' not implemented."
                         )
-            elif self.mesh.topological_dimension() == 2 and cartesian:
+            elif self.mesh.topological_dimension() == 2 and self.mesh.cartesian:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
@@ -230,7 +279,7 @@ class StokesSolver:
                 elif INFO >= log_level:
                     self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
 
-        # solver object is set up later to permit editing default solver parameters
+        # solver object is set up later to permit editing default solver parameters specified above
         self._solver_setup = False
 
     def setup_solver(self):
