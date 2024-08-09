@@ -272,7 +272,7 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 # +
 stokes_bcs = {
     bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"RaFS": 1e6}},
+    top_id: {"free_surface": {"RaFS": 1e5}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
@@ -324,7 +324,7 @@ energy_solver = EnergySolver(
 )
 
 stokes_solver = StokesSolver(
-    z, T, approximation, bcs=stokes_bcs, constant_jacobian=True, free_surface_dt=delta_t
+    z, T, approximation, bcs=stokes_bcs, constant_jacobian=False, free_surface_dt=delta_t
 )
 
 # -
@@ -392,3 +392,12 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # collection = tripcolor(T, axes=axes, cmap='coolwarm')
 # fig.colorbar(collection);
 # -
+
+# code to add to end of base case to get final dynamic topo!
+
+
+# eta = Function(W)
+
+# eta.interpolate((-z.subfunctions[1] + 2 * Dx(z.subfunctions[0][1], 1))/(Ra*T-Ra*10))
+# coef = assemble(eta * ds(top_id))/assemble(Constant(1.0)*ds(top_id, domain=mesh))
+# eta.project(eta - coef)
