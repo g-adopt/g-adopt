@@ -6,7 +6,7 @@
 #
 # Free Surface
 # ------------
-# In the base case and other tutorials so far we have assumed that the top surface of the model is a rigid lid, i.e. there is no normal flow at the top surface. For a free surface we relax that condition so that the surface is able to deform.
+# In the base case and other tutorials so far we have assumed that the top surface of the model is free-slip, i.e. there is no normal flow across the top surface of the model. For a free surface we relax that condition so that the surface is able to deform.
 #
 # Mathematically, the boundary conditions for a free surface can be written as
 # \begin{equation}
@@ -15,19 +15,19 @@
 # \begin{equation}
 #       \textbf{n} \cdot \boldsymbol{\sigma}  = \textbf{0},
 # \end{equation}
-# where $\textbf{u}$ is the velocity vector, $\textbf{n}$ is the unit normal, $\eta$ is the free surface height, $\boldsymbol{\hat{r}}$ is the radial unit vector and $\boldsymbol{\sigma}$ is the full stress tensor. The first equation states that the velocity of the free surface is just the normal velocity at the surface and the second equation states there is no stress acting on the free surface.
+# where $\textbf{u}$ is the velocity vector, $\textbf{n}$ is the unit normal, $\eta$ is the free surface height, $\boldsymbol{\hat{r}}$ is the radial unit vector and $\boldsymbol{\sigma}$ is the full stress tensor. The first equation states that the velocity of the free surface is just the normal velocity at the surface and the second equation states there is no stress acting at the free surface.
 #
-# One way to implement the zero stress at the free surface is just to move the mesh based on the velocity calculated in the domain. This is a Lagrangian formulation.  There are a few downsides to this. Firstly, it can be expensive to continually update the mesh geometry at each timestep. We also have to reformulate our equations in terms of a moving reference frame accounting for the mesh velocity.
+# One way to implement the zero stress condition at the free surface is just to move the mesh based on the velocity calculated in the domain. This is a Lagrangian formulation.  There are a few downsides to this. Firstly, it can be expensive to continually update the mesh geometry at each timestep. We also have to reformulate our equations in terms of a moving reference frame accounting for the mesh velocity.
 #
-# A possibly more important consideration though, is that if we couple the free surface to the momentum equation explicitly in time, there will always be a lag between the interior dynamics pushing the free surface up and the stabilising feedback due to deviations of the free surface from the reference level. If we take timesteps that are too long then the simulation becomes unstable. This timestep limitation is based on a characteristic relaxation time scale
+# A possibly more important consideration though, is that if we couple the free surface to the Stokes equations explicitly in time, there will always be a lag between the interior dynamics pushing the free surface up and the stabilising feedback due to deviations of the free surface from the reference level. If we take timesteps that are too long then the simulation becomes unstable. This timestep limitation is based on a characteristic relaxation time scale
 # \begin{equation}
 # \tau = \dfrac{2 k \mu}{\Delta \rho_{fs} g},
 # \end{equation}
 # where $k$ is a wavenumber, $\mu$ is the viscosity, $\Delta \rho_{fs}$ is the density contrast across the free surface and $g$ is gravity.
 #
-# Note that long wavelengths decay fastest, so it is the longest waves that dictate the maximum stable timestep for an explicit free surface implementation. Usually the timestep is controlled by an advection CFL condition calculated from the energy equation, however, a stable free surface timestep might be much lower than this estimate. This means that a free surface simulation with explicit timestepping may be an order of magnitude slower than an equivalent rigid-lid simulation.
+# Note that long wavelengths decay fastest, so it is the longest waves that dictate the maximum stable timestep for an explicit free surface implementation. Usually the timestep is controlled by an advection CFL condition calculated from the energy equation, however, a stable free surface timestep might be much lower than this estimate. This means that a free surface simulation with explicit timestepping may be an order of magnitude slower than an equivalent free-slip simulation.
 #
-# A way around this problem is to solve for the free surface height implicitly, i.e. at the same time as the velocity and pressure during the momentum solve. By coupling the solution of velocity, pressure and the free surface together, there is no longer a timestep constraint. The decay of the (long) wavelengths with decay times shorter than the timestep are effectively damped by numerical diffusion. The upshot is we can take longer timesteps, so the simulation time is similar to a rigid-lid simulation, whilst being able to investigate time dependent short wavelength changes of the free surface. We have implemented the second order $\theta$ timestepping method from Kramer et al. (2012) and we point the reader to this paper for a longer discussion of the different approaches and the implementation.
+# A way around this problem is to solve for the free surface height implicitly, i.e. at the same time as the velocity and pressure during the Stokes solve. By coupling the solution of velocity, pressure and the free surface together, there is no longer a timestep constraint. The decay of the (long) wavelengths with decay times shorter than the timestep are effectively damped by numerical diffusion. The upshot is we can take longer timesteps, so the simulation time is similar to a free-slip simulation, whilst being able to investigate time dependent short wavelength changes of the free surface. We have implemented the second order $\theta$ timestepping method from Kramer et al. (2012) and we point the reader to this paper for a longer discussion of the different approaches and their implementation.
 #
 
 # This example
@@ -227,13 +227,13 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # You should see that the temperature field is very similar to the base case result - in fact they are the same! Given this problem reaches a steady state adding a free surface should not change that behaviour, it will just change how the simulation reaches that steady state.
 #
-# We can even verify that the stress exerted by the deviation of the free surface from the reference state is the same as the when calculating dynamic topography from a rigid-lid simulation.
+# We can even verify that the stress exerted by the deviation of the free surface from the reference state is the same as the when calculating dynamic topography from a free-slip simulation.
 #
 # Have a go at trying this yourself by loading the final state from the base case and calculating the expected dynamic topography with the code below. This should match the final free surface height that the code converges towards.
 
 # + tags=["active-ipynb"]
 # #eta_steady = Function(W)
 # #eta_steady.interpolate((-z.subfunctions[1] + 2 * Dx(z.subfunctions[0][1], 1))/(Ra*T-Ra*10))
-# # project out the constant associated with the pressure nullspace for the rigid-lid simulation
+# # project out the constant associated with the pressure nullspace for the free-slip simulation
 # #coef = assemble(eta_steady * ds(top_id))/assemble(Constant(1.0)*ds(top_id, domain=mesh))
 # #eta_steady.project(eta_steady - coef)
