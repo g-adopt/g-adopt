@@ -67,20 +67,28 @@ z.subfunctions[1].rename("Pressure")
 # depends on temperature here, we setup and initialise our temperature earlier than in the previous tutorials.
 
 # +
-Ra = Constant(100)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
-
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
-T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
+T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 
-gamma_T, gamma_Z = Constant(ln(10**5)), Constant(ln(10))  # temperature and depth sensitivity of viscosity
+
+gamma_T = Constant(ln(10**5))  # temperature sensitivity of viscosity
+gamma_Z = Constant(ln(10))  # depth sensitivity of viscosity
 mu_star, sigma_y = Constant(0.001), Constant(1.0)
 epsilon = sym(grad(u))  # Strain-rate
-epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with tolerance to ensure stability)
-mu_lin = exp(-gamma_T*T + gamma_Z*(1 - X[1]))  # linear component of rheological formulation
+# 2nd invariant (with tolerance to ensure stability)
+epsii = sqrt(inner(epsilon, epsilon) + 1e-10)
+# linear component of rheological formulation
+mu_lin = exp(-gamma_T * T + gamma_Z * (1 - X[1]))
 mu_plast = mu_star + (sigma_y / epsii)  # plastic component of rheological formulation
-mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
+mu = (2.0 * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
+
+approximation = EquationSystem(
+    approximation="BA",
+    dimensional=False,
+    parameters={"Ra": 1e2, "mu": mu},
+    buoyancy_terms=["thermal"],
+)
 # -
 
 # As with the previous examples, we set up a *Timestep Adaptor*,
@@ -96,7 +104,8 @@ time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
+# Used to determine if solution has reached a steady state.
+steady_state_tolerance = 1e-9
 
 # This problem has a constant pressure nullspace, handled identically to our
 # previous tutorials.
@@ -107,16 +116,13 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # +
 stokes_bcs = {
-    bottom_id: {'uy': 0},
-    top_id: {'uy': 0},
-    left_id: {'ux': 0},
-    right_id: {'ux': 0},
+    bottom_id: {"uy": 0},
+    top_id: {"uy": 0},
+    left_id: {"ux": 0},
+    right_id: {"ux": 0},
 }
 
-temp_bcs = {
-    bottom_id: {'T': 1.0},
-    top_id: {'T': 0.0},
-}
+temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 # -
 
 # We next set up our output, in VTK format. To do so, we create the output file
@@ -127,10 +133,12 @@ temp_bcs = {
 output_file = VTKFile("output.pvd")
 output_frequency = 50
 
-plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
+plog = ParameterLog("params.log", mesh)
+plog.log_str(
+    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t"
+)
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(bottom_id, top_id, z, T)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
@@ -141,16 +149,22 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 # information to improve convergence.
 
 # +
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
+stokes_solver = StokesSolver(
+    approximation,
+    z,
+    T,
+    bcs=stokes_bcs,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+)
 # -
 
 # Next, we initiate the time loop, which runs until a steady-state solution has been attained.
 
-for timestep in range(0, timesteps):
-
+for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T)
@@ -168,12 +182,14 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
-                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
-                 f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} ")
+    plog.log_str(
+        f"{timestep} {time} {float(delta_t)} {maxchange} "
+        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
+        f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
+    )
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:

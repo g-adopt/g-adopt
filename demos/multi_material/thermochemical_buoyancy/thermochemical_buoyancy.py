@@ -49,9 +49,8 @@ point_2 = gmsh.model.geo.addPoint(lx, 0, 0, mesh_hor_res)
 
 line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
-gmsh.model.geo.extrude(
-    [(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True
-)  # Vertical resolution: 5e-3
+# Vertical resolution: 5e-3
+gmsh.model.geo.extrude([(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True)
 
 gmsh.model.geo.extrude(
     [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 20, 0, numElements=[15], recombine=True
@@ -173,7 +172,12 @@ RaB = field_interface(
     [psi], [material.RaB for material in materials], method="arithmetic"
 )  # Compositional Rayleigh number, defined based on each material value and location
 
-approximation = BoussinesqApproximation(Ra, RaB=RaB)
+approximation = EquationSystem(
+    approximation="BA",
+    dimensional=False,
+    parameters={"Ra": Ra, "Ra_c": RaB},
+    buoyancy_terms=["compositional", "thermal"],
+)
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -240,7 +244,7 @@ output_file = VTKFile("output.pvd")
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(bottom_id, top_id, z, T)
 
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
@@ -255,16 +259,15 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # +
 energy_solver = EnergySolver(
-    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(
+    approximation,
     z,
     T,
-    approximation,
     bcs=stokes_bcs,
-    nullspace=Z_nullspace,
-    transpose_nullspace=Z_nullspace,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 
 subcycles = 1  # Number of advection solves to perform within one time step

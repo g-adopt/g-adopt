@@ -122,18 +122,22 @@ z.subfunctions[1].rename("Pressure")
 X = SpatialCoordinate(mesh)
 Ra = Constant(1e5)  # Rayleigh number
 Di = Constant(0.5)  # Dissipation number
+Gamma = Constant(1.0)  # Grüneisen parameter
 T0 = Constant(0.091)  # Non-dimensional surface temperature
-rhobar = Function(Q, name="CompRefDensity").interpolate(exp((1.0 - X[1]) * Di))  # Reference density
-Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)  # Reference temperature
-alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)  # Thermal expansivity
-cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)  # Specific heat capacity
-chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)  # Bulk modulus
-gbar = Function(Q, name="GravitationalAcceleration").assign(1.0)  # radial gravity
+rhobar = Function(Q, name="CompRefDensity")  # Reference density
+rhobar.interpolate(exp((1.0 - X[1]) * Di))
+Tbar = Function(Q, name="CompRefTemperature")  # Reference temperature
+Tbar.interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)
 
 # These fields are used to set up our Truncated Anelastic Liquid Approximation. Alongside dropping the
 # requirement for specifying the bulk modulus, this is the key change relative to our tutorial under the ALA approximation.
 
-approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar, chi=chibar, g=gbar)
+approximation = EquationSystem(
+    approximation="ALA",
+    dimensional=False,
+    parameters={"Ra": Ra, "Di": Di, "Gamma": Gamma, "rho": rhobar, "T": Tbar},
+    buoyancy_terms=["thermal"],
+)
 
 # As with the previous example, we next set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -148,14 +152,18 @@ time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
+# Used to determine if solution has reached a steady state.
+steady_state_tolerance = 1e-9
 
 # We next set up and initialise our Temperature field. Note that here, we take into consideration
 # the non-dimensional surface temperature, T0. The full temperature field is also initialised.
 
 T = Function(Q, name="Temperature")
-T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
-FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
+T.interpolate(
+    (1.0 - (T0 * exp(Di) - T0))
+    * ((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
+)
+FullT = Function(Q, name="FullTemperature").assign(T + Tbar)
 
 # This problem has a constant pressure nullspace, handled identically to our
 # previous tutorial.
@@ -166,16 +174,13 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # +
 stokes_bcs = {
-    bottom_id: {'uy': 0},
-    top_id: {'uy': 0},
-    left_id: {'ux': 0},
-    right_id: {'ux': 0},
+    bottom_id: {"uy": 0},
+    top_id: {"uy": 0},
+    left_id: {"ux": 0},
+    right_id: {"ux": 0},
 }
 
-temp_bcs = {
-    bottom_id: {'T': 1.0 - (T0*exp(Di) - T0)},
-    top_id: {'T': 0.0},
-}
+temp_bcs = {bottom_id: {"T": 1.0 - (T0 * exp(Di) - T0)}, top_id: {"T": 0.0}}
 # -
 
 # We next set up our output, in VTK format, including a file
@@ -184,15 +189,17 @@ temp_bcs = {
 
 # +
 output_file = VTKFile("output.pvd")
-ref_file = VTKFile('reference_state.pvd')
+ref_file = VTKFile("reference_state.pvd")
+ref_file.write(rhobar, Tbar)
 output_frequency = 50
 
-plog = ParameterLog('params.log', mesh)
+plog = ParameterLog("params.log", mesh)
 plog.log_str(
     "timestep time dt maxchange u_rms u_rms_surf ux_max nu_base "
-    "nu_top energy avg_t rate_work_g rate_viscous energy_2")
+    "nu_top energy avg_t rate_work_g rate_viscous energy_2"
+)
 
-gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(bottom_id, top_id, z, FullT)
 
 # -
 
@@ -200,21 +207,26 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
 # passing in the approximation configured above.
 
 # +
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             transpose_nullspace=Z_nullspace,
-                             constant_jacobian=True)
+stokes_solver = StokesSolver(
+    approximation,
+    z,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace={"transpose_nullspace": Z_nullspace},
+)
 # -
 
 # Next initiate the time loop, which runs until a steady-state solution has been attained:
 
-for timestep in range(0, timesteps):
-
+for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T, FullT)
-        ref_file.write(rhobar, Tbar, alphabar, cpbar, chibar)
 
     dt = t_adapt.update_timestep()
     time += dt
@@ -227,22 +239,26 @@ for timestep in range(0, timesteps):
 
     # Compute diagnostics:
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
-    rate_work_against_gravity = assemble(approximation.work_against_gravity(u, T)*dx)
-    rate_viscous_dissipation = assemble(approximation.viscous_dissipation(u)*dx)
+    rate_work_against_gravity = assemble(
+        approximation.linearized_energy_sink(u) * T * dx
+    )
+    rate_viscous_dissipation = assemble(approximation.viscous_dissipation(u) * dx)
     energy_conservation_2 = abs(rate_work_against_gravity - rate_viscous_dissipation)
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
-                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_bottom()} "
-                 f"{gd.Nu_top()} {energy_conservation} {gd.T_avg()} "
-                 f"{rate_work_against_gravity} {rate_viscous_dissipation} "
-                 f"{energy_conservation_2}")
+    plog.log_str(
+        f"{timestep} {time} {float(delta_t)} {maxchange} "
+        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_bottom()} "
+        f"{gd.Nu_top()} {energy_conservation} {gd.T_avg()} "
+        f"{rate_work_against_gravity} {rate_viscous_dissipation} "
+        f"{energy_conservation_2}"
+    )
 
     # Calculate Full T
-    FullT.assign(T+Tbar)
+    FullT.assign(T + Tbar)
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:

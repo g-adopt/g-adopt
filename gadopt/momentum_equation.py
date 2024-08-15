@@ -26,8 +26,8 @@ the solver provided in the stokes_integrators module.
 from typing import Optional
 
 import firedrake as fd
-from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
-from firedrake import avg, sym, Identity, jump
+from firedrake import dot, inner, outer, transpose, nabla_grad, div
+from firedrake import avg, Identity, jump
 from firedrake import FacetArea, CellVolume
 
 from .equations import BaseTerm, BaseEquation
@@ -57,19 +57,14 @@ class ViscosityTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
 
         mu = fields['viscosity']
+        stress = fields["stress"]
+        compressible = fields["compressible"]
         phi = test
         n = self.n
         u = trial
         u_lagged = trial_lagged
-        compressible = self.term_kwargs['compressible']
 
-        grad_test = nabla_grad(phi)
-        stress = 2 * mu * sym(grad(u))
-        if compressible:
-            stress -= 2/3 * mu * Identity(self.dim) * div(u)
-
-        F = 0
-        F += inner(grad_test, stress)*self.dx
+        F = inner(nabla_grad(phi), stress) * self.dx
 
         # Interior Penalty method
         #
@@ -125,6 +120,12 @@ class ViscosityTerm(BaseTerm):
                 # here we need only the third term, because we assume jump_u=0 (u_ext=u)
                 # the provided stress = n.(mu.stress_tensor)
                 F += dot(-phi, bc['stress']) * self.ds(id)
+            if 'normal_stress' in bc:
+                # add the external normal stress
+                normal_stress = bc['normal_stress']
+                F -= dot(-phi, normal_stress * n) * self.ds(id)
+
+
             if 'drag' in bc:  # (bottom) drag of the form tau = -C_D u |u|
                 C_D = bc['drag']
                 unorm = pow(dot(u_lagged, u_lagged) + 1e-6, 0.5)
@@ -136,65 +137,59 @@ class ViscosityTerm(BaseTerm):
 
             if 'u' in bc and 'stress' in bc:
                 raise ValueError("Cannot apply both 'u' and 'stress' bc on same boundary")
+            if 'u' in bc and 'normal_stress' in bc:
+                raise ValueError("Cannot apply both 'u' and 'normal_stress' bc on same boundary")
             if 'u' in bc and 'drag' in bc:
                 raise ValueError("Cannot apply both 'u' and 'drag' bc on same boundary")
             if 'u' in bc and 'un' in bc:
                 raise ValueError("Cannot apply both 'u' and 'un' bc on same boundary")
+            if 'un' in bc and 'normal_stress' in bc:
+                raise ValueError("Cannot apply both 'un' and 'normal_stress' bc on same boundary")
 
         return -F
 
 
 class PressureGradientTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
-        phi = test
-        n = self.n
         p = fields['pressure']
 
-        assert normal_is_continuous(phi)
-        F = -dot(div(phi), p)*self.dx
+        assert normal_is_continuous(test)
 
-        # integration by parts gives natural condition on pressure
-        # (as part of a normal stress condition), for boundaries where
-        # the normal component of u is specified, we remove that condition
+        F = -dot(div(test), p) * self.dx
+
+        # Integration by parts gives natural condition on pressure (as part of a normal
+        # stress condition). For boundaries where the normal component of u is
+        # specified, we remove that condition.
         for id, bc in bcs.items():
             if 'u' in bc or 'un' in bc:
-                F += dot(phi, n)*p*self.ds(id)
+                F += dot(test, self.n) * p * self.ds(id)
 
         return -F
 
 
 class DivergenceTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
-        psi = test
-        n = self.n
-        u = fields['velocity']
-        rho = fields.get('rho_continuity', 1)
+        u = fields["velocity"]
+        rho = fields["density"]
 
         assert normal_is_continuous(u)
-        F = dot(psi, div(rho * u))*self.dx
+
+        F = dot(test, div(rho * u)) * self.dx
 
         # add boundary integral for bcs that specify normal u-component
         for id, bc in bcs.items():
             if 'u' in bc:
-                F += psi * rho * dot(n, bc['u']-u) * self.ds(id)
+                F += test * rho * dot(self.n, bc["u"] - u) * self.ds(id)
             elif 'un' in bc:
-                F += psi * rho * (bc['un'] - dot(n, u)) * self.ds(id)
+                F += test * rho * (bc["un"] - dot(self.n, u)) * self.ds(id)
 
         return F
 
 
 class MomentumSourceTerm(BaseTerm):
     def residual(self, test, trial, trial_lagged, fields, bcs):
-        if 'source' not in fields:
-            return 0
-
-        phi = test
-        source = fields['source']
-
-        # NOTE, here source term F is already on the RHS
-        F = dot(phi, source)*self.dx
-
-        return F
+        # NOTE: Source term already on the RHS
+        return dot(test, fields["source"]) * self.dx
 
 
 class MomentumEquation(BaseEquation):
@@ -211,7 +206,6 @@ def StokesEquations(
     test_space: fd.functionspaceimpl.WithGeometry,
     trial_space: fd.functionspaceimpl.WithGeometry,
     quad_degree: Optional[int] = None,
-    **kwargs,
 ) -> list[BaseEquation]:
     """Stokes system involving the momentum and mass continuity equations.
 
@@ -226,9 +220,9 @@ def StokesEquations(
 
     """
     mom_eq = MomentumEquation(
-        test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs
+        test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree
     )
     cty_eq = ContinuityEquation(
-        test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs
+        test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree
     )
     return [mom_eq, cty_eq]

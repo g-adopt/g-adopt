@@ -39,7 +39,8 @@ from gadopt import *
 # +
 rmin, rmax, ncells, nlayers = 1.22, 2.22, 128, 32
 mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
-mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')  # extrude into a cylinder
+# extrude into a cylinder
+mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
 mesh.cartesian = False
 bottom_id, top_id = "bottom", "top"
 
@@ -68,8 +69,12 @@ z.subfunctions[1].rename("Pressure")
 
 # We next specify the important constants for this problem, and set up the approximation.
 
-Ra = Constant(1e5)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = EquationSystem(
+    approximation="BA",
+    dimensional=False,
+    parameters={"Ra": 1e5},
+    buoyancy_terms=["thermal"],
+)
 
 # As with the previous examples, we set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -82,7 +87,8 @@ time = 0.0  # Initial time
 delta_t = Constant(1e-7)  # Initial time-step
 timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-steady_state_tolerance = 1e-7  # Used to determine if solution has reached a steady state.
+# Used to determine if solution has reached a steady state.
+steady_state_tolerance = 1e-7
 
 # We next set up and initialise our Temperature field.
 # We choose the initial temperature distribution to trigger upwelling of 4 equidistant plumes.
@@ -94,8 +100,8 @@ steady_state_tolerance = 1e-7  # Used to determine if solution has reached a ste
 
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
-r = sqrt(X[0]**2 + X[1]**2)
-T.interpolate(rmax - r + 0.02*cos(4*atan2(X[1], X[0])) * sin((r - rmin) * pi))
+r = sqrt(X[0] ** 2 + X[1] ** 2)
+T.interpolate(rmax - r + 0.02 * cos(4 * atan2(X[1], X[0])) * sin((r - rmin) * pi))
 
 # We can plot this initial temperature field:
 
@@ -122,7 +128,9 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 # for the velocity block of the Stokes system, to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
 # translational modes.
 
-Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
+Z_near_nullspace = create_stokes_nullspace(
+    Z, closed=False, rotational=True, translations=[0, 1]
+)
 
 # Boundary conditions are next specified. Boundary conditions for temperature are set to $T = 0$ at the surface ($r_{\text{max}}$) and $T = 1$
 # at the base ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries. We incorporate these <b>weakly</b> through
@@ -130,15 +138,9 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # of velocity is zero and all required changes are handled under the hood.
 
 # +
-stokes_bcs = {
-    bottom_id: {'un': 0},
-    top_id: {'un': 0},
-}
+stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
 
-temp_bcs = {
-    bottom_id: {'T': 1.0},
-    top_id: {'T': 0.0},
-}
+temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 # -
 
 # We next setup our output, in VTK format.
@@ -146,31 +148,39 @@ temp_bcs = {
 
 # +
 output_file = VTKFile("output.pvd")
-ref_file = VTKFile('reference_state.pvd')
 output_frequency = 50
 
-plog = ParameterLog('params.log', mesh)
+plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time dt maxchange u_rms nu_base nu_top energy avg_t T_min T_max")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
+gd = GeodynamicalDiagnostics(bottom_id, top_id, z, T, quad_degree=6)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
 # passing in the approximation, nullspace and near-nullspace information configured above.
 
 # +
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             constant_jacobian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             near_nullspace=Z_near_nullspace)
+stokes_solver = StokesSolver(
+    approximation,
+    z,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace={
+        "nullspace": Z_nullspace,
+        "transpose_nullspace": Z_nullspace,
+        "near_nullspace": Z_near_nullspace,
+    },
+)
 # -
 
 # We now initiate the time loop, which runs until a steady-state solution has been attained.
 
-for timestep in range(0, timesteps):
-
+for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T)
@@ -188,7 +198,7 @@ for timestep in range(0, timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    f_ratio = rmin/rmax
+    f_ratio = rmin / rmax
     top_scaling = 1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
     bot_scaling = 0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
     nusselt_number_top = gd.Nu_top() * top_scaling
@@ -196,12 +206,14 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
-                 f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {gd.T_avg()} {gd.T_min()} {gd.T_max()} ")
+    plog.log_str(
+        f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
+        f"{nusselt_number_base} {nusselt_number_top} "
+        f"{energy_conservation} {gd.T_avg()} {gd.T_min()} {gd.T_max()} "
+    )
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:

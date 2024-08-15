@@ -1,9 +1,11 @@
-import pytest
 from pathlib import Path
+
 import pandas as pd
+import pytest
 
 cases = {
     "base_case": {},
+    "free_surface": {"extra_checks": ["eta_min", "eta_max"]},
     "2d_compressible_TALA": {},
     "2d_compressible_ALA": {},
     "viscoplastic_case": {},
@@ -45,8 +47,10 @@ def test_benchmark(benchmark):
     extra_checks = compare_params.pop("extra_checks", [])
 
     pd.testing.assert_series_equal(
-        df[["u_rms", "nu_top"] + extra_checks], expected,
-        check_names=False, **compare_params
+        df[["u_rms", "nu_top"] + extra_checks],
+        expected,
+        check_names=False,
+        **compare_params,
     )
 
     assert abs(df.name - expected.name) <= convergence_tolerance

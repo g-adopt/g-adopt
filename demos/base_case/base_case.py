@@ -224,15 +224,20 @@ z.subfunctions[1].rename("Pressure")
 # allowing the simulation to exit when a steady-state has been achieved.
 
 # +
-Ra = Constant(1e4)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = EquationSystem(
+    approximation="BA",
+    dimensional=False,
+    parameters={"Ra": 1e4},
+    buoyancy_terms=["thermal"],
+)
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
-steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
+# Used to determine if solution has reached a steady state.
+steady_state_tolerance = 1e-9
 # -
 
 # Mantle convection is an initial and boundary-value problem. We
@@ -249,7 +254,7 @@ steady_state_tolerance = 1e-9  # Used to determine if solution has reached a ste
 
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
-T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
+T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 
 # We can visualise the initial temperature field using Firedrake's
 # built-in plotting functionality.
@@ -282,16 +287,13 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # +
 stokes_bcs = {
-    bottom_id: {'uy': 0},
-    top_id: {'uy': 0},
-    left_id: {'ux': 0},
-    right_id: {'ux': 0},
+    bottom_id: {"uy": 0},
+    top_id: {"uy": 0},
+    left_id: {"ux": 0},
+    right_id: {"ux": 0},
 }
 
-temp_bcs = {
-    bottom_id: {'T': 1.0},
-    top_id: {'T': 0.0},
-}
+temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 # -
 
 # We next set up our output, in VTK format. To do so, we create the output file
@@ -309,10 +311,12 @@ output_frequency = 50
 # and temperature functions, alongside bottom and top boundary IDs.
 
 # +
-plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
+plog = ParameterLog("params.log", mesh)
+plog.log_str(
+    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t"
+)
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(bottom_id, top_id, z, T)
 # -
 
 # We finally come to solving the variational problem, with solver
@@ -328,11 +332,18 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 # We note that solution of the two variational problems is undertaken by PETSc.
 
 # +
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             constant_jacobian=True)
+stokes_solver = StokesSolver(
+    approximation,
+    z,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+)
 # -
 
 # We can now initiate the time-loop, with the Stokes and energy
@@ -344,8 +355,7 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
 # the change in temperature and, once this drops below the steady_state_tolerance specified above,
 # we exit the timeloop.
 
-for timestep in range(0, timesteps):
-
+for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T)
@@ -363,12 +373,14 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
-                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
-                 f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} ")
+    plog.log_str(
+        f"{timestep} {time} {float(delta_t)} {maxchange} "
+        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
+        f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
+    )
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:

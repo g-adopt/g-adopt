@@ -5,8 +5,17 @@ parameters and call individual class methods to compute associated diagnostics.
 """
 
 from firedrake import (
-    Constant, DirichletBC, FacetNormal, Function,
-    assemble, dot, ds, dx, grad, norm, sqrt,
+    Constant,
+    DirichletBC,
+    FacetNormal,
+    Function,
+    assemble,
+    dot,
+    ds,
+    dx,
+    grad,
+    norm,
+    sqrt,
 )
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
@@ -18,10 +27,10 @@ class GeodynamicalDiagnostics:
     """Typical simulation diagnostics used in geodynamical simulations.
 
     Arguments:
-      z:            Firedrake function for mixed Stokes function space (velocity, pressure)
-      T:            Firedrake function for temperature
       bottom_id:    Bottom boundary identifier
       top_id:       Top boundary identifier
+      z:            Firedrake function for mixed Stokes function space (velocity, pressure)
+      T:            Firedrake function for temperature
       quad_degree:  Degree of polynomial quadrature approximation
 
     Note:
@@ -41,10 +50,10 @@ class GeodynamicalDiagnostics:
 
     def __init__(
         self,
-        z: Function,
-        T: Function,
         bottom_id: int,
         top_id: int,
+        z: Function,
+        T: Function = 0,
         quad_degree: int = 4,
     ):
         mesh = extract_unique_domain(z)
@@ -53,11 +62,10 @@ class GeodynamicalDiagnostics:
         self.T = T
 
         self.dx = dx(domain=mesh, degree=quad_degree)
-        self.ds = (
-            CombinedSurfaceMeasure(mesh, quad_degree)
-            if T.function_space().extruded
-            else ds(mesh)
-        )
+        if self.u.function_space().extruded:
+            self.ds = CombinedSurfaceMeasure(mesh, quad_degree)
+        else:
+            self.ds = ds(mesh)
         self.ds_t = self.ds(top_id)
         self.ds_b = self.ds(bottom_id)
 

@@ -49,7 +49,7 @@ class ScalarAdvectionTerm(BaseTerm):
         q = trial
         continuous_u_normal = normal_is_continuous(u)
         if 'advective_velocity_scaling' in fields:
-            u = fields['advective_velocity_scaling'] * u
+            u *= fields["advective_velocity_scaling"]
 
         if 'su_nubar' in fields:
             # SU(PG) ala Donea & Huerta 2003
@@ -108,18 +108,14 @@ class ScalarDiffusionTerm(BaseTerm):
         fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
         bcs: Optional[dict[int, dict[str, int | float]]] = None,
     ) -> fd.ufl.core.expr.Expr:
-
-        kappa = fields['diffusivity']
-        if len(kappa.ufl_shape) == 2:
-            diff_tensor = kappa
-        else:
-            diff_tensor = kappa * Identity(self.dim)
+        k = fields["conductivity"]
+        diff_tensor = k if len(k.ufl_shape) == 2 else k * Identity(self.dim)
 
         phi = test
         n = self.n
         q = trial
-        if 'reference_for_diffusion' in fields:
-            q += fields['reference_for_diffusion']
+        if 'reference_for_conduction' in fields:
+            q += fields['reference_for_conduction']
 
         grad_test = grad(phi)
         diff_flux = dot(diff_tensor, grad(q))
@@ -182,15 +178,9 @@ class ScalarSourceTerm(BaseTerm):
         fields: Optional[dict[str, fd.Constant | fd.Function]] = None,
         bcs: Optional[dict[int, dict[str, int | float]]] = None,
     ) -> fd.ufl.core.expr.Expr:
-        if 'source' not in fields:
-            return 0
-        phi = test
-        source = fields['source']
-
-        # NOTE, here source term F is already on the RHS
-        F = dot(phi, source)*self.dx
-
-        return F
+        # NOTE: here source term is already on the RHS
+        source = fields.get("source", 0)
+        return dot(test, source) * self.dx
 
 
 class ScalarAbsorptionTerm(BaseTerm):
@@ -207,12 +197,11 @@ class ScalarAbsorptionTerm(BaseTerm):
         if 'absorption_coefficient' not in fields:
             return 0
 
-        phi = test
         alpha = fields['absorption_coefficient']
 
         # The absorption term F is already on the right-hand side.
         # Implement absorption term implicitly at current time step.
-        F = -dot(phi, alpha*trial)*self.dx
+        F = -dot(test, alpha*trial)*self.dx
 
         return F
 
@@ -233,7 +222,7 @@ class EnergyEquation(ScalarAdvectionDiffusionEquation):
         self,
         test_space: fd.functionspaceimpl.WithGeometry,
         trial_space: fd.functionspaceimpl.WithGeometry,
-        rhocp: Optional[fd.ufl.core.expr.Expr] = None,
+        rhocp: Optional[fd.ufl.core.expr.Expr],
         quad_degree: Optional[int] = None,
     ):
         self.rhocp = rhocp

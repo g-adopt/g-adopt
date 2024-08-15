@@ -39,11 +39,18 @@ slot_left = 0.475
 slot_right = 0.525
 slot_top = 0.85
 
-bell = 0.25*(1+cos(pi*min_value(sqrt(pow(x-bell_x0, 2) + pow(y-bell_y0, 2))/bell_r0, 1.0)))
-cone = 1.0 - min_value(sqrt(pow(x-cone_x0, 2) + pow(y-cone_y0, 2))/cyl_r0, 1.0)
-slot_cyl = conditional(sqrt(pow(x-cyl_x0, 2) + pow(y-cyl_y0, 2)) < cyl_r0,
-                       conditional(And(And(x > slot_left, x < slot_right), y < slot_top),
-                       0.0, 1.0), 0.0)
+bell = 0.25 * (
+    1
+    + cos(
+        pi * min_value(sqrt(pow(x - bell_x0, 2) + pow(y - bell_y0, 2)) / bell_r0, 1.0)
+    )
+)
+cone = 1.0 - min_value(sqrt(pow(x - cone_x0, 2) + pow(y - cone_y0, 2)) / cyl_r0, 1.0)
+slot_cyl = conditional(
+    sqrt(pow(x - cyl_x0, 2) + pow(y - cyl_y0, 2)) < cyl_r0,
+    conditional(And(And(x > slot_left, x < slot_right), y < slot_top), 0.0, 1.0),
+    0.0,
+)
 
 # We then declare the inital condition of :math:`q` to be the sum of these fields.
 # Furthermore, we add 1 to this, so that the initial field lies between 1 and 2,
@@ -67,29 +74,34 @@ u_outfile.write(u)
 # condition, :math:`q_\mathrm{in}`.  In general, this would be a ``Function``, but
 # here we just use a ``Constant`` value. ::
 
-T = 2*pi
-dt = T/600.0
+T = 2 * pi
+dt = T / 600.0
 q_in = Constant(1.0)
 
 
 # Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
 # the choice of units is up to the user. We set the diffusiviy to zero for pure advection.
 # We also apply weak boundary conditions on inflow regions.
-approximation = BoussinesqApproximation(Ra=1, kappa=Constant(0))
-bc_in = {'q': q_in}
+approximation = EquationSystem(
+    approximation="BA",
+    dimensional=False,
+    parameters={"k": 0},
+)
+bc_in = {"q": q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
-energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
+energy_solver = EnergySolver(
+    approximation, q, u, dt, DIRK33, bcs=bcs, su_advection=True
+)
 
 # Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
+nubar = Function(Q).interpolate(energy_solver.fields["su_nubar"])
 nubar_outfile = VTKFile("CG_SUadv_nubar.pvd")
 nubar_outfile.write(nubar)
 
 # Here is the time stepping loop, with an output every 20 steps.
 t = 0.0
 step = 0
-while t < T - 0.5*dt:
-
+while t < T - 0.5 * dt:
     energy_solver.solve()
 
     step += 1
@@ -102,6 +114,6 @@ while t < T - 0.5*dt:
 # Finally, we display the normalised :math:`L^2` error, by comparing to the
 # initial condition. ::
 
-L2_err = sqrt(assemble((q - q_init)*(q - q_init)*dx))
-L2_init = sqrt(assemble(q_init*q_init*dx))
-print(L2_err/L2_init)
+L2_err = sqrt(assemble((q - q_init) * (q - q_init) * dx))
+L2_init = sqrt(assemble(q_init * q_init * dx))
+print(L2_err / L2_init)

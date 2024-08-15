@@ -9,10 +9,10 @@ from typing import Any, Optional
 
 from firedrake import Constant, DirichletBC, Function, Jacobian, TensorFunctionSpace, dot
 
-from .approximations import BaseApproximation
+from .approximations import EquationSystem
 from .scalar_equation import EnergyEquation
 from .time_stepper import RungeKuttaTimeIntegrator
-from .utility import is_continuous, ensure_constant
+from .utility import is_continuous
 from .utility import log_level, INFO, DEBUG, log
 from .utility import absv, su_nubar
 
@@ -53,9 +53,9 @@ class EnergySolver:
     """Timestepper and solver for the energy equation. The temperature, T, is updated in place.
 
     Arguments:
+      approximation:     G-ADOPT base approximation describing the system of equations
       T:                 Firedrake function for temperature
       u:                 Firedrake function for velocity
-      approximation:     G-ADOPT base approximation describing the system of equations
       delta_t:           Simulation time step
       timestepper:       Runge-Kutta time integrator implementing an explicit or implicit numerical scheme
       bcs:               Dictionary of identifier-value pairs specifying boundary conditions
@@ -66,9 +66,9 @@ class EnergySolver:
 
     def __init__(
         self,
+        approximation: EquationSystem,
         T: Function,
         u: Function,
-        approximation: BaseApproximation,
         delta_t: Constant,
         timestepper: RungeKuttaTimeIntegrator,
         bcs: Optional[dict[int, dict[str, Number]]] = None,
@@ -79,14 +79,14 @@ class EnergySolver:
         self.Q = T.function_space()
         self.mesh = self.Q.mesh()
         self.delta_t = delta_t
-        rhocp = approximation.rhocp()
+        rhocp = approximation.rho * approximation.cp
         self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp)
         self.fields = {
-            'diffusivity': ensure_constant(approximation.kappa()),
-            'reference_for_diffusion': approximation.Tbar,
-            'source': approximation.energy_source(u),
-            'velocity': u,
-            'advective_velocity_scaling': rhocp
+            "conductivity": approximation.k,
+            "reference_for_conduction": approximation.T,
+            "source": approximation.energy_source(u),
+            "velocity": u,
+            "advective_velocity_scaling": rhocp,
         }
         sink = approximation.linearized_energy_sink(u)
         if sink:
@@ -106,7 +106,7 @@ class EnergySolver:
             # then we get artifical viscosity nubar from (2.49)
 
             J = Function(TensorFunctionSpace(self.mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(self.mesh))
-            kappa = self.fields['diffusivity'] + 1e-12  # Set lower bound for diffusivity in case zero diffusivity specified for pure advection.
+            kappa = approximation.kappa + 1e-12  # Set lower bound for diffusivity in case zero diffusivity specified for pure advection.
             vel = self.fields['velocity']
             Pe = absv(dot(vel, J)) / (2*kappa)  # Calculate grid peclet number
             nubar = su_nubar(vel, J, Pe)  # Calculate SU artifical diffusion

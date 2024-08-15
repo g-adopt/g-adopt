@@ -39,7 +39,7 @@ from gadopt import *
 
 # +
 a, b, c = 1.0079, 0.6283, 1.0
-nx, ny, nz = 10, int(b/c * 10), 10
+nx, ny, nz = 10, int(b / c * 10), 10
 mesh2d = RectangleMesh(nx, ny, a, b, quadrilateral=True)  # Rectangular 2D mesh
 mesh = ExtrudedMesh(mesh2d, nz)
 mesh.cartesian = True
@@ -68,8 +68,12 @@ z.subfunctions[1].rename("Pressure")
 
 # We next specify the important constants for this problem, and set up the approximation.
 
-Ra = Constant(3e4)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = EquationSystem(
+    approximation="BA",
+    dimensional=False,
+    parameters={"Ra": 3e4},
+    buoyancy_terms=["thermal"],
+)
 
 # As with the previous example, we set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -82,13 +86,17 @@ time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-steady_state_tolerance = 1e-7  # Used to determine if solution has reached a steady state.
+# Used to determine if solution has reached a steady state.
+steady_state_tolerance = 1e-7
 
 # We next set up and initialise our Temperature field (in 3-D).
 
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
-T.interpolate(0.5*(erf((1-X[2])*4)+erf(-X[2]*4)+1) + 0.2*(cos(pi*X[0]/a)+cos(pi*X[1]/b))*sin(pi*X[2]))
+T.interpolate(
+    0.5 * (erf((1 - X[2]) * 4) + erf(-X[2] * 4) + 1)
+    + 0.2 * (cos(pi * X[0] / a) + cos(pi * X[1] / b)) * sin(pi * X[2])
+)
 
 # With closed boundaries on all domain boundaries, this problem has a constant pressure nullspace, which is
 # handled identically to our 2-D tutorials.
@@ -114,25 +122,24 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 # The GAMG preconditioner can make use of so-called *near-nullspace* modes, to improve performance, ensuring that these are accurately represented at the coarser
 # multigrid levels. We therefore create a near-nullspace object consisting of three rotational and three translational modes.
 
-Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
+Z_near_nullspace = create_stokes_nullspace(
+    Z, closed=False, rotational=True, translations=[0, 1, 2]
+)
 
 # Boundary conditions are next specified, with zero slip conditions specified for top and bottom boundaries, and free-slip
 # on all other boundaries. A temperature of 1 is specified at the base and 0 at the domain's surface.
 
 # +
 stokes_bcs = {
-    bottom_id: {'u': 0},
-    top_id: {'u': 0},
-    left_id: {'ux': 0},
-    right_id: {'ux': 0},
-    front_id: {'uy': 0},
-    back_id: {'uy': 0},
+    bottom_id: {"u": 0},
+    top_id: {"u": 0},
+    left_id: {"ux": 0},
+    right_id: {"ux": 0},
+    front_id: {"uy": 0},
+    back_id: {"uy": 0},
 }
 
-temp_bcs = {
-    bottom_id: {'T': 1.0},
-    top_id: {'T': 0.0},
-}
+temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 # -
 
 # We next set up our output, in VTK format, including a file
@@ -141,38 +148,49 @@ temp_bcs = {
 
 # +
 output_file = VTKFile("output.pvd")
-ref_file = VTKFile('reference_state.pvd')
+ref_file = VTKFile("reference_state.pvd")
 output_frequency = 50
 
-plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
+plog = ParameterLog("params.log", mesh)
+plog.log_str(
+    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t"
+)
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(bottom_id, top_id, z, T)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
 # passing in the approximation, nullspace and near-nullspace information configured above.
 
 # +
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             constant_jacobian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             near_nullspace=Z_near_nullspace)
+stokes_solver = StokesSolver(
+    approximation,
+    z,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace={
+        "nullspace": Z_nullspace,
+        "transpose_nullspace": Z_nullspace,
+        "near_nullspace": Z_near_nullspace,
+    },
+)
 # -
 
 # For all iterative solves, G-ADOPT utilises convergence criterion based on the relative reduction of the
 # preconditioned residual, *ksp\_rtol*. These are set to 1e-5 for the *fieldslip\_0* and 1e-4 for *fieldsplit\_1*.
 # We can change these default values, by accessing the solver_parameters dictionary, as follows.
 
-stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-4
-stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-3
+stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-4
+stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-3
 
 # We now initiate the time loop, which runs until a steady-state solution has been attained.
 
-for timestep in range(0, timesteps):
-
+for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T)
@@ -190,12 +208,14 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
-                 f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
-                 f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} ")
+    plog.log_str(
+        f"{timestep} {time} {float(delta_t)} {maxchange} "
+        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
+        f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
+    )
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:

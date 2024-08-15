@@ -34,6 +34,7 @@ class BaseEquation:
         Quadrature degree. Default value is `2p + 1`, where p the polynomial degree of the trial space
 
     """
+
     terms = []
 
     def __init__(
@@ -41,7 +42,6 @@ class BaseEquation:
         test_space: firedrake.functionspaceimpl.WithGeometry,
         trial_space: firedrake.functionspaceimpl.WithGeometry,
         quad_degree: Optional[int] = None,
-        **kwargs
     ):
         self.test_space = test_space
         self.trial_space = trial_space
@@ -50,11 +50,11 @@ class BaseEquation:
         p = trial_space.ufl_element().degree()
         if isinstance(p, int):  # isotropic element
             if quad_degree is None:
-                quad_degree = 2*p + 1
+                quad_degree = 2 * p + 1
         else:  # tensorproduct element
             p_h, p_v = p
             if quad_degree is None:
-                quad_degree = 2*max(p_h, p_v) + 1
+                quad_degree = 2 * max(p_h, p_v) + 1
 
         if trial_space.extruded:
             # Create surface measures that treat the bottom and top boundaries similarly
@@ -62,10 +62,9 @@ class BaseEquation:
             # occurs over both horizontal and vertical boundaries, and we can also use
             # "bottom" and "top" as surface identifiers, for example, ds("top").
             self.ds = CombinedSurfaceMeasure(self.mesh, quad_degree)
-            self.dS = (
-                firedrake.dS_v(domain=self.mesh, degree=quad_degree) +
-                firedrake.dS_h(domain=self.mesh, degree=quad_degree)
-            )
+            self.dS = firedrake.dS_v(
+                domain=self.mesh, degree=quad_degree
+            ) + firedrake.dS_h(domain=self.mesh, degree=quad_degree)
         else:
             self.ds = firedrake.ds(domain=self.mesh, degree=quad_degree)
             self.dS = firedrake.dS(domain=self.mesh, degree=quad_degree)
@@ -75,7 +74,9 @@ class BaseEquation:
         # self._terms stores the actual instances of the BaseTerm-classes in self.terms
         self._terms = []
         for TermClass in self.terms:
-            self._terms.append(TermClass(test_space, trial_space, self.dx, self.ds, self.dS, **kwargs))
+            self._terms.append(
+                TermClass(test_space, trial_space, self.dx, self.ds, self.dS)
+            )
 
     def mass_term(
         self,
@@ -147,6 +148,7 @@ class BaseTerm(ABC):
         function space
 
     """
+
     def __init__(
         self,
         test_space: firedrake.functionspaceimpl.WithGeometry,
@@ -154,7 +156,6 @@ class BaseTerm(ABC):
         dx: firedrake.Measure,
         ds: firedrake.Measure,
         dS: firedrake.Measure,
-        **kwargs,
     ):
         self.test_space = test_space
         self.trial_space = trial_space
@@ -166,8 +167,6 @@ class BaseTerm(ABC):
         self.mesh = test_space.mesh()
         self.dim = self.mesh.geometric_dimension()
         self.n = firedrake.FacetNormal(self.mesh)
-
-        self.term_kwargs = kwargs
 
     @abstractmethod
     def residual(
