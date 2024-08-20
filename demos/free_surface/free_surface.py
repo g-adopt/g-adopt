@@ -6,7 +6,7 @@
 #
 # Free Surface
 # ------------
-# In the base case and other tutorials so far we have assumed that the top surface of the model is free-slip, i.e. there is no normal flow across the top surface of the model. For a free surface we relax that condition so that the surface is able to deform.
+# In the base case and other tutorials so far we have assumed that the top surface of the model is free-slip, i.e. the flow is free to move tangentially, but there is no normal flow across the top surface of the model. For a free surface we relax that condition so that the surface is able to deform.
 #
 # Mathematically, the boundary conditions for a free surface can be written as
 # \begin{equation}
@@ -21,7 +21,7 @@
 #
 # If we subtract off the hydrostatic pressure from the full stress tensor and define this as $\boldsymbol{\sigma }'$, then the new stress boundary condition becomes
 # \begin{equation}
-#       \textbf{n} \cdot \boldsymbol{\sigma }' \cdot \textbf{n}  = - \Delta\rho_{FS} g \eta,
+#       \textbf{n} \cdot \boldsymbol{\sigma }' \cdot \textbf{n}  = - \Delta\rho_{fs} g \eta,
 # \end{equation}
 # where $\Delta \rho_{fs}$ is the density contrast across the free surface and $g$ is gravity. Provided that deviations in the free surface are small, we can linearise the effect of the free surface by just applying the additional stress at the reference level $z = z_0$, instead of at the top of the free surface $z = \eta$. This means we can keep the mesh fixed in time and we do not have to change to a Lagrangian formulation.
 #
@@ -114,7 +114,7 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 # $$Ra = \frac{\rho_0 \alpha \Delta T gd^3}{\mu \kappa} $$
 # where $\rho_0$ is the reference density, $\alpha$ is the thermal expansion coefficient, $\Delta T$ is a characteristic change in temperature across the mantle, $g$ is gravitational acceleration, $d$ is the characteristic length scale used during non dimensionalisation, $\mu$ is the Dynamic viscosity and $\kappa$ is the thermal diffusivity.
 #
-# The buoyancy number is given by
+# The free surface buoyancy number is given by
 # $$B_{fs} = \frac{\Delta \rho_{0FS}}{\rho_0 \alpha \Delta T} ,$$
 # where $\Delta \rho_{0FS} = \rho_0 - \rho_{ext}$, i.e. the density difference between the reference density and the exterior density.
 #
@@ -143,7 +143,7 @@ temp_bcs = {
 
 # +
 output_file = VTKFile("output.pvd")
-output_frequency = 50
+output_frequency = 10
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
@@ -224,25 +224,132 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_function(z, name="Stokes")
 # -
 
-# We can visualise the final temperature field using Firedrake's
-# built-in plotting functionality.
+# Let's use the python package **PyVista** to plot the temperature field through time. We will use the calculated free surface height to artifically scale the mesh in the vertical direction. We have exaggerated the vertical stretching by a factor of 1.5, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
 
-# + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
-# fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
+# +
+# Read the PVD file
+reader = pv.get_reader('output.pvd')
+data = reader.read()[0]  # MultiBlock mesh with only 1 block
+
+# Create a plotter object
+plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+
+# Open a gif
+plotter.open_gif("temperature_warp.gif")
+
+# Make a colour map
+boring_cmap = plt.get_cmap("coolwarm", 25)
+
+for i in range(len(reader.time_values)):
+    reader.set_active_time_point(i)
+    data = reader.read()[0]
+
+    # Artificially warp the output data in the vertical direction by the free surface height
+    warped = data.warp_by_scalar(scalars='eta', normal=(0, 1, 0), factor=1.5)
+
+    # Add the warped temperature field to the frame
+    plotter.add_mesh(
+        warped,
+        scalars="Temperature",
+        lighting=False,
+        show_edges=False,
+        clim=[0, 1],
+        cmap=boring_cmap,
+        scalar_bar_args={'position_x': 0.2, 'position_y': 0.05}
+    )
+    arrows = data.glyph(orient="Velocity", scale="Velocity", factor=0.001, tolerance=0.05)
+    plotter.add_mesh(arrows, color="black")
+    # Centre camera on xy plane and write frame
+    plotter.camera_position = "xy"
+    plotter.write_frame()
+    plotter.clear()
+
+# Closes and finalizes movie
+plotter.close()
+
+
 # -
 
-# You should see that the temperature field is very similar to the base case result - in fact they are the same! Given this problem reaches a steady state adding a free surface should not change that behaviour, it will just change how the simulation reaches that steady state.
+# ![SegmentLocal](temperature_warp.gif "segment")
+
+# As before with the base case, the buoyancy differences due to the starting temperature configuration drives an overturning flow. You should see that the temperature field at the final time is very similar to the base case result - in fact they are the same!
 #
-# We can even verify that the stress exerted by the deviation of the free surface from the reference state is the same as the when calculating dynamic topography from a free-slip simulation.
+# Given this problem reaches a steady state adding a free surface should not change that behaviour, it will just change how the simulation reaches that steady state. We can see that the free surface has been pushed up above regions of hotter mantle, where thermal convection is driving positive vertical flow and is sinking where there is colder mantle below, which all makes intuitive sense.
 #
-# Have a go at trying this yourself by loading the final state from the base case and calculating the expected dynamic topography with the code below. This should match the final free surface height that the code converges towards.
+#
+
+# We can even verify that the stress exerted by the deviation of the free surface from the reference state is the same as the when calculating dynamic topography from a free-slip simulation. As a recap the free surface normal boundary condition is
+#
+# \begin{equation}
+#       \textbf{n} \cdot \boldsymbol{\sigma }' \cdot \textbf{n}  = - \Delta\rho_{FS} g \eta.
+# \end{equation}
+#
+# In 2D, on the top surface, this simplifies to
+# \begin{equation}
+#      -p'  + 2\mu \frac{\partial v}{\partial y }  = - \Delta\rho_{FS} g \eta.
+# \end{equation}
+#
+# For a nondimensional simulation this simplifies to
+# \begin{equation}
+#      -p_{\star}'  + 2 \frac{\partial v_{\star}}{\partial y_{\star} }  = - Ra_{FS} \eta_{\star}+ Ra T_{\star}   \eta_{\star},
+# \end{equation}
+# where $\star$ indicates a nondimensional variable. Rearranging, our expected dynamic topography at steady state would be
+# \begin{equation}
+#      \eta_{\star} = \dfrac{-p_{\star}'  + 2 \frac{\partial v_{\star}}{\partial y_{\star} }}{ Ra T_{\star}- Ra_{FS} }.
+# \end{equation}
+
+# First let's load the final state from the base case and calculate the expected dynamic topography with the code below.
 
 # + tags=["active-ipynb"]
-# #eta_steady = Function(W)
-# #eta_steady.interpolate((-z.subfunctions[1] + 2 * Dx(z.subfunctions[0][1], 1))/(Ra*T-Ra*10))
-# # project out the constant associated with the pressure nullspace for the free-slip simulation
-# #coef = assemble(eta_steady * ds(top_id))/assemble(Constant(1.0)*ds(top_id, domain=mesh))
-# #eta_steady.project(eta_steady - coef)
+# # load velocity and pressure from final state of the base case run (we have saved earlier it earlier!).
+# with CheckpointFile("Final_State_base.h5", "r") as f:
+#     mesh_base = f.load_mesh()
+#     z_base = f.load_function(mesh_base, 'Stokes')
+#     T_base = f.load_function(mesh_base, 'Temperature')
+#
+# # Create a P1 functionspace on the mesh used for the base case simulation
+# W_base = FunctionSpace(mesh_base, "CG", 1)
+#
+# # Store the dynamic topography calculated from the stress on the top
+# # surface after running the base case to steady state
+# eta_base_steady = Function(W_base, name='final_eta_base')
+# eta_base_steady.interpolate((-z_base.subfunctions[1] + 2 * Dx(z_base.subfunctions[0][1], 1))/(Ra*T_base-Ra*10))
+#
+# # project out the constant associated with the pressure nullspace for the base case as all boundaries are closed
+# coef = assemble(eta_base_steady * ds(top_id))/assemble(Constant(1.0)*ds(top_id, domain=mesh_base))
+# eta_base_steady.project(eta_base_steady - coef)
+#
+# # Interpolate the base case dynamic topography field onto the original mesh for plotting
+# eta_steady_original = assemble(interpolate(eta_base_steady, W))
+# eta_steady_original.rename("final_eta_base")
+#
+# # Write out combined eta and base case dynamic topography file
+# combined_eta_file = VTKFile("combined_eta.pvd")
+# combined_eta_file.write(z.subfunctions[2], eta_steady_original)
+#
+# # Read combined eta file
+# eta_reader = pv.get_reader('combined_eta.pvd')
+# data_eta = eta_reader.read()[0]
+#
+# # Sample the combined eta file along the top surface of the mesh
+# a = [0, 1, 0]  # Top left corner of domain
+# b = [1, 1, 0]  # Top right corner of domain
+# data_eta_array = data_eta.sample_over_line(
+#     a,
+#     b,
+#     resolution=100)
+#
+# # Plot the final free surface height with the dynamic topo calculated from running base case to steady state
+# plt.figure()
+# x = np.linspace(0,1,num=101)
+# plt.plot(x, data_eta_array['eta'], label="Free surface simulation")
+# plt.plot(x, data_eta_array['final_eta_base'], label="Dynamic topography running base case to steady state")
+# plt.xlabel('x')
+# plt.ylabel('Nondimensional free surface height')
+# plt.legend()
+# plt.show()
+# -
+
+# As you can see this matches the final free surface height that our example converges towards.
+#
+# A final point for this tutorial is that more rigorous tests check the order of convergence to an analytical solution as the timestep or gridsize are refined. The interested reader can take a look at the free surface test directory where we have confirmed this behaviour for a number of test cases (including top and bottom free surfaces) from Kramer et al. (2012).
