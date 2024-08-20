@@ -54,7 +54,7 @@ jobs:
           make -j convert_demos
           rm -rf rendered && mkdir rendered
           find demos -name '*.ipynb' -exec cp "{}" rendered \;
-          cp demos/.pages rendered
+          cp demos/.pages rendered/CONTENTS.md
           cp demos/.diagram.mermaid rendered
         env:
           GADOPT_LOGLEVEL: WARN
