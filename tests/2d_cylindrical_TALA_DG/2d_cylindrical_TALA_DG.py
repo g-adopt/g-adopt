@@ -29,17 +29,26 @@ rmin, rmax, ncells, nlayers = 1.208, 2.208, 512, 128
 # In this example, we load the mesh from a checkpoint, although the following code was used to generate
 # the original mesh. It is included here for completeness.
 
-# def gaussian(center, c, a):
-#     return a*np.exp(-(np.linspace(rmin, rmax, nlayers)-center)**2/(2*c**2))
+def original_mesh():
+    def gaussian(center, c, a):
+        return a*np.exp(-(np.linspace(rmin, rmax, nlayers)-center)**2/(2*c**2))
 
-# resolution_func = np.ones((nlayers))
-# for idx, r_0 in enumerate([rmin, rmax, rmax - 660/6370]):
-#     c = 0.15
-#     res_amplifier = 5.
-#     resolution_func *= 1/(1+gaussian(center=r_0, c=c, a=res_amplifier))
+    resolution_func = np.ones((nlayers))
+    for idx, r_0 in enumerate([rmin, rmax, rmax - 660/6370]):
+        c = 0.15
+        res_amplifier = 5.
+        resolution_func *= 1/(1+gaussian(center=r_0, c=c, a=res_amplifier))
 
-# mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
-# mesh = ExtrudedMesh(mesh1d, layers=nlayers, layer_height=(rmax-rmin)*resolution_func/np.sum(resolution_func), extrusion_type='radial')  # extrude into a cylinder
+    mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
+    # extrude circle into a cylinder
+    mesh = ExtrudedMesh(
+        mesh1d,
+        layers=nlayers,
+        layer_height=(rmax-rmin)*resolution_func/np.sum(resolution_func),
+        extrusion_type='radial',
+    )
+
+    return mesh
 
 with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
     mesh = f.load_mesh("firedrake_default_extruded")
