@@ -159,10 +159,10 @@ temp_bcs = {
 
 # +
 output_file = VTKFile("output.pvd")
-ref_file = VTKFile('reference_state.pvd')
+ref_file = VTKFile("reference_state.pvd")
 output_frequency = 10
 
-plog = ParameterLog('params.log', mesh)
+plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time dt u_rms nu_base nu_top energy avg_t FullT_min FullT_max")
 
 gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id, quad_degree=6)
