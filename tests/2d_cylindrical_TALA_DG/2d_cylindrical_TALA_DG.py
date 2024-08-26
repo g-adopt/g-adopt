@@ -79,28 +79,50 @@ r = sqrt(X[0]**2 + X[1]**2)
 rhat = as_vector([X[0]/r, X[1]/r])  # Radial unit vector (in direction opposite to gravity)
 thetahat = as_vector([-X[1]/r, X[0]/r])  # Tangential unit vector.
 
-rhobar = Function(Q, name="CompRefDensity")
-interpolate_1d_profile(function=rhobar, one_d_filename="initial_condition_mat_prop/rhobar.txt")
-rhobar.assign(rhobar / 3200.)
-Tbar = Function(Q, name="CompRefTemperature")
-interpolate_1d_profile(function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt")
-Tbar.assign((Tbar - 1600.) / 3700.)
-alphabar = Function(Q, name="IsobaricThermalExpansivity")
-interpolate_1d_profile(function=alphabar, one_d_filename="initial_condition_mat_prop/alphabar.txt")
-alphabar.assign(alphabar / 4.1773e-05)
-cpbar = Function(Q, name="IsobaricSpecificHeatCapacity")
-interpolate_1d_profile(function=cpbar, one_d_filename="initial_condition_mat_prop/CpSIbar.txt")
-cpbar.assign(cpbar / 1249.7)
-gbar = Function(Q, name="GravitationalAcceleration")
-interpolate_1d_profile(function=gbar, one_d_filename="initial_condition_mat_prop/gbar.txt")
-gbar.assign(gbar / 9.8267)
+approximation_profiles = {}
+approximation_sources = {
+    "rho": {
+        "name": "CompRefDensity",
+        "filename": "initial_condition_mat_prop/rhobar.txt",
+        "scaling": lambda x: x / 3200.,
+    },
+    "Tbar": {
+        "name": "CompRefTemperature",
+        "filename": "initial_condition_mat_prop/Tbar.txt",
+        "scaling": lambda x: (x - 1600.) / 3700.,
+    },
+    "alpha": {
+        "name": "IsobaricThermalExpansivity",
+        "filename": "initial_condition_mat_prop/alphabar.txt",
+        "scaling": lambda x: x / 4.1773e-05,
+    },
+    "cp": {
+        "name": "IsobaricSpecificHeatCapacity",
+        "filename": "initial_condition_mat_prop/CpSIbar.txt",
+        "scaling": lambda x: x / 1249.7,
+    },
+    "g": {
+        "name": "GravitationalAcceleration",
+        "filename": "initial_condition_mat_prop/gbar.txt",
+        "scaling": lambda x: x / 9.8267,
+    },
+}
+
+for func, details in approximation_sources.items():
+    f = Function(Q, name=details["name"])
+    interpolate_1d_profile(function=f, one_d_filename=details["filename"])
+    f.assign(details["scaling"](f))
+
+    approximation_profiles[func] = f
+
+Tbar = approximation_profiles["Tbar"]
 
 # We next prepare our viscosity, starting with a radial profile.
 mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
 interpolate_1d_profile(function=mu_rad, one_d_filename="initial_condition_mat_prop/mu2_radial.txt")
 
 # These fields are used to set up our Truncated Anelastic Liquid Approximation.
-approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar, g=gbar, H=H_int)
+approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, H=H_int, **approximation_profiles)
 
 # As with the previous examples, we set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -204,7 +226,7 @@ for timestep in range(0, timesteps):
         # interpolate mu to field for visualisation
         mu_field.interpolate(mu)
         output_file.write(*z.subfunctions, vr, FullT, T, T_dev, mu_field)
-        ref_file.write(rhobar, Tbar, alphabar, cpbar, gbar, mu_rad, T_avg)
+        ref_file.write(*approximation_profiles.values(), mu_rad, T_avg)
 
     if timestep != 0:
         dt = t_adapt.update_timestep()
