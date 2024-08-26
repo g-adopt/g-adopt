@@ -138,8 +138,8 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
 # Boundary conditions are next specified. Boundary conditions for temperature are set to $T = 0$ at the surface ($r_{\text{max}}$) and $T = 1 - adiabatic contribution$
-# at the base ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries. We incorporate these <b>weakly</b> through
-# the <i>Nitsche</i> approximation. This illustrates a key advantage of the G-ADOPT framework: the user only specifies that the normal component
+# at the base ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries. We incorporate these **weakly** through
+# the _Nitsche_ approximation. This illustrates a key advantage of the G-ADOPT framework: the user only specifies that the normal component
 # of velocity is zero and all required changes are handled under the hood.
 
 # +
