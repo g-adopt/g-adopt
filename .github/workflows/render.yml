@@ -34,7 +34,7 @@ jobs:
           ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.*/site-packages/
 
           . /home/firedrake/firedrake/bin/activate
-          python3 -m pip install nbval nbconvert jupytext
+          python3 -m pip install nbval nbconvert jupytext siphash24
           python3 -m pip install .[demos]
           python3 -m ipykernel install --name firedrake --user
 
