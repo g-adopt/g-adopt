@@ -52,6 +52,7 @@ jobs:
           export DISPLAY=:99
           export PYVISTA_OFF_SCREEN=true
           export LIBGL_ALWAYS_SOFTWARE=true
+          export GADOPT_RENDER=true
           Xvfb $DISPLAY -screen 0 1024x768x24 > /dev/null 2>&1 &
           sleep 3
           make -j convert_demos

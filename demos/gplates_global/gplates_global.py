@@ -224,10 +224,15 @@ gplates_velocities = GplatesVelocityFunction(
 #     vtk_file.write(gplates_velocities)
 #
 # import pyvista as pv
+# import os
 # dataset = pv.read("gplates_velocity/gplates_velocity_0.vtu")
 #
 # # Create a plotter object
 # plotter = pv.Plotter()
+# # Whether our plot should be interactive or not
+# backend = None
+# if os.environ.get("GADOPT_RENDER", "false").lower() == "true":
+#     backend = "static"
 # # Add the dataset to the plotter
 # plotter.add_mesh(dataset, scalars="GPlates_Velocity", cmap="coolwarm")
 # glyphs = dataset.glyph(orient="GPlates_Velocity", scale=1, factor=1e-4)
@@ -236,7 +241,7 @@ gplates_velocities = GplatesVelocityFunction(
 # # Adjust the camera position
 # plotter.camera_position = [(10.0, 10.0, 10.0), (0.0, 0.0, 0), (0, 1, 0)]
 # # Show the plot
-# plotter.show()
+# plotter.show(jupyter_backend=backend)
 # -
 
 # And last but not least, we need to inform our solver of our choice
