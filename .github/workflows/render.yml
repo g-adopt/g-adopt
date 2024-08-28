@@ -18,12 +18,15 @@ jobs:
       GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
 
     steps:
+      - name: Install Git LFS
+        run: |
+          sudo apt update
+          sudo apt install -y git-lfs
       - uses: actions/checkout@v4
       - name: Install dependencies
         env:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
-          sudo apt update
           sudo apt install -y xvfb gmsh gh s3cmd unzip
 
           mkdir -p $HOME/.s3cfg
@@ -34,7 +37,7 @@ jobs:
           ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.*/site-packages/
 
           . /home/firedrake/firedrake/bin/activate
-          python3 -m pip install nbval nbconvert jupytext
+          python3 -m pip install nbval nbconvert jupytext siphash24
           python3 -m pip install .[demos]
           python3 -m ipykernel install --name firedrake --user
 
@@ -49,6 +52,7 @@ jobs:
           export DISPLAY=:99
           export PYVISTA_OFF_SCREEN=true
           export LIBGL_ALWAYS_SOFTWARE=true
+          export GADOPT_RENDER=true
           Xvfb $DISPLAY -screen 0 1024x768x24 > /dev/null 2>&1 &
           sleep 3
           make -j convert_demos
