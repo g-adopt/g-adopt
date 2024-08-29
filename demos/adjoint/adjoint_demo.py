@@ -22,6 +22,7 @@ from gadopt.inverse import *
 checkpoint_filename = "adjoint-demo-checkpoint-state.h5"
 checkpoint_file = CheckpointFile(checkpoint_filename, mode="r")
 mesh = checkpoint_file.load_mesh("firedrake_default_extruded")
+mesh.cartesian = True
 
 # Boundary markers from extruded mesh
 bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
@@ -335,9 +336,10 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # violating the bounds, are inactive. These properties make the algorithm a robust and efficient method for solving bound-constrained
 # optimisation problems.
 #
-# To our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`. Here, we set the number of iterations to only 10, as opposed to the default 100.
+# To our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`. Here, we set the number of iterations to only 10, as opposed to the default 100. We also adjust the step-length to this problem, by setting it to a lower value than our default.
 
-minimisation_parameters["Status Test"] = 10
+minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1e-2
 
 #
 # A notable feature of this optimisation approach in ROL is its checkpointing capability. For every iteration, all information necessary to restart the optimisation from that iteration is saved in the specified `checkpoint_dir`.
@@ -359,14 +361,14 @@ optimiser = LinMoreOptimiser(
 
 # +
 solutions_vtk = VTKFile("solutions.pvd")
-solution_container = Function(mesh, Tic.function_space(), name="Solutions")
+solution_container = Function(Tic.function_space(), name="Solutions")
 
 
 def callback():
     solution_container.assign(Tic.block_variable.checkpoint)
     solutions_vtk.write(solution_container)
     final_temperature_misfit = assemble(
-        (T.block_variable.checkpoint.restore() - Tobs) ** 2 * dx
+        (T.block_variable.checkpoint - Tobs) ** 2 * dx
     )
 
     log(f"Terminal Temperature Misfit: {final_temperature_misfit}")
@@ -380,5 +382,22 @@ optimiser.run()
 # -
 
 # At this point a total number of 10 iterations are performed. For the example
-# case here with 5 timesteps this should be enough. Here we can look at the solution
-# and visually compare it by looking at the
+# case here with 5 timesteps this should result an adequete r1`eduction
+# in the objective functional. Now we can look at the solution
+# visually. For the actual simulation with 80 time-steps, this solution
+# could be compared to `Tic_ref` as the "true solution".
+
+# + tags=["active-ipynb"]
+# import pyvista as pv
+# VTKFile("./solution.pvd").write(optimiser.rol_solver.rolvector.dat[0])
+# dataset = pv.read('./solution.pvd')
+# # Create a plotter object
+# plotter = pv.Plotter()
+# # Add the dataset to the plotter
+# plotter.add_mesh(dataset, scalars=dataset[0].array_names[0], cmap='coolwarm')
+# plotter.add_text("Solution after 10 iterations", font_size=10)
+# # Adjust the camera position
+# plotter.camera_position = [(0.5, 0.5, 2.5), (0.5, 0.5, 0), (0, 1, 0)]
+# # Show the plot
+# plotter.show()
+# -
