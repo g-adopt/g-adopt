@@ -1,5 +1,5 @@
 # Compressible (ALA) 2-D mantle convection problem in a square box
-# =======================================================
+# ================================================================
 #
 # Our previous tutorial, which examined convection under the Truncated Anelastic Liquid
 # Approximation (TALA), can be easily modified to use an Anelastic Liquic Approximation (ALA),
@@ -48,7 +48,7 @@ z.subfunctions[1].rename("Pressure")
 # We next specify the important constants for this problem, including those associated with the
 # compressible reference state. Note that for ease of extension, we specify these as functions,
 # allowing for spatial variability. Given that we account for the effect of dynamic pressure on
-# buoyancy in this example, we need to specify the bulk modulus (chibar), which differs to the TALA case.
+# buoyancy in this example, we need to specify the bulk modulus (`chibar`), which differs to the TALA case.
 
 X = SpatialCoordinate(mesh)
 Ra = Constant(1e5)  # Rayleigh number
@@ -90,10 +90,10 @@ FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 
 # As noted above, this problem has a non-constant pressure nullspace (vertical, decreasing with depth)
 # for the right nullspace, and a constant nullspace for the transpose (left) nullspace.
-# We obtain the right nullspace (Z_nullspace) by providing the approximation object and subdomain marker
-# for the top boundary (where the pressure nullspace is referenced -- see the
-# visualise_ALA_p_nullspace demo for more details). The left nullspace (Z_nullspace_transpose) is
-# handled identically to the previous (TALA) tutorial.
+# We obtain the right nullspace (`Z_nullspace`) by providing the approximation object and subdomain marker
+# for the top boundary (where the pressure nullspace is referenced — see the
+# [nullspace visualisation](../visualise_ALA_p_nullspace) demo for more details). The left nullspace (`Z_nullspace_transpose`) is
+# handled identically to the previous [TALA](../2d_compressible_TALA) tutorial.
 
 Z_nullspace = create_stokes_nullspace(
     Z, closed=True, rotational=False,
