@@ -1,94 +1,24 @@
 # Compressible (ALA) 2-D mantle convection problem in a square box
 # ================================================================
 #
-# We next highlight the ease at which simulations can be updated to
-# incorporate more realistic physical approximations. We first account
-# for compressibility, under the Anelastic Liquid Approximation (ALA),
-# simulating a well-established 2-D benchmark case from King et al. (2010).
-# Boundary conditions and material properties are otherwise identical to the
-# previous tutorial.
-#
-# Governing equations
-# -------------------
-#
-# Density changes across Earth's mantle result primarily from hydrostatic compression,
-# with density increasing by $\approx 65\%$ from surface to core-mantle-boundary (CMB).
-# Variations in density associated with local temperature and pressure perturbations are
-# small in comparison to the spherically averaged density. For a chemically homogeneous
-# mantle, it is therefore appropriate to assume a linearised equation of state, of the form:
-#
-# $$ \rho = \bar \rho(\bar T, \bar p) + \rho', $$
-#
-# which can be further expanded as follows:
-#
-# $$ \rho = \bar \rho(\bar T, \bar p) + \bar \rho (\bar \chi_{_T} p' - \bar \alpha  T'). $$
-#
-# Here $\rho$, $p$, $T$, $\chi_{_T}$ and $\alpha$ denote density, pressure, temperature,
-# isothermal compressibility and the coefficient of thermal expansion, respectively,
-# whilst overbars refer to a reference state and primes to departures from it:
-#
-# $$ T = \bar T + T', \quad \quad p = \bar p + p'. $$
-#
-# It is convenient to take the reference state as motionless and steady. Accordingly, for
-# the purposes of the compressible case examined here, we will assume that the reference
-# state varies as a function of depth, $z$, only. The reference state pressure thus satisfies
-# the hydrostatic approximation:
-#
-# $$ \frac{\partial \bar p}{\partial z} = \bar \rho \bar \bf{g} \cdot \hat{\vec{k}}, $$
-#
-# where $\mathbf{g}$ is the acceleration of gravity and $\hat{\vec{k}}$ is the unit vector in
-# the direction opposite to gravity. On Earth, $\mathbf{g}$ is a function of position, however,
-# for simplicity, it will be assumed constant here. Following
-# King et al. (2010), the reference density and reference temperature are described through an
-# adiabatic Adams-Williamson equation of state, where:
-#
-# $$ \bar \rho(z) = \rho_{0}  \;  \mbox{exp} \Bigl (\frac{\alpha_{0} g_{0}}{\gamma_{0}c_{p_{0}}} z \Bigr ) $$
-#
-# and:
-#
-# $$ \bar T(z) = T_{s}  \;  \mbox{exp} \Bigl (\frac{\alpha_{0} g_{0}}{c_{p_{0}}} z \Bigr ). $$
-#
-# Here, $c_p$ and $T_{s}$ represent the specific heat capacity at constant pressure and surface temperature,
-# respectively, whilst $\gamma_{0}$ denotes the Gruneisen parameter, given by:
-# $$ \gamma_{0} = \frac{\alpha_{0}}{\rho_{0} c_{v_{0}} \chi_{_{T_0}} }, $$
-#
-# where $c_{v}$ denotes the specific heat capacity at constant volume. Variables with a sub-script $0$ are constants,
-# used in defining the reference state. Here, they are defined at the domain's upper surface.
-#
-# Assuming a linearised equation of state, the dimensionless form of the conservation of mass equation under the
-# Anelastic Liquid Approximation (ALA) can be expressed as:
-#
-# $$ \nabla \cdot (\bar \rho \mathbf{u}) = 0,$$
-#
-# where $\mathbf{u}$ is the velocity. Neglecting inertial terms, the force balance equation becomes:
-#
-# $$ \mathbf{\nabla} \cdot \left[ \mu \left(\nabla \mathbf{u} + \nabla \mathbf{u}^{T} - \frac{2}{3} \nabla \cdot \mathbf{u} \, \mathbf I \right) \right] -  \nabla p' - Ra \bar \rho \hat{\vec{k}} \bar \alpha T' - \frac{Di}{\gamma_0} \frac{c_{p_{0}}}{c_{v_{0}}} \bar \rho \hat{\vec{k}} \bar \chi_{_T} p' = 0, $$
-#
-# where $\mu$ denotes the dynamic viscosity, $\mathbf I$ the identity tensor, $Ra$ the Rayleigh number, and $Di$ the dissipation number given by, respectively:
-#
-# $$ Ra = \frac{\rho_{0} \alpha_{0} \Delta T g_{0} d^{3}}{\mu_{0} \kappa_{0}}; \;  \quad Di = \frac{\alpha_{0} g_{0}d}{c_{p_{0}}}, $$
-#
-# with $\kappa$ denoting the thermal diffusivity, $d$ the length scale and $\Delta T$ the temperature scale. Note that the last
-# but one term in the force-balance equation above is expressed in terms of the temperature perturbation, $T'$.
-# Finally, in the absence of internal heating, conservation of energy is expressed as:
-#
-# $$ \bar \rho \bar c_{p} \biggl( \frac{\partial T'}{\partial t} + \vec{u}\cdot \nabla T' \biggr) - \nabla \cdot \Bigl [\bar k \nabla (\bar T + T') \Bigr ] + Di \bar \alpha \bar \rho \bar \bf{g} \cdot \mathbf{u} T' - \frac{Di}{Ra}  \Phi = 0, $$
-#
-# where $k$ is the thermal conductivity and $\Phi$ denotes viscous dissipation. The final two terms represent adiabatic heating and viscous dissipation, respectively.
-#
-# As can be seen, these equations differ appreciably from the incompressible
-# approximations utilised in our previous tutorial, with important updates to all
-# three governing equations. Despite this, the changes required to incorporate these
-# equations, within UFL and G-ADOPT, are minimal.
+# Our previous tutorial, which examined convection under the Truncated Anelastic Liquid
+# Approximation (TALA), can be easily modified to use an Anelastic Liquic Approximation (ALA),
+# as we demonstrate here.
 #
 # This example
 # ------------
 #
-# In this example, we simulate compressible convection, for an isoviscous material,
+# We simulate compressible convection, for an isoviscous material,
 # under ALA. We specify $Ra=10^5$ and a dissipation number $Di=0.5$.
 # The model is heated from below $ T = 1.0 - (T0*\mbox{exp}(Di) - T0)$, cooled from the top (T=0)
 # in an enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
 # conditions on all boundaries).
+#
+# Key differences relative to our previous tutorial, which examined convection under the TALA
+# approximation, are:
+# 1. We no longer neglect the effect of dynamic pressure on buoyancy.
+# 2. Specificiation of nullspaces for Stokes system, as this example has a non-constant
+#    pressure nullspace (vertical, decreasing with depth).
 #
 # As with all examples, the first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
@@ -117,7 +47,8 @@ z.subfunctions[1].rename("Pressure")
 
 # We next specify the important constants for this problem, including those associated with the
 # compressible reference state. Note that for ease of extension, we specify these as functions,
-# allowing for spatial variability.
+# allowing for spatial variability. Given that we account for the effect of dynamic pressure on
+# buoyancy in this example, we need to specify the bulk modulus (`chibar`), which differs to the TALA case.
 
 X = SpatialCoordinate(mesh)
 Ra = Constant(1e5)  # Rayleigh number
@@ -128,14 +59,14 @@ Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - X[1]) 
 alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)  # Thermal expansivity
 cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)  # Specific heat capacity
 chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)  # Bulk modulus
-gbar = Function(Q, name="GravitationalAcceleration").assign(1.0)  # radial gravity
+gbar = Function(Q, name="GravitationalAcceleration").assign(1.0)  # Radial gravity
 
-# These fields are used to set up our Truncated Anelastic Liquid Approximation. Alongside dropping the
-# requirement for specifying the bulk modulus, this is the key change relative to our tutorial under the ALA approximation.
+# These fields are used to set up our Anelastic Liquid Approximation. Alongside adding the
+# requirement for specifying the bulk modulus, this is the key change relative to our tutorial under the TALA approximation.
 
 approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar, chi=chibar, g=gbar)
 
-# As with the previous example, we next set up a *Timestep Adaptor*,
+# As with the previous examples, we next set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
 # criterion) as the simulation advances in time. For the latter,
 # we specify the initial time, initial timestep $\Delta t$, and number of
@@ -157,10 +88,18 @@ T = Function(Q, name="Temperature")
 T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
 FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 
-# This problem has a constant pressure nullspace, handled identically to our
-# previous tutorial.
+# As noted above, this problem has a non-constant pressure nullspace (vertical, decreasing with depth)
+# for the right nullspace, and a constant nullspace for the transpose (left) nullspace.
+# We obtain the right nullspace (`Z_nullspace`) by providing the approximation object and subdomain marker
+# for the top boundary (where the pressure nullspace is referenced — see the
+# [nullspace visualisation](../visualise_ALA_p_nullspace) demo for more details). The left nullspace (`Z_nullspace_transpose`) is
+# handled identically to the previous [TALA](../2d_compressible_TALA) tutorial.
 
-Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
+Z_nullspace = create_stokes_nullspace(
+    Z, closed=True, rotational=False,
+    ala_approximation=approximation, top_subdomain_id=top_id)
+Z_nullspace_transpose = create_stokes_nullspace(
+    Z, closed=True, rotational=False)
 
 # Boundary conditions are next specified.
 
@@ -197,13 +136,14 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation configured above.
+# passing in the approximation configured above. Note that relative to our TALA tutorial, we now
+# pass in different nullspace and transpose_nullspace objects to the stokes solver.
 
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             transpose_nullspace=Z_nullspace,
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace_transpose,
                              constant_jacobian=True)
 # -
 
