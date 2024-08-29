@@ -169,7 +169,7 @@ def create_stokes_nullspace(
 
     if closed:
         if ala_approximation:
-            p = ala_right_nullspace(W=W, approximation=ala_approximation, top_subdomain_id=top_subdomain_id)
+            p = ala_right_nullspace(W=stokes_subspaces[1], approximation=ala_approximation, top_subdomain_id=top_subdomain_id)
             p_nullspace = fd.VectorSpaceBasis([p], comm=Z.mesh().comm)
             p_nullspace.orthonormalize()
         else:
