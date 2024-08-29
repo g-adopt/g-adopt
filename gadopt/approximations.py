@@ -7,6 +7,7 @@ Under the hood, G-ADOPT queries attributes and methods from the approximation.
 """
 
 from firedrake import Identity, div, grad, inner, sym
+from firedrake.ufl_expr import extract_unique_domain
 
 from .utility import ensure_constant, vertical_component
 
@@ -14,10 +15,10 @@ from .utility import ensure_constant, vertical_component
 class EquationSystem:
     """Constructs the system of equations to be solved by defining relevant terms.
 
-    The system of equations implemented is the following:
-        - mass conservation -> div(rho * u) = 0;
-        - momentum conservation -> -grad(p) + stress(u) + buoyancy(p, T) * khat = 0;
-        - energy conservation -> rho * cp * DT/Dt + linearized_energy_sink(u) * T
+    The system of conservation equations implemented is:
+        - mass -> div(rho * u) = 0;
+        - momentum -> -grad(p) + div(stress(u)) + buoyancy(p, T) * khat = 0;
+        - energy -> rho * cp * DT/Dt + linearized_energy_sink(u) * T
           = div(k * grad(Tbar + T)) + energy_source(u);
 
     where the following terms are provided as methods:
@@ -68,7 +69,7 @@ class EquationSystem:
         approximation: str,
         dimensional: bool,
         *,
-        parameters: dict[str, float],
+        parameters: dict[str, float] = {},
         buoyancy_terms: list[str] = [],
     ):
         assert approximation in self.approximations
@@ -215,7 +216,7 @@ class EquationSystem:
 
     def stress(self, u: float) -> float:
         """Calculates the stress term in momentum and energy conservations."""
-        identity = Identity(u.ufl_domain().topological_dimension())
+        identity = Identity(extract_unique_domain(u).topological_dimension())
         return 2 * self.mu * sym(grad(u)) - self.compressible_stress * div(u) * identity
 
     def viscous_dissipation(self, u: float) -> float:

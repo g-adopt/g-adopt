@@ -13,56 +13,56 @@ mesh = UnitSquareMesh(nx, ny, quadrilateral=True)
 mesh.cartesian = True
 
 # We set up a function space of discontinous bilinear elements for :math:`q`, and
-# a vector-valued continuous function space for our velocity field. ::
-
+# a vector-valued continuous function space for our velocity field.
 Q = FunctionSpace(mesh, "CG", 1)
 V = VectorFunctionSpace(mesh, "CG", 1)
 
-# We set up the initial velocity field using a simple analytic expression. ::
-
+# We set up the initial velocity field using a simple analytic expression.
 x, y = SpatialCoordinate(mesh)
-velocity = as_vector((cos(30*pi/180), sin(30*pi/180)))
+velocity = as_vector((cos(30 * pi / 180), sin(30 * pi / 180)))
 u = Function(V).interpolate(velocity)
-VTKFile('advdif_DH219_u.pvd').write(u)
+VTKFile("advdif_DH219_u.pvd").write(u)
 
 # the diffusivity based on a chosen grid Peclet number
 Pe = 1e1  # This seems very high so presumably diffusion added from SU dominates.
 h = 1.0 / nx
-kappa = Constant(1*h/(2*Pe))
-
+kappa = Constant(1 * h / (2 * Pe))
 
 # the tracer function and its initial condition
 q_init = Constant(0.0)
 q = Function(Q).interpolate(q_init)
 
-# We declare the output filename, and write out the initial condition. ::
-
-outfile = VTKFile("advdif_DH219_skew_CG1_Pe"+str(Pe)+"_SU.pvd")
+# We declare the output filename, and write out the initial condition.
+outfile = VTKFile("advdif_DH219_skew_CG1_Pe" + str(Pe) + "_SU.pvd")
 outfile.write(q)
 
 # time period and time step
-T = 10.
+T = 10.0
 dt = 0.01
 
-# Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
-# the choice of units is up to the user. We use the diagonaly implicit DIRK33 Runge-Kutta
-# method for timestepping. 'T' means that the boundary conditions will be applied strongly
-# by the energy solver.
-approximation = BoussinesqApproximation(Ra=1, kappa=kappa)
+# Use G-ADOPT's Energy Solver to advect the tracer. The system is considered
+# non-dimensional and controlled only by the thermal diffusivity value. We use the
+# diagonaly implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the
+# boundary conditions will be applied strongly by the energy solver.
+approximation = EquationSystem(
+    approximation="BA", dimensional=False, parameters={"kappa": kappa}
+)
 # strongly applied dirichlet bcs on top and bottom
 q_left = conditional(y < 0.2, 0.0, 1.0)
 q_bottom = 0
-bcs = {3: {'T': q_bottom}, 1: {'T': q_left}}
-energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
+bcs = {3: {"T": q_bottom}, 1: {"T": q_left}}
+energy_solver = EnergySolver(
+    approximation, q, u, dt, DIRK33, bcs=bcs, su_advection=True
+)
 
 # Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
-nubar_outfile = VTKFile("advdof_DH219_skew_CG1_Pe"+str(Pe)+"_SU_nubar.pvd")
+nubar = Function(Q).interpolate(energy_solver.fields["su_nubar"])
+nubar_outfile = VTKFile("advdof_DH219_skew_CG1_Pe" + str(Pe) + "_SU_nubar.pvd")
 nubar_outfile.write(nubar)
 
 t = 0.0
 step = 0
-while t < T - 0.5*dt:
+while t < T - 0.5 * dt:
     # the solution reaches a steady state and finishes the solve when a  max no. of iterations is reached
     energy_solver.solve()
 

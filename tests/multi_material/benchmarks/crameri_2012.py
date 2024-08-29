@@ -86,8 +86,9 @@ class Simulation:
     materials = [mantle, lithosphere, air]
     reference_material = mantle
 
-    # Physical parameters
-    Ra, g = 1, 10
+    # Approximation parameters
+    buoyancy_terms = ["compositional"]
+    g = 10
 
     # Boundary conditions
     temp_bcs = None

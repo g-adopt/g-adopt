@@ -86,8 +86,9 @@ class Simulation:
     materials = [bottom_material, top_material]
     reference_material = None
 
-    # Physical parameters
-    Ra, g = 1e2, 1
+    # Approximation parameters
+    buoyancy_terms = ["compositional", "thermal"]
+    Ra = 1e2
 
     # Parameters to initialise temperature
     A = 0.01

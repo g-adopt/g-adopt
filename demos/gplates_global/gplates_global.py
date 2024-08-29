@@ -293,7 +293,7 @@ plog.log_str(
     "timestep time age dt maxchange u_rms u_rms_top nu_top nu_base energy avg_t"
 )
 
-gd = GeodynamicalDiagnostics(bottom_id, top_id, z, T, quad_degree=6)
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,

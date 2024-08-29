@@ -5,7 +5,7 @@ from gadopt.inverse import *
 def helmholtz(V, source):
     u = Function(V)
     v = TestFunction(V)
-    F = inner(grad(v), grad(u)) * dx + 100.0*v*u*dx - v*source*dx
+    F = inner(grad(v), grad(u)) * dx + 100.0 * v * u * dx - v * source * dx
 
     solve(F == 0, u)
     return u
@@ -42,7 +42,7 @@ c = Control(source)
 # tape the forward solution
 u = helmholtz(V, source)
 
-J = assemble(1e6 * (u - u_ref)**2 * dx)
+J = assemble(1e6 * (u - u_ref) ** 2 * dx)
 rf = ReducedFunctional(J, c)
 
 T_lb = Function(V, name="Lower bound")

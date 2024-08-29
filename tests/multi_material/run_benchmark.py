@@ -29,8 +29,8 @@ def write_output(output_file):
     """Write output fields to the output file."""
     time_output.assign(time_now)
 
-    RaB.interpolate(RaB_ufl) if dimensionless else density.interpolate(
-        dens_diff + ref_dens
+    density.interpolate(dens_diff + ref_dens) if dimensional else RaB.interpolate(
+        RaB_ufl
     )
     viscosity.interpolate(viscosity_ufl)
     if "Trim_2023" in Simulation.name:
@@ -67,7 +67,8 @@ if Simulation.restart_from_checkpoint:  # Restore mesh and key functions
         dump_counter = h5_check.get_timestepping_history(mesh, "Time")["index"][-1]
         time_output = h5_check.load_function(mesh, "Time", idx=dump_counter)
         stokes_function = h5_check.load_function(mesh, "Stokes", idx=dump_counter)
-        temperature = h5_check.load_function(mesh, "Temperature", idx=dump_counter)
+        if "thermal" in Simulation.buoyancy_terms:
+            temperature = h5_check.load_function(mesh, "Temperature", idx=dump_counter)
 
         i = 0
         level_set = []
@@ -114,9 +115,10 @@ else:  # Initialise mesh and key functions
     stokes_function = fd.Function(func_space_stokes)
 
     # Define temperature function space and initialise temperature
-    func_space_temp = fd.FunctionSpace(mesh, "CG", 2)
-    temperature = fd.Function(func_space_temp, name="Temperature")
-    Simulation.initialise_temperature(temperature)
+    if "thermal" in Simulation.buoyancy_terms:
+        func_space_temp = fd.FunctionSpace(mesh, "CG", 2)
+        temperature = fd.Function(func_space_temp, name="Temperature")
+        Simulation.initialise_temperature(temperature)
 
     # Set up function spaces and functions used in the level-set approach
     func_space_ls = fd.FunctionSpace(mesh, "DQ", Simulation.level_set_func_space_deg)
@@ -144,7 +146,7 @@ else:  # Initialise mesh and key functions
     time_now = 0
     dump_counter = 0
 
-# Whether we start from checkpoint or not, we annotate our mesh as cartesian
+# Annotate mesh as cartesian
 mesh.cartesian = True
 
 # Extract velocity and pressure from the Stokes function
@@ -157,11 +159,11 @@ stokes_function.subfunctions[1].rename("Pressure")
 func_space_interp = fd.FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
 
 if "Trim_2023" in Simulation.name:
-    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
+    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensional = ga.density_RaB(
         Simulation, level_set, func_space_interp, method="arithmetic"
     )
 else:
-    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
+    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensional = ga.density_RaB(
         Simulation, level_set, func_space_interp
     )
 
@@ -193,38 +195,50 @@ real_func_space = fd.FunctionSpace(mesh, "R", 0)
 timestep = fd.Function(real_func_space).assign(Simulation.initial_timestep)
 
 # Set up energy and Stokes solvers
-approximation = ga.BoussinesqApproximation(
-    Simulation.Ra,
-    rho=ref_dens,
-    alpha=1,
-    g=Simulation.g,
-    T0=0,
-    RaB=RaB_ufl,
-    delta_rho=dens_diff,
-    kappa=1,
-    H=int_heat_rate_ufl,
+approximation_parameters = {
+    "mu": viscosity_ufl,
+    "rho": ref_dens,
+    "rho_diff": dens_diff,
+}
+if dimensional:
+    approximation_parameters["g"] = Simulation.g
+    if "thermal" in Simulation.buoyancy_terms:
+        approximation_parameters["H"] = int_heat_rate_ufl
+else:
+    approximation_parameters["Ra_c"] = RaB_ufl
+    if "thermal" in Simulation.buoyancy_terms:
+        approximation_parameters["Ra"] = Simulation.Ra
+        approximation_parameters["Q"] = int_heat_rate_ufl
+
+approximation = ga.EquationSystem(
+    approximation="BA",
+    dimensional=dimensional,
+    parameters=approximation_parameters,
+    buoyancy_terms=Simulation.buoyancy_terms,
 )
-energy_solver = ga.EnergySolver(
-    temperature,
-    velocity,
-    approximation,
-    timestep,
-    ga.ImplicitMidpoint,
-    bcs=Simulation.temp_bcs,
-)
+energy_solver = []
+if "thermal" in Simulation.buoyancy_terms:
+    energy_solver.append(
+        ga.EnergySolver(
+            approximation,
+            temperature,
+            velocity,
+            timestep,
+            ga.ImplicitMidpoint,
+            bcs=Simulation.temp_bcs,
+        )
+    )
 stokes_nullspace = ga.create_stokes_nullspace(
     stokes_function.function_space(), **Simulation.stokes_nullspace_args
 )
 stokes_solver = ga.StokesSolver(
+    approximation,
     stokes_function,
     temperature,
-    approximation,
     bcs=Simulation.stokes_bcs,
-    mu=viscosity_ufl,
     quad_degree=None,
     solver_parameters=Simulation.stokes_solver_params,
-    nullspace=stokes_nullspace,
-    transpose_nullspace=stokes_nullspace,
+    nullspace={"nullspace": stokes_nullspace, "transpose_nullspace": stokes_nullspace},
 )
 
 # Solve initial Stokes system
@@ -308,7 +322,8 @@ while True:
     t_adapt.update_timestep()
 
     # Solve energy system
-    energy_solver.solve(t=time_now, update_forcings=update_forcings)
+    for nrg_solv in energy_solver:
+        nrg_solv.solve(t=time_now, update_forcings=update_forcings)
 
     # Advect each level set
     for ls_solv in level_set_solver:

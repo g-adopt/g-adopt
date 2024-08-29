@@ -57,9 +57,10 @@ class Simulation:
     materials = [bottom_material, top_material]
     reference_material = None
 
-    # Physical parameters
-    Ra, g = 1e5, 1
-    RaB = Ra * bottom_material.B
+    # Approximation parameters
+    buoyancy_terms = ["compositional", "thermal"]
+    Ra = 1e5
+    Ra_c = Ra * bottom_material.B
 
     # Parameters to initialise temperature
     a = 100
@@ -69,8 +70,8 @@ class Simulation:
     # Boundary conditions
     C0_0 = 1 / (1 + fd.exp(-2 * k * (intercept - 0)))
     C0_1 = 1 / (1 + fd.exp(-2 * k * (intercept - 1)))
-    temp_bc_bot = RaB / Ra * (C0_0 - 1) + 1
-    temp_bc_top = RaB / Ra * C0_1
+    temp_bc_bot = Ra_c / Ra * (C0_0 - 1) + 1
+    temp_bc_top = Ra_c / Ra * C0_1
     temp_bcs = {3: {"T": temp_bc_bot}, 4: {"T": temp_bc_top}}
     stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
@@ -116,8 +117,8 @@ class Simulation:
                 * fd.cos(fd.pi * x / λ)
                 * fd.sin(fd.pi * y)
                 * cls.f(0)
-                + cls.RaB * cls.C0(y)
-                + (cls.Ra - cls.RaB) * (1 - y)
+                + cls.Ra_c * cls.C0(y)
+                + (cls.Ra - cls.Ra_c) * (1 - y)
             )
             / cls.Ra
         )
@@ -139,7 +140,7 @@ class Simulation:
                     cls.k,
                     cls.intercept,
                     cls.Ra,
-                    cls.RaB,
+                    cls.Ra_c,
                 )
             )
 

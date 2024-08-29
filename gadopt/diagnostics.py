@@ -50,10 +50,10 @@ class GeodynamicalDiagnostics:
 
     def __init__(
         self,
-        bottom_id: int,
-        top_id: int,
         z: Function,
         T: Function = 0,
+        bottom_id: int = None,
+        top_id: int = None,
         quad_degree: int = 4,
     ):
         mesh = extract_unique_domain(z)
@@ -62,18 +62,21 @@ class GeodynamicalDiagnostics:
         self.T = T
 
         self.dx = dx(domain=mesh, degree=quad_degree)
+        self.domain_volume = assemble(Constant(1) * self.dx)
+
         if self.u.function_space().extruded:
             self.ds = CombinedSurfaceMeasure(mesh, quad_degree)
         else:
             self.ds = ds(mesh)
-        self.ds_t = self.ds(top_id)
-        self.ds_b = self.ds(bottom_id)
+
+        if bottom_id:
+            self.ds_b = self.ds(bottom_id)
+            self.bottom_surface = assemble(Constant(1) * self.ds_b)
+        if top_id:
+            self.ds_t = self.ds(top_id)
+            self.top_surface = assemble(Constant(1) * self.ds_t)
 
         self.n = FacetNormal(mesh)
-
-        self.domain_volume = assemble(Constant(1) * self.dx)
-        self.top_surface = assemble(Constant(1) * self.ds_t)
-        self.bottom_surface = assemble(Constant(1) * self.ds_b)
 
     def u_rms(self):
         return norm(self.u) / sqrt(self.domain_volume)

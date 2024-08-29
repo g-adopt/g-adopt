@@ -56,8 +56,8 @@ class Simulation:
     materials = [buoyant_material, dense_material]
     reference_material = None
 
-    # Physical parameters
-    Ra, g = 0, 1
+    # Approximation parameters
+    buoyancy_terms = ["compositional"]
 
     # Boundary conditions
     temp_bcs = None

@@ -125,7 +125,7 @@ plog.log_str(
     "nu_top energy avg_t rate_work_g rate_viscous energy_2"
 )
 
-gd = GeodynamicalDiagnostics(bottom_id, top_id, z, FullT)
+gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
 
 # -
 

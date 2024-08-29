@@ -3,11 +3,13 @@ This standalone script tests the robustness of the derivatives
 using the Taylor remainder convergence test.
 """
 
+import sys
+
+import numpy as np
+from mpi4py import MPI
+
 from gadopt import *
 from gadopt.inverse import *
-from mpi4py import MPI
-import numpy as np
-import sys
 
 from cases import cases
 
@@ -50,8 +52,12 @@ def rectangle_taylor_test(case):
     u.rename("Velocity")
     p.rename("Pressure")
 
-    Ra = Constant(1e6)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
+    approximation = EquationSystem(
+        approximation="BA",
+        dimensional=False,
+        parameters={"Ra": 1e6},
+        buoyancy_terms=["thermal"],
+    )
 
     # Define time stepping parameters:
     max_timesteps = 80
@@ -80,28 +86,24 @@ def rectangle_taylor_test(case):
         left_id: {"ux": 0},
         right_id: {"ux": 0},
     }
-    temp_bcs = {
-        bottom_id: {"T": 1.0},
-        top_id: {"T": 0.0},
-    }
+    temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 
     energy_solver = EnergySolver(
+        approximation,
         T,
         u,
-        approximation,
         delta_t,
         ImplicitMidpoint,
         bcs=temp_bcs,
     )
 
     stokes_solver = StokesSolver(
+        approximation,
         z,
         T,
-        approximation,
         bcs=stokes_bcs,
-        nullspace=Z_nullspace,
-        transpose_nullspace=Z_nullspace,
         constant_jacobian=True,
+        nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
     )
 
     # Control variable for optimisation

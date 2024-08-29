@@ -1,11 +1,11 @@
 # Runs Spiegelman et al. (2016) cases at eta1=1e23,1e24, and 5e24 Pa s and, resp., U0=2.5,5 and 12.5 mm/yr
 # at specified nx, ny resolution with variable number of initial Picard iterations and with or without
 # stabilisation of the Jacobian as advocated in Fraters et al. (2019)
-from gadopt import *
-from firedrake.petsc import PETSc
-import firedrake
 import os.path
 import sys
+
+from gadopt import *
+
 PETSc.Sys.popErrorHandler()
 
 # Quadrature degree:
@@ -15,23 +15,24 @@ dx = dx(degree=6)
 nx, ny = 64, 16
 
 H = 30e3
-year = 86400*365
-U0 = Constant(0.0125/year)
+year = 86400 * 365
+U0 = Constant(0.0125 / year)
 mu0 = 1e22
-mu1 = Constant(5e24/mu0)  # upper layer background visc.
-mu2 = Constant(1e21/mu0)  # lower layer visc. (isovisc.)
+mu1 = Constant(5e24 / mu0)  # upper layer background visc.
+mu2 = Constant(1e21 / mu0)  # lower layer visc. (isovisc.)
 
 H1 = 0.75
-r, h, ww = 0.02, 1/12, 1/6
+r, h, ww = 0.02, 1 / 12, 1 / 6
 log = PETSc.Sys.Print
 
 
 def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     output_dir = f"spiegelman_{float(U0*year)}_{float(mu1*mu0)}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
-    log('\n')
-    log('\n')
-    log('WRITING TO:', output_dir)
-    mesh = RectangleMesh(nx, ny, 4, 1, quadrilateral=True)  # Square mesh generated via firedrake
+    log("\n")
+    log("\n")
+    log("WRITING TO:", output_dir)
+    # Square mesh generated via firedrake
+    mesh = RectangleMesh(nx, ny, 4, 1, quadrilateral=True)
     mesh.cartesian = True
     left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # noqa: F841 Boundary IDs
 
@@ -56,14 +57,13 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     # Output function space information:
     log("Number of Velocity DOF:", V.dim())
     log("Number of Pressure DOF:", W.dim())
-    log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
+    log("Number of Velocity and Pressure DOF:", V.dim() + W.dim())
 
     X = SpatialCoordinate(mesh)
     x = X[0]
     d = 1 - X[1]  # depth: d=0 at top and d=1 at bottom
 
-    # solver dicationaries:
-
+    # solver dictionaries
     mumps_solver_parameters = {
         "mat_type": "aij",
         "ksp_type": "preonly",
@@ -96,21 +96,15 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
             "Mp_pc_type": "ksp",
             "Mp_ksp_ksp_type": "cg",
             "Mp_ksp_pc_type": "sor",
-        }
+        },
     }
 
     # initial Picard solve, extra tight tolerance
-    initial_picard_solver_parameters = {
-        "snes_type": "ksponly",
-        "snes_monitor": None
-    }
+    initial_picard_solver_parameters = {"snes_type": "ksponly", "snes_monitor": None}
     initial_picard_solver_parameters.update(iterative_solver_parameters)
-    initial_picard_solver_parameters['ksp_rtol'] = 1e-16
+    initial_picard_solver_parameters["ksp_rtol"] = 1e-16
 
-    picard_solver_parameters = {
-        "snes_type": "ksponly",
-        "snes_monitor": None,
-    }
+    picard_solver_parameters = {"snes_type": "ksponly", "snes_monitor": None}
     picard_solver_parameters.update(mumps_solver_parameters)
 
     newton_solver_parameters = {
@@ -120,7 +114,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         "snes_atol": 0,
         "snes_rtol": 1e-16,
         "snes_stol": 0,
-        "snes_monitor": ":"+os.path.join(output_dir, "newton.txt"),
+        "snes_monitor": ":" + os.path.join(output_dir, "newton.txt"),
         "snes_converged_reason": None,
     }
     newton_solver_parameters.update(mumps_solver_parameters)
@@ -128,11 +122,11 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     g = Constant(9.81)
     rho0 = Constant(2700)
-    plith = g*rho0*d*H / (U0*mu0/H)
-    phi = Constant(30/180*pi)  # friction angle
-    C = Constant(1e8/(mu0*U0/H))  # Cohesion coeffficient
+    plith = g * rho0 * d * H / (U0 * mu0 / H)
+    phi = Constant(30 / 180 * pi)  # friction angle
+    C = Constant(1e8 / (mu0 * U0 / H))  # Cohesion coeffficient
     # Drucker-Prager:
-    A = Constant(C*cos(phi))
+    A = Constant(C * cos(phi))
     B = Constant(sin(phi))
     alpha = Constant(1)
 
@@ -141,44 +135,45 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     # the latter option is used for the initial Picard solve, as the
     # algebraic viscoplastic formula is not defined for u=epsii=0
     # (it is of course defined in the limit u->0 but then mu -> mu1)
-    switch = Constant(1.)
+    switch = Constant(1.0)
 
     # interface between eta1 and eta2 with rounded corner (although we're
     # completely underresolved for that) as described in Spiegelman
-    dx0 = abs(x-2)
-    interface_depth = H1 - conditional(dx0 < ww/2, h, 0)
-    dx1 = ww/2 + r - dx0
-    interface_depth += conditional(And(dx1 > 0, dx1 < r), sqrt(r**2-dx1**2)-r, 0)
-    dx2 = dx0 - (ww/2 - r)
-    interface_depth -= conditional(And(dx2 > 0, dx2 < r), sqrt(r**2-dx2**2)-r, 0)
+    dx0 = abs(x - 2)
+    interface_depth = H1 - conditional(dx0 < ww / 2, h, 0)
+    dx1 = ww / 2 + r - dx0
+    interface_depth += conditional(And(dx1 > 0, dx1 < r), sqrt(r**2 - dx1**2) - r, 0)
+    dx2 = dx0 - (ww / 2 - r)
+    interface_depth -= conditional(And(dx2 > 0, dx2 < r), sqrt(r**2 - dx2**2) - r, 0)
 
     # write viscosity as function of epsii, so we can reuse it in
     # the Jacobian "stabilisation" term
     def eta(epsii, p):
-        mu_plast = (A + B*(plith + alpha*p))/(2*epsii)
-        mu1_eff = 1/(1/mu1 + 1/mu_plast)
-        mu1_eff = conditional(switch > 0.5, mu1*mu_plast/(mu1+mu_plast), mu1)
+        mu_plast = (A + B * (plith + alpha * p)) / (2 * epsii)
+        mu1_eff = 1 / (1 / mu1 + 1 / mu_plast)
+        mu1_eff = conditional(switch > 0.5, mu1 * mu_plast / (mu1 + mu_plast), mu1)
         mu1_eff = max_value(mu1_eff, mu2)
         return conditional(d < interface_depth, mu1_eff, mu2)
 
     # viscosity expression in terms of u and p
     eps = sym(grad(u))
-    epsii = sqrt(0.5*inner(eps, eps))
+    epsii = sqrt(0.5 * inner(eps, eps))
     mu = eta(epsii, p)
 
     # same expression in terms of u_nl and p_nl used in Picard solve
     eps_nl = sym(grad(u_nl))
-    epsii_nl = sqrt(0.5*inner(eps_nl, eps_nl))
+    epsii_nl = sqrt(0.5 * inner(eps_nl, eps_nl))
     mu_nl = eta(epsii_nl, p_nl)
 
     # Write output files in VTK format:
-    u_, p_ = z.subfunctions  # Do this first to extract individual velocity and pressure fields.
+    # Do this first to extract individual velocity and pressure fields.
+    u_, p_ = z.subfunctions
     # Next rename for output:
     u_.rename("Velocity")
     p_.rename("Pressure")
     # Create output file and select output_frequency:
     output_file = VTKFile(os.path.join(output_dir, "output.pvd"))
-    picard_file = VTKFile(os.path.join(output_dir, 'picard.pvd'))
+    picard_file = VTKFile(os.path.join(output_dir, "picard.pvd"))
 
     # Construct the Jacobian stabilisation form as in Fraters '19
     #
@@ -193,20 +188,31 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     #    derivative with respect to, and then substitute eps2=epsii
     # depsii/deps = eps/(2*epsii)
     # the Constant(1) is the perturbation: derivative computes a Gateaux derivative for a given perturbation
-    b = replace(derivative(eta(eps2, p), eps2, Constant(1)) * eps / (2*eps2), {eps2: epsii})
-    abnorm = sqrt(inner(a, a)*inner(b, b))
-    beta = (1-inner(b, a)/abnorm)**2*abnorm
+    b = replace(
+        derivative(eta(eps2, p), eps2, Constant(1)) * eps / (2 * eps2), {eps2: epsii}
+    )
+    abnorm = sqrt(inner(a, a) * inner(b, b))
+    beta = (1 - inner(b, a) / abnorm) ** 2 * abnorm
     c_safety = Constant(1.0)
-    alpha_SPD = conditional(beta < c_safety*2*mu, 1, c_safety*2*mu/beta)
+    alpha_SPD = conditional(beta < c_safety * 2 * mu, 1, c_safety * 2 * mu / beta)
 
     # SCK:
-    T = 0
-    approximation = BoussinesqApproximation(0)
-    bcs = {left_id: {'ux': 1}, right_id: {'ux': -1}, bottom_id: {'uy': 0}}
-    picard_solver = StokesSolver(z, T, approximation, mu=mu_nl,
-                                 bcs=bcs, solver_parameters=initial_picard_solver_parameters)
-    newton_solver = StokesSolver(z, T, approximation, mu=mu,
-                                 bcs=bcs, solver_parameters=newton_solver_parameters)
+    approximation_picard = EquationSystem(
+        approximation="BA", dimensional=False, parameters={"mu": mu_nl}
+    )
+    approximation_newton = EquationSystem(
+        approximation="BA", dimensional=False, parameters={"mu": mu}
+    )
+    bcs = {left_id: {"ux": 1}, right_id: {"ux": -1}, bottom_id: {"uy": 0}}
+    picard_solver = StokesSolver(
+        approximation_picard,
+        z,
+        bcs=bcs,
+        solver_parameters=initial_picard_solver_parameters,
+    )
+    newton_solver = StokesSolver(
+        approximation_newton, z, bcs=bcs, solver_parameters=newton_solver_parameters
+    )
 
     if stabilisation:
         # need a trial function to express the Jacobian as a UFL 2-form:
@@ -217,11 +223,16 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         #    alpha_SPD=0   deta/du not included
         #    alpha_SPD=1   full deta/du term included
         # Thus we simply subtract (1-alpha_SPD) times that term
-        jac = derivative(newton_solver.F, z) - (1-alpha_SPD) * inner(grad(v), 2*derivative(mu, u, u_trial)*sym(grad(u))) * dx
+        jac = (
+            derivative(newton_solver.F, z)
+            - (1 - alpha_SPD)
+            * inner(grad(v), 2 * derivative(mu, u, u_trial) * sym(grad(u)))
+            * dx
+        )
         newton_solver.J = jac
 
     # switch off viscoplasticity in initial Picard solve as we start from u=0
-    switch.assign(0.)
+    switch.assign(0.0)
 
     picard_solver.solve()
     z_nl.assign(z)
@@ -232,9 +243,9 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     picard_file.write(u_, p_, mu_f, epsii_f)
 
     # output file with Picard residuals
-    f_picard = open(os.path.join(output_dir, 'picard.txt'), 'w')
+    f_picard = open(os.path.join(output_dir, "picard.txt"), "w")
     # switch full viscoplastic rheology back on
-    switch.assign(1.)
+    switch.assign(1.0)
 
     # initial solve is done iteratively with extra tight tolerance
     # subsequent iterative solves are done with direct solvers
@@ -242,7 +253,9 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     picard_solver.setup_solver()
 
     for i in range(picard_iterations):
-        f_picard.write(f"{i:02}: {assemble(picard_solver.F, bcs=picard_solver.strong_bcs, zero_bc_nodes=True).dat.norm}\n")
+        f_picard.write(
+            f"{i:02}: {assemble(picard_solver.F, bcs=picard_solver.strong_bcs, zero_bc_nodes=True).dat.norm}\n"
+        )
         picard_solver.solve()
         z_nl.assign(z)
         mu_f.interpolate(mu)
@@ -252,7 +265,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
 
     try:
         newton_solver.solve()
-    except firedrake.exceptions.ConvergenceError:
+    except ConvergenceError:
         # ignore_solver failures, so we still get final output
         # Most of the cases will not actually converge to the specified
         # very tight tolerances, so we always perform the max. n/o iterations
@@ -283,4 +296,11 @@ if __name__ == "__main__":
             # ignored in that case
             for picard_iterations in [50, 0, 5, 15, 25]:
                 for stab in [False, True]:
-                    spiegelman(Constant(ui/year), Constant(mui/mu0), nx, ny, picard_iterations, stabilisation=stab)
+                    spiegelman(
+                        Constant(ui / year),
+                        Constant(mui / mu0),
+                        nx,
+                        ny,
+                        picard_iterations,
+                        stabilisation=stab,
+                    )

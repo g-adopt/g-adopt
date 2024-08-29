@@ -10,10 +10,7 @@ from pathlib import Path
 import pytest
 
 # Test each grid Peclet number with SU enabled and disabled
-conf = {
-    "Pe": [0.25, 0.9, 50.0],
-    "SU": [True, False],
-}
+conf = {"Pe": [0.25, 0.9, 50.0], "SU": [True, False]}
 
 # Only test the analytical convergence of the Pe=0.25 cases
 convergence = [2.0, 2.0, None, None, None, None]
@@ -30,7 +27,6 @@ def expected_errors():
 
 @pytest.mark.parametrize("params,expected_convergence", param_sets)
 def test_scalar_advection_diffusion_DH27(params, expected_convergence, expected_errors):
-    Pe, SU = params
     param_str = "_".join(f"{p[0]}{p[1]}" for p in zip(conf.keys(), params))
 
     expected_errors = expected_errors[param_str]

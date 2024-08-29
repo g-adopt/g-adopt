@@ -151,7 +151,7 @@ plog.log_str(
     "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t eta_min eta_max"
 )
 
-gd = GeodynamicalDiagnostics(bottom_id, top_id, z, T)
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 # -
 
 # Now let's setup the solver objects.

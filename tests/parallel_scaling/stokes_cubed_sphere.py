@@ -1,6 +1,8 @@
-from gadopt import *
-import scipy.special
 import math
+
+import scipy.special
+
+from gadopt import *
 
 
 def model(ref_level, nlayers, delta_t, steps=None):
@@ -9,7 +11,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
 
     # Construct a CubedSphere mesh and then extrude into a sphere:
     mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
-    mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+    mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
     mesh.cartesian = False
     bottom_id, top_id = "bottom", "top"
 
@@ -36,25 +38,40 @@ def model(ref_level, nlayers, delta_t, steps=None):
     # Set up temperature field and initialise:
     T = Function(Q, name="Temperature")
     X = SpatialCoordinate(mesh)
-    r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
+    r = sqrt(X[0] ** 2 + X[1] ** 2 + X[2] ** 2)
     theta = atan2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
-    phi = atan2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol to Zhong)
+    # Phi (co-latitude - different symbol to Zhong)
+    phi = atan2(sqrt(X[0] ** 2 + X[1] ** 2), X[2])
 
-    conductive_term = rmin*(rmax - r) / (r*(rmax - rmin))
+    conductive_term = rmin * (rmax - r) / (r * (rmax - rmin))
     # evaluate P_lm node-wise using scipy lpmv
     l, m, eps_c, eps_s = 3, 2, 0.01, 0.01
     Plm = Function(Q, name="P_lm")
-    cos_phi = interpolate(cos(phi), Q)
+    cos_phi = Function(Q).interpolate(cos(phi))
     Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
-    Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
+    Plm.assign(
+        Plm
+        * math.sqrt(
+            ((2 * l + 1) * math.factorial(l - m))
+            / (2 * math.pi * math.factorial(l + m))
+        )
+    )
     if m == 0:
-        Plm.assign(Plm/math.sqrt(2))
-    T.interpolate(conductive_term +
-                  (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
+        Plm.assign(Plm / math.sqrt(2))
+    T.interpolate(
+        conductive_term
+        + (eps_c * cos(m * theta) + eps_s * sin(m * theta))
+        * Plm
+        * sin(pi * (r - rmin) / (rmax - rmin))
+    )
 
-    Ra = Constant(7e3)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
     mu = exp(4.605170185988092 * (0.5 - T))
+    approximation = EquationSystem(
+        approximation="BA",
+        dimensional=False,
+        parameters={"Ra": 7e3, "mu": mu},
+        buoyancy_terms=["thermal"],
+    )
 
     delta_t = Constant(delta_t)  # Initial time-step
 
@@ -63,41 +80,49 @@ def model(ref_level, nlayers, delta_t, steps=None):
 
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
-    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
+    Z_near_nullspace = create_stokes_nullspace(
+        Z, closed=False, rotational=True, translations=[0, 1, 2]
+    )
 
-    temp_bcs = {
-        bottom_id: {'T': 1.0},
-        top_id: {'T': 0.0},
-    }
-    stokes_bcs = {
-        bottom_id: {'un': 0},
-        top_id: {'un': 0},
-    }
+    temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
+    stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
 
-    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-    energy_solver.solver_parameters['ksp_converged_reason'] = None
-    energy_solver.solver_parameters['ksp_view'] = None
-    energy_solver.solver_parameters['ksp_rtol'] = 1e-7
+    energy_solver = EnergySolver(
+        approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    )
+    energy_solver.solver_parameters["ksp_converged_reason"] = None
+    energy_solver.solver_parameters["ksp_view"] = None
+    energy_solver.solver_parameters["ksp_rtol"] = 1e-7
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
+    stokes_solver = StokesSolver(
+        approximation,
+        z,
+        T,
+        bcs=stokes_bcs,
+        nullspace={
+            "nullspace": Z_nullspace,
+            "transpose_nullspace": Z_nullspace,
+            "near_nullspace": Z_near_nullspace,
+        },
+    )
 
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_monitor_true_residual'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_view'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-7
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_view'] = None
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
+    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
+    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_monitor_true_residual"] = None
+    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_view"] = None
+    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-7
+    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
+    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_view"] = None
+    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-5
 
     # Now perform the time loop:
-    for timestep in range(0, max_timesteps):
+    for timestep in range(max_timesteps):
         dt = float(delta_t)
         time += dt
 
         # Solve Stokes sytem:
-        with stokes_stage: stokes_solver.solve()
+        with stokes_stage:
+            stokes_solver.solve()
 
         # Temperature system:
-        with energy_stage: energy_solver.solve()
+        with energy_stage:
+            energy_solver.solve()

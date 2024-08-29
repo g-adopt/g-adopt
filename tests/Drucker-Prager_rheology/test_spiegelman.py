@@ -1,6 +1,7 @@
 import itertools
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 
 conf = {
     "ui-mui": list(zip((2.5e-3, 5e-3), (1e23, 1e24))),
@@ -16,7 +17,10 @@ def param_sets(config):
 
 
 def residual(ui, mui, nx, ny, picard_iterations, stabilisation):
-    output_dir = Path(__file__).parent.resolve() / f"spiegelman_{ui}_{mui}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
+    output_dir = (
+        Path(__file__).parent.resolve()
+        / f"spiegelman_{ui}_{mui}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
+    )
 
     with open(output_dir / "picard.txt", "r") as f:
         picard_residuals = np.array([float(line.split()[1]) for line in f])
@@ -43,9 +47,9 @@ def test_spiegelman_1e23():
     assert picard_only < 5e-14
 
     # test all Newton are below Picard-only after 50 iterations
-    newton_residuals = np.array([
-        residual(ui, mui, *params) for params in param_sets(test_conf)
-    ])
+    newton_residuals = np.array(
+        [residual(ui, mui, *params) for params in param_sets(test_conf)]
+    )
 
     assert np.all(newton_residuals < picard_only)
 
@@ -66,9 +70,9 @@ def test_spiegelman_1e24():
     stabilised_conf = test_conf.copy()
     stabilised_conf["stab"] = (True,)
 
-    stabilised_residuals = np.array([
-        residual(ui, mui, *params) for params in param_sets(stabilised_conf)
-    ])
+    stabilised_residuals = np.array(
+        [residual(ui, mui, *params) for params in param_sets(stabilised_conf)]
+    )
 
     assert np.all(stabilised_residuals < picard_only)
 
@@ -76,9 +80,9 @@ def test_spiegelman_1e24():
     unstabilised_conf = test_conf.copy()
     unstabilised_conf["stab"] = (False,)
 
-    unstabilised_residuals = np.array([
-        residual(ui, mui, *params) for params in param_sets(unstabilised_conf)
-    ])
+    unstabilised_residuals = np.array(
+        [residual(ui, mui, *params) for params in param_sets(unstabilised_conf)]
+    )
 
     assert np.all(unstabilised_residuals < 1e-14)
 

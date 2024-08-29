@@ -22,7 +22,7 @@ from .time_stepper import eSSPRKs3p3
 __all__ = [
     "LevelSetSolver",
     "Material",
-    "density_RaB",
+    "density_Ra_c",
     "entrainment",
     "field_interface",
 ]
@@ -44,31 +44,66 @@ reini_params_default = {
 }
 
 
+class Material:
+    """A material with physical properties for the level-set approach.
+
+    Provides a skeleton for available methods compatible with the implemented equation
+    system.
+    """
+
+    @staticmethod
+    def alpha():
+        raise NotImplementedError
+
+    @staticmethod
+    def chi():
+        raise NotImplementedError
+
+    @staticmethod
+    def cp():
+        raise NotImplementedError
+
+    @staticmethod
+    def k():
+        raise NotImplementedError
+
+    @staticmethod
+    def kappa():
+        raise NotImplementedError
+
+    @staticmethod
+    def mu():
+        raise NotImplementedError
+
+    @staticmethod
+    def Ra_c():
+        raise NotImplementedError
+
+    @staticmethod
+    def rho():
+        raise NotImplementedError
+
+
 @dataclass(kw_only=True)
 class Material:
     """A material with physical properties for the level-set approach.
 
     Expects material buoyancy to be defined using a value for either the reference
-    density, buoyancy number, or compositional Rayleigh number.
+    density or compositional Rayleigh number.
 
     Contains static methods to calculate the physical properties of a material.
     Methods implemented here describe properties in the simplest non-dimensional
-    simulation setup and must be overriden for more complex scenarios.
+    simulation setup and should be overriden for more complex scenarios.
 
     Attributes:
         density:
           An integer or a float representing the reference density.
-        B:
-          An integer or a float representing the buoyancy number.
-        RaB:
+        Ra_c:
           An integer or a float representing the compositional Rayleigh number.
-        density_B_RaB:
-          A string to notify how the buoyancy term is calculated.
     """
 
     density: Optional[Number] = None
-    B: Optional[Number] = None
-    RaB: Optional[Number] = None
+    Ra_c: Optional[Number] = None
 
     def __post_init__(self):
         """Checks instance field values.
@@ -81,16 +116,16 @@ class Material:
         for field_var in fields(self):
             field_var_value = getattr(self, field_var.name)
             if isinstance(field_var_value, Number):
-                self.density_B_RaB = field_var.name
+                self.density_B_Ra_c = field_var.name
             elif field_var_value is None:
                 count_None += 1
             else:
                 raise ValueError(
-                    "When provided, density, B, and RaB must have type int or float."
+                    "When provided, density, B, and Ra_c must have type int or float."
                 )
         if count_None != 2:
             raise ValueError(
-                "One, and only one, of density, B, and RaB must be provided, and it "
+                "One, and only one, of density, B, and Ra_c must be provided, and it "
                 "must be an integer or a float."
             )
 
@@ -452,7 +487,7 @@ def field_interface(
     return field_interface_recursive(level_set.copy(), material_value, method)
 
 
-def density_RaB(
+def density_Ra_c(
     Simulation,
     level_set: list,
     func_space_interp: fd.functionspaceimpl.WithGeometry,
@@ -485,18 +520,18 @@ def density_RaB(
         A tuple containing the reference density field, the density difference field,
         the density field, the UFL expression for the compositional Rayleigh number,
         the compositional Rayleigh number field, and a boolean indicating if the
-        simulation is expressed in dimensionless form.
+        system of equations is expressed in dimensional form.
 
     Raises:
         ValueError: Inconsistent buoyancy-related field across materials.
     """
     density = fd.Function(func_space_interp, name="Density")
-    RaB = fd.Function(func_space_interp, name="RaB")
+    Ra_c = fd.Function(func_space_interp, name="Ra_c")
     # Identify if the governing equations are written in dimensional form or not and
     # define accordingly relevant variables for the buoyancy term
-    if all(material.density_B_RaB == "density" for material in Simulation.materials):
-        dimensionless = False
-        RaB_ufl = fd.Constant(1)
+    if all(material.density_B_Ra_c == "density" for material in Simulation.materials):
+        dimensional = True
+        Ra_c_ufl = fd.Constant(1)
         ref_dens = fd.Constant(Simulation.reference_material.density)
         dens_diff = field_interface(
             level_set,
@@ -505,28 +540,30 @@ def density_RaB(
         )
         density.interpolate(dens_diff + ref_dens)
     else:
-        dimensionless = True
+        dimensional = False
         ref_dens = fd.Constant(1)
         dens_diff = fd.Constant(1)
-        if all(material.density_B_RaB == "B" for material in Simulation.materials):
-            RaB_ufl = field_interface(
+        if all(material.density_B_Ra_c == "B" for material in Simulation.materials):
+            Ra_c_ufl = field_interface(
                 level_set,
                 [Simulation.Ra * material.B for material in Simulation.materials],
                 method=method,
             )
-        elif all(material.density_B_RaB == "RaB" for material in Simulation.materials):
-            RaB_ufl = field_interface(
+        elif all(
+            material.density_B_Ra_c == "Ra_c" for material in Simulation.materials
+        ):
+            Ra_c_ufl = field_interface(
                 level_set,
-                [material.RaB for material in Simulation.materials],
+                [material.Ra_c for material in Simulation.materials],
                 method=method,
             )
         else:
             raise ValueError(
                 "All materials must share a common buoyancy-defining parameter."
             )
-        RaB.interpolate(RaB_ufl)
+        Ra_c.interpolate(Ra_c_ufl)
 
-    return ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless
+    return ref_dens, dens_diff, density, Ra_c_ufl, Ra_c, dimensional
 
 
 def entrainment(
