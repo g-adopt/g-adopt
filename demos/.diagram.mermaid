@@ -2,7 +2,7 @@ graph TD
   base[Base]
 
   subgraph physical[Physical]
-  ala[ALA] --> tala[TALA]
+  ala[ALA] --> --> visualise_ala[ALA Nullspace] --> tala[TALA]
   viscoplastic[Viscoplastic]
   end
 
@@ -30,6 +30,7 @@ graph TD
 
   click base "base_case"
   click ala "2d_compressible_ALA"
+  click visualise_ala "visualise_ALA_p_nullspace"
   click tala "2d_compressible_TALA"
   click viscoplastic "viscoplastic_case"
   click cartesian_3d "3d_cartesian"
