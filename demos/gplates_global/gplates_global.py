@@ -28,6 +28,10 @@
 # Let's begin with the usual import of G-ADOPT, set up of the mesh,
 # function spaces, functions to hold our solutions, material
 # properties, approximations and initial conditions:
+#
+# Note that sometimes we get a confusing `SyntaxWarning` during the
+# set up. This is due to the pyGPlates module itself, but doesn't
+# affect any functionality and is safe to ignore.
 
 # +
 from gadopt import *
@@ -38,6 +42,7 @@ rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
 
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
+mesh.cartesian = False
 bottom_id, top_id = "bottom", "top"
 domain_volume = assemble(1*dx(domain=mesh))  # Required for a diagnostic calculation.
 
@@ -79,7 +84,7 @@ if m == 0:
 T.interpolate(conductive_term +
               (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
 
-averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
+averager = LayerAveraging(mesh, quad_degree=6)
 averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 # -
 
@@ -94,9 +99,14 @@ averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 # space. The 1-D profile data is located in the file
 # `./mu2_radial.rad`, and we will use interpolation functionalities
 # provided by G-ADOPT to populate the viscosity field.
+#
+# This expression generates a warning from TSFC, the Two-Stage Form
+# Compiler. The underlying interpolation routine on a non-Cartesian
+# geometry hits an edge case in the form optimisation, but this can
+# safely be ignored.
 
 mu = Function(Q, name="Viscosity")
-interpolate_1d_profile(function=mu, one_d_filename="mu2_radial.rad", cartesian=False)
+interpolate_1d_profile(function=mu, one_d_filename="mu2_radial.rad")
 
 # ## Nullspaces:
 #
@@ -214,10 +224,15 @@ gplates_velocities = GplatesVelocityFunction(
 #     vtk_file.write(gplates_velocities)
 #
 # import pyvista as pv
+# import os
 # dataset = pv.read("gplates_velocity/gplates_velocity_0.vtu")
 #
 # # Create a plotter object
 # plotter = pv.Plotter()
+# # Whether our plot should be interactive or not
+# backend = None
+# if os.environ.get("GADOPT_RENDER", "false").lower() == "true":
+#     backend = "static"
 # # Add the dataset to the plotter
 # plotter.add_mesh(dataset, scalars="GPlates_Velocity", cmap="coolwarm")
 # glyphs = dataset.glyph(orient="GPlates_Velocity", scale=1, factor=1e-4)
@@ -226,7 +241,7 @@ gplates_velocities = GplatesVelocityFunction(
 # # Adjust the camera position
 # plotter.camera_position = [(10.0, 10.0, 10.0), (0.0, 0.0, 0), (0, 1, 0)]
 # # Show the plot
-# plotter.show()
+# plotter.show(jupyter_backend=backend)
 # -
 
 # And last but not least, we need to inform our solver of our choice
@@ -253,12 +268,12 @@ output_frequency = 1
 plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time age dt maxchange u_rms u_rms_top nu_top nu_base energy avg_t")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, degree=6)
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             mu=mu, cartesian=False, constant_jacobian=True,
+                             mu=mu, constant_jacobian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 # -

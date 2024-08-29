@@ -1,3 +1,9 @@
+r"""This module contains a class that augments a matrix preconditioner by setting the
+symmetric-positive-definite option. Users can provide this class as a `pc_python_type`
+entry to a PETSc solver option dictionary.
+
+"""
+
 import firedrake as fd
 from firedrake.petsc import PETSc
 

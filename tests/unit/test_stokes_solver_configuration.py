@@ -35,7 +35,7 @@ def test_solver_parameters_argument():
         "linear_false",
     ]:
         mu = 1
-        cartesian = True
+        mesh.cartesian = True
 
         match test_case:
             case "unspecified":
@@ -57,7 +57,7 @@ def test_solver_parameters_argument():
                 solver_parameters = example_solver_params
                 expected_value = example_solver_params
             case "cartesian_false":
-                cartesian = False
+                mesh.cartesian = False
                 solver_parameters = None
                 expected_value = (
                     base_linear_params_with_log | iterative_stokes_solver_parameters
@@ -77,7 +77,6 @@ def test_solver_parameters_argument():
             temperature,
             approximation,
             mu=mu,
-            cartesian=cartesian,
             solver_parameters=solver_parameters,
         )
 

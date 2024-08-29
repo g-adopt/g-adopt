@@ -21,6 +21,7 @@ mesh1d = IntervalMesh(disc_n, length_or_left=0.0, right=x_max)
 mesh = ExtrudedMesh(
     mesh1d, layers=disc_n, layer_height=y_max / disc_n, extrusion_type="uniform"
 )
+mesh.cartesian = True
 
 # Define boundary IDs for later use.
 bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
@@ -68,7 +69,7 @@ T.interpolate(
 # Calculate the layer average of the initial state.
 Taverage = Function(Q1, name="Average Temperature")
 averager = LayerAveraging(
-    mesh, cartesian=True, quad_degree=6
+    mesh, np.linspace(0, 1.0, 150 * 2), quad_degree=6
 )
 averager.extrapolate_layer_average(Taverage, averager.get_layer_average(T))
 # -

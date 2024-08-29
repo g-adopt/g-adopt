@@ -46,6 +46,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
 
     with CheckpointFile(str(checkpoint_file), "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
+        mesh.cartesian = True
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
     X = SpatialCoordinate(mesh)
