@@ -84,10 +84,10 @@
 # This example
 # ------------
 #
-# In this example, we simulate compressible convection, for an isoviscous material,
+# In this example, we simulate compressible convection, for an isoviscous material.
 # It is common practice within the geodynamical modelling community to
 # neglect dynamic pressure's effect on buoyancy terms in the force-balance equation, under the
-# so-called Truncated Anelastic Liquid Approximation (TALA). This approximation is considered here.
+# so-called Truncated Anelastic Liquid Approximation (TALA). This approximation is used here.
 #
 # We specify $Ra=10^5$ and a dissipation number $Di=0.5$.
 # The model is heated from below $ T = 1.0 - (T0*\mbox{exp}(Di) - T0)$, cooled from the top (T=0)
@@ -100,7 +100,7 @@
 from gadopt import *
 
 # We next set up the mesh, function spaces, and specify functions to hold our solutions,
-# identically to our previous tutorials.
+# identically to our previous tutorial.
 
 # +
 nx, ny = 40, 40  # Number of cells in x and y directions.

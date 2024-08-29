@@ -8,15 +8,17 @@
 # This example
 # ------------
 #
-# In this example, we simulate compressible convection, for an isoviscous material,
+# We simulate compressible convection, for an isoviscous material,
 # under ALA. We specify $Ra=10^5$ and a dissipation number $Di=0.5$.
 # The model is heated from below $ T = 1.0 - (T0*\mbox{exp}(Di) - T0)$, cooled from the top (T=0)
 # in an enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
 # conditions on all boundaries).
 #
-# Key differences relative to Our previous tutorial, which examined convection under TALA, are:
+# Key differences relative to our previous tutorial, which examined convection under the TALA
+# approximation, are:
 # 1. We no longer neglect the effect of dynamic pressure on buoyancy.
-# 2. The nullspace. the Truncated Anelastic.
+# 2. Specificiation of nullspaces for Stokes system, as this example has a non-constant
+#    pressure nullspace (vertical, decreasing with depth).
 #
 # As with all examples, the first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
@@ -46,7 +48,7 @@ z.subfunctions[1].rename("Pressure")
 # We next specify the important constants for this problem, including those associated with the
 # compressible reference state. Note that for ease of extension, we specify these as functions,
 # allowing for spatial variability. Given that we account for the effect of dynamic pressure on
-# buoyancy in this example, we need to specify the bulk modulus (chibar).
+# buoyancy in this example, we need to specify the bulk modulus (chibar), which differs to the TALA case. 
 
 X = SpatialCoordinate(mesh)
 Ra = Constant(1e5)  # Rayleigh number
@@ -59,7 +61,7 @@ cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)  # Specific
 chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)  # Bulk modulus
 gbar = Function(Q, name="GravitationalAcceleration").assign(1.0)  # Radial gravity
 
-# These fields are used to set up ourAnelastic Liquid Approximation. Alongside adding the
+# These fields are used to set up our Anelastic Liquid Approximation. Alongside adding the
 # requirement for specifying the bulk modulus, this is the key change relative to our tutorial under the TALA approximation.
 
 approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, cp=cpbar, chi=chibar, g=gbar)
@@ -86,10 +88,9 @@ T = Function(Q, name="Temperature")
 T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
 FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 
-# This problem has a non-constant pressure nullspace (vertical, decreasing with depth)
+# As noted above, this problem has a non-constant pressure nullspace (vertical, decreasing with depth)
 # for the right nullspace, and a constant nullspace for the transpose (left) nullspace.
-# These are obtained very similarly to our previous tutorial. For the right nullspace (Z_nullspace),
-# this is done by providing the approximation object and subdomain marker
+# We obtain the right nullspace (Z_nullspace) by providing the approximation object and subdomain marker
 # for the top boundary (where the pressure nullspace is referenced -- see the
 # visualise_ALA_p_nullspace demo for more details). The left nullspace (Z_nullspace_transpose) is
 # handled identically to the previous (TALA) tutorial.
