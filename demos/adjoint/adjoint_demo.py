@@ -1,5 +1,5 @@
 # Adjoint Inverse Demo
-# ================================
+# ====================
 #
 # Introduction
 # ------------
@@ -15,9 +15,11 @@
 # We have pre-run this simulation by running `forward.py`, and stored model output as a checkpoint file on our servers.
 # These fields serve as benchmarks for evaluating our inverse problem's performance. To download the reference benchmark
 # checkpoint file, execute the following command:
-#
+
+# + tags=["active-ipynb"]
 # !wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5
-#
+# -
+
 # In this file, fields from the reference simulation are stored under the names "Temperature" and "Velocity".
 # After importing g-adopt and the associated inverse module (gadopt.inverse - discussed further below), we can
 # retrieve timestepping information from the pre-computed forward run as follows
@@ -45,7 +47,7 @@ velocity_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Vel
 
 # + tags=["active-ipynb"]
 # print("Timestepping info for Temperature", temperature_timestepping_info)
-# print("Timestepping infor for Velocity", velocity_timestepping_info)
+# print("Timestepping info for Velocity", velocity_timestepping_info)
 # -
 
 # The timestepping information reveals that there are 80 time-steps (from 0 to 79) in the reference simulation,
@@ -74,11 +76,11 @@ checkpoint_file.close()
 # # Adjust the camera position
 # plotter.camera_position = [(0.5, 0.5, 2.5), (0.5, 0.5, 0), (0, 1, 0)]
 # # Show the plot
-# plotter.show()
+# plotter.show(jupyter_backend="static")
 # -
 
 # The inverse code
-# ---------------------------------------
+# ----------------
 #
 # The novelty of using the overloading approach provided by pyadjoint is that it requires
 # minimal changes to our script to enable the inverse capabalities of G-ADOPT.
@@ -149,7 +151,7 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
 # -
 
 # Define the Control Space
-# ========================
+# ------------------------
 #
 # In this section, we define the control space, which can be restricted to reduce the risk of encountering an
 # undetermined problem. Here, we select the Q1 function space for the initial condition $T_{ic}$. We also provide an
@@ -196,8 +198,8 @@ for time_idx in range(initial_timestep, timesteps):
     u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
 # -
 
-# Defining the Objective Functional
-# ---------------------------------
+# Define the Objective Functional
+# -------------------------------
 #
 # Now that all calculations are in place, we must define *the objective functional*.
 # The objective functional is our way of expressing our goal for this optimisation.
@@ -268,22 +270,21 @@ objective = (
 )
 # -
 
-# Defining the Reduced Functional and Optimisation Method
-# ----------------------
+# Define the Reduced Functional
+# -----------------------------
 #
 # In optimisation terminology, a reduced functional is a functional that takes a given value for the control and outputs
 # the value of the objective functional defined for it. It does this without explicitly depending on all intermediary
 # state variables, hence the name "reduced".
 #
 # To define the reduced functional, we provide the class with an objective (which is an overloaded UFL object) and the control.
+
 reduced_functional = ReducedFunctional(objective, control)
 
-# Pausing Annotation
-# ----------------------
-#
 # At this point, we have completed annotating the tape with the necessary information from running the forward simulation.
 # To prevent further annotations during subsequent operations, we stop the annotation process. This ensures that no additional
 # solves are unnecessarily recorded, keeping the tape focused only on the essential steps.
+
 pause_annotation()
 
 # We can print the contents of the tape at this stage to verify that it is not empty.
@@ -293,7 +294,7 @@ pause_annotation()
 # -
 
 # Verification of Gradients: Taylor Remainder Convergence Test
-# ----------------------
+# ------------------------------------------------------------
 #
 # A fundamental tool for verifying gradients is the Taylor remainder convergence test. This test helps ensure that
 # the gradients computed by our optimisation algorithm are accurate. For the reduced functional, $J(T_{ic})$, and its derivative,
@@ -330,7 +331,7 @@ pause_annotation()
 # that our gradients are accurate and reliable for optimisation.
 
 # Running the inversion
-# ------------------------
+# ---------------------
 # In the final section of this tutorial, we run the optimisation method. First, we define lower and upper bounds for the optimisation problem to guide
 # the optimisation method towards a more constrained solution.
 #
@@ -351,8 +352,8 @@ T_ub.assign(1.0)
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
 # -
 
-# Using the LinMore Optimiser
-# ---------------------------
+# Using the Lin-Moré Optimiser
+# ----------------------------
 #
 # In this tutorial, we employ the trust region method of Lin and Moré (1999) implemented in ROL (Rapid Optimization Library).
 # Lin-Moré is a truncated Newton method, which involves the repeated application of an iterative algorithm to approximately
@@ -367,6 +368,7 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # For our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`.
 # Here, we set the number of iterations to only 10, as opposed to the default 100. We also adjust the step-length for this problem,
 # by setting it to a lower value than our default.
+
 minimisation_parameters["Status Test"]["Iteration Limit"] = 10
 minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1e-2
 
@@ -402,8 +404,10 @@ def callback():
 
 
 optimiser.add_callback(callback)
-# Restore from last possible checkpoint
+
+# If it existed, we could restore the optimisation from last checkpoint:
 # optimiser.restore()
+
 # Run the optimisation
 optimiser.run()
 # -
@@ -426,5 +430,5 @@ optimiser.run()
 # # Adjust the camera position
 # plotter.camera_position = [(0.5, 0.5, 2.5), (0.5, 0.5, 0), (0, 1, 0)]
 # # Show the plot
-# plotter.show()
+# plotter.show(jupyter_backend="static")
 # -
