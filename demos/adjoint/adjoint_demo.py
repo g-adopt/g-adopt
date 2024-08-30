@@ -387,11 +387,15 @@ optimiser = LinMoreOptimiser(
 # callback function will be executed at the end of each iteration. Here, we write out
 # the control field, i.e., the reconstructed intial temperature field, at the end of
 # each iteration. To access the last value of *an overloaded object* we should access the
-# `.block_variable.checkpoint` method as bellow.
+# `.block_variable.checkpoint` method as below.
+#
+# For the sake of this demo, we also record the values of the reduced
+# functional directly in order to produce a plot of the convergence.
 
 # +
 solutions_vtk = VTKFile("solutions.pvd")
 solution_container = Function(Tic.function_space(), name="Solutions")
+functional_values = []
 
 
 def callback():
@@ -403,7 +407,12 @@ def callback():
     log(f"Terminal Temperature Misfit: {final_temperature_misfit}")
 
 
+def record_value(value, *args):
+    functional_values.append(value)
+
+
 optimiser.add_callback(callback)
+reduced_functional.eval_cb_post = record_value
 
 # If it existed, we could restore the optimisation from last checkpoint:
 # optimiser.restore()
@@ -431,4 +440,12 @@ optimiser.run()
 # plotter.camera_position = [(0.5, 0.5, 2.5), (0.5, 0.5, 0), (0, 1, 0)]
 # # Show the plot
 # plotter.show(jupyter_backend="static")
+# -
+
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+# plt.plot(functional_values)
+# plt.xlabel("Optimisation iteration")
+# plt.ylabel("Reduced functional")
+# plt.title("Optimisation convergence")
 # -
