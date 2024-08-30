@@ -151,8 +151,8 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
 # Define the Control Space
 # ========================
 #
-# In this section, we define the control space, which can be constrain to reduce the risk of encountering an
-# undetermined problem. Here, we select the Q1 space for the initial condition $T_{ic}$. We also provide an
+# In this section, we define the control space, which can be restricted to reduce the risk of encountering an
+# undetermined problem. Here, we select the Q1 function space for the initial condition $T_{ic}$. We also provide an
 # initial guess for the control value, which in this synthetic test is the temperature field of the reference
 # simulation at the final time-step (`timesteps - 1`). In other words, our guess for the initial temperature
 # is the final model state.
@@ -173,7 +173,7 @@ with CheckpointFile(checkpoint_filename, mode="r") as fi:
 # We next make pyadjoint aware of our control problem:
 control = Control(Tic)
 
-# Take our initial guess and project from Q1 to Q2, simultaneously imposing temperature boundary conditions.
+# Take our initial guess and project from Q1 to Q2, simultaneously imposing strong temperature boundary conditions.
 T.project(Tic, bcs=energy_solver.strong_bcs)
 
 # We continue by integrating the solutions at each time-step.
@@ -183,10 +183,11 @@ T.project(Tic, bcs=energy_solver.strong_bcs)
 # +
 u_misfit = 0.0
 
-# Next populate the tape by running the forward simulation.
-# For the purpose of this tutorial, we only invert for a total of 5 time-steps. This makes it tractable to run this
-# within a tutorial session. Feel free to change the initial time-step to `0` instead of `timesteps - 5`.
-for time_idx in range(timesteps - 5, timesteps):
+# Next populate the tape by running the forward simulation. ** NOTE ** for the purpose of this tutorial, we only
+# invert for a total of 5 time-steps. This makes it tractable to run this within a tutorial session. To run for
+# the simulation's full duration, change the initial time-step to `0` instead of `timesteps - 5`.
+initial_timestep = timesteps - 5
+for time_idx in range(initial_timestep, timesteps):
     stokes_solver.solve()
     energy_solver.solve()
     # Update the accumulated surface velocity misfit using the observed value.
@@ -202,15 +203,15 @@ for time_idx in range(timesteps - 5, timesteps):
 # The objective functional is our way of expressing our goal for this optimisation.
 # It is composed of several terms, each representing a different aspect of the model's
 # performance and regularisation.
-
+#
 # Regularisation involves imposing constraints on solutions to prevent overfitting, ensuring that the model
-# generalises well to new data. In this context, we use the one-dimensional (1D) temperature profile derived from
+# generalises well to new data. In this context, we use the one-dimensional (1-D) temperature profile derived from
 # the reference simulation as our regularisation constraint. This profile, referred to below as `Taverage`, helps
 # stabilise the inversion process by providing a benchmark that guides the solution towards physically plausible states.
 #
-# The 1D profile, `Taverage`, is also loaded from the checkpoint file
+# The 1-D profile, `Taverage`, is also loaded from the checkpoint file
 
-# Load the 1D average temperature profile from checkpoint file for regularisation
+# Load the 1-D average temperature profile from checkpoint file:
 Taverage = Function(Q1, name="Average Temperature")
 with CheckpointFile(checkpoint_filename, mode="r") as fi:
     Taverage.project(fi.load_function(mesh, "Average Temperature", idx=0))
@@ -242,7 +243,7 @@ with CheckpointFile(checkpoint_filename, mode="r") as fi:
 # which we specify through the `objective` below:
 
 # +
-# Define the component terms of the overall objective functional
+# Define component terms of overall objective functional and their normalisation terms:
 damping = assemble((Tic - Taverage) ** 2 * dx)
 norm_damping = assemble(Taverage**2 * dx)
 smoothing = assemble(dot(grad(Tic - Taverage), grad(Tic - Taverage)) * dx)
@@ -250,7 +251,7 @@ norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
 norm_obs = assemble(Tobs**2 * dx)
 norm_u_surface = assemble(dot(uobs, uobs) * ds_t)
 
-# Temperature misfit between solution and observation
+# Temperature misfit between final state solution and observation:
 t_misfit = assemble((T - Tobs) ** 2 * dx)
 
 # Weighting terms
@@ -258,7 +259,7 @@ alpha_u = 1e-1
 alpha_d = 1e-2
 alpha_s = 1e-1
 
-# Define overall objective functional
+# Define overall objective functional:
 objective = (
     t_misfit +
     alpha_u * (norm_obs * u_misfit / timesteps / norm_u_surface) +
@@ -271,12 +272,10 @@ objective = (
 # ----------------------
 #
 # In optimisation terminology, a reduced functional is a functional that takes a given value for the control and outputs
-# the value of the objective functional defined for it. It does this without explicitly depending on all the intermediary
+# the value of the objective functional defined for it. It does this without explicitly depending on all intermediary
 # state variables, hence the name "reduced".
 #
 # To define the reduced functional, we provide the class with an objective (which is an overloaded UFL object) and the control.
-# Both of these are essential for formulating the reduced functional.
-
 reduced_functional = ReducedFunctional(objective, control)
 
 # Pausing Annotation
@@ -285,10 +284,9 @@ reduced_functional = ReducedFunctional(objective, control)
 # At this point, we have completed annotating the tape with the necessary information from running the forward simulation.
 # To prevent further annotations during subsequent operations, we stop the annotation process. This ensures that no additional
 # solves are unnecessarily recorded, keeping the tape focused only on the essential steps.
-
 pause_annotation()
 
-# We can then print the contents of the tape to verify that it is not empty.
+# We can print the contents of the tape at this stage to verify that it is not empty.
 
 # + tags=["active-ipynb"]
 # print(tape.get_blocks())
@@ -297,18 +295,18 @@ pause_annotation()
 # Verification of Gradients: Taylor Remainder Convergence Test
 # ----------------------
 #
-# A fundamental tool for verifying gradients is the Taylor remainder convergence test. This test helps ensure that the gradients
-# computed by our optimisation algorithm are accurate. For the reduced functional, $J(T_{ic})$, and its derivative, $\frac{\mathrm{d} J}{\mathrm{d} T_{ic}}$,
-# the Taylor remainder convergence test can be expressed as:
+# A fundamental tool for verifying gradients is the Taylor remainder convergence test. This test helps ensure that
+# the gradients computed by our optimisation algorithm are accurate. For the reduced functional, $J(T_{ic})$, and its derivative,
+# $\frac{\mathrm{d} J}{\mathrm{d} T_{ic}}$, the Taylor remainder convergence test can be expressed as:
 #
 # $$ \left| J(T_{ic} + h \,\delta T_{ic}) - J(T_{ic}) - h\,\frac{\mathrm{d} J}{\mathrm{d} T_{ic}} \cdot \delta T_{ic} \right| \longrightarrow 0 \text{ at } O(h^2). $$
 #
 # The expression on the left-hand side is termed the second-order Taylor remainder. This term's convergence rate of $O(h^2)$ is a robust indicator for
-# verifying the computational implementation of the gradient calculation. Essentially, if you halve the value of $h$, the magnitude of the second-order
-# Taylor remainder should decrease by a factor of 4.
+# verifying the computational implementation of the gradient calculation. Essentially, if you halve the value of $h$, the magnitude
+# of the second-order Taylor remainder should decrease by a factor of 4.
 #
-# We employ these so-called *Taylor tests* to confirm the accuracy of the determined gradients. The theoretical convergence rate is $O(2.0)$, and achieving this rate
-# indicates that the gradient information is accurate down to floating-point precision.
+# We employ these so-called *Taylor tests* to confirm the accuracy of the determined gradients. The theoretical convergence rate is
+# $O(2.0)$, and achieving this rate indicates that the gradient information is accurate down to floating-point precision.
 #
 # ### Performing Taylor Tests
 #
@@ -333,8 +331,8 @@ pause_annotation()
 
 # Running the inversion
 # ------------------------
-# In the final section, we run the optimisation method. First, we define lower and upper bounds for the optimisation problem to guide the optimisation method
-# towards a more constrained solution.
+# In the final section of this tutorial, we run the optimisation method. First, we define lower and upper bounds for the optimisation problem to guide
+# the optimisation method towards a more constrained solution.
 #
 # For this simple problem, we perform a bounded nonlinear optimisation where the temperature is only permitted to lie in the range [0, 1]. This means that the
 # optimisation problem should not search for solutions beyond these values.
@@ -363,32 +361,30 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # Lin-Moré effectively handles provided bound constraints by ensuring that variables remain within their specified bounds.
 # During each iteration, variables are classified into "active" and "inactive" sets. Variables at their bounds that do not
 # allow descent are considered active and are fixed during the iteration. The remaining variables, which can change without
-# violating the bounds, are inactive. These properties make the algorithm a robust and efficient method for solving bound-constrained
+# violating the bounds, are inactive. These properties make the algorithm robust and efficient for solving bound-constrained
 # optimisation problems.
 #
-# To our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`.
-# Here, we set the number of iterations to only 10, as opposed to the default 100. We also adjust the step-length to this problem,
+# For our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`.
+# Here, we set the number of iterations to only 10, as opposed to the default 100. We also adjust the step-length for this problem,
 # by setting it to a lower value than our default.
-
 minimisation_parameters["Status Test"]["Iteration Limit"] = 10
 minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1e-2
 
-#
 # A notable feature of this optimisation approach in ROL is its checkpointing capability. For every iteration,
 # all information necessary to restart the optimisation from that iteration is saved in the specified `checkpoint_dir`.
 
-# Define the LinMore Optimiser class with checkpointing capability
+# Define the LinMore Optimiser class with checkpointing capability:
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
     checkpoint_dir="optimisation_checkpoint",
 )
 
-# For sake of book-keeping the simulation, we have also implement a user-defined way of
+# For sake of book-keeping the simulation, we have also implemented a user-defined way of
 # recording information that might be used to check the optimisation performance. This
 # callback function will be executed at the end of each iteration. Here, we write out
 # the control field, i.e., the reconstructed intial temperature field, at the end of
-# each iteration.  To access the last value of *an overloaded object* we should access the
+# each iteration. To access the last value of *an overloaded object* we should access the
 # `.block_variable.checkpoint` method as bellow.
 
 # +
@@ -402,7 +398,6 @@ def callback():
     final_temperature_misfit = assemble(
         (T.block_variable.checkpoint - Tobs) ** 2 * dx
     )
-
     log(f"Terminal Temperature Misfit: {final_temperature_misfit}")
 
 
@@ -414,7 +409,7 @@ optimiser.run()
 # -
 
 # At this point a total number of 10 iterations are performed. For the example
-# case here with 5 timesteps this should result an adequete r1`eduction
+# case here with 5 timesteps this should result an adequete reduction
 # in the objective functional. Now we can look at the solution
 # visually. For the actual simulation with 80 time-steps, this solution
 # could be compared to `Tic_ref` as the "true solution".
