@@ -3,36 +3,45 @@
 #
 # Introduction
 # ------------
-# In this tutorial, we will demonstrate how to perform an inversion to recover the initial temperature field of an idealised mantle convection simulation using G-ADOPT. This tutorial is published as the first synthetic experiment in *Ghelichkhan et al. (2024)*. The full inversion showcased in the publication involves a total number of 80 timesteps. For the tutorial here we start with only 5 timesteps to go through the basics.
+# In this tutorial, we will demonstrate how to perform an inversion to recover the initial temperature field of an
+# idealised mantle convection simulation using G-ADOPT. This tutorial is published as the first synthetic experiment in
+# *Ghelichkhan et al. (2024)*. The full inversion showcased in the publication involves a total number of 80 timesteps.
+# For the tutorial here we start with only 5 timesteps to go through the basics.
 #
-# The tutorial involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the initial state of a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we run a forward mantle convection simulation and record all relevant fields (velocity and temperature) at each time step.
+# The tutorial involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the
+# initial state of a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we
+# run a forward mantle convection simulation and record all relevant fields (velocity and temperature) at each time step.
 #
-# We have pre-run this simulation by running `forward.py`, and stored model output as a checkpoint file on our servers. These fields serve as benchmarks for evaluating our inverse problem's performance. To download the reference benchmark checkpoint file, click
-# [here](https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5), or alternatively, execute the following command in a terminal:
+# We have pre-run this simulation by running `forward.py`, and stored model output as a checkpoint file on our servers.
+# These fields serve as benchmarks for evaluating our inverse problem's performance. To download the reference benchmark
+# checkpoint file, execute the following command:
 #
-# ```wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5```
-
-# In this file, fields from the reference simulation are stored under the names "Temperature" and "Velocity". To retrieve the timestepping information from the pre-domputed forward run, we can use the following code:
+# !wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5
+#
+# In this file, fields from the reference simulation are stored under the names "Temperature" and "Velocity".
+# After importing g-adopt and the associated inverse module (gadopt.inverse - discussed further below), we can
+# retrieve timestepping information from the pre-computed forward run as follows
 
 # +
 from gadopt import *
 from gadopt.inverse import *
 
-# Open the checkpoint file and load the mesh from it
+# Open the checkpoint file and subsequently load the mesh:
 checkpoint_filename = "adjoint-demo-checkpoint-state.h5"
 checkpoint_file = CheckpointFile(checkpoint_filename, mode="r")
 mesh = checkpoint_file.load_mesh("firedrake_default_extruded")
 mesh.cartesian = True
 
-# Boundary markers from extruded mesh
+# Specify boundary markers, noting that for extruded meshes the upper and lower boundaries are tagged as
+# "top" and "bottom" respectively.
 bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
 
-# Retrieve the timestepping information for the Velocity and Temperature functions
+# Retrieve the timestepping information for the Velocity and Temperature functions from checkpoint file:
 temperature_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Temperature")
 velocity_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Velocity")
 # -
 
-# We can check the information for each
+# We can check the information for each:
 
 # + tags=["active-ipynb"]
 # print("Timestepping info for Temperature", temperature_timestepping_info)
@@ -41,18 +50,18 @@ velocity_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Vel
 
 # The timestepping information reveals that there are 80 time-steps (from 0 to 79) in the reference simulation,
 # with the temperature field stored only at the initial (index=0) and final (index=79) timesteps, while the
-# velocity field is stored at all timesteps. We can visualise the benchmark fields using Firedrake's built-in VTK functionality.
-# For example, initial and final temperature fields can be loaded:
+# velocity field is stored at all timesteps. We can visualise the benchmark fields using Firedrake's built-in VTK
+# functionality. For example, initial and final temperature fields can be loaded:
 
-# Load the final state, analagous to the present-day "observed" state
+# Load the final state, analagous to the present-day "observed" state:
 Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=int(temperature_timestepping_info["index"][-1]))
 Tobs.rename("Observed Temperature")
-# Load the reference initial state - i.e. the state that we wish to recover
+# Load the reference initial state - i.e. the state that we wish to recover:
 Tic_ref = checkpoint_file.load_function(mesh, "Temperature", idx=int(temperature_timestepping_info["index"][0]))
 Tic_ref.rename("Reference Initial Temperature")
 checkpoint_file.close()
 
-# and subsequently visualising using standard VTK software, such as Paraview or pyvista:
+# These fields can be visualised using standard VTK software, such as Paraview or pyvista.
 
 # + tags=["active-ipynb"]
 # import pyvista as pv
@@ -73,54 +82,55 @@ checkpoint_file.close()
 #
 # The novelty of using the overloading approach provided by pyadjoint is that it requires
 # minimal changes to our script to enable the inverse capabalities of G-ADOPT.
-# To turn on the adjoint, one simply starts by importing
-# the inverse module (already done above) to enable all taping functionality from pyadjoint.
+# To turn on the adjoint, one simply imports the inverse module (already done above) to
+# enable all taping functionality from pyadjoint.
 #
-# Doing so will turn all Firedrake's objects to overloaded types, in a way
+# Doing so will turn Firedrake's objects to overloaded types, in a way
 # that any UFL operation will be annotated and added to the tape, unless
-# specified otherwise.
+# otherwise specified.
 #
-# We first make sure that the tape is cleared of any previous operations, using the following code:
+# We first ensure that the tape is cleared of any previous operations, using the following code:
 
 tape = get_working_tape()
 tape.clear_tape()
 
 # + tags=["active-ipynb"]
-# # print all the blocks
+# # To verify the tape is empty, we can print all blocks:
 # print(tape.get_blocks())
 # -
 
-# From here onwards, all user operations are specified with minimal differences relative to
+# From here on, all user operations are specified with minimal differences relative to
 # to our forward code. Under the hood, however, the tape will be populated
-# by *blocks* that record their dependencies.
-# Knowing the mesh was loaded above, we continue in a manner that is consistent with our most basic forward modelling tutorials.
+# by *blocks* that record their dependencies. Knowing the mesh was loaded above, we continue
+# in a manner that is consistent with our most basic forward modelling tutorials.
 
 # +
-# Set up function spaces for the Q2Q1 pair.
+# Set up function spaces:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space
 
-# Test functions and functions to hold solutions:
+# Specify test functions and functions to hold solutions:
 z = Function(Z)  # A field over the mixed function space Z
 u, p = split(z)  # Returns symbolic UFL expression for u and p
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
+T = Function(Q, name="Temperature")
 
+# Specify important constants for the problem, alongside the approximation:
 Ra = Constant(1e6)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
 
-# Define time-stepping parameters.
+# Define time-stepping parameters:
 delta_t = Constant(4e-6)  # Constant time step
 timesteps = int(temperature_timestepping_info["index"][-1])  # number of timesteps from forward
 
-T = Function(Q, name="Temperature")
-
-# Nullspaces for the problem (constant pressure).
+# Nullspaces for the problem are next defined:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
-# Stokes and Energy boundary conditions - all free-slip for this problem
+# Followed by boundary conditions, noting that all boundaries are free slip, whilst the domain is
+# heated from below (T = 1) and cooled from above (T = 0).
 stokes_bcs = {
     bottom_id: {"uy": 0},
     top_id: {"uy": 0},
@@ -131,47 +141,51 @@ temp_bcs = {
     bottom_id: {"T": 1.0},
     top_id: {"T": 0.0},
 }
-# Energy and Stokes solver
+
+# Setup Energy and Stokes solver
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, nullspace=Z_nullspace, transpose_nullspace=Z_nullspace, constant_jacobian=True)
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace, constant_jacobian=True)
 # -
 
 # Define the Control Space
 # ========================
 #
-# In this section, we define the control space, which can be simplified to reduce the risk of encountering an undetermined problem.
-# Here, we select the Q1 space for the initial condition $T_{ic}$. We also provide an initial guess for the control value, which in this
-# synthetic test is the temperature field of the reference simulation at the final time-step (`timesteps - 1`). In other words, our guess for the initial
-# temperature is the final model state.
+# In this section, we define the control space, which can be constrain to reduce the risk of encountering an
+# undetermined problem. Here, we select the Q1 space for the initial condition $T_{ic}$. We also provide an
+# initial guess for the control value, which in this synthetic test is the temperature field of the reference
+# simulation at the final time-step (`timesteps - 1`). In other words, our guess for the initial temperature
+# is the final model state.
 
 # +
-# Define control function space using continuous Galerkin (CG) of degree 1 (Q1)
+# Define control function space:
 Q1 = FunctionSpace(mesh, "CG", 1)
 
-# Create a function for the initial temperature field with a name for identification
+# Create a function for the initial temperature field:
 Tic = Function(Q1, name="Initial Temperature")
 
-# Project the temperature field from the reference simulation's final time-step onto the control space as our initial guess
+# Project the temperature field from the reference simulation's final time-step onto the control space as our
+# initial guess:
 with CheckpointFile(checkpoint_filename, mode="r") as fi:
     Tic.project(fi.load_function(mesh, "Temperature", idx=timesteps - 1))
 # -
 
-# We finally introduce our control problem to pyadjoint and continue by integrating the solutions at
-# each time-step. Notice that we cumulatively compute the misfit term with respect to the
-# surface velocity observable.
-
-# +
+# We next make pyadjoint aware of our control problem:
 control = Control(Tic)
-
-u_misfit = 0.0
 
 # Take our initial guess and project from Q1 to Q2, simultaneously imposing temperature boundary conditions.
 T.project(Tic, bcs=energy_solver.strong_bcs)
 
-# Populate the tape by running the forward simulation.
-# For the purpose of this tutorial, we only invert for a total duration of 5 time-steps. This makes
-# all the steps much shorter to run and feasible to cover in one session. Feel free to change the initial
-# time-step to `0` instead of `timesteps - 5`.
+# We continue by integrating the solutions at each time-step.
+# Notice that we cumulatively compute the misfit term with respect to the
+# surface velocity observable.
+
+# +
+u_misfit = 0.0
+
+# Next populate the tape by running the forward simulation.
+# For the purpose of this tutorial, we only invert for a total of 5 time-steps. This makes it tractable to run this
+# within a tutorial session. Feel free to change the initial time-step to `0` instead of `timesteps - 5`.
 for time_idx in range(timesteps - 5, timesteps):
     stokes_solver.solve()
     energy_solver.solve()
@@ -184,17 +198,17 @@ for time_idx in range(timesteps - 5, timesteps):
 # Defining the Objective Functional
 # ---------------------------------
 #
-# Now that all calculations are in place, we need to define *the objective functional*.
+# Now that all calculations are in place, we must define *the objective functional*.
 # The objective functional is our way of expressing our goal for this optimisation.
 # It is composed of several terms, each representing a different aspect of the model's
 # performance and regularisation.
 
-# Regularisation involves imposing constraints on solutions to prevent overfitting, ensuring that the model generalises well to new data.
-# In this context, we use the one-dimensional (1D) temperature profile derived from the reference simulation as our regularisation constraint.
-# This profile, referred to below as `Taverage`, helps stabilise the inversion process by providing a benchmark that guides the solution towards
-# physically plausible states.
+# Regularisation involves imposing constraints on solutions to prevent overfitting, ensuring that the model
+# generalises well to new data. In this context, we use the one-dimensional (1D) temperature profile derived from
+# the reference simulation as our regularisation constraint. This profile, referred to below as `Taverage`, helps
+# stabilise the inversion process by providing a benchmark that guides the solution towards physically plausible states.
 #
-# The 1D profile, `Taverage`, is loaded from the checkpoint file
+# The 1D profile, `Taverage`, is also loaded from the checkpoint file
 
 # Load the 1D average temperature profile from checkpoint file for regularisation
 Taverage = Function(Q1, name="Average Temperature")
@@ -225,7 +239,7 @@ with CheckpointFile(checkpoint_filename, mode="r") as fi:
 # + $D_{T_{obs}} = \int_{\Omega} T_{\text{obs}} ^ 2 \, dx$, and
 # + $D_{\text{damping}} = \int_{\partial \Omega_{\text{top}}} u_{\text{obs}} \cdot u_{\text{obs}} \, ds$
 #
-# which we define with the following definition of `objective`:
+# which we specify through the `objective` below:
 
 # +
 # Define the component terms of the overall objective functional
@@ -256,16 +270,21 @@ objective = (
 # Defining the Reduced Functional and Optimisation Method
 # ----------------------
 #
-# In optimisation terminology, a reduced functional is a functional that takes a given value for the control and outputs the value of the objective functional defined for it. It does this without explicitly depending on all the intermediary state variables, hence the name "reduced".
+# In optimisation terminology, a reduced functional is a functional that takes a given value for the control and outputs
+# the value of the objective functional defined for it. It does this without explicitly depending on all the intermediary
+# state variables, hence the name "reduced".
 #
-# To define the reduced functional, we provide the class with an objective (which is an overloaded UFL object) and the control. Both of these are essential for formulating the reduced functional.
+# To define the reduced functional, we provide the class with an objective (which is an overloaded UFL object) and the control.
+# Both of these are essential for formulating the reduced functional.
 
 reduced_functional = ReducedFunctional(objective, control)
 
 # Pausing Annotation
 # ----------------------
 #
-# At this point, we have completed annotating the tape with the necessary information from running the forward simulation. To prevent further annotations during subsequent operations, we stop the annotation process. This ensures that no additional solves are unnecessarily recorded, keeping the tape focused only on the essential steps.
+# At this point, we have completed annotating the tape with the necessary information from running the forward simulation.
+# To prevent further annotations during subsequent operations, we stop the annotation process. This ensures that no additional
+# solves are unnecessarily recorded, keeping the tape focused only on the essential steps.
 
 pause_annotation()
 
@@ -278,17 +297,24 @@ pause_annotation()
 # Verification of Gradients: Taylor Remainder Convergence Test
 # ----------------------
 #
-# A fundamental tool for verifying gradients is the Taylor remainder convergence test. This test helps ensure that the gradients computed by our optimisation algorithm are accurate. For the reduced functional, $J(T_{ic})$, and its derivative, $\frac{\mathrm{d} J}{\mathrm{d} T_{ic}}$, the Taylor remainder convergence test can be expressed as:
+# A fundamental tool for verifying gradients is the Taylor remainder convergence test. This test helps ensure that the gradients
+# computed by our optimisation algorithm are accurate. For the reduced functional, $J(T_{ic})$, and its derivative, $\frac{\mathrm{d} J}{\mathrm{d} T_{ic}}$,
+# the Taylor remainder convergence test can be expressed as:
 #
 # $$ \left| J(T_{ic} + h \,\delta T_{ic}) - J(T_{ic}) - h\,\frac{\mathrm{d} J}{\mathrm{d} T_{ic}} \cdot \delta T_{ic} \right| \longrightarrow 0 \text{ at } O(h^2). $$
 #
-# The expression on the left-hand side is termed the second-order Taylor remainder. This term's convergence rate of $O(h^2)$ is a robust indicator for verifying the computational implementation of the gradient calculation. Essentially, if you halve the value of $h$, the magnitude of the second-order Taylor remainder should decrease by a factor of 4.
+# The expression on the left-hand side is termed the second-order Taylor remainder. This term's convergence rate of $O(h^2)$ is a robust indicator for
+# verifying the computational implementation of the gradient calculation. Essentially, if you halve the value of $h$, the magnitude of the second-order
+# Taylor remainder should decrease by a factor of 4.
 #
-# We employ these so-called *Taylor tests* to confirm the accuracy of the determined gradients. The theoretical convergence rate is $O(2.0)$, and achieving this rate indicates that the gradient information is accurate down to floating-point precision.
+# We employ these so-called *Taylor tests* to confirm the accuracy of the determined gradients. The theoretical convergence rate is $O(2.0)$, and achieving this rate
+# indicates that the gradient information is accurate down to floating-point precision.
 #
 # ### Performing Taylor Tests
 #
-# In our implementation, we perform a second-order Taylor remainder test for each term of the objective functional. The test involves computing the functional and the associated gradient when randomly perturbing the initial temperature field, $T_{ic}$, and subsequently halving the perturbations at each level.
+# In our implementation, we perform a second-order Taylor remainder test for each term of the objective functional. The test involves
+# computing the functional and the associated gradient when randomly perturbing the initial temperature field, $T_{ic}$, and subsequently
+# halving the perturbations at each level.
 #
 # Here is how you can perform a Taylor test in the code:
 
@@ -302,13 +328,16 @@ pause_annotation()
 # minconv = taylor_test(reduced_functional, Tic, Delta_temp)
 # -
 
-# The `taylor_test` function computes the Taylor remainder and verifies that the convergence rate is close to the theoretical value of $O(2.0)$. This ensures that our gradients are accurate and reliable for optimisation.
+# The `taylor_test` function computes the Taylor remainder and verifies that the convergence rate is close to the theoretical value of $O(2.0)$. This ensures
+# that our gradients are accurate and reliable for optimisation.
 
 # Running the inversion
 # ------------------------
-# In the final section, we run the optimisation method. First, we define lower and upper bounds for the optimisation problem to guide the optimisation method towards a more constrained solution.
+# In the final section, we run the optimisation method. First, we define lower and upper bounds for the optimisation problem to guide the optimisation method
+# towards a more constrained solution.
 #
-# For this simple problem, we perform a bounded nonlinear optimisation where the temperature is only permitted to lie in the range [0, 1]. This means that the optimisation problem should not search for solutions beyond these values.
+# For this simple problem, we perform a bounded nonlinear optimisation where the temperature is only permitted to lie in the range [0, 1]. This means that the
+# optimisation problem should not search for solutions beyond these values.
 
 # +
 # Define lower and upper bounds for the temperature
@@ -328,7 +357,8 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # ---------------------------
 #
 # In this tutorial, we employ the trust region method of Lin and Moré (1999) implemented in ROL (Rapid Optimization Library).
-# Lin-Moré is a truncated Newton method, which involves the repeated application of an iterative algorithm to approximately solve Newton’s equations (Dembo and Steihaug, 1983).
+# Lin-Moré is a truncated Newton method, which involves the repeated application of an iterative algorithm to approximately
+# solve Newton’s equations (Dembo and Steihaug, 1983).
 #
 # Lin-Moré effectively handles provided bound constraints by ensuring that variables remain within their specified bounds.
 # During each iteration, variables are classified into "active" and "inactive" sets. Variables at their bounds that do not
@@ -336,28 +366,30 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # violating the bounds, are inactive. These properties make the algorithm a robust and efficient method for solving bound-constrained
 # optimisation problems.
 #
-# To our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`. Here, we set the number of iterations to only 10, as opposed to the default 100. We also adjust the step-length to this problem, by setting it to a lower value than our default.
+# To our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`.
+# Here, we set the number of iterations to only 10, as opposed to the default 100. We also adjust the step-length to this problem,
+# by setting it to a lower value than our default.
 
 minimisation_parameters["Status Test"]["Iteration Limit"] = 10
 minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1e-2
 
 #
-# A notable feature of this optimisation approach in ROL is its checkpointing capability. For every iteration, all information necessary to restart the optimisation from that iteration is saved in the specified `checkpoint_dir`.
+# A notable feature of this optimisation approach in ROL is its checkpointing capability. For every iteration,
+# all information necessary to restart the optimisation from that iteration is saved in the specified `checkpoint_dir`.
 
-# +
 # Define the LinMore Optimiser class with checkpointing capability
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
     checkpoint_dir="optimisation_checkpoint",
 )
-# -
 
 # For sake of book-keeping the simulation, we have also implement a user-defined way of
 # recording information that might be used to check the optimisation performance. This
 # callback function will be executed at the end of each iteration. Here, we write out
 # the control field, i.e., the reconstructed intial temperature field, at the end of
-# each iteration.  To access the last value of *an overloaded object* we should access the `.block_variable.checkpoint` method as bellow.
+# each iteration.  To access the last value of *an overloaded object* we should access the
+# `.block_variable.checkpoint` method as bellow.
 
 # +
 solutions_vtk = VTKFile("solutions.pvd")
