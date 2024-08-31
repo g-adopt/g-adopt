@@ -84,7 +84,8 @@ class EquationSystem:
         self.compressible = "ALA" in approximation
 
         self.check_reference_profiles()
-        self.check_thermal_diffusion()
+        if "thermal" in buoyancy_terms:
+            self.check_thermal_diffusion()
 
         self.set_buoyancy()
         self.set_adiabatic_compression()
@@ -184,8 +185,10 @@ class EquationSystem:
         Note: In a dimensional system, T represents the difference between temperature
         and reference temperature.
         """
+        if self.dimensional and "thermal" in self.buoyancy_terms:
+            T -= self.T
         return (
-            self.thermal_buoyancy * (T - self.T if self.dimensional else T)
+            self.thermal_buoyancy * T
             - self.compressible_buoyancy * p
             - self.compositional_buoyancy
         )

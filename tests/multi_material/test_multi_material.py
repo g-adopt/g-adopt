@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-base = Path(__file__).parent.resolve()
+base = (Path(__file__).parent / "benchmarks").resolve()
 
 diagnostics = {
     "crameri_2012": [

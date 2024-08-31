@@ -162,20 +162,17 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # using averaging schemes, such as arithmetic, geometric, and harmonic means.
 
 # +
-dense_material = Material(RaB=4.5e5)
-reference_material = Material(RaB=0)
-materials = [dense_material, reference_material]
+Ra_c_reference = 0
+Ra_c_dense = 4.5e5
+# Material fields defined based on each material value and location
+Ra_c = material_field(psi, [Ra_c_dense, Ra_c_reference], interface="sharp")
 
-Ra = 3e5  # Thermal Rayleigh number
-
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
+Ra = 3e5
 
 approximation = EquationSystem(
     approximation="BA",
     dimensional=False,
-    parameters={"Ra": Ra, "Ra_c": RaB},
+    parameters={"Ra": Ra, "Ra_c": Ra_c},
     buoyancy_terms=["compositional", "thermal"],
 )
 # -
@@ -244,7 +241,7 @@ output_file = VTKFile("output.pvd")
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(bottom_id, top_id, z, T)
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
@@ -270,8 +267,7 @@ stokes_solver = StokesSolver(
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 
-subcycles = 1  # Number of advection solves to perform within one time step
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
+level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # Increase the reinitialisation time step to make up for the coarseness of the mesh
 level_set_solver.reini_params["tstep"] *= 20
 # -

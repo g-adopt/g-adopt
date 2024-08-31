@@ -4,13 +4,7 @@ from .approximations import EquationSystem
 from .diagnostics import GeodynamicalDiagnostics
 from .energy_solver import EnergySolver
 from .free_surface_equation import FreeSurfaceEquation
-from .level_set_tools import (
-    LevelSetSolver,
-    Material,
-    density_RaB,
-    entrainment,
-    field_interface,
-)
+from .level_set_tools import LevelSetSolver, entrainment, material_field
 from .limiter import VertexBasedP1DGLimiter
 from .momentum_equation import StokesEquations
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC

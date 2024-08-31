@@ -62,7 +62,7 @@ from gadopt import *
 # solutions, as in our previous tutorials.
 
 # +
-nx, ny = 40, 40  # Number of cells in x and y directions
+nx, ny = 128, 128  # Number of cells in x and y directions
 lx, ly = 0.9142, 1  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
@@ -145,20 +145,16 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # between values or expressions can be represented as sharp or diffuse, with the latter
 # using averaging schemes, such as arithmetic, geometric, and harmonic means.
 
-
 # +
-buoyant_material = Material(RaB=-1)  # Vertical direction is flipped in the benchmark
-dense_material = Material(RaB=0)
-materials = [buoyant_material, dense_material]
-
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
+Ra_c_buoyant = 0
+Ra_c_dense = 1
+# Material fields defined based on each material value and location
+Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="sharp")
 
 approximation = EquationSystem(
     approximation="BA",
     dimensional=False,
-    parameters={"Ra_c": RaB},
+    parameters={"Ra_c": Ra_c},
     buoyancy_terms=["compositional"],
 )
 # -
@@ -188,7 +184,7 @@ stokes_bcs = {
     bottom_id: {"u": 0},
     top_id: {"u": 0},
     left_id: {"ux": 0},
-    right_id: {"ux": 0}
+    right_id: {"ux": 0},
 }
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
@@ -202,7 +198,7 @@ output_file = VTKFile("output.pvd")
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(bottom_id, top_id, z)
+gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
 
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
@@ -222,8 +218,7 @@ stokes_solver = StokesSolver(
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 
-subcycles = 1  # Number of advection solves to perform within one time step
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
+level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # Increase the reinitialisation time step to make up for the coarseness of the mesh
 level_set_solver.reini_params["tstep"] *= 20
 # -

@@ -30,7 +30,7 @@ class TimeIntegratorBase(ABC):
           update_forcings: Firedrake function used to update any time-dependent boundary conditions
 
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def initialize(self, init_solution):
@@ -40,7 +40,7 @@ class TimeIntegratorBase(ABC):
           init_solution: Firedrake function representing the initial solution.
 
         """
-        pass
+        raise NotImplementedError
 
 
 class TimeIntegrator(TimeIntegratorBase):
@@ -360,19 +360,19 @@ class AbstractRKScheme(ABC):
     @abstractmethod
     def a(self):
         """Runge-Kutta matrix :math:`a_{i,j}` of the Butcher tableau"""
-        pass
+        raise NotImplementedError
 
     @property
     @abstractmethod
     def b(self):
         """weights :math:`b_{i}` of the Butcher tableau"""
-        pass
+        raise NotImplementedError
 
     @property
     @abstractmethod
     def c(self):
         """nodes :math:`c_{i}` of the Butcher tableau"""
-        pass
+        raise NotImplementedError
 
     @property
     @abstractmethod
@@ -382,7 +382,7 @@ class AbstractRKScheme(ABC):
         Value 1.0 corresponds to Forward Euler time step.
 
         """
-        pass
+        raise NotImplementedError
 
     def __init__(self):
         super(AbstractRKScheme, self).__init__()
