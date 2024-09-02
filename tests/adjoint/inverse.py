@@ -1,41 +1,57 @@
 """
-This standalone script tests the robustness of the derivatives
-using the Taylor remainder convergence test.
+This runs the optimisation portion of the adjoint test case. A forward run first sets up
+the tape with the adjoint information, then a misfit functional is constructed to be
+used as the goal condition for nonlinear optimisation using ROL.
 """
 
 from gadopt import *
 from gadopt.inverse import *
-from mpi4py import MPI
-import numpy as np
-import sys
-
-from cases import cases
+from pathlib import Path
 
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
 
-def rectangle_taylor_test(case):
+def main():
+    inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
+
+
+def gaussian(r, r_0, sigma):
     """
-    Perform a second-order Taylor remainder convergence test
-    for one term in the objective functional for the rectangular case
-    and asserts if convergence is above 1.9
+    Return a Gaussian distribution centred around r_0 with standard deviation of sigma
 
     Args:
-        case (str): name of the objective functional term
-            either of "damping", "smooothing", "Tobs", "uobs"
+        r: spatial variable
+        r_0: centre of Gaussian
+        sigma: standard deviation
     """
+    return exp(-0.5 * (r - r_0) ** 2 / sigma**2)
 
+
+def inverse(alpha_u, alpha_d, alpha_s):
+    """
+    Use adjoint-based optimisation to solve for the initial condition of the rectangular
+    problem.
+
+    Parameters:
+        alpha_u: The coefficient of the velocity misfit term
+        alpha_d: The coefficient of the initial condition damping term
+        alpha_s: The coefficient of the smoothing term
+    """
+    checkpoint_file = Path(__file__).resolve().parent / "adjoint-demo-checkpoint-state.h5"
     # Clear the tape of any previous operations to ensure
     # the adjoint reflects the forward problem we solve here
     tape = get_working_tape()
     tape.clear_tape()
 
-    with CheckpointFile("mesh.h5", "r") as f:
+    with CheckpointFile(str(checkpoint_file), "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
         mesh.cartesian = True
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
+    X = SpatialCoordinate(mesh)
+
+    enable_disk_checkpointing()
 
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -62,7 +78,7 @@ def rectangle_taylor_test(case):
     Tic = Function(Q1, name="Initial Temperature")
     Taverage = Function(Q1, name="Average Temperature")
 
-    checkpoint_file = CheckpointFile("Checkpoint_State.h5", "r")
+    checkpoint_file = CheckpointFile(str(checkpoint_file), "r")
     # Initialise the control
     Tic.project(
         checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
@@ -113,11 +129,8 @@ def rectangle_taylor_test(case):
     # and impose the boundary conditions at the same time
     T.project(Tic, bcs=energy_solver.strong_bcs)
 
-    # If it is only for smoothing or damping, there is no need to do the time-stepping
-    initial_timestep = 0 if case in ["Tobs", "uobs"] else max_timesteps - 1
-
     # Populate the tape by running the forward simulation
-    for timestep in range(initial_timestep, max_timesteps):
+    for timestep in range(0, max_timesteps):
         stokes_solver.solve()
         energy_solver.solve()
 
@@ -140,8 +153,9 @@ def rectangle_taylor_test(case):
     checkpoint_file.close()
 
     # Define the component terms of the overall objective functional
-    damping = assemble((Tic - Taverage) ** 2 * dx)
-    norm_damping = assemble(Taverage**2 * dx)
+    damping_mask = gaussian(X[1], 1.0, 0.1) + gaussian(X[1], 0.0, 0.1)
+    damping = assemble(damping_mask * (Tic - Taverage) ** 2 * dx)
+    norm_damping = assemble(damping_mask * Taverage**2 * dx)
     smoothing = assemble(dot(grad(Tic - Taverage), grad(Tic - Taverage)) * dx)
     norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
     norm_obs = assemble(Tobs**2 * dx)
@@ -150,14 +164,12 @@ def rectangle_taylor_test(case):
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
-    if case == "Tobs":
-        objective = t_misfit
-    elif case == "uobs":
-        objective = norm_obs * u_misfit / max_timesteps / norm_u_surface
-    elif case == "damping":
-        objective = norm_obs * damping / norm_damping
-    else:
-        objective = norm_obs * smoothing / norm_smoothing
+    objective = (
+        t_misfit +
+        alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface) +
+        alpha_d * (norm_obs * damping / norm_damping) +
+        alpha_s * (norm_obs * smoothing / norm_smoothing)
+    )
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
@@ -165,27 +177,37 @@ def rectangle_taylor_test(case):
     # Defining the object for pyadjoint
     reduced_functional = ReducedFunctional(objective, control)
 
-    Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
-    Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
-    minconv = taylor_test(reduced_functional, Tic, Delta_temp)
+    def callback():
+        initial_misfit = assemble(
+            (Tic.block_variable.checkpoint.restore() - Tic_ref) ** 2 * dx
+        )
+        final_misfit = assemble(
+            (T.block_variable.checkpoint.restore() - Tobs) ** 2 * dx
+        )
+
+        log(f"Initial misfit; {initial_misfit}; final misfit: {final_misfit}")
+
+    # Perform a bounded nonlinear optimisation where temperature
+    # is only permitted to lie in the range [0, 1]
+    T_lb = Function(Tic.function_space(), name="Lower bound temperature")
+    T_ub = Function(Tic.function_space(), name="Upper bound temperature")
+    T_lb.assign(0.0)
+    T_ub.assign(1.0)
+
+    minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
+
+    optimiser = LinMoreOptimiser(
+        minimisation_problem,
+        minimisation_parameters,
+    )
+    optimiser.add_callback(callback)
+    optimiser.run()
 
     # If we're performing mulitple successive optimisations, we want
     # to ensure the annotations are switched back on for the next code
     # to use them
     continue_annotation()
 
-    return minconv
-
 
 if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        for case_name in cases:
-            minconv = rectangle_taylor_test(case_name)
-            print(f"case: {case_name}, result: {minconv}")
-    else:
-        case_name = sys.argv[1]
-        minconv = rectangle_taylor_test(case_name)
-
-        if MPI.COMM_WORLD.Get_rank() == 0:
-            with open(f"{case_name}.conv", "w") as f:
-                f.write(f"{minconv}")
+    main()
