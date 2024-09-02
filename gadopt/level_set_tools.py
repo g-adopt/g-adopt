@@ -1,9 +1,8 @@
 r"""This module provides a set of classes and functions enabling multi-material
-capabilities. Users initialise materials by instantiating the `Material` class and
-define the physical properties of material interfaces using `field_interface`. They
-instantiate the `LevelSetSolver` class by providing relevant parameters and call the
-`solve` method to request a solver update. Finally, they may call the `entrainment`
-function to calculate material entrainment in the simulation.
+capabilities. The `material_field` function provides a simple way to define a UFL
+expression for a physical field depending on material properties. The `LevelSetSolver`
+class instantiates the advection and reinitialisation systems for a single level set.
+The `entrainment` function enables users to easily calculate material entrainment.
 
 """
 
@@ -105,12 +104,11 @@ class LevelSetSolver:
         level_set:
           The Firedrake function for the level set.
         func_space_lsgp:
-          The UFL function space where values of the projected level-set gradient are
-          calculated.
-        level_set_grad_proj:
+          The UFL function space for the projected level-set gradient.
+        ls_grad_proj:
           The Firedrake function for the projected level-set gradient.
         proj_solver:
-          An integer or a float representing the reference density.
+          A Firedrake LinearVariationalSolver to project the level-set gradient.
         reini_params:
           A dictionary containing parameters used in the reinitialisation approach.
         ls_ts:
@@ -167,7 +165,7 @@ class LevelSetSolver:
         self.func_space_lsgp = fd.VectorFunctionSpace(
             self.mesh, "CG", self.func_space.finat_element.degree
         )
-        self.level_set_grad_proj = fd.Function(
+        self.ls_grad_proj = fd.Function(
             self.func_space_lsgp,
             name=f"Level-set gradient (projection) #{level_set.name()[-1]}",
         )
@@ -175,10 +173,7 @@ class LevelSetSolver:
         self.proj_solver = self.gradient_L2_proj()
 
         self.ls_fields = {"velocity": velocity}
-        self.reini_fields = {
-            "level_set_grad": self.level_set_grad_proj,
-            "epsilon": epsilon,
-        }
+        self.reini_fields = {"level_set_grad": self.ls_grad_proj, "epsilon": epsilon}
 
         self.solvers_ready = False
 
@@ -205,9 +200,7 @@ class LevelSetSolver:
             * fd.ds(domain=self.mesh)
         )
         residual = -residual_element + residual_boundary
-        problem = fd.LinearVariationalProblem(
-            mass_term, residual, self.level_set_grad_proj
-        )
+        problem = fd.LinearVariationalProblem(mass_term, residual, self.ls_grad_proj)
 
         solver_params = {
             "mat_type": "aij",
@@ -227,11 +220,14 @@ class LevelSetSolver:
 
     def set_up_solvers(self):
         """Sets up the time steppers for advection and reinitialisation."""
+        self.level_set_old = fd.Function(self.func_space)
+
         self.ls_ts = self.tstep_alg(
             ScalarAdvectionEquation(self.func_space, self.func_space),
             self.level_set,
             self.ls_fields,
             self.tstep / self.subcycles,
+            solution_old=self.level_set_old,
             solver_parameters=self.solver_params,
         )
         self.reini_ts = self.reini_params["tstep_alg"](
@@ -239,6 +235,7 @@ class LevelSetSolver:
             self.level_set,
             self.reini_fields,
             self.reini_params["tstep"],
+            solution_old=self.level_set_old,
             solver_parameters=self.solver_params,
         )
 
@@ -246,12 +243,12 @@ class LevelSetSolver:
         """Updates the level-set function.
 
         Calls advection and reinitialisation solvers within a subcycling loop.
-        The reinitialisation solver can be iterated and might not be called at each
+        The reinitialisation solver can be iterated and may not be called at each
         simulation time step.
 
         Args:
             step:
-              An integer representing the current simulation step.
+              An integer representing the current time-loop iteration.
         """
         if not self.solvers_ready:
             self.set_up_solvers()
@@ -260,16 +257,11 @@ class LevelSetSolver:
         for subcycle in range(self.subcycles):
             self.ls_ts.advance(0)
 
-            if step >= self.reini_params["frequency"]:
-                self.reini_ts.solution_old.assign(self.level_set)
-
             if step % self.reini_params["frequency"] == 0:
                 for reini_step in range(self.reini_params["iterations"]):
                     self.reini_ts.advance(
                         0, update_forcings=self.update_level_set_gradient
                     )
-
-                self.ls_ts.solution_old.assign(self.level_set)
 
 
 def material_field_recursive(
@@ -277,12 +269,11 @@ def material_field_recursive(
     field_values: list[fd.ufl.core.expr.Expr],
     interface: str,
 ) -> fd.ufl.core.expr.Expr:
-    """Sets physical property expressions for each material.
+    """Sets physical property expressions reflecting material distribution.
 
     Ensures that the correct expression is assigned to each material based on the
-    level-set functions.
-    Property transition across material interfaces are expressed according to the
-    provided averaging scheme.
+    level-set functions. Property transition across material interfaces are expressed
+    according to the provided averaging scheme.
 
     Args:
         level_set:
@@ -294,9 +285,6 @@ def material_field_recursive(
 
     Returns:
         A UFL expression representing the physical property throughout the domain.
-
-    Raises:
-        ValueError: Incorrect interface strategy supplied.
 
     """
     ls = fd.max_value(fd.min_value(level_set.pop(), 1), 0)
@@ -323,10 +311,6 @@ def material_field_recursive(
                     + (1 - ls)
                     / material_field_recursive(level_set, field_values, interface)
                 )
-            case _:
-                raise ValueError(
-                    "Method must be sharp, arithmetic, geometric, or harmonic."
-                )
     else:  # Final level set; specify values for both sides of the interface
         match interface:
             case "sharp":
@@ -337,10 +321,6 @@ def material_field_recursive(
                 return field_values[0] ** (1 - ls) * field_values[1] ** ls
             case "harmonic":
                 return 1 / ((1 - ls) / field_values[0] + ls / field_values[1])
-            case _:
-                raise ValueError(
-                    "Interface must be sharp, arithmetic, geometric, or harmonic."
-                )
 
 
 def material_field(
@@ -363,9 +343,16 @@ def material_field(
 
     Returns:
         A UFL expression representing the physical property throughout the domain.
+
+    Raises:
+        ValueError: Incorrect interface strategy supplied.
     """
     if not isinstance(level_set, list):
         level_set = [level_set]
+
+    _impl_interface = ["sharp", "arithmetic", "geometric", "harmonic"]
+    if interface not in _impl_interface:
+        raise ValueError(f"Interface must be one of {_impl_interface}.")
 
     return material_field_recursive(level_set.copy(), field_values, interface)
 
@@ -379,7 +366,7 @@ def entrainment(
 
     Args:
         level_set:
-          A level-set Firedrake function.
+          A Firedrake function for the level set.
         material_area:
           An integer or a float representing the total area occupied by a material.
         entrainment_height:

@@ -61,8 +61,8 @@ class EquationSystem:
     have depth-dependent variations in the Boussinesq approximation.
     """
 
-    approximations = ["BA", "EBA", "TALA", "ALA"]
-    impl_buoyancy_terms = ["compositional", "free_surface", "thermal"]
+    _approximations = ["BA", "EBA", "TALA", "ALA"]
+    _impl_buoyancy_terms = ["compositional", "free_surface", "thermal"]
 
     def __init__(
         self,
@@ -72,8 +72,8 @@ class EquationSystem:
         parameters: dict[str, float] = {},
         buoyancy_terms: list[str] = [],
     ):
-        assert approximation in self.approximations
-        assert all(term in self.impl_buoyancy_terms for term in buoyancy_terms)
+        assert approximation in self._approximations
+        assert all(term in self._impl_buoyancy_terms for term in buoyancy_terms)
 
         self.approximation = approximation
         self.dimensional = dimensional

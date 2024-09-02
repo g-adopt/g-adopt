@@ -150,16 +150,14 @@ epsilon = Constant(min_mesh_edge_length / 4)
 psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # -
 
-# We next define materials present in the simulation using the `Material` class. Here,
-# the problem is non-dimensionalised and can be described by the product of the
-# expressions for the Rayleigh and buoyancy numbers, RaB, which is also referred to as
-# compositional Rayleigh number. Therefore, we provide a value for thermal and
-# compositional Rayleigh numbers to define our approximation. Material fields, such as
-# RaB, are created using the `field_interface` function, which generates a unique field
-# over the numerical domain based on the level-set field(s) and values or expressions
-# associated with each material. At the interface between two materials, the transition
-# between values or expressions can be represented as sharp or diffuse, with the latter
-# using averaging schemes, such as arithmetic, geometric, and harmonic means.
+# We next define the material fields and instantiate the approximation. Here, the system
+# of equations is non-dimensional and includes compositional and thermal buoyancy terms
+# under the Boussinesq approximation. Moreover, physical parameters are constant through
+# space apart from density. As a result, the system is fully defined by the values of
+# the thermal and compositional Rayleigh numbers. We use the `material_field` function
+# to define the compositional Rayleigh number throughout the domain (including the shape
+# of the material interface transition). Both non-dimensional numbers are provided to
+# our approximation, alongside other parameters already mentioned.
 
 # +
 Ra_c_reference = 0

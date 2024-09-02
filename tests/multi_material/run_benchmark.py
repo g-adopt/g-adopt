@@ -275,7 +275,7 @@ else:
     update_forcings = None
 
 # Perform the time loop
-step = 0
+step = 1
 has_end_time = hasattr(simulation, "time_end")
 while True:
     # Calculate simulation diagnostics
