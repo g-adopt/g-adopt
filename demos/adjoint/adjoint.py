@@ -1,5 +1,5 @@
-# Adjoint Inverse Demo
-# ====================
+# Adjoint inverse reconstruction
+# ==============================
 #
 # Introduction
 # ------------

@@ -1,4 +1,4 @@
-# Generating Reference Fields for Adjoint Inversion
+# Generating reference fields for adjoint inversion
 # =================================================
 #
 # This tutorial explains how to run the forward portion of the adjoint test case to generate the reference final
