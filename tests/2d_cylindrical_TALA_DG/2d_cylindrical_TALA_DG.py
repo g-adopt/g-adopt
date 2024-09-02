@@ -29,26 +29,29 @@ rmin, rmax, ncells, nlayers = 1.208, 2.208, 512, 128
 # In this example, we load the mesh from a checkpoint, although the following code was used to generate
 # the original mesh. It is included here for completeness.
 
+
 def original_mesh():
     def gaussian(center, c, a):
-        return a*np.exp(-(np.linspace(rmin, rmax, nlayers)-center)**2/(2*c**2))
+        return a * np.exp(
+            -((np.linspace(rmin, rmax, nlayers) - center) ** 2) / (2 * c**2)
+        )
 
     resolution_func = np.ones((nlayers))
-    for idx, r_0 in enumerate([rmin, rmax, rmax - 660/6370]):
-        c = 0.15
-        res_amplifier = 5.
-        resolution_func *= 1/(1+gaussian(center=r_0, c=c, a=res_amplifier))
+    for r_0 in [rmin, rmax, rmax - 660 / 6370]:
+        resolution_func /= 1 + gaussian(center=r_0, c=0.15, a=5.0)
 
-    mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
+    # construct a circle mesh
+    mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     # extrude circle into a cylinder
     mesh = ExtrudedMesh(
         mesh1d,
         layers=nlayers,
-        layer_height=(rmax-rmin)*resolution_func/np.sum(resolution_func),
-        extrusion_type='radial',
+        layer_height=(rmax - rmin) * resolution_func / np.sum(resolution_func),
+        extrusion_type="radial",
     )
 
     return mesh
+
 
 with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
     mesh = f.load_mesh("firedrake_default_extruded")
@@ -67,29 +70,49 @@ z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
+
+r = sqrt(X[0] ** 2 + X[1] ** 2)
+# Radial unit vector (in direction opposite to gravity)
+rhat = as_vector([X[0] / r, X[1] / r])
 vr = Function(V_scalar, name="Radial_Velocity")  # For diagnostic output
 
-# We next specify the important constants for this problem, and set up the approximation.
-Ra = Constant(5.0e7)  # Rayleigh number
-Di = Constant(0.9492824165791792)  # Dissipation number
-H_int = Constant(9.93)  # Internal heating
-
+# We next set up and initialise our Temperature field from a checkpoint:
 X = SpatialCoordinate(mesh)
-r = sqrt(X[0]**2 + X[1]**2)
-rhat = as_vector([X[0]/r, X[1]/r])  # Radial unit vector (in direction opposite to gravity)
-thetahat = as_vector([-X[1]/r, X[0]/r])  # Tangential unit vector.
+T = Function(Q, name="Temperature")
+with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
+    T = f.load_function(mesh, "Temperature")
+FullT = Function(Q, name="FullTemperature").assign(T + Tbar)
+T_avg = Function(Q, name="Layer_Averaged_Temp")
+averager = LayerAveraging(mesh, quad_degree=6)
+averager.extrapolate_layer_average(T_avg, averager.get_layer_average(FullT))
+T_dev = Function(Q, name="Temperature_Deviation").assign(FullT - T_avg)
+
+# We next prepare our viscosity, starting with a radial profile.
+mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
+interpolate_1d_profile(
+    function=mu_rad, one_d_filename="initial_condition_mat_prop/mu2_radial.txt"
+)
+# We now add lateral viscosity variation due to temperature variations:
+mu_field = Function(Q, name="Viscosity")
+delta_mu_T = Constant(1000.0)
+mu = mu_rad * exp(-ln(delta_mu_T) * T_dev)
+
+# We next specify the important constants for this problem and set up the approximation.
+Ra = Constant(5e7)  # Rayleigh number
+Di = Constant(0.9492824165791792)  # Dissipation number
+H = Constant(9.93)  # Internal heating
 
 approximation_profiles = {}
 approximation_sources = {
     "rho": {
         "name": "CompRefDensity",
         "filename": "initial_condition_mat_prop/rhobar.txt",
-        "scaling": lambda x: x / 3200.,
+        "scaling": lambda x: x / 3200.0,
     },
-    "Tbar": {
+    "T": {
         "name": "CompRefTemperature",
         "filename": "initial_condition_mat_prop/Tbar.txt",
-        "scaling": lambda x: (x - 1600.) / 3700.,
+        "scaling": lambda x: (x - 1600.0) / 3700.0,
     },
     "alpha": {
         "name": "IsobaricThermalExpansivity",
@@ -108,21 +131,22 @@ approximation_sources = {
     },
 }
 
-for func, details in approximation_sources.items():
-    f = Function(Q, name=details["name"])
-    interpolate_1d_profile(function=f, one_d_filename=details["filename"])
-    f.assign(details["scaling"](f))
+for param, meta in approximation_sources.items():
+    f = Function(Q, name=meta["name"])
+    interpolate_1d_profile(function=f, one_d_filename=meta["filename"])
+    f.assign(meta["scaling"](f))
 
-    approximation_profiles[func] = f
+    approximation_profiles[param] = f
 
-Tbar = approximation_profiles["Tbar"]
-
-# We next prepare our viscosity, starting with a radial profile.
-mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
-interpolate_1d_profile(function=mu_rad, one_d_filename="initial_condition_mat_prop/mu2_radial.txt")
+Tbar = approximation_profiles["T"]
 
 # These fields are used to set up our Truncated Anelastic Liquid Approximation.
-approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, H=H_int, **approximation_profiles)
+approximation = EquationSystem(
+    approximation="TALA",
+    dimensional=False,
+    parameters={"Ra": Ra, "Di": Di, "Q": H, "mu": mu, **approximation_profiles},
+    buoyancy_terms=["thermal"],
+)
 
 # As with the previous examples, we set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -133,24 +157,9 @@ approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, H=H_int, **approxi
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 21  # Maximum number of timesteps
-t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.8, maximum_timestep=0.1, increase_tolerance=1.5)
-
-# We next set up and initialise our Temperature field from a checkpoint:
-X = SpatialCoordinate(mesh)
-T = Function(Q, name="Temperature")
-r = sqrt(X[0]**2 + X[1]**2)
-with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
-    T = f.load_function(mesh, "Temperature")
-FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
-T_avg = Function(Q, name='Layer_Averaged_Temp')
-averager = LayerAveraging(mesh, quad_degree=6)
-averager.extrapolate_layer_average(T_avg, averager.get_layer_average(FullT))
-T_dev = Function(Q, name='Temperature_Deviation').assign(FullT-T_avg)
-
-# Now that we have the average T profile, we add lateral viscosity variation due to temperature variations:
-mu_field = Function(Q, name="Viscosity")
-delta_mu_T = Constant(1000.)
-mu = mu_rad * exp(-ln(delta_mu_T) * T_dev)
+t_adapt = TimestepAdaptor(
+    delta_t, u, V, target_cfl=0.8, maximum_timestep=0.1, increase_tolerance=1.5
+)
 
 # With a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
 # of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e. this case incorporates a velocity nullspace,
@@ -166,7 +175,9 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 # for the velocity block of the Stokes system, to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
 # translational modes.
 
-Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
+Z_near_nullspace = create_stokes_nullspace(
+    Z, closed=False, rotational=True, translations=[0, 1]
+)
 
 # Boundary conditions are next specified. Boundary conditions for temperature are set to $T = 0$ at the surface ($r_{\text{max}}$) and $T = 1 - adiabatic contribution$
 # at the base ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries. We incorporate these **weakly** through
@@ -174,16 +185,38 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # of velocity is zero and all required changes are handled under the hood.
 
 # +
-stokes_bcs = {
-    bottom_id: {'un': 0},
-    top_id: {'un': 0},
-}
+stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
 
 temp_bcs = {
-    bottom_id: {'T': 1.0 - 930/3700.},  # Take out adiabat
-    top_id: {'T': 0.0},
+    bottom_id: {"T": 1.0 - 930 / 3700.0},  # Take out adiabat
+    top_id: {"T": 0.0},
 }
 # -
+
+# We can now setup and solve the variational problem, for both the energy and Stokes equations,
+# passing in the approximation, nullspace and near-nullspace information configured above.
+
+energy_solver = EnergySolver(
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+)
+energy_solver.solver_parameters["ksp_rtol"] = 1e-4
+
+stokes_solver = StokesSolver(
+    approximation,
+    z,
+    T,
+    bcs=stokes_bcs,
+    nullspace={
+        "nullspace": Z_nullspace,
+        "transpose_nullspace": Z_nullspace,
+        "near_nullspace": Z_near_nullspace,
+    },
+)
+stokes_solver.solver_parameters["snes_rtol"] = 1e-2
+stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
+stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-3
+stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
+stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-2
 
 # We next setup our output, in VTK format.
 # We also open a file for logging and calculate our diagnostic outputs.
@@ -197,27 +230,15 @@ plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time dt u_rms nu_base nu_top energy avg_t FullT_min FullT_max")
 
 gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id, quad_degree=6)
+
+# f_ratio = rmin / rmax
+top_scaling = 1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
+bot_scaling = 0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
 # -
-
-# We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation, nullspace and near-nullspace information configured above.
-
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-energy_solver.solver_parameters['ksp_rtol'] = 1e-4
-
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             near_nullspace=Z_near_nullspace)
-stokes_solver.solver_parameters['snes_rtol'] = 1e-2
-stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-3
-stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
 
 # We now initiate the time loop, which runs for the number of timesteps specified above.
 
-for timestep in range(0, timesteps):
-
+for timestep in range(timesteps):
     # Update varial velocity:
     vr.interpolate(inner(u, rhat))
 
@@ -241,23 +262,22 @@ for timestep in range(0, timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    f_ratio = rmin/rmax
-    top_scaling = 1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
-    bot_scaling = 0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
     nusselt_number_top = gd.Nu_top() * top_scaling
     nusselt_number_base = gd.Nu_bottom() * bot_scaling
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(delta_t)} {gd.u_rms()} "
-                 f"{nusselt_number_base} {nusselt_number_top} "
-                 f"{energy_conservation} {gd.T_avg()} {gd.T_min()} {gd.T_max()}")
+    plog.log_str(
+        f"{timestep} {time} {float(delta_t)} {gd.u_rms()} "
+        f"{nusselt_number_base} {nusselt_number_top} "
+        f"{energy_conservation} {gd.T_avg()} {gd.T_min()} {gd.T_max()}"
+    )
 
     # Calculate Full T and update gradient fields:
-    FullT.assign(T+Tbar)
+    FullT.assign(T + Tbar)
     # Compute deviation from layer average
     averager.extrapolate_layer_average(T_avg, averager.get_layer_average(FullT))
-    T_dev.assign(FullT-T_avg)
+    T_dev.assign(FullT - T_avg)
 
 # +
 plog.close()
