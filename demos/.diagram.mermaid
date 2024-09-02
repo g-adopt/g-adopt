@@ -19,14 +19,14 @@ graph TD
   end
 
   subgraph adjoint[Adjoint]
-  inverse[Inverse]
+  adjoint_forward[Forward] --> inverse[Inverse]
   end
 
   base --> physical
   base --> dimension
   base --> geometry
   base --> multimaterial
-  base ~~~ adjoint
+  base --> adjoint
 
   click base "base_case"
   click tala "2d_compressible_TALA"
@@ -39,3 +39,5 @@ graph TD
   click isothermal "compositional_buoyancy"
   click thermochemical "thermochemical_buoyancy"
   click gplates_global "gplates_global"
+  click adjoint_forward "adjoint_forward"
+  click inverse "adjoint"
