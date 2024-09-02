@@ -107,7 +107,7 @@ Z_nullspace = create_stokes_nullspace(
     Z,
     closed=True,
     rotational=False,
-    ala_approximation=approximation,
+    approximation=approximation,
     top_subdomain_id=top_id,
 )
 Z_nullspace_transpose = create_stokes_nullspace(Z, closed=True, rotational=False)

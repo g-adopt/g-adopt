@@ -85,9 +85,8 @@ conductive_term = rmin * (rmax - r) / (r * (rmax - rmin))
 l, m, eps_c, eps_s = 3, 2, 0.01, 0.01
 Plm = Function(Q, name="P_lm")
 cos_phi = Function(Q).interpolate(cos(phi))
-Plm.dat.data[:] = scipy.special.lpmv(
-    m, l, cos_phi.dat.data_ro
-)  # Evaluate P_lm node-wise using scipy lpmv
+# Evaluate P_lm node-wise using scipy lpmv
+Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
 Plm.assign(
     Plm
     * math.sqrt(

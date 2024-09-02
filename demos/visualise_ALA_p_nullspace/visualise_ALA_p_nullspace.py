@@ -79,7 +79,7 @@
 
 from gadopt import *
 
-# For directly accessing the pressure nullspace we import `ala_right_nullspace` withing G-ADOPT's stokes_integrators submodule.
+# For directly accessing the pressure nullspace we import `ala_right_nullspace` within G-ADOPT's stokes_integrators submodule.
 
 from gadopt.stokes_integrators import ala_right_nullspace
 
@@ -89,7 +89,6 @@ from gadopt.stokes_integrators import ala_right_nullspace
 # Set up geometry:
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)  # Square mesh generated via firedrake
 mesh.cartesian = True
-
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 # Function spaces
@@ -100,23 +99,25 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
 # Compressible reference state:
 X = SpatialCoordinate(mesh)
-T0 = Constant(0.091)  # Non-dimensional surface temperature
-Di = Constant(0.5)  # Dissipation number.
 Ra = Constant(1e5)  # Rayleigh number
-gruneisen = 1.0
-rhobar = Function(Q, name="CompRefDensity").interpolate(exp(((1.0 - X[1]) * Di) / gruneisen))
-Tbar = Function(Q, name="CompRefTemperature").interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)
+Di = Constant(0.5)  # Dissipation number
+Gamma = Constant(1.0)  # Grüneisen parameter
+T0 = Constant(0.091)  # Non-dimensional surface temperature
+rhobar = Function(Q, name="CompRefDensity")
+rhobar.interpolate(exp(((1.0 - X[1]) * Di) / Gamma))
+Tbar = Function(Q, name="CompRefTemperature")
+Tbar.interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)
 
-#
-alphabar = Function(Q, name="IsobaricThermalExpansivity").assign(1.0)
-cpbar = Function(Q, name="IsobaricSpecificHeatCapacity").assign(1.0)
-chibar = Function(Q, name="IsothermalBulkModulus").assign(1.0)
-
-ala = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, alpha=alphabar, chi=chibar, cp=cpbar)
-p = ala_right_nullspace(W, approximation=ala, top_subdomain_id=top_id)
+approximation = EquationSystem(
+    approximation="ALA",
+    dimensional=False,
+    parameters={"Ra": Ra, "Di": Di, "Gamma": Gamma, "rho": rhobar, "T": Tbar},
+    buoyancy_terms=["thermal"],
+)
+p = ala_right_nullspace(W, approximation, top_id)
 # -
 
-# Note that the right-nullspace solution is calculated last, using `ala_right_nullspace`,
+# Note that the right-nullspace solution is calculated last using `ala_right_nullspace`,
 # which returns a Firedrake `Function` which can be plotted as below:
 
 # + tags=["active-ipynb"]
@@ -126,17 +127,24 @@ p = ala_right_nullspace(W, approximation=ala, top_subdomain_id=top_id)
 # fig.colorbar(collection)
 # -
 
-# The nullspace based on this nullspace solution, should be provided to the Stokes solver for obtaining correct and efficient solutions.
-# In G-ADOPT this works using the same interface for generating stokes nullspaces, i.e. `create_stokes_nullspace`. That is
-# for all practical matters, this is how we generate the right-nullspace for the stokes equations:
+# The nullspace based on this nullspace solution, should be provided to the Stokes
+# solver for obtaining correct and efficient solutions. In G-ADOPT this works using the
+# same interface for generating Stokes nullspaces, i.e. `create_stokes_nullspace`. That
+# is for all practical matters, this is how we generate the right-nullspace for the
+# Stokes equations:
 
 Z_nullspace = create_stokes_nullspace(
-    Z, closed=True, rotational=False,
-    ala_approximation=ala, top_subdomain_id=top_id)
+    Z,
+    closed=True,
+    rotational=False,
+    approximation=approximation,
+    top_subdomain_id=top_id,
+)
 
-# where the anelastic-liquid approximation, and a domain for the top boundary is provided. In the case of the ALA approximation,
-# the _transpose_ (left) nullspace, is simply the same as that for other approximations, and so we call `create_stokes_nullspace` without
-# providing the `AnelasticLiquidApproximation` object `ala`:
+# where the anelastic-liquid approximation, and a domain for the top boundary is
+# provided. In the case of the ALA approximation, the _transpose_ (left) nullspace, is
+# simply the same as that for other approximations, and so we call
+# `create_stokes_nullspace` without providing the `AnelasticLiquidApproximation` object
+# `ala`:
 
-Z_nullspace_transpose = create_stokes_nullspace(
-    Z, closed=True, rotational=False)
+Z_nullspace_transpose = create_stokes_nullspace(Z, closed=True, rotational=False)

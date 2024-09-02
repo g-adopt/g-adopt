@@ -113,7 +113,7 @@ def create_stokes_nullspace(
     closed: bool = True,
     rotational: bool = False,
     translations: Optional[list[int]] = None,
-    ala_approximation: Optional[EquationSystem] = None,
+    approximation: Optional[EquationSystem] = None,
     top_subdomain_id: Optional[str | int] = None,
 ) -> fd.nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
@@ -123,40 +123,34 @@ def create_stokes_nullspace(
       closed: Whether to include a constant pressure null space
       rotational: Whether to include all rotational modes
       translations: List of translations to include
-      ala_approximation: AnelasticLiquidApproximation for calculating (non-constant) right nullspace
+      approximation: AnelasticLiquidApproximation for calculating (non-constant)
+                         right nullspace
       top_subdomain_id: Boundary id of top surface. Required when providing
-                        ala_approximation.
+                        approximation.
 
     Returns:
       A Firedrake mixed vector space basis incorporating the null space components
 
     """
-    # ala_approximation and top_subdomain_id are both needed when calculating right nullspace for ala
-    if (ala_approximation is None) != (top_subdomain_id is None):
+    # approximation and top_subdomain_id are both needed when calculating right
+    # nullspace for ala
+    if (approximation is None) != (top_subdomain_id is None):
         raise ValueError(
-            "Both ala_approximation and top_subdomain_id must be provided, or both must be None."
+            "Both approximation and top_subdomain_id must be provided, or both "
+            "must be None."
         )
 
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
-    stokes_subspaces = Z.subfunctions
 
     if rotational:
         if dim == 2:
-            rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((-X[1], X[0]))
-            )
+            rotV = fd.Function(Z[0]).interpolate(fd.as_vector((-X[1], X[0])))
             basis = [rotV]
         elif dim == 3:
-            x_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((0, -X[2], X[1]))
-            )
-            y_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((X[2], 0, -X[0]))
-            )
-            z_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((-X[1], X[0], 0))
-            )
+            x_rotV = fd.Function(Z[0]).interpolate(fd.as_vector((0, -X[2], X[1])))
+            y_rotV = fd.Function(Z[0]).interpolate(fd.as_vector((X[2], 0, -X[0])))
+            z_rotV = fd.Function(Z[0]).interpolate(fd.as_vector((-X[1], X[0], 0)))
             basis = [x_rotV, y_rotV, z_rotV]
         else:
             raise ValueError("Unknown dimension")
@@ -167,34 +161,28 @@ def create_stokes_nullspace(
         for tdim in translations:
             vec = [0] * dim
             vec[tdim] = 1
-            basis.append(
-                fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector(vec))
-            )
+            basis.append(fd.Function(Z[0]).interpolate(fd.as_vector(vec)))
 
     if basis:
         V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
         V_nullspace.orthonormalize()
     else:
-        V_nullspace = stokes_subspaces[0]
+        V_nullspace = Z[0]
 
     if closed:
-        if ala_approximation:
-            p = ala_right_nullspace(
-                W=stokes_subspaces[1],
-                approximation=ala_approximation,
-                top_subdomain_id=top_subdomain_id,
-            )
+        if approximation and approximation.approximation == "ALA":
+            p = ala_right_nullspace(Z[1], approximation, top_subdomain_id)
             p_nullspace = fd.VectorSpaceBasis([p], comm=Z.mesh().comm)
             p_nullspace.orthonormalize()
         else:
             p_nullspace = fd.VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
     else:
-        p_nullspace = stokes_subspaces[1]
+        p_nullspace = Z[1]
 
     null_space = [V_nullspace, p_nullspace]
 
     # If free surface unknowns, add dummy free surface nullspace
-    null_space += stokes_subspaces[2:]
+    null_space += Z[2:]
 
     return fd.MixedVectorSpaceBasis(Z, null_space)
 
@@ -553,16 +541,13 @@ def ala_right_nullspace(
     """
     W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
     q = fd.TestFunction(W)
-    p = fd.Function(W, name="pressure_nullspace")
-
-    # Fix the solution at the top boundary
-    bc = fd.DirichletBC(W, 1.0, top_subdomain_id)
-
-    F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
-
+    p = fd.Function(W, name="Pressure nullspace")
     k = upward_normal(W.mesh())
 
-    F += -fd.inner(fd.grad(q), -k * approximation.compressible_buoyancy * p) * fd.dx
+    F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
+    F -= fd.inner(fd.grad(q), -k * approximation.compressible_buoyancy * p) * fd.dx
 
-    fd.solve(F == 0, p, bcs=bc)
+    # Fix the solution at the top boundary
+    fd.solve(F == 0, p, bcs=fd.DirichletBC(W, 1.0, top_subdomain_id))
+
     return p
