@@ -1,11 +1,13 @@
 cases := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical 3d_spherical 3d_cartesian adjoint multi_material gplates_global
-demo_cases := base_case 2d_cylindrical 3d_spherical 2d_compressible_ALA visualise_ALA_p_nullspace 2d_compressible_TALA viscoplastic_case 3d_cartesian gplates_global multi_material/compositional_buoyancy multi_material/thermochemical_buoyancy
+demo_cases := base_case 2d_cylindrical 3d_spherical 2d_compressible_ALA visualise_ALA_p_nullspace 2d_compressible_TALA viscoplastic_case 3d_cartesian gplates_global multi_material/compositional_buoyancy multi_material/thermochemical_buoyancy adjoint
 
 .PHONY: all convert_demos $(cases) $(demo_cases) clean generate
 
 all: $(cases)
 
 convert_demos: $(foreach case,$(demo_cases),$(case)/$(notdir $(case)).ipynb)
+
+adjoint/adjoint.ipynb: adjoint/adjoint_forward.ipynb
 
 # sort to remove duplicates which define both tests and demos
 $(sort $(cases) $(demo_cases)):

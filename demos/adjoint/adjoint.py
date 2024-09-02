@@ -12,12 +12,12 @@
 # initial state of a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we
 # run a forward mantle convection simulation and record all relevant fields (velocity and temperature) at each time step.
 #
-# We have pre-run this simulation by running `forward.py`, and stored model output as a checkpoint file on our servers.
-# These fields serve as benchmarks for evaluating our inverse problem's performance. To download the reference benchmark
-# checkpoint file, execute the following command:
+# We have pre-run this simulation by running [the forward case](../adjoint_forward), and stored model output as a
+# checkpoint file on our servers.  These fields serve as benchmarks for evaluating our inverse problem's performance. To
+# download the reference benchmark checkpoint file if it doesn't already exist, execute the following command:
 
 # + tags=["active-ipynb"]
-# !wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5
+# ![ ! -f adjoint-demo-checkpoint-state.h5 ] && wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5
 # -
 
 # In this file, fields from the reference simulation are stored under the names "Temperature" and "Velocity".
