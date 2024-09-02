@@ -132,7 +132,6 @@ temp_bcs = {bottom_id: {"T": 1.0 - (T0 * exp(Di) - T0)}, top_id: {"T": 0.0}}
 # +
 output_file = VTKFile("output.pvd")
 ref_file = VTKFile("reference_state.pvd")
-ref_file.write(rhobar, Tbar)
 output_frequency = 50
 
 plog = ParameterLog("params.log", mesh)
@@ -170,6 +169,7 @@ for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T, FullT)
+        ref_file.write(rhobar, Tbar)
 
     dt = t_adapt.update_timestep()
     time += dt

@@ -54,7 +54,7 @@ jobs:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           sudo apt update
-          sudo apt install -y task-spooler time s3cmd unzip
+          sudo apt install -y task-spooler time s3cmd unzip git-lfs
           tsp -S 48
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
@@ -64,6 +64,12 @@ jobs:
           ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.*/site-packages/
 
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Fetch LFS artifacts
+        run: |
+          git lfs checkout
 
       - name: Install Python dependencies
         run: |
