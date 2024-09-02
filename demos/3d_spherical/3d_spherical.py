@@ -75,10 +75,6 @@ steady_state_tolerance = 1e-6
 # lateral deviations from a radial layer average.
 
 # +
-T = Function(Q, name="Temperature")
-T_avg = Function(Q, name="Layer_Averaged_Temp")
-T_dev = Function(Q, name="Temperature_Deviation")
-
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0] ** 2 + X[1] ** 2 + X[2] ** 2)
 theta = atan2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
@@ -88,9 +84,10 @@ phi = atan2(sqrt(X[0] ** 2 + X[1] ** 2), X[2])
 conductive_term = rmin * (rmax - r) / (r * (rmax - rmin))
 l, m, eps_c, eps_s = 3, 2, 0.01, 0.01
 Plm = Function(Q, name="P_lm")
-cos_phi = Function(Q, name="cos_phi").interpolate(cos(phi))
-# Evaluate P_lm node-wise using scipy lpmv
-Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
+cos_phi = Function(Q).interpolate(cos(phi))
+Plm.dat.data[:] = scipy.special.lpmv(
+    m, l, cos_phi.dat.data_ro
+)  # Evaluate P_lm node-wise using scipy lpmv
 Plm.assign(
     Plm
     * math.sqrt(
@@ -99,12 +96,16 @@ Plm.assign(
 )
 if m == 0:
     Plm.assign(Plm / math.sqrt(2))
-T.interpolate(
+
+T = Function(Q, name="Temperature").interpolate(
     conductive_term
     + (eps_c * cos(m * theta) + eps_s * sin(m * theta))
     * Plm
     * sin(pi * (r - rmin) / (rmax - rmin))
 )
+
+T_avg = Function(Q, name="Layer_Averaged_Temp")
+T_dev = Function(Q, name="Temperature_Deviation")
 # -
 
 # Compute layer average for initial temperature field, using the LayerAveraging functionality provided by G-ADOPT.
