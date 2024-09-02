@@ -15,3 +15,6 @@
 - Multi-material
     - [compositional_buoyancy](compositional_buoyancy.ipynb)
     - [thermochemical_buoyancy](thermochemical_buoyancy.ipynb)
+- Adjoint
+    - [adjoint_forward](adjoint_forward.ipynb)
+    - [adjoint](adjoint.ipynb)
