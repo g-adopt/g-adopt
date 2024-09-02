@@ -237,7 +237,7 @@ level_set_solver = [
 if args.benchmark == "trim_2023":
     for ls_solver in level_set_solver:
         ls_solver.reini_params["iterations"] = 0
-level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solver]
+level_set_grad_proj = [ls_solv.ls_grad_proj for ls_solv in level_set_solver]
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
