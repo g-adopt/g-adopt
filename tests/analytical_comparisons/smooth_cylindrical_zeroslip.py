@@ -1,6 +1,7 @@
-from gadopt import *
-import numpy
 import assess
+import numpy
+
+from gadopt import *
 
 # Projection solver parameters for nullspaces:
 _project_solver_parameters = {
@@ -61,10 +62,7 @@ def model(level, k, nn, do_write=False):
         parameters={"Ra": 1},
         buoyancy_terms=["thermal"],
     )
-    stokes_bcs = {
-        bottom_id: {"u": 0},
-        top_id: {"u": 0},
-    }
+    stokes_bcs = {bottom_id: {"u": 0}, top_id: {"u": 0}}
 
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)

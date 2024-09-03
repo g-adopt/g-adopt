@@ -1,8 +1,8 @@
 """This module provides the EquationSystem class that emulates physical approximations
 of fluid dynamics systems by exposing methods to calculate specific terms in the
-corresponding mathematical equations. Users instantiate the appropriate class by
-providing relevant parameters and pass the instance to other objects, such as solvers.
-Under the hood, G-ADOPT queries attributes and methods from the approximation.
+corresponding mathematical equations. Users instantiate the class by providing
+appropriate parameters and pass the instance to other objects, such as solvers. Under
+the hood, G-ADOPT queries attributes and methods from the approximation.
 
 """
 

@@ -36,7 +36,7 @@ def original_mesh():
             -((np.linspace(rmin, rmax, nlayers) - center) ** 2) / (2 * c**2)
         )
 
-    resolution_func = np.ones((nlayers))
+    resolution_func = np.ones(nlayers)
     for r_0 in [rmin, rmax, rmax - 660 / 6370]:
         resolution_func /= 1 + gaussian(center=r_0, c=0.15, a=5.0)
 
@@ -46,7 +46,7 @@ def original_mesh():
     mesh = ExtrudedMesh(
         mesh1d,
         layers=nlayers,
-        layer_height=(rmax - rmin) * resolution_func / np.sum(resolution_func),
+        layer_height=(rmax - rmin) * resolution_func / resolution_func.sum(),
         extrusion_type="radial",
     )
 
@@ -71,31 +71,16 @@ u, p = split(z)  # Returns symbolic UFL expression for u and p
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 
+X = SpatialCoordinate(mesh)
 r = sqrt(X[0] ** 2 + X[1] ** 2)
 # Radial unit vector (in direction opposite to gravity)
 rhat = as_vector([X[0] / r, X[1] / r])
 vr = Function(V_scalar, name="Radial_Velocity")  # For diagnostic output
 
 # We next set up and initialise our Temperature field from a checkpoint:
-X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
 with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
     T = f.load_function(mesh, "Temperature")
-FullT = Function(Q, name="FullTemperature").assign(T + Tbar)
-T_avg = Function(Q, name="Layer_Averaged_Temp")
-averager = LayerAveraging(mesh, quad_degree=6)
-averager.extrapolate_layer_average(T_avg, averager.get_layer_average(FullT))
-T_dev = Function(Q, name="Temperature_Deviation").assign(FullT - T_avg)
-
-# We next prepare our viscosity, starting with a radial profile.
-mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
-interpolate_1d_profile(
-    function=mu_rad, one_d_filename="initial_condition_mat_prop/mu2_radial.txt"
-)
-# We now add lateral viscosity variation due to temperature variations:
-mu_field = Function(Q, name="Viscosity")
-delta_mu_T = Constant(1000.0)
-mu = mu_rad * exp(-ln(delta_mu_T) * T_dev)
 
 # We next specify the important constants for this problem and set up the approximation.
 Ra = Constant(5e7)  # Rayleigh number
@@ -131,20 +116,36 @@ approximation_sources = {
     },
 }
 
-for param, meta in approximation_sources.items():
-    f = Function(Q, name=meta["name"])
-    interpolate_1d_profile(function=f, one_d_filename=meta["filename"])
-    f.assign(meta["scaling"](f))
+for param, data in approximation_sources.items():
+    f = Function(Q, name=data["name"])
+    interpolate_1d_profile(function=f, one_d_filename=data["filename"])
+    f.assign(data["scaling"](f))
 
     approximation_profiles[param] = f
 
 Tbar = approximation_profiles["T"]
+FullT = Function(Q, name="FullTemperature").assign(T + Tbar)
+T_avg = Function(Q, name="Layer_Averaged_Temp")
+averager = LayerAveraging(mesh, quad_degree=6)
+averager.extrapolate_layer_average(T_avg, averager.get_layer_average(FullT))
+T_dev = Function(Q, name="Temperature_Deviation").assign(FullT - T_avg)
+
+# We next prepare our viscosity, starting with a radial profile.
+mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
+interpolate_1d_profile(
+    function=mu_rad, one_d_filename="initial_condition_mat_prop/mu2_radial.txt"
+)
+# We now add lateral viscosity variation due to temperature variations:
+mu_field = Function(Q, name="Viscosity")
+delta_mu_T = Constant(1000.0)
+mu = mu_rad * exp(-ln(delta_mu_T) * T_dev)
 
 # These fields are used to set up our Truncated Anelastic Liquid Approximation.
+Q_approx = H * approximation_profiles["rho"]
 approximation = EquationSystem(
     approximation="TALA",
     dimensional=False,
-    parameters={"Ra": Ra, "Di": Di, "Q": H, "mu": mu, **approximation_profiles},
+    parameters={"Ra": Ra, "Di": Di, "Q": Q_approx, "mu": mu, **approximation_profiles},
     buoyancy_terms=["thermal"],
 )
 
@@ -187,10 +188,8 @@ Z_near_nullspace = create_stokes_nullspace(
 # +
 stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
 
-temp_bcs = {
-    bottom_id: {"T": 1.0 - 930 / 3700.0},  # Take out adiabat
-    top_id: {"T": 0.0},
-}
+# Take out adiabat at bottom boundary
+temp_bcs = {bottom_id: {"T": 1.0 - 930 / 3700.0}, top_id: {"T": 0.0}}
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
