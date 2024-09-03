@@ -84,8 +84,7 @@ class EquationSystem:
         self.compressible = "ALA" in approximation
 
         self.check_reference_profiles()
-        if "thermal" in buoyancy_terms:
-            self.check_thermal_diffusion()
+        self.check_thermal_diffusion()
 
         self.set_buoyancy()
         self.set_adiabatic_compression()
@@ -115,7 +114,7 @@ class EquationSystem:
                 self.cp = 1 / self.rho
             else:
                 assert self.kappa == self.k / self.rho / self.cp
-        else:
+        elif hasattr(self, "cp") and hasattr(self, "cp"):
             self.kappa = self.k / self.rho / self.cp
 
     def set_adiabatic_compression(self):

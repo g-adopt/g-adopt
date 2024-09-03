@@ -43,7 +43,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
 
     # the diffusivity
     h = 1 / 5  # coarsest grid size
-    kappa = Constant(1 * h / (2 * Pe))
+    kappa = Constant(h / (2 * Pe))
 
     # the tracer function and its initial condition
     q_init = Constant(0.0)
@@ -53,9 +53,8 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     # from Finite element Methods for Flow problems - Donea and Huerta, 2003
     # N.b they have the scalar called 'u' whereas we have 'q'
     gamma = Constant(a / kappa)
-    q_anal = Function(Q2).interpolate(
-        (1 / a) * (x[0] - (1 - exp(gamma * x[0])) / (1 - exp(gamma)))
-    )
+    q_anal = Function(Q2)
+    q_anal.interpolate((1 / a) * (x[0] - (1 - exp(gamma * x[0])) / (1 - exp(gamma))))
 
     # We declare the output filename, and write out the initial condition. ::
     if do_write:
@@ -95,13 +94,13 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
 
         step += 1
         t += dt
-        log("t=", t)
+        log("t =", t)
 
         if do_write:
             outfile.write(q)
 
         if maxchange < steady_state_tolerance:
-            log("Steady-state acheieved -- exiting time-step loop")
+            log("Steady-state achieved -- exiting time-step loop")
             break
 
         L2error_q = errornorm(q_anal, q, norm_type="L2")

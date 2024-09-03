@@ -53,7 +53,6 @@ simulation = import_module(f"benchmarks.{args.benchmark}.simulation")
 # Set benchmark paths
 benchmark_path = Path(f"benchmarks/{args.benchmark}")
 mesh_path = benchmark_path / "mesh"
-mesh_path.mkdir(exist_ok=True)
 output_path = benchmark_path / "outputs"
 
 if simulation.checkpoint_restart:  # Restore mesh and key functions
@@ -93,6 +92,7 @@ else:  # Initialise mesh and key functions
                     if mesh_file.with_suffix(".geo").exists():
                         run(["gmsh", "-2", str(mesh_file.with_suffix(".geo"))])
                     else:
+                        mesh_path.mkdir(exist_ok=True)
                         simulation.generate_mesh(mesh_path)
             mesh = fd.Mesh(str(mesh_file))
         case "firedrake":
