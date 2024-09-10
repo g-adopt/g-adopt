@@ -126,7 +126,7 @@ approximation = BoussinesqApproximation(Ra)
 
 # Define time-stepping parameters:
 delta_t = Constant(4e-6)  # Constant time step
-timesteps = int(temperature_timestepping_info["index"][-1])  # number of timesteps from forward
+timesteps = int(temperature_timestepping_info["index"][-1]) + 1  # number of timesteps from forward
 
 # Nullspaces for the problem are next defined:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
