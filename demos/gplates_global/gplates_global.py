@@ -141,7 +141,7 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # directory. Below, we verify the required paths in this directory and
 # ensure they exist:
 
-muller_2022_files = obtain_Muller_2022_SE(".")
+muller_2022_files = obtain_Muller_2022_SE_v1_2(".")
 
 # + tags=["active-ipynb"]
 # # These are the files that needs to be passed on to pyGPlates
