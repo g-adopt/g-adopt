@@ -31,7 +31,7 @@ def obtain_Muller_2022_SE_v1_2_4(base_path: str | Path):
 
     # This is the path to download and extract files
     base_path = Path(base_path)
-    base_path = base_path / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2"
+    base_path = base_path / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.4"
 
     # Pass the base_path and filenames to the helper function
     return check_and_get_absolute_paths(base_path, plate_reconstruction_files)
