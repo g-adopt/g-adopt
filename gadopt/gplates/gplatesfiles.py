@@ -1,5 +1,28 @@
 from pathlib import Path
 
+_default_plate_files = {
+    "rotation_filenames": ["optimisation/1000_0_rotfile_MantleOptimised.rot"],
+    "topology_filenames": [
+        "250-0_plate_boundaries.gpml",
+        "410-250_plate_boundaries.gpml",
+        "1000-410-Convergence.gpml",
+        "1000-410-Divergence.gpml",
+        "1000-410-Topologies.gpml",
+        "1000-410-Transforms.gpml"
+    ]
+}
+
+reconstructions = {
+    "Muller 2022 SE v1.2": {
+        "plate_files": _default_plate_files,
+        "directory": "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2",
+    },
+    "Muller 2022 SE v1.2.4": {
+        "plate_files": _default_plate_files,
+        "directory": "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.4",
+    },
+}
+
 
 def check_and_get_absolute_paths(base_path: Path, filenames: dict):
     # Check if all files are present
@@ -15,45 +38,10 @@ def check_and_get_absolute_paths(base_path: Path, filenames: dict):
     }
 
 
-def obtain_Muller_2022_SE_v1_2_4(base_path: str | Path):
+def ensure_reconstruction(reconstruction: str, base_path: str | Path):
+    if reconstruction not in reconstructions:
+        raise ValueError(f"Invalid reconstruction dataset {reconstruction}")
 
-    plate_reconstruction_files = {
-        "rotation_filenames": ["optimisation/1000_0_rotfile_MantleOptimised.rot"],
-        "topology_filenames": [
-            "250-0_plate_boundaries.gpml",
-            "410-250_plate_boundaries.gpml",
-            "1000-410-Convergence.gpml",
-            "1000-410-Divergence.gpml",
-            "1000-410-Topologies.gpml",
-            "1000-410-Transforms.gpml"
-        ]
-    }
+    base_path = Path(base_path) / reconstructions[reconstruction]["directory"]
 
-    # This is the path to download and extract files
-    base_path = Path(base_path)
-    base_path = base_path / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.4"
-
-    # Pass the base_path and filenames to the helper function
-    return check_and_get_absolute_paths(base_path, plate_reconstruction_files)
-
-
-def obtain_Muller_2022_SE_v1_2(base_path: str | Path):
-
-    plate_reconstruction_files = {
-        "rotation_filenames": ["optimisation/1000_0_rotfile_MantleOptimised.rot"],
-        "topology_filenames": [
-            "250-0_plate_boundaries.gpml",
-            "410-250_plate_boundaries.gpml",
-            "1000-410-Convergence.gpml",
-            "1000-410-Divergence.gpml",
-            "1000-410-Topologies.gpml",
-            "1000-410-Transforms.gpml"
-        ]
-    }
-
-    # This is the path to download and extract files
-    base_path = Path(base_path)
-    base_path = base_path / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2"
-
-    # Pass the base_path and filenames to the helper function
-    return check_and_get_absolute_paths(base_path, plate_reconstruction_files)
+    return check_and_get_absolute_paths(base_path, reconstructions[reconstruction]["plate_files"])
