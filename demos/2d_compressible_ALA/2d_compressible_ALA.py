@@ -67,7 +67,7 @@ approximation = EquationSystem(
     approximation="ALA",
     dimensional=False,
     parameters={"Ra": Ra, "Di": Di, "Gamma": Gamma, "rho": rhobar, "T": Tbar},
-    buoyancy_terms=["thermal"],
+    buoyancy_terms=["compressible", "thermal"],
 )
 
 # As with the previous examples, we next set up a *Timestep Adaptor*,

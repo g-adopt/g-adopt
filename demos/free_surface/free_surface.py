@@ -278,6 +278,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # +
 # Read the PVD file
+import matplotlib.pyplot as plt  # noqa E402
 import pyvista as pv  # noqa E402
 
 reader = pv.get_reader("output.pvd")
