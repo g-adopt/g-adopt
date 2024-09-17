@@ -4,19 +4,7 @@ parameters and call individual class methods to compute associated diagnostics.
 
 """
 
-from firedrake import (
-    Constant,
-    DirichletBC,
-    FacetNormal,
-    Function,
-    assemble,
-    dot,
-    ds,
-    dx,
-    grad,
-    norm,
-    sqrt,
-)
+import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
 
@@ -50,54 +38,59 @@ class GeodynamicalDiagnostics:
 
     def __init__(
         self,
-        z: Function,
-        T: Function = 0,
+        z: fd.Function,
+        T: fd.Function = 0,
         bottom_id: int = None,
         top_id: int = None,
         quad_degree: int = 4,
-    ):
+    ) -> None:
         mesh = extract_unique_domain(z)
 
         self.u, self.p, *_ = z.subfunctions
         self.T = T
 
-        self.dx = dx(domain=mesh, degree=quad_degree)
-        self.domain_volume = assemble(Constant(1) * self.dx)
+        self.dx = fd.dx(domain=mesh, degree=quad_degree)
+        self.domain_volume = fd.assemble(fd.Constant(1) * self.dx)
 
         if self.u.function_space().extruded:
             self.ds = CombinedSurfaceMeasure(mesh, quad_degree)
         else:
-            self.ds = ds(mesh)
+            self.ds = fd.ds(mesh)
 
         if bottom_id:
             self.ds_b = self.ds(bottom_id)
-            self.bottom_surface = assemble(Constant(1) * self.ds_b)
+            self.bottom_surface = fd.assemble(fd.Constant(1) * self.ds_b)
         if top_id:
             self.ds_t = self.ds(top_id)
-            self.top_surface = assemble(Constant(1) * self.ds_t)
+            self.top_surface = fd.assemble(fd.Constant(1) * self.ds_t)
 
-        self.n = FacetNormal(mesh)
+        self.n = fd.FacetNormal(mesh)
 
-    def u_rms(self):
-        return norm(self.u) / sqrt(self.domain_volume)
+    def u_rms(self) -> float:
+        return fd.norm(self.u) / fd.sqrt(self.domain_volume)
 
     def u_rms_top(self) -> float:
-        return sqrt(assemble(dot(self.u, self.u) * self.ds_t))
+        return fd.sqrt(fd.assemble(fd.dot(self.u, self.u) * self.ds_t))
 
-    def Nu_top(self):
-        return -assemble(dot(grad(self.T), self.n) * self.ds_t) / self.top_surface
+    def Nu_top(self) -> float:
+        return (
+            -fd.assemble(fd.dot(fd.grad(self.T), self.n) * self.ds_t) / self.top_surface
+        )
 
-    def Nu_bottom(self):
-        return assemble(dot(grad(self.T), self.n) * self.ds_b) / self.bottom_surface
+    def Nu_bottom(self) -> float:
+        return (
+            fd.assemble(fd.dot(fd.grad(self.T), self.n) * self.ds_b)
+            / self.bottom_surface
+        )
 
-    def T_avg(self):
-        return assemble(self.T * self.dx) / self.domain_volume
+    def T_avg(self) -> float:
+        return fd.assemble(self.T * self.dx) / self.domain_volume
 
-    def T_min(self):
+    def T_min(self) -> float:
         T_data = self.T.dat.data_ro_with_halos[:]
         return self.T.comm.allreduce(T_data.min(), MPI.MIN)
 
-    def T_max(self):
+    def T_max(self) -> float:
         T_data = self.T.dat.data_ro_with_halos[:]
         return self.T.comm.allreduce(T_data.max(), MPI.MAX)
 
@@ -105,7 +98,7 @@ class GeodynamicalDiagnostics:
         ux_data = self.u.dat.data_ro_with_halos[:, 0]
 
         if boundary_id:
-            bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
+            bcu = fd.DirichletBC(self.u.function_space(), 0, boundary_id)
             ux_data = ux_data[bcu.nodes]
 
         return self.u.comm.allreduce(ux_data.max(initial=0), MPI.MAX)

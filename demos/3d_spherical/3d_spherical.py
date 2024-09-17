@@ -192,7 +192,7 @@ for timestep in range(timesteps):
     T_dev_avg = assemble(T_dev * dx) / domain_volume
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
 
     # Log diagnostics:
     plog.log_str(

@@ -1,8 +1,9 @@
-import pytest
+from pathlib import Path
+
 import analytical
 import numpy as np
 import pandas as pd
-from pathlib import Path
+import pytest
 
 enabled_cases = {
     "smooth/cylindrical/free_slip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
@@ -21,7 +22,8 @@ longtest_cases = [
 ]
 
 params = {
-    f"{l1}/{l2}/{l3}": v3 for l1, v1 in analytical.cases.items()
+    f"{l1}/{l2}/{l3}": v3
+    for l1, v1 in analytical.cases.items()
     for l2, v2 in v1.items()
     for l3, v3 in v2.items()
     if f"{l1}/{l2}/{l3}" in enabled_cases.keys()
@@ -55,11 +57,14 @@ def test_analytical(name, expected, config):
     b = Path(__file__).parent.resolve()
 
     dats = [
-        pd.read_csv(b / "errors-{}-levels{}-{}.dat".format(
-            name.replace("/", "_"),
-            level,
-            idfn(config)
-        ), sep=" ", header=None)
+        pd.read_csv(
+            b
+            / "errors-{}-levels{}-{}.dat".format(
+                name.replace("/", "_"), level, idfn(config)
+            ),
+            sep=" ",
+            header=None,
+        )
         for level in levels
     ]
 
@@ -69,11 +74,17 @@ def test_analytical(name, expected, config):
     dat = dat.set_index("level")
 
     # use the highest resolution analytical solutions as the reference
-    ref = dat.iloc[-1][["l2anal_u", "l2anal_p"]].rename(index=lambda s: s.replace("anal", "error"))
+    ref = dat.iloc[-1][["l2anal_u", "l2anal_p"]].rename(
+        index=lambda s: s.replace("anal", "error")
+    )
     errs = dat[["l2error_u", "l2error_p"]] / ref
     errs = errs.reset_index(drop=True)  # drop resolution label
 
     convergence = np.log2(errs.shift() / errs).drop(index=0)
-    expected_convergence = pd.Series(expected["convergence"], index=["l2error_u", "l2error_p"])
+    expected_convergence = pd.Series(
+        expected["convergence"], index=["l2error_u", "l2error_p"]
+    )
 
-    assert np.allclose(convergence, expected_convergence, rtol=expected.get("rtol", 1e-2))
+    assert np.allclose(
+        convergence, expected_convergence, rtol=expected.get("rtol", 1e-2)
+    )

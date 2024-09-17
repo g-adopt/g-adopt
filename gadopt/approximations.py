@@ -6,7 +6,9 @@ the hood, G-ADOPT queries attributes and methods from the approximation.
 
 """
 
-from firedrake import Identity, div, grad, inner, sym
+from numbers import Number
+
+import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
 
 from .utility import ensure_constant, vertical_component
@@ -62,18 +64,20 @@ class EquationSystem:
     """
 
     _approximations = ["BA", "EBA", "TALA", "ALA"]
-    _impl_buoyancy_terms = ["compositional", "free_surface", "thermal"]
+    _impl_buoyancy_terms = ["compositional", "compressible", "thermal"]
 
     def __init__(
         self,
         approximation: str,
         dimensional: bool,
         *,
-        parameters: dict[str, float] = {},
+        parameters: dict[str, Number | fd.Constant | fd.Function] = {},
         buoyancy_terms: list[str] = [],
-    ):
+    ) -> None:
         assert approximation in self._approximations
         assert all(term in self._impl_buoyancy_terms for term in buoyancy_terms)
+        if approximation != "ALA":
+            assert "compressible" not in buoyancy_terms
 
         self.approximation = approximation
         self.dimensional = dimensional
@@ -93,16 +97,16 @@ class EquationSystem:
 
         self.compressible_stress = 2 / 3 * self.mu if self.compressible else 0
 
-    def check_reference_profiles(self):
+    def check_reference_profiles(self) -> None:
         """Ensures reference profiles are defined."""
         if not self.dimensional:
             for attribute in ["alpha", "chi", "cp", "g", "k", "mu", "rho"]:
                 if not hasattr(self, attribute):
-                    setattr(self, attribute, ensure_constant(1))
+                    setattr(self, attribute, fd.Constant(1.0))
             if not hasattr(self, "T"):
-                setattr(self, "T", ensure_constant(0))
+                setattr(self, "T", fd.Constant(0.0))
 
-    def check_thermal_diffusion(self):
+    def check_thermal_diffusion(self) -> None:
         """Ensures compatibility between terms defining thermal diffusivity."""
         if hasattr(self, "kappa"):
             if hasattr(self, "k") and not hasattr(self, "cp"):
@@ -117,7 +121,7 @@ class EquationSystem:
         elif hasattr(self, "cp") and hasattr(self, "cp"):
             self.kappa = self.k / self.rho / self.cp
 
-    def set_adiabatic_compression(self):
+    def set_adiabatic_compression(self) -> None:
         """Defines the adiabatic compression term in the energy conservation."""
         if self.approximation == "BA":
             self.adiabatic_compression = 0
@@ -126,7 +130,7 @@ class EquationSystem:
             if not self.dimensional:
                 self.adiabatic_compression *= self.Di
 
-    def set_buoyancy(self):
+    def set_buoyancy(self) -> None:
         """Defines buoyancy terms in the momentum conservation."""
         if "compositional" in self.buoyancy_terms:
             if self.dimensional:
@@ -136,22 +140,7 @@ class EquationSystem:
         else:
             self.compositional_buoyancy = 0
 
-        if "free_surface" in self.buoyancy_terms:
-            if self.dimensional:
-                self.free_surface_buoyancy = self.rho_diff_fs * self.g
-            else:
-                self.free_surface_buoyancy = self.Ra_fs
-        else:
-            self.free_surface_buoyancy = 0
-
-        if "thermal" in self.buoyancy_terms:
-            self.thermal_buoyancy = self.rho * self.alpha * self.g
-            if not self.dimensional:
-                self.thermal_buoyancy *= self.Ra
-        else:
-            self.thermal_buoyancy = 0
-
-        if self.approximation == "ALA":
+        if "compressible" in self.buoyancy_terms:
             # How is this contribution calculated? I cannot seem to recover it using
             # chapter 7.02 of Treatise on Geophysics. Relevant discussion there starts
             # from page 18. The article also mentions that cp and cv should be equal
@@ -162,7 +151,14 @@ class EquationSystem:
         else:
             self.compressible_buoyancy = 0
 
-    def set_heat_source(self):
+        if "thermal" in self.buoyancy_terms:
+            self.thermal_buoyancy = self.rho * self.alpha * self.g
+            if not self.dimensional:
+                self.thermal_buoyancy *= self.Ra
+        else:
+            self.thermal_buoyancy = 0
+
+    def set_heat_source(self) -> None:
         """Defines the heat source term in the energy conservation."""
         if self.dimensional and hasattr(self, "H"):
             self.heat_source = self.rho * self.H
@@ -171,14 +167,16 @@ class EquationSystem:
         else:
             self.heat_source = 0
 
-    def set_viscous_dissipation_factor(self):
+    def set_viscous_dissipation_factor(self) -> None:
         """Defines the viscous dissipation factor used in the energy conservation."""
         if self.approximation == "BA":
             self.visc_dis_factor = 0
         else:
             self.visc_dis_factor = 1 if self.dimensional else self.Di / self.Ra
 
-    def buoyancy(self, p: float, T: float) -> float:
+    def buoyancy(
+        self, p: fd.ufl.indexed.Indexed, T: fd.Constant | fd.Function
+    ) -> fd.ufl.algebra.Sum:
         """Calculates the buoyancy term in the momentum conservation.
 
         Note: In a dimensional system, T represents the difference between temperature
@@ -192,7 +190,7 @@ class EquationSystem:
             - self.compositional_buoyancy
         )
 
-    def energy_source(self, u: float) -> float:
+    def energy_source(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
         """Calculates the energy source term in the energy conservation.
 
         Note: Here, the energy source term includes the viscous dissipation
@@ -200,8 +198,12 @@ class EquationSystem:
         return self.viscous_dissipation(u) + self.heat_source
 
     def free_surface_normal_stress(
-        self, p: float, T: float, eta: float, *, variable_rho_fs: bool
-    ) -> float:
+        self,
+        p: fd.ufl.indexed.Indexed,
+        T: fd.Function,
+        eta: fd.ufl.indexed.Indexed,
+        variable_rho_fs: bool,
+    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
         """Calculates the free-surface normal stress in the momentum conservation.
 
         Note: This term only affects the momentum balance at physical boundaries
@@ -212,15 +214,18 @@ class EquationSystem:
 
         return normal_stress
 
-    def linearized_energy_sink(self, u: float) -> float:
+    def linearized_energy_sink(
+        self, u: fd.ufl.indexed.Indexed
+    ) -> fd.ufl.algebra.Product:
         """Calculates the energy sink term in the energy conservation."""
         return self.adiabatic_compression * vertical_component(u)
 
-    def stress(self, u: float) -> float:
+    def stress(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
         """Calculates the stress term in momentum and energy conservations."""
-        identity = Identity(extract_unique_domain(u).topological_dimension())
-        return 2 * self.mu * sym(grad(u)) - self.compressible_stress * div(u) * identity
+        identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
+        compressible_part = self.compressible_stress * fd.div(u) * identity
+        return 2 * self.mu * fd.sym(fd.grad(u)) - compressible_part
 
-    def viscous_dissipation(self, u: float) -> float:
+    def viscous_dissipation(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Product:
         """Calculates the viscous dissipation term in the energy conservation."""
-        return self.visc_dis_factor * inner(self.stress(u), grad(u))
+        return self.visc_dis_factor * fd.inner(self.stress(u), fd.grad(u))

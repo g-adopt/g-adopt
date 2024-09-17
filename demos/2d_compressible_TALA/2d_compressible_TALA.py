@@ -251,7 +251,7 @@ for timestep in range(timesteps):
     energy_conservation_2 = abs(rate_work_against_gravity - rate_viscous_dissipation)
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
 
     # Log diagnostics:
     plog.log_str(

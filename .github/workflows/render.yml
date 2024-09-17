@@ -67,6 +67,7 @@ jobs:
         with:
           name: notebooks
           path: rendered
+          include-hidden-files: true
       - name: Trigger documentation build
         run: |
           gh api --method POST \

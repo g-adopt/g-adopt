@@ -4,21 +4,37 @@ parameters and call the `apply` method to update the function.
 
 """
 
-from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
-from firedrake import max_value, min_value, Function
-from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement, FiniteElement
-from firedrake.functionspaceimpl import WithGeometry
-import numpy as np
-from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
-from pyop2 import op2
 from typing import Optional
+
+import numpy as np
+from firedrake import (
+    EnrichedElement,
+    FiniteElement,
+    Function,
+    FunctionSpace,
+    HDivElement,
+    LinearSolver,
+    MixedElement,
+    TensorProductElement,
+    TestFunction,
+    TrialFunction,
+    VectorElement,
+    VertexBasedLimiter,
+    assemble,
+    dx,
+    max_value,
+    min_value,
+)
+from firedrake.functionspaceimpl import WithGeometry
+from pyop2 import op2
+from pyop2.profiling import timed_function, timed_region, timed_stage  # NOQA
 
 __all__ = ["VertexBasedP1DGLimiter"]
 
 
 def assert_function_space(
     fs: WithGeometry, family: str | list[str], degree: int
-):
+) -> None:
     """Checks the family and degree of the function space.
 
     If the function space lies on an extruded mesh, checks both spaces of the outer
@@ -42,15 +58,25 @@ def assert_function_space(
     if isinstance(ufl_elem, VectorElement):
         ufl_elem = ufl_elem.sub_elements[0]
 
-    if ufl_elem.family() == 'TensorProductElement':  # extruded mesh
+    if ufl_elem.family() == "TensorProductElement":  # extruded mesh
         A, B = ufl_elem.sub_elements
-        assert A.family() in fam_list, 'horizontal space must be one of {0:s}'.format(fam_list)
-        assert B.family() in fam_list, 'vertical space must be {0:s}'.format(fam_list)
-        assert A.degree() == degree, 'degree of horizontal space must be {0:d}'.format(degree)
-        assert B.degree() == degree, 'degree of vertical space must be {0:d}'.format(degree)
+        assert A.family() in fam_list, "horizontal space must be one of {0:s}".format(
+            fam_list
+        )
+        assert B.family() in fam_list, "vertical space must be {0:s}".format(fam_list)
+        assert A.degree() == degree, "degree of horizontal space must be {0:d}".format(
+            degree
+        )
+        assert B.degree() == degree, "degree of vertical space must be {0:d}".format(
+            degree
+        )
     else:  # assume 2D mesh
-        assert ufl_elem.family() in fam_list, 'function space must be one of {0:s}'.format(fam_list)
-        assert ufl_elem.degree() == degree, 'degree of function space must be {0:d}'.format(degree)
+        assert (
+            ufl_elem.family() in fam_list
+        ), "function space must be one of {0:s}".format(fam_list)
+        assert (
+            ufl_elem.degree() == degree
+        ), "degree of function space must be {0:d}".format(degree)
 
 
 def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
@@ -75,9 +101,7 @@ def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
     return ufl_element
 
 
-def get_facet_mask(
-    function_space: WithGeometry, facet: str = 'bottom'
-) -> np.ndarray:
+def get_facet_mask(function_space: WithGeometry, facet: str = "bottom") -> np.ndarray:
     """The meaning of top/bottom depends on the extrusion's direction. Here, we assume
     that the mesh has been extruded upwards (along the positive z axis).
 
@@ -96,8 +120,9 @@ def get_facet_mask(
 
     # get base element
     elem = get_extruded_base_element(function_space.ufl_element())
-    assert isinstance(elem, TensorProductElement), \
-        f'function space must be defined on an extruded 3D mesh: {elem}'
+    assert isinstance(
+        elem, TensorProductElement
+    ), f"function space must be defined on an extruded 3D mesh: {elem}"
     # figure out number of nodes in sub elements
     h_elt, v_elt = elem.sub_elements
     nb_nodes_h = create_finat_element(h_elt).space_dimension()
@@ -105,8 +130,8 @@ def get_facet_mask(
     # compute top/bottom facet indices
     # extruded dimension is the inner loop in index
     # on interval elements, the end points are the first two dofs
-    offset = 0 if facet == 'bottom' else 1
-    indices = np.arange(nb_nodes_h)*nb_nodes_v + offset
+    offset = 0 if facet == "bottom" else 1
+    indices = np.arange(nb_nodes_h) * nb_nodes_v + offset
     return indices
 
 
@@ -123,28 +148,31 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
       clip_max: Maximal threshold to apply
 
     """
+
     def __init__(
         self,
         p1dg_space: WithGeometry,
         clip_min: Optional[float] = None,
         clip_max: Optional[float] = None,
-    ):
-        assert_function_space(p1dg_space, ['Discontinuous Lagrange', 'DQ'], 1)
+    ) -> None:
+        assert_function_space(p1dg_space, ["Discontinuous Lagrange", "DQ"], 1)
 
         self.is_vector = p1dg_space.value_size > 1
         if self.is_vector:
-            p1dg_scalar_space = FunctionSpace(p1dg_space.mesh(), 'DG', 1)
+            p1dg_scalar_space = FunctionSpace(p1dg_space.mesh(), "DG", 1)
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_scalar_space)
         else:
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_space)
 
         self.mesh = self.P0.mesh()
         self.dim = self.mesh.geometric_dimension()
-        self.extruded = hasattr(self.mesh.ufl_cell(), 'sub_cells')
-        assert not self.extruded or len(p1dg_space.ufl_element().sub_elements) > 0, \
-            "Extruded mesh requires extruded function space"
-        assert not self.extruded or all(e.variant() == 'equispaced' for e in p1dg_space.ufl_element().sub_elements), \
-            "Extruded function space must be equivariant"
+        self.extruded = hasattr(self.mesh.ufl_cell(), "sub_cells")
+        assert (
+            not self.extruded or len(p1dg_space.ufl_element().sub_elements) > 0
+        ), "Extruded mesh requires extruded function space"
+        assert not self.extruded or all(
+            e.variant() == "equispaced" for e in p1dg_space.ufl_element().sub_elements
+        ), "Extruded function space must be equivariant"
 
         self.clip_min = clip_min
         self.clip_max = clip_max
@@ -162,11 +190,16 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         v = TestFunction(self.P0)
         self.a_form = u * v * dx
         a = assemble(self.a_form)
-        return LinearSolver(a, solver_parameters={'ksp_type': 'preonly',
-                                                  'pc_type': 'bjacobi',
-                                                  'sub_pc_type': 'ilu'})
+        return LinearSolver(
+            a,
+            solver_parameters={
+                "ksp_type": "preonly",
+                "pc_type": "bjacobi",
+                "sub_pc_type": "ilu",
+            },
+        )
 
-    def _update_centroids(self, field: Function):
+    def _update_centroids(self, field: Function) -> None:
         """Updates centroid values.
 
         Calls the linear solver to calculate centroids.
@@ -180,7 +213,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         b = assemble(TestFunction(self.P0) * field * dx)
         self.centroid_solver.solve(self.centroids, b)
 
-    def compute_bounds(self, field: Function):
+    def compute_bounds(self, field: Function) -> None:
         """Re-computes min/max values of all neighbouring centroids.
 
         Arguments:
@@ -197,13 +230,20 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         from finat.finiteelementbase import entity_support_dofs
 
         if self.extruded:
-            entity_dim = (self.dim-2, 1)  # get vertical facets
+            entity_dim = (self.dim - 2, 1)  # get vertical facets
         else:
-            entity_dim = self.dim-1
+            entity_dim = self.dim - 1
         boundary_dofs = entity_support_dofs(self.P1DG.finat_element, entity_dim)
-        local_facet_nodes = np.array([boundary_dofs[e] for e in sorted(boundary_dofs.keys())])
+        local_facet_nodes = np.array(
+            [boundary_dofs[e] for e in sorted(boundary_dofs.keys())]
+        )
         n_bnd_nodes = local_facet_nodes.shape[1]
-        local_facet_idx = op2.Global(local_facet_nodes.shape, local_facet_nodes, dtype=np.int32, name='local_facet_idx')
+        local_facet_idx = op2.Global(
+            local_facet_nodes.shape,
+            local_facet_nodes,
+            dtype=np.int32,
+            name="local_facet_idx",
+        )
         code = """
             void my_kernel(double *qmax, double *qmin, double *field, unsigned int *facet, unsigned int *local_facet_idx)
             {
@@ -219,21 +259,27 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                     qmin[idx] = fmin(qmin[idx], face_mean);
                 }
             }"""
-        bnd_kernel = op2.Kernel(code % {'nnodes': n_bnd_nodes}, 'my_kernel')
-        op2.par_loop(bnd_kernel,
-                     self.P1DG.mesh().exterior_facets.set,
-                     self.max_field.dat(op2.MAX, self.max_field.exterior_facet_node_map()),
-                     self.min_field.dat(op2.MIN, self.min_field.exterior_facet_node_map()),
-                     field.dat(op2.READ, field.exterior_facet_node_map()),
-                     self.P1DG.mesh().exterior_facets.local_facet_dat(op2.READ),
-                     local_facet_idx(op2.READ))
+        bnd_kernel = op2.Kernel(code % {"nnodes": n_bnd_nodes}, "my_kernel")
+        op2.par_loop(
+            bnd_kernel,
+            self.P1DG.mesh().exterior_facets.set,
+            self.max_field.dat(op2.MAX, self.max_field.exterior_facet_node_map()),
+            self.min_field.dat(op2.MIN, self.min_field.exterior_facet_node_map()),
+            field.dat(op2.READ, field.exterior_facet_node_map()),
+            self.P1DG.mesh().exterior_facets.local_facet_dat(op2.READ),
+            local_facet_idx(op2.READ),
+        )
         if self.extruded:
             # Add nodal values from surface/bottom boundaries
             # NOTE calling firedrake par_loop with measure=ds_t raises an error
-            bottom_nodes = get_facet_mask(self.P1CG, 'bottom')
-            top_nodes = get_facet_mask(self.P1CG, 'top')
-            bottom_idx = op2.Global(len(bottom_nodes), bottom_nodes, dtype=np.int32, name='node_idx')
-            top_idx = op2.Global(len(top_nodes), top_nodes, dtype=np.int32, name='node_idx')
+            bottom_nodes = get_facet_mask(self.P1CG, "bottom")
+            top_nodes = get_facet_mask(self.P1CG, "top")
+            bottom_idx = op2.Global(
+                len(bottom_nodes), bottom_nodes, dtype=np.int32, name="node_idx"
+            )
+            top_idx = op2.Global(
+                len(top_nodes), top_nodes, dtype=np.int32, name="node_idx"
+            )
             code = """
                 void my_kernel(double *qmax, double *qmin, double *field, int *idx) {
                     double face_mean = 0;
@@ -246,36 +292,49 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                         qmin[idx[i]] = fmin(qmin[idx[i]], face_mean);
                     }
                 }"""
-            kernel = op2.Kernel(code % {'nnodes': len(bottom_nodes)}, 'my_kernel')
+            kernel = op2.Kernel(code % {"nnodes": len(bottom_nodes)}, "my_kernel")
 
-            op2.par_loop(kernel, self.mesh.cell_set,
-                         self.max_field.dat(op2.MAX, self.max_field.function_space().cell_node_map()),
-                         self.min_field.dat(op2.MIN, self.min_field.function_space().cell_node_map()),
-                         field.dat(op2.READ, field.function_space().cell_node_map()),
-                         bottom_idx(op2.READ),
-                         iteration_region=op2.ON_BOTTOM)
+            op2.par_loop(
+                kernel,
+                self.mesh.cell_set,
+                self.max_field.dat(
+                    op2.MAX, self.max_field.function_space().cell_node_map()
+                ),
+                self.min_field.dat(
+                    op2.MIN, self.min_field.function_space().cell_node_map()
+                ),
+                field.dat(op2.READ, field.function_space().cell_node_map()),
+                bottom_idx(op2.READ),
+                iteration_region=op2.ON_BOTTOM,
+            )
 
-            op2.par_loop(kernel, self.mesh.cell_set,
-                         self.max_field.dat(op2.MAX, self.max_field.function_space().cell_node_map()),
-                         self.min_field.dat(op2.MIN, self.min_field.function_space().cell_node_map()),
-                         field.dat(op2.READ, field.function_space().cell_node_map()),
-                         top_idx(op2.READ),
-                         iteration_region=op2.ON_TOP)
+            op2.par_loop(
+                kernel,
+                self.mesh.cell_set,
+                self.max_field.dat(
+                    op2.MAX, self.max_field.function_space().cell_node_map()
+                ),
+                self.min_field.dat(
+                    op2.MIN, self.min_field.function_space().cell_node_map()
+                ),
+                field.dat(op2.READ, field.function_space().cell_node_map()),
+                top_idx(op2.READ),
+                iteration_region=op2.ON_TOP,
+            )
 
         if self.clip_min is not None:
             self.min_field.assign(max_value(self.min_field, self.clip_min))
         if self.clip_max is not None:
             self.max_field.assign(min_value(self.max_field, self.clip_max))
 
-    def apply(self, field):
+    def apply(self, field) -> None:
         """Applies the limiter on the given field (in place).
 
         Args:
           field: Firedrake function onto which the limiter is applied
 
         """
-        with timed_stage('limiter'):
-
+        with timed_stage("limiter"):
             if self.is_vector:
                 tmp_func = self.P1DG.get_work_function()
                 fs = field.function_space()

@@ -3,7 +3,7 @@ from gadopt.utility import vertical_component
 
 
 def test_oned_average_assignment_spherical(tmp_path):
-    """ A test case for `interpolate_1d_profile` for 3d spherical mesh
+    """A test case for `interpolate_1d_profile` for 3d spherical mesh
 
     The test calculates a radius profile, writes it out, and then assigns it
     and tests if the values end up being the same
@@ -14,7 +14,7 @@ def test_oned_average_assignment_spherical(tmp_path):
     nlayers = 4
 
     mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
-    mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+    mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
     mesh.cartesian = False
 
     X = SpatialCoordinate(mesh)
@@ -30,12 +30,12 @@ def test_oned_average_assignment_spherical(tmp_path):
 
     p = Function(Q)
     interpolate_1d_profile(p, tmp_path / "one_d_test_spherical.output")
-    log(assemble((p-q) ** 2 * dx))
-    assert assemble((p-q) ** 2 * dx) < 1e-10
+    log(assemble((p - q) ** 2 * dx))
+    assert assemble((p - q) ** 2 * dx) < 1e-10
 
 
 def test_oned_average_assignment_cartesian(tmp_path):
-    """ A test case for `interpolate_1d_profile` for 2d square case
+    """A test case for `interpolate_1d_profile` for 2d square case
 
     The test calculates a vertical profile, writes it out, and then assigns it
     and tests if the values end up being the same
@@ -45,7 +45,7 @@ def test_oned_average_assignment_cartesian(tmp_path):
     mesh.cartesian = True
 
     # because this is not an extruded mesh we have to provide r1d for layer averaging
-    y_disc = np.linspace(0.0, 1.0, n+1)
+    y_disc = np.linspace(0.0, 1.0, n + 1)
 
     X = SpatialCoordinate(mesh)
     Q = FunctionSpace(mesh, "CG", 1)
@@ -61,4 +61,4 @@ def test_oned_average_assignment_cartesian(tmp_path):
     p = Function(Q)
     interpolate_1d_profile(p, tmp_path / "one_d_test.output")
 
-    assert assemble((p-q) ** 2 * dx) < 1e-10
+    assert assemble((p - q) ** 2 * dx) < 1e-10

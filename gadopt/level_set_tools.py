@@ -10,10 +10,10 @@ from numbers import Number
 from typing import Optional
 
 import firedrake as fd
-from firedrake.ufl_expr import extract_unique_domain
 
-from .equations import BaseEquation, BaseTerm
-from .scalar_equation import ScalarAdvectionEquation
+from .equations import Equation
+from .scalar_equation import mass_term as mass_term_advection
+from .scalar_equation import residual_terms_advection as terms_advection
 from .time_stepper import RungeKuttaTimeIntegrator, eSSPRKs3p3
 
 __all__ = ["LevelSetSolver", "entrainment", "material_field"]
@@ -35,7 +35,9 @@ reini_params_default = {
 }
 
 
-class ReinitialisationTerm(BaseTerm):
+def reinitialisation_term(
+    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+) -> fd.Form:
     """Term for the conservative level set reinitialisation equation.
 
     Implements terms on the right-hand side of Equation 17 from
@@ -44,53 +46,16 @@ class ReinitialisationTerm(BaseTerm):
     method.
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
+    sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
+    balance_term = (
+        eq.epsilon
+        * (1 - 2 * trial)
+        * fd.sqrt(fd.inner(eq.level_set_grad, eq.level_set_grad))
+        * eq.test
+        * eq.dx
+    )
 
-    def residual(
-        self,
-        test: fd.ufl_expr.Argument,
-        trial: fd.ufl_expr.Argument,
-        trial_lagged: fd.ufl_expr.Argument,
-        fields: dict,
-        bcs: dict,
-    ) -> fd.ufl.core.expr.Expr:
-        """Residual contribution expressed through UFL.
-
-        Args:
-            test:
-              UFL test function.
-            trial:
-              UFL trial function.
-            trial_lagged:
-              UFL trial function from the previous time step.
-            fields:
-              A dictionary of provided UFL expressions.
-            bcs:
-              A dictionary of boundary conditions.
-        """
-        level_set_grad = fields["level_set_grad"]
-        epsilon = fields["epsilon"]
-
-        sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * test * self.dx
-        balance_term = (
-            epsilon
-            * (1 - 2 * trial)
-            * fd.sqrt(level_set_grad[0] ** 2 + level_set_grad[1] ** 2)
-            * test
-            * self.dx
-        )
-
-        return sharpen_term + balance_term
-
-
-class ReinitialisationEquation(BaseEquation):
-    """Equation for conservative level set reinitialisation.
-
-    Attributes:
-        terms:
-          A list of equation terms that contribute to the system's residual.
-    """
-
-    terms = [ReinitialisationTerm]
+    return sharpen_term + balance_term
 
 
 class LevelSetSolver:
@@ -129,7 +94,7 @@ class LevelSetSolver:
         subcycles: int = 1,
         reini_params: Optional[dict] = None,
         solver_params: Optional[dict] = None,
-    ):
+    ) -> None:
         """Initialises the solver instance.
 
         Args:
@@ -151,7 +116,7 @@ class LevelSetSolver:
               A dictionary containing solver parameters used in the advection and
               reinitialisation approaches.
         """
-        self.level_set = level_set
+        self.solution = level_set
         self.tstep = tstep
         self.tstep_alg = tstep_alg
         self.subcycles = subcycles
@@ -159,8 +124,8 @@ class LevelSetSolver:
         self.reini_params = reini_params or reini_params_default
         self.solver_params = solver_params or solver_params_default
 
-        self.mesh = extract_unique_domain(level_set)
         self.func_space = level_set.function_space()
+        self.mesh = self.func_space.mesh()
 
         self.func_space_lsgp = fd.VectorFunctionSpace(
             self.mesh, "CG", self.func_space.finat_element.degree
@@ -172,8 +137,11 @@ class LevelSetSolver:
 
         self.proj_solver = self.gradient_L2_proj()
 
-        self.ls_fields = {"velocity": velocity}
-        self.reini_fields = {"level_set_grad": self.ls_grad_proj, "epsilon": epsilon}
+        self.ls_terms_kwargs = {"u": velocity}
+        self.reini_terms_kwargs = {
+            "level_set_grad": self.ls_grad_proj,
+            "epsilon": epsilon,
+        }
 
         self.solvers_ready = False
 
@@ -192,10 +160,10 @@ class LevelSetSolver:
 
         mass_term = fd.inner(test_function, trial_function) * fd.dx(domain=self.mesh)
         residual_element = (
-            self.level_set * fd.div(test_function) * fd.dx(domain=self.mesh)
+            self.solution * fd.div(test_function) * fd.dx(domain=self.mesh)
         )
         residual_boundary = (
-            self.level_set
+            self.solution
             * fd.dot(test_function, fd.FacetNormal(self.mesh))
             * fd.ds(domain=self.mesh)
         )
@@ -211,35 +179,50 @@ class LevelSetSolver:
 
         return fd.LinearVariationalSolver(problem, solver_parameters=solver_params)
 
-    def update_level_set_gradient(self, *args, **kwargs):
+    def update_level_set_gradient(self, *args, **kwargs) -> None:
         """Calls the gradient projection solver.
 
         Can be used as a callback.
         """
         self.proj_solver.solve()
 
-    def set_up_solvers(self):
+    def set_up_solvers(self) -> None:
         """Sets up the time steppers for advection and reinitialisation."""
-        self.level_set_old = fd.Function(self.func_space)
+        test = fd.TestFunction(self.func_space)
+
+        advection_equation = Equation(
+            test,
+            self.func_space,
+            terms_advection,
+            mass_term=mass_term_advection,
+            terms_kwargs=self.ls_terms_kwargs,
+        )
+        reinitialisation_equation = Equation(
+            test,
+            self.func_space,
+            reinitialisation_term,
+            mass_term=mass_term_advection,
+            terms_kwargs=self.reini_terms_kwargs,
+        )
+
+        self.solution_old = fd.Function(self.func_space)
 
         self.ls_ts = self.tstep_alg(
-            ScalarAdvectionEquation(self.func_space, self.func_space),
-            self.level_set,
-            self.ls_fields,
+            advection_equation,
+            self.solution,
             self.tstep / self.subcycles,
-            solution_old=self.level_set_old,
+            solution_old=self.solution_old,
             solver_parameters=self.solver_params,
         )
         self.reini_ts = self.reini_params["tstep_alg"](
-            ReinitialisationEquation(self.func_space, self.func_space),
-            self.level_set,
-            self.reini_fields,
+            reinitialisation_equation,
+            self.solution,
             self.reini_params["tstep"],
-            solution_old=self.level_set_old,
+            solution_old=self.solution_old,
             solver_parameters=self.solver_params,
         )
 
-    def solve(self, step: int):
+    def solve(self, step: int) -> None:
         """Updates the level-set function.
 
         Calls advection and reinitialisation solvers within a subcycling loop.
@@ -359,7 +342,7 @@ def material_field(
 
 def entrainment(
     level_set: fd.Function, material_area: Number, entrainment_height: Number
-):
+) -> float:
     """Calculates entrainment diagnostic.
 
     Determines the proportion of a material that is located above a given height.

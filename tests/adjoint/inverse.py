@@ -4,9 +4,10 @@ the tape with the adjoint information, then a misfit functional is constructed t
 used as the goal condition for nonlinear optimisation using ROL.
 """
 
+from pathlib import Path
+
 from gadopt import *
 from gadopt.inverse import *
-from pathlib import Path
 
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
@@ -38,15 +39,15 @@ def inverse(alpha_u, alpha_d, alpha_s):
         alpha_d: The coefficient of the initial condition damping term
         alpha_s: The coefficient of the smoothing term
     """
-    checkpoint_file = Path(__file__).resolve().parent / "adjoint-demo-checkpoint-state.h5"
+    checkpoint_path = Path(__file__).parent / "adjoint-demo-checkpoint-state.h5"
+    checkpoint_file = CheckpointFile(str(checkpoint_path), "r")
     # Clear the tape of any previous operations to ensure
     # the adjoint reflects the forward problem we solve here
     tape = get_working_tape()
     tape.clear_tape()
 
-    with CheckpointFile(str(checkpoint_file), "r") as f:
-        mesh = f.load_mesh("firedrake_default_extruded")
-        mesh.cartesian = True
+    mesh = checkpoint_file.load_mesh("firedrake_default_extruded")
+    mesh.cartesian = True
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
     X = SpatialCoordinate(mesh)
@@ -78,7 +79,6 @@ def inverse(alpha_u, alpha_d, alpha_s):
     Tic = Function(Q1, name="Initial Temperature")
     Taverage = Function(Q1, name="Average Temperature")
 
-    checkpoint_file = CheckpointFile(str(checkpoint_file), "r")
     # Initialise the control
     Tic.project(
         checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
@@ -130,7 +130,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
     T.project(Tic, bcs=energy_solver.strong_bcs)
 
     # Populate the tape by running the forward simulation
-    for timestep in range(0, max_timesteps):
+    for timestep in range(max_timesteps):
         stokes_solver.solve()
         energy_solver.solve()
 
@@ -165,10 +165,10 @@ def inverse(alpha_u, alpha_d, alpha_s):
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
     objective = (
-        t_misfit +
-        alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface) +
-        alpha_d * (norm_obs * damping / norm_damping) +
-        alpha_s * (norm_obs * smoothing / norm_smoothing)
+        t_misfit
+        + alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface)
+        + alpha_d * (norm_obs * damping / norm_damping)
+        + alpha_s * (norm_obs * smoothing / norm_smoothing)
     )
 
     # All done with the forward run, stop annotating anything else to the tape

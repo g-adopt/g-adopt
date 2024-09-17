@@ -89,7 +89,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
         energy_solver.solve()
 
         # Calculate L2-norm of change in temperature:
-        maxchange = sqrt(assemble((q - energy_solver.T_old) ** 2 * dx))
+        maxchange = sqrt(assemble((q - energy_solver.solution_old) ** 2 * dx))
         log("maxchange", maxchange)
 
         step += 1

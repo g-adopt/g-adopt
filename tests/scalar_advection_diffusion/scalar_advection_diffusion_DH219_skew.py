@@ -56,7 +56,7 @@ energy_solver = EnergySolver(
 )
 
 # Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(energy_solver.fields["su_nubar"])
+nubar = Function(Q).interpolate(energy_solver.equation.su_nubar)
 nubar_outfile = VTKFile("advdof_DH219_skew_CG1_Pe" + str(Pe) + "_SU_nubar.pvd")
 nubar_outfile.write(nubar)
 

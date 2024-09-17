@@ -2,7 +2,11 @@ import pickle
 from pathlib import Path
 
 from gadopt import *
-from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, obtain_Muller_2022_SE
+from gadopt.gplates import (
+    GplatesVelocityFunction,
+    obtain_Muller_2022_SE,
+    pyGplatesConnector,
+)
 
 
 def test_obtain_muller_2022_se():
@@ -26,7 +30,7 @@ def test_gplates():
     mesh = ExtrudedMesh(
         mesh2d,
         layers=nlayers,
-        layer_height=(rmax - rmin)/(nlayers-1),
+        layer_height=(rmax - rmin) / (nlayers - 1),
         extrusion_type="radial",
     )
 
@@ -41,16 +45,20 @@ def test_gplates():
         nseeds=1e5,
         nneighbours=4,
         oldest_age=409,
-        delta_t=1.0
+        delta_t=1.0,
     )
 
-    gplates_function = GplatesVelocityFunction(V, gplates_connector=rec_model, top_boundary_marker="top")
+    gplates_function = GplatesVelocityFunction(
+        V, gplates_connector=rec_model, top_boundary_marker="top"
+    )
 
     surface_rms = []
 
     for t in np.arange(409, 0, -50):
         gplates_function.update_plate_reconstruction(rec_model.age2ndtime(t))
-        surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
+        surface_rms.append(
+            sqrt(assemble(inner(gplates_function, gplates_function) * ds_t))
+        )
 
     # Loading reference plate velocities
     test_data_path = Path(__file__).resolve().parent / "data"

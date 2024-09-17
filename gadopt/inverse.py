@@ -4,7 +4,7 @@ relevant parameters and call the `run` method to perform the optimisation.
 
 """
 
-from pathlib import Path
+from pathlib import Path, PosixPath
 import uuid
 
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
@@ -44,7 +44,7 @@ class ROLSolver(pyadjoint_rol.ROLSolver):
         inner_product: str = "L2",
         vector_class=pyadjoint_rol.ROLVector,
         vector_args: list = [],
-    ):
+    ) -> None:
         """Initialises the solver instance.
 
         Args:
@@ -70,7 +70,9 @@ class ROLSolver(pyadjoint_rol.ROLSolver):
 
 
 class LinMoreOptimiser:
-    def __init__(self, problem, parameters, checkpoint_dir=None, auto_checkpoint=True):
+    def __init__(
+        self, problem, parameters, checkpoint_dir=None, auto_checkpoint=True
+    ) -> None:
         """The management class for Lin-More trust region optimisation using ROL.
 
         This class sets up ROL to use the Lin-More trust region method, with a limited-memory
@@ -120,20 +122,20 @@ class LinMoreOptimiser:
 
         self._add_statustest()
 
-    def _ensure_checkpoint_dir(self):
+    def _ensure_checkpoint_dir(self) -> None:
         if MPI.COMM_WORLD.rank == 0:
             self.checkpoint_dir.mkdir(exist_ok=True)
 
         MPI.COMM_WORLD.Barrier()
 
     @property
-    def checkpoint_dir(self):
+    def checkpoint_dir(self) -> PosixPath:
         if self.iteration == -1:
             return self._base_checkpoint_dir
 
         return self._base_checkpoint_dir / str(self.iteration)
 
-    def checkpoint(self):
+    def checkpoint(self) -> None:
         """Checkpoints the current ROL state to disk."""
 
         ROL.serialise_algorithm(self.rol_algorithm, MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
@@ -143,7 +145,7 @@ class LinMoreOptimiser:
             for i, func in enumerate(self.rol_solver.rolvector.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def restore(self, iteration=None):
+    def restore(self, iteration=None) -> None:
         """Restores the ROL state from disk.
 
         The last stored iteration in `checkpoint_dir` is used unless a given iteration
@@ -180,7 +182,7 @@ class LinMoreOptimiser:
 
         _vector_registry.clear()
 
-    def run(self):
+    def run(self) -> None:
         """Runs the actual ROL optimisation.
 
         This will continue until the status test flags the optimisation to complete.
@@ -193,7 +195,7 @@ class LinMoreOptimiser:
                 self.rol_solver.bounds,
             )
 
-    def _add_statustest(self):
+    def _add_statustest(self) -> None:
         class StatusTest(ROL.StatusTest):
             def check(inner_self, status):
                 self.iteration += 1
@@ -210,7 +212,7 @@ class LinMoreOptimiser:
         # Don't chain with the default status test
         self.rol_algorithm.setStatusTest(StatusTest(self.rol_parameters), False)
 
-    def add_callback(self, callback):
+    def add_callback(self, callback) -> None:
         """Adds a callback to run after every optimisation iteration."""
 
         self.callbacks.append(callback)
@@ -233,7 +235,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
         dat: Function,
         optimiser: LinMoreOptimiser,
         inner_product: str = "L2",
-    ):
+    ) -> None:
         """Initialises the checkpointed ROL vector instance.
 
         Args:
@@ -258,7 +260,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
         res.scale(0.0)
         return res
 
-    def save(self, checkpoint_path):
+    def save(self, checkpoint_path) -> None:
         """Checkpoints the data within this vector to disk.
 
         Called when this object is pickled as part of the ROL
@@ -269,7 +271,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
             for i, func in enumerate(self.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def load(self, mesh):
+    def load(self, mesh) -> None:
         """Loads the checkpointed data for this vector from disk.
 
         Called by the parent Optimiser after the ROL state has
@@ -281,7 +283,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
             for i in range(len(self.dat)):
                 self.dat[i] = f.load_function(mesh, name=f"dat_{i}")
 
-    def __setstate__(self, state):
+    def __setstate__(self, state) -> None:
         """Sets the state from the result of unpickling.
 
         This happens during the restoration of a checkpoint. self.dat needs to be
@@ -294,7 +296,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
 
         _vector_registry.append(self)
 
-    def __getstate__(self):
+    def __getstate__(self) -> tuple:
         """Returns a state tuple suitable for pickling"""
 
         checkpoint_filename = f"vector_checkpoint_{uuid.uuid4()}.h5"

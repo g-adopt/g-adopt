@@ -137,7 +137,7 @@ approximation = EquationSystem(
 # Define time-stepping parameters:
 delta_t = Constant(4e-6)  # Constant time step
 # number of timesteps from forward
-timesteps = int(temperature_timestepping_info["index"][-1])
+timesteps = int(temperature_timestepping_info["index"][-1]) + 1
 
 # Nullspaces for the problem are next defined:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)

@@ -125,8 +125,8 @@ z.subfunctions[2].rename("eta")
 approximation = EquationSystem(
     approximation="BA",
     dimensional=False,
-    parameters={"Ra": 1e4, "Ra_fs": 1e5},
-    buoyancy_terms=["free_surface", "thermal"],
+    parameters={"Ra": 1e4},
+    buoyancy_terms=["thermal"],
 )
 
 # We also specify a timestep adaptor as before.
@@ -178,7 +178,7 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 # +
 stokes_bcs = {
     bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"variable_rho_fs": True}},
+    top_id: {"free_surface": {"eta_index": 0, "Ra_fs": 1e5}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
@@ -218,14 +218,7 @@ energy_solver = EnergySolver(
     approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
-stokes_solver = StokesSolver(
-    approximation,
-    z,
-    T,
-    bcs=stokes_bcs,
-    constant_jacobian=False,
-    free_surface_dt=delta_t,
-)
+stokes_solver = StokesSolver(approximation, z, T, bcs=stokes_bcs, timestep_fs=delta_t)
 
 # -
 
@@ -249,7 +242,7 @@ for timestep in range(timesteps):
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
 
     # Log diagnostics:
     plog.log_str(
@@ -285,6 +278,8 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # +
 # Read the PVD file
+import pyvista as pv
+
 reader = pv.get_reader("output.pvd")
 data = reader.read()[0]  # MultiBlock mesh with only 1 block
 
