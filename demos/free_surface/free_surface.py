@@ -278,7 +278,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # +
 # Read the PVD file
-import pyvista as pv
+import pyvista as pv  # noqa E402
 
 reader = pv.get_reader("output.pvd")
 data = reader.read()[0]  # MultiBlock mesh with only 1 block
