@@ -14,13 +14,29 @@ _default_muller2018_plate_files = {
 
 reconstructions = {
     "Muller 2022 SE v1.2": {
-        "plate_files": _default_plate_files,
+        "plate_files": _default_muller2018_plate_files,
         "directory": "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2",
     },
     "Muller 2022 SE v1.2.4": {
-        "plate_files": _default_plate_files,
+        "plate_files": _default_muller2018_plate_files,
         "directory": "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.4",
     },
+    # Cao et al 2024 extends Muller 2018 to 1.8 Byrs.
+    # DOI: 10.1016/j.gsf.2024.101922
+    # Zenodo: 11536687
+    "Cao 2024": {
+        "plate_files": {
+            "rotation_filenames": [
+                "optimisation/1800_1000_rotfile_20240725_run3.rot",
+                "optimisation/1000_0_rotfile_20240725_run3.rot"
+            ],
+            "topology_filenames":
+                _default_muller2018_plate_files["topology_filenames"] +
+                ["1800-1000_plate_boundaries.gpml", "TopologyBuildingBlocks.gpml"],
+        },
+        "directory": "1.8Ga_model_optimised_mantle_ref_frame_20240725",
+    },
+
 }
 
 
