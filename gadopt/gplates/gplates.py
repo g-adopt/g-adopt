@@ -408,7 +408,7 @@ class pyGplatesConnector(object):
                         # add it to the list
                         all_velocities.extend(velocity_vectors)
                     else:
-                        warnings.warn("Issues finding plate ids for some of the seeds.", category=RuntimeWarning)
+                        warnings.warn("pygplates couldn't assign plate IDs to some seeds due to irregularities in the reconstruction model. G-ADOPT will interpolate the nearest values.", category=RuntimeWarning)
                         all_velocities.extend([pygplates.Vector3D(np.nan, np.nan, np.nan)])
 
         return all_velocities
