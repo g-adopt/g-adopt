@@ -1,6 +1,6 @@
 from pathlib import Path
 
-_default_plate_files = {
+_default_muller2018_plate_files = {
     "rotation_filenames": ["optimisation/1000_0_rotfile_MantleOptimised.rot"],
     "topology_filenames": [
         "250-0_plate_boundaries.gpml",
