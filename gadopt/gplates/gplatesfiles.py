@@ -21,7 +21,7 @@ reconstructions = {
         "plate_files": _default_muller2022_plate_files,
         "directory": "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.4",
     },
-    # Cao et al 2024 extends Muller 2018 to 1.8 Byrs.
+    # Cao et al 2024 extends Muller 2022 to 1.8 Byrs.
     # DOI: 10.1016/j.gsf.2024.101922
     # Zenodo: 11536687
     "Cao 2024": {
