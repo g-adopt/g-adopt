@@ -2,12 +2,12 @@ import pickle
 from pathlib import Path
 
 from gadopt import *
-from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, obtain_Muller_2022_SE
+from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, ensure_reconstruction
 
 
 def test_obtain_muller_2022_se():
     gplates_data_path = Path(__file__).resolve().parents[2] / "demos/gplates_global"
-    plate_reconstruction_files_with_path = obtain_Muller_2022_SE(gplates_data_path)
+    plate_reconstruction_files_with_path = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
 
     # Check if the files are downloaded and accessible
     for file_list in plate_reconstruction_files_with_path.values():
@@ -32,7 +32,7 @@ def test_gplates():
 
     V = VectorFunctionSpace(mesh, "CG", 2)
 
-    mueller_2022_se = obtain_Muller_2022_SE(gplates_data_path)
+    mueller_2022_se = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
 
     # compute surface velocities
     rec_model = pyGplatesConnector(

@@ -4,6 +4,7 @@ import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape
 from scipy.spatial import cKDTree
+from ..utility import log
 
 import pygplates
 
@@ -26,6 +27,9 @@ class GPlatesFunctionalityMixin:
             ndtime (float): The model time for which to update the plate
                 velocities. This should be non-dimensionalised time.
         """
+
+        # Print ndtime translated to geological age
+        log(f"pyGplates: Updating surface velocities for {self.gplates_connector.ndtime2age(ndtime):.2f} Ma.")
         # Check if we need to update plate velocities at all
         if self.gplates_connector.reconstruction_age is not None:
             if abs(self.gplates_connector.ndtime2age(ndtime) - self.gplates_connector.reconstruction_age) < self.gplates_connector.delta_t:
@@ -404,7 +408,7 @@ class pyGplatesConnector(object):
                         # add it to the list
                         all_velocities.extend(velocity_vectors)
                     else:
-                        warnings.warn("Issues finding plate ids for some of the seeds.", category=RuntimeWarning)
+                        warnings.warn("pygplates couldn't assign plate IDs to some seeds due to irregularities in the reconstruction model. G-ADOPT will interpolate the nearest values.", category=RuntimeWarning)
                         all_velocities.extend([pygplates.Vector3D(np.nan, np.nan, np.nan)])
 
         return all_velocities
