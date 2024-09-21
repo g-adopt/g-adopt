@@ -74,11 +74,17 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     # Use G-ADOPT's Energy Solver to advect the tracer. The system is considered
     # non-dimensional and controlled only by the thermal diffusivity and heat source
     # values. We use the diagonaly implicit DIRK33 Runge-Kutta method for timestepping.
-    approximation = EquationSystem(
-        approximation="BA", dimensional=False, parameters={"kappa": kappa, "Q": 1}
-    )
-    energy_solver = EnergySolver(
-        approximation, q, u, dt, DIRK33, bcs=bcs, su_advection=su_advection
+    terms = ["advection", "diffusion", "source"]
+    terms_kwargs = {"diffusivity": kappa, "source": 1}
+    adv_diff_solver = AdvectionDiffusionSolver(
+        terms,
+        q,
+        u,
+        dt,
+        DIRK33,
+        terms_kwargs=terms_kwargs,
+        bcs=bcs,
+        su_diffusivity=kappa if su_advection else None,
     )
 
     # this may need tweaking for different length runs/Pe values
@@ -86,10 +92,10 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     t = 0.0
     step = 0
     while t < T - 0.5 * dt:
-        energy_solver.solve()
+        adv_diff_solver.solve()
 
         # Calculate L2-norm of change in temperature:
-        maxchange = sqrt(assemble((q - energy_solver.solution_old) ** 2 * dx))
+        maxchange = sqrt(assemble((q - adv_diff_solver.solution_old) ** 2 * dx))
         log("maxchange", maxchange)
 
         step += 1

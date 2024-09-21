@@ -61,9 +61,7 @@ def model(level, nn, do_write=False):
     mu = Constant(1.0)  # Constant viscosity
     g = Constant(1.0)  # Overall scaling of delta forcing
 
-    approximation = EquationSystem(
-        approximation="BA", dimensional=False, parameters={"Ra": 1}
-    )
+    approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1})
     stokes_bcs = {bottom_id: {"u": 0}, top_id: {"u": 0}}
 
     # Nullspaces and near-nullspaces:

@@ -151,7 +151,6 @@ materials = [bottom_material, top_material]
 
 # Approximation parameters
 dimensional = False
-buoyancy_terms = ["compositional", "thermal"]
 Ra = 1e5
 B = 0.5
 

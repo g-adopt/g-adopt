@@ -11,9 +11,9 @@ from typing import Optional
 
 import firedrake as fd
 
+from . import scalar_equation as scal_eq
+from .energy_solver import AdvectionDiffusionSolver
 from .equations import Equation
-from .scalar_equation import mass_term as mass_term_advection
-from .scalar_equation import residual_terms_advection as terms_advection
 from .time_stepper import RungeKuttaTimeIntegrator, eSSPRKs3p3
 
 __all__ = ["LevelSetSolver", "entrainment", "material_field"]
@@ -76,7 +76,7 @@ class LevelSetSolver:
           A Firedrake LinearVariationalSolver to project the level-set gradient.
         reini_params:
           A dictionary containing parameters used in the reinitialisation approach.
-        ls_ts:
+        ls_solver:
           The G-ADOPT timestepper object for the advection equation.
         reini_ts:
           The G-ADOPT timestepper object for the reinitialisation equation.
@@ -117,6 +117,7 @@ class LevelSetSolver:
               reinitialisation approaches.
         """
         self.solution = level_set
+        self.u = velocity
         self.tstep = tstep
         self.tstep_alg = tstep_alg
         self.subcycles = subcycles
@@ -189,31 +190,26 @@ class LevelSetSolver:
     def set_up_solvers(self) -> None:
         """Sets up the time steppers for advection and reinitialisation."""
         test = fd.TestFunction(self.func_space)
+        self.solution_old = fd.Function(self.func_space)
 
-        advection_equation = Equation(
-            test,
-            self.func_space,
-            terms_advection,
-            mass_term=mass_term_advection,
-            terms_kwargs=self.ls_terms_kwargs,
+        self.ls_solver = AdvectionDiffusionSolver(
+            "advection",
+            self.solution,
+            self.u,
+            self.tstep / self.subcycles,
+            self.tstep_alg,
+            solution_old=self.solution_old,
+            solver_parameters=self.solver_params,
         )
+
         reinitialisation_equation = Equation(
             test,
             self.func_space,
             reinitialisation_term,
-            mass_term=mass_term_advection,
+            mass_term=scal_eq.mass_term,
             terms_kwargs=self.reini_terms_kwargs,
         )
 
-        self.solution_old = fd.Function(self.func_space)
-
-        self.ls_ts = self.tstep_alg(
-            advection_equation,
-            self.solution,
-            self.tstep / self.subcycles,
-            solution_old=self.solution_old,
-            solver_parameters=self.solver_params,
-        )
         self.reini_ts = self.reini_params["tstep_alg"](
             reinitialisation_equation,
             self.solution,
@@ -238,12 +234,12 @@ class LevelSetSolver:
             self.solvers_ready = True
 
         for subcycle in range(self.subcycles):
-            self.ls_ts.advance(0)
+            self.ls_solver.solve()
 
             if step % self.reini_params["frequency"] == 0:
                 for reini_step in range(self.reini_params["iterations"]):
                     self.reini_ts.advance(
-                        0, update_forcings=self.update_level_set_gradient
+                        t=0, update_forcings=self.update_level_set_gradient
                     )
 
 

@@ -127,12 +127,7 @@ z.subfunctions[1].rename("Pressure")
 T = Function(Q, name="Temperature")
 
 # Specify important constants for the problem, alongside the approximation:
-approximation = EquationSystem(
-    approximation="BA",
-    dimensional=False,
-    parameters={"Ra": 1e6},
-    buoyancy_terms=["thermal"],
-)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e6})
 
 # Define time-stepping parameters:
 delta_t = Constant(4e-6)  # Constant time step

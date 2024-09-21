@@ -5,4 +5,4 @@ params.log: free_surface.py
 	/usr/bin/time --format="$@ finished in %E" tsp -f python3 $<
 
 clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
+	rm -f *.pvd *.vtu *.pvtu *.h5 *.gif params.log

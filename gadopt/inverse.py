@@ -4,13 +4,13 @@ relevant parameters and call the `run` method to perform the optimisation.
 
 """
 
-from pathlib import Path, PosixPath
 import uuid
+from pathlib import Path, PosixPath
 
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
 from firedrake import CheckpointFile, Function
-from firedrake.adjoint import *  # noqa: F401
+from firedrake.adjoint import *
 from mpi4py import MPI
 from pyadjoint import MinimizationProblem
 
@@ -99,7 +99,9 @@ class LinMoreOptimiser:
             self._base_checkpoint_dir = Path(checkpoint_dir)
             self._ensure_checkpoint_dir()
 
-            self._mesh = problem.reduced_functional.controls[0].control.function_space().mesh()
+            self._mesh = (
+                problem.reduced_functional.controls[0].control.function_space().mesh()
+            )
             solver_kwargs["vector_class"] = CheckpointedROLVector
             solver_kwargs["vector_args"] = [self]
 
@@ -108,11 +110,15 @@ class LinMoreOptimiser:
             self._base_checkpoint_dir = None
             self.auto_checkpoint = False
 
-        self.rol_solver = ROLSolver(problem, parameters, inner_product="L2", **solver_kwargs)
+        self.rol_solver = ROLSolver(
+            problem, parameters, inner_product="L2", **solver_kwargs
+        )
         self.rol_parameters = ROL.ParameterList(parameters, "Parameters")
 
         try:
-            self.rol_secant = ROL.lBFGS(parameters["General"]["Secant"]["Maximum Storage"])
+            self.rol_secant = ROL.lBFGS(
+                parameters["General"]["Secant"]["Maximum Storage"]
+            )
         except KeyError:
             # Use the default storage value
             self.rol_secant = ROL.lBFGS()
@@ -138,7 +144,9 @@ class LinMoreOptimiser:
     def checkpoint(self) -> None:
         """Checkpoints the current ROL state to disk."""
 
-        ROL.serialise_algorithm(self.rol_algorithm, MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
+        ROL.serialise_algorithm(
+            self.rol_algorithm, MPI.COMM_WORLD.rank, str(self.checkpoint_dir)
+        )
 
         checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
         with CheckpointFile(str(checkpoint_path), "w") as f:
@@ -154,13 +162,20 @@ class LinMoreOptimiser:
         if iteration is not None:
             self.iteration = iteration
         else:
-            stored_iterations = [int(path.parts[-1]) for path in self._base_checkpoint_dir.glob('*[0-9]/')]
+            stored_iterations = [
+                int(path.parts[-1])
+                for path in self._base_checkpoint_dir.glob("*[0-9]/")
+            ]
             self.iteration = sorted(stored_iterations)[-1]
 
-        self.rol_algorithm = ROL.load_algorithm(MPI.COMM_WORLD.rank, str(self.checkpoint_dir))
+        self.rol_algorithm = ROL.load_algorithm(
+            MPI.COMM_WORLD.rank, str(self.checkpoint_dir)
+        )
         self._add_statustest()
 
-        self.rol_solver.rolvector.checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
+        self.rol_solver.rolvector.checkpoint_path = (
+            self.checkpoint_dir / "solution_checkpoint.h5"
+        )
         self.rol_solver.rolvector.load(self._mesh)
 
         # ROL algorithms run in a loop like `while (statusTest()) { ... }`

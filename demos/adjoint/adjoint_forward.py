@@ -95,12 +95,7 @@ checkpoint_file.save_function(T, name="Temperature", idx=0)
 # physical parameters for our simulation.
 
 # +
-approximation = EquationSystem(
-    approximation="BA",
-    dimensional=False,
-    parameters={"Ra": 1e6},
-    buoyancy_terms=["thermal"],
-)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e6})
 
 delta_t = Constant(4e-6)
 timesteps = 80

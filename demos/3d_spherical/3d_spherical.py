@@ -50,12 +50,7 @@ z.subfunctions[1].rename("Pressure")
 
 # We next specify the important constants for this problem, and set up the approximation.
 
-approximation = EquationSystem(
-    approximation="BA",
-    dimensional=False,
-    parameters={"Ra": 7e3},
-    buoyancy_terms=["thermal"],
-)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 7e3})
 
 # As with the previous examples, we set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL

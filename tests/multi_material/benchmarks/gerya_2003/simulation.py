@@ -80,7 +80,6 @@ materials = [buoyant_material, dense_material]
 
 # Approximation parameters
 dimensional = True
-buoyancy_terms = ["compositional"]
 g = 9.8
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}

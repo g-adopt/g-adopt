@@ -64,13 +64,13 @@ def viscosity_term(
     dim = eq.mesh.geometric_dimension()
     identity = Identity(dim)
     mu = eq.approximation.mu
-    compressible = eq.approximation.compressible
+    compressible_stress = "compressible_stress" in eq.approximation.momentum_components
 
     sigma = interior_penalty_factor(eq)
     sigma *= FacetArea(eq.mesh) / avg(CellVolume(eq.mesh))
     if not is_continuous(eq.trial_space):
         trial_tensor_jump = tensor_jump(eq.n, trial) + tensor_jump(trial, eq.n)
-        if compressible:
+        if compressible_stress:
             trial_tensor_jump -= 2 / 3 * identity * jump(trial, eq.n)
 
         F += (
@@ -97,7 +97,7 @@ def viscosity_term(
 
         if "u" in bc:
             trial_tensor_jump = outer(eq.n, trial - bc["u"])
-            if compressible:
+            if compressible_stress:
                 trial_tensor_jump -= (
                     2 / 3 * identity * (dot(eq.n, trial) - dot(eq.n, bc["u"]))
                 )
@@ -114,7 +114,7 @@ def viscosity_term(
 
         if "un" in bc:
             trial_tensor_jump = outer(eq.n, eq.n) * (dot(eq.n, trial) - bc["un"])
-            if compressible:
+            if compressible_stress:
                 trial_tensor_jump -= 2 / 3 * identity * (dot(eq.n, trial) - bc["un"])
             trial_tensor_jump += transpose(trial_tensor_jump)
             # Terms below are similar to the above terms for the DG dS integrals.

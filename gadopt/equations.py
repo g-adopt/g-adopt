@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 
 import firedrake as fd
 
-from .approximations import EquationSystem
+from .approximations import Approximation
 from .utility import CombinedSurfaceMeasure
 
 __all__ = ["Equation"]
@@ -44,7 +44,6 @@ class Equation:
         rescale_factor:
           UFL expression used to rescale mass and residual terms.
 
-
     """
 
     test: fd.Argument | fd.ufl.indexed.Indexed
@@ -53,7 +52,7 @@ class Equation:
     _: KW_ONLY
     mass_term: Optional[Callable] = None
     terms_kwargs: InitVar[dict[str, Any]] = {}
-    approximation: Optional[EquationSystem] = None
+    approximation: Optional[Approximation] = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[Optional[int]] = None
     rescale_factor: Number | fd.Constant | fd.Function = 1

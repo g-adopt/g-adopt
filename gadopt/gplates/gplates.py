@@ -1,16 +1,15 @@
 import warnings
+
 import firedrake as fd
 import numpy as np
+import pygplates
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape
 from scipy.spatial import cKDTree
 
-import pygplates
+from ..utility import log
 
-__all__ = [
-    "GplatesVelocityFunction",
-    "pyGplatesConnector"
-]
+__all__ = ["GplatesVelocityFunction", "pyGplatesConnector"]
 
 
 class GPlatesFunctionalityMixin:
@@ -26,15 +25,25 @@ class GPlatesFunctionalityMixin:
             ndtime (float): The model time for which to update the plate
                 velocities. This should be non-dimensionalised time.
         """
+
+        # Print ndtime translated to geological age
+        log(
+            f"pyGplates: Updating surface velocities for {self.gplates_connector.ndtime2age(ndtime):.2f} Ma."
+        )
         # Check if we need to update plate velocities at all
         if self.gplates_connector.reconstruction_age is not None:
-            if abs(self.gplates_connector.ndtime2age(ndtime) - self.gplates_connector.reconstruction_age) < self.gplates_connector.delta_t:
+            if (
+                abs(
+                    self.gplates_connector.ndtime2age(ndtime)
+                    - self.gplates_connector.reconstruction_age
+                )
+                < self.gplates_connector.delta_t
+            ):
                 return
 
         # Assuming `self` is a Firedrake Function instance,
         self.dat.data_with_halos[self.dbc.nodes, :] = (
-            self.gplates_connector.get_plate_velocities(
-                self.boundary_coords, ndtime)
+            self.gplates_connector.get_plate_velocities(self.boundary_coords, ndtime)
         )
 
         # At this point the values are updated.
@@ -82,11 +91,19 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         ...                                    name="GplateVelocity")
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
     """
+
     def __new__(cls, *args, **kwargs):
         # Ensure compatibility with Firedrake Function's __new__ method
         return super().__new__(cls, *args, **kwargs)
 
-    def __init__(self, function_space, *args, gplates_connector=None, top_boundary_marker="top", **kwargs):
+    def __init__(
+        self,
+        function_space,
+        *args,
+        gplates_connector=None,
+        top_boundary_marker="top",
+        **kwargs,
+    ):
         # Initialize as a Firedrake Function
         super().__init__(function_space, *args, **kwargs)
 
@@ -95,16 +112,17 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         self.top_boundary_marker = top_boundary_marker
         # establishing the DirichletBC that will be used to find surface nodes
         self.dbc = fd.DirichletBC(
-            self.function_space(),
-            self,
-            sub_domain=self.top_boundary_marker)
+            self.function_space(), self, sub_domain=self.top_boundary_marker
+        )
         # coordinates of surface points
-        self.boundary_coords = fd.Function(
-            self.function_space(),
-            name="coordinates").interpolate(
-                fd.SpatialCoordinate(
-                    extract_unique_domain(self))).dat.data_ro_with_halos[self.dbc.nodes]
-        self.boundary_coords /= np.linalg.norm(self.boundary_coords, axis=1)[:, np.newaxis]
+        self.boundary_coords = (
+            fd.Function(self.function_space(), name="coordinates")
+            .interpolate(fd.SpatialCoordinate(extract_unique_domain(self)))
+            .dat.data_ro_with_halos[self.dbc.nodes]
+        )
+        self.boundary_coords /= np.linalg.norm(self.boundary_coords, axis=1)[
+            :, np.newaxis
+        ]
 
         # Store the GPlates connector
         self.gplates_connector = gplates_connector
@@ -121,7 +139,7 @@ class pyGplatesConnector(object):
     #   t [year] X yrs2sec = t [sec]
     yrs2sec = 365 * 24 * 60 * 60
     #   t [Myrs] X myrs2sec = t[sec]
-    myrs2sec = 1e6*yrs2sec
+    myrs2sec = 1e6 * yrs2sec
     #   t [] X time_dimDmyrs2sec = t [Myrs]
     time_dimDmyrs2sec = time_dim_factor / myrs2sec
     #   L [cm] X cm2m = L [m]
@@ -133,7 +151,16 @@ class pyGplatesConnector(object):
     #   this is just to avoid division by zero when weighted averaging
     epsilon_distance = 1e-8
 
-    def __init__(self, rotation_filenames, topology_filenames, oldest_age, delta_t=1., scaling_factor=1.0, nseeds=1e5, nneighbours=4):
+    def __init__(
+        self,
+        rotation_filenames,
+        topology_filenames,
+        oldest_age,
+        delta_t=1.0,
+        scaling_factor=1.0,
+        nseeds=1e5,
+        nneighbours=4,
+    ):
         """An interface to pygplates, used for updating top Dirichlet boundary conditions
         using plate tectonic reconstructions.
 
@@ -182,11 +209,7 @@ class pyGplatesConnector(object):
         self.nneighbours = nneighbours
 
         # pyGplates velocity features
-        self.velocity_domain_features = (
-            self._make_GPML_velocity_feature(
-                self.seeds
-            )
-        )
+        self.velocity_domain_features = self._make_GPML_velocity_feature(self.seeds)
 
         # last reconstruction time
         self.reconstruction_age = None
@@ -223,9 +246,11 @@ class pyGplatesConnector(object):
         # Raising an error if the user is asking for invalid time
         if self.ndtime2age(ndtime=ndtime) < 0:
             raise ValueError(
-                ("Input non-dimensionalised time corresponds to negative age (it is in the future)!"
-                 f"maximum non-dimensionalised time:"
-                 f" {self.oldest_age/(pyGplatesConnector.time_dimDmyrs2sec/self.scaling_factor)}")
+                (
+                    "Input non-dimensionalised time corresponds to negative age (it is in the future)!"
+                    f"maximum non-dimensionalised time:"
+                    f" {self.oldest_age/(pyGplatesConnector.time_dimDmyrs2sec/self.scaling_factor)}"
+                )
             )
 
         # cache the reconstruction age
@@ -244,18 +269,23 @@ class pyGplatesConnector(object):
             float: The converted geologic age in millions of years before present day(Ma).
         """
 
-        return self.oldest_age - float(ndtime) * pyGplatesConnector.time_dimDmyrs2sec/self.scaling_factor
+        return (
+            self.oldest_age
+            - float(ndtime) * pyGplatesConnector.time_dimDmyrs2sec / self.scaling_factor
+        )
 
     def age2ndtime(self, age):
         """Converts geologic age (years before present day in Myrs (Ma) to non-dimensionalised time.
 
-        Args:
-            age (float): geologic age (before present day in Myrs)
+                Args:
+                    age (float): geologic age (before present day in Myrs)
 
-        Returns:
--            float: non-dimensionalised time
+                Returns:
+        -            float: non-dimensionalised time
         """
-        return (self.oldest_age - age)*(self.scaling_factor / pyGplatesConnector.time_dimDmyrs2sec)
+        return (self.oldest_age - age) * (
+            self.scaling_factor / pyGplatesConnector.time_dimDmyrs2sec
+        )
 
     # convert seeds to Gplate features
     def _make_GPML_velocity_feature(self, coords):
@@ -274,14 +304,20 @@ class pyGplatesConnector(object):
 
         # Add points to a multipoint geometry
         multi_point = pygplates.MultiPointOnSphere(
-            [pygplates.PointOnSphere(x=coords[i, 0], y=coords[i, 1], z=coords[i, 2], normalise=True)
-             for i in range(np.shape(coords)[0])]
+            [
+                pygplates.PointOnSphere(
+                    x=coords[i, 0], y=coords[i, 1], z=coords[i, 2], normalise=True
+                )
+                for i in range(np.shape(coords)[0])
+            ]
         )
 
         # Create a feature containing the multipoint feature, and defined as MeshNode type
-        meshnode_feature = pygplates.Feature(pygplates.FeatureType.create_from_qualified_string('gpml:MeshNode'))
+        meshnode_feature = pygplates.Feature(
+            pygplates.FeatureType.create_from_qualified_string("gpml:MeshNode")
+        )
         meshnode_feature.set_geometry(multi_point)
-        meshnode_feature.set_name('Velocity Mesh Nodes from pygplates')
+        meshnode_feature.set_name("Velocity Mesh Nodes from pygplates")
 
         output_feature_collection = pygplates.FeatureCollection(meshnode_feature)
 
@@ -308,10 +344,12 @@ class pyGplatesConnector(object):
             topology_features=self.topology_features,
             rotation_model=self.rotation_model,
             age=self.reconstruction_age,
-            delta_t=self.delta_t)
+            delta_t=self.delta_t,
+        )
 
-        seeds_u = np.array([i.to_xyz() for i in seeds_u]) *\
-            ((pyGplatesConnector.velocity_dimDcmyr) / self.scaling_factor)
+        seeds_u = np.array([i.to_xyz() for i in seeds_u]) * (
+            (pyGplatesConnector.velocity_dimDcmyr) / self.scaling_factor
+        )
 
         # if pyGplates does not find a plate id for a point, assings NaN to the velocity
         # here we make sure we only use velocities that are not NaN.
@@ -326,13 +364,17 @@ class pyGplatesConnector(object):
         # Use np.where to avoid division by very small values
         # Replace tiny distances with pyGplatesConnector.epsilon_distance to avoid division
         # by tiny values while keeping original distances intact for later use
-        safe_dists = np.where(dists < pyGplatesConnector.epsilon_distance, pyGplatesConnector.epsilon_distance, dists)
+        safe_dists = np.where(
+            dists < pyGplatesConnector.epsilon_distance,
+            pyGplatesConnector.epsilon_distance,
+            dists,
+        )
 
         # Then, calculate the weighted average using safe_dists
         res_u = np.einsum(
-            'i, ij->ij',
-            1/np.sum(1/safe_dists, axis=1),
-            np.einsum('ij, ijk ->ik', 1/safe_dists, seeds_u[non_nan_values][idx])
+            "i, ij->ij",
+            1 / np.sum(1 / safe_dists, axis=1),
+            np.einsum("ij, ijk ->ik", 1 / safe_dists, seeds_u[non_nan_values][idx]),
         )
         close_points_mask = dists[:, 0] < pyGplatesConnector.epsilon_distance
         # Now handle the case where points are too close to each other:
@@ -340,7 +382,9 @@ class pyGplatesConnector(object):
 
         return res_u
 
-    def _calc_velocities(self, velocity_domain_features, topology_features, rotation_model, age, delta_t):
+    def _calc_velocities(
+        self, velocity_domain_features, topology_features, rotation_model, age, delta_t
+    ):
         """Calculates velocity vectors for domain points at a specific geological age (Myrs before present day).
 
         This method calculates the velocities for all points in the velocity domain
@@ -371,27 +415,29 @@ class pyGplatesConnector(object):
 
         # Partition our velocity domain features into our topological plate polygons at the current 'age'.
         # Note: pygplates can only deal with rounded ages in million years
-        plate_partitioner = pygplates.PlatePartitioner(topology_features, rotation_model, age_rounded)
+        plate_partitioner = pygplates.PlatePartitioner(
+            topology_features, rotation_model, age_rounded
+        )
 
         for velocity_domain_feature in velocity_domain_features:
-
             # A velocity domain feature usually has a single geometry but we'll assume it can be any number.
             # Iterate over them all.
             for velocity_domain_geometry in velocity_domain_feature.get_geometries():
-
                 for velocity_domain_point in velocity_domain_geometry.get_points():
-
                     all_domain_points.append(velocity_domain_point)
 
-                    partitioning_plate = plate_partitioner.partition_point(velocity_domain_point)
+                    partitioning_plate = plate_partitioner.partition_point(
+                        velocity_domain_point
+                    )
                     if partitioning_plate:
-
                         # We need the newly assigned plate ID to get the equivalent stage rotation of that tectonic plate.
                         partitioning_plate_id = partitioning_plate.get_feature().get_reconstruction_plate_id()
 
                         # Get the stage rotation of partitioning plate from 'age + delta_t' to 'age'.
                         # Note: pygplates can only deal with rounded ages in million years
-                        equivalent_stage_rotation = rotation_model.get_rotation(age_rounded, partitioning_plate_id, age_rounded + delta_t)
+                        equivalent_stage_rotation = rotation_model.get_rotation(
+                            age_rounded, partitioning_plate_id, age_rounded + delta_t
+                        )
 
                         # Calculate velocity at the velocity domain point.
                         # This is from 'age + delta_t' to 'age' on the partitioning plate.
@@ -399,13 +445,20 @@ class pyGplatesConnector(object):
                         velocity_vectors = pygplates.calculate_velocities(
                             [velocity_domain_point],
                             equivalent_stage_rotation,
-                            delta_t, velocity_units=pygplates.VelocityUnits.cms_per_yr)
+                            delta_t,
+                            velocity_units=pygplates.VelocityUnits.cms_per_yr,
+                        )
 
                         # add it to the list
                         all_velocities.extend(velocity_vectors)
                     else:
-                        warnings.warn("Issues finding plate ids for some of the seeds.", category=RuntimeWarning)
-                        all_velocities.extend([pygplates.Vector3D(np.nan, np.nan, np.nan)])
+                        warnings.warn(
+                            "pygplates couldn't assign plate IDs to some seeds due to irregularities in the reconstruction model. G-ADOPT will interpolate the nearest values.",
+                            category=RuntimeWarning,
+                        )
+                        all_velocities.extend(
+                            [pygplates.Vector3D(np.nan, np.nan, np.nan)]
+                        )
 
         return all_velocities
 
@@ -440,9 +493,9 @@ class pyGplatesConnector(object):
             the Fibonacci sequence and the golden ratio.
         """
 
-        phi = np.pi * (3. - np.sqrt(5.))  # golden angle in radians
+        phi = np.pi * (3.0 - np.sqrt(5.0))  # golden angle in radians
 
-        y = 1 - (np.arange(samples)/(samples-1)) * 2
+        y = 1 - (np.arange(samples) / (samples - 1)) * 2
         radius = np.sqrt(1 - y * y)
         theta = phi * np.arange(samples)
         x = np.cos(theta) * radius

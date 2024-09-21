@@ -142,11 +142,10 @@ mu = mu_rad * exp(-ln(delta_mu_T) * T_dev)
 
 # These fields are used to set up our Truncated Anelastic Liquid Approximation.
 Q_approx = H * approximation_profiles["rho"]
-approximation = EquationSystem(
-    approximation="TALA",
+approximation = Approximation(
+    "TALA",
     dimensional=False,
     parameters={"Ra": Ra, "Di": Di, "Q": Q_approx, "mu": mu, **approximation_profiles},
-    buoyancy_terms=["thermal"],
 )
 
 # As with the previous examples, we set up a *Timestep Adaptor*,

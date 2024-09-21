@@ -56,12 +56,7 @@ def model(level, k, nn, do_write=False):
 
     T = -(r**k) / rmax**k * cos(nn * phi)  # RHS
 
-    approximation = EquationSystem(
-        approximation="BA",
-        dimensional=False,
-        parameters={"Ra": 1},
-        buoyancy_terms=["thermal"],
-    )
+    approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1})
     stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
 
     # Nullspaces and near-nullspaces:

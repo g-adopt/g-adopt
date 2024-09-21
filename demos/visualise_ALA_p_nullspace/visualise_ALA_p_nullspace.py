@@ -108,11 +108,10 @@ rhobar.interpolate(exp(((1.0 - X[1]) * Di) / Gamma))
 Tbar = Function(Q, name="CompRefTemperature")
 Tbar.interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)
 
-approximation = EquationSystem(
-    approximation="ALA",
+approximation = Approximation(
+    "ALA",
     dimensional=False,
     parameters={"Ra": Ra, "Di": Di, "Gamma": Gamma, "rho": rhobar, "T": Tbar},
-    buoyancy_terms=["thermal"],
 )
 p = ala_right_nullspace(W, approximation, top_id)
 # -

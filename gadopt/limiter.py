@@ -7,33 +7,15 @@ parameters and call the `apply` method to update the function.
 from typing import Optional
 
 import numpy as np
-from firedrake import (
-    EnrichedElement,
-    FiniteElement,
-    Function,
-    FunctionSpace,
-    HDivElement,
-    LinearSolver,
-    MixedElement,
-    TensorProductElement,
-    TestFunction,
-    TrialFunction,
-    VectorElement,
-    VertexBasedLimiter,
-    assemble,
-    dx,
-    max_value,
-    min_value,
-)
-from firedrake.functionspaceimpl import WithGeometry
+from firedrake import *
 from pyop2 import op2
-from pyop2.profiling import timed_function, timed_region, timed_stage  # NOQA
+from pyop2.profiling import timed_stage
 
 __all__ = ["VertexBasedP1DGLimiter"]
 
 
 def assert_function_space(
-    fs: WithGeometry, family: str | list[str], degree: int
+    fs: functionspaceimpl.WithGeometry, family: str | list[str], degree: int
 ) -> None:
     """Checks the family and degree of the function space.
 
@@ -101,7 +83,9 @@ def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
     return ufl_element
 
 
-def get_facet_mask(function_space: WithGeometry, facet: str = "bottom") -> np.ndarray:
+def get_facet_mask(
+    function_space: functionspaceimpl.WithGeometry, facet: str = "bottom"
+) -> np.ndarray:
     """The meaning of top/bottom depends on the extrusion's direction. Here, we assume
     that the mesh has been extruded upwards (along the positive z axis).
 
@@ -151,7 +135,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
     def __init__(
         self,
-        p1dg_space: WithGeometry,
+        p1dg_space: functionspaceimpl.WithGeometry,
         clip_min: Optional[float] = None,
         clip_max: Optional[float] = None,
     ) -> None:

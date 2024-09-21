@@ -224,16 +224,11 @@ z.subfunctions[1].rename("Pressure")
 # allowing the simulation to exit when a steady-state has been achieved.
 
 # +
-approximation = EquationSystem(
-    approximation="BA",
-    dimensional=False,
-    parameters={"Ra": 1e4},
-    buoyancy_terms=["thermal"],
-)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e4})
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20000  # Maximum number of timesteps
+timesteps = 20_000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Used to determine if solution has reached a steady state.

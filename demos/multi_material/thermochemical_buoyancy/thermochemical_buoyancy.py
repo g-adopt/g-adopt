@@ -167,11 +167,8 @@ Ra_c = material_field(psi, [Ra_c_dense, Ra_c_reference], interface="sharp")
 
 Ra = 3e5
 
-approximation = EquationSystem(
-    approximation="BA",
-    dimensional=False,
-    parameters={"Ra": Ra, "Ra_c": Ra_c},
-    buoyancy_terms=["compositional", "thermal"],
+approximation = Approximation(
+    "BA", dimensional=False, parameters={"Ra": Ra, "Ra_c": Ra_c}
 )
 # -
 

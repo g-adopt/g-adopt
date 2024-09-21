@@ -1,7 +1,7 @@
 import firedrake as fd
 import pytest
 
-from gadopt.approximations import EquationSystem
+from gadopt.approximations import Approximation
 from gadopt.stokes_integrators import (
     StokesSolver,
     direct_stokes_solver_parameters,
@@ -67,9 +67,7 @@ def test_solver_parameters_argument():
                     | direct_stokes_solver_parameters
                 )
 
-        approximation = EquationSystem(
-            approximation="BA", dimensional=False, parameters={"mu": mu}
-        )
+        approximation = Approximation("BA", dimensional=False, parameters={"mu": mu})
         stokes_solver = StokesSolver(
             approximation, stokes_function, solver_parameters=solver_parameters
         )

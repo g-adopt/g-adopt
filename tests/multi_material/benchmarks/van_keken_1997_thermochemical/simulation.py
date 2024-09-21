@@ -182,7 +182,6 @@ materials = [dense_material, reference_material]
 
 # Approximation parameters
 dimensional = False
-buoyancy_terms = ["compositional", "thermal"]
 Ra = 3e5
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}

@@ -34,11 +34,8 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
         )  # Initialise temperature field
 
     def initialise_approximation(self):
-        self.approximation = EquationSystem(
-            approximation="BA",
-            dimensional=False,
-            parameters={"Ra": 1, "alpha": self.alpha},
-            buoyancy_terms=["thermal"],
+        self.approximation = Approximation(
+            "BA", dimensional=False, parameters={"Ra": 1, "alpha": self.alpha}
         )
 
     def initialise_free_surfaces(self):

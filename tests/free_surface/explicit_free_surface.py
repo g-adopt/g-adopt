@@ -116,7 +116,7 @@ class ExplicitFreeSurfaceModel:
         pass
 
     def initialise_approximation(self):
-        self.approximation = EquationSystem(approximation="BA", dimensional=False)
+        self.approximation = Approximation("BA", dimensional=False)
 
     def initialise_free_surfaces(self):
         # initial free surface amplitude (dimensionless)

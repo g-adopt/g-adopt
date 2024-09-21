@@ -66,11 +66,8 @@ def model(ref_level, nlayers, delta_t, steps=None):
     )
 
     mu = exp(4.605170185988092 * (0.5 - T))
-    approximation = EquationSystem(
-        approximation="BA",
-        dimensional=False,
-        parameters={"Ra": 7e3, "mu": mu},
-        buoyancy_terms=["thermal"],
+    approximation = Approximation(
+        "BA", dimensional=False, parameters={"Ra": 7e3, "mu": mu}
     )
 
     delta_t = Constant(delta_t)  # Initial time-step

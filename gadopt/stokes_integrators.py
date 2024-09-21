@@ -10,7 +10,7 @@ from typing import Optional
 
 import firedrake as fd
 
-from .approximations import EquationSystem
+from .approximations import Approximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
@@ -113,7 +113,7 @@ def create_stokes_nullspace(
     closed: bool = True,
     rotational: bool = False,
     translations: Optional[list[int]] = None,
-    approximation: Optional[EquationSystem] = None,
+    approximation: Optional[Approximation] = None,
     top_subdomain_id: Optional[str | int] = None,
 ) -> fd.nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
@@ -174,7 +174,7 @@ def create_stokes_nullspace(
         V_nullspace = Z[0]
 
     if closed:
-        if approximation and approximation.approximation == "ALA":
+        if approximation and approximation.preset == "ALA":
             p = ala_right_nullspace(Z[1], approximation, top_subdomain_id)
             p_nullspace = fd.VectorSpaceBasis([p], comm=Z.mesh().comm)
             p_nullspace.orthonormalize()
@@ -228,7 +228,7 @@ class StokesSolver:
 
     def __init__(
         self,
-        approximation: EquationSystem,
+        approximation: Approximation,
         z: fd.Function,
         T: fd.Function = None,
         bcs: dict[int, dict[str, Number]] = {},
@@ -265,26 +265,9 @@ class StokesSolver:
         else:
             self.set_solver_parameters(solver_parameters)
 
-        # Add terms to Stokes equations.
-        terms_kwargs = {
-            "u": self.split_solution[0],
-            "p": self.split_solution[1],
-            "T": self.T,
-        }
-        for i, terms_eq in enumerate(terms_stokes):
-            eq = Equation(
-                self.tests[i],
-                self.Z[i],
-                terms_eq,
-                terms_kwargs=terms_kwargs,
-                approximation=approximation,
-                bcs=self.weak_bcs,
-                quad_degree=quad_degree,
-            )
-            self.F -= eq.residual(self.split_solution[i])
+        self.set_equation()
 
-        # Solver object is set up later to permit editing default solver parameters
-        # specified above.
+        # Solver object is set up later to permit editing default solver parameters.
         self._solver_setup = False
 
     def set_boundary_conditions(self) -> None:
@@ -434,6 +417,25 @@ class StokesSolver:
                     {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
                 )
 
+    def set_equation(self) -> None:
+        """Sets up UFL forms for the Stokes equations residual."""
+        terms_kwargs = {
+            "u": self.split_solution[0],
+            "p": self.split_solution[1],
+            "T": self.T,
+        }
+        for i, terms_eq in enumerate(terms_stokes):
+            eq = Equation(
+                self.tests[i],
+                self.Z[i],
+                terms_eq,
+                terms_kwargs=terms_kwargs,
+                approximation=self.approximation,
+                bcs=self.weak_bcs,
+                quad_degree=self.quad_degree,
+            )
+            self.F -= eq.residual(self.split_solution[i])
+
     def setup_solver(self) -> None:
         """Sets up the solver."""
         appctx = {"mu": self.approximation.mu / self.approximation.rho}  # fd.MassInvPC
@@ -482,7 +484,7 @@ class StokesSolver:
 
 def ala_right_nullspace(
     W: fd.functionspaceimpl.WithGeometry,
-    approximation: EquationSystem,
+    approximation: Approximation,
     top_subdomain_id: str | int,
 ) -> fd.Function:
     r"""Compute pressure nullspace for Anelastic Liquid Approximation.

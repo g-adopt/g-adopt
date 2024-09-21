@@ -187,14 +187,12 @@ if args.benchmark == "trim_2023":
 
 if simulation.dimensional:
     approximation_parameters["g"] = simulation.g
-elif "thermal" in simulation.buoyancy_terms:
+    approximation_parameters["T"] = 0
+elif hasattr(simulation, "Ra"):
     approximation_parameters["Ra"] = simulation.Ra
 
-approximation = ga.EquationSystem(
-    approximation="BA",
-    dimensional=simulation.dimensional,
-    parameters=approximation_parameters,
-    buoyancy_terms=simulation.buoyancy_terms,
+approximation = ga.Approximation(
+    "BA", dimensional=simulation.dimensional, parameters=approximation_parameters
 )
 
 # Timestep object

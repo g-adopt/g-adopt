@@ -83,12 +83,7 @@ mu_lin = exp(-gamma_T * T + gamma_Z * (1 - X[1]))
 mu_plast = mu_star + (sigma_y / epsii)  # plastic component of rheological formulation
 mu = (2.0 * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
 
-approximation = EquationSystem(
-    approximation="BA",
-    dimensional=False,
-    parameters={"Ra": 1e2, "mu": mu},
-    buoyancy_terms=["thermal"],
-)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e2, "mu": mu})
 # -
 
 # As with the previous examples, we set up a *Timestep Adaptor*,
@@ -102,7 +97,7 @@ approximation = EquationSystem(
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20000  # Maximum number of timesteps
+timesteps = 20_000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 # Used to determine if solution has reached a steady state.
 steady_state_tolerance = 1e-9

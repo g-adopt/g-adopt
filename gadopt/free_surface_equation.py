@@ -4,7 +4,7 @@ All terms implement the UFL residual as it would be on the RHS of the equation:
 
   dq/dt = \sum term
 
-This sign-convention is for compatibility with Thetis' time integrators. In general,
+This sign-convention is for compatibility with Thetis's time integrators. In general,
 however, we like to think about the terms as they are on the LHS. Therefore, in the
 function below, we assemble in F as it would be on the LHS:
 

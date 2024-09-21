@@ -116,7 +116,6 @@ materials = [buoyant_material, dense_material]
 
 # Approximation parameters
 dimensional = False
-buoyancy_terms = ["compositional"]
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
 stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"ux": 0, "uy": 0}, 4: {"ux": 0, "uy": 0}}

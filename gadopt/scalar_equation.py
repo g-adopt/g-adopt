@@ -83,25 +83,27 @@ def scalar_diffusion_term(
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    k = eq.approximation.k
+    kappa = eq.diffusivity
     dim = eq.mesh.geometric_dimension()
-    cond_tensor = k if len(k.ufl_shape) == 2 else k * Identity(dim)
+    diff_tensor = kappa if len(kappa.ufl_shape) == 2 else kappa * Identity(dim)
 
-    if hasattr(eq, "reference_for_conduction"):
-        q = trial + eq.reference_for_conduction
+    if hasattr(eq, "reference_for_diffusion"):
+        q = trial + eq.reference_for_diffusion
+    else:
+        q = trial
 
-    F = inner(grad(eq.test), dot(cond_tensor, grad(q))) * eq.dx
+    F = inner(grad(eq.test), dot(diff_tensor, grad(q))) * eq.dx
 
     sigma = interior_penalty_factor(eq)
     if not is_continuous(eq.trial_space):
         sigma_int = sigma * avg(FacetArea(eq.mesh) / CellVolume(eq.mesh))
         F += (
             sigma_int
-            * inner(jump(eq.test, eq.n), dot(avg(cond_tensor), jump(q, eq.n)))
+            * inner(jump(eq.test, eq.n), dot(avg(diff_tensor), jump(q, eq.n)))
             * eq.dS
         )
-        F -= inner(avg(dot(cond_tensor, grad(eq.test))), jump(q, eq.n)) * eq.dS
-        F -= inner(jump(eq.test, eq.n), avg(dot(cond_tensor, grad(q)))) * eq.dS
+        F -= inner(avg(dot(diff_tensor, grad(eq.test))), jump(q, eq.n)) * eq.dS
+        F -= inner(jump(eq.test, eq.n), avg(dot(diff_tensor, grad(q)))) * eq.dS
 
     for bc_id, bc in eq.bcs.items():
         if "q" in bc and "flux" in bc:
@@ -115,15 +117,15 @@ def scalar_diffusion_term(
                 2
                 * sigma_ext
                 * eq.test
-                * inner(eq.n, dot(cond_tensor, eq.n))
+                * inner(eq.n, dot(diff_tensor, eq.n))
                 * jump_q
                 * eq.ds(bc_id)
             )
-            F -= inner(dot(cond_tensor, grad(eq.test)), eq.n) * jump_q * eq.ds(bc_id)
-            F -= inner(eq.test * eq.n, dot(cond_tensor, grad(q))) * eq.ds(bc_id)
+            F -= inner(dot(diff_tensor, grad(eq.test)), eq.n) * jump_q * eq.ds(bc_id)
+            F -= inner(eq.test * eq.n, dot(diff_tensor, grad(q))) * eq.ds(bc_id)
         elif "flux" in bc:
             # Here we need only the third term because we assume jump_q = 0
-            # (q_ext = trial) and flux = kappa dq/dn = dot(n, dot(cond_tensor, grad(q)).
+            # (q_ext = trial) and flux = kappa dq/dn = dot(n, dot(diff_tensor, grad(q)).
             F -= eq.test * bc["flux"] * eq.ds(bc_id)
 
     return -F
@@ -143,9 +145,9 @@ def scalar_absorption_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     r"""Scalar absorption term `\alpha_T T`."""
-    alpha = eq.absorption_coefficient if hasattr(eq, "absorption_coefficient") else 0
+    sink = eq.sink if hasattr(eq, "sink") else 0
     # Implement absorption term implicitly at current time step.
-    F = dot(eq.test, alpha * trial) * eq.dx
+    F = dot(eq.test, sink * trial) * eq.dx
 
     return -F
 
@@ -164,34 +166,3 @@ def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
 
     """
     return dot(eq.test, trial) * eq.dx
-
-
-def mass_term_energy(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
-    """UFL form for the mass term used in the time discretisation.
-
-    Arguments:
-        eq:
-          G-ADOPT Equation.
-        trial:
-          Firedrake trial function.
-
-    Returns:
-        The UFL form associated with the mass term of the equation.
-
-    """
-    return eq.approximation.rho * eq.approximation.cp * dot(eq.test, trial) * eq.dx
-
-
-residual_terms_advection = [
-    scalar_absorption_term,
-    scalar_advection_term,
-    scalar_source_term,
-]
-residual_terms_advection_diffusion = [
-    scalar_absorption_term,
-    scalar_advection_term,
-    scalar_diffusion_term,
-    scalar_source_term,
-]

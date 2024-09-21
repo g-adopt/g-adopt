@@ -197,21 +197,14 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     alpha_SPD = conditional(beta < c_safety * 2 * mu, 1, c_safety * 2 * mu / beta)
 
     # SCK:
-    approximation_picard = EquationSystem(
-        approximation="BA", dimensional=False, parameters={"mu": mu_nl}
-    )
-    approximation_newton = EquationSystem(
-        approximation="BA", dimensional=False, parameters={"mu": mu}
-    )
+    approximation = Approximation("BA", dimensional=False, parameters={"mu": mu_nl})
     bcs = {left_id: {"ux": 1}, right_id: {"ux": -1}, bottom_id: {"uy": 0}}
     picard_solver = StokesSolver(
-        approximation_picard,
-        z,
-        bcs=bcs,
-        solver_parameters=initial_picard_solver_parameters,
+        approximation, z, bcs=bcs, solver_parameters=initial_picard_solver_parameters
     )
+    approximation.mu = mu
     newton_solver = StokesSolver(
-        approximation_newton, z, bcs=bcs, solver_parameters=newton_solver_parameters
+        approximation, z, bcs=bcs, solver_parameters=newton_solver_parameters
     )
 
     if stabilisation:

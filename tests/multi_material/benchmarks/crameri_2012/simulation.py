@@ -149,7 +149,6 @@ materials = [mantle, lithosphere, air]
 
 # Approximation parameters
 dimensional = True
-buoyancy_terms = ["compositional"]
 g = 10
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}

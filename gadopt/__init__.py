@@ -6,8 +6,9 @@ from logging import WARNING as WARNING
 
 from firedrake import *
 
-from .approximations import EquationSystem as EquationSystem
+from .approximations import Approximation as Approximation
 from .diagnostics import GeodynamicalDiagnostics as GeodynamicalDiagnostics
+from .energy_solver import AdvectionDiffusionSolver as AdvectionDiffusionSolver
 from .energy_solver import EnergySolver as EnergySolver
 from .level_set_tools import LevelSetSolver as LevelSetSolver
 from .level_set_tools import entrainment as entrainment

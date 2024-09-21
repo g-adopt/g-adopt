@@ -53,12 +53,7 @@ def rectangle_taylor_test(case):
     u.rename("Velocity")
     p.rename("Pressure")
 
-    approximation = EquationSystem(
-        approximation="BA",
-        dimensional=False,
-        parameters={"Ra": 1e6},
-        buoyancy_terms=["thermal"],
-    )
+    approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e6})
 
     # Define time stepping parameters:
     max_timesteps = 80

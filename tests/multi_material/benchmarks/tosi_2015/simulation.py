@@ -103,7 +103,6 @@ materials = [material, material]
 
 # Approximation parameters
 dimensional = False
-buoyancy_terms = ["compositional", "thermal"]
 Ra = 1e2
 
 # Parameters to initialise temperature

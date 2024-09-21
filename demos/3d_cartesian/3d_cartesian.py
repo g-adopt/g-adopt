@@ -68,12 +68,7 @@ z.subfunctions[1].rename("Pressure")
 
 # We next specify the important constants for this problem, and set up the approximation.
 
-approximation = EquationSystem(
-    approximation="BA",
-    dimensional=False,
-    parameters={"Ra": 3e4},
-    buoyancy_terms=["thermal"],
-)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 3e4})
 
 # As with the previous example, we set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -84,7 +79,7 @@ approximation = EquationSystem(
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20000  # Maximum number of timesteps
+timesteps = 20_000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 # Used to determine if solution has reached a steady state.
 steady_state_tolerance = 1e-7

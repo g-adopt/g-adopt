@@ -148,12 +148,7 @@ Ra_c_dense = 1
 # Material fields defined based on each material value and location
 Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="sharp")
 
-approximation = EquationSystem(
-    approximation="BA",
-    dimensional=False,
-    parameters={"Ra_c": Ra_c},
-    buoyancy_terms=["compositional"],
-)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class

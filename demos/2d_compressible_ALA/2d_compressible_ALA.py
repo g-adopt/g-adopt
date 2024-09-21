@@ -63,11 +63,10 @@ Tbar.interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)
 # These fields are used to set up our Anelastic Liquid Approximation. Alongside adding the
 # requirement for specifying the bulk modulus, this is the key change relative to our tutorial under the TALA approximation.
 
-approximation = EquationSystem(
-    approximation="ALA",
+approximation = Approximation(
+    "ALA",
     dimensional=False,
     parameters={"Ra": Ra, "Di": Di, "Gamma": Gamma, "rho": rhobar, "T": Tbar},
-    buoyancy_terms=["compressible", "thermal"],
 )
 
 # As with the previous examples, we next set up a *Timestep Adaptor*,
@@ -81,7 +80,7 @@ approximation = EquationSystem(
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20000  # Maximum number of timesteps
+timesteps = 20_000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 # Used to determine if solution has reached a steady state.
 steady_state_tolerance = 1e-9

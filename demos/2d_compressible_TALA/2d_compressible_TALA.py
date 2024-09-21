@@ -137,11 +137,8 @@ Tbar.interpolate(T0 * exp((1.0 - X[1]) * Di) - T0)
 
 # These fields are used to set up our Truncated Anelastic Liquid Approximation.
 
-approximation = EquationSystem(
-    approximation="TALA",
-    dimensional=False,
-    parameters={"Ra": Ra, "Di": Di, "rho": rhobar, "T": Tbar},
-    buoyancy_terms=["thermal"],
+approximation = Approximation(
+    "TALA", dimensional=False, parameters={"Ra": Ra, "Di": Di, "rho": rhobar, "T": Tbar}
 )
 
 # As with the previous example, we next set up a *Timestep Adaptor*,
@@ -155,7 +152,7 @@ approximation = EquationSystem(
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20000  # Maximum number of timesteps
+timesteps = 20_000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 # Used to determine if solution has reached a steady state.
 steady_state_tolerance = 1e-9
