@@ -78,7 +78,8 @@ class Approximation:
     _momentum_components = {"BA": ["compositional_buoyancy", "thermal_buoyancy"]}
     _momentum_components["EBA"] = _momentum_components["BA"] + []
     _momentum_components["TALA"] = _momentum_components["EBA"] + ["compressible_stress"]
-    _momentum_components["ALA"] = _momentum_components["TALA"] + ["compressible_buoyancy"
+    _momentum_components["ALA"] = _momentum_components["TALA"] + [
+        "compressible_buoyancy"
     ]
 
     _energy_components = {"BA": ["heat_source"]}
@@ -91,7 +92,7 @@ class Approximation:
 
     def __init__(
         self,
-        preset_or_components: str | dict[str : list[str]],
+        preset_or_components: str | dict[str, list[str]],
         *,
         dimensional: bool,
         parameters: dict[str, Number | fd.Constant | fd.Function] = {},

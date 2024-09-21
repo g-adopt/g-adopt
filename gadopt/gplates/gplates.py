@@ -6,7 +6,6 @@ import pygplates
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape
 from scipy.spatial import cKDTree
-from ..utility import log
 
 from ..utility import log
 
