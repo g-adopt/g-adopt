@@ -106,7 +106,7 @@ class Equation:
         )
 
 
-def cell_edge_integral_ratio(mesh, p) -> int:
+def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     r"""
     Ratio C such that \int_f u^2 <= C Area(f)/Volume(e) \int_e u^2 for facets f,
     elements e, and polynomials u of degree p.

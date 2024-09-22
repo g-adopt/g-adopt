@@ -252,7 +252,7 @@ class AdvectionDiffusionSolver(AdvectionDiffusionBase):
         delta_t: fd.Constant,
         timestepper: RungeKuttaTimeIntegrator,
         *,
-        terms_kwargs: dict[str, float] = {},
+        terms_kwargs: Optional[dict[str, float]] = None,
         solution_old: Optional[fd.Function] = None,
         bcs: dict[int, dict[str, Number]] = {},
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
@@ -270,8 +270,9 @@ class AdvectionDiffusionSolver(AdvectionDiffusionBase):
         if isinstance(terms, str):
             terms = [terms]
 
+        if terms_kwargs is None:
+            terms_kwargs = {}
         assert all(term_kwarg in self._terms_kwargs for term_kwarg in terms_kwargs)
-        terms_kwargs["u"] = u
 
         self.set_equation(terms, u, terms_kwargs, su_diffusivity)
 
@@ -282,6 +283,8 @@ class AdvectionDiffusionSolver(AdvectionDiffusionBase):
         terms_kwargs: dict[str, float],
         su_diffusivity: Optional[float],
     ) -> None:
+        terms_kwargs["u"] = u
+
         if su_diffusivity is not None:
             terms_kwargs["su_nubar"] = self.su_nubar(u, su_diffusivity)
 
