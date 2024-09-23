@@ -11,7 +11,8 @@ from typing import Optional
 import firedrake as fd
 
 from .approximations import BaseApproximation, AnelasticLiquidApproximation
-from .momentum_equation import StokesEquations
+from .equations import Equation
+from .momentum_equation import residual_terms_stokes as terms_stokes
 from .utility import DEBUG, INFO, depends_on, ensure_constant, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
@@ -215,8 +216,6 @@ class StokesSolver:
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
-        self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
-                                         compressible=approximation.compressible)
         self.solution = z
         self.solution_old = None
         self.approximation = approximation
@@ -226,17 +225,6 @@ class StokesSolver:
         self.linear = not depends_on(self.mu, self.solution)
 
         self.solver_kwargs = kwargs
-        u, p = fd.split(self.solution)
-        self.k = upward_normal(self.Z.mesh())
-        self.fields = {
-            'velocity': u,
-            'pressure': p,
-            'viscosity': self.mu,
-            'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
-                                                   # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
-            'source': self.approximation.buoyancy(p, T) * self.k,
-            'rho_continuity': self.approximation.rho_continuity(),
-        }
 
         self.weak_bcs = {}
         self.strong_bcs = []
@@ -255,9 +243,25 @@ class StokesSolver:
                     weak_bc[bc_type] = value
             self.weak_bcs[id] = weak_bc
 
+        u, p = fd.split(self.solution)
+        terms_kwargs = {"u": u, "p": p, "T": T, "mu": mu}
+
+        self.equations = []
+        for i, terms_eq in enumerate(terms_stokes):
+            self.equations.append(
+                Equation(
+                    self.test[i],
+                    self.Z[i],
+                    terms_eq,
+                    terms_kwargs=terms_kwargs,
+                    approximation=self.approximation,
+                    bcs=self.weak_bcs,
+                    quad_degree=quad_degree,
+                )
+            )
         self.F = 0
-        for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
-            self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
+        for eq, trial in zip(self.equations, fd.split(self.solution)):
+            self.F -= eq.residual(trial)
 
         if isinstance(solver_parameters, dict):
             self.solver_parameters = solver_parameters
