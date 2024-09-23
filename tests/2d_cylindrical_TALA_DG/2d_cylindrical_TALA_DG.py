@@ -78,7 +78,6 @@ rhat = as_vector([X[0] / r, X[1] / r])
 vr = Function(V_scalar, name="Radial_Velocity")  # For diagnostic output
 
 # We next set up and initialise our Temperature field from a checkpoint:
-T = Function(Q, name="Temperature")
 with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
     T = f.load_function(mesh, "Temperature")
 
@@ -222,6 +221,7 @@ stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-2
 # +
 output_file = VTKFile("output.pvd")
 ref_file = VTKFile("reference_state.pvd")
+ref_file.write(*approximation_profiles.values(), mu_rad, T_avg)
 output_frequency = 10
 
 plog = ParameterLog("params.log", mesh)
@@ -245,7 +245,6 @@ for timestep in range(timesteps):
         # interpolate mu to field for visualisation
         mu_field.interpolate(mu)
         output_file.write(*z.subfunctions, vr, FullT, T, T_dev, mu_field)
-        ref_file.write(*approximation_profiles.values(), mu_rad, T_avg)
 
     if timestep != 0:
         dt = t_adapt.update_timestep()

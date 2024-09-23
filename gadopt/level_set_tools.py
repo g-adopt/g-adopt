@@ -138,7 +138,6 @@ class LevelSetSolver:
 
         self.proj_solver = self.gradient_L2_proj()
 
-        self.ls_terms_kwargs = {"u": velocity}
         self.reini_terms_kwargs = {
             "level_set_grad": self.ls_grad_proj,
             "epsilon": epsilon,

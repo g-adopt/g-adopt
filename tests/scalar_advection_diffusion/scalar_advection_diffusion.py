@@ -1,6 +1,6 @@
-# Demo for scalar advection-diffusion - this is adapted from the scalar
-# advection demo again using G-ADOPT's Energy solver and a CG discretisation
-# with Streamline Upwind (SU) stabilisation but here we introduce some explicit diffusion.
+# Demo for scalar advection-diffusion - this is adapted from the scalar advection demo
+# again using G-ADOPT's AdvectionDiffusionSolver and a CG discretisation with Streamline
+# Upwind (SU) stabilisation, albeit here we introduce some explicit diffusion.
 
 from gadopt import *
 from gadopt.time_stepper import DIRK33
@@ -54,10 +54,9 @@ outfile.write(q)
 T = 10.0
 dt = T / 600.0
 
-# Use G-ADOPT's Energy Solver to advect the tracer. The system is considered
-# non-dimensional and controlled only by the thermal diffusivity value. We use the
-# diagonaly implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the
-# boundary conditions will be applied strongly by the energy solver.
+# Use G-ADOPT's AdvectionDiffusionSolver to advect the tracer. We use the diagonaly
+# implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the boundary
+# conditions will be applied strongly by the solver.
 terms = ["advection", "diffusion"]
 terms_kwargs = {"diffusivity": kappa}
 q_top = 1.0

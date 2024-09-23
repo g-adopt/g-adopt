@@ -72,9 +72,8 @@ T = 2 * pi
 dt = T / 600.0
 q_in = Constant(1.0)
 
-# Use G-ADOPT's advection-diffusion solver to advect the tracer. We only include an
-# advection term and set the su diffusiviy to zero. We also apply weak boundary
-# conditions on inflow regions.
+# Use G-ADOPT's AdvectionDiffusionSolver to advect the tracer. We only include an
+# advection term and apply weak boundary conditions on inflow regions.
 bc_in = {"q": q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 adv_diff_solver = AdvectionDiffusionSolver(

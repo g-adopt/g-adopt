@@ -18,9 +18,6 @@ $$
 
 and then return `-F`.
 
-Users should not interact with these classes; instead, please use
-the solver provided in the stokes_integrators module.
-
 """
 
 from firedrake import *
@@ -137,11 +134,10 @@ def viscosity_term(
         if "normal_stress" in bc:
             F += dot(eq.test, bc["normal_stress"] * eq.n) * eq.ds(bc_id)
 
-        # if "drag" in bc:  # (bottom) drag of the form tau = -C_D trial |trial|
-        #     C_D = bc["drag"]
-        #     unorm = pow(dot(u_lagged, u_lagged) + 1e-6, 0.5)
-
-        #     F += dot(-test, -C_D * unorm * trial) * ds(bc_id)
+        # if "drag" in bc:  # (bottom) drag of the form tau = -drag trial |trial|
+        #     drag = bc["drag"]
+        #     unorm = pow(dot(trial_lagged, trial_lagged) + 1e-6, 0.5)
+        #     F += dot(eq.test, drag * unorm * trial) * eq.ds(bc_id)
 
     return -F
 

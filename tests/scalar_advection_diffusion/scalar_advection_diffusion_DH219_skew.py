@@ -40,10 +40,9 @@ outfile.write(q)
 T = 10.0
 dt = 0.01
 
-# Use G-ADOPT's Energy Solver to advect the tracer. The system is considered
-# non-dimensional and controlled only by the thermal diffusivity value. We use the
-# diagonaly implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the
-# boundary conditions will be applied strongly by the energy solver.
+# Use G-ADOPT's AdvectionDiffusionSolver to advect the tracer. We use the diagonaly
+# implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the boundary
+# conditions will be applied strongly by the solver.
 terms = ["advection", "diffusion"]
 terms_kwargs = {"diffusivity": kappa}
 # strongly applied dirichlet bcs on top and bottom

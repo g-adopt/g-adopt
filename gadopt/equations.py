@@ -33,14 +33,16 @@ class Equation:
         residual_terms:
           List of equation terms contributing to the residual.
         mass_term:
-          List of equation terms contributing to the residual.
+          Callable returning the equation's mass term.
         terms_kwargs:
           Dictionary of fields and parameters used in the equation's weak form.
+        approximation:
+          G-ADOPT approximation for the system of equations considered.
         bcs:
           Dictionary of identifier-value pairs specifying weak boundary conditions.
         quad_degree:
-          Integer specifying the quadrature degree. If not provided, it is set to
-          `2p + 1`, where p is the polynomial degree of the trial space.
+          Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
+          where p is the polynomial degree of the trial space.
         rescale_factor:
           UFL expression used to rescale mass and residual terms.
 
@@ -57,7 +59,12 @@ class Equation:
     quad_degree: InitVar[Optional[int]] = None
     rescale_factor: Number | fd.Constant | fd.Function = 1
 
-    def __post_init__(self, residual_terms, terms_kwargs, quad_degree) -> None:
+    def __post_init__(
+        self,
+        residual_terms: Callable | list[Callable],
+        terms_kwargs: dict[str, Any],
+        quad_degree: Optional[int],
+    ) -> None:
         if not isinstance(residual_terms, list):
             residual_terms = [residual_terms]
         self.residual_terms = residual_terms
@@ -132,7 +139,7 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
         raise NotImplementedError("Unknown cell type in mesh: {}".format(cell_type))
 
 
-def interior_penalty_factor(eq: Equation) -> float:
+def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
     """Interior Penalty method
     For details on the choice of sigma, see
     https://www.researchgate.net/publication/260085826
@@ -150,6 +157,6 @@ def interior_penalty_factor(eq: Equation) -> float:
         # safety factor: 1.0 is theoretical minimum
         alpha = eq.interior_penalty if hasattr(eq, "interior_penalty") else 2.0
         num_facets = eq.mesh.ufl_cell().num_facets()
-        sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree - 1) * num_facets
+        sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
 
     return sigma
