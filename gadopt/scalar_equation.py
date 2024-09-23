@@ -91,7 +91,7 @@ def scalar_diffusion_term(
 
     F = inner(grad(eq.test), dot(diff_tensor, grad(q))) * eq.dx
 
-    sigma = interior_penalty_factor(eq)
+    sigma = interior_penalty_factor(eq, shift=-1)
     if not is_continuous(eq.trial_space):
         sigma_int = sigma * avg(FacetArea(eq.mesh) / CellVolume(eq.mesh))
         F += (

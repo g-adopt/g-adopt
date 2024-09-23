@@ -139,7 +139,7 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
         raise NotImplementedError("Unknown cell type in mesh: {}".format(cell_type))
 
 
-def interior_penalty_factor(eq: Equation) -> float:
+def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
     """Interior Penalty method
     For details on the choice of sigma, see
     https://www.researchgate.net/publication/260085826
@@ -157,6 +157,6 @@ def interior_penalty_factor(eq: Equation) -> float:
         # safety factor: 1.0 is theoretical minimum
         alpha = eq.interior_penalty if hasattr(eq, "interior_penalty") else 2.0
         num_facets = eq.mesh.ufl_cell().num_facets()
-        sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree - 1) * num_facets
+        sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
 
     return sigma

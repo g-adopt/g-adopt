@@ -62,7 +62,7 @@ def viscosity_term(
     mu = eq.mu
     stress = 2 * mu * sym(grad(eq.u))
     if compressible_stress:
-        stress -= 2 / 3 * mu * Identity(dim) * div(eq.u)
+        stress -= 2 / 3 * mu * identity * div(eq.u)
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
     sigma = interior_penalty_factor(eq)
