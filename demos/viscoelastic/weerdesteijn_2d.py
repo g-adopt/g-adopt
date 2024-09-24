@@ -211,8 +211,8 @@ class Weerdesteijn2d:
         pass
 
     def viscosity_values(self):
-        # Log10(viscosity)
-        return [17, -2, -2, -1.698970004, 0]
+        # Log10(viscosity) using math log10 function
+        return [17, -2, -2, -1.6989700043360187, 0]
 
     def initialise_background_field(self, field, background_values):
         if self.vertical_tanh_width is None:
@@ -236,7 +236,7 @@ class Weerdesteijn2d:
         pass
 
     def initialise_depth(self):
-        return self.X[1]
+        return self.X[self.vertical_component]
 
     def setup_ice_load(self):
         if self.short_simulation:
@@ -380,5 +380,5 @@ class Weerdesteijn2d:
         objective_checkpoint_file.close()
 
 if __name__ == "__main__":
-    simulation = Weerdesteijn2d(nz=320)
+    simulation = Weerdesteijn2d()
     simulation.run_simulation()
