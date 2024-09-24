@@ -133,7 +133,8 @@ class Weerdesteijn2d:
         self.ice_load = Function(W)
         self.setup_ice_load()
         self.update_ice_load()
-        File("ice.pvd").write(self.ice_load)
+        if do_write:
+            File("ice.pvd").write(self.ice_load)
         # Add low viscosity region
         if low_viscosity_region:
             r = self.initialise_r()
