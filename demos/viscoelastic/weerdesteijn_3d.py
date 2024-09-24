@@ -8,6 +8,7 @@ parser.add_argument("--dx", default=5, type=float, help="Horizontal resolution i
 parser.add_argument("--refined_surface", action='store_true', help="Use refined surface mesh")
 parser.add_argument("--refined_box", action='store_true', help="Use refined 3d box mesh")
 parser.add_argument("--nz", default=80, type=int, help="Number of vertical layers", required=False)
+parser.add_argument("--tanh_width", default=None, type=float, help="Vertical tanh width", required=False)
 parser.add_argument("--dt", default=50, type=float, help="Timestep in years", required=False)
 parser.add_argument("--Tend", default=110e3, type=float, help="Simulation end time in years", required=False)
 parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
@@ -62,16 +63,16 @@ class Weerdesteijn3d(Weerdesteijn2d):
         if self.refined_box:
             return f"/g/data/vo05/ws9229/viscoelastic/3d_weerdesteijn/{self.name}-refinedbox-isodxz{round(self.dx/1000)}km-dt{self.dt_years}years-chk.h5"
         else:
-            return f"/g/data/vo05/ws9229/viscoelastic/3d_weerdesteijn/{self.name}-refinedsurface{self.refined_surface}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years-chk.h5"
+            return f"/g/data/vo05/ws9229/viscoelastic/3d_weerdesteijn/{self.name}-refinedsurface{self.refined_surface}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years-tanh{self.vertical_tanh_width}-chk.h5"
 
     def displacement_filename(self):
         if self.refined_box:
             return f"displacement-{self.name}-refinedbox-isodxz{round(self.dx/1000)}km-dt{self.dt_years}years.dat"
         else:
-            return f"displacement-{self.name}-refinedsurface{self.refined_surface}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years.dat"
+            return f"displacement-{self.name}-refinedsurface{self.refined_surface}-dx{round(self.dx/1000)}km-nz{self.nz}-dt{self.dt_years}years-tanh{self.vertical_tanh_width}.dat"
 
 
 if __name__ == "__main__":
-    simulation = Weerdesteijn3d(dx=args.dx*1e3, refined_surface=args.refined_surface, refined_box=args.refined_box, nz=args.nz, dt_years=args.dt, Tend_years=args.Tend,
-                                LOAD_CHECKPOINT=args.load_checkpoint, checkpoint_file=args.checkpoint_file, Tstart=args.Tstart)
+    simulation = Weerdesteijn3d(dx=args.dx*1e3, refined_surface=args.refined_surface, refined_box=args.refined_box, nz=args.nz, vertical_tanh_width=args.tanh_width, dt_years=args.dt, Tend_years=args.Tend,
+                                LOAD_CHECKPOINT=args.load_checkpoint, checkpoint_file=args.checkpoint_file, Tstart=args.Tstart, do_write=False)
     simulation.run_simulation()
