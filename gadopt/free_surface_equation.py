@@ -23,7 +23,7 @@ def free_surface_term(
     eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
 ) -> fd.Form:
     r"""Free Surface term: u \dot n"""
-    F = -eq.test * fd.dot(eq.u, eq.n) * eq.ds(eq.free_surface_id)
+    F = -eq.buoyancy_scale * eq.test * fd.dot(eq.u, eq.n) * eq.ds(eq.boundary_id)
 
     return -F
 
@@ -43,4 +43,9 @@ def mass_term(
         The UFL form associated with the mass term of the equation.
 
     """
-    return fd.dot(eq.test, trial) * vertical_component(eq.n) * eq.ds(eq.free_surface_id)
+    return (
+        eq.buoyancy_scale
+        * fd.dot(eq.test, trial)
+        * vertical_component(eq.n)
+        * eq.ds(eq.boundary_id)
+    )

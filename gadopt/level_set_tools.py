@@ -217,7 +217,7 @@ class LevelSetSolver:
             solver_parameters=self.solver_params,
         )
 
-    def solve(self, step: int) -> None:
+    def solve(self, step: int, equation: Optional[str] = None) -> None:
         """Updates the level-set function.
 
         Calls advection and reinitialisation solvers within a subcycling loop.
@@ -227,15 +227,18 @@ class LevelSetSolver:
         Args:
             step:
               An integer representing the current time-loop iteration.
+            equation:
+              An optional string specifying which equation to solve if not both.
         """
         if not self.solvers_ready:
             self.set_up_solvers()
             self.solvers_ready = True
 
         for subcycle in range(self.subcycles):
-            self.ls_solver.solve()
+            if equation != "reinitialisation":
+                self.ls_solver.solve()
 
-            if step % self.reini_params["frequency"] == 0:
+            if equation != "advection" and step % self.reini_params["frequency"] == 0:
                 for reini_step in range(self.reini_params["iterations"]):
                     self.reini_ts.advance(
                         t=0, update_forcings=self.update_level_set_gradient
@@ -270,11 +273,10 @@ def material_field_recursive(
     if level_set:  # Directly specify material value on only one side of the interface
         match interface:
             case "sharp":
-                return fd.conditional(
-                    ls > 0.5,
-                    field_values.pop(),
-                    material_field_recursive(level_set, field_values, interface),
-                )
+                heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
+                return field_values.pop() * heaviside + material_field_recursive(
+                    level_set, field_values, interface
+                ) * (1 - heaviside)
             case "arithmetic":
                 return field_values.pop() * ls + material_field_recursive(
                     level_set, field_values, interface
@@ -292,7 +294,8 @@ def material_field_recursive(
     else:  # Final level set; specify values for both sides of the interface
         match interface:
             case "sharp":
-                return fd.conditional(ls < 0.5, *field_values)
+                heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
+                return field_values[0] * (1 - heaviside) + field_values[1] * heaviside
             case "arithmetic":
                 return field_values[0] * (1 - ls) + field_values[1] * ls
             case "geometric":

@@ -263,8 +263,6 @@ stokes_solver = StokesSolver(
 )
 
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
-# Increase the reinitialisation time step to make up for the coarseness of the mesh
-level_set_solver.reini_params["tstep"] *= 20
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -277,7 +275,7 @@ time_end = 0.02  # Will be changed to 0.05 once mesh adaptivity is available
 while True:
     # Write output
     if time_now >= output_counter * output_frequency:
-        output_file.write(*z.subfunctions, T, psi)
+        output_file.write(*z.subfunctions, T, psi, time=time_now)
         output_counter += 1
 
     # Update timestep
@@ -308,11 +306,12 @@ while True:
         break
 # -
 
-# At the end of the simulation, once a steady-state has been achieved, we close our
-# logging file and checkpoint solution fields to disk. These can later be used to
+# At the end of the simulation, we write the final state for visualisation, close our
+# logging file, and checkpoint solution fields to disk. These can later be used to
 # restart the simulation, if required.
 
 # +
+output_file.write(*z.subfunctions, psi, time=time_now)
 plog.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:

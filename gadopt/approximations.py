@@ -46,7 +46,6 @@ class Approximation:
             H: specific heat source
             kappa: thermal diffusivity
             rho_diff: compositional density contrast
-            rho_diff_fs: free-surface density contrast
         2. Non-dimensional parameters
             Di: dissipation number
             Gamma: Grüneisen parameter
@@ -230,7 +229,7 @@ class Approximation:
         Note: In a dimensional system, T represents the difference between actual
         temperature and reference temperature.
         """
-        if self.dimensional and "thermal_buoyancy" in self.momentum_components:
+        if self.dimensional and self.thermal_buoyancy != 0:
             T -= self.T
         return (
             self.thermal_buoyancy * T

@@ -14,7 +14,7 @@ import numpy as np
 from mpi4py import MPI
 from pandas import read_excel
 
-from .materials import mantle, air, lithosphere
+from .materials import air, lithosphere, mantle
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):

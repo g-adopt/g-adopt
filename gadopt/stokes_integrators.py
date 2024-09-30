@@ -352,9 +352,9 @@ class StokesSolver:
         # N.B. In the case where the density contrast across the free surface is
         # spatially variant due to interior buoyancy changes then the matrix will not be
         # exactly symmetric.
-        rescale_factor = -self.theta_fs * buoyancy
+        buoyancy_scale = -self.theta_fs * buoyancy
 
-        terms_kwargs = {"free_surface_id": bc_id, "u": u}
+        terms_kwargs = {"boundary_id": bc_id, "buoyancy_scale": buoyancy_scale, "u": u}
 
         eq_fs = Equation(
             self.tests[2 + eta_ind],
@@ -363,7 +363,6 @@ class StokesSolver:
             mass_term=mass_term_fs,
             terms_kwargs=terms_kwargs,
             quad_degree=self.quad_degree,
-            rescale_factor=rescale_factor,
         )
         self.F -= eq_fs.residual(eta)
         self.F += eq_fs.mass((eta - self.eta_old[eta_ind]) / self.timestep_fs)

@@ -57,7 +57,7 @@ class Equation:
     approximation: Optional[Approximation] = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[Optional[int]] = None
-    rescale_factor: Number | fd.Constant | fd.Function = 1
+    rescale_factor: Number | fd.Constant = 1
 
     def __post_init__(
         self,
