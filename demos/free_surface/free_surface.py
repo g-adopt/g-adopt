@@ -227,6 +227,9 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # Let's use the python package **PyVista** to plot the temperature field through time. We will use the calculated free surface height to artifically scale the mesh in the vertical direction. We have exaggerated the vertical stretching by a factor of 1.5, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
 
 # +
+import matplotlib as plt
+import pyvista as pv
+
 # Read the PVD file
 reader = pv.get_reader('output.pvd')
 data = reader.read()[0]  # MultiBlock mesh with only 1 block
