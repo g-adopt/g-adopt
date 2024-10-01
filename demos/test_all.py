@@ -16,6 +16,7 @@ cases = {
     "../tests/2d_cylindrical_TALA_DG": {
         "extra_checks": ["avg_t", "FullT_min", "FullT_max"]
     },
+    "../tests/viscoplastic_case_dg": {"extra_checks": ["avg_t"]},
 }
 
 
