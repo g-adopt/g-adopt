@@ -196,7 +196,7 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
 
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "

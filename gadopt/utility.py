@@ -191,31 +191,6 @@ def cell_size(mesh):
         return CellDiameter(mesh)
 
 
-def cell_edge_integral_ratio(mesh, p):
-    r"""
-    Ratio C such that \int_f u^2 <= C Area(f)/Volume(e) \int_e u^2
-    for facets f, elements e and polynomials u of degree p.
-
-    See eqn. (3.7) ad table 3.1 from Hillewaert's thesis: https://www.researchgate.net/publication/260085826
-    and its appendix C for derivation."""
-    cell_type = mesh.ufl_cell().cellname()
-    if cell_type == "triangle":
-        return (p+1)*(p+2)/2.
-    elif cell_type == "quadrilateral" or cell_type == "interval * interval":
-        return (p+1)**2
-    elif cell_type == "triangle * interval":
-        return (p+1)**2
-    elif cell_type == "quadrilateral * interval":
-        # if e is a wedge and f is a triangle: (p+1)**2
-        # if e is a wedge and f is a quad: (p+1)*(p+2)/2
-        # here we just return the largest of the the two (for p>=0)
-        return (p+1)**2
-    elif cell_type == "tetrahedron":
-        return (p+1)*(p+3)/3
-    else:
-        raise NotImplementedError("Unknown cell type in mesh: {}".format(cell_type))
-
-
 def tensor_jump(v, n):
     r"""
     Jump term for vector functions based on the tensor product

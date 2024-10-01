@@ -14,7 +14,7 @@ from typing import Any, Optional
 import firedrake
 import numpy as np
 
-from .equations import BaseEquation
+from .equations import Equation
 from .utility import ensure_constant
 
 
@@ -49,7 +49,6 @@ class TimeIntegrator(TimeIntegratorBase):
     Args:
       equation: G-ADOPT equation to integrate
       solution: Firedrake function representing the equation's solution
-      fields: Dictionary of Firedrake fields passed to the equation
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
@@ -60,9 +59,8 @@ class TimeIntegrator(TimeIntegratorBase):
 
     def __init__(
         self,
-        equation: BaseEquation,
+        equation: Equation,
         solution: firedrake.Function,
-        fields: dict[str, firedrake.Function | firedrake.Constant],
         dt: float,
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = None,
@@ -73,7 +71,6 @@ class TimeIntegrator(TimeIntegratorBase):
         self.equation = equation
         self.test = firedrake.TestFunction(solution.function_space())
         self.solution = solution
-        self.fields = fields
         self.dt = float(dt)
         self.dt_const = ensure_constant(dt)
         self.solution_old = solution_old or firedrake.Function(solution, name='Old'+solution.name())
@@ -124,7 +121,6 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
     Arguments:
       equation: G-ADOPT equation to solve
       solution: Firedrake function reperesenting the equation's solution
-      fields: Dictionary of Firedrake fields passed to the equation
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
@@ -134,18 +130,18 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
 
     """
     def __init__(
-            self,
-            equation: BaseEquation,
-            solution: firedrake.Function,
-            fields: dict[str, firedrake.Function | firedrake.Constant],
-            dt: float,
-            solution_old: Optional[firedrake.Function] = None,
-            bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
-            solver_parameters: Optional[dict[str, Any]] = {},
-            strong_bcs: Optional[list[firedrake.DirichletBC]] = None
+        self,
+        equation: Equation,
+        solution: firedrake.Function,
+        dt: float,
+        solution_old: Optional[firedrake.Function] = None,
+        bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
+        solver_parameters: Optional[dict[str, Any]] = {},
+        strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
     ):
-        super(ERKGeneric, self).__init__(equation, solution, fields, dt,
-                                         solution_old, solver_parameters, strong_bcs)
+        super(ERKGeneric, self).__init__(
+            equation, solution, dt, solution_old, solver_parameters, strong_bcs
+        )
         self._initialized = False
         V = solution.function_space()
         assert V == equation.trial_space
@@ -157,8 +153,8 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
 
         # fully explicit evaluation
         trial = firedrake.TrialFunction(V)
-        self.a_rk = self.equation.mass_term(self.test, trial)
-        self.l_rk = self.dt_const*self.equation.residual(self.test, self.solution, self.solution, self.fields, bnd_conditions)
+        self.a_rk = self.equation.mass(trial)
+        self.l_rk = self.dt_const * self.equation.residual(self.solution)
 
         self._nontrivial = self.l_rk != 0
 
@@ -223,7 +219,6 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
     Arguments:
       equation: G-ADOPT equation to solve
       solution: Firedrake function reperesenting the equation's solution
-      fields: Dictionary of Firedrake fields passed to the equation
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
@@ -236,19 +231,19 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
 
     """
     def __init__(
-            self,
-            equation: BaseEquation,
-            solution: firedrake.Function,
-            fields: dict[str, firedrake.Function | firedrake.Constant],
-            dt: float,
-            solution_old: Optional[firedrake.Function] = None,
-            bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
-            solver_parameters: Optional[dict[str, Any]] = {},
-            strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-            terms_to_add: Optional[str | list[str]] = 'all'
+        self,
+        equation: Equation,
+        solution: firedrake.Function,
+        dt: float,
+        solution_old: Optional[firedrake.Function] = None,
+        bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
+        solver_parameters: Optional[dict[str, Any]] = {},
+        strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
+        terms_to_add: Optional[str | list[str]] = "all",
     ):
-        super(DIRKGeneric, self).__init__(equation, solution, fields, dt,
-                                          solution_old, solver_parameters, strong_bcs)
+        super(DIRKGeneric, self).__init__(
+            equation, solution, dt, solution_old, solver_parameters, strong_bcs
+        )
         self.solver_parameters.setdefault('snes_type', 'newtonls')
         self._initialized = False
 
@@ -272,8 +267,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                         u = self.solution_old + self.a[i][j]*self.dt_const*self.k[j]
                     else:
                         u += self.a[i][j]*self.dt_const*self.k[j]
-                self.F.append(self.equation.mass_term(self.test, self.k[i]) -
-                              self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
+                self.F.append(self.equation.mass(self.k[i]) - self.equation.residual(u))
         else:
             # solution must be split before computing sum
             # pass components to equation in a list
@@ -286,8 +280,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                     else:
                         for l, k in enumerate(firedrake.split(self.k[j])):
                             u[l] += self.a[i][j]*self.dt_const*k
-                self.F.append(self.equation.mass_term(self.test, self.k[i]) -
-                              self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
+                self.F.append(self.equation.mass(self.k[i]) - self.equation.residual(u))
         self.update_solver()
 
         # construct expressions for stage solutions

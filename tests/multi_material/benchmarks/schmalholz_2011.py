@@ -87,7 +87,7 @@ class Simulation:
     Ra, g = 1, 9.81
 
     # Boundary conditions
-    temp_bcs = None
+    temp_bcs = {}
     stokes_bcs = {
         1: {"ux": 0, "uy": 0},
         2: {"ux": 0, "uy": 0},
