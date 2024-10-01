@@ -7,7 +7,12 @@ all: $(cases)
 
 convert_demos: $(foreach case,$(demo_cases),$(case)/$(notdir $(case)).ipynb)
 
+# explicit dependencies between notebooks
+# adjoint uses the checkpoint from the forward run
 adjoint/adjoint.ipynb: adjoint/adjoint_forward.ipynb
+
+# free surface has a comparison plot against the base case
+free_surface/free_surface.ipynb: base_case/base_case.ipynb
 
 # sort to remove duplicates which define both tests and demos
 $(sort $(cases) $(demo_cases)):

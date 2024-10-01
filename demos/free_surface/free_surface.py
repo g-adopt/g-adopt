@@ -303,7 +303,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # + tags=["active-ipynb"]
 # # load velocity and pressure from final state of the base case run (from a simulation we saved earlier!).
-# with CheckpointFile("Final_State_base.h5", "r") as f:
+# with CheckpointFile("../base_case/Final_State.h5", "r") as f:
 #     mesh_base = f.load_mesh()
 #     z_base = f.load_function(mesh_base, 'Stokes')
 #     T_base = f.load_function(mesh_base, 'Temperature')
