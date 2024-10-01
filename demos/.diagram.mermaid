@@ -12,6 +12,7 @@ graph TD
 
   subgraph geometry["Geometry & Boundary Condition"]
   cylindrical_2d[2D Cylindrical] --> spherical_3d[3D Spherical] --> gplates_global["Global GPlates"]
+  free_surface[Free Surface]
   end
 
   subgraph multimaterial[Multi-material]
@@ -41,3 +42,4 @@ graph TD
   click gplates_global "gplates_global"
   click adjoint_forward "adjoint_forward"
   click inverse "adjoint"
+  click free_surface "free_surface"
