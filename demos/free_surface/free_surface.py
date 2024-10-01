@@ -226,51 +226,49 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # Let's use the python package **PyVista** to plot the temperature field through time. We will use the calculated free surface height to artifically scale the mesh in the vertical direction. We have exaggerated the vertical stretching by a factor of 1.5, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
 
-# +
-import matplotlib.pyplot as plt
-import pyvista as pv
-
-# Read the PVD file
-reader = pv.get_reader('output.pvd')
-data = reader.read()[0]  # MultiBlock mesh with only 1 block
-
-# Create a plotter object
-plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
-
-# Open a gif
-plotter.open_gif("temperature_warp.gif")
-
-# Make a colour map
-boring_cmap = plt.get_cmap("coolwarm", 25)
-
-for i in range(len(reader.time_values)):
-    reader.set_active_time_point(i)
-    data = reader.read()[0]
-
-    # Artificially warp the output data in the vertical direction by the free surface height
-    warped = data.warp_by_scalar(scalars='eta', normal=(0, 1, 0), factor=1.5)
-
-    # Add the warped temperature field to the frame
-    plotter.add_mesh(
-        warped,
-        scalars="Temperature",
-        lighting=False,
-        show_edges=False,
-        clim=[0, 1],
-        cmap=boring_cmap,
-        scalar_bar_args={'position_x': 0.2, 'position_y': 0.05}
-    )
-    arrows = data.glyph(orient="Velocity", scale="Velocity", factor=0.001, tolerance=0.05)
-    plotter.add_mesh(arrows, color="black")
-    # Centre camera on xy plane and write frame
-    plotter.camera_position = "xy"
-    plotter.write_frame()
-    plotter.clear()
-
-# Closes and finalizes movie
-plotter.close()
-
-
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+# import pyvista as pv
+#
+# # Read the PVD file
+# reader = pv.get_reader('output.pvd')
+# data = reader.read()[0]  # MultiBlock mesh with only 1 block
+#
+# # Create a plotter object
+# plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+#
+# # Open a gif
+# plotter.open_gif("temperature_warp.gif")
+#
+# # Make a colour map
+# boring_cmap = plt.get_cmap("coolwarm", 25)
+#
+# for i in range(len(reader.time_values)):
+#     reader.set_active_time_point(i)
+#     data = reader.read()[0]
+#
+#     # Artificially warp the output data in the vertical direction by the free surface height
+#     warped = data.warp_by_scalar(scalars='eta', normal=(0, 1, 0), factor=1.5)
+#
+#     # Add the warped temperature field to the frame
+#     plotter.add_mesh(
+#         warped,
+#         scalars="Temperature",
+#         lighting=False,
+#         show_edges=False,
+#         clim=[0, 1],
+#         cmap=boring_cmap,
+#         scalar_bar_args={'position_x': 0.2, 'position_y': 0.05}
+#     )
+#     arrows = data.glyph(orient="Velocity", scale="Velocity", factor=0.001, tolerance=0.05)
+#     plotter.add_mesh(arrows, color="black")
+#     # Centre camera on xy plane and write frame
+#     plotter.camera_position = "xy"
+#     plotter.write_frame()
+#     plotter.clear()
+#
+# # Closes and finalizes movie
+# plotter.close()
 # -
 
 # ![SegmentLocal](temperature_warp.gif "segment")
