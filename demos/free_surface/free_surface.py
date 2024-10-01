@@ -304,7 +304,7 @@ plotter.close()
 # First let's load the final state from the base case and calculate the expected dynamic topography with the code below.
 
 # + tags=["active-ipynb"]
-# # load velocity and pressure from final state of the base case run (we have saved earlier it earlier!).
+# # load velocity and pressure from final state of the base case run (from a simulation we saved earlier!).
 # with CheckpointFile("Final_State_base.h5", "r") as f:
 #     mesh_base = f.load_mesh()
 #     z_base = f.load_function(mesh_base, 'Stokes')
