@@ -164,7 +164,7 @@ stokes_solver = StokesSolver(
 # Next, we initiate the time loop, which runs until a steady-state solution has been
 # attained.
 
-for timestep in range(0, timesteps):
+for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T)
