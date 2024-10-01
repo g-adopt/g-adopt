@@ -161,16 +161,15 @@ class BoussinesqApproximation(BaseApproximation):
     parameters are typically constant. Viscous dissipation is neglected (Di << 1).
 
     Arguments:
-      Ra:                            Rayleigh number
-      rho:                           reference density
-      alpha:                         coefficient of thermal expansion
-      T0:                            reference temperature
-      g:                             gravitational acceleration
-      RaB:                           compositional Rayleigh number; product of the Rayleigh and buoyancy numbers
-      delta_rho:                     compositional density difference from the reference density
-      kappa:                         thermal diffusivity
-      H:                             internal heating rate
-      variable_free_surface_density: variable free surface density flag
+      Ra:        Rayleigh number
+      rho:       reference density
+      alpha:     coefficient of thermal expansion
+      T0:        reference temperature
+      g:         gravitational acceleration
+      RaB:       compositional Rayleigh number; product of the Rayleigh and buoyancy numbers
+      delta_rho: compositional density difference from the reference density
+      kappa:     thermal diffusivity
+      H:         internal heating rate
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
