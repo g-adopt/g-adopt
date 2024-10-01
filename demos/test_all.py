@@ -4,6 +4,7 @@ import pandas as pd
 
 cases = {
     "base_case": {},
+    "free_surface": {"extra_checks": ["eta_min", "eta_max"]},
     "2d_compressible_TALA": {},
     "2d_compressible_ALA": {},
     "viscoplastic_case": {},

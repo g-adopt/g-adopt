@@ -57,9 +57,7 @@ jobs:
           sleep 3
           make -j convert_demos
           rm -rf rendered && mkdir rendered
-          find demos -name '*.ipynb' -exec cp "{}" rendered \;
-          cp demos/.pages rendered/CONTENTS.md
-          cp demos/.diagram.mermaid rendered
+          tar -xf demos/artifact.tar -C rendered
         env:
           GADOPT_LOGLEVEL: WARN
       - uses: actions/upload-artifact@v4

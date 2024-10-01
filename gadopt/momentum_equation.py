@@ -125,6 +125,11 @@ class ViscosityTerm(BaseTerm):
                 # here we need only the third term, because we assume jump_u=0 (u_ext=u)
                 # the provided stress = n.(mu.stress_tensor)
                 F += dot(-phi, bc['stress']) * self.ds(id)
+            if 'normal_stress' in bc:
+                # add the external normal stress
+                normal_stress = bc['normal_stress']
+                F -= dot(-phi, normal_stress * n) * self.ds(id)
+
             if 'drag' in bc:  # (bottom) drag of the form tau = -C_D u |u|
                 C_D = bc['drag']
                 unorm = pow(dot(u_lagged, u_lagged) + 1e-6, 0.5)
@@ -136,10 +141,14 @@ class ViscosityTerm(BaseTerm):
 
             if 'u' in bc and 'stress' in bc:
                 raise ValueError("Cannot apply both 'u' and 'stress' bc on same boundary")
+            if 'u' in bc and 'normal_stress' in bc:
+                raise ValueError("Cannot apply both 'u' and 'normal_stress' bc on same boundary")
             if 'u' in bc and 'drag' in bc:
                 raise ValueError("Cannot apply both 'u' and 'drag' bc on same boundary")
             if 'u' in bc and 'un' in bc:
                 raise ValueError("Cannot apply both 'u' and 'un' bc on same boundary")
+            if 'un' in bc and 'normal_stress' in bc:
+                raise ValueError("Cannot apply both 'un' and 'normal_stress' bc on same boundary")
 
         return -F
 
