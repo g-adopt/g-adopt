@@ -13,6 +13,7 @@ cases = {
     "3d_cartesian": {"rtol": 1e-4},
     "gplates_global": {"extra_checks": ["u_rms_top"]},
     "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["avg_t", "FullT_min", "FullT_max"]},
+    "../tests/viscoplastic_case_dg": {"extra_checks": ["avg_t"]},
 }
 
 
