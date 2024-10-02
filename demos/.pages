@@ -11,6 +11,7 @@
 - Geometry & Boundary Conditions
     - [2d_cylindrical](2d_cylindrical.ipynb)
     - [3d_spherical](3d_spherical.ipynb)
+    - [free_surface](free_surface.ipynb)
     - [gplates_global](gplates_global.ipynb)
 - Multi-material
     - [compositional_buoyancy](compositional_buoyancy.ipynb)

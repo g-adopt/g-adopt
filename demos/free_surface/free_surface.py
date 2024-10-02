@@ -271,53 +271,52 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # **BUT...** it is important to remember this is just for ease of visualisation - the
 # mesh is not moving in reality!
 
-# +
-# Read the PVD file
-import matplotlib.pyplot as plt  # noqa E402
-import pyvista as pv  # noqa E402
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+# import pyvista as pv
 
-reader = pv.get_reader("output.pvd")
-data = reader.read()[0]  # MultiBlock mesh with only 1 block
+# # Read the PVD file
+# reader = pv.get_reader("output.pvd")
+# data = reader.read()[0]  # MultiBlock mesh with only 1 block
 
-# Create a plotter object
-plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+# # Create a plotter object
+# plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
 
-# Open a gif
-plotter.open_gif("temperature_warp.gif")
+# # Open a gif
+# plotter.open_gif("temperature_warp.gif")
 
-# Make a colour map
-boring_cmap = plt.get_cmap("coolwarm", 25)
+# # Make a colour map
+# boring_cmap = plt.get_cmap("coolwarm", 25)
 
-for i in range(len(reader.time_values)):
-    reader.set_active_time_point(i)
-    data = reader.read()[0]
+# for i in range(len(reader.time_values)):
+#     reader.set_active_time_point(i)
+#     data = reader.read()[0]
 
-    # Warp the output data in the vertical direction by the free surface height
-    warped = data.warp_by_scalar(scalars="eta", normal=(0, 1, 0), factor=1.5)
+#     # Artificially warp the output data in the vertical direction by the free surface
+#     # height
+#     warped = data.warp_by_scalar(scalars="eta", normal=(0, 1, 0), factor=1.5)
 
-    # Add the warped temperature field to the frame
-    plotter.add_mesh(
-        warped,
-        scalars="Temperature",
-        lighting=False,
-        show_edges=False,
-        clim=[0, 1],
-        cmap=boring_cmap,
-        scalar_bar_args={"position_x": 0.2, "position_y": 0.05},
-    )
-    arrows = data.glyph(
-        orient="Velocity", scale="Velocity", factor=0.001, tolerance=0.05
-    )
-    plotter.add_mesh(arrows, color="black")
-    # Centre camera on xy plane and write frame
-    plotter.camera_position = "xy"
-    plotter.write_frame()
-    plotter.clear()
+#     # Add the warped temperature field to the frame
+#     plotter.add_mesh(
+#         warped,
+#         scalars="Temperature",
+#         lighting=False,
+#         show_edges=False,
+#         clim=[0, 1],
+#         cmap=boring_cmap,
+#         scalar_bar_args={"position_x": 0.2, "position_y": 0.05},
+#     )
+#     arrows = data.glyph(
+#         orient="Velocity", scale="Velocity", factor=0.001, tolerance=0.05
+#     )
+#     plotter.add_mesh(arrows, color="black")
+#     # Centre camera on xy plane and write frame
+#     plotter.camera_position = "xy"
+#     plotter.write_frame()
+#     plotter.clear()
 
-# Closes and finalizes movie
-plotter.close()
-
-
+# # Closes and finalizes movie
+# plotter.close()
 # -
 
 # ![SegmentLocal](temperature_warp.gif "segment")
@@ -332,7 +331,9 @@ plotter.close()
 # thermal convection is driving positive vertical flow and is sinking where there is
 # colder mantle below, which all makes intuitive sense.
 
-# We can even verify that the stress exerted by the deviation of the free surface from the reference state is the same as the when calculating dynamic topography from a free-slip simulation. As a recap the free surface normal boundary condition is
+# We can even verify that the stress exerted by the deviation of the free surface from
+# the reference state is the same as the when calculating dynamic topography from a
+# free-slip simulation. As a recap the free surface normal boundary condition is
 
 # \begin{equation}
 #     \textbf{n} \cdot \boldsymbol{\sigma }' \cdot \textbf{n}  = - \Delta\rho_{FS} g \eta.
@@ -357,24 +358,29 @@ plotter.close()
 # topography with the code below.
 
 # + tags=["active-ipynb"]
-# # load velocity and pressure from final state of the base case run (we have saved it
-# earlier!).
-# with CheckpointFile("Final_State_base.h5", "r") as f:
+# # load velocity and pressure from final state of the base case run (from a simulation
+# # we saved earlier!).
+# with CheckpointFile("../base_case/Final_State_base.h5", "r") as f:
 #     mesh_base = f.load_mesh()
-#     z_base = f.load_function(mesh_base, 'Stokes')
-#     T_base = f.load_function(mesh_base, 'Temperature')
+#     z_base = f.load_function(mesh_base, "Stokes")
+#     T_base = f.load_function(mesh_base, "Temperature")
 
 # # Create a P1 functionspace on the mesh used for the base case simulation
 # W_base = FunctionSpace(mesh_base, "CG", 1)
 
 # # Store the dynamic topography calculated from the stress on the top
 # # surface after running the base case to steady state
-# eta_base_steady = Function(W_base, name='final_eta_base')
-# eta_base_steady.interpolate((-z_base.subfunctions[1] + 2 * Dx(z_base.subfunctions[0][1], 1))/(Ra*T_base-Ra*10))
+# eta_base_steady = Function(W_base, name="final_eta_base")
+# eta_base_steady.interpolate(
+#     (-z_base.subfunctions[1] + 2 * Dx(z_base.subfunctions[0][1], 1))
+#     / (Ra * T_base - Ra * 10)
+# )
 
 # # project out the constant associated with the pressure nullspace for the base case as
-# all boundaries are closed
-# coef = assemble(eta_base_steady * ds(top_id))/assemble(Constant(1.0)*ds(top_id, domain=mesh_base))
+# # all boundaries are closed
+# coef = assemble(eta_base_steady * ds(top_id)) / assemble(
+#     Constant(1.0) * ds(top_id, domain=mesh_base)
+# )
 # eta_base_steady.project(eta_base_steady - coef)
 
 # # Interpolate the base case dynamic topography onto the original mesh for plotting
@@ -386,25 +392,26 @@ plotter.close()
 # combined_eta_file.write(z.subfunctions[2], eta_steady_original)
 
 # # Read combined eta file
-# eta_reader = pv.get_reader('combined_eta.pvd')
+# eta_reader = pv.get_reader("combined_eta.pvd")
 # data_eta = eta_reader.read()[0]
 
 # # Sample the combined eta file along the top surface of the mesh
 # a = [0, 1, 0]  # Top left corner of domain
 # b = [1, 1, 0]  # Top right corner of domain
-# data_eta_array = data_eta.sample_over_line(
-#     a,
-#     b,
-#     resolution=100)
+# data_eta_array = data_eta.sample_over_line(a, b, resolution=100)
 
 # # Plot the final free surface height with the dynamic topo calculated from running
-# base case to steady state
+# # base case to steady state
 # plt.figure()
-# x = np.linspace(0,1,num=101)
-# plt.plot(x, data_eta_array['eta'], label="Free surface simulation")
-# plt.plot(x, data_eta_array['final_eta_base'], label="Dynamic topography running base case to steady state")
-# plt.xlabel('x')
-# plt.ylabel('Nondimensional free surface height')
+# x = np.linspace(0, 1, num=101)
+# plt.plot(x, data_eta_array["eta"], label="Free surface simulation")
+# plt.plot(
+#     x,
+#     data_eta_array["final_eta_base"],
+#     label="Dynamic topography running base case to steady state",
+# )
+# plt.xlabel("x")
+# plt.ylabel("Nondimensional free surface height")
 # plt.legend()
 # plt.show()
 # -
