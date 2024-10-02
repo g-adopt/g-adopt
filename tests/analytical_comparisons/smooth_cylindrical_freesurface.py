@@ -27,14 +27,6 @@ from gadopt.utility import CombinedSurfaceMeasure
 
 # Quadrature degree:
 _dx = dx(degree=6)
-# Projection solver parameters for nullspaces:
-_project_solver_parameters = {
-    "snes_type": "ksponly",
-    "ksp_type": "gmres",
-    "pc_type": "sor",
-    "mat_type": "aij",
-    "ksp_rtol": 1e-12,
-}
 
 
 def model(level, k, nn, do_write=False):
@@ -59,6 +51,7 @@ def model(level, k, nn, do_write=False):
     # Construct a circle mesh and then extrude into a cylinder:
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
+    mesh.cartesian = False
     bottom_id, top_id = "bottom", "top"
 
     # Define geometric quantities
@@ -106,10 +99,10 @@ def model(level, k, nn, do_write=False):
         },
     }
 
-    # Characteristic time scale (dimensionless)
-    tau0 = Constant(2 * nn * mu / (approximation.rho * approximation.g))
-    log("tau0", tau0)
-    dt = Constant(tau0)  # timestep (dimensionless)
+    # Characteristic time scale (dimensionless). Simulation runs for 10 characteristic
+    # time scales so end state is close to being fully relaxed.
+    time = Constant(0.0)
+    dt = Constant(2 * nn * mu / (approximation.rho * approximation.g))
     log("dt (dimensionless)", dt)
 
     stokes_solver = StokesSolver(
@@ -124,16 +117,9 @@ def model(level, k, nn, do_write=False):
         },
         timestep_fs=dt,
     )
-
     # use tighter tolerances than default to ensure convergence:
     stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-13
     stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-11
-
-    time = Constant(0.0)
-    # Simulation runs for 10 characteristic time scales so end state is close to being
-    # fully relaxed
-    max_timesteps = round(20 * tau0 / dt)
-    log("max_timesteps", max_timesteps)
 
     # Solve system - configured for solving non-linear systems, where everything is on
     # the LHS (as above) and the RHS == 0.
@@ -178,14 +164,15 @@ def model(level, k, nn, do_write=False):
 
     steady_state_tolerance = 1e-9
 
-    u_old, p_old, eta_old = split(stokes_solver.solution_old)
-
     u_error = Function(V, name="VelocityError").assign(u_ - u_anal)
     p_error = Function(W, name="PressureError").assign(p_ - p_anal)
     eta_error = Function(W, name="EtaError").assign(eta_ - eta_anal)
 
     # Now perform the time loop:
-    for timestep in range(1, 20):
+    while True:
+        # Store current velocity before solve
+        u_old = z.subfunctions[0].copy(deepcopy=True)
+
         # Solve Stokes sytem:
         stokes_solver.solve()
         time.assign(time + dt)
