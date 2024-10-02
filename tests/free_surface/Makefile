@@ -5,7 +5,7 @@ ncpus := 8
 
 all: $(serial_cases) $(parallel_cases)
 
-$(serial_cases): 
+$(serial_cases):
 	echo "running $@ free surface coupling "
 	tsp -N 1 -f python3 $@_free_surface.py
 
