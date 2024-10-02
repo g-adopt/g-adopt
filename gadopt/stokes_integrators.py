@@ -253,7 +253,7 @@ class StokesSolver:
         # Setup boundary conditions
         self.weak_bcs = {}
         self.strong_bcs = []
-        
+
         # Free surface parameters
         self.free_surface_dict = {}  # Separate dictionary for copying free surface information
         self.free_surface_dt = free_surface_dt
@@ -358,7 +358,6 @@ class StokesSolver:
             'rho_continuity': self.approximation.rho_continuity(),
         }
 
-
     def setup_free_surface(self):
 
         if self.free_surface_dt is None:
@@ -388,8 +387,8 @@ class StokesSolver:
             # N.b. in the case where the density contrast across the free surface is spatially variant due to
             # interior buoyancy changes then the matrix will not be exactly symmetric.
             normal_stress, prefactor = self.approximation.free_surface_terms(
-                    self.p, self.T, self.eta_theta[c], self.free_surface_theta, **free_surface_params
-                )
+                self.p, self.T, self.eta_theta[c], self.free_surface_theta, **free_surface_params
+            )
             # Add free surface stress term
             if 'normal_stress' in self.weak_bcs[free_surface_id]:
                 # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
@@ -455,7 +454,7 @@ class StokesSolver:
         """Solves the system."""
         if not self._solver_setup:
             self.setup_solver()
-        
+
         # Need to update old free surface height for implicit free surface
         if self.free_surface:
             for i in range(len(self.eta_)):
@@ -591,8 +590,8 @@ class ViscoelasticStokesSolver(StokesSolver):
             implicit_displacement_up = fd.dot(implicit_displacement, self.k)
             # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
             normal_stress, _ = self.approximation.free_surface_terms(
-                    self.p, self.T, implicit_displacement_up, self.free_surface_theta, **free_surface_params
-                )
+                self.p, self.T, implicit_displacement_up, self.free_surface_theta, **free_surface_params
+            )
             if 'normal_stress' in self.weak_bcs[free_surface_id]:
                 # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
                 existing_value = self.weak_bcs[free_surface_id]['normal_stress']
