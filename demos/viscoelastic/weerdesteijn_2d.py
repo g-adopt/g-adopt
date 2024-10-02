@@ -24,7 +24,6 @@ class Weerdesteijn2d:
         self.LOAD_CHECKPOINT = LOAD_CHECKPOINT
         self.LOAD_MESH = LOAD_MESH
         self.LOAD_VISCOSITY = LOAD_VISCOSITY
-        self.cartesian = cartesian
         self.vertical_squashing = vertical_squashing
         self.vertical_tanh_width = vertical_tanh_width
         self.low_viscosity_region = low_viscosity_region
@@ -47,6 +46,7 @@ class Weerdesteijn2d:
             self.checkpoint_file = checkpoint_file
 
         self.setup_mesh()
+        self.mesh.cartesian = cartesian
         self.disk_checkpointing()
         self.X = SpatialCoordinate(self.mesh)
 
@@ -153,9 +153,9 @@ class Weerdesteijn2d:
 
         self.setup_nullspaces()
 
-        self.stokes_solver = ViscoelasticStokesSolver(m, 1e23*10**self.viscosity, self.shear_modulus, self.density,
+        self.stokes_solver = ViscoelasticStokesSolver(m, 1e23*self.viscosity, self.shear_modulus, self.density,
                                                       self.deviatoric_stress, self.displacement, approximation,
-                                                      self.dt, bcs=self.stokes_bcs, cartesian=self.cartesian,
+                                                      self.dt, bcs=self.stokes_bcs, 
                                                       nullspace=self.Z_nullspace, transpose_nullspace=self.Z_nullspace,
                                                       near_nullspace=self.Z_near_nullspace)
 
@@ -213,7 +213,8 @@ class Weerdesteijn2d:
 
     def viscosity_values(self):
         # Log10(viscosity) using math log10 function
-        return [17, -2, -2, -1.6989700043360187, 0]
+     #   return [17, -2, -2, -1.6989700043360187, 0]
+        return [1e17, 1e-2, 1e-2, 2e-2, 0]
 
     def initialise_background_field(self, field, background_values):
         if self.vertical_tanh_width is None:
@@ -283,9 +284,10 @@ class Weerdesteijn2d:
 
     def setup_bcs(self):
         # Setup boundary conditions
+        exterior_density = conditional(self.time < self.T2_load, self.rho_ice*self.disc, 0)
         self.stokes_bcs = {
             self.bottom_id: {'uy': 0},
-            self.top_id: {'normal_stress': self.ice_load, 'free_surface': {'exterior_density': conditional(self.time < self.T2_load, self.rho_ice*self.disc, 0)}},
+            self.top_id: {'normal_stress': self.ice_load, 'free_surface': {'delta_rho_fs': self.density - exterior_density}},
             1: {'ux': 0},
             2: {'ux': 0},
         }
@@ -350,7 +352,7 @@ class Weerdesteijn2d:
             self.time.assign(self.time+self.dt)
 
             # Compute diagnostics:
-            self.vertical_displacement.interpolate(vc(self.displacement, cartesian=self.cartesian))
+            self.vertical_displacement.interpolate(vc(self.displacement))
             bc_displacement = DirichletBC(self.vertical_displacement.function_space(), 0, self.top_id)
             displacement_z_min = self.vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
             displacement_min = self.vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
