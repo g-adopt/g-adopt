@@ -6,6 +6,7 @@ used as the goal condition for nonlinear optimisation using ROL.
 
 from gadopt import *
 from gadopt.inverse import *
+from pathlib import Path
 
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
@@ -37,14 +38,15 @@ def inverse(alpha_u, alpha_d, alpha_s):
         alpha_d: The coefficient of the initial condition damping term
         alpha_s: The coefficient of the smoothing term
     """
-
+    checkpoint_file = Path(__file__).resolve().parent / "adjoint-demo-checkpoint-state.h5"
     # Clear the tape of any previous operations to ensure
     # the adjoint reflects the forward problem we solve here
     tape = get_working_tape()
     tape.clear_tape()
 
-    with CheckpointFile("mesh.h5", "r") as f:
+    with CheckpointFile(str(checkpoint_file), "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
+        mesh.cartesian = True
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
     X = SpatialCoordinate(mesh)
@@ -76,7 +78,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
     Tic = Function(Q1, name="Initial Temperature")
     Taverage = Function(Q1, name="Average Temperature")
 
-    checkpoint_file = CheckpointFile("Checkpoint_State.h5", "r")
+    checkpoint_file = CheckpointFile(str(checkpoint_file), "r")
     # Initialise the control
     Tic.project(
         checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)

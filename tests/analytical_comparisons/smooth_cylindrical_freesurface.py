@@ -56,6 +56,7 @@ def model(level, k, nn, do_write=False):
     # Construct a circle mesh and then extrude into a cylinder:
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
+    mesh.cartesian = False
     bottom_id, top_id = "bottom", "top"
 
     # Define geometric quantities
@@ -89,10 +90,11 @@ def model(level, k, nn, do_write=False):
     # to affect the height that the free surface relaxes too. With the flag set to True there is an assymetry
     # in the free surface highs (at hot spots) and free surface lows (cold spots), that does not
     # occur in the Assess steady state solution
-    approximation = BoussinesqApproximation(1, variable_free_surface_density=False)
+    approximation = BoussinesqApproximation(1)
     stokes_bcs = {
-        bottom_id: {'un': 0},
-        top_id: {'free_surface': {}},  # Apply the free surface boundary condition
+        bottom_id: {"un": 0},
+        # Apply the free surface boundary condition
+        top_id: {"free_surface": {"variable_rho_fs": False}},
     }
 
     rho0 = approximation.rho
@@ -102,7 +104,7 @@ def model(level, k, nn, do_write=False):
     dt = Constant(tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, cartesian=False, free_surface_dt=dt,
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, free_surface_dt=dt,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
 

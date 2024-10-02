@@ -44,7 +44,7 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         # This is not ideal - python dictionaries are ordered by insertion only since recently (since 3.7) - so relying on
         # their order is fraught and not considered pythonic. At the moment let's consider having more than one free surface
         # a bit of a niche case for now, and leave it as is...
-        self.stokes_bcs[self.bottom_id] = {'free_surface': {'exterior_density': self.rho_bottom}}
+        self.stokes_bcs[self.bottom_id] = {"free_surface": {"RaFS": -1}}
 
     def update_analytical_free_surfaces(self):
         super().update_analytical_free_surfaces()

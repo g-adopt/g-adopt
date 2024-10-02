@@ -1,4 +1,9 @@
-"""Slope limiters for discontinuous fields."""
+r"""This module provides a class that implements limiting of functions defined on
+discontinuous function spaces. Users instantiate the class by providing relevant
+parameters and call the `apply` method to update the function.
+
+"""
+
 from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSolver, TestFunction, dx, assemble
 from firedrake import max_value, min_value, Function
 from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement, FiniteElement

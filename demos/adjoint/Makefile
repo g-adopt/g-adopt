@@ -1,16 +1,14 @@
-cases := damping smoothing Tobs uobs
-
-all: $(addsuffix .conv,$(cases))
+all: solutions.pvd
 
 ncpus := 2
 
-%.conv: taylor_test.py Checkpoint_State.h5
-	echo "running $< on case $*" >&2
-	/usr/bin/time --format="$< on case $* took %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $< $*
+solutions.pvd: adjoint.py adjoint-demo-checkpoint-state.h5
+	echo "running $<" >&2
+	/usr/bin/time --format="$@ finished in %E" tsp -f python3 $<
 
-Checkpoint_State.h5: forward.py
-	echo "running forward adjoint case" >&2
-	/usr/bin/time --format="forward adjoint case took %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
+adjoint-demo-checkpoint-state.h5: adjoint_forward.py
+	echo "running $<" >&2
+	/usr/bin/time --format="$@ finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 
 clean:
-	rm -f *.h5 *.conv *.dat
+	rm -rf *.h5 *.pvd solutions solution visualisation_vtk optimisation_checkpoint

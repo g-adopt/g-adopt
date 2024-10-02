@@ -61,6 +61,7 @@ def inverse(alpha_u, alpha_d, alpha_s):
 
     with CheckpointFile("Checkpoint_State.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
+        mesh.cartesian = False
 
     enable_disk_checkpointing()
 
@@ -160,7 +161,6 @@ def inverse(alpha_u, alpha_d, alpha_s):
         approximation,
         mu=mu,
         bcs=stokes_bcs,
-        cartesian=False,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,

@@ -23,12 +23,15 @@ import math
 # as with our previous tutorials. For the mesh, we use Firedrake's built-in *CubedSphereMesh* and extrude it radially through
 # 8 layers, forming hexahedral elements. As with our cylindrical shell example, we approximate the curved spherical domain quadratically,
 # using the optional keyword argument *degree$=2$*.
+# Because this problem is not formulated in a Cartesian geometry, we set the `mesh.cartesian`
+# attribute to False. This ensures the correct configuration of a radially inward vertical direction.
 
 # +
-rmin, rmax, ref_level, nlayers = 1.22, 2.22, 4, 8
+rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
 
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+mesh.cartesian = False
 bottom_id, top_id = "bottom", "top"
 domain_volume = assemble(1*dx(domain=mesh))  # Required for a diagnostic calculation.
 
@@ -65,10 +68,6 @@ steady_state_tolerance = 1e-6  # Used to determine if solution has reached a ste
 # lateral deviations from a radial layer average.
 
 # +
-T = Function(Q, name="Temperature")
-T_avg = Function(Q, name='Layer_Averaged_Temp')
-T_dev = Function(Q, name='Temperature_Deviation')
-
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 theta = atan2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
@@ -77,18 +76,27 @@ phi = atan2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol 
 conductive_term = rmin*(rmax - r) / (r*(rmax - rmin))
 l, m, eps_c, eps_s = 3, 2, 0.01, 0.01
 Plm = Function(Q, name="P_lm")
-cos_phi = interpolate(cos(phi), Q)
+cos_phi = Function(Q).interpolate(cos(phi))
 Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)  # Evaluate P_lm node-wise using scipy lpmv
 Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
 if m == 0:
     Plm.assign(Plm/math.sqrt(2))
-T.interpolate(conductive_term +
-              (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
+
+T = (
+    Function(Q, name="Temperature")
+    .interpolate(
+        conductive_term +
+        (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin))
+    )
+)
+
+T_avg = Function(Q, name="Layer_Averaged_Temp")
+T_dev = Function(Q, name="Temperature_Deviation")
 # -
 
 # Compute layer average for initial temperature field, using the LayerAveraging functionality provided by G-ADOPT.
 
-averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
+averager = LayerAveraging(mesh, quad_degree=6)
 averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
 # Nullspaces and near-nullspace objects are next set up,
@@ -120,19 +128,17 @@ output_frequency = 1
 plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, degree=6)
+gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation, nullspace and near-nullspace information configured above. We also
-# set the optional `cartesian` keyword argument to False, which ensures that the unit vector points radially,
-# in the direction opposite to gravity.
+# passing in the approximation, nullspace and near-nullspace information configured above.
 
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             cartesian=False, constant_jacobian=True,
+                             constant_jacobian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 # -

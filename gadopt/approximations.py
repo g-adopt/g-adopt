@@ -1,3 +1,11 @@
+r"""This module provides classes that emulate physical approximations of fluid dynamics
+systems by exposing methods to calculate specific terms in the corresponding
+mathematical equations. Users instantiate the appropriate class by providing relevant
+parameters and pass the instance to other objects, such as solvers. Under the hood,
+G-ADOPT queries variables and methods from the approximation.
+
+"""
+
 import abc
 from numbers import Number
 from typing import Optional
@@ -120,13 +128,27 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def free_surface_density(self, p, T) -> ufl.core.expr.Expr:
-        """Defines density used in the interior, beneath the free surface, when calculating a density contrast across
-        the free surface. Depending on the variable_free_surface_density flag this is either set to constant density
-        or a variable density that accounts for changes in temperature, composition etc within the domain.
+    def free_surface_terms(self, p, T, eta, theta_fs) -> tuple[ufl.core.expr.Expr]:
+        """Defines free surface normal stress in the momentum equation and prefactor
+        multiplying the free surface equation.
+
+        The normal stress depends on the density contrast across the free surface.
+        Depending on the `variable_rho_fs` argument, this contrast either involves the
+        interior reference density or the full interior density that accounts for
+        changes in temperature and composition within the domain. For dimensional
+        simulations, the user should specify `delta_rho_fs`, defined as the difference
+        between the reference interior density and the exterior density. For
+        non-dimensional simulations, the user should specify `RaFS`, the equivalent of
+        the Rayleigh number for the density contrast across the free surface.
+
+        The prefactor multiplies the free surface equation to ensure the top-right and
+        bottom-left corners of the block matrix remain symmetric. This is similar to
+        rescaling eta -> eta_tilde in Kramer et al. (2012, see block matrix shown in
+        Eq. 23).
 
         Returns:
-          A UFL expression for density beneath the free surface for the external normal stress term in the momentum equation.
+          A UFL expression for the free surface normal stress and a UFL expression for
+          the free surface equation prefactor.
 
         """
         pass
@@ -205,11 +227,16 @@ class BoussinesqApproximation(BaseApproximation):
     def energy_source(self, u):
         return self.rho * self.H
 
-    def free_surface_density(self, p, T):
-        if self.variable_free_surface_density:
-            return self.rho - self.buoyancy(p, T) / self.g
-        else:
-            return self.rho
+    def free_surface_terms(
+        self, p, T, eta, theta_fs, *, variable_rho_fs=True, RaFS=1, delta_rho_fs=1
+    ):
+        free_surface_normal_stress = RaFS * delta_rho_fs * self.g * eta
+        if variable_rho_fs:
+            free_surface_normal_stress -= self.buoyancy(p, T) * eta
+
+        prefactor = -theta_fs * RaFS * delta_rho_fs * self.g
+
+        return free_surface_normal_stress, prefactor
 
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):
@@ -223,15 +250,17 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
       Di: Dissipation number
       mu: dynamic viscosity
       H:  volumetric heat production
-      cartesian:
-        - True: gravity is assumed to point in the negative z-direction
-        - False: gravity is assumed to point radially inward
 
-    Keyword Arguments:
-      kappa (Number): thermal diffusivity
-      g (Number):     gravitational acceleration
-      rho (Number):   reference density
-      alpha (Number): coefficient of thermal expansion
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         coefficient of thermal expansion
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         thermal diffusivity
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
@@ -241,12 +270,11 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, mu: Number = 1, H: Optional[Number] = None, cartesian: bool = True, **kwargs):
+    def __init__(self, Ra: Number, Di: Number, *, mu: Number = 1, H: Optional[Number] = None, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.mu = mu
         self.H = H
-        self.cartesian = cartesian
 
     def viscous_dissipation(self, u):
         stress = 2 * self.mu * sym(grad(u))
@@ -255,12 +283,12 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
         phi = inner(stress, grad(u))
         return phi * self.Di / self.Ra
 
-    def work_against_gravity(self, u, T):
-        w = vertical_component(u, self.cartesian)
-        return self.Di * self.alpha * self.rho * self.g * w * T
-
     def linearized_energy_sink(self, u):
-        return self.work_against_gravity(u, 1)
+        w = vertical_component(u)
+        return self.Di * self.alpha * self.rho * self.g * w
+
+    def work_against_gravity(self, u, T):
+        return self.linearized_energy_sink(u) * T
 
     def energy_source(self, u):
         source = self.viscous_dissipation(u)
@@ -272,31 +300,29 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
 class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     """Truncated Anelastic Liquid Approximation
 
-    Compressible approximation. Excludes linear dependence of density on pressure (chi)
+    Compressible approximation. Excludes linear dependence of density on pressure.
 
     Arguments:
-      Ra: Rayleigh number
-      Di: Dissipation number
-      Tbar:  reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion) - default 0
-      chi:   reference isothermal compressibility
-      cp:    reference specific heat at constant pressure
-      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
-      cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
-      cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+      Ra:     Rayleigh number
+      Di:     Dissipation number
+      Tbar:   reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion)
+      cp:     reference specific heat at constant pressure
 
-    Keyword Arguments:
-      rho (Number):   reference density
-      alpha (Number): reference thermal expansion coefficient
-      mu (Number):    viscosity used in viscous dissipation
-      H (Number):     volumetric heat production - default 0
-      cartesian (bool):
-        - True: gravity points in negative z-direction
-        - False: gravity points radially inward
-      kappa (Number):  diffusivity
-      g (Number):      gravitational acceleration
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         reference thermal expansion coefficient
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         diffusivity
+      mu (Number):            viscosity used in viscous dissipation
+      H (Number):             volumetric heat production
 
     Note:
-      The keyword arguments may be depth-dependent, but default to 1 if not supplied.
+      Other keyword arguments may be depth-dependent, but default to 1 if not supplied.
 
     """
     compressible = True
@@ -304,20 +330,13 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     def __init__(self,
                  Ra: Number,
                  Di: Number,
+                 *,
                  Tbar: Function | Number = 0,
-                 chi: Function | Number = 1,
                  cp: Function | Number = 1,
-                 gamma0: Function | Number = 1,
-                 cp0: Function | Number = 1,
-                 cv0: Function | Number = 1,
                  **kwargs):
         super().__init__(Ra, Di, **kwargs)
         self.Tbar = Tbar
-        # Equation of State:
-        self.chi = chi
         self.cp = cp
-        assert 'g' not in kwargs
-        self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
 
     def rho_continuity(self):
         return self.rho
@@ -325,19 +344,57 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
     def rhocp(self):
         return self.rho * self.cp
 
-    def linearized_energy_sink(self, u):
-        w = vertical_component(u, self.cartesian)
-        return self.Di * self.rho * self.alpha * w
-
 
 class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
     """Anelastic Liquid Approximation
 
-    Compressible approximation. Includes linear dependence of density on pressure (chi)
+    Compressible approximation. Includes linear dependence of density on pressure.
+
+    Arguments:
+      Ra:     Rayleigh number
+      Di:     Dissipation number
+      chi:    reference isothermal compressibility
+      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
+      cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
+      cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
+
+    Other Arguments:
+      rho (Number):           reference density
+      alpha (Number):         reference thermal expansion coefficient
+      T0 (Function | Number): reference temperature
+      g (Number):             gravitational acceleration
+      RaB (Number):           compositional Rayleigh number; product
+                              of the Rayleigh and buoyancy numbers
+      delta_rho (Number):     compositional density difference from
+                              the reference density
+      kappa (Number):         diffusivity
+      mu (Number):            viscosity used in viscous dissipation
+      H (Number):             volumetric heat production
+      Tbar (Number):          reference temperature. In the diffusion
+                              term we use Tbar + T (i.e. T is the pertubartion)
+      cp (Number):            reference specific heat at constant pressure
+
     """
 
+    def __init__(self,
+                 Ra: Number,
+                 Di: Number,
+                 *,
+                 chi: Function | Number = 1,
+                 gamma0: Function | Number = 1,
+                 cp0: Function | Number = 1,
+                 cv0: Function | Number = 1,
+                 **kwargs):
+        super().__init__(Ra, Di, **kwargs)
+        # Dynamic pressure contribution towards buoyancy
+        self.chi = chi
+        self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
+
+    def dbuoyancydp(self, p, T: ufl.core.expr.Expr):
+        return -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi
+
     def buoyancy(self, p, T):
-        pressure_part = -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi * p
+        pressure_part = self.dbuoyancydp(p, T) * p
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
 
@@ -366,8 +423,10 @@ class SmallDisplacementViscoelasticApproximation(BaseApproximation):
         # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
         return -self.g * self.density_perturbation()
 
-    def free_surface_density(self, p, T):
-        return self.background_density + self.density_perturbation
+    def free_surface_terms(self, p, T, eta, theta_fs, *, delta_rho_fs=1):
+        free_surface_normal_stress = delta_rho_fs * self.g * eta
+        # prefactor only needed when solving eta as part of mixed system
+        return free_surface_normal_stress, None
 
     def rho_continuity(self):
         return 1
