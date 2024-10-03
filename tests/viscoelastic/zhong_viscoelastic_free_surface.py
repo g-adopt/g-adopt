@@ -8,6 +8,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--case", default="viscoelastic", type=str, help="Test case to run: elastic limit (dt << maxwell time, 1 step), viscoelastic (dt ~ maxwell time), viscous limit (dt >> maxwell time) ", required=False)
 args = parser.parse_args()
 
+
 def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11):
     # Set up geometry:
     nz = nx  # Number of vertical cells
@@ -140,24 +141,28 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
 
 
 params = {
-        "viscoelastic": {"dtf_start": 0.1,
-                "nx": 80, 
-                "sim_time": "long",
-                "shear_modulus": 1e11},
-          "elastic": {"dtf_start": 0.001,
-                "nx": 80, 
-                "sim_time": "short",
-                "shear_modulus": 1e11},
-          "viscous": {"dtf_start": 0.1,
-                "nx": 80, 
-                "sim_time": "long",
-                "shear_modulus": 1e14}
+    "viscoelastic": {
+        "dtf_start": 0.1,
+        "nx": 80,
+        "sim_time": "long",
+        "shear_modulus": 1e11},
+    "elastic": {
+        "dtf_start": 0.001,
+        "nx": 80,
+        "sim_time": "short",
+        "shear_modulus": 1e11},
+    "viscous": {
+        "dtf_start": 0.1,
+        "nx": 80,
+        "sim_time": "long",
+        "shear_modulus": 1e14}
 }
 
+
 def run_benchmark(case_name):
-    
+
     # Run default case run for four dt factors
-    dtf_start = params[case_name]["dtf_start"]  # First dt is 1/10th of viscous relaxation time, by fourth refinement dt < maxwell time
+    dtf_start = params[case_name]["dtf_start"]
     params[case_name].pop("dtf_start")  # Don't pass this to viscoelastic_model
     dt_factors = dtf_start / (2 ** np.arange(4))
     prefix = f"errors-{case_name}-zhong"
@@ -167,6 +172,7 @@ def run_benchmark(case_name):
     relative_errors = errors / ref
     convergence = np.log2(relative_errors[:-1] / relative_errors[1:])
     print(convergence)
+
 
 if __name__ == "__main__":
     run_benchmark(args.case)
