@@ -6,7 +6,7 @@ import numpy as np
 from gadopt.utility import vertical_component as vc
 from gadopt.utility import CombinedSurfaceMeasure, step_func
 import pandas as pd
-from decimal import Decimal
+
 
 class Weerdesteijn2d:
     name = "weerdesteijn-2d"
@@ -155,7 +155,7 @@ class Weerdesteijn2d:
 
         self.stokes_solver = ViscoelasticStokesSolver(m, 1e23*self.viscosity, self.shear_modulus, self.density,
                                                       self.deviatoric_stress, self.displacement, approximation,
-                                                      self.dt, bcs=self.stokes_bcs, 
+                                                      self.dt, bcs=self.stokes_bcs,
                                                       nullspace=self.Z_nullspace, transpose_nullspace=self.Z_nullspace,
                                                       near_nullspace=self.Z_near_nullspace)
 
@@ -213,7 +213,7 @@ class Weerdesteijn2d:
 
     def viscosity_values(self):
         # Log10(viscosity) using math log10 function
-     #   return [17, -2, -2, -1.6989700043360187, 0]
+        # return [17, -2, -2, -1.6989700043360187, 0]
         return [1e17, 1e-2, 1e-2, 2e-2, 0]
 
     def initialise_background_field(self, field, background_values):
@@ -230,9 +230,8 @@ class Weerdesteijn2d:
                 centre = self.radius_values[i] - self.radius_values[0]
                 mag = background_values[i] - background_values[i-1]
                 profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
-        
-            field.interpolate(profile)
 
+            field.interpolate(profile)
 
     def setup_heterogenous_viscosity(self):
         pass
@@ -329,7 +328,7 @@ class Weerdesteijn2d:
             for i in range(self.mesh.geometric_dimension()):
                 self.displacement_vom_matplotlib_df[f'displacement{i}_vom_array_{float(self.time/self.year_in_seconds):.0f}years'] = self.displacement_vom_input.dat.data[:, i]
             self.displacement_vom_matplotlib_df.to_csv(f"{self.name}/surface_displacement_arrays.csv")
-    
+
     def integrated_time_misfit(self, timestep):
         pass
 
@@ -343,11 +342,11 @@ class Weerdesteijn2d:
 
             with self.stokes_stage: self.stokes_solver.solve()
 
-            # Storing displacement and incremental displacement to be used in the objective 
+            # Storing displacement and incremental displacement to be used in the objective
             if self.WRITE_OBJ_CHECKPOINT:
                 objective_checkpoint_file.save_function(self.u_, name="Incremental Displacement", idx=timestep)
                 objective_checkpoint_file.save_function(self.displacement, name="Displacement", idx=timestep)
-            
+
             self.integrated_time_misfit(timestep)
             self.time.assign(self.time+self.dt)
 
@@ -360,7 +359,6 @@ class Weerdesteijn2d:
             self.displacement_min_array.append([float(self.time/self.year_in_seconds), displacement_min])
 
 #            if self.do_write and timestep == 1:
-                # Write out the elastic displacement
 #                self.displacement_vom_out()
             # Write output:
             if timestep % self.dump_period == 0:
@@ -381,6 +379,7 @@ class Weerdesteijn2d:
                     np.savetxt(displacement_filename, self.displacement_min_array)
 
         objective_checkpoint_file.close()
+
 
 if __name__ == "__main__":
     simulation = Weerdesteijn2d()
