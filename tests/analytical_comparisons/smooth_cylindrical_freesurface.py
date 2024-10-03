@@ -56,6 +56,7 @@ def model(level, k, nn, do_write=False):
     # Construct a circle mesh and then extrude into a cylinder:
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
+    mesh.cartesian = False
     bottom_id, top_id = "bottom", "top"
 
     # Define geometric quantities
@@ -150,8 +151,7 @@ def model(level, k, nn, do_write=False):
     eta_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in etaxy.dat.data]
 
     steady_state_tolerance = 1e-9
-
-    u_old, p_old, eta_old = split(stokes_solver.solution_old)
+    u_old = Function(V, name="VelocityOld")
 
     u_error = Function(V, name="VelocityError").assign(u_-u_anal)
     p_error = Function(W, name="PressureError").assign(p_-p_anal)
@@ -167,6 +167,8 @@ def model(level, k, nn, do_write=False):
         # Calculate L2-norm of change in velocity:
         maxchange = sqrt(assemble((u - u_old)**2 * dx))
         log("maxchange = ", maxchange)
+
+        u_old.assign(u_)
 
         if do_write:
             u_error.assign(u_-u_anal)
