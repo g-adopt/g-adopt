@@ -1,10 +1,14 @@
 from gadopt import *
 import numpy as np
+import argparse
 OUTPUT = False
 output_directory = "./2d_analytic_zhong_viscoelastic_freesurface/"
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--case", default="viscoelastic", type=str, help="Test case to run: elastic limit (dt << maxwell time, 1 step), viscoelastic (dt ~ maxwell time), viscous limit (dt >> maxwell time) ", required=False)
+args = parser.parse_args()
 
-def viscoelastic_model(nx, dt_factor):
+def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11):
     # Set up geometry:
     nz = nx  # Number of vertical cells
     D = 3e6  # length of domain in m
@@ -55,7 +59,7 @@ def viscoelastic_model(nx, dt_factor):
     rho0 = Function(R).assign(Constant(4500))  # density in kg/m^3
     g = 10  # gravitational acceleration in m/s^2
     viscosity = Constant(1e21)  # Viscosity Pa s
-    shear_modulus = Constant(1e11)  # Shear modulus in Pa
+    shear_modulus = Constant(shear_modulus)  # Shear modulus in Pa
     maxwell_time = viscosity / shear_modulus
 
     # Set up surface load
@@ -71,7 +75,11 @@ def viscoelastic_model(nx, dt_factor):
     log("tau0 in years", float(tau0/year_in_seconds))
     time = Constant(0.0)
     dt = Constant(dt_factor * tau0)  # Initial time-step
-    max_timesteps = round(2*tau0/dt)
+    if sim_time == "long":
+        max_timesteps = round(2*tau0/dt)
+    else:
+        max_timesteps = 1
+
     log("max timesteps", max_timesteps)
     dump_period = 1
     log("dump_period", dump_period)
@@ -131,11 +139,34 @@ def viscoelastic_model(nx, dt_factor):
     return final_error
 
 
-# Run default case run for four dt factors
-dtf_start = 0.1  # First dt is 1/10th of viscous relaxation time, by fourth refinement dt < maxwell time
-dt_factors = dtf_start / (2 ** np.arange(4))
-nx = 80
+params = {
+        "viscoelastic": {"dtf_start": 0.1,
+                "nx": 80, 
+                "sim_time": "long",
+                "shear_modulus": 1e11},
+          "elastic": {"dtf_start": 0.001,
+                "nx": 80, 
+                "sim_time": "short",
+                "shear_modulus": 1e11},
+          "viscous": {"dtf_start": 0.1,
+                "nx": 80, 
+                "sim_time": "long",
+                "shear_modulus": 1e14}
+}
 
-prefix = "errors-viscoelastic-zhong"
-errors = np.array([viscoelastic_model(nx, dtf) for dtf in dt_factors])
-np.savetxt(f"{prefix}-free-surface.dat", errors)
+def run_benchmark(case_name):
+    
+    # Run default case run for four dt factors
+    dtf_start = params[case_name]["dtf_start"]  # First dt is 1/10th of viscous relaxation time, by fourth refinement dt < maxwell time
+    params[case_name].pop("dtf_start")  # Don't pass this to viscoelastic_model
+    dt_factors = dtf_start / (2 ** np.arange(4))
+    prefix = f"errors-{case_name}-zhong"
+    errors = np.array([viscoelastic_model(dt_factor=dtf, **params[case_name]) for dtf in dt_factors])
+    np.savetxt(f"{prefix}-free-surface.dat", errors)
+    ref = errors[-1]
+    relative_errors = errors / ref
+    convergence = np.log2(relative_errors[:-1] / relative_errors[1:])
+    print(convergence)
+
+if __name__ == "__main__":
+    run_benchmark(args.case)

@@ -2,7 +2,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 base = Path(__file__).parent.resolve()
 
 
@@ -12,7 +11,9 @@ def expected_errors():
 
 
 cases = [
+    ("elastic-zhong", [1.5, 1.5, 1.5]),
     ("viscoelastic-zhong", [1.0, 1.0, 1.0]),
+    ("viscous-zhong", [1.0, 1.0, 1.0]),
 ]
 
 
