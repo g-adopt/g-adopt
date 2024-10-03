@@ -49,9 +49,8 @@ point_2 = gmsh.model.geo.addPoint(lx, 0, 0, mesh_hor_res)
 
 line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
-gmsh.model.geo.extrude(
-    [(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True
-)  # Vertical resolution: 5e-3
+# Vertical resolution: 5e-3
+gmsh.model.geo.extrude([(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True)
 
 gmsh.model.geo.extrude(
     [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 20, 0, numElements=[15], recombine=True
@@ -151,29 +150,26 @@ epsilon = Constant(min_mesh_edge_length / 4)
 psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # -
 
-# We next define materials present in the simulation using the `Material` class. Here,
-# the problem is non-dimensionalised and can be described by the product of the
-# expressions for the Rayleigh and buoyancy numbers, RaB, which is also referred to as
-# compositional Rayleigh number. Therefore, we provide a value for thermal and
-# compositional Rayleigh numbers to define our approximation. Material fields, such as
-# RaB, are created using the `field_interface` function, which generates a unique field
-# over the numerical domain based on the level-set field(s) and values or expressions
-# associated with each material. At the interface between two materials, the transition
-# between values or expressions can be represented as sharp or diffuse, with the latter
-# using averaging schemes, such as arithmetic, geometric, and harmonic means.
+# We next define the material fields and instantiate the approximation. Here, the system
+# of equations is non-dimensional and includes compositional and thermal buoyancy terms
+# under the Boussinesq approximation. Moreover, physical parameters are constant through
+# space apart from density. As a result, the system is fully defined by the values of
+# the thermal and compositional Rayleigh numbers. We use the `material_field` function
+# to define the compositional Rayleigh number throughout the domain (including the shape
+# of the material interface transition). Both non-dimensional numbers are provided to
+# our approximation, alongside other parameters already mentioned.
 
 # +
-dense_material = Material(RaB=4.5e5)
-reference_material = Material(RaB=0)
-materials = [dense_material, reference_material]
+Ra_c_reference = 0
+Ra_c_dense = 4.5e5
+# Material fields defined based on each material value and location
+Ra_c = material_field(psi, [Ra_c_dense, Ra_c_reference], interface="sharp")
 
-Ra = 3e5  # Thermal Rayleigh number
+Ra = 3e5
 
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
-
-approximation = BoussinesqApproximation(Ra, RaB=RaB)
+approximation = Approximation(
+    "BA", dimensional=False, parameters={"Ra": Ra, "Ra_c": Ra_c}
+)
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -255,22 +251,18 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # +
 energy_solver = EnergySolver(
-    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(
+    approximation,
     z,
     T,
-    approximation,
     bcs=stokes_bcs,
-    nullspace=Z_nullspace,
-    transpose_nullspace=Z_nullspace,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 
-subcycles = 1  # Number of advection solves to perform within one time step
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
-# Increase the reinitialisation time step to make up for the coarseness of the mesh
-level_set_solver.reini_params["tstep"] *= 20
+level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -283,7 +275,7 @@ time_end = 0.02  # Will be changed to 0.05 once mesh adaptivity is available
 while True:
     # Write output
     if time_now >= output_counter * output_frequency:
-        output_file.write(*z.subfunctions, T, psi)
+        output_file.write(*z.subfunctions, T, psi, time=time_now)
         output_counter += 1
 
     # Update timestep
@@ -314,11 +306,12 @@ while True:
         break
 # -
 
-# At the end of the simulation, once a steady-state has been achieved, we close our
-# logging file and checkpoint solution fields to disk. These can later be used to
+# At the end of the simulation, we write the final state for visualisation, close our
+# logging file, and checkpoint solution fields to disk. These can later be used to
 # restart the simulation, if required.
 
 # +
+output_file.write(*z.subfunctions, psi, time=time_now)
 plog.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:

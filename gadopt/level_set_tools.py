@@ -1,31 +1,22 @@
 r"""This module provides a set of classes and functions enabling multi-material
-capabilities. Users initialise materials by instantiating the `Material` class and
-define the physical properties of material interfaces using `field_interface`. They
-instantiate the `LevelSetSolver` class by providing relevant parameters and call the
-`solve` method to request a solver update. Finally, they may call the `entrainment`
-function to calculate material entrainment in the simulation.
+capabilities. The `material_field` function provides a simple way to define a UFL
+expression for a physical field depending on material properties. The `LevelSetSolver`
+class instantiates the advection and reinitialisation systems for a single level set.
+The `entrainment` function enables users to easily calculate material entrainment.
 
 """
 
-import abc
-from dataclasses import dataclass, fields
 from numbers import Number
 from typing import Optional
 
 import firedrake as fd
-from firedrake.ufl_expr import extract_unique_domain
 
-from .equations import BaseEquation, BaseTerm
-from .scalar_equation import ScalarAdvectionEquation
-from .time_stepper import eSSPRKs3p3
+from . import scalar_equation as scal_eq
+from .energy_solver import AdvectionDiffusionSolver
+from .equations import Equation
+from .time_stepper import RungeKuttaTimeIntegrator, eSSPRKs3p3
 
-__all__ = [
-    "LevelSetSolver",
-    "Material",
-    "density_RaB",
-    "entrainment",
-    "field_interface",
-]
+__all__ = ["LevelSetSolver", "entrainment", "material_field"]
 
 
 # Default solver options for level-set advection and reinitialisation
@@ -37,95 +28,16 @@ solver_params_default = {
 }
 # Default parameters used to set up level-set reinitialisation
 reini_params_default = {
-    "tstep": 1e-2,
+    "tstep": 5e-2,
     "tstep_alg": eSSPRKs3p3,
     "frequency": 5,
     "iterations": 1,
 }
 
 
-@dataclass(kw_only=True)
-class Material:
-    """A material with physical properties for the level-set approach.
-
-    Expects material buoyancy to be defined using a value for either the reference
-    density, buoyancy number, or compositional Rayleigh number.
-
-    Contains static methods to calculate the physical properties of a material.
-    Methods implemented here describe properties in the simplest non-dimensional
-    simulation setup and must be overriden for more complex scenarios.
-
-    Attributes:
-        density:
-          An integer or a float representing the reference density.
-        B:
-          An integer or a float representing the buoyancy number.
-        RaB:
-          An integer or a float representing the compositional Rayleigh number.
-        density_B_RaB:
-          A string to notify how the buoyancy term is calculated.
-    """
-
-    density: Optional[Number] = None
-    B: Optional[Number] = None
-    RaB: Optional[Number] = None
-
-    def __post_init__(self):
-        """Checks instance field values.
-
-        Raises:
-            ValueError:
-              Incorrect field types.
-        """
-        count_None = 0
-        for field_var in fields(self):
-            field_var_value = getattr(self, field_var.name)
-            if isinstance(field_var_value, Number):
-                self.density_B_RaB = field_var.name
-            elif field_var_value is None:
-                count_None += 1
-            else:
-                raise ValueError(
-                    "When provided, density, B, and RaB must have type int or float."
-                )
-        if count_None != 2:
-            raise ValueError(
-                "One, and only one, of density, B, and RaB must be provided, and it "
-                "must be an integer or a float."
-            )
-
-    @staticmethod
-    def viscosity(*args, **kwargs):
-        """Calculates dynamic viscosity (Pa s)."""
-        return 1.0
-
-    @staticmethod
-    def thermal_expansion(*args, **kwargs):
-        """Calculates volumetric thermal expansion coefficient (K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def thermal_conductivity(*args, **kwargs):
-        """Calculates thermal conductivity (W m^-1 K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def specific_heat_capacity(*args, **kwargs):
-        """Calculates specific heat capacity at constant pressure (J kg^-1 K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def internal_heating_rate(*args, **kwargs):
-        """Calculates internal heating rate per unit mass (W kg^-1)."""
-        return 0.0
-
-    @classmethod
-    def thermal_diffusivity(cls, *args, **kwargs):
-        """Calculates thermal diffusivity (m^2 s^-1)."""
-        return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
-
-
-class ReinitialisationTerm(BaseTerm):
+def reinitialisation_term(
+    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+) -> fd.Form:
     """Term for the conservative level set reinitialisation equation.
 
     Implements terms on the right-hand side of Equation 17 from
@@ -134,53 +46,16 @@ class ReinitialisationTerm(BaseTerm):
     method.
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
+    sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
+    balance_term = (
+        eq.epsilon
+        * (1 - 2 * trial)
+        * fd.sqrt(fd.inner(eq.level_set_grad, eq.level_set_grad))
+        * eq.test
+        * eq.dx
+    )
 
-    def residual(
-        self,
-        test: fd.ufl_expr.Argument,
-        trial: fd.ufl_expr.Argument,
-        trial_lagged: fd.ufl_expr.Argument,
-        fields: dict,
-        bcs: dict,
-    ) -> fd.ufl.core.expr.Expr:
-        """Residual contribution expressed through UFL.
-
-        Args:
-            test:
-              UFL test function.
-            trial:
-              UFL trial function.
-            trial_lagged:
-              UFL trial function from the previous time step.
-            fields:
-              A dictionary of provided UFL expressions.
-            bcs:
-              A dictionary of boundary conditions.
-        """
-        level_set_grad = fields["level_set_grad"]
-        epsilon = fields["epsilon"]
-
-        sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * test * self.dx
-        balance_term = (
-            epsilon
-            * (1 - 2 * trial)
-            * fd.sqrt(level_set_grad[0] ** 2 + level_set_grad[1] ** 2)
-            * test
-            * self.dx
-        )
-
-        return sharpen_term + balance_term
-
-
-class ReinitialisationEquation(BaseEquation):
-    """Equation for conservative level set reinitialisation.
-
-    Attributes:
-        terms:
-          A list of equation terms that contribute to the system's residual.
-    """
-
-    terms = [ReinitialisationTerm]
+    return sharpen_term + balance_term
 
 
 class LevelSetSolver:
@@ -194,15 +69,14 @@ class LevelSetSolver:
         level_set:
           The Firedrake function for the level set.
         func_space_lsgp:
-          The UFL function space where values of the projected level-set gradient are
-          calculated.
-        level_set_grad_proj:
+          The UFL function space for the projected level-set gradient.
+        ls_grad_proj:
           The Firedrake function for the projected level-set gradient.
         proj_solver:
-          An integer or a float representing the reference density.
+          A Firedrake LinearVariationalSolver to project the level-set gradient.
         reini_params:
           A dictionary containing parameters used in the reinitialisation approach.
-        ls_ts:
+        ls_solver:
           The G-ADOPT timestepper object for the advection equation.
         reini_ts:
           The G-ADOPT timestepper object for the reinitialisation equation.
@@ -215,12 +89,12 @@ class LevelSetSolver:
         level_set: fd.Function,
         velocity: fd.ufl.tensors.ListTensor,
         tstep: fd.Constant,
-        tstep_alg: abc.ABCMeta,
-        subcycles: int,
+        tstep_alg: type[RungeKuttaTimeIntegrator],
         epsilon: fd.Constant,
+        subcycles: int = 1,
         reini_params: Optional[dict] = None,
         solver_params: Optional[dict] = None,
-    ):
+    ) -> None:
         """Initialises the solver instance.
 
         Args:
@@ -242,7 +116,8 @@ class LevelSetSolver:
               A dictionary containing solver parameters used in the advection and
               reinitialisation approaches.
         """
-        self.level_set = level_set
+        self.solution = level_set
+        self.u = velocity
         self.tstep = tstep
         self.tstep_alg = tstep_alg
         self.subcycles = subcycles
@@ -250,22 +125,21 @@ class LevelSetSolver:
         self.reini_params = reini_params or reini_params_default
         self.solver_params = solver_params or solver_params_default
 
-        self.mesh = extract_unique_domain(level_set)
         self.func_space = level_set.function_space()
+        self.mesh = self.func_space.mesh()
 
         self.func_space_lsgp = fd.VectorFunctionSpace(
             self.mesh, "CG", self.func_space.finat_element.degree
         )
-        self.level_set_grad_proj = fd.Function(
+        self.ls_grad_proj = fd.Function(
             self.func_space_lsgp,
             name=f"Level-set gradient (projection) #{level_set.name()[-1]}",
         )
 
         self.proj_solver = self.gradient_L2_proj()
 
-        self.ls_fields = {"velocity": velocity}
-        self.reini_fields = {
-            "level_set_grad": self.level_set_grad_proj,
+        self.reini_terms_kwargs = {
+            "level_set_grad": self.ls_grad_proj,
             "epsilon": epsilon,
         }
 
@@ -286,17 +160,15 @@ class LevelSetSolver:
 
         mass_term = fd.inner(test_function, trial_function) * fd.dx(domain=self.mesh)
         residual_element = (
-            self.level_set * fd.div(test_function) * fd.dx(domain=self.mesh)
+            self.solution * fd.div(test_function) * fd.dx(domain=self.mesh)
         )
         residual_boundary = (
-            self.level_set
+            self.solution
             * fd.dot(test_function, fd.FacetNormal(self.mesh))
             * fd.ds(domain=self.mesh)
         )
         residual = -residual_element + residual_boundary
-        problem = fd.LinearVariationalProblem(
-            mass_term, residual, self.level_set_grad_proj
-        )
+        problem = fd.LinearVariationalProblem(mass_term, residual, self.ls_grad_proj)
 
         solver_params = {
             "mat_type": "aij",
@@ -307,238 +179,175 @@ class LevelSetSolver:
 
         return fd.LinearVariationalSolver(problem, solver_parameters=solver_params)
 
-    def update_level_set_gradient(self, *args, **kwargs):
+    def update_level_set_gradient(self, *args, **kwargs) -> None:
         """Calls the gradient projection solver.
 
         Can be used as a callback.
         """
         self.proj_solver.solve()
 
-    def set_up_solvers(self):
+    def set_up_solvers(self) -> None:
         """Sets up the time steppers for advection and reinitialisation."""
-        self.ls_ts = self.tstep_alg(
-            ScalarAdvectionEquation(self.func_space, self.func_space),
-            self.level_set,
-            self.ls_fields,
+        test = fd.TestFunction(self.func_space)
+        self.solution_old = fd.Function(self.func_space)
+
+        self.ls_solver = AdvectionDiffusionSolver(
+            "advection",
+            self.solution,
+            self.u,
             self.tstep / self.subcycles,
-            solver_parameters=self.solver_params,
-        )
-        self.reini_ts = self.reini_params["tstep_alg"](
-            ReinitialisationEquation(self.func_space, self.func_space),
-            self.level_set,
-            self.reini_fields,
-            self.reini_params["tstep"],
+            self.tstep_alg,
+            solution_old=self.solution_old,
             solver_parameters=self.solver_params,
         )
 
-    def solve(self, step: int):
+        reinitialisation_equation = Equation(
+            test,
+            self.func_space,
+            reinitialisation_term,
+            mass_term=scal_eq.mass_term,
+            terms_kwargs=self.reini_terms_kwargs,
+        )
+
+        self.reini_ts = self.reini_params["tstep_alg"](
+            reinitialisation_equation,
+            self.solution,
+            self.reini_params["tstep"],
+            solution_old=self.solution_old,
+            solver_parameters=self.solver_params,
+        )
+
+    def solve(self, step: int, equation: Optional[str] = None) -> None:
         """Updates the level-set function.
 
         Calls advection and reinitialisation solvers within a subcycling loop.
-        The reinitialisation solver can be iterated and might not be called at each
+        The reinitialisation solver can be iterated and may not be called at each
         simulation time step.
 
         Args:
             step:
-              An integer representing the current simulation step.
+              An integer representing the current time-loop iteration.
+            equation:
+              An optional string specifying which equation to solve if not both.
         """
         if not self.solvers_ready:
             self.set_up_solvers()
             self.solvers_ready = True
 
         for subcycle in range(self.subcycles):
-            self.ls_ts.advance(0)
+            if equation != "reinitialisation":
+                self.ls_solver.solve()
 
-            if step >= self.reini_params["frequency"]:
-                self.reini_ts.solution_old.assign(self.level_set)
-
-            if step % self.reini_params["frequency"] == 0:
+            if equation != "advection" and step % self.reini_params["frequency"] == 0:
                 for reini_step in range(self.reini_params["iterations"]):
                     self.reini_ts.advance(
-                        0, update_forcings=self.update_level_set_gradient
+                        t=0, update_forcings=self.update_level_set_gradient
                     )
 
-                self.ls_ts.solution_old.assign(self.level_set)
 
-
-def field_interface_recursive(
-    level_set: list, material_value: list, method: str
+def material_field_recursive(
+    level_set: fd.Function | list[fd.Function],
+    field_values: list[fd.ufl.core.expr.Expr],
+    interface: str,
 ) -> fd.ufl.core.expr.Expr:
-    """Sets physical property expressions for each material.
+    """Sets physical property expressions reflecting material distribution.
 
     Ensures that the correct expression is assigned to each material based on the
-    level-set functions.
-    Property transition across material interfaces are expressed according to the
-    provided method.
+    level-set functions. Property transition across material interfaces are expressed
+    according to the provided averaging scheme.
 
     Args:
         level_set:
-          A list of level-set UFL functions.
-        material_value:
-          A list of physical property values applicable to each material.
-        method:
-          A string specifying the nature of property transitions between materials.
+          A Firedrake function for the level set (or a list of these).
+        field_values:
+          A list of physical property values relevant for each material.
+        interface:
+          A string specifying how property transitions between materials are calculated.
 
     Returns:
-        A UFL expression to calculate physical property values throughout the domain.
-
-    Raises:
-      ValueError: Incorrect method name supplied.
+        A UFL expression representing the physical property throughout the domain.
 
     """
     ls = fd.max_value(fd.min_value(level_set.pop(), 1), 0)
 
     if level_set:  # Directly specify material value on only one side of the interface
-        match method:
+        match interface:
             case "sharp":
-                return fd.conditional(
-                    ls > 0.5,
-                    material_value.pop(),
-                    field_interface_recursive(level_set, material_value, method),
-                )
+                heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
+                return field_values.pop() * heaviside + material_field_recursive(
+                    level_set, field_values, interface
+                ) * (1 - heaviside)
             case "arithmetic":
-                return material_value.pop() * ls + field_interface_recursive(
-                    level_set, material_value, method
+                return field_values.pop() * ls + material_field_recursive(
+                    level_set, field_values, interface
                 ) * (1 - ls)
             case "geometric":
-                return material_value.pop() ** ls * field_interface_recursive(
-                    level_set, material_value, method
+                return field_values.pop() ** ls * material_field_recursive(
+                    level_set, field_values, interface
                 ) ** (1 - ls)
             case "harmonic":
                 return 1 / (
-                    ls / material_value.pop()
+                    ls / field_values.pop()
                     + (1 - ls)
-                    / field_interface_recursive(level_set, material_value, method)
-                )
-            case _:
-                raise ValueError(
-                    "Method must be sharp, arithmetic, geometric, or harmonic."
+                    / material_field_recursive(level_set, field_values, interface)
                 )
     else:  # Final level set; specify values for both sides of the interface
-        match method:
+        match interface:
             case "sharp":
-                return fd.conditional(ls < 0.5, *material_value)
+                heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
+                return field_values[0] * (1 - heaviside) + field_values[1] * heaviside
             case "arithmetic":
-                return material_value[0] * (1 - ls) + material_value[1] * ls
+                return field_values[0] * (1 - ls) + field_values[1] * ls
             case "geometric":
-                return material_value[0] ** (1 - ls) * material_value[1] ** ls
+                return field_values[0] ** (1 - ls) * field_values[1] ** ls
             case "harmonic":
-                return 1 / ((1 - ls) / material_value[0] + ls / material_value[1])
-            case _:
-                raise ValueError(
-                    "Method must be sharp, arithmetic, geometric, or harmonic."
-                )
+                return 1 / ((1 - ls) / field_values[0] + ls / field_values[1])
 
 
-def field_interface(
-    level_set: list, material_value: list, method: str
+def material_field(
+    level_set: fd.Function | list[fd.Function],
+    field_values: list[fd.ufl.core.expr.Expr],
+    interface: str,
 ) -> fd.ufl.core.expr.Expr:
-    """Executes field_interface_recursive with a modified argument.
+    """Executes material_field_recursive providing a copy of the level-set list.
 
-    Calls field_interface_recursive using a copy of the level-set list to ensure the
-    original one is not consumed by the function call.
+    Providing a copy of the level-set list prevents the original one from being consumed
+    by the function call.
 
     Args:
         level_set:
-          A list of level-set UFL functions.
-        material_value:
-          A list of physical property values applicable to each material.
-        method:
-          A string specifying the nature of property transitions between materials.
+          A Firedrake function for the level set (or a list of these).
+        field_values:
+          A list of physical property values relevant for each material.
+        interface:
+          A string specifying how property transitions between materials are calculated.
 
     Returns:
-        A UFL expression to calculate physical property values throughout the domain.
-    """
-    return field_interface_recursive(level_set.copy(), material_value, method)
-
-
-def density_RaB(
-    Simulation,
-    level_set: list,
-    func_space_interp: fd.functionspaceimpl.WithGeometry,
-    method: Optional[str] = "sharp",
-) -> tuple[
-    fd.Constant,
-    fd.Constant | fd.ufl.core.expr.Expr,
-    fd.Function,
-    fd.Constant | fd.ufl.core.expr.Expr,
-    fd.Function,
-    bool,
-]:
-    """Sets up buoyancy-related fields.
-
-    Assigns UFL expressions to buoyancy-related fields based on the way the Material
-    class was initialised.
-
-    Args:
-        Simulation:
-          A class representing the current simulation.
-        level_set:
-          A list of level-set UFL functions.
-        func_space_interp:
-          A continuous UFL function space where material fields are calculated.
-        method:
-          An optional string specifying the nature of property transitions between
-          materials.
-
-    Returns:
-        A tuple containing the reference density field, the density difference field,
-        the density field, the UFL expression for the compositional Rayleigh number,
-        the compositional Rayleigh number field, and a boolean indicating if the
-        simulation is expressed in dimensionless form.
+        A UFL expression representing the physical property throughout the domain.
 
     Raises:
-        ValueError: Inconsistent buoyancy-related field across materials.
+        ValueError: Incorrect interface strategy supplied.
     """
-    density = fd.Function(func_space_interp, name="Density")
-    RaB = fd.Function(func_space_interp, name="RaB")
-    # Identify if the governing equations are written in dimensional form or not and
-    # define accordingly relevant variables for the buoyancy term
-    if all(material.density_B_RaB == "density" for material in Simulation.materials):
-        dimensionless = False
-        RaB_ufl = fd.Constant(1)
-        ref_dens = fd.Constant(Simulation.reference_material.density)
-        dens_diff = field_interface(
-            level_set,
-            [material.density - ref_dens for material in Simulation.materials],
-            method=method,
-        )
-        density.interpolate(dens_diff + ref_dens)
-    else:
-        dimensionless = True
-        ref_dens = fd.Constant(1)
-        dens_diff = fd.Constant(1)
-        if all(material.density_B_RaB == "B" for material in Simulation.materials):
-            RaB_ufl = field_interface(
-                level_set,
-                [Simulation.Ra * material.B for material in Simulation.materials],
-                method=method,
-            )
-        elif all(material.density_B_RaB == "RaB" for material in Simulation.materials):
-            RaB_ufl = field_interface(
-                level_set,
-                [material.RaB for material in Simulation.materials],
-                method=method,
-            )
-        else:
-            raise ValueError(
-                "All materials must share a common buoyancy-defining parameter."
-            )
-        RaB.interpolate(RaB_ufl)
+    if not isinstance(level_set, list):
+        level_set = [level_set]
 
-    return ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless
+    _impl_interface = ["sharp", "arithmetic", "geometric", "harmonic"]
+    if interface not in _impl_interface:
+        raise ValueError(f"Interface must be one of {_impl_interface}.")
+
+    return material_field_recursive(level_set.copy(), field_values, interface)
 
 
 def entrainment(
     level_set: fd.Function, material_area: Number, entrainment_height: Number
-):
+) -> float:
     """Calculates entrainment diagnostic.
 
     Determines the proportion of a material that is located above a given height.
 
     Args:
         level_set:
-          A level-set Firedrake function.
+          A Firedrake function for the level set.
         material_area:
           An integer or a float representing the total area occupied by a material.
         entrainment_height:

@@ -1,6 +1,7 @@
-import pytest
 from pathlib import Path
+
 import pandas as pd
+import pytest
 
 cases = {
     "base_case": {},
@@ -12,7 +13,9 @@ cases = {
     "3d_spherical": {"extra_checks": ["t_dev_avg"]},
     "3d_cartesian": {"rtol": 1e-4},
     "gplates_global": {"extra_checks": ["u_rms_top"]},
-    "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["avg_t", "FullT_min", "FullT_max"]},
+    "../tests/2d_cylindrical_TALA_DG": {
+        "extra_checks": ["avg_t", "FullT_min", "FullT_max"]
+    },
     "../tests/viscoplastic_case_dg": {"extra_checks": ["avg_t"]},
 }
 
@@ -48,8 +51,10 @@ def test_benchmark(benchmark):
     extra_checks = compare_params.pop("extra_checks", [])
 
     pd.testing.assert_series_equal(
-        df[["u_rms", "nu_top"] + extra_checks], expected,
-        check_names=False, **compare_params
+        df[["u_rms", "nu_top"] + extra_checks],
+        expected,
+        check_names=False,
+        **compare_params,
     )
 
     assert abs(df.name - expected.name) <= convergence_tolerance

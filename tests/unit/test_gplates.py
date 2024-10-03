@@ -2,12 +2,18 @@ import pickle
 from pathlib import Path
 
 from gadopt import *
-from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, ensure_reconstruction
+from gadopt.gplates import (
+    GplatesVelocityFunction,
+    ensure_reconstruction,
+    pyGplatesConnector,
+)
 
 
 def test_obtain_muller_2022_se():
     gplates_data_path = Path(__file__).resolve().parents[2] / "demos/gplates_global"
-    plate_reconstruction_files_with_path = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
+    plate_reconstruction_files_with_path = ensure_reconstruction(
+        "Muller 2022 SE v1.2", gplates_data_path
+    )
 
     # Check if the files are downloaded and accessible
     for file_list in plate_reconstruction_files_with_path.values():
@@ -26,7 +32,7 @@ def test_gplates():
     mesh = ExtrudedMesh(
         mesh2d,
         layers=nlayers,
-        layer_height=(rmax - rmin)/(nlayers-1),
+        layer_height=(rmax - rmin) / (nlayers - 1),
         extrusion_type="radial",
     )
 
@@ -41,16 +47,20 @@ def test_gplates():
         nseeds=1e5,
         nneighbours=4,
         oldest_age=409,
-        delta_t=1.0
+        delta_t=1.0,
     )
 
-    gplates_function = GplatesVelocityFunction(V, gplates_connector=rec_model, top_boundary_marker="top")
+    gplates_function = GplatesVelocityFunction(
+        V, gplates_connector=rec_model, top_boundary_marker="top"
+    )
 
     surface_rms = []
 
     for t in np.arange(409, 0, -50):
         gplates_function.update_plate_reconstruction(rec_model.age2ndtime(t))
-        surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
+        surface_rms.append(
+            sqrt(assemble(inner(gplates_function, gplates_function) * ds_t))
+        )
 
     # Loading reference plate velocities
     test_data_path = Path(__file__).resolve().parent / "data"

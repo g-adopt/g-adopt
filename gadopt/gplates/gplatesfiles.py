@@ -8,8 +8,8 @@ _default_muller2022_plate_files = {
         "1000-410-Convergence.gpml",
         "1000-410-Divergence.gpml",
         "1000-410-Topologies.gpml",
-        "1000-410-Transforms.gpml"
-    ]
+        "1000-410-Transforms.gpml",
+    ],
 }
 
 reconstructions = {
@@ -28,24 +28,28 @@ reconstructions = {
         "plate_files": {
             "rotation_filenames": [
                 "optimisation/1800_1000_rotfile_20240725_run3.rot",
-                "optimisation/1000_0_rotfile_20240725_run3.rot"
+                "optimisation/1000_0_rotfile_20240725_run3.rot",
             ],
-            "topology_filenames":
-                _default_muller2022_plate_files["topology_filenames"] +
-                ["1800-1000_plate_boundaries.gpml", "TopologyBuildingBlocks.gpml"],
+            "topology_filenames": _default_muller2022_plate_files["topology_filenames"]
+            + ["1800-1000_plate_boundaries.gpml", "TopologyBuildingBlocks.gpml"],
         },
         "directory": "1.8Ga_model_optimised_mantle_ref_frame_20240725",
     },
-
 }
 
 
 def check_and_get_absolute_paths(base_path: Path, filenames: dict):
     # Check if all files are present
-    all_files_present = all((base_path / filename).exists() for files in filenames.values() for filename in files)
+    all_files_present = all(
+        (base_path / filename).exists()
+        for files in filenames.values()
+        for filename in files
+    )
 
     if not all_files_present:
-        raise FileNotFoundError("Some files are missing. Cannot proceed without downloading the required files.")
+        raise FileNotFoundError(
+            "Some files are missing. Cannot proceed without downloading the required files."
+        )
 
     # Return absolute paths of the files
     return {
@@ -60,4 +64,6 @@ def ensure_reconstruction(reconstruction: str, base_path: str | Path):
 
     base_path = Path(base_path) / reconstructions[reconstruction]["directory"]
 
-    return check_and_get_absolute_paths(base_path, reconstructions[reconstruction]["plate_files"])
+    return check_and_get_absolute_paths(
+        base_path, reconstructions[reconstruction]["plate_files"]
+    )

@@ -39,7 +39,9 @@ mesh.cartesian = True
 bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
 
 # Retrieve the timestepping information for the Velocity and Temperature functions from checkpoint file:
-temperature_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Temperature")
+temperature_timestepping_info = checkpoint_file.get_timestepping_history(
+    mesh, "Temperature"
+)
 velocity_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Velocity")
 # -
 
@@ -56,10 +58,14 @@ velocity_timestepping_info = checkpoint_file.get_timestepping_history(mesh, "Vel
 # functionality. For example, initial and final temperature fields can be loaded:
 
 # Load the final state, analagous to the present-day "observed" state:
-Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=int(temperature_timestepping_info["index"][-1]))
+Tobs = checkpoint_file.load_function(
+    mesh, "Temperature", idx=int(temperature_timestepping_info["index"][-1])
+)
 Tobs.rename("Observed Temperature")
 # Load the reference initial state - i.e. the state that we wish to recover:
-Tic_ref = checkpoint_file.load_function(mesh, "Temperature", idx=int(temperature_timestepping_info["index"][0]))
+Tic_ref = checkpoint_file.load_function(
+    mesh, "Temperature", idx=int(temperature_timestepping_info["index"][0])
+)
 Tic_ref.rename("Reference Initial Temperature")
 checkpoint_file.close()
 
@@ -121,12 +127,12 @@ z.subfunctions[1].rename("Pressure")
 T = Function(Q, name="Temperature")
 
 # Specify important constants for the problem, alongside the approximation:
-Ra = Constant(1e6)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e6})
 
 # Define time-stepping parameters:
 delta_t = Constant(4e-6)  # Constant time step
-timesteps = int(temperature_timestepping_info["index"][-1]) + 1  # number of timesteps from forward
+# number of timesteps from forward
+timesteps = int(temperature_timestepping_info["index"][-1]) + 1
 
 # Nullspaces for the problem are next defined:
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
@@ -139,15 +145,20 @@ stokes_bcs = {
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
-temp_bcs = {
-    bottom_id: {"T": 1.0},
-    top_id: {"T": 0.0},
-}
+temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 
 # Setup Energy and Stokes solver
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace, constant_jacobian=True)
+energy_solver = EnergySolver(
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+)
+stokes_solver = StokesSolver(
+    approximation,
+    z,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+)
 # -
 
 # Define the Control Space
@@ -263,10 +274,10 @@ alpha_s = 1e-1
 
 # Define overall objective functional:
 objective = (
-    t_misfit +
-    alpha_u * (norm_obs * u_misfit / timesteps / norm_u_surface) +
-    alpha_d * (norm_obs * damping / norm_damping) +
-    alpha_s * (norm_obs * smoothing / norm_smoothing)
+    t_misfit
+    + alpha_u * (norm_obs * u_misfit / timesteps / norm_u_surface)
+    + alpha_d * (norm_obs * damping / norm_damping)
+    + alpha_s * (norm_obs * smoothing / norm_smoothing)
 )
 # -
 
@@ -401,9 +412,7 @@ functional_values = []
 def callback():
     solution_container.assign(Tic.block_variable.checkpoint)
     solutions_vtk.write(solution_container)
-    final_temperature_misfit = assemble(
-        (T.block_variable.checkpoint - Tobs) ** 2 * dx
-    )
+    final_temperature_misfit = assemble((T.block_variable.checkpoint - Tobs) ** 2 * dx)
     log(f"Terminal Temperature Misfit: {final_temperature_misfit}")
 
 

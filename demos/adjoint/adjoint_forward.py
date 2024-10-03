@@ -12,6 +12,7 @@
 # First, we define the domain extents and discretisation.
 
 from gadopt import *
+
 x_max = 1.0
 y_max = 1.0
 disc_n = 150
@@ -60,8 +61,8 @@ T = Function(Q, name="Temperature")
 # +
 X = SpatialCoordinate(mesh)
 T.interpolate(
-    0.5 * (erf((1 - X[1]) * 3.0) + erf(-X[1] * 3.0) + 1) +
-    0.1 * exp(-0.5 * ((X - as_vector((0.5, 0.2))) / Constant(0.1)) ** 2)
+    0.5 * (erf((1 - X[1]) * 3.0) + erf(-X[1] * 3.0) + 1)
+    + 0.1 * exp(-0.5 * ((X - as_vector((0.5, 0.2))) / Constant(0.1)) ** 2)
 )
 # -
 
@@ -72,9 +73,7 @@ T.interpolate(
 # inversion process.
 
 Taverage = Function(Q1, name="Average Temperature")
-averager = LayerAveraging(
-    mesh, np.linspace(0, 1.0, 150 * 2), quad_degree=6
-)
+averager = LayerAveraging(mesh, np.linspace(0, 1.0, 150 * 2), quad_degree=6)
 averager.extrapolate_layer_average(Taverage, averager.get_layer_average(T))
 
 # Checkpointing of fields
@@ -96,8 +95,7 @@ checkpoint_file.save_function(T, name="Temperature", idx=0)
 # physical parameters for our simulation.
 
 # +
-Ra = Constant(1e6)
-approximation = BoussinesqApproximation(Ra)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e6})
 
 delta_t = Constant(4e-6)
 timesteps = 80
@@ -117,10 +115,7 @@ stokes_bcs = {
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
-temp_bcs = {
-    bottom_id: {"T": 1.0},
-    top_id: {"T": 0.0},
-}
+temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 # -
@@ -132,17 +127,16 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # +
 energy_solver = EnergySolver(
-    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(
+    approximation,
     z,
     T,
-    approximation,
     bcs=stokes_bcs,
-    nullspace=Z_nullspace,
-    transpose_nullspace=Z_nullspace,
     constant_jacobian=True,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 # -
 
@@ -152,12 +146,17 @@ stokes_solver = StokesSolver(
 # the velocity field for later use, and periodically output the results.
 
 # +
-for timestep in range(0, timesteps):
+for timestep in range(timesteps):
     stokes_solver.solve()
     energy_solver.solve()
 
     # Store the velocity field for use in the adjoint problem.
-    checkpoint_file.save_function(u, name="Velocity", idx=timestep, timestepping_info={"index": float(timestep), "delta_t": float(delta_t)})
+    checkpoint_file.save_function(
+        u,
+        name="Velocity",
+        idx=timestep,
+        timestepping_info={"index": float(timestep), "delta_t": float(delta_t)},
+    )
 
 # Save the final temperature field to the checkpoint file.
 checkpoint_file.save_function(T, name="Temperature", idx=timesteps - 1)
