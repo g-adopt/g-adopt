@@ -59,7 +59,7 @@ Note:
 """
 
 
-class AdvectionDiffusionBase:
+class AdvectionDiffusionBase(abc.ABC):
     """Timestepper and solver for an equation involving advection and diffusion terms.
 
     All combinations of advection, diffusion, sink, and source terms are handled.
