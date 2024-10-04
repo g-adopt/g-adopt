@@ -1,4 +1,4 @@
-cases := weerdesteijn_2d 
+cases := viscoelastic_loading 
 
 all: $(cases)
 
