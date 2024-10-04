@@ -211,7 +211,7 @@ def displacement_vom_out():
 
 # +
 checkpoint_filename = "viscoelastic_loading-chk.h5"
-displacement_filename = "displacement-weerdesteijn.dat"
+displacement_filename = "displacement-weerdesteijn-2d.dat"
 
 for timestep in range(1, max_timesteps+1):
     ramp.assign(conditional(time < T1_load, time / T1_load,
