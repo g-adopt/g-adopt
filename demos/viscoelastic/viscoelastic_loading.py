@@ -26,7 +26,9 @@ dz = D / nz  # because of extrusion need to define dz after
 surface_mesh = IntervalMesh(nx, L, name="surface_mesh")
 mesh = ExtrudedMesh(surface_mesh, nz, layer_height=dz)
 mesh.cartesian = True
-
+vertical_component = 1
+vertical_squashing = True
+vertical_tanh_width = None
 mesh.coordinates.dat.data[:, vertical_component] -= D
 
 if vertical_squashing:
@@ -115,10 +117,14 @@ initialise_background_field(density, density_values)
 # +
 # Timestepping parameters
 year_in_seconds = Constant(3600 * 24 * 365.25)
+Tstart = 0
 time = Function(R).assign(Tstart * year_in_seconds)
 
+dt_years = 50
 dt = Constant(dt_years * year_in_seconds)
+Tend_years = 110e3
 Tend = Constant(Tend_years * year_in_seconds)
+dt_out_years = 10e3
 dt_out = Constant(dt_out_years * year_in_seconds)
 
 max_timesteps = round((Tend - Tstart*year_in_seconds)/dt)
