@@ -26,7 +26,7 @@ dz = D / nz  # because of extrusion need to define dz after
 surface_mesh = IntervalMesh(nx, L, name="surface_mesh")
 mesh = ExtrudedMesh(surface_mesh, nz, layer_height=dz)
 mesh.cartesian = True
-            
+
 mesh.coordinates.dat.data[:, vertical_component] -= D
 
 if vertical_squashing:
@@ -52,21 +52,21 @@ bottom_id, top_id = "bottom", "top"  # Boundary IDs for extruded meshes
 # -
 
 def initialise_background_field(field, background_values):
-        if vertical_tanh_width is None:
-            for i in range(0, len(background_values)-1):
-                field.interpolate(conditional(X[vertical_component] >= radius_values[i+1] - radius_values[0],
-                                  conditional(X[vertical_component] <= radius_values[i] - radius_values[0],
-                                  background_values[i], field), field))
-        else:
-            profile = background_values[0]
-            sharpness = 1 / vertical_tanh_width
-            depth = initialise_depth()
-            for i in range(1, len(background_values)-1):
-                centre = radius_values[i] - radius_values[0]
-                mag = background_values[i] - background_values[i-1]
-                profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
+    if vertical_tanh_width is None:
+        for i in range(0, len(background_values)-1):
+            field.interpolate(conditional(X[vertical_component] >= radius_values[i+1] - radius_values[0],
+                              conditional(X[vertical_component] <= radius_values[i] - radius_values[0],
+                              background_values[i], field), field))
+    else:
+        profile = background_values[0]
+        sharpness = 1 / vertical_tanh_width
+        depth = initialise_depth()
+        for i in range(1, len(background_values)-1):
+            centre = radius_values[i] - radius_values[0]
+            mag = background_values[i] - background_values[i-1]
+            profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
 
-            field.interpolate(profile)
+        field.interpolate(profile)
 
 
 # +
@@ -145,9 +145,6 @@ r = X[0]
 disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
 ramp = Constant(0)
 
-
-
-
 if do_write:
     File("ice.pvd").write(ice_load)
 # -
@@ -165,8 +162,8 @@ stokes_bcs = {
 approximation = SmallDisplacementViscoelasticApproximation(density, displacement, g=g)
 
 stokes_solver = ViscoelasticStokesSolver(m, viscosity, shear_modulus, density,
-                                                      deviatoric_stress, displacement, approximation,
-                                                      dt, bcs=stokes_bcs)
+                                         deviatoric_stress, displacement, approximation,
+                                         dt, bcs=stokes_bcs)
 
 # +
 prefactor_prestress = Function(W, name='prefactor prestress').interpolate(stokes_solver.prefactor_prestress)
@@ -200,6 +197,7 @@ displacement_vom = Function(DG0_vom)
 DG0_vom_input_ordering = VectorFunctionSpace(surface_VOM.input_ordering, "DG", 0)
 displacement_vom_input = Function(DG0_vom_input_ordering)
 
+
 def displacement_vom_out():
     displacement_vom.interpolate(displacement)
     displacement_vom_input.interpolate(displacement_vom)
@@ -213,20 +211,19 @@ def displacement_vom_out():
 
 # +
 checkpoint_filename = "viscoelastic_loading-chk.h5"
-displacement_filename = f"displacement-weerdesteijn.dat"
+displacement_filename = "displacement-weerdesteijn.dat"
 
 for timestep in range(1, max_timesteps+1):
     ramp.assign(conditional(time < T1_load, time / T1_load,
-                         conditional(time < T2_load, 1 - (time - T1_load) / (T2_load - T1_load),
-                                     0)
-                                     )
-                         )
+                            conditional(time < T2_load, 1 - (time - T1_load) / (T2_load - T1_load),
+                                        0)
+                            )
+                )
 
     ice_load.interpolate(ramp * rho_ice * g * Hice * disc)
-    stokes_solver.solve()
-    
 
-   
+    stokes_solver.solve()
+
     time.assign(time+dt)
     # Compute diagnostics:
     vertical_displacement.interpolate(vc(displacement))
@@ -241,7 +238,6 @@ for timestep in range(1, max_timesteps+1):
         if do_write:
             output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, vertical_displacement)
 
-
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(u_, name="Incremental Displacement")
             checkpoint.save_function(p_, name="Pressure")
@@ -252,7 +248,3 @@ for timestep in range(1, max_timesteps+1):
             np.savetxt(displacement_filename, displacement_min_array)
 
 # -
-
-
-
-
