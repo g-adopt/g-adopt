@@ -170,6 +170,7 @@ class BoussinesqApproximation(BaseApproximation):
       delta_rho: compositional density difference from the reference density
       kappa:     thermal diffusivity
       H:         internal heating rate
+      variable_free_surface_density:         variable free surface density flag
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
@@ -192,6 +193,7 @@ class BoussinesqApproximation(BaseApproximation):
         delta_rho: Function | Number = 1,
         kappa: Function | Number = 1,
         H: Function | Number = 0,
+        variable_free_surface_density: bool = True,
     ):
         self.Ra = ensure_constant(Ra)
         self.rho = ensure_constant(rho)
@@ -202,6 +204,7 @@ class BoussinesqApproximation(BaseApproximation):
         self.RaB = RaB
         self.delta_rho = ensure_constant(delta_rho)
         self.H = ensure_constant(H)
+        self.variable_free_surface_density = variable_free_surface_density
 
     def buoyancy(self, p, T):
         return (
@@ -394,3 +397,50 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         pressure_part = self.dbuoyancydp(p, T) * p
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
+
+
+class SmallDisplacementViscoelasticApproximation(BaseApproximation):
+
+    """Small Displacement Viscoelastic approximation:
+
+    Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
+    compressible = False
+
+    def __init__(self, background_density, displacement, g=1):
+        """
+        :arg kappa, g, rho, alpha:  Diffusivity, gravitational acceleration, reference density and thermal expansion coefficient
+                                    Normally kept at 1 when non-dimensionalised."""
+        self.g = ensure_constant(g)
+        self.background_density = background_density  # This is a field
+        self.displacement = displacement  # This is a field
+
+    def density_perturbation(self):
+        return -inner(self.displacement, grad(self.background_density))
+
+    def buoyancy(self, p, T):
+        # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
+        # accounts for advection of density in the absence of an evolution equation for temperature
+        # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
+        return -self.g * self.density_perturbation()
+
+    def free_surface_terms(self, p, T, eta, theta_fs, *, delta_rho_fs=1):
+        free_surface_normal_stress = delta_rho_fs * self.g * eta
+        # prefactor only needed when solving eta as part of mixed system
+        return free_surface_normal_stress, None
+
+    def rho_continuity(self):
+        return 1
+
+    def rhocp(self):
+        return 1
+
+    def kappa(self):
+        return 0
+
+    Tbar = 0
+
+    def linearized_energy_sink(self, u):
+        return 0
+
+    def energy_source(self, u):
+        return 0
