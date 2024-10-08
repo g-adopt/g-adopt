@@ -149,7 +149,7 @@ from mpi4py import MPI
 import numpy as np
 from gadopt.utility import vertical_component as vc
 import pandas as pd
-from gadopt.utility import step_func
+# from gadopt.utility import step_func
 
 # Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and 2891 km deep. As mentioned to speed up things for this first demo let's just consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
 #
@@ -173,10 +173,65 @@ nz = 80  # number of vertical cells
 log(f"Horizontal resolution {L/nx/1000} km")
 log(f"Vertical resolution {D/nz/1000} km")
 
-mesh = RectangleMesh(nx, nz, L, D, name="mesh")
-mesh.cartesian = True
+# mesh = RectangleMesh(nx, nz, L, D, name="mesh")
+# mesh.cartesian = True
+# +
+# Set up geometry:
+dx = 10e3  # horizontal grid resolution in m
+L = 1500e3  # length of the domain in m
+nz = 80  # number of vertical cells
 
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
+
+nx = L/dx
+dz = D / nz  # because of extrusion need to define dz after
+surface_mesh = IntervalMesh(nx, L, name="surface_mesh")
+mesh = ExtrudedMesh(surface_mesh, nz, layer_height=dz)
+mesh.cartesian = True
+vertical_component = 1
+vertical_squashing = True
+vertical_tanh_width = None
+mesh.coordinates.dat.data[:, vertical_component] -= D
+
+if vertical_squashing:
+    # rescale vertical resolution
+    X = SpatialCoordinate(mesh)
+    a = Constant(4)
+    b = Constant(0)
+    depth_c = 500.0
+    z_scaled = X[vertical_component] / D
+    Cs = (1.-b) * sinh(a*z_scaled) / sinh(a) + b*(tanh(a*(z_scaled + 0.5))/(2*tanh(0.5*a)) - 0.5)
+    Vc = mesh.coordinates.function_space()
+
+    scaled_z_coordinates = [X[i] for i in range(vertical_component)]
+    scaled_z_coordinates.append(depth_c*z_scaled + (D - depth_c)*Cs)
+    f = Function(Vc).interpolate(as_vector(scaled_z_coordinates))
+    mesh.coordinates.assign(f)
+
+X = SpatialCoordinate(mesh)
+bottom_id, top_id = "bottom", "top"  # Boundary IDs for extruded meshes
+
+
+# -
+
+def initialise_background_field(field, background_values):
+    if vertical_tanh_width is None:
+        for i in range(0, len(background_values)-1):
+            field.interpolate(conditional(X[vertical_component] >= radius_values[i+1] - radius_values[0],
+                              conditional(X[vertical_component] <= radius_values[i] - radius_values[0],
+                              background_values[i], field), field))
+    else:
+        profile = background_values[0]
+        sharpness = 1 / vertical_tanh_width
+        depth = initialise_depth()
+        for i in range(1, len(background_values)-1):
+            centre = radius_values[i] - radius_values[0]
+            mag = background_values[i] - background_values[i-1]
+            profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
+
+        field.interpolate(profile)
+
+
+# left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 # -
 
 # We also need function spaces, which is achieved by associating the
@@ -239,7 +294,7 @@ density_values = [3037, 3438, 3871, 4978, 10750]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11, 0]
 viscosity_values = [1e40, 1e21, 1e21, 2e21, 0]
 
-
+'''
 def initialise_background_field(field, background_values, vertical_tanh_width=10e3):
     profile = background_values[0]
     sharpness = 1 / vertical_tanh_width
@@ -250,7 +305,7 @@ def initialise_background_field(field, background_values, vertical_tanh_width=10
         profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
 
     field.interpolate(profile)
-
+'''
 
 density = Function(W, name="density")
 initialise_background_field(density, density_values)
@@ -271,6 +326,7 @@ g = 9.8125
 # Initialise ice loading
 ice_load = Function(W)
 Hice = 1000
+year_in_seconds = Constant(3600 * 24 * 365.25)
 T1_load = 90e3 * year_in_seconds
 T2_load = 100e3 * year_in_seconds
 
@@ -290,7 +346,6 @@ ramp = Constant(0)
 # Let's print out the maxwell time for each layer
 
 # +
-year_in_seconds = Constant(3600 * 24 * 365.25)
 
 for layer_visc, layer_mu in zip(viscosity_values[:-1], shear_modulus_values[:-1]):
     log("Maxwell time:", float(layer_visc/layer_mu/year_in_seconds), "years")
@@ -348,7 +403,7 @@ approximation = SmallDisplacementViscoelasticApproximation(density, displacement
 # objects for the Stokes systems created. We pass in the solution fields z and various fields needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
-stokes_solver = ViscoelasticStokesSolver(m, viscosity, shear_modulus, density,
+stokes_solver = ViscoelasticStokesSolver(z, viscosity, shear_modulus, density,
                                          deviatoric_stress, displacement, approximation,
                                          dt, bcs=stokes_bcs)
 
@@ -361,7 +416,7 @@ effective_viscosity = Function(W, name='effective viscosity').interpolate(stokes
 if do_write:
     # Create output file
     output_file = VTKFile(f"viscoelastic_loading/out_dtout{dt_out_years}a.pvd")
-    output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, vertical_displacement)
+    output_file.write(u_, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity)
 
 displacement_min_array = []
 # -
@@ -369,7 +424,8 @@ displacement_min_array = []
 # Let's setup some more helper functions for logging the displacement at the surface.
 
 # +
-
+P2 = FunctionSpace(mesh, "CG", 2)
+vertical_displacement = Function(P2)
 displacement_vom_matplotlib_df = pd.DataFrame()
 surface_nodes = []
 surface_nx = round(L / (0.5*dx))
@@ -429,7 +485,7 @@ for timestep in range(1, max_timesteps+1):
         log("timestep", timestep)
 
         if do_write:
-            output_file.write(u_, u_old, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, vertical_displacement)
+            output_file.write(u_, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(u_, name="Incremental Displacement")
