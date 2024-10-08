@@ -9,11 +9,10 @@ import uuid
 
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
-from firedrake import CheckpointFile, Function, TestFunction, TrialFunction, assemble, dot, solve
+from firedrake import CheckpointFile, Function
 from firedrake.adjoint import *  # noqa: F401
 from mpi4py import MPI
-from pyadjoint import Block, MinimizationProblem
-from gadopt.utility import InteriorBC, CombinedSurfaceMeasure
+from pyadjoint import MinimizationProblem
 
 # emulate the previous behaviour of firedrake_adjoint by automatically
 # starting the tape
@@ -360,54 +359,3 @@ minimisation_parameters = {
         "Iteration Limit": 100,
     },
 }
-
-
-class DiagnosticBlock(Block):
-    def __init__(self, f, function, riesz_options={'riesz_representation': 'L2'}):
-        super().__init__()
-        self.add_dependency(function)
-        self.add_output(function.block_variable)
-        self.f = f
-        self.f_name = function.name()
-        self.riesz_options = riesz_options
-
-    def recompute_component(self, inputs, block_variable, idx, prepared):
-        return block_variable.checkpoint
-
-    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
-        out = inputs[0]._ad_convert_type(adj_inputs[0], options=self.riesz_options)
-        out.rename('adjoint_'+self.f_name)
-        self.f.write(out)
-        return 0
-
-
-class DiagnosticConstantBlock(Block):
-    def __init__(self, constant, name):
-        super().__init__()
-        self.add_dependency(constant)
-        self.add_output(constant.block_variable)
-        self.name = name
-
-    def recompute_component(self, inputs, block_variable, idx, prepared):
-        return block_variable.checkpoint
-
-    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
-        out = inputs[0]._ad_convert_type(adj_inputs[0])
-        print("Adjoint ", self.name, out.values()[0])
-        return 0
-
-
-class RieszL2BoundaryRepresentation:
-    """Callable that Converts l2-representatives to L2-boundary representatives"""
-    def __init__(self, Q, bids):
-        self.Q = Q
-        v = TestFunction(Q)
-        g = TrialFunction(Q)
-        bc = InteriorBC(Q, 0, bids)
-        ds = CombinedSurfaceMeasure(v.function_space().mesh(), degree=6)
-        self.M = assemble(dot(v, g)*ds(bids), bcs=bc)
-
-    def __call__(self, value):
-        ret = Function(self.Q)
-        solve(self.M, ret, value)
-        return ret
