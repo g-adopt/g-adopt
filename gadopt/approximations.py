@@ -55,7 +55,7 @@ class MantleConvectionBaseApproximation(abc.ABC):
 
         """
         pass
-    
+
     @abc.abstractmethod
     def stress(self, u: Function) -> ufl.core.expr.Expr:
         """Defines the deviatoric stress.
