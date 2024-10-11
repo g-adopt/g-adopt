@@ -57,6 +57,7 @@ class Approximation:
             # Treatise on Geophysics uses incompressibility (i.e. bulk modulus).
             chi: isothermal compressibility
             cp: isobaric specific heat capacity (varies only in TALA and ALA)
+            G: shear modulus (only used in VE)
             g: acceleration of gravity
             k: thermal conductivity
             mu: dynamic viscosity
@@ -71,8 +72,8 @@ class Approximation:
     have depth-dependent variations in the Boussinesq approximation.
     """
 
-    _presets = ["BA", "EBA", "TALA", "ALA"]
-    _components = ["momentum", "energy"]
+    _presets = ["BA", "EBA", "TALA", "ALA", "VE"]
+    _components = ["momentum", "mass", "energy"]
 
     _momentum_components = {"BA": ["compositional_buoyancy", "thermal_buoyancy"]}
     _momentum_components["EBA"] = _momentum_components["BA"] + []
@@ -80,6 +81,13 @@ class Approximation:
     _momentum_components["ALA"] = _momentum_components["TALA"] + [
         "compressible_buoyancy"
     ]
+    _momentum_components["VE"] = ["viscoelastic_buoyancy"]
+
+    _mass_components = {"BA": []}
+    _mass_components["EBA"] = _mass_components["BA"] + []
+    _mass_components["TALA"] = _mass_components["EBA"] + ["mass_advection"]
+    _mass_components["ALA"] = _mass_components["TALA"] + []
+    _mass_components["VE"] = []
 
     _energy_components = {"BA": ["heat_source"]}
     _energy_components["EBA"] = _energy_components["BA"] + [
@@ -102,6 +110,8 @@ class Approximation:
 
             if self.preset in self._momentum_components:
                 self.momentum_components = self._momentum_components[self.preset]
+            if self.preset in self._mass_components:
+                self.mass_components = self._mass_components[self.preset]
             if self.preset in self._energy_components:
                 self.energy_components = self._energy_components[self.preset]
         else:
@@ -113,6 +123,8 @@ class Approximation:
 
             if "momentum" in preset_or_components:
                 self.momentum_components = preset_or_components["momentum"]
+            if "mass" in preset_or_components:
+                self.mass_components = preset_or_components["mass"]
             if "energy" in preset_or_components:
                 self.energy_components = preset_or_components["energy"]
 
@@ -127,6 +139,9 @@ class Approximation:
             self.set_buoyancy()
             self.set_compressible_stress()
 
+        if hasattr(self, "mass_components"):
+            self.set_mass_advection()
+
         if hasattr(self, "energy_components"):
             self.check_thermal_diffusion()
 
@@ -136,7 +151,7 @@ class Approximation:
 
     def check_reference_profiles(self) -> None:
         """Ensures reference profiles are defined for non-dimensional systems."""
-        for attribute in ["alpha", "chi", "cp", "g", "k", "mu", "rho"]:
+        for attribute in ["alpha", "chi", "cp", "G", "g", "k", "mu", "rho"]:
             if not hasattr(self, attribute):
                 setattr(self, attribute, fd.Constant(1.0))
         if not hasattr(self, "T"):
@@ -167,17 +182,18 @@ class Approximation:
             if not self.dimensional:
                 self.adiabatic_compression *= self.Di
         else:
-            self.adiabatic_compression = 0
+            self.adiabatic_compression = 0.0
 
     def set_buoyancy(self) -> None:
         """Defines buoyancy terms in the momentum conservation."""
-        self.compositional_buoyancy = 0
+        self.compositional_buoyancy = 0.0
         if "compositional_buoyancy" in self.momentum_components:
             if self.dimensional and hasattr(self, "rho_diff"):
                 self.compositional_buoyancy = self.rho_diff * self.g
             elif not self.dimensional and hasattr(self, "Ra_c"):
                 self.compositional_buoyancy = self.Ra_c
 
+        self.compressible_buoyancy = 0.0
         if "compressible_buoyancy" in self.momentum_components:
             # This term looks similar to the thermal contribution, but I cannot seem to
             # recover it using chapter 7.02 of Treatise on Geophysics. Relevant
@@ -186,43 +202,52 @@ class Approximation:
             self.compressible_buoyancy = self.rho * self.chi * self.g
             if not self.dimensional:
                 self.compressible_buoyancy *= self.Di / self.Gamma
-        else:
-            self.compressible_buoyancy = 0
 
-        self.thermal_buoyancy = 0
+        self.thermal_buoyancy = 0.0
         if "thermal_buoyancy" in self.momentum_components:
             if self.dimensional and hasattr(self, "alpha"):
                 self.thermal_buoyancy = self.rho * self.alpha * self.g
             elif not self.dimensional and hasattr(self, "Ra"):
                 self.thermal_buoyancy = self.Ra * self.rho * self.alpha * self.g
 
+        self.viscoelastic_buoyancy = 0.0
+        if "viscoelastic_buoyancy" in self.momentum_components:
+            self.viscoelastic_buoyancy = fd.grad(self.rho) * self.g
+
     def set_compressible_stress(self) -> None:
         """Defines the compressible stress term in the momentum conservation."""
         if "compressible_stress" in self.momentum_components:
             self.compressible_stress = 2 / 3 * self.mu
         else:
-            self.compressible_stress = 0
+            self.compressible_stress = 0.0
 
     def set_heat_source(self) -> None:
         """Defines the heat source term in the energy conservation."""
-        self.heat_source = 0
+        self.heat_source = 0.0
         if "heat_source" in self.energy_components:
             if self.dimensional and hasattr(self, "H"):
                 self.heat_source = self.rho * self.H
             elif not self.dimensional and hasattr(self, "Q"):
                 self.heat_source = self.Q
 
+    def set_mass_advection(self) -> None:
+        """Defines the advection term in the mass conservation."""
+        self.rho_mass = self.rho if "mass_advection" in self.mass_components else 1.0
+
     def set_viscous_dissipation(self) -> None:
         """Defines the viscous dissipation factor used in the energy conservation."""
         if "viscous_dissipation" in self.energy_components:
-            self.viscous_dissipation_factor = 1
+            self.viscous_dissipation_factor = 1.0
             if not self.dimensional:
                 self.viscous_dissipation_factor *= self.Di / self.Ra
         else:
-            self.viscous_dissipation_factor = 0
+            self.viscous_dissipation_factor = 0.0
 
     def buoyancy(
-        self, p: fd.ufl.indexed.Indexed, T: fd.Constant | fd.Function
+        self,
+        p: fd.ufl.indexed.Indexed,
+        T: fd.Constant | fd.Function = fd.Constant(0),
+        displ: fd.Constant | fd.Function = fd.Constant(0),
     ) -> fd.ufl.algebra.Sum:
         """Calculates the buoyancy term in the momentum conservation.
 
@@ -235,6 +260,7 @@ class Approximation:
             self.thermal_buoyancy * T
             - self.compressible_buoyancy * p
             - self.compositional_buoyancy
+            + fd.inner(self.viscoelastic_buoyancy, displ)
         )
 
     def energy_source(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
@@ -250,11 +276,20 @@ class Approximation:
         """Calculates the energy sink term in the energy conservation."""
         return self.adiabatic_compression * vertical_component(u)
 
-    def stress(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
+    def stress(self, u: fd.ufl.indexed.Indexed, stress_old) -> fd.ufl.algebra.Sum:
         """Calculates the stress term in momentum and energy conservations."""
         identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
         compressible_part = self.compressible_stress * fd.div(u) * identity
-        return 2 * self.mu * fd.sym(fd.grad(u)) - compressible_part
+        return 2 * self.mu * fd.sym(fd.grad(u)) - compressible_part + stress_old
+
+    def viscoelastic_rheology(
+        self, dt: float | fd.Constant | fd.Function
+    ) -> fd.ufl.algebra.Division:
+        maxwell_time = self.mu / self.G
+        self.mu = self.mu / (maxwell_time + dt / 2)
+        stress_scale = (maxwell_time - dt / 2) / (maxwell_time + dt / 2)
+
+        return stress_scale
 
     def viscous_dissipation(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Product:
         """Calculates the viscous dissipation term in the energy conservation."""

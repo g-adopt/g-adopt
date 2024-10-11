@@ -55,7 +55,8 @@ def viscosity_term(
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    stress = eq.approximation.stress(eq.u)
+    stress_old = eq.stress_old if hasattr(eq, "stress_old") else 0.0
+    stress = eq.approximation.stress(eq.u, stress_old)
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
     dim = eq.mesh.geometric_dimension()
@@ -164,7 +165,7 @@ def divergence_term(
 ) -> Form:
     assert normal_is_continuous(eq.u)
 
-    rho = eq.approximation.rho
+    rho = eq.approximation.rho_mass
     F = -dot(eq.test, div(rho * eq.u)) * eq.dx
 
     # Add boundary integral for bcs that specify the normal component of u.
@@ -180,7 +181,11 @@ def divergence_term(
 def momentum_source_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
-    source = eq.approximation.buoyancy(eq.p, eq.T) * upward_normal(eq.mesh)
+    T = eq.T if hasattr(eq, "T") else 0.0
+    displ = eq.displ if hasattr(eq, "displ") else 0.0
+
+    source = eq.approximation.buoyancy(eq.p, T, displ) * upward_normal(eq.mesh)
+
     F = -dot(eq.test, source) * eq.dx
 
     return -F
