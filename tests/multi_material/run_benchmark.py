@@ -195,6 +195,7 @@ timestep = fd.Function(real_func_space).assign(Simulation.initial_timestep)
 # Set up energy and Stokes solvers
 approximation = ga.BoussinesqApproximation(
     Simulation.Ra,
+    mu=viscosity_ufl
     rho=ref_dens,
     alpha=1,
     g=Simulation.g,
@@ -220,7 +221,6 @@ stokes_solver = ga.StokesSolver(
     temperature,
     approximation,
     bcs=Simulation.stokes_bcs,
-    mu=viscosity_ufl,
     quad_degree=None,
     solver_parameters=Simulation.stokes_solver_params,
     nullspace=stokes_nullspace,

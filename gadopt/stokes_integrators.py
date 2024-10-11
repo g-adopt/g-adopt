@@ -10,12 +10,12 @@ from typing import Optional
 
 import firedrake as fd
 
-from .approximations import BaseApproximation, AnelasticLiquidApproximation
+from .approximations import MantleConvectionBaseApproximation, AnelasticLiquidApproximation
 from .free_surface_equation import FreeSurfaceEquation
 from .momentum_equation import StokesEquations
 from .viscoelastic_equation import ViscoelasticEquations
 from .equations import BaseEquation
-from .utility import DEBUG, INFO, InteriorBC, depends_on, ensure_constant, log_level, upward_normal
+from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -195,7 +195,6 @@ class StokesSolver:
       T: Firedrake function representing temperature
       approximation: Approximation describing system of equations
       bcs: Dictionary of identifier-value pairs specifying boundary conditions
-      mu: Firedrake function representing dynamic viscosity
       quad_degree: Quadrature degree. Default value is `2p + 1`, where
                    p is the polynomial degree of the trial space
       solver_parameters: Either a dictionary of PETSc solver parameters or a string
@@ -216,9 +215,8 @@ class StokesSolver:
         self,
         z: fd.Function,
         T: fd.Function,
-        approximation: BaseApproximation,
+        approximation: MantleConvectionBaseApproximation,
         bcs: dict[int, dict[str, Number]] = {},
-        mu: fd.Function | Number = 1,
         quad_degree: int = 6,
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
@@ -237,10 +235,9 @@ class StokesSolver:
         self.T = T
         self.approximation = approximation
 
-        self.mu = ensure_constant(mu)
         self.J = J
         self.constant_jacobian = constant_jacobian
-        self.linear = not depends_on(self.mu, self.solution)
+        self.linear = not depends_on(self.approximation.mu, self.solution)
 
         self.solver_kwargs = kwargs
         self.u, self.p, *self.eta = fd.split(self.solution)   # eta is a list of 0, 1 or multiple free surface fields
@@ -351,7 +348,8 @@ class StokesSolver:
         self.fields = {
             'velocity': self.u,
             'pressure': self.p,
-            'viscosity': self.mu,
+            'stress': self.approximation.stress(self.u),
+            'viscosity': self.approximation.mu,
             'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
                                                    # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
             'source': self.approximation.buoyancy(self.p, self.T) * self.k,
@@ -421,7 +419,7 @@ class StokesSolver:
     def setup_solver(self):
         """Sets up the solver."""
         # mu used in MassInvPC:
-        appctx = {"mu": self.mu / self.approximation.rho_continuity()}
+        appctx = {"mu": self.approximation.mu / self.approximation.rho_continuity()}
 
         if self.free_surface:
             appctx["free_surface_id_list"] = self.free_surface_id_list
