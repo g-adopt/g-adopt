@@ -286,14 +286,13 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, *, mu: Number = 1, H: Optional[Number] = None, **kwargs):
+    def __init__(self, Ra: Number, Di: Number, *, H: Optional[Number] = None, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
-        self.mu = mu
         self.H = H
 
     def viscous_dissipation(self, u):
-        phi = inner(self.stress, grad(u))
+        phi = inner(self.stress(u), grad(u))
         return phi * self.Di / self.Ra
 
     def linearized_energy_sink(self, u):
@@ -352,8 +351,9 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         self.cp = cp
 
     def stress(self, u):
-        stress = self.super(u)
-        return stress - 2/3 * self.mu * Identity(self.dim) * div(u)
+        stress = super().stress(u)
+        dim = len(u)  # Geometric dimension, i.e. 2D or 3D
+        return stress - 2/3 * self.mu * Identity(dim) * div(u)
 
     def rho_continuity(self):
         return self.rho
