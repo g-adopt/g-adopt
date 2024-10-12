@@ -276,11 +276,18 @@ class Approximation:
         """Calculates the energy sink term in the energy conservation."""
         return self.adiabatic_compression * vertical_component(u)
 
-    def stress(self, u: fd.ufl.indexed.Indexed, stress_old) -> fd.ufl.algebra.Sum:
+    def stress(
+        self, u: fd.ufl.indexed.Indexed, stress_old: float | fd.Function = 0.0
+    ) -> fd.ufl.algebra.Sum:
         """Calculates the stress term in momentum and energy conservations."""
         identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
-        compressible_part = self.compressible_stress * fd.div(u) * identity
-        return 2 * self.mu * fd.sym(fd.grad(u)) - compressible_part + stress_old
+
+        stokes_part = 2 * self.mu * fd.sym(fd.grad(u))
+        compressible_part = -self.compressible_stress * fd.div(u) * identity
+        if isinstance(stress_old, float):
+            stress_old *= identity
+
+        return stokes_part + compressible_part + stress_old
 
     def viscoelastic_rheology(
         self, dt: float | fd.Constant | fd.Function
