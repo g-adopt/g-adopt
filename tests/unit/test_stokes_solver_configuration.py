@@ -21,8 +21,6 @@ def test_solver_parameters_argument():
     func_space_temp = fd.FunctionSpace(mesh, "CG", 2)
     temperature = fd.Function(func_space_temp, name="Temperature")
 
-    approximation = BoussinesqApproximation(1)
-
     base_linear_params_with_log = {"snes_type": "ksponly", "snes_monitor": None}
     example_solver_params = {"mat_type": "aij", "ksp_type": "cg", "pc_type": "sor"}
 
@@ -71,6 +69,8 @@ def test_solver_parameters_argument():
                     | newton_stokes_solver_parameters
                     | direct_stokes_solver_parameters
                 )
+
+        approximation = BoussinesqApproximation(1, mu=mu)
 
         stokes_solver = StokesSolver(
             stokes_function,
