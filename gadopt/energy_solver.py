@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from firedrake import Constant, DirichletBC, Function, Jacobian, TensorFunctionSpace, dot
 
-from .approximations import MantleConvectionBaseApproximation
+from .approximations import BaseApproximation
 from .scalar_equation import EnergyEquation
 from .time_stepper import RungeKuttaTimeIntegrator
 from .utility import is_continuous, ensure_constant
@@ -68,7 +68,7 @@ class EnergySolver:
         self,
         T: Function,
         u: Function,
-        approximation: MantleConvectionBaseApproximation,
+        approximation: BaseApproximation,
         delta_t: Constant,
         timestepper: RungeKuttaTimeIntegrator,
         bcs: Optional[dict[int, dict[str, Number]]] = None,

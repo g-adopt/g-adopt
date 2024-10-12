@@ -397,21 +397,20 @@ stokes_bcs = {
 # We also need to specify a G-ADIOT approximation which sets up the various parameters and fields needed for the viscoelastic loading problem.
 
 
-approximation = SmallDisplacementViscoelasticApproximation(density, displacement, g=g)
+approximation = SmallDisplacementViscoelasticApproximation(viscosity, shear_modulus, g=g)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes systems created. We pass in the solution fields z and various fields needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
-stokes_solver = ViscoelasticStokesSolver(z, viscosity, shear_modulus, density,
-                                         deviatoric_stress, displacement, approximation,
+stokes_solver = ViscoelasticStokesSolver(z, density, deviatoric_stress, displacement, approximation,
                                          dt, bcs=stokes_bcs)
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
 # +
 prefactor_prestress = Function(W, name='prefactor prestress').interpolate(stokes_solver.prefactor_prestress)
-effective_viscosity = Function(W, name='effective viscosity').interpolate(stokes_solver.effective_viscosity)
+effective_viscosity = Function(W, name='effective viscosity').interpolate(approximation.effective_viscosity(dt))
 
 if do_write:
     # Create output file

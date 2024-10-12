@@ -22,7 +22,7 @@ __all__ = [
 ]
 
 
-class MantleConvectionBaseApproximation(abc.ABC):
+class BaseApproximation(abc.ABC):
     """Base class to provide expressions for the coupled Stokes and Energy system.
 
     The basic assumption is that we are solving (to be extended when needed)
@@ -164,7 +164,7 @@ class MantleConvectionBaseApproximation(abc.ABC):
         pass
 
 
-class BoussinesqApproximation(MantleConvectionBaseApproximation):
+class BoussinesqApproximation(BaseApproximation):
     """Expressions for the Boussinesq approximation.
 
     Density variations are considered small and only affect the buoyancy term. Reference
@@ -423,22 +423,29 @@ class SmallDisplacementViscoelasticApproximation():
     Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
     compressible = False
 
-    def __init__(self, background_density, displacement, g=1):
+    def __init__(self, viscosity, shear_modulus, g=1):
         """
         :arg kappa, g, rho, alpha:  Diffusivity, gravitational acceleration, reference density and thermal expansion coefficient
                                     Normally kept at 1 when non-dimensionalised."""
+        self.viscosity = ensure_constant(viscosity)
+        self.shear_modulus = ensure_constant(shear_modulus)
         self.g = ensure_constant(g)
-        self.background_density = background_density  # This is a field
-        self.displacement = displacement  # This is a field
 
-    def density_perturbation(self):
-        return -inner(self.displacement, grad(self.background_density))
+        self.maxwell_time = viscosity / shear_modulus
 
-    def buoyancy(self, p, T):
+    def effective_viscosity(self, dt):
+        return self.viscosity / (self.maxwell_time + dt / 2)
+
+    def prefactor_prestress(self, dt):
+        return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
+
+    def stress(self, u, dt):
+        return 2 * self.effective_viscosity(dt) * sym(grad(u))
+
+    def buoyancy(self, displacement, background_density):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
-        # arguments p and T kept for consisteny with StokesSolver maybe this is bad?
-        return -self.g * self.density_perturbation()
+        return -self.g * -inner(displacement, grad(background_density))
 
     def free_surface_terms(self, p, T, eta, theta_fs, *, delta_rho_fs=1):
         free_surface_normal_stress = delta_rho_fs * self.g * eta
@@ -447,17 +454,3 @@ class SmallDisplacementViscoelasticApproximation():
 
     def rho_continuity(self):
         return 1
-
-    def rhocp(self):
-        return 1
-
-    def kappa(self):
-        return 0
-
-    Tbar = 0
-
-    def linearized_energy_sink(self, u):
-        return 0
-
-    def energy_source(self, u):
-        return 0
