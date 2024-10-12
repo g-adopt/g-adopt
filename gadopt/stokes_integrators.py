@@ -179,10 +179,7 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     def __post_init__(self) -> None:
         self.set_boundary_conditions()
-
-        if not isinstance(self.solver_parameters, dict):
-            self.set_solver_options()
-
+        self.set_solver_options()
         self.set_equations()
 
     def set_boundary_conditions(self) -> None:
@@ -219,6 +216,7 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
             if normal_stress_fs is not None:
                 weak_bc["normal_stress"] += normal_stress_fs
+                normal_stress_fs = None
 
             self.weak_bcs[bc_id] = weak_bc
 
@@ -229,7 +227,11 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     def set_solver_options(self) -> None:
         """Sets PETSc solver parameters."""
-        preset = self.solver_parameters
+        # Application context for the inverse mass matrix preconditioner
+        self.appctx = {"mu": self.approximation.mu / self.approximation.rho}
+
+        if isinstance(preset := self.solver_parameters, dict):
+            return
 
         if not depends_on(self.approximation.mu, self.solution):
             self.solver_parameters = {"snes_type": "ksponly"}
@@ -259,9 +261,6 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
                 self.solver_parameters["fieldsplit_1"]["ksp_monitor"] = None
             elif INFO >= log_level:
                 self.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
-
-        # Application context for the inverse mass matrix preconditioner
-        self.appctx = {"mu": self.approximation.mu / self.approximation.rho}
 
     @abc.abstractmethod
     def set_equations(self):
