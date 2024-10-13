@@ -110,7 +110,7 @@ L2-norm of the function.
 
 
 class MetaPostInit(abc.ABCMeta):
-    """Calls the user-defined __post_init__ after __init__ returned."""
+    """Calls the user-defined __post_init__ method after __init__ returns."""
 
     def __call__(cls, *args, **kwargs):
         class_instance = super().__call__(*args, **kwargs)
@@ -124,23 +124,23 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     Arguments:
       approximation:
-        Approximation describing system of equations.
-      z:
-        Firedrake function representing mixed Stokes system.
+        G-ADOPT approximation defining terms in the system of equations.
+      solution:
+        Firedrake function representing the field over the mixed Stokes space.
       bcs:
-        Dictionary of identifier-value pairs specifying boundary conditions.
+        Dictionary specifying boundary conditions (identifier, type, and value).
       quad_degree:
         Integer denoting the quadrature degree. Default value is `2p + 1`, where p is
         the polynomial degree of the trial space.
       solver_parameters:
         Either a dictionary of PETSc solver parameters or a string specifying a default
-        set of parameters defined in G-ADOPT
+        set of parameters defined in G-ADOPT.
       J:
-        Firedrake function representing the Jacobian of the system.
+        Firedrake function representing the Jacobian of the mixed Stokes system.
       constant_jacobian:
-        Whether the Jacobian of the system is constant.
+        A boolean specifying whether the Jacobian of the system is constant.
       nullspace:
-        Dictionary of nullspace options.
+        Dictionary of nullspace options, including transpose and near nullspaces.
     """
 
     name = "MassMomentum"
@@ -174,13 +174,13 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
         self.F = 0.0  # Weak form of the system
 
-        # Solver object is set up later to permit editing default solver parameters.
+        # Solver object is set up later to permit editing default solver options.
         self._solver_ready = False
 
     def __post_init__(self) -> None:
         self.set_boundary_conditions()
-        self.set_solver_options()
         self.set_equations()
+        self.set_solver_options()
 
     def set_boundary_conditions(self) -> None:
         """Sets up boundary conditions."""
@@ -223,14 +223,20 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
     ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+        """Sets the given boundary as a free surface."""
         pass
+
+    @abc.abstractmethod
+    def set_equations(self):
+        """Sets up the term contributions from each equation."""
+        raise NotImplementedError
 
     def set_solver_options(self) -> None:
         """Sets PETSc solver parameters."""
         # Application context for the inverse mass matrix preconditioner
         self.appctx = {"mu": self.approximation.mu / self.approximation.rho}
 
-        if isinstance(preset := self.solver_parameters, dict):
+        if isinstance(solver_preset := self.solver_parameters, dict):
             return
 
         if not depends_on(self.approximation.mu, self.solution):
@@ -241,14 +247,14 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
         if INFO >= log_level:
             self.solver_parameters["snes_monitor"] = None
 
-        if preset is not None:
-            match preset:
+        if solver_preset is not None:
+            match solver_preset:
                 case "direct":
                     self.solver_parameters.update(direct_stokes_solver_parameters)
                 case "iterative":
                     self.solver_parameters.update(iterative_stokes_solver_parameters)
                 case _:
-                    raise ValueError(f"Solver type '{preset}' not implemented.")
+                    raise ValueError(f"Solver type '{solver_preset}' not implemented.")
         elif self.mesh.topological_dimension() == 2 and self.mesh.cartesian:
             self.solver_parameters.update(direct_stokes_solver_parameters)
         else:
@@ -261,11 +267,6 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
                 self.solver_parameters["fieldsplit_1"]["ksp_monitor"] = None
             elif INFO >= log_level:
                 self.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
-
-    @abc.abstractmethod
-    def set_equations(self):
-        """Sets up the system of equations."""
-        raise NotImplementedError
 
     def setup_solver(self) -> None:
         """Sets up the solver."""
@@ -297,6 +298,7 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
         self._solver_ready = True
 
     def solver_callback(self) -> None:
+        """Optional instructions to execute right after a solve."""
         pass
 
     def solve(self) -> None:
@@ -314,29 +316,29 @@ class StokesSolver(MassMomentumBase):
 
     Arguments:
       approximation:
-        Approximation describing system of equations.
-      z:
-        Firedrake function representing mixed Stokes system.
+        G-ADOPT approximation defining terms in the system of equations.
+      solution:
+        Firedrake function representing the field over the mixed Stokes space.
       T:
-        Firedrake function representing temperature.
+        Firedrake function representing the temperature field.
       bcs:
-        Dictionary of identifier-value pairs specifying boundary conditions.
+        Dictionary specifying boundary conditions (identifier, type, and value).
       quad_degree:
         Integer denoting the quadrature degree. Default value is `2p + 1`, where p is
         the polynomial degree of the trial space.
       solver_parameters:
         Either a dictionary of PETSc solver parameters or a string specifying a default
-        set of parameters defined in G-ADOPT
+        set of parameters defined in G-ADOPT.
       J:
-        Firedrake function representing the Jacobian of the system.
+        Firedrake function representing the Jacobian of the mixed Stokes system.
       constant_jacobian:
-        Whether the Jacobian of the system is constant.
+        A boolean specifying whether the Jacobian of the system is constant.
       nullspace:
-        Dictionary of nullspace options.
+        Dictionary of nullspace options, including transpose and near nullspaces.
       timestep_fs:
-        Float representing the timestep of the free surface equation.
+        Float representing the timestep used in the free surface equation.
       theta_fs:
-        Float representing the implitcit contribution in the free-surface timestepping.
+        Float quantifying the implicit contribution in the free-surface timestepping.
         theta_fs = 0: Forward Euler
         theta_fs = 0.5: Crank-Nicolson (default)
         theta_fs = 1: Backward Euler
@@ -376,10 +378,10 @@ class StokesSolver(MassMomentumBase):
         the weak form.
 
         Arguments:
-          bc_id;
-            An integer representing the index of the mesh boundary.
           params_fs:
             A dictionary holding information about the free surface boundary.
+          bc_id;
+            An integer representing the index of the mesh boundary.
 
         Returns:
           A UFL expression for the normal stress at the free surface boundary.
@@ -409,27 +411,6 @@ class StokesSolver(MassMomentumBase):
             normal_stress -= self.approximation.buoyancy(p, self.T) * eta_theta
 
         return normal_stress
-
-    def set_solver_options(self) -> None:
-        super().set_solver_options()
-
-        if (
-            self.free_surface_map
-            and self.solver_parameters.get("pc_type") == "fieldsplit"
-        ):
-            # Gather pressure and free surface fields for Schur complement solve
-            fields = ",".join(map(str, range(1, len(self.solution_split))))
-            self.solver_parameters.update(
-                {"pc_fieldsplit_0_fields": "0", "pc_fieldsplit_1_fields": fields}
-            )
-            # Update mass inverse preconditioner
-            self.solver_parameters["fieldsplit_1"].update(
-                {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
-            )
-
-            # Update application context
-            self.appctx["free_surface"] = self.free_surface_map
-            self.appctx["ds"] = self.ds_fs
 
     def set_equations(self) -> None:
         """Sets up UFL forms for the Stokes equations residual."""
@@ -482,8 +463,29 @@ class StokesSolver(MassMomentumBase):
 
             self.ds_fs = eq_fs.ds
 
+    def set_solver_options(self) -> None:
+        super().set_solver_options()
+
+        if (
+            self.free_surface_map
+            and self.solver_parameters.get("pc_type") == "fieldsplit"
+        ):
+            # Gather pressure and free surface fields for Schur complement solve
+            fields = ",".join(map(str, range(1, len(self.solution_split))))
+            self.solver_parameters.update(
+                {"pc_fieldsplit_0_fields": "0", "pc_fieldsplit_1_fields": fields}
+            )
+            # Update mass inverse preconditioner
+            self.solver_parameters["fieldsplit_1"].update(
+                {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
+            )
+
+            # Update application context
+            self.appctx["free_surface"] = self.free_surface_map
+            self.appctx["ds"] = self.ds_fs
+
     def solver_callback(self) -> None:
-        # Need to update old free surface height for implicit free surface
+        # The old free surface height must be updated for an implicit free surface.
         for eta, eta_old in zip(self.solution_split[2:], self.eta_old):
             eta_old.interpolate(eta)
 
@@ -493,23 +495,29 @@ class ViscoelasticSolver(MassMomentumBase):
 
     Arguments:
       approximation:
-        Approximation describing system of equations.
-      z:
-        Firedrake function representing mixed viscoelastic system.
+        G-ADOPT approximation defining terms in the system of equations.
+      solution:
+        Firedrake function representing the field over the mixed Stokes space.
+      displ:
+        Firedrake function representing the total displacement.
+      tau_old:
+        Firedrake function representing the previous deviatoric stress.
+      dt:
+        Float representing the simulation's timestep.
       bcs:
-        Dictionary of identifier-value pairs specifying boundary conditions.
+        Dictionary specifying boundary conditions (identifier, type, and value).
       quad_degree:
         Integer denoting the quadrature degree. Default value is `2p + 1`, where p is
         the polynomial degree of the trial space.
       solver_parameters:
         Either a dictionary of PETSc solver parameters or a string specifying a default
-        set of parameters defined in G-ADOPT
+        set of parameters defined in G-ADOPT.
       J:
-        Firedrake function representing the Jacobian of the system.
+        Firedrake function representing the Jacobian of the mixed Stokes system.
       constant_jacobian:
-        Whether the Jacobian of the system is constant.
+        A boolean specifying whether the Jacobian of the system is constant.
       nullspace:
-        Dictionary of nullspace options.
+        Dictionary of nullspace options, including transpose and near nullspaces.
     """
 
     name = "Viscoelastic"
@@ -536,10 +544,10 @@ class ViscoelasticSolver(MassMomentumBase):
         """Sets the given boundary as a free surface.
 
         Arguments:
-          bc_id;
-            An integer representing the index of the mesh boundary.
           params_fs:
             A dictionary holding information about the free surface boundary.
+          bc_id;
+            An integer representing the index of the mesh boundary.
 
         Returns:
           A UFL expression for the normal stress at the free surface boundary.
