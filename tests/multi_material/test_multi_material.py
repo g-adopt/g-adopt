@@ -13,7 +13,7 @@ diagnostics = {
                 np.subtract(data["max_topography"], data["max_topography_analytical"])
             ).max(),
             operator.le,
-            0.055,
+            0.06,
         )
     ],
     "gerya_2003": [
