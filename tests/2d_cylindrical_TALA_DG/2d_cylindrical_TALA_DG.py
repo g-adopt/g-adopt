@@ -207,7 +207,7 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id, quad_degree=6)
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 stokes_solver.solver_parameters['snes_rtol'] = 1e-2
