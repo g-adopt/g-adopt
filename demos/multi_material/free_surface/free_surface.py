@@ -19,8 +19,6 @@ from gadopt import *
 # solutions, as in our previous tutorials.
 
 # +
-from mpi4py import MPI
-
 nx, ny = 256, 64  # Number of cells in x and y directions
 lx, ly = 3e6, 7e5  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
@@ -49,17 +47,18 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 
 # +
 import shapely as sl  # noqa: E402
+from mpi4py import MPI  # noqa: E402
 
 # Shapely Polygon representation of the material interface
 slab = sl.Polygon(
     [
-        (1e6, 7e5),
+        (1e6, 7e5 + 1e5),
         (1e6, 5e5),
         (1.1e6, 5e5),
         (1.1e6, 6e5),
-        (3e6, 6e5),
-        (3e6, 7e5),
-        (1e6, 7e5),
+        (3e6 + 1e5, 6e5),
+        (3e6 + 1e5, 7e5 + 1e5),
+        (1e6, 7e5 + 1e5),
     ]
 )
 sl.prepare(slab)
@@ -140,28 +139,11 @@ stokes_bcs = {
 # G-ADOPT geodynamical diagnostic utility, and define some parameters specific to this
 # problem.
 
-
 # +
-import numpy as np  # noqa: E402
-
-
-def slab_tip_depth():
-    depth_per_core.interpolate(
-        conditional(psi >= 0.5, domain_dim_y - mesh.coordinates[1], np.nan)
-    )
-    max_depth_per_core = np.nanmax(depth_per_core.dat.data_ro_with_halos, initial=0)
-    max_depth = psi.comm.allreduce(max_depth_per_core, MPI.MAX)
-
-    return max_depth
-
-
 output_file = VTKFile("output.pvd")
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt slab_tip_depth")
-
-domain_dim_y = 7e5
-depth_per_core = Function(K)
 # -
 
 # Here, we set up the variational problem for the Stokes and level-set systems. The
@@ -181,6 +163,8 @@ level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # attained.
 
 # +
+from gadopt.level_set_tools import min_max_height  # noqa: E402
+
 step = 0  # A counter to keep track of looping
 output_counter = 0  # A counter to keep track of outputting
 time_end = 6e7 * 365.25 * 8.64e4
@@ -194,8 +178,6 @@ while True:
     if time_end is not None:
         t_adapt.maximum_timestep = min(output_frequency, time_end - time_now)
     t_adapt.update_timestep()
-    time_now += float(delta_t)
-    step += 1
 
     # Advect level set
     level_set_solver.solve(step)
@@ -203,8 +185,14 @@ while True:
     # Solve Stokes sytem
     stokes_solver.solve()
 
+    time_now += float(delta_t)
+    step += 1
+
     # Log diagnostics
-    plog.log_str(f"{step} {time_now} {float(delta_t)} {slab_tip_depth()}")
+    plog.log_str(
+        f"{step} {time_now} {float(delta_t)} "
+        f"{(ly - min_max_height(psi, epsilon, 1, "min")) / 1e3}"
+    )
 
     # Check if simulation has completed
     if time_now >= time_end:

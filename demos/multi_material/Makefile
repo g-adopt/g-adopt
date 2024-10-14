@@ -1,4 +1,4 @@
-cases := compositional_buoyancy thermochemical_buoyancy
+cases := compositional_buoyancy thermochemical_buoyancy free_surface
 ncpus := 4
 
 all: $(cases)

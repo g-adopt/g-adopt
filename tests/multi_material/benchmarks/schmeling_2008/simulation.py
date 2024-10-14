@@ -7,32 +7,22 @@ Physics of the Earth and Planetary Interiors, 171(1-4), 198-223.
 
 from functools import partial
 
-import firedrake as fd
 import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 from pandas import read_excel
 
+from gadopt.level_set_tools import min_max_height
+
 from .materials import air, lithosphere, mantle
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
-    level_set = diag_vars["level_set"][1]
-    function_space = level_set.function_space()
-
-    depth_per_core = fd.Function(function_space).interpolate(
-        fd.conditional(
-            level_set >= 0.5,
-            domain_dims[1] - function_space.mesh().coordinates[1],
-            np.nan,
-        )
-    )
-    max_depth_per_core = np.nanmax(depth_per_core.dat.data_ro_with_halos, initial=0)
-    max_depth = level_set.comm.allreduce(max_depth_per_core, MPI.MAX)
+    height = min_max_height(diag_vars["level_set"][1], diag_vars["epsilon"], 1, "min")
 
     diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e6)
-    diag_fields["slab_tip_depth"].append((max_depth - 5e4) / 1e3)
+    diag_fields["slab_tip_depth"].append((domain_dims[1] - 5e4 - height) / 1e3)
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(

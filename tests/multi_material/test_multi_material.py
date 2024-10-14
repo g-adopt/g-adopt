@@ -13,7 +13,7 @@ diagnostics = {
                 np.subtract(data["max_topography"], data["max_topography_analytical"])
             ).max(),
             operator.le,
-            0.15,
+            0.055,
         )
     ],
     "gerya_2003": [
@@ -45,7 +45,7 @@ diagnostics = {
                 np.asarray(data["output_time"])[
                     np.asarray(data["slab_tip_depth"]) >= 600
                 ].min()
-                - 45.5
+                - 45.2
             ),
             operator.le,
             0.1,

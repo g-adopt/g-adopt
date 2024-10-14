@@ -102,7 +102,7 @@ def isd_schmeling(parameters, level_set):
     """Initialise signed-distance function from the model setup of
     Schmeling et al. (2008)"""
     rectangle_lith = sl.Polygon(
-        [(1e6, 7e5), (3e6, 7e5), (3e6, 6e5), (1e6, 6e5), (1e6, 7e5)]
+        [(1e6, 7e5), (3e6 + 1e5, 7e5), (3e6 + 1e5, 6e5), (1e6, 6e5), (1e6, 7e5)]
     )
     sl.prepare(rectangle_lith)
     rectangle_slab = sl.Polygon(

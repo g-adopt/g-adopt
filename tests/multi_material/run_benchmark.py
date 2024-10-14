@@ -40,7 +40,7 @@ def write_output(output_file):
         *level_set,
         *level_set_grad_proj,
         *output_fields,
-        time=time_now,
+        time=time_now / 1e6 / 365.25 / 8.64e4 if simulation.dimensional else time_now,
     )
 
 
@@ -315,6 +315,7 @@ while True:
     else:
         exit_loop = fd.norm(velocity - velocity_old) < simulation.steady_state_threshold
         velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
+
     if exit_loop:
         # Calculate final simulation diagnostics
         simulation.diagnostics(time_now, geo_diag, diag_vars, benchmark_path)

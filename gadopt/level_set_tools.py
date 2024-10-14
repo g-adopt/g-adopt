@@ -6,10 +6,13 @@ The `entrainment` function enables users to easily calculate material entrainmen
 
 """
 
+import operator
 from numbers import Number
 from typing import Optional
 
 import firedrake as fd
+import numpy as np
+from mpi4py import MPI
 
 from . import scalar_equation as scal_eq
 from .energy_solver import AdvectionDiffusionSolver
@@ -341,13 +344,13 @@ def material_field(
 def entrainment(
     level_set: fd.Function, material_area: Number, entrainment_height: Number
 ) -> float:
-    """Calculates entrainment diagnostic.
+    """Calculates the entrainment diagnostic.
 
     Determines the proportion of a material that is located above a given height.
 
     Args:
         level_set:
-          A Firedrake function for the level set.
+          A Firedrake function for the level set field.
         material_area:
           An integer or a float representing the total area occupied by a material.
         entrainment_height:
@@ -365,3 +368,94 @@ def entrainment(
         fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
         / material_area
     )
+
+
+def min_max_height(
+    level_set: fd.Function, epsilon: fd.Constant, side: int, mode: str
+) -> float:
+    """Calculates the maximum or minimum height of the level set.
+
+    Determines the location.
+
+    Args:
+        level_set:
+          A Firedrake function for the level set field.
+        epsilon:
+          A Firedrake constant for the thickness of the hyperbolic tangent profile.
+        side:
+          An integer indicating the level set side making up the geometric object.
+        mode:
+          A string indicating whether the maximum or minimum height is sought.
+
+    Returns:
+        A float corresponding to the level set maximum or minimum height.
+    """
+
+    match side:
+        case 0:
+            comparison = operator.le
+        case 1:
+            comparison = operator.ge
+        case _:
+            raise ValueError("'side' must be 0 or 1.")
+
+    match mode:
+        case "min":
+            arg_finder = np.argmin
+            irrelevant_data = np.inf
+            mpi_comparison = MPI.MIN
+        case "max":
+            arg_finder = np.argmax
+            irrelevant_data = -np.inf
+            mpi_comparison = MPI.MAX
+        case _:
+            raise ValueError("'mode' must be 'min' or 'max'.")
+
+    mesh = level_set.ufl_domain()
+    if not mesh.cartesian:
+        raise ValueError("Only Cartesian meshes are currently supported.")
+
+    coords_space = fd.VectorFunctionSpace(mesh, level_set.ufl_element())
+    coords = fd.Function(coords_space).interpolate(mesh.coordinates)
+    coords_data = coords.dat.data_ro_with_halos
+    ls_data = level_set.dat.data_ro_with_halos
+
+    mask_ls = comparison(ls_data, 0.5)
+    if mask_ls.any():
+        ind_inside = arg_finder(coords_data[mask_ls, -1])
+        height_inside = coords_data[mask_ls, -1][ind_inside]
+
+        if not mask_ls.all():
+            hor_coords = coords_data[mask_ls, :-1][ind_inside]
+            hor_dist_vec = coords_data[~mask_ls, :-1] - hor_coords
+            hor_dist = np.sqrt(np.sum(hor_dist_vec**2, axis=1))
+
+            epsilon = float(epsilon)
+            mask_hor_coords = hor_dist < epsilon
+
+            if mask_hor_coords.any():
+                ind_outside = abs(
+                    coords_data[~mask_ls, -1][mask_hor_coords] - height_inside
+                ).argmin()
+                height_outside = coords_data[~mask_ls, -1][mask_hor_coords][ind_outside]
+
+                ls_inside = ls_data[mask_ls][ind_inside]
+                sdls_inside = epsilon * np.log(ls_inside / (1 - ls_inside))
+
+                ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
+                sdls_outside = epsilon * np.log(ls_outside / (1 - ls_outside))
+
+                sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
+                height = sdls_dist * height_inside + (1 - sdls_dist) * height_outside
+            else:
+                height = height_inside
+
+        else:
+            height = height_inside
+
+    else:
+        height = irrelevant_data
+
+    height_global = level_set.comm.allreduce(height, mpi_comparison)
+
+    return height_global
