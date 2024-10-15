@@ -1,5 +1,6 @@
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 
 
 def test_checkpointing():
@@ -12,6 +13,8 @@ def test_checkpointing():
 
     assert np.allclose(full_optimisation[-restored_steps:], restored_optimisation)
 
-    restored_optimisation_last_it = np.loadtxt(base / "restored_optimisation_from_last_it.dat")
+    restored_optimisation_last_it = np.loadtxt(
+        base / "restored_optimisation_from_last_it.dat"
+    )
 
     assert full_optimisation[-1] > restored_optimisation_last_it[0]

@@ -3,14 +3,15 @@ This standalone script tests the robustness of the derivatives
 using the Taylor remainder convergence test.
 """
 
-from gadopt import *
-from gadopt.inverse import *
-from mpi4py import MPI
-import numpy as np
 import sys
 from pathlib import Path
 
+import numpy as np
 from cases import cases
+from mpi4py import MPI
+
+from gadopt import *
+from gadopt.inverse import *
 
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
@@ -26,16 +27,16 @@ def rectangle_taylor_test(case):
         case (str): name of the objective functional term
             either of "damping", "smooothing", "Tobs", "uobs"
     """
-    checkpoint_file = Path(__file__).resolve().parent / "adjoint-demo-checkpoint-state.h5"
+    checkpoint_path = Path(__file__).parent / "adjoint-demo-checkpoint-state.h5"
+    checkpoint_file = CheckpointFile(str(checkpoint_path), "r")
 
     # Clear the tape of any previous operations to ensure
     # the adjoint reflects the forward problem we solve here
     tape = get_working_tape()
     tape.clear_tape()
 
-    with CheckpointFile(str(checkpoint_file), "r") as f:
-        mesh = f.load_mesh("firedrake_default_extruded")
-        mesh.cartesian = True
+    mesh = checkpoint_file.load_mesh("firedrake_default_extruded")
+    mesh.cartesian = True
 
     bottom_id, top_id, left_id, right_id = "bottom", "top", 1, 2
 
@@ -52,8 +53,7 @@ def rectangle_taylor_test(case):
     u.rename("Velocity")
     p.rename("Pressure")
 
-    Ra = Constant(1e6)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
+    approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e6})
 
     # Define time stepping parameters:
     max_timesteps = 80
@@ -64,7 +64,6 @@ def rectangle_taylor_test(case):
     Tic = Function(Q1, name="Initial Temperature")
     Taverage = Function(Q1, name="Average Temperature")
 
-    checkpoint_file = CheckpointFile(str(checkpoint_file), "r")
     # Initialise the control
     Tic.project(
         checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
@@ -82,28 +81,24 @@ def rectangle_taylor_test(case):
         left_id: {"ux": 0},
         right_id: {"ux": 0},
     }
-    temp_bcs = {
-        bottom_id: {"T": 1.0},
-        top_id: {"T": 0.0},
-    }
+    temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 
     energy_solver = EnergySolver(
+        approximation,
         T,
         u,
-        approximation,
         delta_t,
         ImplicitMidpoint,
         bcs=temp_bcs,
     )
 
     stokes_solver = StokesSolver(
+        approximation,
         z,
         T,
-        approximation,
         bcs=stokes_bcs,
-        nullspace=Z_nullspace,
-        transpose_nullspace=Z_nullspace,
         constant_jacobian=True,
+        nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
     )
 
     # Control variable for optimisation

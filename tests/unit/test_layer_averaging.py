@@ -7,7 +7,7 @@ def test_layer_averaging():
     mesh.cartesian = True
 
     # because this is not an extruded mesh we have to provide r1d for layer averaging
-    y_disc = np.linspace(0.0, 1.0, n+1)
+    y_disc = np.linspace(0.0, 1.0, n + 1)
 
     X = SpatialCoordinate(mesh)
     Q = FunctionSpace(mesh, "CG", 2)
