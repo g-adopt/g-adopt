@@ -585,8 +585,6 @@ class ViscoelasticStokesSolver(StokesSolver):
             # the unknown `incremental displacement' (u) that
             # we are solving for
             implicit_displacement = self.u + self.displacement
-#            implicit_displacement = self.solution_old.subfunctions[0] + self.displacement
-#            implicit_displacement = self.displacement
             implicit_displacement_up = fd.dot(implicit_displacement, self.k)
             # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
             normal_stress, _ = self.approximation.free_surface_terms(
