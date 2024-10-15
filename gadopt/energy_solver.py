@@ -17,7 +17,7 @@ from firedrake import (
     dot,
 )
 
-from . import scalar_equation as scal_eq
+from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
 from .time_stepper import RungeKuttaTimeIntegrator
@@ -124,10 +124,10 @@ class EnergySolver:
 
         rho_cp = approximation.rhocp()
         eq_terms = [
-            scal_eq.scalar_advection_term,
-            scal_eq.scalar_diffusion_term,
-            scal_eq.scalar_absorption_term,
-            scal_eq.scalar_source_term,
+            scalar_eq.advection_term,
+            scalar_eq.diffusion_term,
+            scalar_eq.absorption_term,
+            scalar_eq.source_term,
         ]
         terms_kwargs = {
             "advective_velocity_scaling": rho_cp,
@@ -160,11 +160,12 @@ class EnergySolver:
             nubar = su_nubar(vel, J, Pe)  # Calculate SU artifical diffusion
 
             terms_kwargs["su_nubar"] = nubar
+
         self.eq = Equation(
             TestFunction(self.Q),
             self.Q,
             eq_terms,
-            mass_term=lambda eq, trial: scal_eq.mass_term(eq, rho_cp * trial),
+            mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
             terms_kwargs=terms_kwargs,
             approximation=approximation,
             bcs=self.weak_bcs,

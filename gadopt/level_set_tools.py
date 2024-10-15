@@ -15,7 +15,7 @@ from typing import Optional
 import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
 
-from . import scalar_equation as scal_eq
+from . import scalar_equation as scalar_eq
 from .equations import Equation
 from .time_stepper import eSSPRKs3p3
 
@@ -286,8 +286,8 @@ class LevelSetSolver:
         advection_equation = Equation(
             test,
             self.func_space,
-            scal_eq.scalar_advection_term,
-            mass_term=scal_eq.mass_term,
+            scalar_eq.advection_term,
+            mass_term=scalar_eq.mass_term,
             terms_kwargs=self.ls_terms_kwargs,
         )
         self.ls_ts = self.tstep_alg(
@@ -301,7 +301,7 @@ class LevelSetSolver:
             test,
             self.func_space,
             reinitialisation_term,
-            mass_term=scal_eq.mass_term,
+            mass_term=scalar_eq.mass_term,
             terms_kwargs=self.reini_terms_kwargs,
         )
         self.reini_ts = self.reini_params["tstep_alg"](

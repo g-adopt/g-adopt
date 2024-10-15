@@ -25,13 +25,6 @@ from firedrake import *
 from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous, normal_is_continuous, tensor_jump, upward_normal
 
-__all__ = [
-    "divergence_term",
-    "momentum_source_term",
-    "pressure_gradient_term",
-    "viscosity_term",
-]
-
 
 def viscosity_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
@@ -42,10 +35,10 @@ def viscosity_term(
     form becomes
 
     $$
-    {:( -int_Omega nabla * (mu grad u) test dx , = , int_Omega mu (grad test) * (grad u) dx ),
-      ( , - , int_(cc"I" uu cc"I"_v) "jump"(test bb n) * "avg"(mu grad u) dS
-          -   int_(cc"I" uu cc"I"_v) "jump"(u bb n) * "avg"(mu grad test) dS ),
-      ( , + , int_(cc"I" uu cc"I"_v) sigma "avg"(mu) "jump"(u bb n) * "jump"(test bb n) dS )
+    {:( -int_Omega nabla * (mu grad u) phi dx , = , int_Omega mu (grad phi) * (grad u) dx ),
+      ( , - , int_(cc"I" uu cc"I"_v) "jump"(phi bb n) * "avg"(mu grad u) dS
+          -   int_(cc"I" uu cc"I"_v) "jump"(u bb n) * "avg"(mu grad phi) dS ),
+      ( , + , int_(cc"I" uu cc"I"_v) sigma "avg"(mu) "jump"(u bb n) * "jump"(phi bb n) dS )
     :}
     $$
 
@@ -166,7 +159,7 @@ def divergence_term(
 ) -> Form:
     assert normal_is_continuous(eq.u)
 
-    rho = eq.approximation.rho
+    rho = eq.rho_mass
     F = -dot(eq.test, div(rho * eq.u)) * eq.dx
 
     # Add boundary integral for bcs that specify the normal component of u.

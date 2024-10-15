@@ -244,7 +244,8 @@ class StokesSolver:
             self.weak_bcs[id] = weak_bc
 
         u, p = fd.split(self.solution)
-        terms_kwargs = {"u": u, "p": p, "T": T, "mu": mu}
+        rho_mass = approximation.rho_continuity()
+        terms_kwargs = {"u": u, "p": p, "T": T, "mu": mu, "rho_mass": rho_mass}
 
         self.equations = []
         for i, terms_eq in enumerate(terms_stokes):

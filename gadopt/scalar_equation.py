@@ -26,14 +26,12 @@ from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous, normal_is_continuous
 
 
-def scalar_advection_term(
+def advection_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     r"""Scalar advection term (non-conservative): u \dot \div(q)."""
-    if hasattr(eq, "advective_velocity_scaling"):
-        u = eq.advective_velocity_scaling * eq.u
-    else:
-        u = eq.u
+    advective_velocity_scaling = getattr(eq, "advective_velocity_scaling", 1)
+    u = advective_velocity_scaling * eq.u
 
     if hasattr(eq, "su_nubar"):  # SU(PG) à la Donea & Huerta (2003)
         phi = eq.test + eq.su_nubar / (dot(u, u) + 1e-12) * dot(u, grad(eq.test))
@@ -44,7 +42,7 @@ def scalar_advection_term(
         F = -trial * div(eq.test * u) * eq.dx
         F += trial * dot(eq.n, u) * eq.test * eq.ds  # Boundary term in the weak form
 
-        if not all([is_continuous(eq.trial_space), normal_is_continuous(eq.u)]):
+        if not (is_continuous(eq.trial_space) and normal_is_continuous(eq.u)):
             # s = 0: u.n(-) < 0 => flow goes from '+' to '-' => '+' is upwind
             # s = 1: u.n(-) > 0 => flow goes from '-' to '+' => '-' is upwind
             s = 0.5 * (sign(dot(avg(u), eq.n("-"))) + 1.0)
@@ -59,7 +57,7 @@ def scalar_advection_term(
     return -F
 
 
-def scalar_diffusion_term(
+def diffusion_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     r"""Scalar diffusion term $-nabla * (kappa grad q)$.
@@ -84,10 +82,8 @@ def scalar_diffusion_term(
     dim = eq.mesh.geometric_dimension()
     diff_tensor = kappa if len(kappa.ufl_shape) == 2 else kappa * Identity(dim)
 
-    if hasattr(eq, "reference_for_diffusion"):
-        q = trial + eq.reference_for_diffusion
-    else:
-        q = trial
+    reference_for_diffusion = getattr(eq, "reference_for_diffusion", 0)
+    q = trial + reference_for_diffusion
 
     F = inner(grad(eq.test), dot(diff_tensor, grad(q))) * eq.dx
 
@@ -128,23 +124,25 @@ def scalar_diffusion_term(
     return -F
 
 
-def scalar_source_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def source_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
     r"""Scalar source term `s_T`."""
-    source = eq.source if hasattr(eq, "source") else 0
-    F = -dot(eq.test, source) * eq.dx
+    if not hasattr(eq, "source"):
+        return 0
+
+    F = -dot(eq.test, eq.source) * eq.dx
 
     return -F
 
 
-def scalar_absorption_term(
+def absorption_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     r"""Scalar absorption term `\alpha_T T`."""
-    sink = eq.sink if hasattr(eq, "sink") else 0
+    if not hasattr(eq, "sink"):
+        return 0
+
     # Implement absorption term implicitly at current time step.
-    F = dot(eq.test, sink * trial) * eq.dx
+    F = dot(eq.test, eq.sink * trial) * eq.dx
 
     return -F
 

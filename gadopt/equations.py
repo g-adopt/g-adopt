@@ -109,7 +109,7 @@ class Equation:
         """Generates the UFL form corresponding to the residual terms."""
 
         return self.rescale_factor * sum(
-            [term(self, trial) for term in self.residual_terms]
+            term(self, trial) for term in self.residual_terms
         )
 
 
@@ -155,7 +155,7 @@ def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
         sigma = 1.0
     else:
         # safety factor: 1.0 is theoretical minimum
-        alpha = eq.interior_penalty if hasattr(eq, "interior_penalty") else 2.0
+        alpha = getattr(eq, "interior_penalty", 2.0)
         num_facets = eq.mesh.ufl_cell().num_facets()
         sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
 
