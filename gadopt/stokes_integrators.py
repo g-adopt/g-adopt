@@ -541,13 +541,10 @@ def ala_right_nullspace(
 class ViscoelasticStokesSolver(StokesSolver):
     name = "ViscoelasticStokesSolver"
 
-    def __init__(self, z, density, deviatoric_stress, displacement, approximation, dt, bcs=None,
-                 quad_degree=6, solver_parameters=None,
-                 closed=True, rotational=False, J=None, constant_jacobian=False,
-                 iterative_2d=False, free_surface_dt=None, free_surface_variable_rho=True,
+    def __init__(self, z, deviatoric_stress, displacement, approximation, dt, bcs=None,
+                 quad_degree=6, solver_parameters=None, J=None, constant_jacobian=False,
                  **kwargs):
 
-        self.density = density
         self.deviatoric_stress = deviatoric_stress  # Temporary function to store deviatoric stress from previous time step
         self.displacement = displacement
         self.dt = dt
@@ -557,7 +554,10 @@ class ViscoelasticStokesSolver(StokesSolver):
 
         approximation.mu = approximation.effective_viscosity(self.dt)
 
-        super().__init__(z, self.density, approximation, bcs=bcs,
+        # This isn't used by the code but StokesSolver currently assumes temperature is required as an argument
+        T_placeholder = approximation.density
+
+        super().__init__(z, T_placeholder, approximation, bcs=bcs,
                          quad_degree=quad_degree, solver_parameters=solver_parameters,
                          J=J, constant_jacobian=constant_jacobian, free_surface_dt=self.dt,
                          equations=ViscoelasticEquations, **kwargs)
@@ -570,12 +570,11 @@ class ViscoelasticStokesSolver(StokesSolver):
             'velocity': self.u,  # This is incremental displacement (m)
             'pressure': self.p,
             'stress': self.approximation.stress(self.u, self.dt),
-            'displacement': self.density,
             'previous_stress': self.previous_stress,
             'viscosity': self.approximation.effective_viscosity(self.dt),
             'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
                                                    # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
-            'source': self.approximation.buoyancy(self.displacement, self.density) * self.k,
+            'source': self.approximation.buoyancy(self.displacement) * self.k,
             'rho_continuity': self.approximation.rho_continuity(),
         }
 

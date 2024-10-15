@@ -87,7 +87,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     log("dt in years", float(dt/year_in_seconds))
     log("maxwell time in years", float(maxwell_time/year_in_seconds))
 
-    approximation = SmallDisplacementViscoelasticApproximation(viscosity, shear_modulus, g=g)
+    approximation = SmallDisplacementViscoelasticApproximation(rho0, shear_modulus, viscosity, g=g)
 
     # Create output file
     if OUTPUT:
@@ -108,7 +108,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     eta_analytical.interpolate(((F0 - h_elastic) * (1-exp(-(time)/(tau0+maxwell_time)))+h_elastic) * cos(kk * X[0]))
     error = 0  # Initialise error
 
-    stokes_solver = ViscoelasticStokesSolver(z,rho0, deviatoric_stress, displacement, approximation,
+    stokes_solver = ViscoelasticStokesSolver(z, deviatoric_stress, displacement, approximation,
                                              dt, bcs=stokes_bcs,)
 
     if OUTPUT:

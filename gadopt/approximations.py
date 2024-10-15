@@ -423,12 +423,13 @@ class SmallDisplacementViscoelasticApproximation():
     Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
     compressible = False
 
-    def __init__(self, viscosity, shear_modulus, g=1):
+    def __init__(self, density, shear_modulus, viscosity, g=1):
         """
         :arg kappa, g, rho, alpha:  Diffusivity, gravitational acceleration, reference density and thermal expansion coefficient
                                     Normally kept at 1 when non-dimensionalised."""
-        self.viscosity = ensure_constant(viscosity)
+        self.density = ensure_constant(density)
         self.shear_modulus = ensure_constant(shear_modulus)
+        self.viscosity = ensure_constant(viscosity)
         self.g = ensure_constant(g)
 
         self.maxwell_time = viscosity / shear_modulus
@@ -442,10 +443,10 @@ class SmallDisplacementViscoelasticApproximation():
     def stress(self, u, dt):
         return 2 * self.effective_viscosity(dt) * sym(grad(u))
 
-    def buoyancy(self, displacement, background_density):
+    def buoyancy(self, displacement):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
-        return -self.g * -inner(displacement, grad(background_density))
+        return -self.g * -inner(displacement, grad(self.density))
 
     def free_surface_terms(self, p, T, eta, theta_fs, *, delta_rho_fs=1):
         free_surface_normal_stress = delta_rho_fs * self.g * eta
