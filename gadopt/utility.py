@@ -7,7 +7,7 @@ depending on what they would like to achieve.
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement, DirichletBC, utils, exp, pi
+from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
@@ -487,16 +487,6 @@ def step_func(r, centre, mag, increasing=True, sharpness=50):
     return mag * (
         0.5 * (1 + tanh((1 if increasing else -1) * (r - centre) * sharpness))
     )
-
-
-def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
-    arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
-    numerator = exp(-1/(2*(1-rho**2))*arg)
-    if normalised_area:
-        denominator = 2*pi*sigma_x*sigma_y*(1-rho**2)**0.5
-    else:
-        denominator = 1
-    return numerator / denominator
 
 
 def node_coordinates(function):
