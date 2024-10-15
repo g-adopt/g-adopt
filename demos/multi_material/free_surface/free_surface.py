@@ -191,7 +191,7 @@ while True:
     # Log diagnostics
     plog.log_str(
         f"{step} {time_now} {float(delta_t)} "
-        f"{(ly - min_max_height(psi, epsilon, 1, "min")) / 1e3}"
+        f"{(ly - min_max_height(psi, epsilon, 1, 'min')) / 1e3}"
     )
 
     # Check if simulation has completed
