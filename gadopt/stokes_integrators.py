@@ -13,8 +13,6 @@ import firedrake as fd
 from .approximations import BaseApproximation, AnelasticLiquidApproximation
 from .free_surface_equation import FreeSurfaceEquation
 from .momentum_equation import StokesEquations
-from .viscoelastic_equation import ViscoelasticEquations
-from .equations import BaseEquation
 from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
@@ -205,7 +203,6 @@ class StokesSolver:
       free_surface_theta: Timestepping prefactor for free surface equation, where
                           theta = 0: Forward Euler, theta = 0.5: Crank-Nicolson (default),
                           or theta = 1: Backward Euler
-      equations: GADOPT system of equations to solve. StokesEquations (default) or Viscoelastic (equations)
 
     """
 
@@ -223,14 +220,13 @@ class StokesSolver:
         constant_jacobian: bool = False,
         free_surface_dt: Optional[float] = None,
         free_surface_theta: float = 0.5,
-        equations: BaseEquation = StokesEquations,
         **kwargs,
     ):
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
-        self.equations = equations(self.Z, self.Z, quad_degree=quad_degree,
-                                   compressible=approximation.compressible)
+        self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
+                                         compressible=approximation.compressible)
         self.solution = z
         self.T = T
         self.approximation = approximation
@@ -541,16 +537,13 @@ def ala_right_nullspace(
 class ViscoelasticStokesSolver(StokesSolver):
     name = "ViscoelasticStokesSolver"
 
-    def __init__(self, z, deviatoric_stress, displacement, approximation, dt, bcs=None,
+    def __init__(self, z, stress_old, displacement, approximation, dt, bcs=None,
                  quad_degree=6, solver_parameters=None, J=None, constant_jacobian=False,
                  **kwargs):
 
-        self.deviatoric_stress = deviatoric_stress  # Temporary function to store deviatoric stress from previous time step
+        self.stress_old = stress_old  # Function to store deviatoric stress from previous time step
         self.displacement = displacement
         self.dt = dt
-
-        self.prefactor_prestress = approximation.prefactor_prestress(self.dt)
-        self.previous_stress = fd.Function(deviatoric_stress, name="previous stress").interpolate(self.prefactor_prestress * self.deviatoric_stress)  # History stress term from previous time step (explicit RHS forcing)
 
         approximation.mu = approximation.effective_viscosity(self.dt)
 
@@ -560,7 +553,7 @@ class ViscoelasticStokesSolver(StokesSolver):
         super().__init__(z, T_placeholder, approximation, bcs=bcs,
                          quad_degree=quad_degree, solver_parameters=solver_parameters,
                          J=J, constant_jacobian=constant_jacobian, free_surface_dt=self.dt,
-                         equations=ViscoelasticEquations, **kwargs)
+                         **kwargs)
 
         scale_mu = fd.Constant(1e10)  # this is a scaling factor roughly size of mantle maxwell time to make sure that solve converges with strong bcs in parallel...
         self.F = (1 / scale_mu)*self.F
@@ -569,8 +562,7 @@ class ViscoelasticStokesSolver(StokesSolver):
         self.fields = {
             'velocity': self.u,  # This is incremental displacement (m)
             'pressure': self.p,
-            'stress': self.approximation.stress(self.u, self.dt),
-            'previous_stress': self.previous_stress,
+            'stress': self.approximation.stress(self.u, self.stress_old, self.dt),
             'viscosity': self.approximation.effective_viscosity(self.dt),
             'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
                                                    # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
@@ -602,8 +594,6 @@ class ViscoelasticStokesSolver(StokesSolver):
 
     def solve(self):
         super().solve()
-        # Update deviatoric stress for the timestep that has just been solved for
-        self.deviatoric_stress.interpolate(self.approximation.stress(self.u, self.dt) + self.prefactor_prestress * self.deviatoric_stress)
         # Update history stress term for using as a RHS explicit forcing in the next timestep
-        self.previous_stress.interpolate(self.prefactor_prestress * self.deviatoric_stress)
+        self.stress_old.interpolate(self.approximation.prefactor_prestress(self.dt) * self.approximation.stress(self.u, self.stress_old, self.dt))
         self.displacement.interpolate(self.displacement+self.stokes_subfunctions[0])

@@ -437,8 +437,8 @@ class SmallDisplacementViscoelasticApproximation():
     def prefactor_prestress(self, dt):
         return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
 
-    def stress(self, u, dt):
-        return 2 * self.effective_viscosity(dt) * sym(grad(u))
+    def stress(self, u, stress_old, dt):
+        return 2 * self.effective_viscosity(dt) * sym(grad(u)) + stress_old
 
     def buoyancy(self, displacement):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time

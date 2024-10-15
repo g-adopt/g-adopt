@@ -34,6 +34,5 @@ from .utility import (
     node_coordinates,
     timer_decorator,
 )
-from .viscoelastic_equation import ViscoelasticEquations
 
 PETSc.Sys.popErrorHandler()

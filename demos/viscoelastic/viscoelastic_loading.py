@@ -258,7 +258,7 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # parts – incremental displacement and pressure – is obtained with `split`. For later
 # visualisation, we rename the subfunctions of z Incremental Displacement and Pressure.
 #
-# We also need to initialise two functions `displacement` and `deviatoric stress` that are used when timestepping the constitutive equation.
+# We also need to initialise two functions `displacement` and `stress old` that are used when timestepping the constitutive equation.
 
 # +
 z = Function(Z)  # A field over the mixed function space Z.
@@ -268,7 +268,7 @@ u_.rename("Incremental Displacement")
 p_.rename("Pressure")
 
 displacement = Function(V, name="displacement").assign(0)
-deviatoric_stress = Function(TP1, name='deviatoric_stress')
+stress_old = Function(TP1, name="stress_old").assign(0)
 # -
 
 # We can output function space information, for example the number of degrees
@@ -403,19 +403,19 @@ approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulu
 # objects for the Stokes systems created. We pass in the solution fields z and various fields needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
-stokes_solver = ViscoelasticStokesSolver(z, deviatoric_stress, displacement, approximation,
+stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
                                          dt, bcs=stokes_bcs)
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
 # +
-prefactor_prestress = Function(W, name='prefactor prestress').interpolate(stokes_solver.prefactor_prestress)
+prefactor_prestress = Function(W, name='prefactor prestress').interpolate(approximation.prefactor_prestress(dt))
 effective_viscosity = Function(W, name='effective viscosity').interpolate(approximation.effective_viscosity(dt))
 
 if do_write:
     # Create output file
     output_file = VTKFile(f"viscoelastic_loading/out_dtout{dt_out_years}a.pvd")
-    output_file.write(u_, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity)
+    output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity)
 
 displacement_min_array = []
 # -
@@ -484,13 +484,13 @@ for timestep in range(1, max_timesteps+1):
         log("timestep", timestep)
 
         if do_write:
-            output_file.write(u_, displacement, p_, stokes_solver.previous_stress, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity)
+            output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(u_, name="Incremental Displacement")
             checkpoint.save_function(p_, name="Pressure")
             checkpoint.save_function(displacement, name="Displacement")
-            checkpoint.save_function(deviatoric_stress, name="Deviatoric stress")
+            checkpoint.save_function(stress_old, name="Deviatoric stress")
 
         if MPI.COMM_WORLD.rank == 0:
             np.savetxt(displacement_filename, displacement_min_array)
