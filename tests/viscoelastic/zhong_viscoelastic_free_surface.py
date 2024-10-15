@@ -48,7 +48,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     p_.rename("Pressure")
 
     displacement = Function(V, name="displacement")
-    deviatoric_stress = Function(TP1, name='deviatoric_stress')
+    stress_old = Function(TP1, name='stress old')
 
     # Output function space information:
     log("Number of Velocity DOF:", V.dim())
@@ -108,11 +108,11 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     eta_analytical.interpolate(((F0 - h_elastic) * (1-exp(-(time)/(tau0+maxwell_time)))+h_elastic) * cos(kk * X[0]))
     error = 0  # Initialise error
 
-    stokes_solver = ViscoelasticStokesSolver(z, deviatoric_stress, displacement, approximation,
+    stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
                                              dt, bcs=stokes_bcs,)
 
     if OUTPUT:
-        output_file.write(u_, displacement, p_, eta_analytical, deviatoric_stress, stokes_solver.previous_stress)
+        output_file.write(u_, displacement, p_, eta_analytical, stress_old, stokes_solver.previous_stress)
 
     # Now perform the time loop:
     for timestep in range(1, max_timesteps+1):
@@ -133,7 +133,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
             log("timestep", timestep)
             log("time", float(time))
             if OUTPUT:
-                output_file.write(u_, displacement, p_, eta_analytical, deviatoric_stress, stokes_solver.previous_stress)
+                output_file.write(u_, displacement, p_, eta_analytical, stress_old, stokes_solver.previous_stress)
 
     final_error = pow(error, 0.5)/L
     return final_error
