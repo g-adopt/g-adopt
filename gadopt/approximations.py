@@ -181,7 +181,6 @@ class BoussinesqApproximation(BaseApproximation):
       delta_rho: compositional density difference from the reference density
       kappa:     thermal diffusivity
       H:         internal heating rate
-      variable_free_surface_density:         variable free surface density flag
 
     Note:
       The thermal diffusivity, gravitational acceleration, reference
@@ -205,7 +204,6 @@ class BoussinesqApproximation(BaseApproximation):
         delta_rho: Function | Number = 1,
         kappa: Function | Number = 1,
         H: Function | Number = 0,
-        variable_free_surface_density: bool = True,
     ):
         self.Ra = ensure_constant(Ra)
         self.mu = ensure_constant(mu)
@@ -217,10 +215,6 @@ class BoussinesqApproximation(BaseApproximation):
         self.RaB = RaB
         self.delta_rho = ensure_constant(delta_rho)
         self.H = ensure_constant(H)
-        self.variable_free_surface_density = variable_free_surface_density
-
-    def stress(self, u):
-        return 2 * self.mu * sym(grad(u))
 
     def stress(self, u):
         return 2 * self.mu * sym(grad(u))
