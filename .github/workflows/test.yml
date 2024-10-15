@@ -158,7 +158,7 @@ jobs:
 
       - name: Upload failed run log
         if: steps.run_tests.conclusion == 'failure'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: run-log
           path: test_output.log

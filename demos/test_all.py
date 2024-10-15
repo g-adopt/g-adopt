@@ -4,6 +4,7 @@ import pandas as pd
 
 cases = {
     "base_case": {},
+    "free_surface": {"extra_checks": ["eta_min", "eta_max"]},
     "2d_compressible_TALA": {},
     "2d_compressible_ALA": {},
     "viscoplastic_case": {},
@@ -12,6 +13,7 @@ cases = {
     "3d_cartesian": {"rtol": 1e-4},
     "gplates_global": {"extra_checks": ["u_rms_top"]},
     "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["avg_t", "FullT_min", "FullT_max"]},
+    "../tests/viscoplastic_case_dg": {"extra_checks": ["avg_t"]},
 }
 
 

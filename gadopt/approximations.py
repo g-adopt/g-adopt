@@ -127,6 +127,32 @@ class BaseApproximation(abc.ABC):
         """
         pass
 
+    @abc.abstractmethod
+    def free_surface_terms(self, p, T, eta, theta_fs) -> tuple[ufl.core.expr.Expr]:
+        """Defines free surface normal stress in the momentum equation and prefactor
+        multiplying the free surface equation.
+
+        The normal stress depends on the density contrast across the free surface.
+        Depending on the `variable_rho_fs` argument, this contrast either involves the
+        interior reference density or the full interior density that accounts for
+        changes in temperature and composition within the domain. For dimensional
+        simulations, the user should specify `delta_rho_fs`, defined as the difference
+        between the reference interior density and the exterior density. For
+        non-dimensional simulations, the user should specify `RaFS`, the equivalent of
+        the Rayleigh number for the density contrast across the free surface.
+
+        The prefactor multiplies the free surface equation to ensure the top-right and
+        bottom-left corners of the block matrix remain symmetric. This is similar to
+        rescaling eta -> eta_tilde in Kramer et al. (2012, see block matrix shown in
+        Eq. 23).
+
+        Returns:
+          A UFL expression for the free surface normal stress and a UFL expression for
+          the free surface equation prefactor.
+
+        """
+        pass
+
 
 class BoussinesqApproximation(BaseApproximation):
     """Expressions for the Boussinesq approximation.
@@ -197,6 +223,17 @@ class BoussinesqApproximation(BaseApproximation):
 
     def energy_source(self, u):
         return self.rho * self.H
+
+    def free_surface_terms(
+        self, p, T, eta, theta_fs, *, variable_rho_fs=True, RaFS=1, delta_rho_fs=1
+    ):
+        free_surface_normal_stress = RaFS * delta_rho_fs * self.g * eta
+        if variable_rho_fs:
+            free_surface_normal_stress -= self.buoyancy(p, T) * eta
+
+        prefactor = -theta_fs * RaFS * delta_rho_fs * self.g
+
+        return free_surface_normal_stress, prefactor
 
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):
