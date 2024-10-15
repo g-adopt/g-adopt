@@ -15,15 +15,7 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import residual_terms_stokes as terms_stokes
-from .utility import (
-    DEBUG,
-    INFO,
-    InteriorBC,
-    depends_on,
-    ensure_constant,
-    log_level,
-    upward_normal,
-)
+from .utility import DEBUG, INFO, InteriorBC, depends_on, ensure_constant, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -54,7 +46,7 @@ iterative_stokes_solver_parameters = {
         "Mp_ksp_ksp_rtol": 1e-5,
         "Mp_ksp_ksp_type": "cg",
         "Mp_ksp_pc_type": "sor",
-    },
+    }
 }
 """Default iterative solver parameters for solution of stokes system.
 
@@ -145,9 +137,7 @@ def create_stokes_nullspace(
     """
     # ala_approximation and top_subdomain_id are both needed when calculating right nullspace for ala
     if (ala_approximation is None) != (top_subdomain_id is None):
-        raise ValueError(
-            "Both ala_approximation and top_subdomain_id must be provided, or both must be None."
-        )
+        raise ValueError("Both ala_approximation and top_subdomain_id must be provided, or both must be None.")
 
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
@@ -155,20 +145,12 @@ def create_stokes_nullspace(
 
     if rotational:
         if dim == 2:
-            rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((-X[1], X[0]))
-            )
+            rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((-X[1], X[0])))
             basis = [rotV]
         elif dim == 3:
-            x_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((0, -X[2], X[1]))
-            )
-            y_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((X[2], 0, -X[0]))
-            )
-            z_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((-X[1], X[0], 0))
-            )
+            x_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((0, -X[2], X[1])))
+            y_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((X[2], 0, -X[0])))
+            z_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((-X[1], X[0], 0)))
             basis = [x_rotV, y_rotV, z_rotV]
         else:
             raise ValueError("Unknown dimension")
@@ -179,9 +161,7 @@ def create_stokes_nullspace(
         for tdim in translations:
             vec = [0] * dim
             vec[tdim] = 1
-            basis.append(
-                fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector(vec))
-            )
+            basis.append(fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector(vec)))
 
     if basis:
         V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
@@ -191,11 +171,7 @@ def create_stokes_nullspace(
 
     if closed:
         if ala_approximation:
-            p = ala_right_nullspace(
-                W=stokes_subspaces[1],
-                approximation=ala_approximation,
-                top_subdomain_id=top_subdomain_id,
-            )
+            p = ala_right_nullspace(W=stokes_subspaces[1], approximation=ala_approximation, top_subdomain_id=top_subdomain_id)
             p_nullspace = fd.VectorSpaceBasis([p], comm=Z.mesh().comm)
             p_nullspace.orthonormalize()
         else:
@@ -254,8 +230,8 @@ class StokesSolver:
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
         self.solution = z
-        self.solution_old = None
         self.approximation = approximation
+
         self.mu = ensure_constant(mu)
         self.J = J
         self.constant_jacobian = constant_jacobian
@@ -272,21 +248,15 @@ class StokesSolver:
         for id, bc in bcs.items():
             weak_bc = {}
             for bc_type, value in bc.items():
-                if bc_type == "u":
+                if bc_type == 'u':
                     self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
-                elif bc_type == "ux":
-                    self.strong_bcs.append(
-                        fd.DirichletBC(self.Z.sub(0).sub(0), value, id)
-                    )
-                elif bc_type == "uy":
-                    self.strong_bcs.append(
-                        fd.DirichletBC(self.Z.sub(0).sub(1), value, id)
-                    )
-                elif bc_type == "uz":
-                    self.strong_bcs.append(
-                        fd.DirichletBC(self.Z.sub(0).sub(2), value, id)
-                    )
-                elif bc_type == "free_surface":
+                elif bc_type == 'ux':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
+                elif bc_type == 'uy':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
+                elif bc_type == 'uz':
+                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
+                elif bc_type == 'free_surface':
                     # N.b. stokes_integrators assumes that the order of the bcs matches the order of the
                     # free surfaces defined in the mixed space. This is not ideal - python dictionaries
                     # are ordered by insertion only since recently (since 3.7) - so relying on their order
@@ -424,30 +394,21 @@ class StokesSolver:
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
 
+            if self.solver_parameters.get("pc_type") == "fieldsplit":
+                # extra options for iterative solvers
                 if DEBUG >= log_level:
-                    self.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = (
-                        None
-                    )
-                    self.solver_parameters["fieldsplit_1"]["ksp_monitor"] = None
+                    self.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+                    self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
                 elif INFO >= log_level:
-                    self.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = (
-                        None
-                    )
+                    self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
 
                 if self.free_surface:
                     # merge free surface fields with pressure field for Schur complement solve
-                    self.solver_parameters.update(
-                        {
-                            "pc_fieldsplit_0_fields": "0",
-                            "pc_fieldsplit_1_fields": "1,"
-                            + ",".join(str(2 + i) for i in range(len(eta))),
-                        }
-                    )
+                    self.solver_parameters.update({"pc_fieldsplit_0_fields": '0',
+                                                   "pc_fieldsplit_1_fields": '1,'+','.join(str(2+i) for i in range(len(eta)))})
 
                     # update keys for GADOPT's free surface mass inverse preconditioner
-                    self.solver_parameters["fieldsplit_1"].update(
-                        {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
-                    )
+                    self.solver_parameters["fieldsplit_1"].update({"pc_python_type": "gadopt.FreeSurfaceMassInvPC"})
 
         # solver object is set up later to permit editing default solver parameters specified above
         self._solver_setup = False
@@ -503,81 +464,77 @@ class StokesSolver:
 
 
 def ala_right_nullspace(
-    W: fd.functionspaceimpl.WithGeometry,
-    approximation: AnelasticLiquidApproximation,
-    top_subdomain_id: str | int,
-):
+        W: fd.functionspaceimpl.WithGeometry,
+        approximation: AnelasticLiquidApproximation,
+        top_subdomain_id: str | int):
     r"""Compute pressure nullspace for Anelastic Liquid Approximation.
 
-    Arguments:
-      W: pressure function space
-      approximation: AnelasticLiquidApproximation with equation parameters
-      top_subdomain_id: boundary id of top surface
+        Arguments:
+          W: pressure function space
+          approximation: AnelasticLiquidApproximation with equation parameters
+          top_subdomain_id: boundary id of top surface
 
-    Returns:
-      pressure nullspace solution
+        Returns:
+          pressure nullspace solution
 
-    To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
-    which includes a pressure-dependent buoyancy term, we try to solve the equation:
+        To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
+        which includes a pressure-dependent buoyancy term, we try to solve the equation:
 
-    $$
-      -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
-    $$
+        $$
+          -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
+        $$
 
-    Taking the divergence:
+        Taking the divergence:
 
-    $$
-      -nabla * nabla p + nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) = 0,
-    $$
+        $$
+          -nabla * nabla p + nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) = 0,
+        $$
 
-    then testing it with q:
+        then testing it with q:
 
-    $$
-        int_Omega -q nabla * nabla p dx + int_Omega q nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) dx = 0
-    $$
+        $$
+            int_Omega -q nabla * nabla p dx + int_Omega q nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) dx = 0
+        $$
 
-    followed by integration by parts:
+        followed by integration by parts:
 
-    $$
-        int_Gamma -bb n * q nabla p ds + int_Omega nabla q cdot nabla p dx +
-        int_Gamma bb n * hatk q g "Di" rho chi c_p/(c_v gamma) p dx -
-        int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
-    $$
+        $$
+            int_Gamma -bb n * q nabla p ds + int_Omega nabla q cdot nabla p dx +
+            int_Gamma bb n * hatk q g "Di" rho chi c_p/(c_v gamma) p dx -
+            int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
+        $$
 
-    This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
-    all boundary terms:
+        This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
+        all boundary terms:
 
-    $$
-      int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
-    $$
+        $$
+          int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
+        $$
 
-    However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
-    we ended up merely testing the original equation with $nabla q$). Instead we use the fact that the gradient of the null mode
-    is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
-    any nonzero constant for this surface fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
-    and apply it as a Dirichlet boundary condition.
+        However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
+        we ended up merely testing the original equation with $nabla q$). Instead we use the fact that the gradient of the null mode
+        is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
+        any nonzero constant for this surface fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
+        and apply it as a Dirichlet boundary condition.
 
-    Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
-    since not every test function $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
-    pressure test space, the two terms do not necessarily exactly cancel when tested with $v$ instead of $nabla q$ as in our
-    final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
-    an improved convergence of the iterative Stokes solver.
+        Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
+        since not every test function $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
+        pressure test space, the two terms do not necessarily exactly cancel when tested with $v$ instead of $nabla q$ as in our
+        final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
+        an improved convergence of the iterative Stokes solver.
     """
     W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
     q = fd.TestFunction(W)
     p = fd.Function(W, name="pressure_nullspace")
 
     # Fix the solution at the top boundary
-    bc = fd.DirichletBC(W, 1.0, top_subdomain_id)
+    bc = fd.DirichletBC(W, 1., top_subdomain_id)
 
     F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
 
     k = upward_normal(W.mesh())
 
-    F += (
-        -fd.inner(fd.grad(q), k * approximation.dbuoyancydp(p, fd.Constant(1.0)) * p)
-        * fd.dx
-    )
+    F += - fd.inner(fd.grad(q), k * approximation.dbuoyancydp(p, fd.Constant(1.0)) * p) * fd.dx
 
     fd.solve(F == 0, p, bcs=bc)
     return p
