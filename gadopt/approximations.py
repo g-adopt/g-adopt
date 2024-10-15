@@ -222,6 +222,9 @@ class BoussinesqApproximation(BaseApproximation):
     def stress(self, u):
         return 2 * self.mu * sym(grad(u))
 
+    def stress(self, u):
+        return 2 * self.mu * sym(grad(u))
+
     def buoyancy(self, p, T):
         return (
             self.Ra * self.rho * self.alpha * (T - self.T0) * self.g
