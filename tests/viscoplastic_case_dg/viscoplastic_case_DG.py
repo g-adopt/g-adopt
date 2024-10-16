@@ -69,9 +69,6 @@ z.subfunctions[1].rename("Pressure")
 # depends on temperature here, we setup and initialise our temperature earlier than in the previous tutorials.
 
 # +
-Ra = Constant(100)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
-
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
 T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
@@ -83,6 +80,9 @@ epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with tolerance t
 mu_lin = exp(-gamma_T*T + gamma_Z*(1 - X[1]))  # linear component of rheological formulation
 mu_plast = mu_star + (sigma_y / epsii)  # plastic component of rheological formulation
 mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
+
+Ra = Constant(100)  # Rayleigh number
+approximation = BoussinesqApproximation(Ra, mu=mu)
 # -
 
 # As with the previous examples, we set up a *Timestep Adaptor*,
@@ -145,7 +145,7 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 # -
 

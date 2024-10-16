@@ -129,7 +129,7 @@ class ExplicitFreeSurfaceModel:
 
     def setup_solver(self):
         # Set up the stokes solver
-        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs, mu=self.mu)
+        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs)
 
         # Setup remaining free surface parameters needed for explicit coupling
         eta_eq = FreeSurfaceEquation(self.W, self.W, free_surface_id=self.top_id, k=upward_normal(self.mesh))  # Initialise the separate free surface equation for explicit coupling

@@ -3,8 +3,8 @@
 lint:
 	@echo "Linting module code"
 	@python3 -m flake8 gadopt
-	@echo "Linting demos"
-	@python3 -m flake8 demos
+	@echo "Linting demos and tests"
+	@python3 -m flake8 demos tests
 
 test:
 	$(MAKE) -C demos & $(MAKE) -C tests & wait

@@ -26,8 +26,8 @@ the solver provided in the stokes_integrators module.
 from typing import Optional
 
 import firedrake as fd
-from firedrake import dot, inner, outer, transpose, grad, nabla_grad, div
-from firedrake import avg, sym, Identity, jump
+from firedrake import dot, inner, outer, transpose, nabla_grad, div
+from firedrake import avg, Identity, jump
 from firedrake import FacetArea, CellVolume
 
 from .equations import BaseTerm, BaseEquation
@@ -62,11 +62,9 @@ class ViscosityTerm(BaseTerm):
         u = trial
         u_lagged = trial_lagged
         compressible = self.term_kwargs['compressible']
+        stress = fields['stress']
 
         grad_test = nabla_grad(phi)
-        stress = 2 * mu * sym(grad(u))
-        if compressible:
-            stress -= 2/3 * mu * Identity(self.dim) * div(u)
 
         F = 0
         F += inner(grad_test, stress)*self.dx
