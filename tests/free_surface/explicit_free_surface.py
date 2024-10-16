@@ -1,6 +1,8 @@
-from gadopt import *
-from gadopt.utility import upward_normal
 from test_free_surface import run_benchmark
+
+from gadopt import *
+from gadopt.equations import Equation
+from gadopt.free_surface_equation import free_surface_term, mass_term
 
 
 class ExplicitFreeSurfaceModel:
@@ -131,15 +133,28 @@ class ExplicitFreeSurfaceModel:
         # Set up the stokes solver
         self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs)
 
+        eq_attrs = {
+            "boundary_id": self.top_id,
+            "buoyancy_scale": 1,
+            "u": self.stokes_vars[0],
+        }
+
         # Setup remaining free surface parameters needed for explicit coupling
-        eta_eq = FreeSurfaceEquation(self.W, self.W, free_surface_id=self.top_id, k=upward_normal(self.mesh))  # Initialise the separate free surface equation for explicit coupling
-        eta_fields = {'velocity': self.stokes_vars[0]}
+        eta_eq = Equation(
+            TestFunction(self.W),
+            self.W,
+            free_surface_term,
+            mass_term=mass_term,
+            eq_attrs=eq_attrs,
+        )  # Initialise the separate free surface equation for explicit coupling
         eta_bcs = {}
         # Apply strong homogenous boundary to interior DOFs to prevent a singular matrix when only integrating the free surface equation over the top surface.
         eta_strong_bcs = [InteriorBC(self.W, 0., self.top_id)]
 
         # Set up a timestepper for the free surface, here we use a first order backward Euler method following Kramer et al. 2012
-        self.eta_timestepper = BackwardEuler(eta_eq, self.eta, eta_fields, self.dt, bnd_conditions=eta_bcs, strong_bcs=eta_strong_bcs)
+        self.eta_timestepper = BackwardEuler(
+            eta_eq, self.eta, self.dt, bnd_conditions=eta_bcs, strong_bcs=eta_strong_bcs
+        )
 
     def update_analytical_free_surfaces(self):
         # Equation A.4 from Kramer et al., 2012. Here we have a simplified form assuming that the relaxation time scale,
