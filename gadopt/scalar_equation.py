@@ -126,9 +126,6 @@ def diffusion_term(
 
 def source_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
     r"""Scalar source term `s_T`."""
-    if not hasattr(eq, "source"):
-        return 0
-
     F = -dot(eq.test, eq.source) * eq.dx
 
     return -F
@@ -138,9 +135,6 @@ def absorption_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     r"""Scalar absorption term `\alpha_T T`."""
-    if not hasattr(eq, "sink"):
-        return 0
-
     # Implement absorption term implicitly at current time step.
     F = dot(eq.test, eq.sink * trial) * eq.dx
 
@@ -161,3 +155,13 @@ def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
 
     """
     return dot(eq.test, trial) * eq.dx
+
+
+advection_term.required_attrs = {"u"}
+advection_term.optional_attrs = {"advective_velocity_scaling", "su_nubar"}
+diffusion_term.required_attrs = {"diffusivity"}
+diffusion_term.optional_attrs = {"reference_for_diffusion", "interior_penalty"}
+source_term.required_attrs = {"source"}
+source_term.optional_attrs = set()
+absorption_term.required_attrs = {"sink"}
+absorption_term.optional_attrs = set()

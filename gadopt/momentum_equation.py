@@ -129,11 +129,6 @@ def viscosity_term(
         if "normal_stress" in bc:
             F += dot(eq.test, bc["normal_stress"] * eq.n) * eq.ds(bc_id)
 
-        # if "drag" in bc:  # (bottom) drag of the form tau = -drag trial |trial|
-        #     drag = bc["drag"]
-        #     unorm = pow(dot(trial_lagged, trial_lagged) + 1e-6, 0.5)
-        #     F += dot(eq.test, drag * unorm * trial) * eq.ds(bc_id)
-
     return -F
 
 
@@ -181,5 +176,15 @@ def momentum_source_term(
     return -F
 
 
+viscosity_term.required_attrs = {"u", "mu"}
+viscosity_term.optional_attrs = {"interior_penalty"}
+pressure_gradient_term.required_attrs = {"p"}
+pressure_gradient_term.optional_attrs = set()
+divergence_term.required_attrs = {"u", "rho_mass"}
+divergence_term.optional_attrs = set()
+momentum_source_term.required_attrs = {"p", "T"}
+momentum_source_term.optional_attrs = set()
+
 residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]
-residual_terms_stokes = [residual_terms_momentum, divergence_term]
+residual_terms_mass = divergence_term
+residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]

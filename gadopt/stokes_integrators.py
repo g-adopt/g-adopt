@@ -14,7 +14,7 @@ from .approximations import BaseApproximation, AnelasticLiquidApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
-from .momentum_equation import residual_terms_stokes as terms_stokes
+from .momentum_equation import residual_terms_stokes
 from .utility import DEBUG, INFO, InteriorBC, depends_on, ensure_constant, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
@@ -273,16 +273,16 @@ class StokesSolver:
         # eta is a list of 0, 1 or multiple free surface fields
         u, p, *eta = fd.split(self.solution)
         rho_mass = approximation.rho_continuity()
-        terms_kwargs = {"u": u, "p": p, "T": T, "mu": mu, "rho_mass": rho_mass}
+        eqs_attrs = [{"u": u, "p": p, "T": T, "mu": mu}, {"u": u, "rho_mass": rho_mass}]
 
         self.equations = []
-        for i, terms_eq in enumerate(terms_stokes):
+        for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):
             self.equations.append(
                 Equation(
                     self.test[i],
                     self.Z[i],
                     terms_eq,
-                    terms_kwargs=terms_kwargs,
+                    eq_attrs=eq_attrs,
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
                     quad_degree=quad_degree,
@@ -327,7 +327,7 @@ class StokesSolver:
                 # Add free surface stress term
                 self.weak_bcs[free_surface_id] = {"normal_stress": normal_stress}
 
-                terms_kwargs = {
+                eq_attrs = {
                     "boundary_id": free_surface_id,
                     "buoyancy_scale": prefactor,
                     "u": u,
@@ -340,7 +340,7 @@ class StokesSolver:
                         self.Z[2 + c],
                         free_surface_term,
                         mass_term=mass_term_fs,
-                        terms_kwargs=terms_kwargs,
+                        eq_attrs=eq_attrs,
                         quad_degree=quad_degree,
                     )
                 )

@@ -129,7 +129,7 @@ class EnergySolver:
             scalar_eq.absorption_term,
             scalar_eq.source_term,
         ]
-        terms_kwargs = {
+        eq_attrs = {
             "advective_velocity_scaling": rho_cp,
             "diffusivity": approximation.kappa(),
             "reference_for_diffusion": approximation.Tbar,
@@ -154,19 +154,19 @@ class EnergySolver:
                 TensorFunctionSpace(self.mesh, "DQ", 1), name="Jacobian"
             ).interpolate(Jacobian(self.mesh))
             # Set lower bound for diffusivity in case zero diffusivity specified for pure advection.
-            kappa = terms_kwargs["diffusivity"] + 1e-12
-            vel = terms_kwargs["u"]
+            kappa = eq_attrs["diffusivity"] + 1e-12
+            vel = eq_attrs["u"]
             Pe = absv(dot(vel, J)) / (2 * kappa)  # Calculate grid peclet number
             nubar = su_nubar(vel, J, Pe)  # Calculate SU artifical diffusion
 
-            terms_kwargs["su_nubar"] = nubar
+            eq_attrs["su_nubar"] = nubar
 
         self.eq = Equation(
             TestFunction(self.Q),
             self.Q,
             eq_terms,
             mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
-            terms_kwargs=terms_kwargs,
+            eq_attrs=eq_attrs,
             approximation=approximation,
             bcs=self.weak_bcs,
         )

@@ -228,8 +228,8 @@ class LevelSetSolver:
 
         self.proj_solver = self.gradient_L2_proj()
 
-        self.ls_terms_kwargs = {"u": velocity}
-        self.reini_terms_kwargs = {
+        self.ls_eq_attrs = {"u": velocity}
+        self.reini_eq_attrs = {
             "level_set_grad": self.level_set_grad_proj,
             "epsilon": epsilon,
         }
@@ -288,7 +288,7 @@ class LevelSetSolver:
             self.func_space,
             scalar_eq.advection_term,
             mass_term=scalar_eq.mass_term,
-            terms_kwargs=self.ls_terms_kwargs,
+            eq_attrs=self.ls_eq_attrs,
         )
         self.ls_ts = self.tstep_alg(
             advection_equation,
@@ -302,7 +302,7 @@ class LevelSetSolver:
             self.func_space,
             reinitialisation_term,
             mass_term=scalar_eq.mass_term,
-            terms_kwargs=self.reini_terms_kwargs,
+            eq_attrs=self.reini_eq_attrs,
         )
         self.reini_ts = self.reini_params["tstep_alg"](
             reinitialisation_equation,
@@ -536,3 +536,7 @@ def entrainment(
         fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
         / material_area
     )
+
+
+reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
+reinitialisation_term.optional_attrs = set()
