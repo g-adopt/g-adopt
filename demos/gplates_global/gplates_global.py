@@ -56,9 +56,6 @@ u, p = split(z)  # Returns symbolic UFL expression for u and p
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 
-Ra = Constant(7e3)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
-
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 5  # Maximum number of timesteps
@@ -107,6 +104,12 @@ averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
 mu = Function(Q, name="Viscosity")
 interpolate_1d_profile(function=mu, one_d_filename="mu2_radial.rad")
+
+# Now that we have the viscosity profile we can pass this to our
+# approximation.
+
+Ra = Constant(7e3)  # Rayleigh number
+approximation = BoussinesqApproximation(Ra, mu=mu)
 
 # ## Nullspaces:
 #
@@ -273,7 +276,7 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             mu=mu, constant_jacobian=True,
+                             constant_jacobian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 # -

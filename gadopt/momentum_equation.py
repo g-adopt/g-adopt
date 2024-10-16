@@ -52,10 +52,8 @@ def viscosity_term(
     identity = Identity(dim)
     compressible_stress = eq.approximation.compressible
 
-    mu = eq.mu
-    stress = 2 * mu * sym(grad(eq.u))
-    if compressible_stress:
-        stress -= 2 / 3 * mu * identity * div(eq.u)
+    mu = eq.approximation.mu
+    stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
     sigma = interior_penalty_factor(eq)
@@ -176,7 +174,7 @@ def momentum_source_term(
     return -F
 
 
-viscosity_term.required_attrs = {"u", "mu"}
+viscosity_term.required_attrs = {"u", "stress"}
 viscosity_term.optional_attrs = {"interior_penalty"}
 pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()

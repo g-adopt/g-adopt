@@ -15,7 +15,7 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import residual_terms_stokes
-from .utility import DEBUG, INFO, InteriorBC, depends_on, ensure_constant, log_level, upward_normal
+from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -195,7 +195,6 @@ class StokesSolver:
       T: Firedrake function representing temperature
       approximation: Approximation describing system of equations
       bcs: Dictionary of identifier-value pairs specifying boundary conditions
-      mu: Firedrake function representing dynamic viscosity
       quad_degree: Quadrature degree. Default value is `2p + 1`, where
                    p is the polynomial degree of the trial space
       solver_parameters: Either a dictionary of PETSc solver parameters or a string
@@ -217,7 +216,6 @@ class StokesSolver:
         T: fd.Function,
         approximation: BaseApproximation,
         bcs: dict[int, dict[str, Number]] = {},
-        mu: fd.Function | Number = 1,
         quad_degree: int = 6,
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
@@ -232,10 +230,9 @@ class StokesSolver:
         self.solution = z
         self.approximation = approximation
 
-        self.mu = ensure_constant(mu)
         self.J = J
         self.constant_jacobian = constant_jacobian
-        self.linear = not depends_on(self.mu, self.solution)
+        self.linear = not depends_on(self.approximation.mu, self.solution)
 
         self.solver_kwargs = kwargs
 
@@ -273,7 +270,11 @@ class StokesSolver:
         # eta is a list of 0, 1 or multiple free surface fields
         u, p, *eta = fd.split(self.solution)
         rho_mass = approximation.rho_continuity()
-        eqs_attrs = [{"u": u, "p": p, "T": T, "mu": mu}, {"u": u, "rho_mass": rho_mass}]
+        stress = approximation.stress(u)
+        eqs_attrs = [
+            {"u": u, "p": p, "T": T, "stress": stress},
+            {"u": u, "rho_mass": rho_mass},
+        ]
 
         self.equations = []
         for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):
@@ -416,7 +417,7 @@ class StokesSolver:
     def setup_solver(self):
         """Sets up the solver."""
         # mu used in MassInvPC:
-        appctx = {"mu": self.mu / self.approximation.rho_continuity()}
+        appctx = {"mu": self.approximation.mu / self.approximation.rho_continuity()}
 
         if self.free_surface:
             appctx["free_surface_id_list"] = self.free_surface_id_list

@@ -29,6 +29,7 @@ rmin, rmax, ncells, nlayers = 1.208, 2.208, 512, 128
 # In this example, we load the mesh from a checkpoint, although the following code was used to generate
 # the original mesh. It is included here for completeness.
 
+
 def original_mesh():
     def gaussian(center, c, a):
         return a*np.exp(-(np.linspace(rmin, rmax, nlayers)-center)**2/(2*c**2))
@@ -49,6 +50,7 @@ def original_mesh():
     )
 
     return mesh
+
 
 with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
     mesh = f.load_mesh("firedrake_default_extruded")
@@ -121,20 +123,6 @@ Tbar = approximation_profiles["Tbar"]
 mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
 interpolate_1d_profile(function=mu_rad, one_d_filename="initial_condition_mat_prop/mu2_radial.txt")
 
-# These fields are used to set up our Truncated Anelastic Liquid Approximation.
-approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, H=H_int, **approximation_profiles)
-
-# As with the previous examples, we set up a *Timestep Adaptor*,
-# for controlling the time-step length (via a CFL
-# criterion) as the simulation advances in time. For the latter,
-# we specify the initial time, initial timestep $\Delta t$, and number of
-# timesteps.
-
-time = 0.0  # Initial time
-delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 21  # Maximum number of timesteps
-t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.8, maximum_timestep=0.1, increase_tolerance=1.5)
-
 # We next set up and initialise our Temperature field from a checkpoint:
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
@@ -151,6 +139,20 @@ T_dev = Function(Q, name='Temperature_Deviation').assign(FullT-T_avg)
 mu_field = Function(Q, name="Viscosity")
 delta_mu_T = Constant(1000.)
 mu = mu_rad * exp(-ln(delta_mu_T) * T_dev)
+
+# These fields are used to set up our Truncated Anelastic Liquid Approximation.
+approximation = TruncatedAnelasticLiquidApproximation(Ra, Di, H=H_int, mu=mu, **approximation_profiles)
+
+# As with the previous examples, we set up a *Timestep Adaptor*,
+# for controlling the time-step length (via a CFL
+# criterion) as the simulation advances in time. For the latter,
+# we specify the initial time, initial timestep $\Delta t$, and number of
+# timesteps.
+
+time = 0.0  # Initial time
+delta_t = Constant(1e-6)  # Initial time-step
+timesteps = 21  # Maximum number of timesteps
+t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.8, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # With a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
 # of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e. this case incorporates a velocity nullspace,
@@ -205,7 +207,7 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id, quad_degree=6)
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
+stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 stokes_solver.solver_parameters['snes_rtol'] = 1e-2
