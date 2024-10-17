@@ -21,6 +21,22 @@ def get_convergence(base):
     return pd.read_csv(base / "params.log", sep="\\s+", header=0).iloc[-1]
 
 
+def check_series(
+    actual,
+    expected,
+    *,
+    compare_params,
+    convergence_tolerance,
+    extra_checks,
+):
+    pd.testing.assert_series_equal(
+        actual[["u_rms", "nu_top"] + extra_checks], expected,
+        check_names=False, **compare_params
+    )
+
+    assert abs(actual.name - expected.name) <= convergence_tolerance
+
+
 @pytest.mark.parametrize("benchmark", cases.keys())
 def test_benchmark(benchmark):
     """Test a benchmark case against the expected convergence result.
@@ -47,9 +63,35 @@ def test_benchmark(benchmark):
     convergence_tolerance = compare_params.pop("iterations", 2)
     extra_checks = compare_params.pop("extra_checks", [])
 
-    pd.testing.assert_series_equal(
-        df[["u_rms", "nu_top"] + extra_checks], expected,
-        check_names=False, **compare_params
-    )
+    if isinstance(expected, list):
+        assertion = None
 
-    assert abs(df.name - expected.name) <= convergence_tolerance
+        for expected_df in expected:
+            try:
+                check_series(
+                    df,
+                    expected_df,
+                    compare_params=compare_params,
+                    convergence_tolerance=convergence_tolerance,
+                    extra_checks=extra_checks,
+                )
+            except AssertionError as e:
+                assertion = e
+            else:
+                # this test was successful, so we reset the assertion and
+                # break early
+                assertion = None
+                break
+
+        # if none of the tests passed, re-raise the last failure
+        if assertion:
+            raise assertion
+
+    else:
+        check_series(
+            df,
+            expected,
+            compare_params=compare_params,
+            convergence_tolerance=convergence_tolerance,
+            extra_checks=extra_checks,
+        )
