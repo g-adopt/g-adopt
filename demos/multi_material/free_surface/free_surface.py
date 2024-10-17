@@ -52,13 +52,13 @@ from mpi4py import MPI  # noqa: E402
 # Shapely Polygon representation of the material interface
 slab = sl.Polygon(
     [
-        (1e6, 7e5 + 1e5),
+        (1e6, 7e5),
         (1e6, 5e5),
         (1.1e6, 5e5),
         (1.1e6, 6e5),
         (3e6 + 1e5, 6e5),
-        (3e6 + 1e5, 7e5 + 1e5),
-        (1e6, 7e5 + 1e5),
+        (3e6 + 1e5, 7e5),
+        (1e6, 7e5),
     ]
 )
 sl.prepare(slab)
