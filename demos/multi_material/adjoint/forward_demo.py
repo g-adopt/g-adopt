@@ -8,7 +8,7 @@ def cosine_curve(x, amplitude, wavelength, vertical_shift):
     return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
 
 
-nx, ny = 64, 64
+nx, ny = 80, 80
 lx, ly = 0.9142, 1
 
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
@@ -27,7 +27,7 @@ z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 psi = Function(K, name="Level set")
 
-interface_deflection = 0.02
+interface_deflection = 0.1
 interface_wavelength = 2 * lx
 material_interface_y = 0.2
 
@@ -59,11 +59,9 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 
 Ra_c_buoyant = 0
 Ra_c_dense = 1
-Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="sharp")
+Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="arithmetic")
 
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
-
-delta_t = Function(R).assign(1.0)
 
 Z_nullspace = create_stokes_nullspace(Z)
 
@@ -74,9 +72,6 @@ stokes_bcs = {
     right_id: {"ux": 0},
 }
 
-output_file = VTKFile("forward_output.pvd")
-output_file.write(*z.subfunctions, psi)
-
 stokes_solver = StokesSolver(
     approximation,
     z,
@@ -85,13 +80,31 @@ stokes_solver = StokesSolver(
 )
 stokes_solver.solve()
 
+delta_t = Function(R).assign(1.0)
+t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
+
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 
-for step in range(200):
-    level_set_solver.solve(step)  # , equation="advection")
+time_now, time_end = 0, 100
+
+output_file = VTKFile("forward_output.pvd")
+output_file.write(*z.subfunctions, psi, time=time_now)
+
+step = 0
+while True:
+    t_adapt.maximum_timestep = time_end - time_now
+    t_adapt.update_timestep()
+
+    level_set_solver.solve(step, equation="advection")
     stokes_solver.solve()
 
-    output_file.write(*z.subfunctions, psi)
+    time_now += float(delta_t)
+    step += 1
+
+    output_file.write(*z.subfunctions, psi, time=time_now)
+
+    if time_now >= time_end:
+        break
 
 with CheckpointFile("forward_checkpoint.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
