@@ -11,8 +11,10 @@ from typing import Optional
 import firedrake as fd
 
 from .approximations import BaseApproximation, AnelasticLiquidApproximation
-from .free_surface_equation import FreeSurfaceEquation
-from .momentum_equation import StokesEquations
+from .equations import Equation
+from .free_surface_equation import free_surface_term
+from .free_surface_equation import mass_term as mass_term_fs
+from .momentum_equation import residual_terms_stokes
 from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
@@ -225,8 +227,6 @@ class StokesSolver:
         self.Z = z.function_space()
         self.mesh = self.Z.mesh()
         self.test = fd.TestFunctions(self.Z)
-        self.equations = StokesEquations(self.Z, self.Z, quad_degree=quad_degree,
-                                         compressible=approximation.compressible)
         self.solution = z
         self.approximation = approximation
 
@@ -235,20 +235,6 @@ class StokesSolver:
         self.linear = not depends_on(self.approximation.mu, self.solution)
 
         self.solver_kwargs = kwargs
-        u, p, *eta = fd.split(self.solution)   # eta is a list of 0, 1 or multiple free surface fields
-        self.k = upward_normal(self.Z.mesh())
-
-        # Add velocity, pressure and buoyancy term to the fields dictionary
-        self.fields = {
-            'velocity': u,
-            'pressure': p,
-            'stress': self.approximation.stress(u),
-            'viscosity': self.approximation.mu,
-            'interior_penalty': fd.Constant(2.0),  # allows for some wiggle room in imposition of weak BCs
-                                                   # 6.25 matches C_ip=100. in "old" code for Q2Q1 in 2d.
-            'source': approximation.buoyancy(p, T) * self.k,
-            'rho_continuity': approximation.rho_continuity(),
-        }
 
         # Setup boundary conditions
         self.weak_bcs = {}
@@ -281,9 +267,31 @@ class StokesSolver:
                     weak_bc[bc_type] = value
             self.weak_bcs[id] = weak_bc
 
+        # eta is a list of 0, 1 or multiple free surface fields
+        u, p, *eta = fd.split(self.solution)
+        rho_mass = approximation.rho_continuity()
+        stress = approximation.stress(u)
+        eqs_attrs = [{"p": p, "T": T, "stress": stress}, {"u": u, "rho_mass": rho_mass}]
+
+        self.equations = []
+        for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):
+            self.equations.append(
+                Equation(
+                    self.test[i],
+                    self.Z[i],
+                    terms_eq,
+                    eq_attrs=eq_attrs,
+                    approximation=self.approximation,
+                    bcs=self.weak_bcs,
+                    quad_degree=quad_degree,
+                )
+            )
+
         if self.free_surface:
             if free_surface_dt is None:
-                raise TypeError("Please provide a timestep to advance the free surface, currently free_surface_dt=None.")
+                raise TypeError(
+                    "Please provide a timestep to advance the free surface, currently free_surface_dt=None."
+                )
 
             u_, p_, *self.eta_ = self.solution.subfunctions
             self.eta_old = []
@@ -294,7 +302,10 @@ class StokesSolver:
             for free_surface_id, free_surface_params in free_surface_dict.items():
                 # Define free surface variables for timestepping
                 self.eta_old.append(fd.Function(self.eta_[c]))
-                eta_theta.append((1-free_surface_theta)*self.eta_old[c] + free_surface_theta*eta[c])
+                eta_theta.append(
+                    (1 - free_surface_theta) * self.eta_old[c]
+                    + free_surface_theta * eta[c]
+                )
 
                 # Normal stress #
                 # Depending on variable_free_surface_density flag provided to approximation the
@@ -314,15 +325,21 @@ class StokesSolver:
                 # Add free surface stress term
                 self.weak_bcs[free_surface_id] = {"normal_stress": normal_stress}
 
+                eq_attrs = {
+                    "boundary_id": free_surface_id,
+                    "buoyancy_scale": prefactor,
+                    "u": u,
+                }
+
                 # Add the free surface equation
                 self.equations.append(
-                    FreeSurfaceEquation(
-                        self.Z.sub(2 + c),
-                        self.Z.sub(2 + c),
+                    Equation(
+                        self.test[2 + c],
+                        self.Z[2 + c],
+                        free_surface_term,
+                        mass_term=mass_term_fs,
+                        eq_attrs=eq_attrs,
                         quad_degree=quad_degree,
-                        prefactor=prefactor,
-                        free_surface_id=free_surface_id,
-                        k=self.k,
                     )
                 )
 
@@ -335,16 +352,17 @@ class StokesSolver:
 
                 c += 1
 
-        # Add terms to Stokes Equations
         self.F = 0
-        for test, eq, u in zip(self.test, self.equations, fd.split(self.solution)):
-            self.F -= eq.residual(test, u, u, self.fields, bcs=self.weak_bcs)
+        for eq, trial in zip(self.equations, fd.split(self.solution)):
+            self.F -= eq.residual(trial)
 
         if self.free_surface:
             for i in range(len(eta)):
                 # Add free surface time derivative term
                 # (N.b. we already have two equations from StokesEquations)
-                self.F += self.equations[2+i].mass_term(self.test[2+i], (eta[i]-self.eta_old[i])/free_surface_dt)
+                self.F += self.equations[2 + i].mass(
+                    (eta[i] - self.eta_old[i]) / free_surface_dt
+                )
 
         if isinstance(solver_parameters, dict):
             self.solver_parameters = solver_parameters
@@ -406,22 +424,27 @@ class StokesSolver:
             z_tri = fd.TrialFunction(self.Z)
             F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
             a, L = fd.lhs(F_stokes_lin), fd.rhs(F_stokes_lin)
-            self.problem = fd.LinearVariationalProblem(a, L, self.solution,
-                                                       bcs=self.strong_bcs,
-                                                       constant_jacobian=True)
-            self.solver = fd.LinearVariationalSolver(self.problem,
-                                                     solver_parameters=self.solver_parameters,
-                                                     options_prefix=self.name,
-                                                     appctx=appctx,
-                                                     **self.solver_kwargs)
+            self.problem = fd.LinearVariationalProblem(
+                a, L, self.solution, bcs=self.strong_bcs, constant_jacobian=True
+            )
+            self.solver = fd.LinearVariationalSolver(
+                self.problem,
+                solver_parameters=self.solver_parameters,
+                options_prefix=self.name,
+                appctx=appctx,
+                **self.solver_kwargs,
+            )
         else:
-            self.problem = fd.NonlinearVariationalProblem(self.F, self.solution,
-                                                          bcs=self.strong_bcs, J=self.J)
-            self.solver = fd.NonlinearVariationalSolver(self.problem,
-                                                        solver_parameters=self.solver_parameters,
-                                                        options_prefix=self.name,
-                                                        appctx=appctx,
-                                                        **self.solver_kwargs)
+            self.problem = fd.NonlinearVariationalProblem(
+                self.F, self.solution, bcs=self.strong_bcs, J=self.J
+            )
+            self.solver = fd.NonlinearVariationalSolver(
+                self.problem,
+                solver_parameters=self.solver_parameters,
+                options_prefix=self.name,
+                appctx=appctx,
+                **self.solver_kwargs,
+            )
 
         self._solver_setup = True
 

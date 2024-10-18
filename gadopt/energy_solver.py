@@ -7,12 +7,21 @@ the `solve` method to request a solver update.
 from numbers import Number
 from typing import Any, Optional
 
-from firedrake import Constant, DirichletBC, Function, Jacobian, TensorFunctionSpace, dot
+from firedrake import (
+    Constant,
+    DirichletBC,
+    Function,
+    Jacobian,
+    TensorFunctionSpace,
+    TestFunction,
+    dot,
+)
 
+from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
-from .scalar_equation import EnergyEquation
+from .equations import Equation
 from .time_stepper import RungeKuttaTimeIntegrator
-from .utility import is_continuous, ensure_constant
+from .utility import is_continuous
 from .utility import log_level, INFO, DEBUG, log
 from .utility import absv, su_nubar
 
@@ -79,39 +88,6 @@ class EnergySolver:
         self.Q = T.function_space()
         self.mesh = self.Q.mesh()
         self.delta_t = delta_t
-        rhocp = approximation.rhocp()
-        self.eq = EnergyEquation(self.Q, self.Q, rhocp=rhocp)
-        self.fields = {
-            'diffusivity': ensure_constant(approximation.kappa()),
-            'reference_for_diffusion': approximation.Tbar,
-            'source': approximation.energy_source(u),
-            'velocity': u,
-            'advective_velocity_scaling': rhocp
-        }
-        sink = approximation.linearized_energy_sink(u)
-        if sink:
-            self.fields['absorption_coefficient'] = sink
-
-        if su_advection:
-            if not is_continuous(self.Q):
-                raise TypeError("SU advection requires a continuous function space.")
-
-            log("Using SU advection")
-            # SU(PG) ala Donea & Huerta:
-            # Columns of Jacobian J are the vectors that span the quad/hex
-            # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
-            # thus u^T J is (dx * u , dy * v)
-            # and following (2.44c) Pe = u^T J / 2 kappa
-            # beta(Pe) is the xibar vector in (2.44a)
-            # then we get artifical viscosity nubar from (2.49)
-
-            J = Function(TensorFunctionSpace(self.mesh, 'DQ', 1), name='Jacobian').interpolate(Jacobian(self.mesh))
-            kappa = self.fields['diffusivity'] + 1e-12  # Set lower bound for diffusivity in case zero diffusivity specified for pure advection.
-            vel = self.fields['velocity']
-            Pe = absv(dot(vel, J)) / (2*kappa)  # Calculate grid peclet number
-            nubar = su_nubar(vel, J, Pe)  # Calculate SU artifical diffusion
-
-            self.fields['su_nubar'] = nubar
 
         if solver_parameters is None:
             if self.mesh.topological_dimension() == 2:
@@ -145,16 +121,71 @@ class EnergySolver:
 
         self.timestepper = timestepper
         self.T_old = Function(self.Q)
+
+        rho_cp = approximation.rhocp()
+        eq_terms = [
+            scalar_eq.advection_term,
+            scalar_eq.diffusion_term,
+            scalar_eq.sink_term,
+            scalar_eq.source_term,
+        ]
+        eq_attrs = {
+            "advective_velocity_scaling": rho_cp,
+            "diffusivity": approximation.kappa(),
+            "reference_for_diffusion": approximation.Tbar,
+            "sink_coeff": approximation.linearized_energy_sink(u),
+            "source": approximation.energy_source(u),
+            "u": u,
+        }
+        if su_advection:
+            if not is_continuous(self.Q):
+                raise TypeError("SU advection requires a continuous function space.")
+
+            log("Using SU advection")
+            # SU(PG) ala Donea & Huerta:
+            # Columns of Jacobian J are the vectors that span the quad/hex
+            # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
+            # thus u^T J is (dx * u , dy * v)
+            # and following (2.44c) Pe = u^T J / 2 kappa
+            # beta(Pe) is the xibar vector in (2.44a)
+            # then we get artifical viscosity nubar from (2.49)
+
+            J = Function(
+                TensorFunctionSpace(self.mesh, "DQ", 1), name="Jacobian"
+            ).interpolate(Jacobian(self.mesh))
+            # Set lower bound for diffusivity in case zero diffusivity specified for pure advection.
+            kappa = eq_attrs["diffusivity"] + 1e-12
+            vel = eq_attrs["u"]
+            Pe = absv(dot(vel, J)) / (2 * kappa)  # Calculate grid peclet number
+            nubar = su_nubar(vel, J, Pe)  # Calculate SU artifical diffusion
+
+            eq_attrs["su_nubar"] = nubar
+
+        self.eq = Equation(
+            TestFunction(self.Q),
+            self.Q,
+            eq_terms,
+            mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
+            eq_attrs=eq_attrs,
+            approximation=approximation,
+            bcs=self.weak_bcs,
+        )
+
         # solver is setup only at the end, so users
         # can overwrite or augment default parameters specified above
         self._solver_setup = False
 
     def setup_solver(self):
         """Sets up timestepper and associated solver, using specified solver parameters"""
-        self.ts = self.timestepper(self.eq, self.T, self.fields, self.delta_t,
-                                   bnd_conditions=self.weak_bcs, solution_old=self.T_old,
-                                   strong_bcs=self.strong_bcs,
-                                   solver_parameters=self.solver_parameters)
+        self.ts = self.timestepper(
+            self.eq,
+            self.T,
+            self.delta_t,
+            bnd_conditions=self.weak_bcs,
+            solution_old=self.T_old,
+            strong_bcs=self.strong_bcs,
+            solver_parameters=self.solver_parameters,
+        )
         self._solver_setup = True
 
     def solve(self, t=0, update_forcings=None):

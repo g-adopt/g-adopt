@@ -18,26 +18,21 @@ $$
 
 and then return `-F`.
 
-Users should not interact with these classes; instead, please use
-the solver provided in the stokes_integrators module.
-
 """
 
-from typing import Optional
+from firedrake import *
 
-import firedrake as fd
-from firedrake import dot, inner, outer, transpose, nabla_grad, div
-from firedrake import avg, Identity, jump
-from firedrake import FacetArea, CellVolume
-
-from .equations import BaseTerm, BaseEquation
-from .utility import is_continuous, normal_is_continuous, tensor_jump, cell_edge_integral_ratio
+from .equations import Equation, interior_penalty_factor
+from .utility import is_continuous, normal_is_continuous, tensor_jump, upward_normal
 
 
-class ViscosityTerm(BaseTerm):
+def viscosity_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
     r"""Viscosity term $-nabla * (mu nabla u)$ in the momentum equation.
 
-    Using the symmetric interior penalty method, the weak form becomes
+    Using the symmetric interior penalty method (Epshteyn & Rivière, 2007), the weak
+    form becomes
 
     $$
     {:( -int_Omega nabla * (mu grad u) phi dx , = , int_Omega mu (grad phi) * (grad u) dx ),
@@ -47,195 +42,147 @@ class ViscosityTerm(BaseTerm):
     :}
     $$
 
-    where σ is a penalty parameter (see Epshteyn and Riviere, 2007).
+    where σ is a penalty parameter.
 
-    Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty parameters for symmetric
-    interior penalty Galerkin methods. Journal of Computational and Applied Mathematics,
-    206(2), 843-872.
-
+    Epshteyn, Y., & Rivière, B. (2007).
+    Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
+    Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    def residual(self, test, trial, trial_lagged, fields, bcs):
+    dim = eq.mesh.geometric_dimension()
+    identity = Identity(dim)
+    compressible_stress = eq.approximation.compressible
 
-        mu = fields['viscosity']
-        phi = test
-        n = self.n
-        u = trial
-        u_lagged = trial_lagged
-        compressible = self.term_kwargs['compressible']
-        stress = fields['stress']
+    mu = eq.approximation.mu
+    stress = eq.stress
+    F = inner(nabla_grad(eq.test), stress) * eq.dx
 
-        grad_test = nabla_grad(phi)
+    sigma = interior_penalty_factor(eq)
+    sigma *= FacetArea(eq.mesh) / avg(CellVolume(eq.mesh))
+    if not is_continuous(eq.trial_space):
+        trial_tensor_jump = tensor_jump(eq.n, trial) + tensor_jump(trial, eq.n)
+        if compressible_stress:
+            trial_tensor_jump -= 2 / 3 * identity * jump(trial, eq.n)
 
-        F = 0
-        F += inner(grad_test, stress)*self.dx
+        F += (
+            sigma
+            * inner(tensor_jump(eq.n, eq.test), avg(mu) * trial_tensor_jump)
+            * eq.dS
+        )
+        F -= inner(avg(mu * nabla_grad(eq.test)), trial_tensor_jump) * eq.dS
+        F -= inner(tensor_jump(eq.n, eq.test), avg(stress)) * eq.dS
 
-        # Interior Penalty method
-        #
-        # see https://www.researchgate.net/publication/260085826 for details
-        # on the choice of sigma
+    # NOTE: Unspecified boundaries are equivalent to free stress (i.e. free in all
+    # directions).
+    # NOTE: "un" can be combined with "stress" provided the stress force is tangential
+    # (e.g. no normal flow with wind)
+    for bc_id, bc in eq.bcs.items():
+        if "u" in bc and any(bc_type in bc for bc_type in ["stress", "un"]):
+            raise ValueError(
+                '"stress" or "un" cannot be specified if "u" is already given.'
+            )
+        if "normal_stress" in bc and any(bc_type in bc for bc_type in ["u", "un"]):
+            raise ValueError(
+                '"u" or "un" cannot be specified if "normal_stress" is already given.'
+            )
 
-        degree = self.trial_space.ufl_element().degree()
-        if not isinstance(degree, int):
-            degree = max(degree[0], degree[1])
-        # safety factor: 1.0 is theoretical minimum
-        alpha = fields.get('interior_penalty', 2.0)
-        if degree == 0:
-            # probably only works for orthog. quads and hexes
-            sigma = 1.0
-        else:
-            nf = self.mesh.ufl_cell().num_facets()
-            sigma = alpha * cell_edge_integral_ratio(self.mesh, degree) * nf
-        # we use (3.23) + (3.20) from https://www.researchgate.net/publication/260085826
-        # instead of maximum over two adjacent cells + and -, we just sum (which is 2*avg())
-        # and the for internal facets we have an extra 0.5:
-        # WEIRDNESS: avg(1/CellVolume(mesh)) crashes TSFC - whereas it works in scalar diffusion! - instead just writing out explicitly
-        sigma *= FacetArea(self.mesh)*(1/CellVolume(self.mesh)('-') + 1/CellVolume(self.mesh)('+'))/2
+        if "u" in bc:
+            trial_tensor_jump = outer(eq.n, trial - bc["u"])
+            if compressible_stress:
+                trial_tensor_jump -= (
+                    2 / 3 * identity * (dot(eq.n, trial) - dot(eq.n, bc["u"]))
+                )
+            trial_tensor_jump += transpose(trial_tensor_jump)
+            # Terms below are similar to the above terms for the DG dS integrals.
+            F += (
+                2
+                * sigma
+                * inner(outer(eq.n, eq.test), mu * trial_tensor_jump)
+                * eq.ds(bc_id)
+            )
+            F -= inner(mu * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
+            F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
 
-        if not is_continuous(self.trial_space):
-            u_tensor_jump = tensor_jump(n, u) + tensor_jump(u, n)
-            if compressible:
-                u_tensor_jump -= 2/3 * Identity(self.dim) * jump(u, n)
-            F += sigma*inner(tensor_jump(n, phi), avg(mu) * u_tensor_jump)*self.dS
-            F += -inner(avg(mu * nabla_grad(phi)), u_tensor_jump)*self.dS
-            F += -inner(tensor_jump(n, phi), avg(stress))*self.dS
+        if "un" in bc:
+            trial_tensor_jump = outer(eq.n, eq.n) * (dot(eq.n, trial) - bc["un"])
+            if compressible_stress:
+                trial_tensor_jump -= 2 / 3 * identity * (dot(eq.n, trial) - bc["un"])
+            trial_tensor_jump += transpose(trial_tensor_jump)
+            # Terms below are similar to the above terms for the DG dS integrals.
+            F += (
+                2
+                * sigma
+                * inner(outer(eq.n, eq.test), mu * trial_tensor_jump)
+                * eq.ds(bc_id)
+            )
+            F -= inner(mu * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
+            # We only keep the normal part of stress; the tangential part is assumed to
+            # be zero stress (i.e. free slip) or prescribed via "stress".
+            F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
 
-        for id, bc in bcs.items():
-            if 'u' in bc or 'un' in bc:
-                if 'u' in bc:
-                    u_tensor_jump = outer(n, u-bc['u'])
-                    if compressible:
-                        u_tensor_jump -= 2/3 * Identity(self.dim) * (dot(n, u) - dot(n, bc['u']))
-                else:
-                    u_tensor_jump = outer(n, n)*(dot(n, u)-bc['un'])
-                    if compressible:
-                        u_tensor_jump -= 2/3 * Identity(self.dim) * (dot(n, u) - bc['un'])
-                u_tensor_jump += transpose(u_tensor_jump)
-                # this corresponds to the same 3 terms as the dS integrals for DG above:
-                F += 2*sigma*inner(outer(n, phi), mu * u_tensor_jump)*self.ds(id)
-                F += -inner(mu * nabla_grad(phi), u_tensor_jump)*self.ds(id)
-                if 'u' in bc:
-                    F += -inner(outer(n, phi), stress) * self.ds(id)
-                elif 'un' in bc:
-                    # we only keep, the normal part of stress, the tangential
-                    # part is assumed to be zero stress (i.e. free slip), or prescribed via 'stress'
-                    F += -dot(n, phi)*dot(n, dot(stress, n)) * self.ds(id)
-            if 'stress' in bc:  # a momentum flux, a.k.a. "force"
-                # here we need only the third term, because we assume jump_u=0 (u_ext=u)
-                # the provided stress = n.(mu.stress_tensor)
-                F += dot(-phi, bc['stress']) * self.ds(id)
-            if 'normal_stress' in bc:
-                # add the external normal stress
-                normal_stress = bc['normal_stress']
-                F -= dot(-phi, normal_stress * n) * self.ds(id)
+        if "stress" in bc:  # a momentum flux, a.k.a. "force"
+            # Here we need only the third term because we assume jump_u = 0
+            # (u_ext = trial) and stress = n . (mu . stress_tensor).
+            F -= dot(eq.test, bc["stress"]) * eq.ds(bc_id)
 
-            if 'drag' in bc:  # (bottom) drag of the form tau = -C_D u |u|
-                C_D = bc['drag']
-                unorm = pow(dot(u_lagged, u_lagged) + 1e-6, 0.5)
+        if "normal_stress" in bc:
+            F += dot(eq.test, bc["normal_stress"] * eq.n) * eq.ds(bc_id)
 
-                F += dot(-phi, -C_D*unorm*u) * self.ds(id)
-
-            # NOTE 1: unspecified boundaries are equivalent to free stress (i.e. free in all directions)
-            # NOTE 2: 'un' can be combined with 'stress' provided the stress force is tangential (e.g. no-normal flow with wind)
-
-            if 'u' in bc and 'stress' in bc:
-                raise ValueError("Cannot apply both 'u' and 'stress' bc on same boundary")
-            if 'u' in bc and 'normal_stress' in bc:
-                raise ValueError("Cannot apply both 'u' and 'normal_stress' bc on same boundary")
-            if 'u' in bc and 'drag' in bc:
-                raise ValueError("Cannot apply both 'u' and 'drag' bc on same boundary")
-            if 'u' in bc and 'un' in bc:
-                raise ValueError("Cannot apply both 'u' and 'un' bc on same boundary")
-            if 'un' in bc and 'normal_stress' in bc:
-                raise ValueError("Cannot apply both 'un' and 'normal_stress' bc on same boundary")
-
-        return -F
+    return -F
 
 
-class PressureGradientTerm(BaseTerm):
-    def residual(self, test, trial, trial_lagged, fields, bcs):
-        phi = test
-        n = self.n
-        p = fields['pressure']
+def pressure_gradient_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+    assert normal_is_continuous(eq.test)
 
-        assert normal_is_continuous(phi)
-        F = -dot(div(phi), p)*self.dx
+    F = -dot(div(eq.test), eq.p) * eq.dx
 
-        # integration by parts gives natural condition on pressure
-        # (as part of a normal stress condition), for boundaries where
-        # the normal component of u is specified, we remove that condition
-        for id, bc in bcs.items():
-            if 'u' in bc or 'un' in bc:
-                F += dot(phi, n)*p*self.ds(id)
+    # Integration by parts gives a natural condition on pressure (as part of a normal
+    # stress condition). For boundaries where the normal component of u is specified, we
+    # remove that condition.
+    for bc_id, bc in eq.bcs.items():
+        if "u" in bc or "un" in bc:
+            F += dot(eq.test, eq.n) * eq.p * eq.ds(bc_id)
 
-        return -F
+    return -F
 
 
-class DivergenceTerm(BaseTerm):
-    def residual(self, test, trial, trial_lagged, fields, bcs):
-        psi = test
-        n = self.n
-        u = fields['velocity']
-        rho = fields.get('rho_continuity', 1)
+def divergence_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+    assert normal_is_continuous(eq.u)
 
-        assert normal_is_continuous(u)
-        F = dot(psi, div(rho * u))*self.dx
+    rho = eq.rho_mass
+    F = -dot(eq.test, div(rho * eq.u)) * eq.dx
 
-        # add boundary integral for bcs that specify normal u-component
-        for id, bc in bcs.items():
-            if 'u' in bc:
-                F += psi * rho * dot(n, bc['u']-u) * self.ds(id)
-            elif 'un' in bc:
-                F += psi * rho * (bc['un'] - dot(n, u)) * self.ds(id)
+    # Add boundary integral for bcs that specify the normal component of u.
+    for bc_id, bc in eq.bcs.items():
+        if "u" in bc:
+            F -= eq.test * rho * dot(eq.n, bc["u"] - eq.u) * eq.ds(bc_id)
+        elif "un" in bc:
+            F -= eq.test * rho * (bc["un"] - dot(eq.n, eq.u)) * eq.ds(bc_id)
 
-        return F
+    return -F
 
 
-class MomentumSourceTerm(BaseTerm):
-    def residual(self, test, trial, trial_lagged, fields, bcs):
-        if 'source' not in fields:
-            return 0
+def momentum_source_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+    source = eq.approximation.buoyancy(eq.p, eq.T) * upward_normal(eq.mesh)
+    F = -dot(eq.test, source) * eq.dx
 
-        phi = test
-        source = fields['source']
-
-        # NOTE, here source term F is already on the RHS
-        F = dot(phi, source)*self.dx
-
-        return F
+    return -F
 
 
-class MomentumEquation(BaseEquation):
-    """Momentum equation with viscosity, pressure gradient, and source terms."""
-    terms = [ViscosityTerm, PressureGradientTerm, MomentumSourceTerm]
+viscosity_term.required_attrs = {"stress"}
+viscosity_term.optional_attrs = {"interior_penalty"}
+pressure_gradient_term.required_attrs = {"p"}
+pressure_gradient_term.optional_attrs = set()
+divergence_term.required_attrs = {"u", "rho_mass"}
+divergence_term.optional_attrs = set()
+momentum_source_term.required_attrs = {"p", "T"}
+momentum_source_term.optional_attrs = set()
 
-
-class ContinuityEquation(BaseEquation):
-    """Mass continuity equation with a single divergence term."""
-    terms = [DivergenceTerm]
-
-
-def StokesEquations(
-    test_space: fd.functionspaceimpl.WithGeometry,
-    trial_space: fd.functionspaceimpl.WithGeometry,
-    quad_degree: Optional[int] = None,
-    **kwargs,
-) -> list[BaseEquation]:
-    """Stokes system involving the momentum and mass continuity equations.
-
-    Arguments:
-      test_space: Firedrake function space of the test function
-      trial_space: Firedrake function space of the trial function
-      quad_degree: Quadrature degree. Default value is `2p + 1`, where
-                     p is the polynomial degree of the trial space
-
-    Returns:
-      A list of equation instances for the Stokes system.
-
-    """
-    mom_eq = MomentumEquation(
-        test_space.sub(0), trial_space.sub(0), quad_degree=quad_degree, **kwargs
-    )
-    cty_eq = ContinuityEquation(
-        test_space.sub(1), trial_space.sub(1), quad_degree=quad_degree, **kwargs
-    )
-    return [mom_eq, cty_eq]
+residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]
+residual_terms_mass = divergence_term
+residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]

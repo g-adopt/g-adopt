@@ -1,48 +1,55 @@
-from .equations import BaseTerm, BaseEquation
-from firedrake import dot, FacetNormal
-r"""
-This module contains the free surface terms and equations
+r"""This module contains the free surface terms.
 
-NOTE: for all terms, the residual() method returns the residual as it would be on the RHS of the equation, i.e.:
+All terms implement the UFL residual as it would be on the RHS of the equation:
 
-  dq/dt = \sum term.residual()
+  dq/dt = \sum term
 
-This sign-convention is for compatibility with Thetis' timeintegrators. In general, however we like to think about
-the terms as they are on the LHS. Therefore in the residual methods below we assemble in F as it would be on the LHS:
+This sign-convention is for compatibility with Thetis's time integrators. In general,
+however, we like to think about the terms as they are on the LHS. Therefore, in the
+function below, we assemble in F as it would be on the LHS:
 
   dq/dt + F(q) = 0
 
-and at the very end "return -F".
+and at the very end return "-F".
 """
 
+import firedrake as fd
 
-class FreeSurfaceTerm(BaseTerm):
-    r"""
-    Free Surface term: u \dot n
+from .equations import Equation
+from .utility import vertical_component
+
+
+def free_surface_term(
+    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+) -> fd.Form:
+    r"""Free Surface term: u \dot n"""
+    F = -eq.buoyancy_scale * eq.test * fd.dot(eq.u, eq.n) * eq.ds(eq.boundary_id)
+
+    return -F
+
+
+def mass_term(
+    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+) -> fd.Form:
+    r"""Mass term \int test * trial * ds for the free surface time discretisation.
+
+    Arguments:
+        eq:
+          G-ADOPT Equation.
+        trial:
+          Firedrake trial function.
+
+    Returns:
+        The UFL form associated with the mass term of the equation.
+
     """
-    def residual(self, test, trial, trial_lagged, fields, bcs):
-        free_surface_id = self.term_kwargs['free_surface_id']
-
-        u = fields['velocity']
-        psi = test
-        n = self.n
-
-        F = psi * dot(u, n) * self.ds(free_surface_id)  # Note this term is already on the RHS
-
-        return F
+    return (
+        eq.buoyancy_scale
+        * fd.dot(eq.test, trial)
+        * vertical_component(eq.n)
+        * eq.ds(eq.boundary_id)
+    )
 
 
-class FreeSurfaceEquation(BaseEquation):
-    """
-    Free Surface Equation.
-    """
-
-    terms = [FreeSurfaceTerm]
-
-    def mass_term(self, test, trial):
-        r"""Return the UFL for the mass term \int test * trial * ds for the free surface time derivative term integrated over the free surface."""
-        free_surface_id = self.kwargs['free_surface_id']
-        k = self.kwargs['k']
-        n = FacetNormal(self.mesh)
-        # self.prefactor is a general prefactor from equations.py that multiplies all terms in an equation
-        return self.prefactor * dot(n, k) * dot(test, trial) * self.ds(free_surface_id)
+free_surface_term.required_attrs = {"u", "buoyancy_scale", "boundary_id"}
+free_surface_term.optional_attrs = set()
