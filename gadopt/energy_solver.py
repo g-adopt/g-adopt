@@ -126,7 +126,7 @@ class EnergySolver:
         eq_terms = [
             scalar_eq.advection_term,
             scalar_eq.diffusion_term,
-            scalar_eq.absorption_term,
+            scalar_eq.sink_term,
             scalar_eq.source_term,
         ]
         eq_attrs = {
