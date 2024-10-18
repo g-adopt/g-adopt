@@ -14,18 +14,202 @@
 
 # Governing equations
 # -------------------
+# Let's start by reviewing some equations! Similar to mantle convection, the governing
+# equations for viscoelastic loading are derived from the conservation laws of mass and
+# momentum.
+
+# The conservation of momentum is
+
+# \begin{equation}
+#     \nabla \cdot \boldsymbol{\sigma} - \rho \nabla \Phi = 0,
+# \end{equation}
+
+# where $\boldsymbol{\sigma}$ is the full stress tensor, $\rho$ is the density, and
+# $\Phi$ is the gravitational potential field. Similar to mantle convection, we have
+# neglected inertial terms.
+
+# For incompressible materials conservation of mass is
+
+# \begin{equation}
+#     \frac{\partial \rho}{\partial t} + \textbf{v} \cdot \nabla \rho = 0,
+# \end{equation}
+
+# where $\textbf{v}$ is the velocity. For the moment we are focusing on incompressible
+# materials where
+
+# \begin{equation}
+#     \nabla \cdot \textbf{v} = 0.
+# \end{equation}
 
 # Linearisation
 # -------------
+# The conservation of momentum is usually linearised due to the small displacements
+# relative to the depth of the mantle, i.e.
+
+# \begin{equation}
+#     \rho = \rho_0 + \rho_1,
+# \end{equation}
+
+# \begin{equation}
+#     \boldsymbol{\sigma} = \boldsymbol{\sigma}_0 + \boldsymbol{\sigma}_1,
+# \end{equation}
+
+# \begin{equation}
+#     \nabla \Phi = \nabla \Phi_0 + \nabla \Phi_1 = \textbf{g} + \nabla \Phi_1.
+# \end{equation}
+
+# Subbing this into the momentum equation and neglecting higher order terms gives
+
+# \begin{equation}
+#     \nabla \cdot \boldsymbol{\sigma}_0 + \nabla \cdot \boldsymbol{\sigma}_1  - \rho_0 \textbf{g}  - \rho_1 \textbf{g} - \rho_0 \nabla \Phi_1 = 0.
+# \end{equation}
+
+# The background state is assumed to be in hydrostatic equilibrium so
+
+# \begin{equation}
+#     \nabla \cdot \boldsymbol{\sigma}_0 = \rho_0 \textbf{g}.
+# \end{equation}
+
+# Therefore we can simplify the momentum balance to
+
+# \begin{equation}
+#     \nabla \cdot \boldsymbol{\sigma}_1   - \rho_1 \textbf{g} - \rho_0 \nabla \Phi_1 = 0.
+# \end{equation}
+
+# For this tutorial we are going to ignore changes in the gravitational field, so the
+# last term drops out, giving
+
+# \begin{equation}
+#     \nabla \cdot \boldsymbol{\sigma}_1   - \rho_1 \textbf{g}  = 0.
+# \end{equation}
+
+# Linearising the conservation of mass gives
+
+# \begin{equation}
+#     \frac{\partial (\rho_0+\rho_1)}{\partial t} + \textbf{v} \cdot \nabla (\rho_0 + \rho_1) = 0.
+# \end{equation}
+
+# After neglecting higher order terms and assuming the background density field,
+# $\rho_0$, does not vary in time, the conservation of mass becomes
+
+# \begin{equation}
+#     \frac{\partial \rho_1}{\partial t} + \textbf{v} \cdot \nabla \rho_0  = 0.
+# \end{equation}
+
+# Integrating this equation with respect to time gives
+
+# \begin{equation}
+#     \rho_1 = - \textbf{u} \cdot \nabla \rho_0 ,
+# \end{equation}
+
+# assuming $\rho_1 = 0$ at initial times. Note that $\textbf{u}$ is now the displacement
+# vector. The density perturbation $\rho_1$ is referred to as the *Eulerian density
+# pertubation* by the GIA community.
 
 # Incremental Lagrangian Stress Tensor
 # -------------------------------------
+# The GIA community usually reformulate the linearised momentum equation in terms of the
+# *Incremental lagrangian stress tensor*. This can be traced back to the early roots of
+# the GIA modellers adopting Laplace transform methods. The idea behind this is to
+# convert the time dependent viscoelastic problem to a time independent `elastic'
+# problem by the correspondence principle.
+
+# From an elastic wave theory point of view, \citet{dahlen_theoretical_1998} make the
+# point that it is the Lagrangian perturbation in stress not the Eulerian perturbation
+# that is related to the displacement gradient by the elastic parameters. Transforming
+# between the Lagrangian perturbation in stress and the Eulerian description is given by
+
+# \begin{equation}
+#     \boldsymbol{\sigma}_{L1} =  \boldsymbol{\sigma}_1 + \textbf{u} \cdot \nabla \boldsymbol{\sigma}_0 ,
+# \end{equation}
+
+# where $\boldsymbol{\sigma}_{L1}$ is the incremental Lagrangian stress tensor.
+
+# This is effectively accounting for an advection of a background quantity when
+# translating between the Eulerian and Lagrangian frames of reference through a first
+# order Taylor series expansion.
+
+# This advection of prestress can be important for very long wavelength loads.
+# \citet{cathles_viscosity_2016} estimates that the term becomes leading order when the
+# wavelength is greater than 30000 km for typical Earth parameters, i.e. only when the
+# wavelength is the same order of magnitude as the circumference of the Earth.
+
+# For the viscoelastic problem, however, this term is crucial because it acts as a
+# restoring force to isostatic equilibrium. If the Laplace transform methods do not
+# include this term a load placed on the surface of the Earth will keep sinking
+# \cite{wu_viscous_1982}!
+
+# Subbing into the stress balance gives
+
+# \begin{equation}
+#     \nabla \cdot \boldsymbol{\sigma}_1 = \nabla \cdot (\boldsymbol{\sigma}_{L1}  - \textbf{u} \cdot \nabla \boldsymbol{\sigma}_0 ) = \nabla \cdot \boldsymbol{\sigma}_{L1} - \nabla (\rho_0 g u_r)
+# \end{equation}
+
+# where $u_r$ is the radial displacement vector.
 
 # Maxwell Rheology
 # ----------------
+# The GIA community generally model the mantle as an incompressible Maxwell solid. The
+# conceptual picture is a spring and a dashpot connected together in series
+# \citep{ranalli_rheology_1995}. For this viscoelastic model the elastic and viscous
+# stresses are the same but the total displacements combine.
+
+# The viscous constitutive relationship is
+
+# \begin{equation}
+#     \overset{\cdot}{\boldsymbol{\epsilon}}^v = \dfrac{1}{2 \eta} (\boldsymbol{\sigma}_{L1} + p \textbf{I}).
+# \end{equation}
+
+# The corresponding elastic constitutive equation is
+
+# \begin{equation}
+#     \boldsymbol{\epsilon}^e  = \dfrac{1}{2 \mu} (\boldsymbol{\sigma}_{L1} + p \textbf{I})
+# \end{equation}
+
+# where $\boldsymbol{\epsilon}^v$ and $\boldsymbol{\epsilon}^e$ are the strain tensors
+# for viscous and elastic deformation, $\eta$  is the viscosity, $\mu$ is the shear
+# modulus, $\textbf{I}$ is the Identity matrix, $p$ is the pressure, and
+# $\boldsymbol{\sigma}_{L1} $ is the incremental lagrangian stress tensor. An overhead
+# dot notes the time derivative i.e the viscous strain rate is proportional to stress,
+# while the elastic strain  is proportional to stress. The total strain is
+
+# \begin{equation}
+#     \boldsymbol{\epsilon} = \boldsymbol{\epsilon}^v + \boldsymbol{\epsilon}^e = \dfrac{1}{2} ( \nabla \textbf{u} + (\nabla \textbf{u})^T),
+# \end{equation}
+
+# where $\textbf{u}$ is the displacement vector.
+
+# Taking the time derivative of the total strain and substituting this into the
+# consitutive equations gives
+
+# \begin{equation}
+#     \boldsymbol{\sigma}_{L1}+ \dfrac{\eta}{ \mu} \overset{\cdot}{\boldsymbol{\sigma}}_{L1} = - \left(p + \dfrac{\eta}{ \mu}\overset{\cdot}{p}\right) \textbf{I} + 2 \eta \overset{\cdot}{\boldsymbol{\epsilon}}.
+# \end{equation}
 
 # Summary
 # --------
+# The linearised governing equations for an incompressible Maxwell body used by the GIA
+# community are
+
+# \begin{equation}
+#     \nabla \cdot \boldsymbol{\sigma}_{L1} - \nabla (\rho_0 g u_r)   - \rho_1 \textbf{g}  = 0,
+# \end{equation}
+
+# \begin{equation}
+#     \nabla \cdot \textbf{v} = 0,
+# \end{equation}
+
+# \begin{equation}
+#     \rho_1 = - \textbf{u} \cdot \nabla \rho_0,
+# \end{equation}
+
+# \begin{equation}
+#     \boldsymbol{\sigma}_{L1}+ \dfrac{\eta}{ \mu} \overset{\cdot}{\boldsymbol{\sigma}}_{L1} = - \left(p + \dfrac{\eta}{ \mu}\overset{\cdot}{p}\right) \textbf{I} + 2 \eta \overset{\cdot}{\boldsymbol{\epsilon}} .
+# \end{equation}
+
+# Note as stated above, this still neglects perturbations in the gravitational field and
+# we will leave solving the associated Poisson equation to later demos.
+
 
 # This example
 # -------------
@@ -34,9 +218,6 @@
 
 # Let's get started! The first step is to import the `gadopt` module, which provides
 # access to Firedrake and associated functionality.
-
-import numpy as np
-from mpi4py import MPI
 
 from gadopt import *
 from gadopt.utility import vertical_component
@@ -74,8 +255,8 @@ nz = 80  # number of vertical cells
 dz = D / nz  # because of extrusion need to define dz after
 
 # Let's print out the grid resolution in km
-log(f"Horizontal resolution {L/nx/1000} km")
-log(f"Vertical resolution {D/nz/1000} km")
+log(f"Horizontal resolution {L / nx / 1e3} km")
+log(f"Vertical resolution {D / nz / 1e3} km")
 
 surface_mesh = IntervalMesh(nx, L, name="Surface mesh")
 mesh = ExtrudedMesh(surface_mesh, nz, layer_height=dz)
@@ -118,9 +299,9 @@ TP1 = TensorFunctionSpace(mesh, "DQ", 2)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 # Output function space information:
-log("Number of Velocity DOF:", V.dim())
-log("Number of Pressure DOF:", W.dim())
-log("Number of Velocity and Pressure DOF:", V.dim() + W.dim())
+log(f"Number of Velocity DOF: {V.dim()}")
+log(f"Number of Pressure DOF: {W.dim()}")
+log(f"Number of Velocity and Pressure DOF: {V.dim() + W.dim()}")
 
 z = Function(Z)  # a field over the mixed function space Z
 z.subfunctions[0].rename("Incremental displacement")
@@ -148,12 +329,12 @@ rho_values = [3037, 3438, 3871, 4978]
 G_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 mu_values = [1e40, 1e21, 1e21, 2e21]
 
-mu = Function(W, name="Viscosity")
-mu.interpolate(layered_initial_condition(mu_values, radius_values.copy()))
+rho = Function(W, name="Density")
+rho.interpolate(layered_initial_condition(rho_values, radius_values.copy()))
 G = Function(W, name="Shear modulus")
 G.interpolate(layered_initial_condition(G_values, radius_values.copy()))
-rho = Function(W, name="Density")
-rho.interpolate(layered_initial_condition(rho_values, radius_values))
+mu = Function(W, name="Viscosity")
+mu.interpolate(layered_initial_condition(mu_values, radius_values))
 # -
 
 # Next let's define the length of our time step. If we want to accurately resolve the
@@ -219,6 +400,7 @@ k_disc = 2 * pi / 8 / disc_delta_x  # wavenumber for disk 2pi / lambda
 disc = 0.5 * (1 - tanh(k_disc * (X[0] - disc_radius)))
 Hice = 1000
 
+# ice_load = Function(W)
 ice_load = ramp * rho_ice * g * Hice * disc
 # -
 
@@ -270,7 +452,7 @@ displ = Function(V, name="Displacement")
 tau_old = Function(TP1, name="Deviatoric stress (old)")
 
 viscoelastic_solver = ViscoelasticSolver(
-    approximation, z, displ, tau_old, dt, bcs=stokes_bcs, solver_parameters="direct"
+    approximation, z, displ, tau_old, dt, bcs=stokes_bcs
 )
 # -
 
@@ -287,6 +469,9 @@ output_file.write(*z.subfunctions, displ, tau_old, mu, rho, G)
 # values accounting for the time dependent Maxwell consitutive equation.
 
 # +
+import numpy as np  # noqa: E402
+from mpi4py import MPI  # noqa: E402
+
 displ_vert = Function(FunctionSpace(mesh, "CG", 2))
 displ_min_array = []
 
@@ -294,6 +479,8 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 displ_filename = "displacement-weerdesteijn-2d.dat"
 bc_fs = Function(W, name="Normal stress")
 for timestep in range(max_timesteps):
+    # ice_load.interpolate(ramp * rho_ice * g * Hice * disc)
+
     viscoelastic_solver.solve()
 
     time.assign(time + dt)

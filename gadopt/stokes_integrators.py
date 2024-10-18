@@ -215,6 +215,7 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
                     weak_bc[bc_type] = value
 
             if normal_stress_fs is not None:
+                # weak_bc["normal_stress"] = weak_bc["normal_stress"] + normal_stress_fs
                 weak_bc["normal_stress"] += normal_stress_fs
                 normal_stress_fs = None
 

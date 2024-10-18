@@ -2,6 +2,10 @@ from gadopt import *
 from gadopt.inverse import *
 
 
+def reinitialisation_steady(psi, psi_grad):
+    return -psi * (1 - psi)  # + epsilon * sqrt(inner(psi_grad, psi_grad))
+
+
 def callback():
     psi_opt.assign(psi_control.block_variable.checkpoint)
     optimisation_file.write(psi_opt)
@@ -9,12 +13,10 @@ def callback():
     psi_check = psi.block_variable.checkpoint
     psi_grad_check = psi_grad_proj.block_variable.checkpoint
 
-    reini_steady = -psi_check * (1 - psi_check) + epsilon * sqrt(
-        inner(psi_grad_check, psi_grad_check)
-    )
-
     misfit = assemble((psi_check - psi_obs) ** 2 * dx)
-    reinitialisation = assemble(reini_steady**2 * dx)
+    reinitialisation = assemble(
+        reinitialisation_steady(psi_check, psi_grad_check) ** 2 * dx
+    )
 
     log(f"Level-set misfit: {misfit}")
     log(f"Level-set reinitialisation: {reinitialisation}")
@@ -67,6 +69,7 @@ stokes_solver = StokesSolver(
     bcs=stokes_bcs,
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
+del stokes_solver.solver_parameters["snes_monitor"]
 
 delta_t = Function(R).assign(1.0)
 t_adapt = TimestepAdaptor(delta_t, u, z.function_space()[0], target_cfl=0.6)
@@ -74,11 +77,11 @@ t_adapt = TimestepAdaptor(delta_t, u, z.function_space()[0], target_cfl=0.6)
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 psi_grad_proj = level_set_solver.ls_grad_proj
 
-time_now, time_end = 0, 150
+time_now, time_end = 0, 100
 
 output_file = VTKFile("inverse_output.pvd")
 output_file.write(*z.subfunctions, psi, time=time_now)
-optimisation_file = VTKFile("optimisation_17oct.pvd")
+optimisation_file = VTKFile("optimisation_output.pvd")
 
 step = 0
 while True:
@@ -97,10 +100,8 @@ while True:
     if time_now >= time_end:
         break
 
-reini_steady = -psi * (1 - psi) + epsilon * sqrt(inner(psi_grad_proj, psi_grad_proj))
-
 psi_misfit = assemble((psi - psi_obs) ** 2 * dx)
-psi_reini = assemble(reini_steady**2 * dx)
+psi_reini = assemble(reinitialisation_steady(psi, psi_grad_proj) ** 2 * dx)
 objective = psi_misfit + psi_reini
 reduced_functional = ReducedFunctional(objective, Control(psi_control))
 
@@ -110,12 +111,12 @@ log(f"\n\nReduced functional: {reduced_functional(psi_control)}")
 log(f"Objective: {objective}\n\n")
 
 perturbation = Function(psi_control, name="Level set perturbation")
-perturbation.interpolate(0.5 - abs(min_value(max_value(psi_control, 0), 1) - 0.5))
+perturbation.interpolate((0.5 - abs(min_value(max_value(psi_control, 0), 1) - 0.5)))
 
-# random_scale = np.random.default_rng().normal(
-#     1, 0.001, size=perturbation.dat.data.shape
-# )
-# perturbation.dat.data[:] *= random_scale
+random_scale = np.random.default_rng().normal(
+    5e-2, 1e-3, size=perturbation.dat.data.shape
+)
+perturbation.dat.data[:] *= random_scale
 
 taylor_convergence = taylor_test(reduced_functional, psi_control, perturbation)
 log(f"\n\nTaylor test: {taylor_convergence}\n\n")
@@ -125,8 +126,7 @@ phi_ub = Function(psi_control, name="Upper Bound Phi").assign(1.0)
 
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(phi_lb, phi_ub))
 
+minimisation_parameters["Status Test"]["Step Tolerance"] = 1e-3
 optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
 optimiser.add_callback(callback)
 optimiser.run()
-
-optimisation_file.write(optimiser.rol_solver.rolvector.dat[0])
