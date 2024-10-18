@@ -271,10 +271,7 @@ class StokesSolver:
         u, p, *eta = fd.split(self.solution)
         rho_mass = approximation.rho_continuity()
         stress = approximation.stress(u)
-        eqs_attrs = [
-            {"u": u, "p": p, "T": T, "stress": stress},
-            {"u": u, "rho_mass": rho_mass},
-        ]
+        eqs_attrs = [{"p": p, "T": T, "stress": stress}, {"u": u, "rho_mass": rho_mass}]
 
         self.equations = []
         for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):

@@ -136,7 +136,7 @@ def absorption_term(
 ) -> Form:
     r"""Scalar absorption term `\alpha_T T`."""
     # Implement absorption term implicitly at current time step.
-    F = dot(eq.test, eq.sink * trial) * eq.dx
+    F = dot(eq.test, eq.sink_coeff * trial) * eq.dx
 
     return -F
 
@@ -163,5 +163,5 @@ diffusion_term.required_attrs = {"diffusivity"}
 diffusion_term.optional_attrs = {"reference_for_diffusion", "interior_penalty"}
 source_term.required_attrs = {"source"}
 source_term.optional_attrs = set()
-absorption_term.required_attrs = {"sink"}
+absorption_term.required_attrs = {"sink_coeff"}
 absorption_term.optional_attrs = set()

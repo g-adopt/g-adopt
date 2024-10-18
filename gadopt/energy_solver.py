@@ -133,7 +133,7 @@ class EnergySolver:
             "advective_velocity_scaling": rho_cp,
             "diffusivity": approximation.kappa(),
             "reference_for_diffusion": approximation.Tbar,
-            "sink": approximation.linearized_energy_sink(u),
+            "sink_coeff": approximation.linearized_energy_sink(u),
             "source": approximation.energy_source(u),
             "u": u,
         }

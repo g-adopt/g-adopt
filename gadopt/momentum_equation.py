@@ -76,9 +76,9 @@ def viscosity_term(
     # NOTE: "un" can be combined with "stress" provided the stress force is tangential
     # (e.g. no normal flow with wind)
     for bc_id, bc in eq.bcs.items():
-        if "u" in bc and any(bc_type in bc for bc_type in ["drag", "stress", "un"]):
+        if "u" in bc and any(bc_type in bc for bc_type in ["stress", "un"]):
             raise ValueError(
-                '"drag", "stress", or "un" cannot be specified if "u" is already given.'
+                '"stress" or "un" cannot be specified if "u" is already given.'
             )
         if "normal_stress" in bc and any(bc_type in bc for bc_type in ["u", "un"]):
             raise ValueError(
@@ -174,7 +174,7 @@ def momentum_source_term(
     return -F
 
 
-viscosity_term.required_attrs = {"u", "stress"}
+viscosity_term.required_attrs = {"stress"}
 viscosity_term.optional_attrs = {"interior_penalty"}
 pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
