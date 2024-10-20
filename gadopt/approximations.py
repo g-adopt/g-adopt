@@ -414,16 +414,42 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
 
 
 class SmallDisplacementViscoelasticApproximation():
+    """Expressions for the small displacement viscoelastic approximation.
 
-    """Small Displacement Viscoelastic approximation:
+    Small displacement linearises the problem. Perturbation about a reference state.
+    We assume a Maxwell viscoelastic rheology, i.e. stress is the same but viscous and
+    elastic strains combine linearly. We follow the approach by Zhong et al. 2003
+    redefining the problem in terms of incremental displacement, i.e. velocity * dt
+    where dt is the timestep. This produces a mixed stokes system for incremental
+    displacement and pressure which can be solved in the same way as mantle convection
+    (where unknowns are velocity and pressure), with a modfied viscosity and stress term
+    accounting for the deviatoric stress at the previous timestep.
 
-    Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
+    Zhong, Shijie, Archie Paulson, and John Wahr.
+    "Three-dimensional finite-element modelling of Earth’s viscoelastic
+    deformation: effects of lateral variations lithospheric thickness."
+    Geophysical Journal International 155.2 (2003): 679-695.
+
+    N.b. that the implentation currently assumes all terms are dimensional.
+
+    Arguments:
+      density:       background density
+      shear_modulus: shear modulus
+      viscosity:     viscosity
+      g:             gravitational acceleration
+
+    """
     compressible = False
 
-    def __init__(self, density, shear_modulus, viscosity, g=1):
-        """
-        :arg kappa, g, rho, alpha:  Diffusivity, gravitational acceleration, reference density and thermal expansion coefficient
-                                    Normally kept at 1 when non-dimensionalised."""
+    def __init__(
+        self,
+        density: Function | Number,
+        shear_modulus: Function | Number,
+        viscosity: Function | Number,
+        *,
+        g: Function | Number = 1,
+    ):
+
         self.density = ensure_constant(density)
         self.shear_modulus = ensure_constant(shear_modulus)
         self.viscosity = ensure_constant(viscosity)
