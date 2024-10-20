@@ -10,7 +10,7 @@ cases = {
     "viscoplastic_case": {"extra_checks": ["nu_top"]},
     "2d_cylindrical": {"extra_checks": ["nu_top", "T_min", "T_max"]},
     "3d_spherical": {"extra_checks": ["nu_top", "t_dev_avg"]},
-    "3d_cartesian": {"extra_checks": ["nu_top", "nu_top"], "rtol": 1e-4},
+    "3d_cartesian": {"extra_checks": ["nu_top"], "rtol": 1e-4},
     "gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
     "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]},
     "../tests/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
