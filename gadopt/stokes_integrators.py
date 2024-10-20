@@ -535,19 +535,46 @@ def ala_right_nullspace(
 
 
 class ViscoelasticStokesSolver(StokesSolver):
+    """Solves the Stokes system assuming a Maxwell viscoelastic rheology.
+
+    Arguments:
+      z: Firedrake function representing mixed Stokes system
+      stress_old: Firedrake function representing deviatoric stress from previous timestep
+      displacement: Firedrake function representing displacement field
+      approximation: Approximation describing system of equations
+      dt: Timestep for viscoelastic rheology
+      bcs: Dictionary of identifier-value pairs specifying boundary conditions
+      quad_degree: Quadrature degree. Default value is `2p + 1`, where
+                   p is the polynomial degree of the trial space
+      solver_parameters: Either a dictionary of PETSc solver parameters or a string
+                         specifying a default set of parameters defined in G-ADOPT
+      J: Firedrake function representing the Jacobian of the system
+      constant_jacobian: Whether the Jacobian of the system is constant
+    """
+
     name = "ViscoelasticStokesSolver"
 
-    def __init__(self, z, stress_old, displacement, approximation, dt, bcs=None,
-                 quad_degree=6, solver_parameters=None, J=None, constant_jacobian=False,
-                 **kwargs):
-
+    def __init__(
+        self,
+        z: fd.Function,
+        stress_old: fd.Function,
+        displacement: fd.Function,
+        approximation: BaseApproximation,
+        dt: Number | fd.Constant,
+        bcs: dict[int, dict[str, Number]] = {},
+        quad_degree: int = 6,
+        solver_parameters: Optional[dict[str, str | Number] | str] = None,
+        J: Optional[fd.Function] = None,
+        constant_jacobian: bool = False,
+        **kwargs,
+    ):
         self.stress_old = stress_old  # Function to store deviatoric stress from previous time step
         self.displacement = displacement
         self.dt = dt
 
         approximation.mu = approximation.effective_viscosity(self.dt)
 
-        # This isn't used by the code but StokesSolver currently assumes temperature is required as an argument
+        # This isn't used in the viscoelastic code but StokesSolver currently assumes temperature is required as an argument
         T_placeholder = approximation.density
 
         super().__init__(z, T_placeholder, approximation, bcs=bcs,
