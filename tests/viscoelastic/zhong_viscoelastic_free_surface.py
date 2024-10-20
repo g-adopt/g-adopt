@@ -1,3 +1,14 @@
+# Test case based on simple harmonic loading and unloading problems
+# from `Viscosity of the Earth's Mantle' by Cathles (1975). The specific
+# analytic solution is actually based off of Equation 2 in `On calculating
+# glacial isostatic adjustment', Cathles (2024). The decay time is the viscous
+# relaxation timescale plus the maxwell time, including the elastic buoyancy
+# effects. Note that we are solving a loading problem not an unloading problem.
+# There are three default tests:
+# 1) elastic case limit (dt << maxwell time, 1 step)
+# 2) viscoelastic (dt ~ maxwell time)
+# 3) viscous limit (dt >> maxwell time)
+
 from gadopt import *
 import numpy as np
 import argparse
