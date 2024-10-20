@@ -3,17 +3,18 @@ from pathlib import Path
 import pandas as pd
 
 cases = {
-    "base_case": {},
-    "free_surface": {"extra_checks": ["eta_min", "eta_max"]},
-    "2d_compressible_TALA": {},
-    "2d_compressible_ALA": {},
-    "viscoplastic_case": {},
-    "2d_cylindrical": {"extra_checks": ["T_min", "T_max"]},
-    "3d_spherical": {"extra_checks": ["t_dev_avg"]},
-    "3d_cartesian": {"rtol": 1e-4},
-    "gplates_global": {"extra_checks": ["u_rms_top"]},
-    "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["avg_t", "FullT_min", "FullT_max"]},
-    "../tests/viscoplastic_case_dg": {"extra_checks": ["avg_t"]},
+    "base_case": {"extra_checks": ["nu_top"]},
+    "free_surface": {"extra_checks": ["nu_top", "eta_min", "eta_max"]},
+    "2d_compressible_TALA": {"extra_checks": ["nu_top"]},
+    "2d_compressible_ALA": {"extra_checks": ["nu_top"]},
+    "viscoplastic_case": {"extra_checks": ["nu_top"]},
+    "2d_cylindrical": {"extra_checks": ["nu_top", "T_min", "T_max"]},
+    "3d_spherical": {"extra_checks": ["nu_top", "t_dev_avg"]},
+    "3d_cartesian": {"extra_checks": ["nu_top", "nu_top"], "rtol": 1e-4},
+    "gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
+    "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]},
+    "../tests/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
+    "viscoelastic": {"extra_checks": ["disp_min", "disp_max"]},
 }
 
 
@@ -30,7 +31,7 @@ def check_series(
     extra_checks,
 ):
     pd.testing.assert_series_equal(
-        actual[["u_rms", "nu_top"] + extra_checks], expected,
+        actual[["u_rms"] + extra_checks], expected,
         check_names=False, **compare_params
     )
 
