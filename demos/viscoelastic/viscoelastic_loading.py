@@ -418,7 +418,7 @@ for timestep in range(max_timesteps):
 # # Open a gif
 # plotter.open_gif("displacement_warp_2.gif")
 #
-# Make a colour map
+# # Make a colour map
 # boring_cmap = plt.get_cmap("viridis", 25)
 #
 # for i in range(len(reader.time_values)):
@@ -428,7 +428,7 @@ for timestep in range(max_timesteps):
 #     # Artificially warp the output data in the vertical direction by the free surface height
 #     # Note the mesh is not really moving!
 #     warped = data.warp_by_vector(vectors="displacement", factor=1500)
-#     arrows = warped.glyph(orient="Incremental Displacement", scale="Incremental Displacement", factor=400000, tolerance=0.05)
+#     arrows = data.glyph(orient="Incremental Displacement", scale="Incremental Displacement", factor=400000, tolerance=0.05)
 #     plotter.add_mesh(arrows, color="white", lighting=False)
 #
 #     # Add the warped displacement field to the frame
