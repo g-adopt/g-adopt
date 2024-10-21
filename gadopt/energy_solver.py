@@ -11,7 +11,7 @@ from typing import Any, Callable, Optional
 
 import firedrake as fd
 
-from . import scalar_equation as scal_eq
+from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
 from .time_stepper import RungeKuttaTimeIntegrator
@@ -84,10 +84,10 @@ class GenericTransportBase(abc.ABC):
     """
 
     terms_mapping = {
-        "advection": scal_eq.scalar_advection_term,
-        "diffusion": scal_eq.scalar_diffusion_term,
-        "sink": scal_eq.scalar_absorption_term,
-        "source": scal_eq.scalar_source_term,
+        "advection": scalar_eq.advection_term,
+        "diffusion": scalar_eq.diffusion_term,
+        "sink": scalar_eq.sink_term,
+        "source": scalar_eq.source_term,
     }
 
     def __init__(
@@ -227,7 +227,7 @@ class GenericTransportSolver(GenericTransportBase):
         Simulation time step
       timestepper:
         Runge-Kutta time integrator employing an explicit or implicit numerical scheme
-      terms_kwargs:
+      eq_attrs:
         Dicitionary of terms arguments and their values
       solution_old:
         Firedrake function holding the previous solution
@@ -242,7 +242,7 @@ class GenericTransportSolver(GenericTransportBase):
 
     """
 
-    _terms_kwargs = ["diffusivity", "sink", "source"]
+    _eq_attrs = ["diffusivity", "sink_coeff", "source"]
 
     def __init__(
         self,
@@ -252,7 +252,7 @@ class GenericTransportSolver(GenericTransportBase):
         delta_t: fd.Constant,
         timestepper: RungeKuttaTimeIntegrator,
         *,
-        terms_kwargs: Optional[dict[str, float]] = None,
+        eq_attrs: Optional[dict[str, float]] = None,
         solution_old: Optional[fd.Function] = None,
         bcs: dict[int, dict[str, Number]] = {},
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
@@ -270,23 +270,23 @@ class GenericTransportSolver(GenericTransportBase):
         if isinstance(terms, str):
             terms = [terms]
 
-        if terms_kwargs is None:
-            terms_kwargs = {}
-        assert all(term_kwarg in self._terms_kwargs for term_kwarg in terms_kwargs)
+        if eq_attrs is None:
+            eq_attrs = {}
+        assert all(term_kwarg in self._eq_attrs for term_kwarg in eq_attrs)
 
-        self.set_equation(terms, u, terms_kwargs, su_diffusivity)
+        self.set_equation(terms, u, eq_attrs, su_diffusivity)
 
     def set_equation(
         self,
         terms: list[str],
         u: fd.Function,
-        terms_kwargs: dict[str, float],
+        eq_attrs: dict[str, float],
         su_diffusivity: Optional[float],
     ) -> None:
-        terms_kwargs["u"] = u
+        eq_attrs["u"] = u
 
         if su_diffusivity is not None:
-            terms_kwargs["su_nubar"] = self.su_nubar(u, su_diffusivity)
+            eq_attrs["su_nubar"] = self.su_nubar(u, su_diffusivity)
 
         eq_terms = [self.terms_mapping[term] for term in terms]
 
@@ -294,8 +294,8 @@ class GenericTransportSolver(GenericTransportBase):
             fd.TestFunction(self.Q),
             self.Q,
             eq_terms,
-            mass_term=scal_eq.mass_term,
-            terms_kwargs=terms_kwargs,
+            mass_term=scalar_eq.mass_term,
+            eq_attrs=eq_attrs,
             bcs=self.weak_bcs,
         )
 
@@ -361,17 +361,17 @@ class EnergySolver(GenericTransportBase):
     ) -> None:
         rho_cp = approximation.rhocp()
 
-        terms_kwargs = {
+        eq_attrs = {
             "advective_velocity_scaling": rho_cp,
             "diffusivity": approximation.kappa(),
             "reference_for_diffusion": approximation.Tbar,
-            "sink": approximation.linearized_energy_sink(u),
+            "sink_coeff": approximation.linearized_energy_sink(u),
             "source": approximation.energy_source(u),
             "u": u,
         }
 
         if su_diffusivity is not None:
-            terms_kwargs["su_nubar"] = self.su_nubar(u, su_diffusivity)
+            eq_attrs["su_nubar"] = self.su_nubar(u, su_diffusivity)
 
         eq_terms = [self.terms_mapping[term] for term in terms]
 
@@ -379,8 +379,8 @@ class EnergySolver(GenericTransportBase):
             fd.TestFunction(self.Q),
             self.Q,
             eq_terms,
-            mass_term=lambda eq, trial: scal_eq.mass_term(eq, rho_cp * trial),
-            terms_kwargs=terms_kwargs,
+            mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
+            eq_attrs=eq_attrs,
             approximation=approximation,
             bcs=self.weak_bcs,
         )
