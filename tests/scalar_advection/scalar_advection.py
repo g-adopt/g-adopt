@@ -75,12 +75,12 @@ q_in = Constant(1.0)
 # advection term and apply weak boundary conditions on inflow regions.
 bc_in = {'q': q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
-adv_diff_solver = GenericTransportSolver(
+adv_solver = GenericTransportSolver(
     "advection", q, u, dt, DIRK33, bcs=bcs, su_diffusivity=0.0
 )
 
 # Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(adv_diff_solver.equation.su_nubar)
+nubar = Function(Q).interpolate(adv_solver.equation.su_nubar)
 nubar_outfile = VTKFile("CG_SUadv_nubar.pvd")
 nubar_outfile.write(nubar)
 
@@ -88,7 +88,7 @@ nubar_outfile.write(nubar)
 t = 0.0
 step = 0
 while t < T - 0.5*dt:
-    adv_diff_solver.solve()
+    adv_solver.solve()
 
     step += 1
     t += dt

@@ -35,10 +35,10 @@ def viscosity_term(
     form becomes
 
     $$
-    {:( -int_Omega nabla * (mu grad u) test dx , = , int_Omega mu (grad test) * (grad u) dx ),
-      ( , - , int_(cc"I" uu cc"I"_v) "jump"(test bb n) * "avg"(mu grad u) dS
-          -   int_(cc"I" uu cc"I"_v) "jump"(u bb n) * "avg"(mu grad test) dS ),
-      ( , + , int_(cc"I" uu cc"I"_v) sigma "avg"(mu) "jump"(u bb n) * "jump"(test bb n) dS )
+    {:( -int_Omega nabla * (mu grad u) phi dx , = , int_Omega mu (grad phi) * (grad u) dx ),
+      ( , - , int_(cc"I" uu cc"I"_v) "jump"(phi bb n) * "avg"(mu grad u) dS
+          -   int_(cc"I" uu cc"I"_v) "jump"(u bb n) * "avg"(mu grad phi) dS ),
+      ( , + , int_(cc"I" uu cc"I"_v) sigma "avg"(mu) "jump"(u bb n) * "jump"(phi bb n) dS )
     :}
     $$
 

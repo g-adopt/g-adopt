@@ -62,12 +62,12 @@ dt = T/600.0
 # implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the boundary
 # conditions will be applied strongly by the solver.
 terms = ["advection", "diffusion"]
-terms_kwargs = {"diffusivity": kappa}
+eq_attrs = {"diffusivity": kappa}
 q_top = 1.0
 q_bottom = 0.0
 bcs = {3: {'T': q_bottom}, 4: {'T': q_top}}
 adv_diff_solver = GenericTransportSolver(
-    terms, q, u, dt, DIRK33, terms_kwargs=terms_kwargs, bcs=bcs, su_diffusivity=kappa
+    terms, q, u, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_diffusivity=kappa
 )
 
 # Get nubar (additional SU diffusion) for plotting
