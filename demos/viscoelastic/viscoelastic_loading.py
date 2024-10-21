@@ -75,7 +75,7 @@
 # -------------------------------------
 # The GIA community usually reformulate the linearised momentum equation in terms of the *Incremental lagrangian stress tensor*. This can be traced back to the early roots of the GIA modellers adopting Laplace transform methods. The idea behind this is to convert the time dependent *viscoelastic* problem to a time independent *elastic* problem by the correspondence principle.
 #
-# From an elastic wave theory point of view, \citet{dahlen_theoretical_1998} make the point that it is the Lagrangian perturbation in stress not the Eulerian perturbation that is related to the displacement gradient by the elastic parameters. Transforming between the Lagrangian perturbation in stress and the Eulerian description is given by
+# From an elastic wave theory point of view, Dahlen and Tromp (1998) make the point that it is the Lagrangian perturbation in stress not the Eulerian perturbation that is related to the displacement gradient by the elastic parameters. Transforming between the Lagrangian perturbation in stress and the Eulerian description is given by
 # \begin{equation}
 #      \boldsymbol{\sigma}_{L1} =  \boldsymbol{\sigma}_1 + \textbf{u} \cdot \nabla \boldsymbol{\sigma}_0 ,
 # \end{equation}
@@ -83,9 +83,9 @@
 #
 # This is effectively accounting for an advection of a background quantity when translating between the Eulerian and Lagrangian frames of reference through a first order Taylor series expansion.
 #
-# This advection of prestress can be important for very long wavelength loads. \citet{cathles_viscosity_2016} estimates that the term becomes leading order when the wavelength is greater than 30000 km for typical Earth parameters, i.e. only when the wavelength is the same order of magnitude as the circumference of the Earth.
+# This advection of prestress can be important for very long wavelength loads. Cathles (1975) estimates that the term becomes leading order when the wavelength is greater than 30000 km for typical Earth parameters, i.e. only when the wavelength is the same order of magnitude as the circumference of the Earth.
 #
-# For the viscoelastic problem, however, this term is crucial because it acts as a restoring force to isostatic equilibrium. If the Laplace transform methods do not include this term a load placed on the surface of the Earth will keep sinking \cite{wu_viscous_1982}!
+# For the viscoelastic problem, however, this term is crucial because it acts as a restoring force to isostatic equilibrium. If the Laplace transform methods do not include this term a load placed on the surface of the Earth will keep sinking (Wu and Peltier, 1982)!
 #
 # Subbing into the stress balance gives
 #
@@ -98,7 +98,7 @@
 # Maxwell Rheology
 # ----------------
 #
-# The GIA community generally model the mantle as an incompressible Maxwell solid. The conceptual picture is a spring and a dashpot connected together in series \citep{ranalli_rheology_1995}. For this viscoelastic model the elastic and viscous stresses are the same but the total displacements combine.
+# The GIA community generally model the mantle as an incompressible Maxwell solid. The conceptual picture is a spring and a dashpot connected together in series (Ranalli, 1995). For this viscoelastic model the elastic and viscous stresses are the same but the total displacements combine.
 #
 # The viscous constitutive relationship is
 # \begin{equation}
@@ -137,27 +137,54 @@
 # Note as stated above, this still neglects perturbations in the gravitational field and we will leave solving the associated Poisson equation to later demos.
 #
 
+# Time discretisation
+# -------------------
+#
+# One of the key difference with the mantle convection demos is that the constitutive equation now depends on time. We have implemented the method of Zhong et al. (2003) where deviatoric stress is implemented in terms of 'incremental displacement'. They recast the problem in terms of $\textbf{u}_{inc}^n = \textbf{u}^n - \textbf{u}^{n-1}$, where the subcripts refer to time levels $t$ and $t - \Delta t$ respectively. The incremental strain $\Delta \boldsymbol{\epsilon}$ is
+# \begin{equation}
+#     \Delta \boldsymbol{\epsilon} =   \dfrac{1}{2} ( \nabla \textbf{u}_{inc} + (\nabla \textbf{u}_{inc})^T).
+# \end{equation}
+#
+#
+# The constitutive equation is discretised by integrating from $t - \Delta t$ to $t$ using the trapezoid rule
+# \begin{equation}
+#     \int_{t-\Delta t}^t \boldsymbol{\sigma}_{L1} + \dfrac{\eta}{ \mu} \overset{\cdot}{\boldsymbol{\sigma}_{L1}} \, dt = \int_{t-\Delta t}^t - \left(p + \dfrac{\eta}{ \mu}\overset{\cdot}{p}\right) \textbf{I} + 2 \eta \overset{\cdot}{\boldsymbol{\epsilon}} \, dt.
+# \end{equation}
+# The trapezoid rule is
+# \begin{equation}
+#     \int_{a}^b f(x) \approx \dfrac{1}{2}(b - a)(f(a) + f(b).
+# \end{equation}
+# Using this gives
+# \begin{equation}
+#     \dfrac{\Delta t}{2} (\boldsymbol{\sigma}_{L1}^n + \boldsymbol{\sigma}_{L1}^{n-1}) + \dfrac{\eta}{ \mu} (\boldsymbol{\sigma}_{L1}^n - \boldsymbol{\sigma}_{L1}) = -\dfrac{\Delta t}{2} (p^n + p^{n-1}) \textbf{I} - \dfrac{\eta}{ \mu}(p^n - p^{n-1})  \textbf{I} + 2 \eta (\boldsymbol{\epsilon}^n - \boldsymbol{\epsilon}^{n-1}).
+# \end{equation}
+# Using maxwell time, $\alpha = \eta / \mu$, this simplifies to
+# \begin{equation}
+#     \boldsymbol{\sigma}_{L1}^n  = - p^n \textbf{I} + \dfrac{2 \eta}{\alpha + \Delta t / 2}  \Delta \boldsymbol{\epsilon}^n + \dfrac{\alpha - \Delta t / 2}{\alpha + \Delta t / 2}(\boldsymbol{\sigma}_{L1}^{n-1} + p^{n-1} \textbf{I}).
+# \end{equation}
+#
+# This expression for the stress is very similar to mantle convection. We are solving for incremental displacement instead of velocity, but the only difference between these two functions is the timestep multiplying factor. We also have a modified viscosity based on the timestep and the maxwell time. Finally, the stress history is included as the last term is the deviatoric stress from the previous timestep multiplied by a prefactor involving the timestep and the maxwell time. Note that in the small dt limit (i.e. $dt$ << $\alpha$) the effective viscosity tends towards the shear modulus. i.e. we are solving the elastic equations.
+
 # This example
 # -------------
-# We are going to simulate a viscoelastic loading and unloading problem based on a 2D version of the test case presented in Weerdesteijn et al 2023.
+# We are going to simulate a viscoelastic loading and unloading problem based on a 2D version of the test case presented in Weerdesteijn et al. (2023).
 #
 # Let's get started! The first step is to import the `gadopt` module, which
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
 from gadopt.utility import step_func
-# from gadopt.utility import step_func
 
 # Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and 2891 km deep. As mentioned to speed up things for this first demo let's just consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
 #
-# For starters let's use one of the default meshes provided by Firedrake, `RectangleMesh`. We have chosen 40 quadrilateral elements in the $x$ direction and 40 quadrilateral elements in the $y$ direction. For real simulations we can use fully unstructured meshes to accurately resolve important features in the model, for instance near coastlines or sharp discontinuities in mantle properties.  We can print out the grid resolution using `log`, a utility provided by gadopt. (N.b. `log` is equivalent to python's `print` function, except simplifies outputs when running simulations in parallel.)
-#
-# Boundaries are automatically tagged by the built-in meshes supported by Firedrake. For the `RectangleMesh` being used here, tag 1 corresponds to the plane $x=0$; 2 to the $x=L$ plane; 3 to the $y=0$ plane; and 4 to the $y=D$ plane. For convenience, we can rename these to `left_id`, `right_id`, `bottom_id` and `top_id`.
+# For starters let's use one of the default meshes provided by Firedrake, `RectangleMesh`. We have chosen 40 quadrilateral elements in the $x$ direction and 40 quadrilateral elements in the $y$ direction. It is worth emphasising that the setup has coarse grid resolution so that the demo is quick to run! For real simulations we can use fully unstructured meshes to accurately resolve important features in the model, for instance near coastlines or sharp discontinuities in mantle properties.  We can print out the grid resolution using `log`, a utility provided by gadopt. (N.b. `log` is equivalent to python's `print` function, except that it simplifies outputs when running simulations in parallel.)
 #
 # On the mesh, we also denote that our geometry is Cartesian, i.e. gravity points
 # in the negative z-direction. This attribute is used by G-ADOPT specifically, not
 # Firedrake. By contrast, a non-Cartesian geometry is assumed to have gravity
 # pointing in the radially inward direction.
+#
+# Boundaries are automatically tagged by the built-in meshes supported by Firedrake. For the `RectangleMesh` being used here, tag 1 corresponds to the plane $x=0$; 2 to the $x=L$ plane; 3 to the $y=0$ plane; and 4 to the $y=D$ plane. For convenience, we can rename these to `left_id`, `right_id`, `bottom_id` and `top_id`.
 
 # +
 # Set up geometry:
@@ -182,16 +209,16 @@ left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 # variables representing function spaces. They also contain the
 # function space’s computational implementation, recording the
 # association of degrees of freedom with the mesh and pointing to the
-# finite element basis.
+# finite element basis. We will choose Q2-Q1 for the mixed incremental displacement-pressure similar to our mantle convection demos. This is a Taylor-Hood element pair which has good properties for Stokes modelling. We also initilaise a discontinuous tensor function space that wil store our previous values of the deviatoric stress, as the gradient of the continous incremental displacement field will be discontinuous.
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
-V = VectorFunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-TP1 = TensorFunctionSpace(mesh, "DG", 2)  # (Discontinuous) Stress tensor function space (tensor)
+V = VectorFunctionSpace(mesh, "Q", 2)  # (Incremental) Displacement function space (vector)
+W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
+TP1 = TensorFunctionSpace(mesh, "DQ", 2)  # (Discontinuous) Stress tensor function space (tensor)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 # Function spaces can be combined in the natural way to create mixed
-# function spaces, combining the velocity and pressure spaces to form
+# function spaces, combining the incremental displacement and pressure spaces to form
 # a function space for the mixed Stokes problem, `Z`.
 
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
@@ -201,7 +228,7 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # parts – incremental displacement and pressure – is obtained with `split`. For later
 # visualisation, we rename the subfunctions of z Incremental Displacement and Pressure.
 #
-# We also need to initialise two functions `displacement` and `stress old` that are used when timestepping the constitutive equation.
+# We also need to initialise two functions `displacement` and `stress_old` that are used when timestepping the constitutive equation.
 
 # +
 z = Function(Z)  # A field over the mixed function space Z.
@@ -261,7 +288,7 @@ viscosity = Function(W, name="viscosity")
 initialise_background_field(viscosity, viscosity_values)
 # -
 
-# Next let's create a function to store our ice load. Following the long test from Weeredesteijn et al 2023, during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km and then in the next 10 thousand years the ice will be removed much more quickly back towards ice free conditions. The simulation will run for further 10 thousand years to allow the system to relax towards isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we have used a tanh function again to smooth out the transition.
+# Next let's create a function to store our ice load. Following the long test from Weeredesteijn et al 2023, during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice free conditons in the next 10 thousand years. Finally, the simulation will run for a further 10 thousand years to allow the system to relax towards isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we have used a tanh function again to smooth out the transition.
 
 # +
 rho_ice = 931
@@ -357,7 +384,7 @@ effective_viscosity = Function(W, name='effective viscosity').interpolate(approx
 
 if do_write:
     # Create output file
-    output_file = VTKFile(f"viscoelastic_loading_nosquashing/out_dtout{dt_out_years}a.pvd")
+    output_file = VTKFile("output.pvd")
     output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
 
 plog = ParameterLog("params.log", mesh)
@@ -409,14 +436,14 @@ for timestep in range(max_timesteps):
 # import pyvista as pv
 #
 # # Read the PVD file
-# reader = pv.get_reader("./viscoelastic_loading_nosquashing/out_dtout2000.0a.pvd")
+# reader = pv.get_reader("output.pvd")
 # data = reader.read()[0]  # MultiBlock mesh with only 1 block
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
 #
 # # Open a gif
-# plotter.open_gif("displacement_warp_2.gif")
+# plotter.open_gif("displacement_warp.gif")
 #
 # # Make a colour map
 # boring_cmap = plt.get_cmap("viridis", 25)
@@ -471,4 +498,20 @@ for timestep in range(max_timesteps):
 # -
 # Looking at the animation, we can see that as the weight of the ice load builds up the mantle deforms, pushing up material away from the ice load. If we kept the ice load fixed this forebulge will eventually grow enough that it balances the weight of the ice, i.e the mantle is in isostatic isostatic equilbrium and the deformation due to the ice load stops. At 100 thousand years when the ice is removed the topographic highs associated with forebulges are now out of equilibrium so the flow of material in the mantle reverses back towards the previously glaciated region.
 
-# ![SegmentLocal](displacement_warp_2.gif "segment")
+# ![SegmentLocal](displacement_warp.gif "segment")
+
+# In this demo we have seen how to setup a simple viscoelastic loading problem. In the next demos we will start to look at more realistic cases in Earth-like geometry and with additional physics including gravity, transient rheology and sea level.
+
+# References
+# ----------
+# Cathles L.M. (1975). *Viscosity of the Earth's Mantle*, Princeton University Press.
+#
+# Dahlen F. A. and Tromp J. (1998). *Theoretical Global Seismology*, Princeton University Press.
+#
+# Ranalli, G. (1995). Rheology of the Earth. Springer Science & Business Media.
+#
+# Weerdesteijn, M. F., Naliboff, J. B., Conrad, C. P., Reusen, J. M., Steffen, R., Heister, T., & Zhang, J. (2023). *Modeling viscoelastic solid earth deformation due to ice age and contemporary glacial mass changes in ASPECT*. Geochemistry, Geophysics, Geosystems.
+#
+# Wu P., Peltier W. R. (1982). *Viscous gravitational relaxation*, Geophysical Journal International.
+#
+# Zhong, S., Paulson, A., & Wahr, J. (2003). Three-dimensional finite-element modelling of Earth’s viscoelastic deformation: effects of lateral variations in lithospheric thickness. Geophysical Journal International.
