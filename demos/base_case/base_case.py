@@ -328,7 +328,9 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 # We note that solution of the two variational problems is undertaken by PETSc.
 
 # +
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(
+    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
+)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,

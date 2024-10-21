@@ -1,21 +1,22 @@
-r"""This module provides a minimal solver for general scalar equations including
-advection and diffusion terms and a fine-tuned solver class for the energy conservation
-equation. Users instantiate the `EnergySolver` class by providing relevant parameters
-and call the `solve` method to request a solver update.
+r"""This module provides a minimal solver for generic transport equations, which may
+include advection, diffusion, sink, and source terms, and a fine-tuned solver class for
+the energy conservation equation. Users instantiate the `GenericTransportSolver` or
+`EnergySolver` classes by providing the appropriate documented parameters and call the
+`solve` method to request a solver update.
 
 """
 
 import abc
 from numbers import Number
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
-import firedrake as fd
+from firedrake import *
 
 from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
 from .time_stepper import RungeKuttaTimeIntegrator
-from .utility import DEBUG, INFO, absv, is_continuous, log, log_level, su_nubar
+from .utility import DEBUG, INFO, absv, is_continuous, log, log_level
 
 __all__ = [
     "GenericTransportSolver",
@@ -59,26 +60,36 @@ Note:
 """
 
 
-class GenericTransportBase(abc.ABC):
-    """Timestepper and solver for an equation involving advection and diffusion terms.
+class MetaPostInit(abc.ABCMeta):
+    """Calls the user-defined __post_init__ method after __init__ returns."""
+
+    def __call__(cls, *args, **kwargs):
+        class_instance = super().__call__(*args, **kwargs)
+        class_instance.__post_init__()
+
+        return class_instance
+
+
+class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
+    """Base class for advancing a generic transport equation in time.
 
     All combinations of advection, diffusion, sink, and source terms are handled.
 
-    Note: The scalar field is updated in place.
+    Note: The solution field is updated in place.
 
     Arguments:
-      scalar_field:
-        Firedrake function for scalar field of interest
-      delta_t:
-        Simulation time step
+      solution:
+        Firedrake function for the field of interest
       timestepper:
         Runge-Kutta time integrator employing an explicit or implicit numerical scheme
+      delta_t:
+        Simulation time step
       solution_old:
-        Firedrake function holding the previous solution
+        Firedrake function holding the solution field at the previous time step
       bcs:
-        Dictionary of identifier-value pairs specifying boundary conditions
+        Dictionary specifying boundary conditions (identifier, type, and value)
       solver_parameters:
-        Dicitionary of solver parameters or a string specifying a default configuration
+        Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
 
     """
@@ -92,63 +103,103 @@ class GenericTransportBase(abc.ABC):
 
     def __init__(
         self,
-        scalar_field: fd.Function,
-        delta_t: fd.Constant,
+        solution: Function,
+        /,
         timestepper: RungeKuttaTimeIntegrator,
+        delta_t: Constant,
         *,
-        solution_old: Optional[fd.Function] = None,
+        solution_old: Function | None = None,
         bcs: dict[int, dict[str, Number]] = {},
-        solver_parameters: Optional[dict[str, str | Number] | str] = None,
+        solver_parameters: dict[str, str | Number] | str | None = None,
     ) -> None:
-        self.solution = scalar_field
-        self.delta_t = delta_t
+        self.solution = solution
         self.timestepper = timestepper
+        self.delta_t = delta_t
+        self.solution_old = solution_old or Function(solution)
+        self.bcs = bcs
+        self.solver_parameters = solver_parameters
 
-        self.Q = scalar_field.function_space()
-        self.mesh = self.Q.mesh()
-        self.solution_old = solution_old or fd.Function(self.Q)
+        self.solution_space = solution.function_space()
+        self.mesh = self.solution_space.mesh()
+        self.test = TestFunction(self.solution_space)
 
-        self.set_boundary_conditions(bcs)
+        self.continuous_solution = is_continuous(self.solution)
 
-        if isinstance(solver_parameters, dict):
-            self.solver_parameters = solver_parameters
-        else:
-            self.set_solver_parameters(solver_parameters)
+        # Solver object is set up later to permit editing default solver options.
+        self._solver_ready = False
 
-        # Solver object is set up later to permit editing default solver parameters.
-        self._solver_setup = False
+    def __post_init__(self) -> None:
+        self.set_boundary_conditions()
+        self.set_equation()
+        self.set_solver_options()
 
-    def set_boundary_conditions(self, bcs: dict[int, dict[str, Number]]) -> None:
+    def set_boundary_conditions(self) -> None:
         """Sets up boundary conditions."""
         self.strong_bcs = []
         self.weak_bcs = {}
 
-        apply_strongly = is_continuous(self.solution)
-
-        for bc_id, bc in bcs.items():
+        for bc_id, bc in self.bcs.items():
             weak_bc = {}
-            for type, value in bc.items():
-                if type == "T":
-                    if apply_strongly:
-                        self.strong_bcs.append(fd.DirichletBC(self.Q, value, bc_id))
+
+            for bc_type, value in bc.items():
+                if bc_type == "T":
+                    if self.continuous_solution:
+                        strong_bc = DirichletBC(self.solution_space, value, bc_id)
+                        self.strong_bcs.append(strong_bc)
                     else:
                         weak_bc["q"] = value
                 else:
-                    weak_bc[type] = value
+                    weak_bc[bc_type] = value
+
             self.weak_bcs[bc_id] = weak_bc
 
-    def set_solver_parameters(self, solver_parameters) -> None:
+    def set_su_nubar(self, u: Function, su_diffusivity: float) -> ufl.algebra.Product:
+        """Sets up the advection streamline-upwind scheme (Donea & Huerta, 2003).
+
+        Columns of Jacobian J are the vectors that span the quad/hex and can be seen as
+        unit vectors scaled with the dx/dy/dz in that direction (assuming physical
+        coordinates x, y, z aligned with local coordinates).
+        Thus u^T J is (dx * u , dy * v). Following (2.44c), Pe = u^T J / 2 kappa, and
+        beta(Pe) is the xibar vector in (2.44a). Finally, we get the artificial
+        diffusion nubar from (2.49).
+
+        Donea, J., & Huerta, A. (2003).
+        Finite element methods for flow problems.
+        John Wiley & Sons.
+        """
+        if not self.continuous_solution:
+            raise TypeError("SU advection requires a continuous function space.")
+
+        log("Using SU advection")
+
+        J = Function(TensorFunctionSpace(self.mesh, "DQ", 1), name="Jacobian")
+        J.interpolate(Jacobian(self.mesh))
+        # Calculate grid Peclet number. Note the use of a lower bound for diffusivity if
+        # a pure advection scenario is considered.
+        Pe = absv(dot(u, J)) / 2 / (su_diffusivity + 1e-12)
+        beta_Pe = as_vector([1 / tanh(Pe_i + 1e-6) - 1 / (Pe_i + 1e-6) for Pe_i in Pe])
+        nubar = dot(absv(dot(u, J)), beta_Pe) / 2  # Calculate SU artificial diffusion
+
+        return nubar
+
+    @abc.abstractmethod
+    def set_equation(self):
+        """Sets up the term contributions in the equation."""
+        raise NotImplementedError
+
+    def set_solver_options(self) -> None:
         """Sets PETSc solver parameters."""
-        if isinstance(solver_parameters, str):
-            match solver_parameters:
+        if isinstance(solver_preset := self.solver_parameters, dict):
+            return
+
+        if solver_preset is not None:
+            match solver_preset:
                 case "direct":
                     self.solver_parameters = direct_energy_solver_parameters.copy()
                 case "iterative":
                     self.solver_parameters = iterative_energy_solver_parameters.copy()
                 case _:
-                    raise ValueError(
-                        f"Solver type '{solver_parameters}' not implemented."
-                    )
+                    raise ValueError(f"Solver type '{solver_preset}' not implemented.")
         elif self.mesh.topological_dimension() == 2:
             self.solver_parameters = direct_energy_solver_parameters.copy()
         else:
@@ -159,38 +210,8 @@ class GenericTransportBase(abc.ABC):
         elif INFO >= log_level:
             self.solver_parameters["ksp_converged_reason"] = None
 
-    def su_nubar(self, u: fd.Function, su_diffusivity: float) -> fd.ufl.algebra.Product:
-        """Sets up the streamline-upwind scheme."""
-        if not is_continuous(self.Q):
-            raise TypeError("SU advection requires a continuous function space.")
-
-        log("Using SU advection")
-        # SU(PG) à la Donea & Huerta (2003)
-        # Columns of Jacobian J are the vectors that span the quad/hex and can be
-        # seen as unit vectors scaled with the dx/dy/dz in that direction (assuming
-        # physical coordinates x, y, z aligned with local coordinates).
-        # Thus u^T J is (dx * u , dy * v), and following (2.44c), Pe = u^T J / 2 kappa.
-        # beta(Pe) is the xibar vector in (2.44a)
-        # then we get artifical viscosity nubar from (2.49)
-
-        J = fd.Function(
-            fd.TensorFunctionSpace(self.mesh, "DQ", 1), name="Jacobian"
-        ).interpolate(fd.Jacobian(self.mesh))
-        # Set lower bound for diffusivity in case zero diffusivity specified for
-        # pure advection.
-        kappa = su_diffusivity + 1e-12
-        Pe = absv(fd.dot(u, J)) / 2 / kappa  # Calculate grid Peclet number
-        nubar = su_nubar(u, J, Pe)  # Calculate SU artificial diffusion
-
-        return nubar
-
-    @abc.abstractmethod
-    def set_equation(self):
-        """Sets up the equation."""
-        raise NotImplementedError
-
     def setup_solver(self) -> None:
-        """Sets up timestepper and associated solver, using specified solver parameters"""
+        """Sets up the timestepper using specified parameters."""
         self.ts = self.timestepper(
             self.equation,
             self.solution,
@@ -199,42 +220,47 @@ class GenericTransportBase(abc.ABC):
             solver_parameters=self.solver_parameters,
             strong_bcs=self.strong_bcs,
         )
-        self._solver_setup = True
 
-    def solve(self, t: Number = 0, update_forcings: Optional[Callable] = None) -> None:
+        self._solver_ready = True
+
+    def solver_callback(self) -> None:
+        """Optional instructions to execute right after a solve."""
+        pass
+
+    def solve(self, t: Number = 0, update_forcings: Callable | None = None) -> None:
         """Advances solver in time."""
-        if not self._solver_setup:
+        if not self._solver_ready:
             self.setup_solver()
 
         self.ts.advance(t, update_forcings)
 
+        self.solver_callback()
+
 
 class GenericTransportSolver(GenericTransportBase):
-    """Timestepper and solver for an advection-diffusion equation.
+    """Advances in time a generic transport equation.
 
-    All combinations of advection, diffusion, sink, and source terms are valid.
+    All combinations of advection, diffusion, sink, and source terms are handled.
 
-    The scalar field is updated in place.
+    Note: The solution field is updated in place.
 
     Arguments:
       terms:
-        List of equation terms defined in scalar_equation.py
-      scalar_field:
-        Firedrake function for scalar field of interest
-      u:
-        Firedrake function for velocity
-      delta_t:
-        Simulation time step
+        List of equation terms (refer to terms_mapping)
+      solution:
+        Firedrake function for the field of interest
       timestepper:
         Runge-Kutta time integrator employing an explicit or implicit numerical scheme
-      eq_attrs:
-        Dicitionary of terms arguments and their values
+      delta_t:
+        Simulation time step
       solution_old:
-        Firedrake function holding the previous solution
+        Firedrake function holding the solution field at the previous time step
+      eq_attrs:
+        Dictionary of terms arguments and their values
       bcs:
-        Dictionary of identifier-value pairs specifying boundary conditions
+        Dictionary specifying boundary conditions (identifier, type, and value)
       solver_parameters:
-        Dicitionary of solver parameters or a string specifying a default configuration
+        Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
       su_diffusivity:
         Float activating the streamline-upwind stabilisation scheme and specifying the
@@ -242,145 +268,118 @@ class GenericTransportSolver(GenericTransportBase):
 
     """
 
-    _eq_attrs = ["diffusivity", "sink_coeff", "source"]
-
     def __init__(
         self,
         terms: str | list[str],
-        scalar_field: fd.Function,
-        u: fd.Function,
-        delta_t: fd.Constant,
+        solution: Function,
+        /,
         timestepper: RungeKuttaTimeIntegrator,
+        delta_t: Constant,
         *,
-        eq_attrs: Optional[dict[str, float]] = None,
-        solution_old: Optional[fd.Function] = None,
-        bcs: dict[int, dict[str, Number]] = {},
-        solver_parameters: Optional[dict[str, str | Number] | str] = None,
-        su_diffusivity: Optional[float] = None,
+        eq_attrs: dict[str, float] | None = None,
+        su_diffusivity: float | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(
-            scalar_field,
-            delta_t,
-            timestepper,
-            solution_old=solution_old,
-            bcs=bcs,
-            solver_parameters=solver_parameters,
-        )
+        super().__init__(solution, timestepper, delta_t, **kwargs)
 
         if isinstance(terms, str):
             terms = [terms]
 
-        if eq_attrs is None:
-            eq_attrs = {}
-        assert all(term_kwarg in self._eq_attrs for term_kwarg in eq_attrs)
+        self.terms = terms
+        self.eq_attrs = eq_attrs or {}
+        self.su_diffusivity = su_diffusivity
 
-        self.set_equation(terms, u, eq_attrs, su_diffusivity)
+    def set_equation(self) -> None:
+        if self.su_diffusivity is not None:
+            if (u := self.eq_attrs.get("u")) is None:
+                raise ValueError(
+                    "'u' must be included into `eq_attrs` if `su_diffusivity` is given."
+                )
 
-    def set_equation(
-        self,
-        terms: list[str],
-        u: fd.Function,
-        eq_attrs: dict[str, float],
-        su_diffusivity: Optional[float],
-    ) -> None:
-        eq_attrs["u"] = u
+            self.eq_attrs["su_nubar"] = self.set_su_nubar(u, self.su_diffusivity)
 
-        if su_diffusivity is not None:
-            eq_attrs["su_nubar"] = self.su_nubar(u, su_diffusivity)
-
-        eq_terms = [self.terms_mapping[term] for term in terms]
+        eq_terms = [self.terms_mapping[term] for term in self.terms]
 
         self.equation = Equation(
-            fd.TestFunction(self.Q),
-            self.Q,
+            self.test,
+            self.solution_space,
             eq_terms,
             mass_term=scalar_eq.mass_term,
-            eq_attrs=eq_attrs,
+            eq_attrs=self.eq_attrs,
             bcs=self.weak_bcs,
         )
 
 
 class EnergySolver(GenericTransportBase):
-    """Timestepper and solver for the energy equation.
+    """Advances in time the energy conservation equation.
 
-    The temperature, T, is updated in place.
+    Note: The solution field is updated in place.
 
     Arguments:
       approximation:
-        G-ADOPT base approximation describing the system of equations
-      T:
+        G-ADOPT approximation defining terms in the system of equations
+      solution:
         Firedrake function for temperature
       u:
         Firedrake function for velocity
-      delta_t:
-        Simulation time step
       timestepper:
         Runge-Kutta time integrator employing an explicit or implicit numerical scheme
+      delta_t:
+        Simulation time step
       solution_old:
-        Firedrake function holding the previous solution
+        Firedrake function holding the solution field at the previous time step
       bcs:
-        Dictionary of identifier-value pairs specifying boundary conditions
+        Dictionary specifying boundary conditions (identifier, type, and value)
       solver_parameters:
-        Dicitionary of solver parameters or a string specifying a default configuration
+        Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
       su_diffusivity:
-        Boolean indicating whether or not to use the streamline-upwind stabilisation scheme
+        Float activating the streamline-upwind stabilisation scheme and specifying the
+        corresponding diffusivity
 
     """
 
     def __init__(
         self,
-        T: fd.Function,
-        u: fd.Function,
         approximation: BaseApproximation,
-        delta_t: fd.Constant,
+        solution: Function,
+        u: Function,
+        /,
         timestepper: RungeKuttaTimeIntegrator,
+        delta_t: Constant,
         *,
-        solution_old: Optional[fd.Function] = None,
-        bcs: dict[int, dict[str, Number]] = {},
-        solver_parameters: Optional[dict[str, str | Number] | str] = None,
-        su_diffusivity: Optional[float] = None,
+        su_diffusivity: float | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(
-            T,
-            delta_t,
-            timestepper,
-            solution_old=solution_old,
-            bcs=bcs,
-            solver_parameters=solver_parameters,
-        )
+        super().__init__(solution, timestepper, delta_t, **kwargs)
 
-        self.set_equation(self.terms_mapping.keys(), approximation, u, su_diffusivity)
+        self.approximation = approximation
+        self.u = u
+        self.su_diffusivity = su_diffusivity
 
-    def set_equation(
-        self,
-        terms: list[str],
-        approximation: BaseApproximation,
-        u: fd.Function,
-        su_diffusivity: Optional[float],
-    ) -> None:
-        rho_cp = approximation.rhocp()
+    def set_equation(self) -> None:
+        rho_cp = self.approximation.rhocp()
 
         eq_attrs = {
             "advective_velocity_scaling": rho_cp,
-            "diffusivity": approximation.kappa(),
-            "reference_for_diffusion": approximation.Tbar,
-            "sink_coeff": approximation.linearized_energy_sink(u),
-            "source": approximation.energy_source(u),
-            "u": u,
+            "diffusivity": self.approximation.kappa(),
+            "reference_for_diffusion": self.approximation.Tbar,
+            "sink_coeff": self.approximation.linearized_energy_sink(self.u),
+            "source": self.approximation.energy_source(self.u),
+            "u": self.u,
         }
 
-        if su_diffusivity is not None:
-            eq_attrs["su_nubar"] = self.su_nubar(u, su_diffusivity)
+        if self.su_diffusivity is not None:
+            eq_attrs["su_nubar"] = self.set_su_nubar(self.u, self.su_diffusivity)
 
-        eq_terms = [self.terms_mapping[term] for term in terms]
+        eq_terms = self.terms_mapping.values()
 
         self.equation = Equation(
-            fd.TestFunction(self.Q),
-            self.Q,
+            self.test,
+            self.solution_space,
             eq_terms,
             mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
             eq_attrs=eq_attrs,
-            approximation=approximation,
+            approximation=self.approximation,
             bcs=self.weak_bcs,
         )

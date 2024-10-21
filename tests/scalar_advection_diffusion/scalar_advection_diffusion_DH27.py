@@ -69,13 +69,12 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     # source values. We use the diagonally implicit DIRK33 Runge-Kutta method for
     # timestepping.
     terms = ["advection", "diffusion", "source"]
-    eq_attrs = {"diffusivity": kappa, "source": 1}
+    eq_attrs = {"diffusivity": kappa, "source": 1, "u": u}
     adv_diff_solver = GenericTransportSolver(
         terms,
         q,
-        u,
-        dt,
         DIRK33,
+        dt,
         eq_attrs=eq_attrs,
         bcs=bcs,
         su_diffusivity=kappa if su_advection else None,
