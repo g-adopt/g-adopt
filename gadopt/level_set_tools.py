@@ -8,7 +8,6 @@ The `entrainment` function enables users to easily calculate material entrainmen
 
 import operator
 from numbers import Number
-from typing import Optional
 
 import firedrake as fd
 import numpy as np
@@ -95,8 +94,9 @@ class LevelSetSolver:
         tstep_alg: type[RungeKuttaTimeIntegrator],
         epsilon: fd.Constant,
         subcycles: int = 1,
-        reini_params: Optional[dict] = None,
-        solver_params: Optional[dict] = None,
+        bcs: dict = {},
+        reini_params: dict | None = None,
+        solver_params: dict | None = None,
     ) -> None:
         """Initialises the solver instance.
 
@@ -115,6 +115,8 @@ class LevelSetSolver:
               A UFL constant denoting the thickness of the hyperbolic tangent profile.
             reini_params:
               A dictionary containing parameters used in the reinitialisation approach.
+            bcs:
+              Dictionary of identifier-value pairs specifying boundary conditions
             solver_params:
               A dictionary containing solver parameters used in the advection and
               reinitialisation approaches.
@@ -124,6 +126,7 @@ class LevelSetSolver:
         self.tstep = tstep
         self.tstep_alg = tstep_alg
         self.subcycles = subcycles
+        self.bcs = bcs
 
         self.reini_params = reini_params or reini_params_default
         self.solver_params = solver_params or solver_params_default
@@ -201,6 +204,7 @@ class LevelSetSolver:
             self.tstep / self.subcycles,
             self.tstep_alg,
             solution_old=self.solution_old,
+            bcs=self.bcs,
             solver_parameters=self.solver_params,
         )
 
@@ -220,7 +224,7 @@ class LevelSetSolver:
             solver_parameters=self.solver_params,
         )
 
-    def solve(self, step: int, equation: Optional[str] = None) -> None:
+    def solve(self, step: int, equation: str | None = None) -> None:
         """Updates the level-set function.
 
         Calls advection and reinitialisation solvers within a subcycling loop.

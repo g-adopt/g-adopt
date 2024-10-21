@@ -38,13 +38,9 @@ interface_y = cosine_curve(interface_x, *isd_params)
 line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
 sl.prepare(line_string)
 
-node_coords_x, node_coords_y = node_coordinates(psi)
 node_relation_to_curve = [
-    (
-        node_coord_y > cosine_curve(node_coord_x, *isd_params),
-        line_string.distance(sl.Point(node_coord_x, node_coord_y)),
-    )
-    for node_coord_x, node_coord_y in zip(node_coords_x, node_coords_y)
+    (y > cosine_curve(x, *isd_params), line_string.distance(sl.Point(x, y)))
+    for x, y in node_coordinates(psi)
 ]
 
 signed_dist_to_interface = Function(K)

@@ -49,31 +49,35 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 import shapely as sl  # noqa: E402
 from mpi4py import MPI  # noqa: E402
 
-# Shapely Polygon representation of the material interface
+# Shapely Polygon representing the initial lithosphere
 slab = sl.Polygon(
     [
-        (1e6, 7e5),
+        (1e6, ly),
         (1e6, 5e5),
         (1.1e6, 5e5),
         (1.1e6, 6e5),
-        (3e6 + 1e5, 6e5),
-        (3e6 + 1e5, 7e5),
-        (1e6, 7e5),
+        (lx + 1e5, 6e5),
+        (lx + 1e5, ly),
+        (1e6, ly),
     ]
 )
 sl.prepare(slab)
+# Shapely LineString representing the domain's free surface
+free_surface = sl.LineString([(0, ly), (lx, ly)])
+sl.prepare(free_surface)
+# Shapely union of the lithosphere boundary and free surface
+material_interface = sl.union(free_surface, slab.boundary)
 
-node_coords_x, node_coords_y = node_coordinates(psi)  # Extract node coordinates
 # Determine to which material nodes belong and calculate distance to interface
-node_relation_to_curve = [
-    (slab.contains(sl.Point(x, y)), slab.boundary.distance(sl.Point(x, y)))
-    for x, y in zip(node_coords_x, node_coords_y)
+node_relation_to_interface = [
+    (slab.contains(sl.Point(x, y)), material_interface.distance(sl.Point(x, y)))
+    for x, y in node_coordinates(psi)
 ]
 
 # Define the signed-distance function and overwrite its value array
 signed_dist_to_interface = Function(K)
 signed_dist_to_interface.dat.data[:] = [
-    dist if is_inside else -dist for is_inside, dist in node_relation_to_curve
+    dist if is_inside else -dist for is_inside, dist in node_relation_to_interface
 ]
 
 # Define thickness of the hyperbolic tangent profile
@@ -126,10 +130,10 @@ t_adapt = TimestepAdaptor(
 # on the left and ride sides. No boundary conditions are required for level set, as the
 # numerical domain is closed.
 
-rho_air = 0
+rho_ext = 0
 stokes_bcs = {
     bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 0, "rho_diff": rho - rho_air}},
+    top_id: {"free_surface": {"eta_index": 0, "rho_diff": rho - rho_ext}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }

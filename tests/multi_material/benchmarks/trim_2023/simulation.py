@@ -46,22 +46,12 @@ def initialise_temperature(temperature):
 
 
 def internal_heating_rate(int_heat_rate, simu_time):
-    node_coords_x, node_coords_y = ga.node_coordinates(int_heat_rate)
-
-    # flib can be obtained from
-    # https://github.com/seantrim/exact-thermochem-solution
+    # flib can be obtained from https://github.com/seantrim/exact-thermochem-solution
     analytical_values = []
-    for coord_x, coord_y in zip(node_coords_x, node_coords_y):
+    for x, y in ga.node_coordinates(int_heat_rate):
         analytical_values.append(
             flib.h_python(
-                coord_x,
-                coord_y,
-                float(simu_time),
-                domain_dims[0],
-                k,
-                intercept,
-                Ra,
-                Ra * B,
+                x, y, float(simu_time), domain_dims[0], k, intercept, Ra, Ra * B
             )
         )
 
