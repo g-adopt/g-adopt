@@ -6,7 +6,7 @@ depending on what they would like to achieve.
 
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
 from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
 from firedrake.ufl_expr import extract_unique_domain
