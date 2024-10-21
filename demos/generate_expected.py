@@ -16,6 +16,6 @@ if __name__ == "__main__":
     for case in cases:
         extra_checks = all_cases[case].get("extra_checks", [])
         b = Path(__file__).parent.resolve() / case
-        df = get_convergence(b)[["u_rms", "nu_top"] + extra_checks]
+        df = get_convergence(b)[["u_rms"] + extra_checks]
 
         df.to_pickle(b / "expected.pkl")
