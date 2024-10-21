@@ -8,7 +8,7 @@ from .approximations import (
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
-from .energy_solver import AdvectionDiffusionSolver, EnergySolver
+from .energy_solver import GenericTransportSolver, EnergySolver
 from .level_set_tools import (
     LevelSetSolver,
     Material,

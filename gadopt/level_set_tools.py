@@ -16,7 +16,7 @@ import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
 
 from . import scalar_equation as scalar_eq
-from .energy_solver import AdvectionDiffusionSolver
+from .energy_solver import GenericTransportSolver
 from .equations import Equation
 from .time_stepper import eSSPRKs3p3
 
@@ -285,7 +285,7 @@ class LevelSetSolver:
         """Sets up the time steppers for advection and reinitialisation."""
         test = fd.TestFunction(self.func_space)
 
-        self.ls_solver = AdvectionDiffusionSolver(
+        self.ls_solver = GenericTransportSolver(
             "advection",
             self.level_set,
             self.u,

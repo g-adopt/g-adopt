@@ -1,5 +1,5 @@
 # Demo for scalar advection-diffusion - this is adapted from the scalar advection demo
-# again using G-ADOPT's AdvectionDiffusionSolver and a CG discretisation with Streamline
+# again using G-ADOPT's GenericTransportSolver and a CG discretisation with Streamline
 # Upwind (SU) stabilisation, albeit here we introduce some explicit diffusion.
 
 from gadopt import *
@@ -58,7 +58,7 @@ T = 10.
 dt = T/600.0
 
 
-# Use G-ADOPT's AdvectionDiffusionSolver to advect the tracer. We use the diagonaly
+# Use G-ADOPT's GenericTransportSolver to advect the tracer. We use the diagonally
 # implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the boundary
 # conditions will be applied strongly by the solver.
 terms = ["advection", "diffusion"]
@@ -66,7 +66,7 @@ terms_kwargs = {"diffusivity": kappa}
 q_top = 1.0
 q_bottom = 0.0
 bcs = {3: {'T': q_bottom}, 4: {'T': q_top}}
-adv_diff_solver = AdvectionDiffusionSolver(
+adv_diff_solver = GenericTransportSolver(
     terms, q, u, dt, DIRK33, terms_kwargs=terms_kwargs, bcs=bcs, su_diffusivity=kappa
 )
 

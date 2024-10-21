@@ -64,13 +64,13 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     # 'T' sets strong dirichlet boundary conditions for G-ADOPT's energy solver
     bcs = {1: {'T': q_left}, 2: {'T': q_right}}
 
-    # Use G-ADOPT's AdvectionDiffusionSolver to advect the tracer. The system is
+    # Use G-ADOPT's GenericTransportSolver to advect the tracer. The system is
     # considered non-dimensional and controlled only by the thermal diffusivity and heat
-    # source values. We use the diagonaly implicit DIRK33 Runge-Kutta method for
+    # source values. We use the diagonally implicit DIRK33 Runge-Kutta method for
     # timestepping.
     terms = ["advection", "diffusion", "source"]
     terms_kwargs = {"diffusivity": kappa, "source": 1}
-    adv_diff_solver = AdvectionDiffusionSolver(
+    adv_diff_solver = GenericTransportSolver(
         terms,
         q,
         u,

@@ -1,5 +1,5 @@
 # Demo for pure scalar advection - this is adapted from the Firedrake DG_advection demo,
-# but here we use G-ADOPT's AdvectionDiffusionSolver and use a CG discretisation with
+# but here we use G-ADOPT's GenericTransportSolver and use a CG discretisation with
 # Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
@@ -71,11 +71,11 @@ T = 2*pi
 dt = T/600.0
 q_in = Constant(1.0)
 
-# Use G-ADOPT's AdvectionDiffusionSolver to advect the tracer. We only include an
+# Use G-ADOPT's GenericTransportSolver to advect the tracer. We only include an
 # advection term and apply weak boundary conditions on inflow regions.
 bc_in = {'q': q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
-adv_diff_solver = AdvectionDiffusionSolver(
+adv_diff_solver = GenericTransportSolver(
     "advection", q, u, dt, DIRK33, bcs=bcs, su_diffusivity=0.0
 )
 

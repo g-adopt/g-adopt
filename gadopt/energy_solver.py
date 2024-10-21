@@ -18,7 +18,7 @@ from .time_stepper import RungeKuttaTimeIntegrator
 from .utility import DEBUG, INFO, absv, is_continuous, log, log_level, su_nubar
 
 __all__ = [
-    "AdvectionDiffusionSolver",
+    "GenericTransportSolver",
     "EnergySolver",
     "direct_energy_solver_parameters",
     "iterative_energy_solver_parameters",
@@ -59,7 +59,7 @@ Note:
 """
 
 
-class AdvectionDiffusionBase(abc.ABC):
+class GenericTransportBase(abc.ABC):
     """Timestepper and solver for an equation involving advection and diffusion terms.
 
     All combinations of advection, diffusion, sink, and source terms are handled.
@@ -209,7 +209,7 @@ class AdvectionDiffusionBase(abc.ABC):
         self.ts.advance(t, update_forcings)
 
 
-class AdvectionDiffusionSolver(AdvectionDiffusionBase):
+class GenericTransportSolver(GenericTransportBase):
     """Timestepper and solver for an advection-diffusion equation.
 
     All combinations of advection, diffusion, sink, and source terms are valid.
@@ -300,7 +300,7 @@ class AdvectionDiffusionSolver(AdvectionDiffusionBase):
         )
 
 
-class EnergySolver(AdvectionDiffusionBase):
+class EnergySolver(GenericTransportBase):
     """Timestepper and solver for the energy equation.
 
     The temperature, T, is updated in place.
