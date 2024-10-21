@@ -15,7 +15,7 @@ from typing import Optional
 import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
 
-from . import scalar_equation as scal_eq
+from . import scalar_equation as scalar_eq
 from .energy_solver import AdvectionDiffusionSolver
 from .equations import Equation
 from .time_stepper import eSSPRKs3p3
@@ -230,8 +230,8 @@ class LevelSetSolver:
 
         self.proj_solver = self.gradient_L2_proj()
 
-        self.ls_terms_kwargs = {"u": velocity}
-        self.reini_terms_kwargs = {
+        self.ls_eq_attrs = {"u": velocity}
+        self.reini_eq_attrs = {
             "level_set_grad": self.level_set_grad_proj,
             "epsilon": epsilon,
         }
@@ -298,8 +298,8 @@ class LevelSetSolver:
             test,
             self.func_space,
             reinitialisation_term,
-            mass_term=scal_eq.mass_term,
-            terms_kwargs=self.reini_terms_kwargs,
+            mass_term=scalar_eq.mass_term,
+            eq_attrs=self.reini_eq_attrs,
         )
         self.reini_ts = self.reini_params["tstep_alg"](
             reinitialisation_equation,
@@ -533,3 +533,7 @@ def entrainment(
         fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
         / material_area
     )
+
+
+reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
+reinitialisation_term.optional_attrs = set()

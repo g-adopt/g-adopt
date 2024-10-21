@@ -25,13 +25,6 @@ from firedrake import *
 from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous, normal_is_continuous, tensor_jump, upward_normal
 
-__all__ = [
-    "divergence_term",
-    "momentum_source_term",
-    "pressure_gradient_term",
-    "viscosity_term",
-]
-
 
 def viscosity_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
@@ -59,10 +52,8 @@ def viscosity_term(
     identity = Identity(dim)
     compressible_stress = eq.approximation.compressible
 
-    mu = eq.mu
-    stress = 2 * mu * sym(grad(eq.u))
-    if compressible_stress:
-        stress -= 2 / 3 * mu * identity * div(eq.u)
+    mu = eq.approximation.mu
+    stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
     sigma = interior_penalty_factor(eq)
@@ -85,9 +76,9 @@ def viscosity_term(
     # NOTE: "un" can be combined with "stress" provided the stress force is tangential
     # (e.g. no normal flow with wind)
     for bc_id, bc in eq.bcs.items():
-        if "u" in bc and any(bc_type in bc for bc_type in ["drag", "stress", "un"]):
+        if "u" in bc and any(bc_type in bc for bc_type in ["stress", "un"]):
             raise ValueError(
-                '"drag", "stress", or "un" cannot be specified if "u" is already given.'
+                '"stress" or "un" cannot be specified if "u" is already given.'
             )
         if "normal_stress" in bc and any(bc_type in bc for bc_type in ["u", "un"]):
             raise ValueError(
@@ -136,11 +127,6 @@ def viscosity_term(
         if "normal_stress" in bc:
             F += dot(eq.test, bc["normal_stress"] * eq.n) * eq.ds(bc_id)
 
-        # if "drag" in bc:  # (bottom) drag of the form tau = -drag trial |trial|
-        #     drag = bc["drag"]
-        #     unorm = pow(dot(trial_lagged, trial_lagged) + 1e-6, 0.5)
-        #     F += dot(eq.test, drag * unorm * trial) * eq.ds(bc_id)
-
     return -F
 
 
@@ -166,7 +152,7 @@ def divergence_term(
 ) -> Form:
     assert normal_is_continuous(eq.u)
 
-    rho = eq.approximation.rho
+    rho = eq.rho_mass
     F = -dot(eq.test, div(rho * eq.u)) * eq.dx
 
     # Add boundary integral for bcs that specify the normal component of u.
@@ -188,5 +174,15 @@ def momentum_source_term(
     return -F
 
 
+viscosity_term.required_attrs = {"stress"}
+viscosity_term.optional_attrs = {"interior_penalty"}
+pressure_gradient_term.required_attrs = {"p"}
+pressure_gradient_term.optional_attrs = set()
+divergence_term.required_attrs = {"u", "rho_mass"}
+divergence_term.optional_attrs = set()
+momentum_source_term.required_attrs = {"p", "T"}
+momentum_source_term.optional_attrs = set()
+
 residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]
-residual_terms_stokes = [residual_terms_momentum, divergence_term]
+residual_terms_mass = divergence_term
+residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]

@@ -17,10 +17,17 @@ from .level_set_tools import (
     field_interface,
 )
 from .limiter import VertexBasedP1DGLimiter
-from .preconditioners import SPDAssembledPC
+from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .stokes_integrators import StokesSolver, create_stokes_nullspace
-from .time_stepper import CrankNicolsonRK, ImplicitMidpoint, eSSPRKs3p3, eSSPRKs10p3
+from .time_stepper import (
+    BackwardEuler,
+    CrankNicolsonRK,
+    ImplicitMidpoint,
+    eSSPRKs3p3,
+    eSSPRKs10p3,
+)
 from .utility import (
+    InteriorBC,
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,

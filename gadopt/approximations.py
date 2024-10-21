@@ -57,6 +57,16 @@ class BaseApproximation(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def stress(self, u: Function) -> ufl.core.expr.Expr:
+        """Defines the deviatoric stress.
+
+        Returns:
+          A UFL expression for the deviatoric stress.
+
+        """
+        pass
+
+    @abc.abstractmethod
     def buoyancy(self, p: Function, T: Function) -> ufl.core.expr.Expr:
         """Defines the buoyancy force.
 
@@ -127,6 +137,32 @@ class BaseApproximation(abc.ABC):
         """
         pass
 
+    @abc.abstractmethod
+    def free_surface_terms(self, p, T, eta, theta_fs) -> tuple[ufl.core.expr.Expr]:
+        """Defines free surface normal stress in the momentum equation and prefactor
+        multiplying the free surface equation.
+
+        The normal stress depends on the density contrast across the free surface.
+        Depending on the `variable_rho_fs` argument, this contrast either involves the
+        interior reference density or the full interior density that accounts for
+        changes in temperature and composition within the domain. For dimensional
+        simulations, the user should specify `delta_rho_fs`, defined as the difference
+        between the reference interior density and the exterior density. For
+        non-dimensional simulations, the user should specify `RaFS`, the equivalent of
+        the Rayleigh number for the density contrast across the free surface.
+
+        The prefactor multiplies the free surface equation to ensure the top-right and
+        bottom-left corners of the block matrix remain symmetric. This is similar to
+        rescaling eta -> eta_tilde in Kramer et al. (2012, see block matrix shown in
+        Eq. 23).
+
+        Returns:
+          A UFL expression for the free surface normal stress and a UFL expression for
+          the free surface equation prefactor.
+
+        """
+        pass
+
 
 class BoussinesqApproximation(BaseApproximation):
     """Expressions for the Boussinesq approximation.
@@ -136,6 +172,7 @@ class BoussinesqApproximation(BaseApproximation):
 
     Arguments:
       Ra:        Rayleigh number
+      mu:        dynamic viscosity
       rho:       reference density
       alpha:     coefficient of thermal expansion
       T0:        reference temperature
@@ -158,6 +195,7 @@ class BoussinesqApproximation(BaseApproximation):
         self,
         Ra: Function | Number,
         *,
+        mu: Function | Number = 1,
         rho: Function | Number = 1,
         alpha: Function | Number = 1,
         T0: Function | Number = 0,
@@ -168,6 +206,7 @@ class BoussinesqApproximation(BaseApproximation):
         H: Function | Number = 0,
     ):
         self.Ra = ensure_constant(Ra)
+        self.mu = ensure_constant(mu)
         self.rho = ensure_constant(rho)
         self.alpha = ensure_constant(alpha)
         self.T0 = T0
@@ -176,6 +215,9 @@ class BoussinesqApproximation(BaseApproximation):
         self.RaB = RaB
         self.delta_rho = ensure_constant(delta_rho)
         self.H = ensure_constant(H)
+
+    def stress(self, u):
+        return 2 * self.mu * sym(grad(u))
 
     def buoyancy(self, p, T):
         return (
@@ -197,6 +239,17 @@ class BoussinesqApproximation(BaseApproximation):
 
     def energy_source(self, u):
         return self.rho * self.H
+
+    def free_surface_terms(
+        self, p, T, eta, theta_fs, *, variable_rho_fs=True, RaFS=1, delta_rho_fs=1
+    ):
+        free_surface_normal_stress = RaFS * delta_rho_fs * self.g * eta
+        if variable_rho_fs:
+            free_surface_normal_stress -= self.buoyancy(p, T) * eta
+
+        prefactor = -theta_fs * RaFS * delta_rho_fs * self.g
+
+        return free_surface_normal_stress, prefactor
 
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):
@@ -230,17 +283,13 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
     """
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, *, mu: Number = 1, H: Optional[Number] = None, **kwargs):
+    def __init__(self, Ra: Number, Di: Number, *, H: Optional[Number] = None, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
-        self.mu = mu
         self.H = H
 
     def viscous_dissipation(self, u):
-        stress = 2 * self.mu * sym(grad(u))
-        if self.compressible:  # (used in AnelasticLiquidApproximations below)
-            stress -= 2/3 * self.mu * div(u) * Identity(u.ufl_shape[0])
-        phi = inner(stress, grad(u))
+        phi = inner(self.stress(u), grad(u))
         return phi * self.Di / self.Ra
 
     def linearized_energy_sink(self, u):
@@ -297,6 +346,11 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         super().__init__(Ra, Di, **kwargs)
         self.Tbar = Tbar
         self.cp = cp
+
+    def stress(self, u):
+        stress = super().stress(u)
+        dim = len(u)  # Geometric dimension, i.e. 2D or 3D
+        return stress - 2/3 * self.mu * Identity(dim) * div(u)
 
     def rho_continuity(self):
         return self.rho

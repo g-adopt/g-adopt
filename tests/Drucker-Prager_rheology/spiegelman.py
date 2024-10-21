@@ -201,12 +201,13 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
 
     # SCK:
     T = 0
-    approximation = BoussinesqApproximation(0)
+    approximation_nl = BoussinesqApproximation(0, mu=mu_nl)
+    approximation = BoussinesqApproximation(0, mu=mu)
     bcs = {left_id: {'ux': 1}, right_id: {'ux': -1}, bottom_id: {'uy': 0}}
-    picard_solver = StokesSolver(z, T, approximation, mu=mu_nl,
-                                 bcs=bcs, solver_parameters=initial_picard_solver_parameters)
-    newton_solver = StokesSolver(z, T, approximation, mu=mu,
-                                 bcs=bcs, solver_parameters=newton_solver_parameters)
+    picard_solver = StokesSolver(z, T, approximation_nl, bcs=bcs,
+                                 solver_parameters=initial_picard_solver_parameters)
+    newton_solver = StokesSolver(z, T, approximation, bcs=bcs,
+                                 solver_parameters=newton_solver_parameters)
 
     if stabilisation:
         # need a trial function to express the Jacobian as a UFL 2-form:

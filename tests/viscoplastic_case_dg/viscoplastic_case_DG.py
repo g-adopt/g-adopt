@@ -37,6 +37,8 @@
 # in an enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
 # conditions on all boundaries).
 #
+# Relative to the visco-plastic tutorial, this case has a DG temperature field.
+#
 # As with all examples, the first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
 
@@ -53,7 +55,7 @@ left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+Q = FunctionSpace(mesh, "DG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
 z = Function(Z)  # A field over the mixed function space Z.
@@ -67,7 +69,6 @@ z.subfunctions[1].rename("Pressure")
 # depends on temperature here, we setup and initialise our temperature earlier than in the previous tutorials.
 
 # +
-
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
 T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
@@ -79,9 +80,6 @@ epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with tolerance t
 mu_lin = exp(-gamma_T*T + gamma_Z*(1 - X[1]))  # linear component of rheological formulation
 mu_plast = mu_star + (sigma_y / epsii)  # plastic component of rheological formulation
 mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
-
-# Now that we have defined our expression for the viscosity field
-# we can pass this to our approximation.
 
 Ra = Constant(100)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra, mu=mu)
@@ -172,7 +170,7 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
