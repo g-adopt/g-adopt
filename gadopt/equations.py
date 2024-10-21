@@ -6,6 +6,7 @@ required by Firedrake solvers.
 
 """
 
+from collections.abc import Iterable
 from dataclasses import KW_ONLY, InitVar, dataclass, field
 from numbers import Number
 from typing import Any, Callable, Optional
@@ -66,7 +67,7 @@ class Equation:
         eq_attrs: dict[str, Any],
         quad_degree: Optional[int],
     ) -> None:
-        if not isinstance(residual_terms, list):
+        if not isinstance(residual_terms, Iterable):
             residual_terms = [residual_terms]
         self.residual_terms = residual_terms
 

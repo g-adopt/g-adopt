@@ -74,6 +74,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           . /home/firedrake/firedrake/bin/activate
+          python3 -m pip install siphash24
           python3 -m pip install .[demos,optimisation]
 
       - name: Get Muller et al 2022 plate reconstructions
