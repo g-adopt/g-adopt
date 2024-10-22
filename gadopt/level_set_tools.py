@@ -288,8 +288,8 @@ class LevelSetSolver:
         self.ls_solver = GenericTransportSolver(
             "advection",
             self.level_set,
-            self.tstep_alg,
             self.tstep / self.subcycles,
+            self.tstep_alg,
             eq_attrs={"u": self.u},
             solver_parameters=self.solver_params,
         )
