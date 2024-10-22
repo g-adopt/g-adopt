@@ -204,7 +204,9 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id, quad_degree=6)
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
 # passing in the approximation, nullspace and near-nullspace information configured above.
 
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(
+    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
+)
 energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,

@@ -273,7 +273,9 @@ plog.log_str("timestep time age dt maxchange u_rms u_rms_top nu_top nu_base ener
 
 gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
 
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(
+    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
+)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              constant_jacobian=True,

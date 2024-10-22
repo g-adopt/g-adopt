@@ -74,7 +74,9 @@ def model(ref_level, nlayers, delta_t, steps=None):
         top_id: {'un': 0},
     }
 
-    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+    energy_solver = EnergySolver(
+        approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
+    )
     energy_solver.solver_parameters['ksp_converged_reason'] = None
     energy_solver.solver_parameters['ksp_view'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-7

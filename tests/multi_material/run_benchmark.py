@@ -206,11 +206,11 @@ approximation = ga.BoussinesqApproximation(
     H=int_heat_rate_ufl,
 )
 energy_solver = ga.EnergySolver(
+    approximation,
     temperature,
     velocity,
-    approximation,
-    timestep,
     ga.ImplicitMidpoint,
+    timestep,
     bcs=Simulation.temp_bcs,
 )
 stokes_nullspace = ga.create_stokes_nullspace(

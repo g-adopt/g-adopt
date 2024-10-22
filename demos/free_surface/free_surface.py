@@ -167,7 +167,7 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 
 # +
 energy_solver = EnergySolver(
-    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(
