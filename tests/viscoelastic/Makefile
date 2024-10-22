@@ -1,10 +1,11 @@
-cases := zhong
+cases := elastic viscoelastic viscous
+output_files := $(foreach case,$(cases),errors-$(case)-zhong-free-surface.dat)
 
-all: $(cases)
+all: $(output_files)
 
-
-$(cases): 
-	echo "running viscoelastic $@ free surface formulation "
-	tsp -N 1 -f python3 $@_viscoelastic_free_surface.py --case elastic
-	tsp -N 1 -f python3 $@_viscoelastic_free_surface.py --case viscoelastic
-	tsp -N 1 -f python3 $@_viscoelastic_free_surface.py --case viscous
+errors-%-zhong-free-surface.dat: zhong_viscoelastic_free_surface.py
+	echo "running $< on $*" >&1
+	/usr/bin/time --format="$< $* finished in %E" tsp -f python3 $< --case $*
+	
+clean:
+	rm -rf errors*.dat
