@@ -1,4 +1,4 @@
-cases := viscoelastic_loading 
+cases := viscoelastic
 
 all: $(cases)
 
