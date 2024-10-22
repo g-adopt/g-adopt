@@ -1,7 +1,7 @@
 # Idealised 2-D viscoelastic loading problem in a square box
 # =======================================================
 #
-# In this tutorial, we examine an idealised 2-D loading problem in a square box. Here we will focus purely on viscoelastic deformation by a surface load, i.e. a synthetic ice sheet! In the next tutorials we will build up the complexity of our physical approximation of Glacial Isostatic Adjustment (GIA), linked to feedbacks from gravity, rotation, transient rheology and ultimately sea level.
+# In this tutorial, we examine an idealised 2-D loading problem in a square box. Here we will focus purely on viscoelastic deformation by a surface load, i.e. a synthetic ice sheet!
 #
 # You may already have seen how G-ADOPT can be applied to mantle convection problems in our other tutorials. Generally the setup of the G-ADOPT model should be familiar but the equations we are solving and the necessary input fields will be slightly different.
 #
@@ -108,7 +108,7 @@
 # \begin{equation}
 #     \boldsymbol{\epsilon}^e  = \dfrac{1}{2 \mu} (\boldsymbol{\sigma}_{L1} + p \textbf{I})
 # \end{equation}
-# where $\boldsymbol{\epsilon}^v$ and $\boldsymbol{\epsilon}^e$ are the strain tensors for viscous and elastic deformation, $\eta$  is the viscosity, $\mu$ is the shear modulus, $\textbf{I}$ is the Identity matrix, $p$ is the perturbation pressure, and $\boldsymbol{\sigma}_{L1} $ is the incremental lagrangian stress tensor. Note $p$ is a perturbation pressure as we have already removed the hydostatic background state earlier. An overhead dot notes the time derivative i.e the viscous strain rate is proportional to stress, while the elastic strain  is proportional to stress. The total strain is
+# where $\overset{\cdot}{\boldsymbol{\epsilon}}^v $ is the viscous strain rate tensor, $\boldsymbol{\epsilon}^e$ is the elastic strain tensor, $\eta$  is the viscosity, $\mu$ is the shear modulus, $\textbf{I}$ is the Identity matrix, $p$ is the perturbation pressure, and $\boldsymbol{\sigma}_{L1} $ is the incremental lagrangian stress tensor. Note $p$ is a perturbation pressure as we have already removed the hydostatic background state earlier. An overhead dot notes the time derivative i.e the viscous strain rate is proportional to stress, while the elastic strain  is proportional to stress. The total strain is
 # \begin{equation}
 #     \boldsymbol{\epsilon} = \boldsymbol{\epsilon}^v + \boldsymbol{\epsilon}^e = \dfrac{1}{2} ( \nabla \textbf{u} + (\nabla \textbf{u})^T),
 # \end{equation}
@@ -158,7 +158,7 @@
 # \begin{equation}
 #     \dfrac{\Delta t}{2} (\boldsymbol{\sigma}_{L1}^n + \boldsymbol{\sigma}_{L1}^{n-1}) + \dfrac{\eta}{ \mu} (\boldsymbol{\sigma}_{L1}^n - \boldsymbol{\sigma}_{L1}) = -\dfrac{\Delta t}{2} (p^n + p^{n-1}) \textbf{I} - \dfrac{\eta}{ \mu}(p^n - p^{n-1})  \textbf{I} + 2 \eta (\boldsymbol{\epsilon}^n - \boldsymbol{\epsilon}^{n-1}).
 # \end{equation}
-# Using maxwell time, $\alpha = \eta / \mu$, this simplifies to
+# Using Maxwell time, $\alpha = \eta / \mu$, this simplifies to
 # \begin{equation}
 #     \boldsymbol{\sigma}_{L1}^n  = - p^n \textbf{I} + \dfrac{2 \eta}{\alpha + \Delta t / 2}  \Delta \boldsymbol{\epsilon}^n + \dfrac{\alpha - \Delta t / 2}{\alpha + \Delta t / 2}(\boldsymbol{\sigma}_{L1}^{n-1} + p^{n-1} \textbf{I}).
 # \end{equation}
@@ -188,10 +188,10 @@ from gadopt.utility import step_func
 
 # +
 # Set up geometry:
-L = 1500e3  # length of the domain in m
+L = 1500e3  # Length of the domain in m
 D = 2891e3  # Depth of domain in m
 nx = 40  # Number of horizontal cells
-nz = 40  # number of vertical cells
+nz = 40  # Number of vertical cells
 
 # Let's print out the grid resolution in km
 log(f"Horizontal resolution {L/nx/1000} km")
@@ -200,21 +200,18 @@ log(f"Vertical resolution {D/nz/1000} km")
 mesh = RectangleMesh(nx, nz, L, D, name="mesh", quadrilateral=True)
 mesh.cartesian = True
 
-# Shift top of mesh to z = 0.
-mesh.coordinates.dat.data[:, 1] -= D
-
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 # -
-# We now need to choose finite element function spaces. `V` , `W`, `TP1` and `R` are symbolic
+# We now need to choose finite element function spaces. `V` , `W`, `S` and `R` are symbolic
 # variables representing function spaces. They also contain the
-# function space’s computational implementation, recording the
+# function space's computational implementation, recording the
 # association of degrees of freedom with the mesh and pointing to the
 # finite element basis. We will choose Q2-Q1 for the mixed incremental displacement-pressure similar to our mantle convection demos. This is a Taylor-Hood element pair which has good properties for Stokes modelling. We also initilaise a discontinuous tensor function space that wil store our previous values of the deviatoric stress, as the gradient of the continous incremental displacement field will be discontinuous.
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "Q", 2)  # (Incremental) Displacement function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
-TP1 = TensorFunctionSpace(mesh, "DQ", 2)  # (Discontinuous) Stress tensor function space (tensor)
+S = TensorFunctionSpace(mesh, "DQ", 2)  # (Discontinuous) Stress tensor function space (tensor)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 # Function spaces can be combined in the natural way to create mixed
@@ -238,7 +235,7 @@ u_.rename("Incremental Displacement")
 p_.rename("Pressure")
 
 displacement = Function(V, name="displacement").assign(0)
-stress_old = Function(TP1, name="stress_old").assign(0)
+stress_old = Function(S, name="stress_old").assign(0)
 # -
 
 # We can output function space information, for example the number of degrees
@@ -262,14 +259,14 @@ radius_values = [6371e3, 6301e3, 5951e3, 5701e3]
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [1e25, 1e21, 1e21, 2e21]
-# N.b. that we have modified the viscosity of the Lithosphere viscosity from
+# N.b. that we have modified the viscosity of the Lithosphere from
 # Spada et al 2011 because we are using coarse grid resolution
 
 
 def initialise_background_field(field, background_values, vertical_tanh_width=20e3):
     profile = background_values[0]
     sharpness = 1 / vertical_tanh_width
-    depth = X[1]
+    depth = X[1] - D
     for i in range(1, len(background_values)):
         centre = radius_values[i] - radius_values[0]
         mag = background_values[i] - background_values[i-1]
@@ -288,7 +285,7 @@ viscosity = Function(W, name="viscosity")
 initialise_background_field(viscosity, viscosity_values)
 # -
 
-# Next let's create a function to store our ice load. Following the long test from Weeredesteijn et al 2023, during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice free conditons in the next 10 thousand years. Finally, the simulation will run for a further 10 thousand years to allow the system to relax towards isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we have used a tanh function again to smooth out the transition.
+# Next let's create a function to store our ice load. Following the long test from Weeredesteijn et al 2023, during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice free conditions in the next 10 thousand years. Finally, the simulation will run for a further 10 thousand years to allow the system to relax towards isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we have used a tanh function again to smooth out the transition from ice to ice-free regions.
 
 # +
 rho_ice = 931
@@ -312,14 +309,14 @@ ramp = Constant(0)
 
 # -
 
-# Next let's define the length of our time step. If we want to accurately resolve the elastic response we should choose a timestep lower than the Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation to 'catch up' the initial, instantaneous elastic deformation.
+# Next let's define the length of our time step. If we want to accurately resolve the elastic response we should choose a timestep lower than the Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation to 'catch up' with the initial, instantaneous elastic deformation.
 #
-# Let's print out the maxwell time for each layer
+# Let's print out the Maxwell time for each layer
 
 for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
     log(f"Maxwell time: {float(layer_visc/layer_mu/year_in_seconds):.0f} years")
 
-# As we can see the shortest Maxwell time is given by the lower mantle and is about 280 years, i.e. it will take about 280 years for the viscous deformation in that layer to catch up any instantaneous elastic deformation. Conversely the top layer, our lithosphere, has a maxwell time of 6 million years. Given that our simulations only run for 110000 years the viscous deformation over the course of the simulation will always be negligible compared with the elastic deformation. For now let's choose a timestep of 250 years and an output time step of 2000 years.
+# As we can see the shortest Maxwell time is given by the lower mantle and is about 280 years, i.e. it will take about 280 years for the viscous deformation in that layer to catch up any instantaneous elastic deformation. Conversely the top layer, our lithosphere, has a Maxwell time of 6 million years. Given that our simulations only run for 110000 years the viscous deformation over the course of the simulation will always be negligible compared with the elastic deformation. For now let's choose a timestep of 250 years and an output frequency of 2000 years.
 
 # +
 # Timestepping parameters
@@ -336,19 +333,17 @@ dt_out = Constant(dt_out_years * year_in_seconds)
 max_timesteps = round((Tend - Tstart * year_in_seconds) / dt)
 log("max timesteps: ", max_timesteps)
 
-dump_period = round(dt_out / dt)
-log("dump_period:", dump_period)
+output_frequency = round(dt_out / dt)
+log("output_frequency:", output_frequency)
 log(f"dt: {float(dt / year_in_seconds)} years")
 log(f"Simulation start time: {Tstart} years")
-
-do_write = True
 # -
 
 # We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing the string `ux` and `uy`, G-ADOPT knows to specify these as Strong Dirichlet boundary conditions.
 #
 # For the top surface we need to specify a normal stress, i.e. the weight of the ice load, as well as indicating this is a free surface.
 #
-# The `delta_rho_fs` option accounts for the density contrast across the free surface whether there is ice or air (or in later examples ocean!) above a particular region of the mantle.
+# The `delta_rho_fs` option accounts for the density contrast across the free surface whether there is ice or air above a particular region of the mantle.
 
 # +
 # Setup boundary conditions
@@ -370,7 +365,7 @@ gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
 approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
 
 # We finally come to solving the variational problem, with solver
-# objects for the Stokes systems created. We pass in the solution fields `z` and various fields needed for the solve along with the approximation, timestep and boundary conditions.
+# objects for the Stokes system created. We pass in the solution fields `z` and various fields needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
 stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
@@ -382,10 +377,9 @@ stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximat
 prefactor_prestress = Function(W, name='prefactor prestress').interpolate(approximation.prefactor_prestress(dt))
 effective_viscosity = Function(W, name='effective viscosity').interpolate(approximation.effective_viscosity(dt))
 
-if do_write:
-    # Create output file
-    output_file = VTKFile("output.pvd")
-    output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
+# Create output file
+output_file = VTKFile("output.pvd")
+output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
@@ -410,11 +404,10 @@ for timestep in range(max_timesteps):
 
     time.assign(time+dt)
 
-    if timestep % dump_period == 0:
+    if timestep % output_frequency == 0:
         log("timestep", timestep)
 
-        if do_write:
-            output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
+        output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(u_, name="Incremental Displacement")
@@ -480,8 +473,8 @@ for timestep in range(max_timesteps):
 #     )
 #
 #     # Fix camera in default position otherwise mesh appears to jumpy around!
-#     plotter.camera_position = [(750000.0, -1445500.0, 6291991.008627122),
-#                         (750000.0, -1445500.0, 0.0),
+#     plotter.camera_position = [(750000.0, 1445500.0, 6291991.008627122),
+#                         (750000.0, 1445500.0, 0.0),
 #                         (0.0, 1.0, 0.0)]
 #     plotter.add_text(f"Time: {i*2000:6} years", name='time-label')
 #     plotter.write_frame()
@@ -499,8 +492,6 @@ for timestep in range(max_timesteps):
 # Looking at the animation, we can see that as the weight of the ice load builds up the mantle deforms, pushing up material away from the ice load. If we kept the ice load fixed this forebulge will eventually grow enough that it balances the weight of the ice, i.e the mantle is in isostatic isostatic equilbrium and the deformation due to the ice load stops. At 100 thousand years when the ice is removed the topographic highs associated with forebulges are now out of equilibrium so the flow of material in the mantle reverses back towards the previously glaciated region.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
-
-# In this demo we have seen how to setup a simple viscoelastic loading problem. In the next demos we will start to look at more realistic cases in Earth-like geometry and with additional physics including gravity, transient rheology and sea level.
 
 # References
 # ----------
