@@ -416,14 +416,15 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
 class SmallDisplacementViscoelasticApproximation():
     """Expressions for the small displacement viscoelastic approximation.
 
-    Small displacement linearises the problem. Perturbation about a reference state.
-    We assume a Maxwell viscoelastic rheology, i.e. stress is the same but viscous and
-    elastic strains combine linearly. We follow the approach by Zhong et al. 2003
-    redefining the problem in terms of incremental displacement, i.e. velocity * dt
-    where dt is the timestep. This produces a mixed stokes system for incremental
-    displacement and pressure which can be solved in the same way as mantle convection
-    (where unknowns are velocity and pressure), with a modfied viscosity and stress term
-    accounting for the deviatoric stress at the previous timestep.
+    By assuming a small displacement, we can linearise the problem, assuming a perturbation
+    away from a reference state. We assume a Maxwell viscoelastic rheology, i.e.
+    stress is the same but viscous and elastic strains combine linearly. We follow
+    the approach by Zhong et al. 2003 redefining the problem in terms of incremental
+    displacement, i.e. velocity * dt where dt is the timestep. This produces a mixed
+    stokes system for incremental displacement and pressure which can be solved in
+    the same way as mantle convection (where unknowns are velocity and pressure),
+    with a modfied viscosity and stress term accounting for the deviatoric stress
+    at the previous timestep.
 
     Zhong, Shijie, Archie Paulson, and John Wahr.
     "Three-dimensional finite-element modelling of Earth’s viscoelastic
