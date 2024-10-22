@@ -80,10 +80,10 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
     Arguments:
       solution:
         Firedrake function for the field of interest
-      timestepper:
-        Runge-Kutta time integrator employing an explicit or implicit numerical scheme
       delta_t:
         Simulation time step
+      timestepper:
+        Runge-Kutta time integrator employing an explicit or implicit numerical scheme
       solution_old:
         Firedrake function holding the solution field at the previous time step
       eq_attrs:
@@ -110,8 +110,8 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         self,
         solution: Function,
         /,
-        timestepper: RungeKuttaTimeIntegrator,
         delta_t: Constant,
+        timestepper: RungeKuttaTimeIntegrator,
         *,
         solution_old: Function | None = None,
         eq_attrs: dict[str, float] = {},
@@ -120,8 +120,8 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         su_diffusivity: float | None = None,
     ) -> None:
         self.solution = solution
-        self.timestepper = timestepper
         self.delta_t = delta_t
+        self.timestepper = timestepper
         self.solution_old = solution_old or Function(solution)
         self.eq_attrs = eq_attrs
         self.bcs = bcs
@@ -267,10 +267,10 @@ class GenericTransportSolver(GenericTransportBase):
         List of equation terms (refer to terms_mapping)
       solution:
         Firedrake function for the field of interest
-      timestepper:
-        Runge-Kutta time integrator employing an explicit or implicit numerical scheme
       delta_t:
         Simulation time step
+      timestepper:
+        Runge-Kutta time integrator employing an explicit or implicit numerical scheme
       solution_old:
         Firedrake function holding the solution field at the previous time step
       eq_attrs:
@@ -291,11 +291,11 @@ class GenericTransportSolver(GenericTransportBase):
         terms: str | list[str],
         solution: Function,
         /,
-        timestepper: RungeKuttaTimeIntegrator,
         delta_t: Constant,
+        timestepper: RungeKuttaTimeIntegrator,
         **kwargs,
     ) -> None:
-        super().__init__(solution, timestepper, delta_t, **kwargs)
+        super().__init__(solution, delta_t, timestepper, **kwargs)
 
         self.terms = [terms] if isinstance(terms, str) else terms
 
@@ -318,16 +318,16 @@ class EnergySolver(GenericTransportBase):
     Note: The solution field is updated in place.
 
     Arguments:
-      approximation:
-        G-ADOPT approximation defining terms in the system of equations
       solution:
         Firedrake function for temperature
       u:
         Firedrake function for velocity
-      timestepper:
-        Runge-Kutta time integrator employing an explicit or implicit numerical scheme
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations
       delta_t:
         Simulation time step
+      timestepper:
+        Runge-Kutta time integrator employing an explicit or implicit numerical scheme
       solution_old:
         Firedrake function holding the solution field at the previous time step
       bcs:
@@ -343,18 +343,20 @@ class EnergySolver(GenericTransportBase):
 
     def __init__(
         self,
-        approximation: BaseApproximation,
         solution: Function,
         u: Function,
+        approximation: BaseApproximation,
         /,
-        timestepper: RungeKuttaTimeIntegrator,
         delta_t: Constant,
+        timestepper: RungeKuttaTimeIntegrator,
         **kwargs,
     ) -> None:
-        super().__init__(solution, timestepper, delta_t, **kwargs)
+        super().__init__(solution, delta_t, timestepper, **kwargs)
 
         self.approximation = approximation
         self.u = u
+
+        self.T_old = self.solution_old
 
     def set_equation(self) -> None:
         rho_cp = self.approximation.rhocp()

@@ -273,9 +273,7 @@ plog.log_str("timestep time age dt maxchange u_rms u_rms_top nu_top nu_base ener
 
 gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, quad_degree=6)
 
-energy_solver = EnergySolver(
-    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
-)
+energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              constant_jacobian=True,
@@ -324,7 +322,7 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {plate_reconstruction_model.ndtime2age(time)} {float(delta_t)} "

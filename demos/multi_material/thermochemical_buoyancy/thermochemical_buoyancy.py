@@ -255,7 +255,7 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # +
 energy_solver = EnergySolver(
-    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(

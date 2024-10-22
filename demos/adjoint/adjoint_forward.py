@@ -132,7 +132,7 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # +
 energy_solver = EnergySolver(
-    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(

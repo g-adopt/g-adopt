@@ -102,11 +102,11 @@ def inverse(alpha_u, alpha_d, alpha_s):
     }
 
     energy_solver = EnergySolver(
-        approximation,
         T,
         u,
-        ImplicitMidpoint,
+        approximation,
         delta_t,
+        ImplicitMidpoint,
         bcs=temp_bcs,
     )
 

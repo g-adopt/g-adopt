@@ -88,11 +88,11 @@ def rectangle_taylor_test(case):
     }
 
     energy_solver = EnergySolver(
-        approximation,
         T,
         u,
-        ImplicitMidpoint,
+        approximation,
         delta_t,
+        ImplicitMidpoint,
         bcs=temp_bcs,
     )
 

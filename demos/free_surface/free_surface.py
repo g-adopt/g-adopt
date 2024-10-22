@@ -167,7 +167,7 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 
 # +
 energy_solver = EnergySolver(
-    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(
@@ -196,7 +196,7 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
 
     # Log diagnostics:
     plog.log_str(

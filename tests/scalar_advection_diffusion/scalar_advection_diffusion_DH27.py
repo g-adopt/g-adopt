@@ -73,8 +73,8 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     adv_diff_solver = GenericTransportSolver(
         terms,
         q,
-        DIRK33,
         dt,
+        DIRK33,
         eq_attrs=eq_attrs,
         bcs=bcs,
         su_diffusivity=kappa if su_advection else None,

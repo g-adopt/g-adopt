@@ -201,9 +201,7 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
 # passing in the approximation configured above.
 
 # +
-energy_solver = EnergySolver(
-    approximation, T, u, ImplicitMidpoint, delta_t, bcs=temp_bcs
-)
+energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
@@ -235,7 +233,7 @@ for timestep in range(0, timesteps):
     energy_conservation_2 = abs(rate_work_against_gravity - rate_viscous_dissipation)
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} "
