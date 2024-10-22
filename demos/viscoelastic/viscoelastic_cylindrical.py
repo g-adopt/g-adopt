@@ -192,9 +192,7 @@ from gadopt.utility import step_func, CombinedSurfaceMeasure
 L = 1500e3  # length of the domain in m
 D = 2891e3  # Depth of domain in m
 dx=250*1e3
-nz=20
-print(D)
-print(rmax-rmin)
+nz=80
 
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 # Set up geometry:
@@ -342,7 +340,7 @@ initialise_background_field(viscosity, viscosity_values)
 
 viscosity = setup_heterogenous_viscosity(viscosity)
 
-visc_file = VTKFile('viscosity.pvd').write(viscosity)
+visc_file = VTKFile('viscosity.pvd').write(density)
 
 # +
 import matplotlib.pyplot as plt
@@ -393,7 +391,7 @@ g = 9.8125
 
 Hice1 = 1000
 Hice2 = 2000
-
+year_in_seconds = Constant(3600 * 24 * 365.25)
 # Disc ice load but with a smooth transition given by a tanh profile
 disc_halfwidth1 = (2*pi/360) * 10  # Disk half width in radians
 disc_halfwidth2 = (2*pi/360) * 20  # Disk half width in radians
@@ -405,9 +403,50 @@ disc1 = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surfac
 disc2 = 0.5*(1-tanh((abs(abs(colatitude)-disc2_centre) - disc_halfwidth2) / (2*surface_resolution_radians)))
 ramp = Constant(1)
 ice_load = Function(W, name="Ice load")
-ice_load.interpolate(ramp * rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
+ice_load.interpolate(ramp * rho_ice * g * (Hice1 * disc1 + Hice2 * disc2))
+
+visc_file = VTKFile('ice.pvd').write(ice_load)
 
 
+# +
+import matplotlib.pyplot as plt
+import pyvista as pv
+
+# Read the PVD file
+reader = pv.get_reader("ice.pvd")
+data = reader.read()[0]  # MultiBlock mesh with only 1 block
+
+print(data.get_array)
+# Create a plotter object
+plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+
+# Make a colour map
+boring_cmap = plt.get_cmap("viridis", 25)
+# Add the warped displacement field to the frame
+plotter.add_mesh(
+    data,
+  #  scalars="viscosity",
+    component=None,
+    lighting=False,
+    show_edges=False,
+    edge_color='white',
+    #clim=[0, 70],
+    cmap=boring_cmap,
+    scalar_bar_args={
+        "title": 'Viscosity',
+        "position_x": 0.8,
+        "position_y": 0.2,
+        "vertical": True,
+        "title_font_size": 20,
+        "label_font_size": 16,
+        "fmt": "%.0f",
+        "font_family": "arial",
+    }
+)
+plotter.camera_position = 'xy'
+plotter.show()
+# Closes and finalizes movie
+plotter.close()
 # -
 
 # Next let's define the length of our time step. If we want to accurately resolve the elastic response we should choose a timestep lower than the Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation to 'catch up' the initial, instantaneous elastic deformation.
@@ -415,7 +454,7 @@ ice_load.interpolate(ramp * rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 # Let's print out the maxwell time for each layer
 
 for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
-    log(f"Maxwell time: {float(layer_visc/layer_mu/year_in_seconds):.0f} years")
+    log(f"Maxwell time: {float(1e23*10**layer_visc/layer_mu/year_in_seconds):.0f} years")
 
 # As we can see the shortest Maxwell time is given by the lower mantle and is about 280 years, i.e. it will take about 280 years for the viscous deformation in that layer to catch up any instantaneous elastic deformation. Conversely the top layer, our lithosphere, has a maxwell time of 6 million years. Given that our simulations only run for 110000 years the viscous deformation over the course of the simulation will always be negligible compared with the elastic deformation. For now let's choose a timestep of 250 years and an output time step of 2000 years.
 
@@ -450,7 +489,6 @@ do_write = True
 
 # +
 # Setup boundary conditions
-exterior_density = conditional(time < T2_load, rho_ice*disc, 0)
 stokes_bcs = {
             top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - rho_ice*(disc1+disc2)}},
             bottom_id: {'un': 0}
@@ -464,19 +502,23 @@ gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields needed for the viscoelastic loading problem.
 
 
-approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
+# +
+actual_visc = Function(viscosity).interpolate(1e23*10**viscosity)
+
+approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, actual_visc, g=g)
+# -
 
 # Nullspaces and near-nullspaces:
-Z_nullspace = create_stokes_nullspace(M, closed=False, rotational=True)
-Z_near_nullspace = create_stokes_nullspace(M, closed=False, rotational=True, translations=[0, 1])
+Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
+Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes systems created. We pass in the solution fields `z` and various fields needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
 stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
-                                         dt, bcs=stokes_bcs, nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                                      near_nullspace=Z_near_nullspace )
+                                         dt, bcs=stokes_bcs) #, nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                                                      #near_nullspace=Z_near_nullspace )
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
@@ -499,7 +541,7 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 
 # Now let's run the simulation! We are going to control the ice thickness using the `ramp` parameter. At each step we call `solve` to calculate the incremental displacement and pressure fields. This will update the displacement at the surface and stress values accounting for the time dependent Maxwell consitutive equation.
 
-for timestep in range(max_timesteps):
+for timestep in range(1, max_timesteps+1):
 
     stokes_solver.solve()
 
@@ -543,6 +585,10 @@ for timestep in range(max_timesteps):
 # # Make a colour map
 # boring_cmap = plt.get_cmap("viridis", 25)
 #
+# # Fix camera in default position otherwise mesh appears to jumpy around!
+# #plotter.camera_position = 'xy'
+#
+#
 # for i in range(len(reader.time_values)):
 #     reader.set_active_time_point(i)
 #     data = reader.read()[0]
@@ -550,7 +596,7 @@ for timestep in range(max_timesteps):
 #     # Artificially warp the output data in the vertical direction by the free surface height
 #     # Note the mesh is not really moving!
 #     warped = data.warp_by_vector(vectors="displacement", factor=1500)
-#     arrows = data.glyph(orient="Incremental Displacement", scale="Incremental Displacement", factor=400000, tolerance=0.05)
+#     arrows = data.glyph(orient="Incremental Displacement", scale="Incremental Displacement", factor=10000, tolerance=0.05)
 #     plotter.add_mesh(arrows, color="white", lighting=False)
 #
 #     # Add the warped displacement field to the frame
@@ -560,7 +606,7 @@ for timestep in range(max_timesteps):
 #         component=None,
 #         lighting=False,
 #         show_edges=False,
-#         clim=[0, 70],
+#         clim=[0, 400],
 #         cmap=boring_cmap,
 #         scalar_bar_args={
 #             "title": 'Displacement (m)',
@@ -574,13 +620,16 @@ for timestep in range(max_timesteps):
 #         }
 #     )
 #
-#     # Fix camera in default position otherwise mesh appears to jumpy around!
-#     plotter.camera_position = [(750000.0, -1445500.0, 6291991.008627122),
-#                         (750000.0, -1445500.0, 0.0),
-#                         (0.0, 1.0, 0.0)]
-#     plotter.add_text(f"Time: {i*2000:6} years", name='time-label')
-#     plotter.write_frame()
-#
+#     
+#     plotter.camera_position = [(0, 0, rmax*5),
+#                                  (0.0, 0.0, 0.0),
+#                                  (0.0, 1.0, 0.0)]
+#     plotter.add_text(f"Time: {i*1000:6} years", name='time-label')
+#     print(plotter.camera_position)
+#     # Write end frame multiple times to give a pause before gif starts again!
+#     for j in range(5):
+#         plotter.write_frame()
+#     
 #     if i == len(reader.time_values)-1:
 #         # Write end frame multiple times to give a pause before gif starts again!
 #         for j in range(20):
