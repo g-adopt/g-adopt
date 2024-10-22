@@ -14,7 +14,7 @@
 # \begin{equation}
 #     \nabla \cdot \boldsymbol{\sigma} - \rho \nabla \Phi = 0,
 # \end{equation}
-# where $\boldsymbol{\sigma}$ is the full stress tensor, $\rho$ is the density and $\Phi$ is the gravitational potential field. Similar to mantle convection, we have neglected inertial terms.
+# where $\boldsymbol{\sigma}$ is the full stress tensor, $\rho$ is the density and $\Phi$ is the gravitational potential field. As with mantle convection, we have neglected inertial terms.
 #
 # For incompressible materials conservation of mass is
 # \begin{equation}
@@ -73,7 +73,7 @@
 
 # Incremental Lagrangian Stress Tensor
 # -------------------------------------
-# The GIA community usually reformulate the linearised momentum equation in terms of the *Incremental lagrangian stress tensor*. This can be traced back to the early roots of the GIA modellers adopting Laplace transform methods. The idea behind this is to convert the time dependent *viscoelastic* problem to a time independent *elastic* problem by the correspondence principle.
+# The GIA community usually reformulates the linearised momentum equation in terms of the *Incremental lagrangian stress tensor*. This can be traced back to the early roots of GIA modellers adopting Laplace transform methods. The idea behind this is to convert the time dependent *viscoelastic* problem to a time independent *elastic* problem by the correspondence principle.
 #
 # From an elastic wave theory point of view, Dahlen and Tromp (1998) make the point that it is the Lagrangian perturbation in stress not the Eulerian perturbation that is related to the displacement gradient by the elastic parameters. Transforming between the Lagrangian perturbation in stress and the Eulerian description is given by
 # \begin{equation}
@@ -121,7 +121,7 @@
 
 # Summary
 # --------
-# The linearised governing equations for an incompressible Maxwell body used by the GIA community are
+# The linearised governing equations for an incompressible Maxwell body used by the GIA community, and adopted herein, are
 # \begin{equation}
 #     \nabla \cdot \boldsymbol{\sigma}_{L1} - \nabla (\rho_0 g u_r)   - \rho_1 \textbf{g}  = 0,
 # \end{equation}
@@ -134,13 +134,13 @@
 # \begin{equation}
 #     \boldsymbol{\sigma}_{L1}+ \dfrac{\eta}{ \mu} \overset{\cdot}{\boldsymbol{\sigma}}_{L1} = - \left(p + \dfrac{\eta}{ \mu}\overset{\cdot}{p}\right) \textbf{I} + 2 \eta \overset{\cdot}{\boldsymbol{\epsilon}} .
 # \end{equation}
-# Note as stated above, this still neglects perturbations in the gravitational field and we will leave solving the associated Poisson equation to later demos.
+# Note as stated above, this still neglects perturbations in the gravitational field and we will leave solving the associated Poisson equation to a later demo.
 #
 
 # Time discretisation
 # -------------------
 #
-# One of the key difference with the mantle convection demos is that the constitutive equation now depends on time. We have implemented the method of Zhong et al. (2003) where deviatoric stress is implemented in terms of 'incremental displacement'. They recast the problem in terms of $\textbf{u}_{inc}^n = \textbf{u}^n - \textbf{u}^{n-1}$, where the subcripts refer to time levels $t$ and $t - \Delta t$ respectively. The incremental strain $\Delta \boldsymbol{\epsilon}$ is
+# One of the key differences with the mantle convection demos is that the constitutive equation now depends on time. G-ADOPT implements the method of Zhong et al. (2003) where deviatoric stress is accounted for via an 'incremental displacement', thus recasting the problem in terms of $\textbf{u}_{inc}^n = \textbf{u}^n - \textbf{u}^{n-1}$, where  subscripts refer to time levels $t$ and $t - \Delta t$ respectively. The incremental strain $\Delta \boldsymbol{\epsilon}$ is
 # \begin{equation}
 #     \Delta \boldsymbol{\epsilon} =   \dfrac{1}{2} ( \nabla \textbf{u}_{inc} + (\nabla \textbf{u}_{inc})^T).
 # \end{equation}
@@ -163,11 +163,11 @@
 #     \boldsymbol{\sigma}_{L1}^n  = - p^n \textbf{I} + \dfrac{2 \eta}{\alpha + \Delta t / 2}  \Delta \boldsymbol{\epsilon}^n + \dfrac{\alpha - \Delta t / 2}{\alpha + \Delta t / 2}(\boldsymbol{\sigma}_{L1}^{n-1} + p^{n-1} \textbf{I}).
 # \end{equation}
 #
-# This expression for the stress is very similar to mantle convection. We are solving for incremental displacement instead of velocity, but the only difference between these two functions is the timestep multiplying factor. We also have a modified viscosity based on the timestep and the maxwell time. Finally, the stress history is included as the last term is the deviatoric stress from the previous timestep multiplied by a prefactor involving the timestep and the maxwell time. Note that in the small dt limit (i.e. $dt$ << $\alpha$) the effective viscosity tends towards the shear modulus. i.e. we are solving the elastic equations.
+# This expression for the stress is similar to that relevant for mantle convection. We are solving for incremental displacement instead of velocity, but the only difference between these two functions is the timestep multiplication factor. We also have a modified viscosity based on the timestep and the Maxwell time. Finally, the stress history is included as the last term is the deviatoric stress from the previous timestep multiplied by a prefactor involving the timestep and the Maxwell time. Note that in the small dt limit (i.e. $dt$ << $\alpha$) the effective viscosity tends towards the shear modulus. i.e. we are solving the elastic equations.
 
 # This example
 # -------------
-# We are going to simulate a viscoelastic loading and unloading problem based on a 2D version of the test case presented in Weerdesteijn et al. (2023).
+# We will simulate a viscoelastic loading and unloading problem based on a 2D version of the test case presented in Weerdesteijn et al. (2023).
 #
 # Let's get started! The first step is to import the `gadopt` module, which
 # provides access to Firedrake and associated functionality.
@@ -175,9 +175,9 @@
 from gadopt import *
 from gadopt.utility import step_func
 
-# Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and 2891 km deep. As mentioned to speed up things for this first demo let's just consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
+# Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and 2891 km deep. To speed up things for this first demo, we consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
 #
-# For starters let's use one of the default meshes provided by Firedrake, `RectangleMesh`. We have chosen 40 quadrilateral elements in the $x$ direction and 40 quadrilateral elements in the $y$ direction. It is worth emphasising that the setup has coarse grid resolution so that the demo is quick to run! For real simulations we can use fully unstructured meshes to accurately resolve important features in the model, for instance near coastlines or sharp discontinuities in mantle properties.  We can print out the grid resolution using `log`, a utility provided by gadopt. (N.b. `log` is equivalent to python's `print` function, except that it simplifies outputs when running simulations in parallel.)
+# For starters let's use one of the default meshes provided by Firedrake, `RectangleMesh`. We have chosen 40 quadrilateral elements in the $x$ direction and 40 quadrilateral elements in the $y$ direction. It is worth emphasising that the setup has coarse grid resolution so that the demo is quick to run! For real simulations we can use fully unstructured meshes to accurately resolve important features in the model, for instance near coastlines or sharp discontinuities in mantle properties.  We can print out the grid resolution using `log`, a utility provided by G-ADOPT. (N.b. `log` is equivalent to python's `print` function, except that it simplifies outputs when running simulations in parallel.)
 #
 # On the mesh, we also denote that our geometry is Cartesian, i.e. gravity points
 # in the negative z-direction. This attribute is used by G-ADOPT specifically, not
