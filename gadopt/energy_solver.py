@@ -86,11 +86,16 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         Simulation time step
       solution_old:
         Firedrake function holding the solution field at the previous time step
+      eq_attrs:
+        Dictionary of terms arguments and their values
       bcs:
         Dictionary specifying boundary conditions (identifier, type, and value)
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
+      su_diffusivity:
+        Float activating the streamline-upwind stabilisation scheme and specifying the
+        corresponding diffusivity
 
     """
 
@@ -109,15 +114,19 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         delta_t: Constant,
         *,
         solution_old: Function | None = None,
+        eq_attrs: dict[str, float] = {},
         bcs: dict[int, dict[str, Number]] = {},
         solver_parameters: dict[str, str | Number] | str | None = None,
+        su_diffusivity: float | None = None,
     ) -> None:
         self.solution = solution
         self.timestepper = timestepper
         self.delta_t = delta_t
         self.solution_old = solution_old or Function(solution)
+        self.eq_attrs = eq_attrs
         self.bcs = bcs
         self.solver_parameters = solver_parameters
+        self.su_diffusivity = su_diffusivity
 
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
@@ -130,6 +139,7 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 
     def __post_init__(self) -> None:
         self.set_boundary_conditions()
+        self.set_su_nubar()
         self.set_equation()
         self.set_solver_options()
 
@@ -153,7 +163,7 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 
             self.weak_bcs[bc_id] = weak_bc
 
-    def set_su_nubar(self, u: Function, su_diffusivity: float) -> ufl.algebra.Product:
+    def set_su_nubar(self) -> None:
         """Sets up the advection streamline-upwind scheme (Donea & Huerta, 2003).
 
         Columns of Jacobian J are the vectors that span the quad/hex and can be seen as
@@ -167,6 +177,14 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         Finite element methods for flow problems.
         John Wiley & Sons.
         """
+        if self.su_diffusivity is None:
+            return
+
+        if (u := getattr(self, "u", self.eq_attrs.get("u"))) is None:
+            raise ValueError(
+                "'u' must be included into `eq_attrs` if `su_diffusivity` is given."
+            )
+
         if not self.continuous_solution:
             raise TypeError("SU advection requires a continuous function space.")
 
@@ -176,11 +194,11 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         J.interpolate(Jacobian(self.mesh))
         # Calculate grid Peclet number. Note the use of a lower bound for diffusivity if
         # a pure advection scenario is considered.
-        Pe = absv(dot(u, J)) / 2 / (su_diffusivity + 1e-12)
+        Pe = absv(dot(u, J)) / 2 / (self.su_diffusivity + 1e-12)
         beta_Pe = as_vector([1 / tanh(Pe_i + 1e-6) - 1 / (Pe_i + 1e-6) for Pe_i in Pe])
         nubar = dot(absv(dot(u, J)), beta_Pe) / 2  # Calculate SU artificial diffusion
 
-        return nubar
+        self.eq_attrs["su_nubar"] = nubar
 
     @abc.abstractmethod
     def set_equation(self):
@@ -275,29 +293,13 @@ class GenericTransportSolver(GenericTransportBase):
         /,
         timestepper: RungeKuttaTimeIntegrator,
         delta_t: Constant,
-        *,
-        eq_attrs: dict[str, float] | None = None,
-        su_diffusivity: float | None = None,
         **kwargs,
     ) -> None:
         super().__init__(solution, timestepper, delta_t, **kwargs)
 
-        if isinstance(terms, str):
-            terms = [terms]
-
-        self.terms = terms
-        self.eq_attrs = eq_attrs or {}
-        self.su_diffusivity = su_diffusivity
+        self.terms = [terms] if isinstance(terms, str) else terms
 
     def set_equation(self) -> None:
-        if self.su_diffusivity is not None:
-            if (u := self.eq_attrs.get("u")) is None:
-                raise ValueError(
-                    "'u' must be included into `eq_attrs` if `su_diffusivity` is given."
-                )
-
-            self.eq_attrs["su_nubar"] = self.set_su_nubar(u, self.su_diffusivity)
-
         eq_terms = [self.terms_mapping[term] for term in self.terms]
 
         self.equation = Equation(
@@ -347,20 +349,17 @@ class EnergySolver(GenericTransportBase):
         /,
         timestepper: RungeKuttaTimeIntegrator,
         delta_t: Constant,
-        *,
-        su_diffusivity: float | None = None,
         **kwargs,
     ) -> None:
         super().__init__(solution, timestepper, delta_t, **kwargs)
 
         self.approximation = approximation
         self.u = u
-        self.su_diffusivity = su_diffusivity
 
     def set_equation(self) -> None:
         rho_cp = self.approximation.rhocp()
 
-        eq_attrs = {
+        self.eq_attrs |= {
             "advective_velocity_scaling": rho_cp,
             "diffusivity": self.approximation.kappa(),
             "reference_for_diffusion": self.approximation.Tbar,
@@ -369,9 +368,6 @@ class EnergySolver(GenericTransportBase):
             "u": self.u,
         }
 
-        if self.su_diffusivity is not None:
-            eq_attrs["su_nubar"] = self.set_su_nubar(self.u, self.su_diffusivity)
-
         eq_terms = self.terms_mapping.values()
 
         self.equation = Equation(
@@ -379,7 +375,7 @@ class EnergySolver(GenericTransportBase):
             self.solution_space,
             eq_terms,
             mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
-            eq_attrs=eq_attrs,
+            eq_attrs=self.eq_attrs,
             approximation=self.approximation,
             bcs=self.weak_bcs,
         )
