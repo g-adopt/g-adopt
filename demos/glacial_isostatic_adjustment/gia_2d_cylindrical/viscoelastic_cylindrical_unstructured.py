@@ -46,10 +46,10 @@ surface_dx = 2 * pi * radius_earth / ncells
 log("target surface resolution = ", dx)
 log("actual surface resolution = ", surface_dx)
 dz = D / nz
-bottom_id, top_id = "bottom", "top"
+bottom_id, top_id = 1, 2
 
 surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name='surface_mesh')
-mesh = ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type='radial')
+mesh = Mesh("unstructured_annulus.msh") # ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type='radial')
 
 mesh.cartesian = False
 
@@ -60,9 +60,9 @@ mesh.cartesian = False
 
 # +
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
-V = VectorFunctionSpace(mesh, "Q", 2)  # (Incremental) Displacement function space (vector)
-W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
-TP1 = TensorFunctionSpace(mesh, "DQ", 2)  # (Discontinuous) Stress tensor function space (tensor)
+V = VectorFunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (vector)
+W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+TP1 = TensorFunctionSpace(mesh, "DG", 2)  # (Discontinuous) Stress tensor function space (tensor)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
@@ -164,19 +164,20 @@ def initialise_background_field(field, background_values, vertical_tanh_width=40
 
     field.interpolate(profile)
 
+DG0 = FunctionSpace(mesh, "CG", 1)
 
-density = Function(W, name="density")
+density = Function(DG0, name="density")
 initialise_background_field(density, density_values)
 
-shear_modulus = Function(W, name="shear modulus")
+shear_modulus = Function(DG0, name="shear modulus")
 initialise_background_field(shear_modulus, shear_modulus_values)
 
-viscosity = Function(W, name="viscosity")
+viscosity = Function(DG0, name="viscosity")
 initialise_background_field(viscosity, viscosity_values)
 
 viscosity = setup_heterogenous_viscosity(viscosity)
-
-visc_file = VTKFile('viscosity.pvd').write(density)
+print(shear_modulus.dat.data[:].min())
+visc_file = VTKFile('viscosity.pvd').write(viscosity)
 
 # +
 import matplotlib.pyplot as plt
@@ -198,8 +199,8 @@ plotter.add_mesh(
   #  scalars="viscosity",
     component=None,
     lighting=False,
-    show_edges=False,
-    edge_color='white',
+    #show_edges=True,
+    #edge_color='white',
     #clim=[0, 70],
     cmap=boring_cmap,
     scalar_bar_args={
@@ -299,11 +300,11 @@ for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
 Tstart = 0
 time = Function(R).assign(Tstart * year_in_seconds)
 
-dt_years = 50
+dt_years = 200
 dt = Constant(dt_years * year_in_seconds)
 Tend_years = 10e3
 Tend = Constant(Tend_years * year_in_seconds)
-dt_out_years = 1e3
+dt_out_years = 2e3
 dt_out = Constant(dt_out_years * year_in_seconds)
 
 max_timesteps = round((Tend - Tstart * year_in_seconds) / dt)
@@ -342,6 +343,8 @@ gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
 actual_visc = Function(viscosity).interpolate(1e23*10**viscosity)
 
 approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, actual_visc, g=g)
+
+log(float(np.min(Function(W).interpolate(approximation.maxwell_time).dat.data)/year_in_seconds))
 # -
 
 # As noted above, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
@@ -363,8 +366,8 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 #
 
 stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
-                                         dt, bcs=stokes_bcs, nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                                      near_nullspace=Z_near_nullspace )
+                                         dt, bcs=stokes_bcs,) # nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,)
+                                         #near_nullspace=Z_near_nullspace )
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
@@ -438,12 +441,13 @@ for timestep in range(1, max_timesteps+1):
 # for i in range(len(reader.time_values)):
 #     reader.set_active_time_point(i)
 #     data = reader.read()[0]
-#
+#     edges = mesh_data.extract_all_edges()
+#     plotter.add_mesh(edges)
 #     # Artificially warp the output data in the vertical direction by the free surface height
 #     # Note the mesh is not really moving!
 #     warped = data.warp_by_vector(vectors="displacement", factor=1500)
-#     arrows = data.glyph(orient="Incremental Displacement", scale="Incremental Displacement", factor=10000, tolerance=0.05)
-#     plotter.add_mesh(arrows, color="white", lighting=False)
+#     arrows = data.glyph(orient="Incremental Displacement", scale="Incremental Displacement", factor=200000, tolerance=0.05)
+#   #  plotter.add_mesh(arrows, color="white", lighting=False)
 #
 #     # Add the warped displacement field to the frame
 #     plotter.add_mesh(
@@ -451,7 +455,7 @@ for timestep in range(1, max_timesteps+1):
 #         scalars="displacement",
 #         component=None,
 #         lighting=False,
-#         show_edges=False,
+#        # show_edges=True,
 #         clim=[0, 400],
 #         cmap=boring_cmap,
 #         scalar_bar_args={
@@ -489,6 +493,56 @@ for timestep in range(1, max_timesteps+1):
 # Looking at the animation, we can see that as the weight of the ice load builds up the mantle deforms, pushing up material away from the ice load. If we kept the ice load fixed this forebulge will eventually grow enough that it balances the weight of the ice, i.e the mantle is in isostatic isostatic equilbrium and the deformation due to the ice load stops. At 100 thousand years when the ice is removed the topographic highs associated with forebulges are now out of equilibrium so the flow of material in the mantle reverses back towards the previously glaciated region.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
+
+# +
+mesh_data = pv.read("output/output_0.vtu")
+edges = mesh_data.extract_all_edges()
+plotter = pv.Plotter(notebook=True)
+
+plotter.add_mesh(
+        mesh_data,
+        scalars="viscosity",
+        component=None,
+        lighting=False,
+        show_edges=True,
+    )
+plotter.add_mesh(edges, color="white", opacity=1)
+plotter.camera_position = "xy"
+plotter.show(jupyter_backend="static", interactive=False)
+
+# +
+mesh_data = pv.read("viscosity/viscosity_0.vtu")
+print(mesh_data)
+
+DG0 = FunctionSpace(mesh, "DG", 0)
+# Output function space information:
+log("P2:", V.dim())
+log("P1:", W.dim())
+log("DG0:", DG0.dim())
+
+mesh_data = pv.read("output/output_0.vtu")
+print(mesh_data)
+
+DG0 = FunctionSpace(mesh, "DG", 0)
+# Output function space information:
+log("P2:", V.dim())
+log("P1:", W.dim())
+log("DG0:", DG0.dim())
+log("DG2:", TP1.dim())
+# -
+
+# Add the warped displacement field to the frame
+mesh_data = pv.read("output/output_0.vtu")
+plotter = pv.Plotter(notebook=True)
+plotter.add_mesh(
+        mesh_data,
+        scalars="viscosity",
+        component=None,
+        lighting=False,
+        show_edges=True,
+    )
+plotter.camera_position = "xy"
+plotter.show(jupyter_backend="static", interactive=False)
 
 # In this demo we have seen how to setup a simple viscoelastic loading problem. In the next demos we will start to look at more realistic cases in Earth-like geometry and with additional physics including gravity, transient rheology and sea level.
 
