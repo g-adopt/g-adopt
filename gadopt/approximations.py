@@ -411,3 +411,71 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         pressure_part = self.dbuoyancydp(p, T) * p
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
+
+
+class SmallDisplacementViscoelasticApproximation():
+    """Expressions for the small displacement viscoelastic approximation.
+
+    By assuming a small displacement, we can linearise the problem, assuming a perturbation
+    away from a reference state. We assume a Maxwell viscoelastic rheology, i.e.
+    stress is the same but viscous and elastic strains combine linearly. We follow
+    the approach by Zhong et al. 2003 redefining the problem in terms of incremental
+    displacement, i.e. velocity * dt where dt is the timestep. This produces a mixed
+    stokes system for incremental displacement and pressure which can be solved in
+    the same way as mantle convection (where unknowns are velocity and pressure),
+    with a modfied viscosity and stress term accounting for the deviatoric stress
+    at the previous timestep.
+
+    Zhong, Shijie, Archie Paulson, and John Wahr.
+    "Three-dimensional finite-element modelling of Earth’s viscoelastic
+    deformation: effects of lateral variations lithospheric thickness."
+    Geophysical Journal International 155.2 (2003): 679-695.
+
+    N.b. that the implentation currently assumes all terms are dimensional.
+
+    Arguments:
+      density:       background density
+      shear_modulus: shear modulus
+      viscosity:     viscosity
+      g:             gravitational acceleration
+
+    """
+    compressible = False
+
+    def __init__(
+        self,
+        density: Function | Number,
+        shear_modulus: Function | Number,
+        viscosity: Function | Number,
+        *,
+        g: Function | Number = 1,
+    ):
+
+        self.density = ensure_constant(density)
+        self.shear_modulus = ensure_constant(shear_modulus)
+        self.viscosity = ensure_constant(viscosity)
+        self.g = ensure_constant(g)
+
+        self.maxwell_time = viscosity / shear_modulus
+
+    def effective_viscosity(self, dt):
+        return self.viscosity / (self.maxwell_time + dt / 2)
+
+    def prefactor_prestress(self, dt):
+        return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
+
+    def stress(self, u, stress_old, dt):
+        return 2 * self.effective_viscosity(dt) * sym(grad(u)) + stress_old
+
+    def buoyancy(self, displacement):
+        # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
+        # accounts for advection of density in the absence of an evolution equation for temperature
+        return -self.g * -inner(displacement, grad(self.density))
+
+    def free_surface_terms(self, p, T, eta, theta_fs, *, delta_rho_fs=1):
+        free_surface_normal_stress = delta_rho_fs * self.g * eta
+        # prefactor only needed when solving eta as part of mixed system
+        return free_surface_normal_stress, None
+
+    def rho_continuity(self):
+        return 1
