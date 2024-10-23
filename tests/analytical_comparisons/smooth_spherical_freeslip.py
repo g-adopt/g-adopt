@@ -74,8 +74,8 @@ def model(level, l, mm, k, do_write=False):
     )
 
     stokes_solver = StokesSolver(
-        approximation,
         z,
+        approximation,
         T,
         bcs=stokes_bcs,
         nullspace={

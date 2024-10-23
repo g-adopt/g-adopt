@@ -13,8 +13,8 @@ import firedrake as fd
 import numpy as np
 from mpi4py import MPI
 
-from . import scalar_equation as scal_eq
-from .energy_solver import AdvectionDiffusionSolver
+from . import scalar_equation as scalar_eq
+from .energy_solver import GenericTransportSolver
 from .equations import Equation
 from .time_stepper import RungeKuttaTimeIntegrator, eSSPRKs3p3
 
@@ -144,10 +144,8 @@ class LevelSetSolver:
 
         self.proj_solver = self.gradient_L2_proj()
 
-        self.reini_terms_kwargs = {
-            "level_set_grad": self.ls_grad_proj,
-            "epsilon": epsilon,
-        }
+        self.ls_eq_attrs = {"u": velocity}
+        self.reini_eq_attrs = {"level_set_grad": self.ls_grad_proj, "epsilon": epsilon}
 
         self.solvers_ready = False
 
@@ -197,13 +195,13 @@ class LevelSetSolver:
         test = fd.TestFunction(self.func_space)
         self.solution_old = fd.Function(self.func_space)
 
-        self.ls_solver = AdvectionDiffusionSolver(
+        self.ls_solver = GenericTransportSolver(
             "advection",
             self.solution,
-            self.u,
             self.tstep / self.subcycles,
             self.tstep_alg,
             solution_old=self.solution_old,
+            eq_attrs=self.ls_eq_attrs,
             bcs=self.bcs,
             solver_parameters=self.solver_params,
         )
@@ -212,8 +210,8 @@ class LevelSetSolver:
             test,
             self.func_space,
             reinitialisation_term,
-            mass_term=scal_eq.mass_term,
-            terms_kwargs=self.reini_terms_kwargs,
+            mass_term=scalar_eq.mass_term,
+            eq_attrs=self.reini_eq_attrs,
         )
 
         self.reini_ts = self.reini_params["tstep_alg"](
@@ -463,3 +461,7 @@ def min_max_height(
     height_global = level_set.comm.allreduce(height, mpi_comparison)
 
     return height_global
+
+
+reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
+reinitialisation_term.optional_attrs = set()

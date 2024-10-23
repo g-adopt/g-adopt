@@ -69,8 +69,8 @@ stokes_bcs = {
 }
 
 stokes_solver = StokesSolver(
-    approximation,
     z,
+    approximation,
     bcs=stokes_bcs,
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )

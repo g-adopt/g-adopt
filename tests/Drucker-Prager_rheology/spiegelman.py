@@ -200,11 +200,11 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     approximation = Approximation("BA", dimensional=False, parameters={"mu": mu_nl})
     bcs = {left_id: {"ux": 1}, right_id: {"ux": -1}, bottom_id: {"uy": 0}}
     picard_solver = StokesSolver(
-        approximation, z, bcs=bcs, solver_parameters=initial_picard_solver_parameters
+        z, approximation, bcs=bcs, solver_parameters=initial_picard_solver_parameters
     )
     approximation.mu = mu
     newton_solver = StokesSolver(
-        approximation, z, bcs=bcs, solver_parameters=newton_solver_parameters
+        z, approximation, bcs=bcs, solver_parameters=newton_solver_parameters
     )
 
     if stabilisation:

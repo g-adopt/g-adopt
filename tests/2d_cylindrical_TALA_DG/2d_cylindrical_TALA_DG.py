@@ -194,13 +194,13 @@ temp_bcs = {bottom_id: {"T": 1.0 - 930 / 3700.0}, top_id: {"T": 0.0}}
 # passing in the approximation, nullspace and near-nullspace information configured above.
 
 energy_solver = EnergySolver(
-    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 energy_solver.solver_parameters["ksp_rtol"] = 1e-4
 
 stokes_solver = StokesSolver(
-    approximation,
     z,
+    approximation,
     T,
     bcs=stokes_bcs,
     nullspace={
@@ -227,7 +227,9 @@ output_frequency = 10
 plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time dt u_rms nu_base nu_top energy avg_t FullT_min FullT_max")
 
-gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id, quad_degree=6)
+gd = GeodynamicalDiagnostics(
+    z, FullT, bottom_id=bottom_id, top_id=top_id, quad_degree=6
+)
 
 # f_ratio = rmin / rmax
 top_scaling = 1.3290170684486309  # log(f_ratio) / (1.- f_ratio)

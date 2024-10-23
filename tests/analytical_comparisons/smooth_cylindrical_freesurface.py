@@ -106,8 +106,8 @@ def model(level, k, nn, do_write=False):
     log("dt (dimensionless)", dt)
 
     stokes_solver = StokesSolver(
-        approximation,
         z,
+        approximation,
         T,
         bcs=stokes_bcs,
         nullspace={

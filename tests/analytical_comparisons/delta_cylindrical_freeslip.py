@@ -71,8 +71,8 @@ def model(level, nn, do_write=False):
     )
 
     stokes_solver = StokesSolver(
-        approximation,
         z,
+        approximation,
         bcs=stokes_bcs,
         nullspace={
             "nullspace": Z_nullspace,

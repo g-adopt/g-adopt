@@ -18,7 +18,9 @@ class Approximation:
     """Constructs the equation approximation by defining relevant term components.
 
     Implemented approximations include Boussinesq (BA), Extended Boussinesq (EBA),
-    Truncated Anelastic Liquid (TALA), and Anelastic Liquid (ALA).
+    Truncated Anelastic Liquid (TALA), and Anelastic Liquid (ALA). Additionally, an
+    approximation for the small displacement viscoelastic limit (SDVA) is included (see
+    below).
 
     The system of conservation equations implemented is:
         - mass -> div(rho * u) = 0;
@@ -41,6 +43,25 @@ class Approximation:
         - energy_source(u)
             = viscous_dissipation(u) + Q
 
+    Small Displacement Viscoelastic Approximation
+    ---------------------------------------------
+    By assuming a small displacement, we can linearise the problem, assuming a
+    perturbation away from a reference state. We assume a Maxwell viscoelastic rheology,
+    i.e. stress is the same but viscous and elastic strains combine linearly. We follow
+    the approach by Zhong et al. (2003) redefining the problem in terms of incremental
+    displacement, i.e. velocity * dt, where dt is the timestep. This produces a mixed
+    Stokes system for incremental displacement and pressure which can be solved in the
+    same way as mantle convection (where unknowns are velocity and pressure), with a
+    modfied viscosity and stress term accounting for the deviatoric stress at the
+    previous timestep.
+
+    N.B. This implementation currently assumes all terms are dimensional.
+
+    Zhong, S., Paulson, A., & Wahr, J. (2003).
+    Three-dimensional finite-element modelling of Earth's viscoelastic deformation:
+    effects of lateral variations in lithospheric thickness.
+    Geophysical Journal International, 155(2), 679-695.
+
     *Parameters (name: physical meaning)*
         1. Reference dimensional parameters
             H: specific heat source
@@ -57,7 +78,7 @@ class Approximation:
             # Treatise on Geophysics uses incompressibility (i.e. bulk modulus).
             chi: isothermal compressibility
             cp: isobaric specific heat capacity (varies only in TALA and ALA)
-            G: shear modulus (only used in VE)
+            G: shear modulus (only used in SDVA)
             g: acceleration of gravity
             k: thermal conductivity
             mu: dynamic viscosity
@@ -72,7 +93,7 @@ class Approximation:
     have depth-dependent variations in the Boussinesq approximation.
     """
 
-    _presets = ["BA", "EBA", "TALA", "ALA", "VE"]
+    _presets = ["BA", "EBA", "TALA", "ALA", "SDVA"]
     _components = ["momentum", "mass", "energy"]
 
     _momentum_components = {"BA": ["compositional_buoyancy", "thermal_buoyancy"]}
@@ -81,13 +102,13 @@ class Approximation:
     _momentum_components["ALA"] = _momentum_components["TALA"] + [
         "compressible_buoyancy"
     ]
-    _momentum_components["VE"] = ["viscoelastic_buoyancy"]
+    _momentum_components["SDVA"] = ["viscoelastic_buoyancy"]
 
     _mass_components = {"BA": []}
     _mass_components["EBA"] = _mass_components["BA"] + []
     _mass_components["TALA"] = _mass_components["EBA"] + ["mass_advection"]
     _mass_components["ALA"] = _mass_components["TALA"] + []
-    _mass_components["VE"] = []
+    _mass_components["SDVA"] = []
 
     _energy_components = {"BA": ["heat_source"]}
     _energy_components["EBA"] = _energy_components["BA"] + [

@@ -49,3 +49,7 @@ def mass_term(
         * vertical_component(eq.n)
         * eq.ds(eq.boundary_id)
     )
+
+
+free_surface_term.required_attrs = {"u", "buoyancy_scale", "boundary_id"}
+free_surface_term.optional_attrs = set()

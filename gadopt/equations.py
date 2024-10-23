@@ -6,9 +6,11 @@ required by Firedrake solvers.
 
 """
 
+from collections.abc import Iterable
 from dataclasses import KW_ONLY, InitVar, dataclass, field
 from numbers import Number
-from typing import Any, Callable, Optional
+from typing import Any, Callable
+from warnings import warn
 
 import firedrake as fd
 
@@ -34,7 +36,7 @@ class Equation:
           List of equation terms contributing to the residual.
         mass_term:
           Callable returning the equation's mass term.
-        terms_kwargs:
+        eq_attrs:
           Dictionary of fields and parameters used in the equation's weak form.
         approximation:
           G-ADOPT approximation for the system of equations considered.
@@ -52,24 +54,38 @@ class Equation:
     trial_space: fd.functionspaceimpl.WithGeometry
     residual_terms: InitVar[Callable | list[Callable]]
     _: KW_ONLY
-    mass_term: Optional[Callable] = None
-    terms_kwargs: InitVar[dict[str, Any]] = {}
-    approximation: Optional[Approximation] = None
+    mass_term: Callable | None = None
+    eq_attrs: InitVar[dict[str, Any]] = {}
+    approximation: Approximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
-    quad_degree: InitVar[Optional[int]] = None
-    rescale_factor: Number | fd.Constant = 1
+    quad_degree: InitVar[int | None] = None
+    rescale_factor: Number | fd.Constant | fd.Function = 1
 
     def __post_init__(
         self,
         residual_terms: Callable | list[Callable],
-        terms_kwargs: dict[str, Any],
-        quad_degree: Optional[int],
+        eq_attrs: dict[str, Any],
+        quad_degree: int | None,
     ) -> None:
-        if not isinstance(residual_terms, list):
+        if not isinstance(residual_terms, Iterable):
             residual_terms = [residual_terms]
         self.residual_terms = residual_terms
 
-        for key, value in terms_kwargs.items():
+        required_attrs = set.union(*(term.required_attrs for term in residual_terms))
+        if missing_attrs := required_attrs - eq_attrs.keys():
+            raise ValueError(
+                "Provided equation attributes do not match the requirements of "
+                f"requested equation terms.\nMissing attributes: {missing_attrs}."
+            )
+
+        optional_attrs = set.union(*(term.optional_attrs for term in residual_terms))
+        if unused_attrs := eq_attrs.keys() - required_attrs.union(optional_attrs):
+            warn(
+                "Some unused equation attributes were provided.\nUnused attributes: "
+                f"{unused_attrs}"
+            )
+
+        for key, value in eq_attrs.items():
             setattr(self, key, value)
 
         if quad_degree is None:
@@ -109,7 +125,7 @@ class Equation:
         """Generates the UFL form corresponding to the residual terms."""
 
         return self.rescale_factor * sum(
-            [term(self, trial) for term in self.residual_terms]
+            term(self, trial) for term in self.residual_terms
         )
 
 
@@ -155,7 +171,7 @@ def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
         sigma = 1.0
     else:
         # safety factor: 1.0 is theoretical minimum
-        alpha = eq.interior_penalty if hasattr(eq, "interior_penalty") else 2.0
+        alpha = getattr(eq, "interior_penalty", 2.0)
         num_facets = eq.mesh.ufl_cell().num_facets()
         sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
 

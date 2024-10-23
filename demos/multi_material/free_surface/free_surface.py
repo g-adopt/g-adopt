@@ -157,7 +157,7 @@ plog.log_str("step time dt slab_tip_depth")
 # conditions, with the CFL for level-set advection being the most restrictive.
 
 # +
-stokes_solver = StokesSolver(approximation, z, bcs=stokes_bcs, timestep_fs=delta_t)
+stokes_solver = StokesSolver(z, approximation, bcs=stokes_bcs, timestep_fs=delta_t)
 stokes_solver.solve()
 
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)

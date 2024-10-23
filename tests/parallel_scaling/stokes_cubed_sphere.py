@@ -85,15 +85,15 @@ def model(ref_level, nlayers, delta_t, steps=None):
     stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
 
     energy_solver = EnergySolver(
-        approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+        T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
     )
     energy_solver.solver_parameters["ksp_converged_reason"] = None
     energy_solver.solver_parameters["ksp_view"] = None
     energy_solver.solver_parameters["ksp_rtol"] = 1e-7
 
     stokes_solver = StokesSolver(
-        approximation,
         z,
+        approximation,
         T,
         bcs=stokes_bcs,
         nullspace={

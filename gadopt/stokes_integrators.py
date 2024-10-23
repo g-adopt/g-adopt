@@ -15,7 +15,7 @@ from .approximations import Approximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
-from .momentum_equation import residual_terms_stokes as terms_stokes
+from .momentum_equation import residual_terms_stokes
 from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, vertical_component
 
 iterative_stokes_solver_parameters = {
@@ -123,10 +123,10 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
     """Solver for a system involving mass and momentum conservation.
 
     Arguments:
-      approximation:
-        G-ADOPT approximation defining terms in the system of equations.
       solution:
         Firedrake function representing the field over the mixed Stokes space.
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations.
       bcs:
         Dictionary specifying boundary conditions (identifier, type, and value).
       quad_degree:
@@ -147,8 +147,8 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     def __init__(
         self,
-        approximation: Approximation,
         solution: fd.Function,
+        approximation: Approximation,
         /,
         *,
         bcs: dict[int, dict[str, Number]] = {},
@@ -158,8 +158,8 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
         constant_jacobian: bool = False,
         nullspace: dict[str, float] = {},
     ) -> None:
-        self.approximation = approximation
         self.solution = solution
+        self.approximation = approximation
         self.bcs = bcs
         self.quad_degree = quad_degree
         self.solver_parameters = solver_parameters
@@ -215,7 +215,6 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
                     weak_bc[bc_type] = value
 
             if normal_stress_fs is not None:
-                # weak_bc["normal_stress"] = weak_bc["normal_stress"] + normal_stress_fs
                 weak_bc["normal_stress"] += normal_stress_fs
                 normal_stress_fs = None
 
@@ -316,10 +315,10 @@ class StokesSolver(MassMomentumBase):
     """Solver for the Stokes system.
 
     Arguments:
-      approximation:
-        G-ADOPT approximation defining terms in the system of equations.
       solution:
         Firedrake function representing the field over the mixed Stokes space.
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations.
       T:
         Firedrake function representing the temperature field.
       bcs:
@@ -349,8 +348,8 @@ class StokesSolver(MassMomentumBase):
 
     def __init__(
         self,
-        approximation: Approximation,
         solution: fd.Function,
+        approximation: Approximation,
         T: fd.Function = fd.Constant(0.0),
         /,
         *,
@@ -358,7 +357,7 @@ class StokesSolver(MassMomentumBase):
         theta_fs: float = 0.5,
         **kwargs,
     ) -> None:
-        super().__init__(approximation, solution, **kwargs)
+        super().__init__(solution, approximation, **kwargs)
 
         self.T = T
         self.timestep_fs = timestep_fs
@@ -415,17 +414,16 @@ class StokesSolver(MassMomentumBase):
 
     def set_equations(self) -> None:
         """Sets up UFL forms for the Stokes equations residual."""
-        terms_kwargs = {
-            "u": self.solution_split[0],
-            "p": self.solution_split[1],
-            "T": self.T,
-        }
-        for i, terms_eq in enumerate(terms_stokes):
+        eqs_attrs = [
+            {"p": self.solution_split[1], "T": self.T},
+            {"u": self.solution_split[0]},
+        ]
+        for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):
             eq = Equation(
                 self.tests[i],
                 self.solution_space[i],
                 terms_eq,
-                terms_kwargs=terms_kwargs,
+                eq_attrs=eq_attrs,
                 approximation=self.approximation,
                 bcs=self.weak_bcs,
                 quad_degree=self.quad_degree,
@@ -442,7 +440,7 @@ class StokesSolver(MassMomentumBase):
             # not be exactly symmetric.
             buoyancy_scale = -self.theta_fs * self.buoyancy_fs[eta_ind]
 
-            terms_kwargs = {
+            eq_attrs = {
                 "boundary_id": bc_id,
                 "buoyancy_scale": buoyancy_scale,
                 "u": self.solution_split[0],
@@ -456,7 +454,7 @@ class StokesSolver(MassMomentumBase):
                 func_space_eta,
                 free_surface_term,
                 mass_term=mass_term_fs,
-                terms_kwargs=terms_kwargs,
+                eq_attrs=eq_attrs,
                 quad_degree=self.quad_degree,
             )
             self.F += eq_fs.mass((eta - self.eta_old[eta_ind]) / self.timestep_fs)
@@ -492,17 +490,17 @@ class StokesSolver(MassMomentumBase):
 
 
 class ViscoelasticSolver(MassMomentumBase):
-    """Solver for the linear viscoelastic system.
+    """Solves the Stokes system assuming a Maxwell viscoelastic rheology.
 
     Arguments:
-      approximation:
-        G-ADOPT approximation defining terms in the system of equations.
       solution:
         Firedrake function representing the field over the mixed Stokes space.
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations.
       displ:
         Firedrake function representing the total displacement.
       tau_old:
-        Firedrake function representing the previous deviatoric stress.
+        Firedrake function representing the deviatoric stress at the previous time step.
       dt:
         Float representing the simulation's timestep.
       bcs:
@@ -525,14 +523,14 @@ class ViscoelasticSolver(MassMomentumBase):
 
     def __init__(
         self,
-        approximation: Approximation,
         solution: fd.Function,
         displ: fd.Function,
         tau_old: fd.Function,
+        approximation: Approximation,
         dt: float | fd.Constant | fd.Function,
         **kwargs,
     ) -> None:
-        super().__init__(approximation, solution, **kwargs)
+        super().__init__(solution, approximation, **kwargs)
 
         self.displ = displ
         self.tau_old = tau_old
@@ -565,23 +563,25 @@ class ViscoelasticSolver(MassMomentumBase):
 
     def set_equations(self) -> None:
         """Sets up UFL forms for the viscoelastic Stokes equations residual."""
-        terms_kwargs = {
-            "u": self.solution_split[0],
-            "p": self.solution_split[1],
-            "displ": self.displ,
-            "stress_old": self.tau_old,
-        }
+        eqs_attrs = [
+            {
+                "p": self.solution_split[1],
+                "displ": self.displ,
+                "stress_old": self.tau_old,
+            },
+            {"u": self.solution_split[0]},
+        ]
 
         # This is a scaling factor roughly size of mantle Maxwell time to make sure that
         # solve converges with strong bcs in parallel...
         # scaling_factor = 1e-10
 
-        for i, terms_eq in enumerate(terms_stokes):
+        for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):
             eq = Equation(
                 self.tests[i],
                 self.solution_space[i],
                 terms_eq,
-                terms_kwargs=terms_kwargs,
+                eq_attrs=eq_attrs,
                 approximation=self.approximation,
                 bcs=self.weak_bcs,
                 quad_degree=self.quad_degree,

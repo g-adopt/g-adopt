@@ -1,7 +1,8 @@
-cases := viscoelastic_loading 
+all: params.log
 
-all: $(cases)
+params.log: viscoelastic.py
+	echo "running $<" >&2
+	/usr/bin/time --format="$@ finished in %E" tsp -f python3 $<
 
-$(cases): 
-	echo "running $@  "
-	tsp -N 1 -f python3 $@.py
+clean:
+	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.gif

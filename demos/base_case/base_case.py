@@ -311,7 +311,7 @@ plog.log_str(
     "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t"
 )
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 # -
 
 # We finally come to solving the variational problem, with solver
@@ -328,12 +328,12 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 
 # +
 energy_solver = EnergySolver(
-    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(
-    approximation,
     z,
+    approximation,
     T,
     bcs=stokes_bcs,
     constant_jacobian=True,

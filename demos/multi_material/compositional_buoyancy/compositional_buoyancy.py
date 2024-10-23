@@ -199,8 +199,8 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # +
 stokes_solver = StokesSolver(
-    approximation,
     z,
+    approximation,
     bcs=stokes_bcs,
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )

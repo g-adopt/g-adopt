@@ -69,10 +69,10 @@ def test_solver_parameters_argument():
 
         approximation = Approximation("BA", dimensional=False, parameters={"mu": mu})
         stokes_solver = StokesSolver(
-            approximation, stokes_function, solver_parameters=solver_parameters
+            stokes_function, approximation, solver_parameters=solver_parameters
         )
 
         assert stokes_solver.solver_parameters == expected_value
 
     with pytest.raises(ValueError):
-        StokesSolver(approximation, stokes_function, solver_parameters="")
+        StokesSolver(stokes_function, approximation, solver_parameters="")

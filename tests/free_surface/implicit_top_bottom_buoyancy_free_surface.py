@@ -48,8 +48,8 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
 
     def setup_solver(self):
         self.stokes_solver = StokesSolver(
-            self.approximation,
             self.z,
+            self.approximation,
             self.T,
             bcs=self.stokes_bcs,
             solver_parameters=self.solver_parameters,

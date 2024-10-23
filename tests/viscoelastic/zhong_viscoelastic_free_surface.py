@@ -1,20 +1,37 @@
+# Test case based on simple harmonic loading and unloading problems from `Viscosity of
+# the Earth's Mantle' by Cathles (1975). The specific analytic solution is actually
+# based off of Equation 2 in `On calculating glacial isostatic adjustment', Cathles
+# (2024). The decay time is the viscous relaxation timescale plus the Maxwell time,
+# including the elastic buoyancy effects. Note that we are solving a loading problem not
+# an unloading problem.
+
+# There are three default tests:
+# 1) elastic case limit (dt << Maxwell time, 1 step)
+# 2) viscoelastic (dt ~ Maxwell time)
+# 3) viscous limit (dt >> Maxwell time)
+
 import argparse
 
 import numpy as np
 
 from gadopt import *
 
-OUTPUT = False
-output_directory = "2d_analytic_zhong_viscoelastic_freesurface"
-
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--case",
     default="viscoelastic",
+    required=False,
     help="""Test case to run:
-elastic limit (dt << maxwell time, 1 step),
-viscoelastic (dt ~ maxwell time),
-viscous limit (dt >> maxwell time)""",
+- elastic limit (dt << Maxwell time, 1 step)
+- viscoelastic (dt ~ Maxwell time)
+- viscous limit (dt >> Maxwell time)""",
+)
+parser.add_argument("--output", action="store_true", help="Output VTK files")
+parser.add_argument(
+    "--output_directory",
+    default="2d_analytic_zhong_viscoelastic_freesurface/",
+    required=False,
+    help="Output directory",
 )
 args = parser.parse_args()
 
@@ -22,7 +39,7 @@ args = parser.parse_args()
 def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", G=1e11):
     # Set up geometry:
     nz = nx  # Number of vertical cells
-    D = 3e6  # length of domain in m
+    D = 3e6  # Length of domain in m
     L = D / 2  # Depth of the domain in m
     mesh = RectangleMesh(nx, nz, L, D)  # Rectangle mesh generated via Firedrake
     mesh.cartesian = True
@@ -48,7 +65,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", G=1e11):
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
     Q = FunctionSpace(mesh, "CG", 2)  # Analytical function space (scalar)
     # (Discontinuous) Stress tensor function space (tensor)
-    TP1 = TensorFunctionSpace(mesh, "DG", 1)
+    S = TensorFunctionSpace(mesh, "DG", 1)
     R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
     # Output function space information:
@@ -59,12 +76,12 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", G=1e11):
 
     # Function to store the solutions:
     z = Function(Z)  # a field over the mixed function space Z.
-    if OUTPUT:
-        z.subfunctions[0].rename("Incremental displacement")
-        z.subfunctions[1].rename("Pressure")
+    # Next rename for output:
+    z.subfunctions[0].rename("Incremental displacement")
+    z.subfunctions[1].rename("Pressure")
 
     displ = Function(V, name="Displacement")
-    tau_old = Function(TP1, name="Deviatoric stress (old)")
+    tau_old = Function(S, name="Deviatoric stress (old)")
 
     # Physical fields
     rho = Function(R).assign(4500.0)  # density in kg/m^3
@@ -97,15 +114,16 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", G=1e11):
     log("maxwell time in years", maxwell_time / year_in_seconds)
 
     approximation = Approximation(
-        "VE", dimensional=True, parameters={"G": G, "g": g, "mu": mu, "rho": rho}
+        "SDVA", dimensional=True, parameters={"G": G, "g": g, "mu": mu, "rho": rho}
     )
 
     # Create output file
-    if OUTPUT:
+    if args.output:
+        output_directory = args.output_directory
         output_file = VTKFile(
             f"{output_directory}viscoelastic_freesurface_maxwelltime"
-            f"{maxwell_time / year_in_seconds:.0f}a_nx{nx}_dt"
-            f"{dt / year_in_seconds:.0f}a_tau{tau / year_in_seconds:.0f}.pvd"
+            f"{maxwell_time / year_in_seconds:.0f}a_nx{nx}_dt{dt / year_in_seconds:.0f}"
+            f"a_tau{tau / year_in_seconds:.0f}.pvd"
         )
 
     # Setup boundary conditions
@@ -127,10 +145,10 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", G=1e11):
     error = 0  # Initialise error
 
     viscoelastic_solver = ViscoelasticSolver(
-        approximation, z, displ, tau_old, dt, bcs=stokes_bcs, solver_parameters="direct"
+        z, displ, tau_old, approximation, dt, bcs=stokes_bcs, solver_parameters="direct"
     )
 
-    if OUTPUT:
+    if args.output:
         output_file.write(*z.subfunctions, displ, tau_old)
 
     # Now perform the time loop:
@@ -153,7 +171,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", G=1e11):
         if (timestep + 1) % dump_period == 0:
             log("timestep", timestep)
             log("time", time)
-            if OUTPUT:
+            if args.output:
                 output_file.write(*z.subfunctions, displ, tau_old)
 
     final_error = pow(error, 0.5) / L
@@ -170,7 +188,7 @@ params = {
 def run_benchmark(case_name):
     # Run default case run for four dt factors
     dtf_start = params[case_name]["dtf_start"]
-    params[case_name].pop("dtf_start")  # Don't pass this to viscoelastic_model
+    params[case_name].pop("dtf_start")  # Do not pass this to viscoelastic_model
     dt_factors = dtf_start / (2 ** np.arange(4))
     prefix = f"errors-{case_name}-zhong"
     errors = np.array(

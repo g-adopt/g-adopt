@@ -49,7 +49,6 @@ class TimeIntegrator(TimeIntegratorBase):
     Args:
       equation: G-ADOPT equation to integrate
       solution: Firedrake function representing the equation's solution
-      fields: Dictionary of Firedrake fields passed to the equation
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep

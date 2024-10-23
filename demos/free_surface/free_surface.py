@@ -192,7 +192,7 @@ plog.log_str(
     "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t eta_min eta_max"
 )
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 # -
 
 # Now let's setup the solver objects.
@@ -210,10 +210,10 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 
 # +
 energy_solver = EnergySolver(
-    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
-stokes_solver = StokesSolver(approximation, z, T, bcs=stokes_bcs, timestep_fs=delta_t)
+stokes_solver = StokesSolver(z, approximation, T, bcs=stokes_bcs, timestep_fs=delta_t)
 
 # -
 

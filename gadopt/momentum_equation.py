@@ -25,13 +25,6 @@ from firedrake import *
 from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous, normal_is_continuous, tensor_jump, upward_normal
 
-__all__ = [
-    "divergence_term",
-    "momentum_source_term",
-    "pressure_gradient_term",
-    "viscosity_term",
-]
-
 
 def viscosity_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
@@ -55,8 +48,8 @@ def viscosity_term(
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    stress_old = eq.stress_old if hasattr(eq, "stress_old") else 0.0
-    stress = eq.approximation.stress(eq.u, stress_old)
+    stress_old = getattr(eq, "stress_old", 0.0)
+    stress = eq.approximation.stress(trial, stress_old)
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
     dim = eq.mesh.geometric_dimension()
@@ -84,9 +77,9 @@ def viscosity_term(
     # NOTE: "un" can be combined with "stress" provided the stress force is tangential
     # (e.g. no normal flow with wind)
     for bc_id, bc in eq.bcs.items():
-        if "u" in bc and any(bc_type in bc for bc_type in ["drag", "stress", "un"]):
+        if "u" in bc and any(bc_type in bc for bc_type in ["stress", "un"]):
             raise ValueError(
-                '"drag", "stress", or "un" cannot be specified if "u" is already given.'
+                '"stress" or "un" cannot be specified if "u" is already given.'
             )
         if "normal_stress" in bc and any(bc_type in bc for bc_type in ["u", "un"]):
             raise ValueError(
@@ -135,11 +128,6 @@ def viscosity_term(
         if "normal_stress" in bc:
             F += dot(eq.test, bc["normal_stress"] * eq.n) * eq.ds(bc_id)
 
-        # if "drag" in bc:  # (bottom) drag of the form tau = -drag trial |trial|
-        #     drag = bc["drag"]
-        #     unorm = pow(dot(trial_lagged, trial_lagged) + 1e-6, 0.5)
-        #     F += dot(eq.test, drag * unorm * trial) * eq.ds(bc_id)
-
     return -F
 
 
@@ -156,6 +144,20 @@ def pressure_gradient_term(
     for bc_id, bc in eq.bcs.items():
         if "u" in bc or "un" in bc:
             F += dot(eq.test, eq.n) * eq.p * eq.ds(bc_id)
+
+    return -F
+
+
+def momentum_source_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+    p = getattr(eq, "p", 0.0)
+    T = getattr(eq, "T", 0.0)
+    displ = getattr(eq, "displ", 0.0)
+
+    source = eq.approximation.buoyancy(p, T, displ) * upward_normal(eq.mesh)
+
+    F = -dot(eq.test, source) * eq.dx
 
     return -F
 
@@ -178,18 +180,15 @@ def divergence_term(
     return -F
 
 
-def momentum_source_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
-    T = eq.T if hasattr(eq, "T") else 0.0
-    displ = eq.displ if hasattr(eq, "displ") else 0.0
-
-    source = eq.approximation.buoyancy(eq.p, T, displ) * upward_normal(eq.mesh)
-
-    F = -dot(eq.test, source) * eq.dx
-
-    return -F
-
+viscosity_term.required_attrs = set()
+viscosity_term.optional_attrs = {"stress_old", "interior_penalty"}
+pressure_gradient_term.required_attrs = {"p"}
+pressure_gradient_term.optional_attrs = set()
+momentum_source_term.required_attrs = set()
+momentum_source_term.optional_attrs = {"p", "T", "displ"}
+divergence_term.required_attrs = {"u"}
+divergence_term.optional_attrs = set()
 
 residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]
-residual_terms_stokes = [residual_terms_momentum, divergence_term]
+residual_terms_mass = divergence_term
+residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]

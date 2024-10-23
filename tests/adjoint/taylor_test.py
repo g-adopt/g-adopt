@@ -84,17 +84,17 @@ def rectangle_taylor_test(case):
     temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 
     energy_solver = EnergySolver(
-        approximation,
         T,
         u,
+        approximation,
         delta_t,
         ImplicitMidpoint,
         bcs=temp_bcs,
     )
 
     stokes_solver = StokesSolver(
-        approximation,
         z,
+        approximation,
         T,
         bcs=stokes_bcs,
         constant_jacobian=True,

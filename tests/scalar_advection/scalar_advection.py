@@ -1,6 +1,6 @@
 # Demo for pure scalar advection - this is adapted from the Firedrake DG_advection demo,
-# but here we use G-ADOPT's Energy solver and use a CG discretisation
-# with Streamline Upwind (SU) stabilisation.
+# but here we use G-ADOPT's GenericTransportSolver and use a CG discretisation with
+# Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
 from gadopt.time_stepper import DIRK33
@@ -72,16 +72,17 @@ T = 2 * pi
 dt = T / 600.0
 q_in = Constant(1.0)
 
-# Use G-ADOPT's AdvectionDiffusionSolver to advect the tracer. We only include an
+# Use G-ADOPT's GenericTransportSolver to advect the tracer. We only include an
 # advection term and apply weak boundary conditions on inflow regions.
 bc_in = {"q": q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
-adv_diff_solver = AdvectionDiffusionSolver(
-    "advection", q, u, dt, DIRK33, bcs=bcs, su_diffusivity=0.0
+eq_attrs = {"u": u}
+adv_solver = GenericTransportSolver(
+    "advection", q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_diffusivity=0.0
 )
 
 # Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(adv_diff_solver.equation.su_nubar)
+nubar = Function(Q).interpolate(adv_solver.equation.su_nubar)
 nubar_outfile = VTKFile("CG_SUadv_nubar.pvd")
 nubar_outfile.write(nubar)
 
@@ -89,7 +90,7 @@ nubar_outfile.write(nubar)
 t = 0.0
 step = 0
 while t < T - 0.5 * dt:
-    adv_diff_solver.solve()
+    adv_solver.solve()
 
     step += 1
     t += dt

@@ -40,6 +40,8 @@ class GeodynamicalDiagnostics:
         self,
         z: fd.Function,
         T: fd.Function = 0,
+        /,
+        *,
         bottom_id: int = None,
         top_id: int = None,
         quad_degree: int = 4,

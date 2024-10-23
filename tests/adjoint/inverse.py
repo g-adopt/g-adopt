@@ -112,8 +112,8 @@ def inverse(alpha_u, alpha_d, alpha_s):
 
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
+        T,
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,

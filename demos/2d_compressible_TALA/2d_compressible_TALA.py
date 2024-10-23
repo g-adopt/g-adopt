@@ -200,7 +200,7 @@ plog.log_str(
     "nu_top energy avg_t rate_work_g rate_viscous energy_2"
 )
 
-gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, FullT, bottom_id=bottom_id, top_id=top_id)
 
 # -
 
@@ -209,12 +209,12 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id)
 
 # +
 energy_solver = EnergySolver(
-    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(
-    approximation,
     z,
+    approximation,
     T,
     bcs=stokes_bcs,
     constant_jacobian=True,

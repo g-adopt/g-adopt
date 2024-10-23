@@ -204,9 +204,9 @@ energy_solver = []
 if hasattr(simulation, "initialise_temperature"):
     energy_solver.append(
         ga.EnergySolver(
-            approximation,
             temperature,
             velocity,
+            approximation,
             timestep,
             ga.ImplicitMidpoint,
             bcs=simulation.temp_bcs if hasattr(simulation, "temp_bcs") else None,
@@ -214,8 +214,8 @@ if hasattr(simulation, "initialise_temperature"):
     )
 stokes_nullspace = ga.create_stokes_nullspace(stokes_function.function_space())
 stokes_solver = ga.StokesSolver(
-    approximation,
     stokes_function,
+    approximation,
     temperature,
     bcs=simulation.stokes_bcs,
     quad_degree=None,

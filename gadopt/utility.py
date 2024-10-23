@@ -476,18 +476,14 @@ def absv(u):
     return as_vector([abs(ui) for ui in u])
 
 
-def su_nubar(u, J, Pe):
-    """SU stabilisation viscosity as a function of velocity, Jacobian and grid Peclet number"""
-    # SU(PG) ala Donea & Huerta:
-    # Columns of Jacobian J are the vectors that span the quad/hex
-    # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
-    # thus u^T J is (dx * u , dy * v)
-    # and following (2.44c) Pe = u^T J / (2*nu)
-    # beta(Pe) is the xibar vector in (2.44a)
-    # then we get artifical viscosity nubar from (2.49)
-    beta_pe = as_vector([1 / tanh(Pei + 1e-6) - 1 / (Pei + 1e-6) for Pei in Pe])
+def step_func(r, centre, mag, increasing=True, sharpness=50):
+    """A step function designed to represent viscosity jumps.
 
-    return dot(absv(dot(u, J)), beta_pe) / 2
+    Builds a step centred at "centre" with given magnitude.
+    Increases with radius if "increasing" is True.
+    """
+    sign = 1 if increasing else -1
+    return mag * (0.5 * (1 + tanh(sign * (r - centre) * sharpness)))
 
 
 def node_coordinates(function):

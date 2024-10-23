@@ -40,17 +40,17 @@ outfile.write(q)
 T = 10.0
 dt = 0.01
 
-# Use G-ADOPT's AdvectionDiffusionSolver to advect the tracer. We use the diagonaly
+# Use G-ADOPT's GenericTransportSolver to advect the tracer. We use the diagonally
 # implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the boundary
 # conditions will be applied strongly by the solver.
 terms = ["advection", "diffusion"]
-terms_kwargs = {"diffusivity": kappa}
+eq_attrs = {"diffusivity": kappa, "u": u}
 # strongly applied dirichlet bcs on top and bottom
 q_left = conditional(y < 0.2, 0.0, 1.0)
 q_bottom = 0
 bcs = {3: {"T": q_bottom}, 1: {"T": q_left}}
-adv_diff_solver = AdvectionDiffusionSolver(
-    terms, q, u, dt, DIRK33, terms_kwargs=terms_kwargs, bcs=bcs, su_diffusivity=kappa
+adv_diff_solver = GenericTransportSolver(
+    terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_diffusivity=kappa
 )
 
 # Get nubar (additional SU diffusion) for plotting

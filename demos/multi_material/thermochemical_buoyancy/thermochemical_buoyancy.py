@@ -231,7 +231,7 @@ output_file = VTKFile("output.pvd")
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
@@ -246,12 +246,12 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # +
 energy_solver = EnergySolver(
-    approximation, T, u, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
 stokes_solver = StokesSolver(
-    approximation,
     z,
+    approximation,
     T,
     bcs=stokes_bcs,
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
