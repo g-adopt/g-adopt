@@ -7,17 +7,17 @@ gia_path = "glacial_isostatic_adjustment"
 
 cases = {
     f"{mc_path}/base_case": {"extra_checks": ["nu_top"]},
-#    f"{mc_path}/free_surface": {"extra_checks": ["nu_top", "eta_min", "eta_max"]},
-#    f"{mc_path}/2d_compressible_TALA": {"extra_checks": ["nu_top"]},
-#    f"{mc_path}/2d_compressible_ALA": {"extra_checks": ["nu_top"]},
-#    f"{mc_path}/viscoplastic_case": {"extra_checks": ["nu_top"]},
-#    f"{mc_path}/2d_cylindrical": {"extra_checks": ["nu_top", "T_min", "T_max"]},
-#    f"{mc_path}/3d_spherical": {"extra_checks": ["nu_top", "t_dev_avg"]},
-#    f"{mc_path}/3d_cartesian": {"extra_checks": ["nu_top"], "rtol": 1e-4},
-#    f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
-#    "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]},
-#    "../tests/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
-#    f"{gia_path}/viscoelastic": {"extra_checks": ["disp_min", "disp_max"]},
+    f"{mc_path}/free_surface": {"extra_checks": ["nu_top", "eta_min", "eta_max"]},
+    f"{mc_path}/2d_compressible_TALA": {"extra_checks": ["nu_top"]},
+    f"{mc_path}/2d_compressible_ALA": {"extra_checks": ["nu_top"]},
+    f"{mc_path}/viscoplastic_case": {"extra_checks": ["nu_top"]},
+    f"{mc_path}/2d_cylindrical": {"extra_checks": ["nu_top", "T_min", "T_max"]},
+    f"{mc_path}/3d_spherical": {"extra_checks": ["nu_top", "t_dev_avg"]},
+    f"{mc_path}/3d_cartesian": {"extra_checks": ["nu_top"], "rtol": 1e-4},
+    f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
+    "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]},
+    "../tests/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
+    f"{gia_path}/viscoelastic": {"extra_checks": ["disp_min", "disp_max"]},
 }
 
 
