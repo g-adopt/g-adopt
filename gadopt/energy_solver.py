@@ -374,7 +374,7 @@ class EnergySolver(GenericTransportBase):
             )
         if (
             self.approximation.heat_source != 0
-            and self.approximation.viscous_dissipation_factor != 0
+            or self.approximation.viscous_dissipation_factor != 0
         ):
             terms.append("source")
             self.eq_attrs["source"] = self.approximation.energy_source(self.u)
