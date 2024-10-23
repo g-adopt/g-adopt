@@ -245,7 +245,7 @@ class StokesSolver:
         self.strong_bcs = []
 
         # Free surface parameters
-        self.free_surface_dict = {}  # Separate dictionary for copying free surface information
+        self.free_surface_dict = {}
         self.free_surface_dt = free_surface_dt
         self.free_surface_theta = free_surface_theta  # theta = 0.5 gives a second order accurate integration scheme in time
         self.free_surface = False

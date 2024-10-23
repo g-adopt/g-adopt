@@ -1,11 +1,19 @@
-cases := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical 3d_spherical 3d_cartesian adjoint multi_material gplates_global free_surface viscoelastic
-demo_cases := base_case 2d_cylindrical 3d_spherical 2d_compressible_ALA visualise_ALA_p_nullspace 2d_compressible_TALA viscoplastic_case 3d_cartesian gplates_global multi_material/compositional_buoyancy multi_material/thermochemical_buoyancy adjoint free_surface viscoelastic
+cases := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical 3d_spherical 3d_cartesian adjoint gplates_global free_surface
+demo_cases := base_case 2d_cylindrical 3d_spherical 2d_compressible_ALA visualise_ALA_p_nullspace 2d_compressible_TALA viscoplastic_case 3d_cartesian gplates_global adjoint free_surface
+mc_dir="mantle_convection/"
+
+mm_cases := multi_material
+mm_demo_cases := multi_material/compositional_buoyancy multi_material/thermochemical_buoyancy
+
+gia_cases := viscoelastic
+gia_demo_cases := viscoelastic
+gia_dir="glacial_isostatic_adjustment/"
 
 notebook_files := $(foreach case,$(demo_cases),$(case)/$(notdir $(case)).ipynb) adjoint/adjoint_forward.ipynb
 
-.PHONY: all convert_demos $(cases) $(demo_cases) clean generate
+.PHONY: all convert_demos $(cases) $(demo_cases) clean generate $(mm_cases) $(mm_demo_cases)
 
-all: $(cases)
+all: $(cases) $(mm_cases) $(gia_cases)
 
 convert_demos: $(notebook_files) .pages .diagram.mermaid
 	tar --transform='s/.pages/CONTENTS.md/' --create --file artifact.tar .pages .diagram.mermaid
@@ -14,14 +22,20 @@ convert_demos: $(notebook_files) .pages .diagram.mermaid
 
 # explicit dependencies between notebooks
 # adjoint uses the checkpoint from the forward run
-adjoint/adjoint.ipynb: adjoint/adjoint_forward.ipynb
+$(mc_dir)/adjoint/adjoint.ipynb: $(mc_dir)adjoint/adjoint_forward.ipynb
 
 # free surface has a comparison plot against the base case
-free_surface/free_surface.ipynb: base_case/base_case.ipynb
+$(mc_dir)free_surface/free_surface.ipynb: $(mc_dir)base_case/base_case.ipynb
 
 # sort to remove duplicates which define both tests and demos
 $(sort $(cases) $(demo_cases)):
+	$(MAKE) -C $(mc_dir)$@ $(MAKECMDGOALS)
+
+$(sort $(mm_cases) $(mm_demo_cases)):
 	$(MAKE) -C $@ $(MAKECMDGOALS)
+
+$(sort $(gia_cases) $(gia_demo_cases)):
+	$(MAKE) -C $(gia_dir)$@ $(MAKECMDGOALS)
 
 generate:
 	python3 generate_expected.py

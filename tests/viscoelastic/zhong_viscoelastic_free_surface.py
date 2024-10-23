@@ -12,11 +12,11 @@
 from gadopt import *
 import numpy as np
 import argparse
-OUTPUT = False
-output_directory = "./2d_analytic_zhong_viscoelastic_freesurface/"
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--case", default="viscoelastic", type=str, help="Test case to run: elastic limit (dt << maxwell time, 1 step), viscoelastic (dt ~ maxwell time), viscous limit (dt >> maxwell time) ", required=False)
+parser.add_argument("--output", action='store_true', help="Output VTK files")
+parser.add_argument("--output_directory", default="2d_analytic_zhong_viscoelastic_freesurface/", type=str, help="Output directory", required=False)
 args = parser.parse_args()
 
 
@@ -45,7 +45,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     # Set up function spaces - currently using P2P1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-    Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+    Q = FunctionSpace(mesh, "CG", 2)  # Analytical Free surface function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
     TP1 = TensorFunctionSpace(mesh, "DG", 1)
     R = FunctionSpace(mesh, "R", 0)
@@ -53,10 +53,9 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     # Function to store the solutions:
     z = Function(Z)  # a field over the mixed function space Z.
     u, p = split(z)  # Returns symbolic UFL expression for u and p
-    u_, p_ = z.subfunctions  # Returns individual Function for output
     # Next rename for output:
-    u_.rename("Incremental Displacement")
-    p_.rename("Pressure")
+    z.subfunctions[0].rename("Incremental Displacement")
+    z.subfunctions[1].rename("Pressure")
 
     displacement = Function(V, name="displacement")
     stress_old = Function(TP1, name='stress old')
@@ -65,7 +64,6 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     log("Number of Velocity DOF:", V.dim())
     log("Number of Pressure DOF:", W.dim())
     log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
-    log("Number of Temperature DOF:", Q.dim())
 
     # timestepping
     rho0 = Function(R).assign(Constant(4500))  # density in kg/m^3
@@ -101,7 +99,8 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     approximation = SmallDisplacementViscoelasticApproximation(rho0, shear_modulus, viscosity, g=g)
 
     # Create output file
-    if OUTPUT:
+    if args.output:
+        output_directory = args.output_directory
         output_file = VTKFile(f"{output_directory}viscoelastic_freesurface_maxwelltime{float(maxwell_time/year_in_seconds):.0f}a_nx{nx}_dt{float(dt/year_in_seconds):.0f}a_tau{float(tau0/year_in_seconds):.0f}.pvd")
 
     # Setup boundary conditions
@@ -122,8 +121,8 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
                                              dt, bcs=stokes_bcs,)
 
-    if OUTPUT:
-        output_file.write(u_, displacement, p_, eta_analytical, stress_old, stokes_solver.previous_stress)
+    if args.output:
+        output_file.write(*z.subfunctions, displacement, eta_analytical, stress_old)
 
     # Now perform the time loop:
     for timestep in range(1, max_timesteps+1):
@@ -143,8 +142,8 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
         if timestep % dump_period == 0:
             log("timestep", timestep)
             log("time", float(time))
-            if OUTPUT:
-                output_file.write(u_, displacement, p_, eta_analytical, stress_old, stokes_solver.previous_stress)
+            if args.output:
+                output_file.write(*z.subfunctions, displacement, eta_analytical, stress_old)
 
     final_error = pow(error, 0.5)/L
     return final_error
