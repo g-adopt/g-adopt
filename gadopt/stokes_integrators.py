@@ -9,7 +9,7 @@ import abc
 from collections import defaultdict
 from numbers import Number
 
-import firedrake as fd
+from firedrake import *
 
 from .approximations import Approximation
 from .equations import Equation
@@ -147,14 +147,14 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     def __init__(
         self,
-        solution: fd.Function,
+        solution: Function,
         approximation: Approximation,
         /,
         *,
         bcs: dict[int, dict[str, Number]] = {},
         quad_degree: int = 6,
         solver_parameters: dict[str, str | Number] | str | None = None,
-        J: fd.Function | None = None,
+        J: Function | None = None,
         constant_jacobian: bool = False,
         nullspace: dict[str, float] = {},
     ) -> None:
@@ -169,8 +169,8 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
-        self.tests = fd.TestFunctions(self.solution_space)
-        self.solution_split = fd.split(solution)
+        self.tests = TestFunctions(self.solution_space)
+        self.solution_split = split(solution)
 
         self.F = 0.0  # Weak form of the system
 
@@ -179,7 +179,7 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     def __post_init__(self) -> None:
         self.set_boundary_conditions()
-        self.set_equations()
+        self.set_equation()
         self.set_solver_options()
 
     def set_boundary_conditions(self) -> None:
@@ -195,19 +195,19 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
             for bc_type, value in bc.items():
                 if bc_type == "u":
                     self.strong_bcs.append(
-                        fd.DirichletBC(self.solution_space.sub(0), value, bc_id)
+                        DirichletBC(self.solution_space.sub(0), value, bc_id)
                     )
                 elif bc_type == "ux":
                     self.strong_bcs.append(
-                        fd.DirichletBC(self.solution_space.sub(0).sub(0), value, bc_id)
+                        DirichletBC(self.solution_space.sub(0).sub(0), value, bc_id)
                     )
                 elif bc_type == "uy":
                     self.strong_bcs.append(
-                        fd.DirichletBC(self.solution_space.sub(0).sub(1), value, bc_id)
+                        DirichletBC(self.solution_space.sub(0).sub(1), value, bc_id)
                     )
                 elif bc_type == "uz":
                     self.strong_bcs.append(
-                        fd.DirichletBC(self.solution_space.sub(0).sub(2), value, bc_id)
+                        DirichletBC(self.solution_space.sub(0).sub(2), value, bc_id)
                     )
                 elif bc_type == "free_surface":
                     normal_stress_fs = self.set_free_surface_boundary(value, bc_id)
@@ -222,12 +222,12 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
-    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+    ) -> ufl.algebra.Product | ufl.algebra.Sum:
         """Sets the given boundary as a free surface."""
         pass
 
     @abc.abstractmethod
-    def set_equations(self):
+    def set_equation(self):
         """Sets up the term contributions from each equation."""
         raise NotImplementedError
 
@@ -271,13 +271,13 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
     def setup_solver(self) -> None:
         """Sets up the solver."""
         if self.constant_jacobian:
-            z_tri = fd.TrialFunction(self.solution_space)
-            F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
-            a, L = fd.lhs(F_stokes_lin), fd.rhs(F_stokes_lin)
-            self.problem = fd.LinearVariationalProblem(
+            z_tri = TrialFunction(self.solution_space)
+            F_stokes_lin = replace(self.F, {self.solution: z_tri})
+            a, L = lhs(F_stokes_lin), rhs(F_stokes_lin)
+            self.problem = LinearVariationalProblem(
                 a, L, self.solution, bcs=self.strong_bcs, constant_jacobian=True
             )
-            self.solver = fd.LinearVariationalSolver(
+            self.solver = LinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
                 options_prefix=self.name,
@@ -285,10 +285,10 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
                 appctx=self.appctx,
             )
         else:
-            self.problem = fd.NonlinearVariationalProblem(
+            self.problem = NonlinearVariationalProblem(
                 self.F, self.solution, bcs=self.strong_bcs, J=self.J
             )
-            self.solver = fd.NonlinearVariationalSolver(
+            self.solver = NonlinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
                 options_prefix=self.name,
@@ -348,9 +348,9 @@ class StokesSolver(MassMomentumBase):
 
     def __init__(
         self,
-        solution: fd.Function,
+        solution: Function,
         approximation: Approximation,
-        T: fd.Function = fd.Constant(0.0),
+        T: Function = Constant(0.0),
         /,
         *,
         timestep_fs: float | None = None,
@@ -369,7 +369,7 @@ class StokesSolver(MassMomentumBase):
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
-    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+    ) -> ufl.algebra.Product | ufl.algebra.Sum:
         """Sets the given boundary as a free surface.
 
         This method sets an interior boundary condition away from the free surface
@@ -395,7 +395,7 @@ class StokesSolver(MassMomentumBase):
         # Set internal dofs to zero to prevent singular matrix for free surface equation
         self.strong_bcs.append(InteriorBC(func_space_eta, 0, bc_id))
 
-        self.eta_old[eta_ind] = fd.Function(func_space_eta).interpolate(eta)
+        self.eta_old[eta_ind] = Function(func_space_eta).interpolate(eta)
         eta_theta = self.theta_fs * eta + (1 - self.theta_fs) * self.eta_old[eta_ind]
         if self.approximation.dimensional:
             self.buoyancy_fs[eta_ind] = params_fs["rho_diff"] * self.approximation.g
@@ -412,7 +412,7 @@ class StokesSolver(MassMomentumBase):
 
         return normal_stress
 
-    def set_equations(self) -> None:
+    def set_equation(self) -> None:
         """Sets up UFL forms for the Stokes equations residual."""
         eqs_attrs = [
             {"p": self.solution_split[1], "T": self.T},
@@ -523,11 +523,11 @@ class ViscoelasticSolver(MassMomentumBase):
 
     def __init__(
         self,
-        solution: fd.Function,
-        displ: fd.Function,
-        tau_old: fd.Function,
+        solution: Function,
+        displ: Function,
+        tau_old: Function,
         approximation: Approximation,
-        dt: float | fd.Constant | fd.Function,
+        dt: float | Constant | Function,
         **kwargs,
     ) -> None:
         super().__init__(solution, approximation, **kwargs)
@@ -539,7 +539,7 @@ class ViscoelasticSolver(MassMomentumBase):
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
-    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+    ) -> ufl.algebra.Product | ufl.algebra.Sum:
         """Sets the given boundary as a free surface.
 
         Arguments:
@@ -561,7 +561,7 @@ class ViscoelasticSolver(MassMomentumBase):
 
         return normal_stress
 
-    def set_equations(self) -> None:
+    def set_equation(self) -> None:
         """Sets up UFL forms for the viscoelastic Stokes equations residual."""
         eqs_attrs = [
             {
@@ -599,13 +599,13 @@ class ViscoelasticSolver(MassMomentumBase):
 
 
 def create_stokes_nullspace(
-    Z: fd.functionspaceimpl.WithGeometry,
+    Z: functionspaceimpl.WithGeometry,
     closed: bool = True,
     rotational: bool = False,
     translations: list[int] | None = None,
     approximation: Approximation | None = None,
     top_subdomain_id: str | int | None = None,
-) -> fd.nullspace.MixedVectorSpaceBasis:
+) -> nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
 
     Arguments:
@@ -634,17 +634,17 @@ def create_stokes_nullspace(
             "must be None."
         )
 
-    X = fd.SpatialCoordinate(Z.mesh())
+    X = SpatialCoordinate(Z.mesh())
     dim = len(X)
 
     if rotational:
         if dim == 2:
-            rotV = fd.Function(Z[0]).interpolate(fd.as_vector((-X[1], X[0])))
+            rotV = Function(Z[0]).interpolate(as_vector((-X[1], X[0])))
             basis = [rotV]
         elif dim == 3:
-            x_rotV = fd.Function(Z[0]).interpolate(fd.as_vector((0, -X[2], X[1])))
-            y_rotV = fd.Function(Z[0]).interpolate(fd.as_vector((X[2], 0, -X[0])))
-            z_rotV = fd.Function(Z[0]).interpolate(fd.as_vector((-X[1], X[0], 0)))
+            x_rotV = Function(Z[0]).interpolate(as_vector((0, -X[2], X[1])))
+            y_rotV = Function(Z[0]).interpolate(as_vector((X[2], 0, -X[0])))
+            z_rotV = Function(Z[0]).interpolate(as_vector((-X[1], X[0], 0)))
             basis = [x_rotV, y_rotV, z_rotV]
         else:
             raise ValueError("Unknown dimension")
@@ -655,10 +655,10 @@ def create_stokes_nullspace(
         for tdim in translations:
             vec = [0] * dim
             vec[tdim] = 1
-            basis.append(fd.Function(Z[0]).interpolate(fd.as_vector(vec)))
+            basis.append(Function(Z[0]).interpolate(as_vector(vec)))
 
     if basis:
-        V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
+        V_nullspace = VectorSpaceBasis(basis, comm=Z.mesh().comm)
         V_nullspace.orthonormalize()
     else:
         V_nullspace = Z[0]
@@ -666,10 +666,10 @@ def create_stokes_nullspace(
     if closed:
         if approximation and approximation.preset == "ALA":
             p = ala_right_nullspace(Z[1], approximation, top_subdomain_id)
-            p_nullspace = fd.VectorSpaceBasis([p], comm=Z.mesh().comm)
+            p_nullspace = VectorSpaceBasis([p], comm=Z.mesh().comm)
             p_nullspace.orthonormalize()
         else:
-            p_nullspace = fd.VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
+            p_nullspace = VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
     else:
         p_nullspace = Z[1]
 
@@ -678,14 +678,14 @@ def create_stokes_nullspace(
     # If free surface unknowns, add dummy free surface nullspace
     null_space += Z[2:]
 
-    return fd.MixedVectorSpaceBasis(Z, null_space)
+    return MixedVectorSpaceBasis(Z, null_space)
 
 
 def ala_right_nullspace(
-    W: fd.functionspaceimpl.WithGeometry,
+    W: functionspaceimpl.WithGeometry,
     approximation: Approximation,
     top_subdomain_id: str | int,
-) -> fd.Function:
+) -> Function:
     r"""Compute pressure nullspace for Anelastic Liquid Approximation.
 
     Arguments:
@@ -696,9 +696,9 @@ def ala_right_nullspace(
     Returns:
       pressure nullspace solution
 
-    To obtain the pressure nullspace solution for the Stokes equation in the
-    Anelastic Liquid Approximation (which includes a pressure-dependent buoyancy
-    term), we try to solve the equation:
+    To obtain the pressure nullspace solution for the Stokes equation in the Anelastic
+    Liquid Approximation (which includes a pressure-dependent buoyancy term), we try to
+    solve the equation:
 
     $$
       -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
@@ -724,37 +724,37 @@ def ala_right_nullspace(
         int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
     $$
 
-    This elliptic equation can be solved with natural boundary conditions by
-    imposing our original equation above, which eliminates all boundary terms:
+    This elliptic equation can be solved with natural boundary conditions by imposing
+    our original equation above, which eliminates all boundary terms:
 
     $$
       int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
     $$
 
-    However, if we do so on all boundaries we end up with a system that has the
-    same nullspace as the one we are after (note that we ended up merely testing the
-    original equation with $nabla q$). Instead, we use the fact that the gradient of
-    the null mode is always vertical, and thus the null mode is constant at any
-    horizontal level (geoid), such as the top surface. Choosing any nonzero constant
-    for this surface fixes the arbitrary scalar multiplier of the null mode. We
-    choose the value of one and apply it as a Dirichlet boundary condition.
+    However, if we do so on all boundaries we end up with a system that has the same
+    nullspace as the one we are after (note that we ended up merely testing the original
+    equation with $nabla q$). Instead, we use the fact that the gradient of the null
+    mode is always vertical, and thus the null mode is constant at any horizontal level
+    (geoid), such as the top surface. Choosing any nonzero constant for this surface
+    fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
+    and apply it as a Dirichlet boundary condition.
 
     Note that this procedure does not necessarily compute the exact nullspace of the
     *discretised* Stokes system. In particular, since not every test function $v$ in
     $V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
     pressure test space, the two terms do not necessarily exactly cancel when tested
-    with $v$ instead of $nabla q$ as in our final equation. However, in practice,
-    the discrete error appears to be small enough, and providing this nullspace
-    gives an improved convergence of the iterative Stokes solver.
+    with $v$ instead of $nabla q$ as in our final equation. However, in practice, the
+    discrete error appears to be small enough, and providing this nullspace gives an
+    improved convergence of the iterative Stokes solver.
     """
-    W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
-    q = fd.TestFunction(W)
-    p = fd.Function(W, name="Pressure nullspace")
+    W = FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
+    q = TestFunction(W)
+    p = Function(W, name="Pressure nullspace")
 
-    F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
-    F += vertical_component(fd.grad(q) * approximation.buoyancy(p)) * fd.dx
+    F = inner(grad(q), grad(p)) * dx
+    F += vertical_component(grad(q) * approximation.buoyancy(p)) * dx
 
     # Fix the solution at the top boundary
-    fd.solve(F == 0, p, bcs=fd.DirichletBC(W, 1.0, top_subdomain_id))
+    solve(F == 0, p, bcs=DirichletBC(W, 1.0, top_subdomain_id))
 
     return p

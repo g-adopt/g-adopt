@@ -233,7 +233,10 @@ class Approximation:
 
         self.viscoelastic_buoyancy = 0.0
         if "viscoelastic_buoyancy" in self.momentum_components:
-            self.viscoelastic_buoyancy = fd.grad(self.rho) * self.g
+            if self.dimensional:
+                self.viscoelastic_buoyancy = fd.grad(self.rho) * self.g
+            else:
+                raise ValueError("SDVA is only available for dimensional systems.")
 
     def set_compressible_stress(self) -> None:
         """Defines the compressible stress term in the momentum conservation."""

@@ -400,7 +400,7 @@ initialise_background_field(mu, mu_values)
 # Let's print out the Maxwell time for each layer
 year_in_seconds = 8.64e4 * 365.25
 for layer_mu, layer_G in zip(mu_values, G_values):
-    log(f"Maxwell time: {float(layer_mu / layer_G / year_in_seconds)} years")
+    log(f"Maxwell time: {layer_mu / layer_G / year_in_seconds} years")
 
 # As we can see the shortest Maxwell time is given by the lower mantle and is about 280
 # years, i.e. it will take about 280 years for the viscous deformation in that layer to
@@ -524,7 +524,7 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 for timestep in range(max_timesteps):
     viscoelastic_solver.solve()
 
-    time.assign(time + dt)
+    time += dt
 
     # Write output:
     if timestep % output_frequency == 0:
@@ -539,7 +539,7 @@ for timestep in range(max_timesteps):
 
     # Log diagnostics:
     plog.log_str(
-        f"{timestep} {float(time)} {float(dt)} "
+        f"{timestep} {float(time)} {dt} "
         f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} "
         f"{displ.dat.data[:, 1].min()} {displ.dat.data[:, 1].max()}"
     )
