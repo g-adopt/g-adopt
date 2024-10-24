@@ -1,9 +1,12 @@
 cases := compositional_buoyancy thermochemical_buoyancy
-
-.PHONY: all $(cases)
+ncpus := 4
 
 all: $(cases)
 
 $(cases):
-	cd $@; /usr/bin/time --format="$@ finished in %E" tsp -f python3 $@.py
+	echo "running $@.py" >&2
+	cd $@ && /usr/bin/time --format="$@.py finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $@.py
+
+clean:
+	rm -f */*.pvd */*.vtu */*.pvtu */*.h5 */params.log
 

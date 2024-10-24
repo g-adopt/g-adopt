@@ -1,7 +1,7 @@
 import firedrake as fd
 import pytest
 
-from gadopt.approximations import BoussinesqApproximation
+from gadopt.approximations import Approximation
 from gadopt.stokes_integrators import (
     StokesSolver,
     direct_stokes_solver_parameters,
@@ -17,9 +17,6 @@ def test_solver_parameters_argument():
     func_space_pres = fd.FunctionSpace(mesh, "CG", 1)
     func_space_stokes = fd.MixedFunctionSpace([func_space_vel, func_space_pres])
     stokes_function = fd.Function(func_space_stokes)
-
-    func_space_temp = fd.FunctionSpace(mesh, "CG", 2)
-    temperature = fd.Function(func_space_temp, name="Temperature")
 
     base_linear_params_with_log = {"snes_type": "ksponly", "snes_monitor": None}
     example_solver_params = {"mat_type": "aij", "ksp_type": "cg", "pc_type": "sor"}
@@ -70,17 +67,12 @@ def test_solver_parameters_argument():
                     | direct_stokes_solver_parameters
                 )
 
-        approximation = BoussinesqApproximation(1, mu=mu)
-
+        approximation = Approximation("BA", dimensional=False, parameters={"mu": mu})
         stokes_solver = StokesSolver(
-            stokes_function,
-            temperature,
-            approximation,
-            mu=mu,
-            solver_parameters=solver_parameters,
+            stokes_function, approximation, solver_parameters=solver_parameters
         )
 
         assert stokes_solver.solver_parameters == expected_value
 
     with pytest.raises(ValueError):
-        StokesSolver(stokes_function, temperature, approximation, solver_parameters="")
+        StokesSolver(stokes_function, approximation, solver_parameters="")

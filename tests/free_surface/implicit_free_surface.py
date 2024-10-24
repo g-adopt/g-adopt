@@ -1,6 +1,7 @@
-from gadopt import *
 from explicit_free_surface import ExplicitFreeSurfaceModel
 from test_free_surface import run_benchmark
+
+from gadopt import *
 
 
 class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
@@ -13,11 +14,12 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
     iterative = True
 
     def __init__(self, dt_factor, iterative_2d=False, **kwargs):
-        self.solver_parameters = 'iterative' if iterative_2d else 'direct'
+        self.solver_parameters = "iterative" if iterative_2d else "direct"
         super().__init__(dt_factor, **kwargs)
 
     def setup_function_space(self):
-        self.Z = MixedFunctionSpace([self.V, self.W, self.W])  # Mixed function space for velocity, pressure and eta.
+        # Mixed function space for velocity, pressure and eta.
+        self.Z = MixedFunctionSpace([self.V, self.W, self.W])
 
     def setup_variables(self):
         # Function to store the solutions:
@@ -30,30 +32,50 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
         self.stokes_vars[2].rename("eta")
 
     def initialise_free_surfaces(self):
-        self.F0 = Constant(1000 / self.L0)  # initial free surface amplitude (dimensionless)
-        self.stokes_vars[2].interpolate(self.F0 * cos(self.kk * self.X[0]))  # Initial free surface condition
+        # initial free surface amplitude (dimensionless)
+        self.F0 = Constant(1000 / self.L0)
+        # Initial free surface condition
+        self.stokes_vars[2].interpolate(self.F0 * cos(self.kk * self.X[0]))
         self.eta_analytical = Function(self.stokes_vars[2], name="eta analytical")
 
     def setup_bcs(self):
         # No normal flow except on the free surface
+        # Free surface boundary conditions are applied automatically in
+        # stokes_integrators and momentum_equation for implicit free surface coupling.
         self.stokes_bcs = {
-            self.top_id: {'free_surface': {}},  # Free surface boundary conditions are applied automatically in stokes_integrators and momentum_equation for implicit free surface coupling
-            self.bottom_id: {'un': 0},
-            self.left_id: {'un': 0},
-            self.right_id: {'un': 0},
+            self.top_id: {"free_surface": {"eta_index": 0, "Ra_fs": 1}},
+            self.bottom_id: {"un": 0},
+            self.left_id: {"un": 0},
+            self.right_id: {"un": 0},
         }
 
     def setup_solver(self):
-        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs,
-                                          free_surface_dt=self.dt, solver_parameters=self.solver_parameters, nullspace=self.Z_nullspace,
-                                          transpose_nullspace=self.Z_nullspace, near_nullspace=self.Z_near_nullspace)
+        self.stokes_solver = StokesSolver(
+            self.z,
+            self.approximation,
+            bcs=self.stokes_bcs,
+            solver_parameters=self.solver_parameters,
+            nullspace={
+                "nullspace": self.Z_nullspace,
+                "transpose_nullspace": self.Z_nullspace,
+                "near_nullspace": self.Z_near_nullspace,
+            },
+            timestep_fs=self.dt,
+        )
 
     def calculate_error(self):
-        local_error = assemble(pow(self.stokes_vars[2]-self.eta_analytical, 2)*self.ds(self.top_id))
-        self.error += local_error*self.dt
+        local_error = assemble(
+            pow(self.stokes_vars[2] - self.eta_analytical, 2) * self.ds(self.top_id)
+        )
+        self.error += local_error * self.dt
 
     def write_file(self):
-        self.output_file.write(self.stokes_vars[0], self.stokes_vars[1], self.stokes_vars[2], self.eta_analytical)
+        self.output_file.write(
+            self.stokes_vars[0],
+            self.stokes_vars[1],
+            self.stokes_vars[2],
+            self.eta_analytical,
+        )
 
     def advance_timestep(self):
         # Solve Stokes sytem:

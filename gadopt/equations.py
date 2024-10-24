@@ -6,14 +6,15 @@ required by Firedrake solvers.
 
 """
 
+from collections.abc import Iterable
 from dataclasses import KW_ONLY, InitVar, dataclass, field
 from numbers import Number
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 from warnings import warn
 
 import firedrake as fd
 
-from .approximations import BaseApproximation
+from .approximations import Approximation
 from .utility import CombinedSurfaceMeasure
 
 __all__ = ["Equation"]
@@ -53,20 +54,20 @@ class Equation:
     trial_space: fd.functionspaceimpl.WithGeometry
     residual_terms: InitVar[Callable | list[Callable]]
     _: KW_ONLY
-    mass_term: Optional[Callable] = None
+    mass_term: Callable | None = None
     eq_attrs: InitVar[dict[str, Any]] = {}
-    approximation: Optional[BaseApproximation] = None
+    approximation: Approximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
-    quad_degree: InitVar[Optional[int]] = None
+    quad_degree: InitVar[int | None] = None
     rescale_factor: Number | fd.Constant | fd.Function = 1
 
     def __post_init__(
         self,
         residual_terms: Callable | list[Callable],
         eq_attrs: dict[str, Any],
-        quad_degree: Optional[int],
+        quad_degree: int | None,
     ) -> None:
-        if not isinstance(residual_terms, list):
+        if not isinstance(residual_terms, Iterable):
             residual_terms = [residual_terms]
         self.residual_terms = residual_terms
 

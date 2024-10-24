@@ -1,6 +1,6 @@
 import firedrake as fd
-import ufl
-from gadopt.utility import is_continuous, normal_is_continuous, get_functionspace
+
+from gadopt.utility import get_functionspace, is_continuous, normal_is_continuous
 
 
 def assert_continuity_test(V, continuity_test, expected):
@@ -28,7 +28,7 @@ def test_continuity():
     meshes = [
         fd.UnitSquareMesh(1, 1, quadrilateral=True),
         fd.UnitSquareMesh(1, 1, quadrilateral=False),
-        fd.ExtrudedMesh(mesh1d, 1)
+        fd.ExtrudedMesh(mesh1d, 1),
     ]
 
     for mesh in meshes:
@@ -36,13 +36,15 @@ def test_continuity():
         P1DG = fd.FunctionSpace(mesh, "DG", 1)
         assert_continuity(P1)
         assert_continuity(P1DG, expected=False)
-        if mesh.ufl_cell() == ufl.triangle:
+
+        if mesh.ufl_cell() == fd.ufl.triangle:
             RT1 = fd.FunctionSpace(mesh, "RT", 1)
             assert_continuity(RT1, expected=False)
             assert_normal_continuity(RT1)
         else:
             DPC1 = fd.FunctionSpace(mesh, "DPC", 1)
             assert_continuity(DPC1, expected=False)
+
         VP1 = fd.VectorFunctionSpace(mesh, "CG", 1)
         assert_continuity(VP1)
         assert_normal_continuity(VP1)
@@ -50,15 +52,18 @@ def test_continuity():
         assert_continuity(VDG1, expected=False)
         assert_normal_continuity(VDG1, expected=False)
 
-        if not isinstance(mesh.ufl_cell(), ufl.cell.TensorProductCell):
+        if not isinstance(mesh.ufl_cell(), fd.ufl.cell.TensorProductCell):
             mesh3d = fd.ExtrudedMesh(mesh, 1)
+
             V = get_functionspace(mesh3d, "CG", 1, "CG", 1)
             assert_continuity(V)
             assert_normal_continuity(V)
+
             V = get_functionspace(mesh3d, "CG", 1, "DG", 1)
             assert_continuity(V, expected=False)
             assert_normal_continuity(V, expected=False)
-            if mesh.ufl_cell() == ufl.triangle:
+
+            if mesh.ufl_cell() == fd.ufl.triangle:
                 N2_1 = fd.FiniteElement("N2curl", fd.triangle, 1, variant="integral")
                 CG_2 = fd.FiniteElement("CG", fd.interval, 2)
                 N2CG = fd.TensorProductElement(N2_1, CG_2)

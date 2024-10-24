@@ -62,7 +62,7 @@ from gadopt import *
 # solutions, as in our previous tutorials.
 
 # +
-nx, ny = 40, 40  # Number of cells in x and y directions
+nx, ny = 128, 128  # Number of cells in x and y directions
 lx, ly = 0.9142, 1  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
@@ -72,7 +72,6 @@ left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Stokes function space (mixed)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space for time step
 
@@ -80,7 +79,6 @@ z = Function(Z)  # A field over the mixed function space Z
 u, p = split(z)  # Symbolic UFL expressions for velocity and pressure
 z.subfunctions[0].rename("Velocity")  # Associated Firedrake velocity function
 z.subfunctions[1].rename("Pressure")  # Associated Firedrake pressure function
-T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
@@ -111,15 +109,10 @@ interface_y = cosine_curve(interface_x, *isd_params)
 line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
 sl.prepare(line_string)
 
-# Extract node coordinates
-node_coords_x, node_coords_y = node_coordinates(psi)
 # Determine to which material nodes belong and calculate distance to interface
 node_relation_to_curve = [
-    (
-        node_coord_y > cosine_curve(node_coord_x, *isd_params),
-        line_string.distance(sl.Point(node_coord_x, node_coord_y)),
-    )
-    for node_coord_x, node_coord_y in zip(node_coords_x, node_coords_y)
+    (y > cosine_curve(x, *isd_params), line_string.distance(sl.Point(x, y)))
+    for x, y in node_coordinates(psi)
 ]
 
 # Define the signed-distance function and overwrite its value array
@@ -136,30 +129,21 @@ epsilon = Constant(min_mesh_edge_length / 4)
 psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # -
 
-# We next define materials present in the simulation using the `Material` class. Here,
-# the problem is non-dimensionalised and can be described by the product of the
-# expressions for the Rayleigh and buoyancy numbers, RaB, which is also referred to as
-# compositional Rayleigh number. Therefore, we provide a value for thermal and
-# compositional Rayleigh numbers to define our approximation. Material fields, such as
-# RaB, are created using the `field_interface` function, which generates a unique field
-# over the numerical domain based on the level-set field(s) and values or expressions
-# associated with each material. At the interface between two materials, the transition
-# between values or expressions can be represented as sharp or diffuse, with the latter
-# using averaging schemes, such as arithmetic, geometric, and harmonic means.
-
+# We next define the material fields and instantiate the approximation. Here, the system
+# of equations is non-dimensional and only includes compositional buoyancy under the
+# Boussinesq approximation. Moreover, physical parameters are constant through space
+# apart from density. As a result, the system is fully defined by the compositional
+# Rayleigh number. We use the `material_field` function to define its value throughout
+# the domain (including the shape of the material interface transition) and provide it
+# to our approximation, alongside other parameters already mentioned.
 
 # +
-buoyant_material = Material(RaB=-1)  # Vertical direction is flipped in the benchmark
-dense_material = Material(RaB=0)
-materials = [buoyant_material, dense_material]
+Ra_c_buoyant = 0
+Ra_c_dense = 1
+# Material fields defined based on each material value and location
+Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="sharp")
 
-Ra = 0  # Thermal Rayleigh number
-
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
-
-approximation = BoussinesqApproximation(Ra, RaB=RaB)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -201,7 +185,7 @@ output_file = VTKFile("output.pvd")
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
 
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
@@ -216,17 +200,12 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 # +
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
     bcs=stokes_bcs,
-    nullspace=Z_nullspace,
-    transpose_nullspace=Z_nullspace,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 
-subcycles = 1  # Number of advection solves to perform within one time step
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
-# Increase the reinitialisation time step to make up for the coarseness of the mesh
-level_set_solver.reini_params["tstep"] *= 20
+level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -239,7 +218,7 @@ time_end = 2000
 while True:
     # Write output
     if time_now >= output_counter * output_frequency:
-        output_file.write(*z.subfunctions, T, psi)
+        output_file.write(*z.subfunctions, psi, time=time_now)
         output_counter += 1
 
     # Update timestep
@@ -267,16 +246,16 @@ while True:
         break
 # -
 
-# At the end of the simulation, once a steady-state has been achieved, we close our
-# logging file and checkpoint solution fields to disk. These can later be used to
+# At the end of the simulation, we write the final state for visualisation, close our
+# logging file, and checkpoint solution fields to disk. These can later be used to
 # restart the simulation, if required.
 
 # +
+output_file.write(*z.subfunctions, psi, time=time_now)
 plog.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
-    final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
     final_checkpoint.save_function(psi, name="Level set")
 # -
