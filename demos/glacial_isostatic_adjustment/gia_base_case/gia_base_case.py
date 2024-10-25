@@ -156,7 +156,7 @@
 # \end{equation}
 # Using this gives
 # \begin{equation}
-#     \dfrac{\Delta t}{2} (\boldsymbol{\sigma}_{L1}^n + \boldsymbol{\sigma}_{L1}^{n-1}) + \dfrac{\eta}{ \mu} (\boldsymbol{\sigma}_{L1}^n - \boldsymbol{\sigma}_{L1}) = -\dfrac{\Delta t}{2} (p^n + p^{n-1}) \textbf{I} - \dfrac{\eta}{ \mu}(p^n - p^{n-1})  \textbf{I} + 2 \eta (\boldsymbol{\epsilon}^n - \boldsymbol{\epsilon}^{n-1}).
+#     \dfrac{\Delta t}{2} (\boldsymbol{\sigma}_{L1}^n + \boldsymbol{\sigma}_{L1}^{n-1}) + \dfrac{\eta}{ \mu} (\boldsymbol{\sigma}_{L1}^n - \boldsymbol{\sigma}_{L1}^{n-1}) = -\dfrac{\Delta t}{2} (p^n + p^{n-1}) \textbf{I} - \dfrac{\eta}{ \mu}(p^n - p^{n-1})  \textbf{I} + 2 \eta (\boldsymbol{\epsilon}^n - \boldsymbol{\epsilon}^{n-1}).
 # \end{equation}
 # Using Maxwell time, $\alpha = \eta / \mu$, this simplifies to
 # \begin{equation}
@@ -223,7 +223,7 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # We also specify functions to hold our solutions: `z` in the mixed
 # function space, noting that a symbolic representation of the two
 # parts – incremental displacement and pressure – is obtained with `split`. For later
-# visualisation, we rename the subfunctions of z Incremental Displacement and Pressure.
+# visualisation, we rename the subfunctions of `z` to *Incremental Displacement* and *Pressure*.
 #
 # We also need to initialise two functions `displacement` and `stress_old` that are used when timestepping the constitutive equation.
 
@@ -289,6 +289,7 @@ initialise_background_field(viscosity, viscosity_values)
 #
 # Let's print out the Maxwell time for each layer
 
+year_in_seconds = 8.64e4 * 365.25
 for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
     log(f"Maxwell time: {float(layer_visc/layer_mu/year_in_seconds):.0f} years")
 
@@ -345,7 +346,7 @@ ice_load = ramp * rho_ice * g * Hice * disc
 
 # +
 # Setup boundary conditions
-exterior_density = conditional(time < T2_load, rho_ice*disc, 0)
+exterior_density = conditional(time < t2_load, rho_ice*disc, 0)
 stokes_bcs = {
     bottom_id: {'uy': 0},
     top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - exterior_density}},
