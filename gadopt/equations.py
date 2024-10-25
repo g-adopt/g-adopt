@@ -33,7 +33,7 @@ class Equation:
         trial_space:
           Firedrake function space of the trial function.
         residual_terms:
-          List of equation terms contributing to the residual.
+          Equation term or a list thereof contributing to the residual.
         mass_term:
           Callable returning the equation's mass term.
         eq_attrs:
@@ -41,7 +41,7 @@ class Equation:
         approximation:
           G-ADOPT approximation for the system of equations considered.
         bcs:
-          Dictionary of identifier-value pairs specifying weak boundary conditions.
+          Dictionary specifying weak boundary conditions (identifier, type, and value).
         quad_degree:
           Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
           where p is the polynomial degree of the trial space.
@@ -157,11 +157,13 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
 
 def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
     """Interior Penalty method
+
     For details on the choice of sigma, see
     https://www.researchgate.net/publication/260085826
-    We use Equations (3.20) and (3.23). Instead of getting the maximum over two
-    adjacent cells (+ and -), we just sum (i.e. 2 * avg) and have an extra 0.5 for for
-    internal facets.
+
+    We use Equations (3.20) and (3.23). Instead of getting the maximum over two adjacent
+    cells (+ and -), we just sum (i.e. 2 * avg) and have an extra 0.5 for internal
+    facets.
     """
     degree = eq.trial_space.ufl_element().degree()
     if not isinstance(degree, int):

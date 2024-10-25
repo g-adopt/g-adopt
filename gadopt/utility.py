@@ -193,13 +193,6 @@ def normal_is_continuous(expr) -> bool:
     return elem in ufl.HDiv
 
 
-def cell_size(mesh):
-    if hasattr(mesh.ufl_cell(), "sub_cells"):
-        return sqrt(CellVolume(mesh))
-    else:
-        return CellDiameter(mesh)
-
-
 def tensor_jump(v, n):
     r"""
     Jump term for vector functions based on the tensor product
@@ -236,27 +229,6 @@ def extend_function_to_3d(func, mesh_extruded):
     func_extended = Function(fs_extended, name=name, val=func.dat._data)
     func_extended.source = func
     return func_extended
-
-
-class ExtrudedFunction(Function):
-    """A 2D `Function` that provides a 3D view on the extruded domain.
-
-    The 3D function can be accessed as `ExtrudedFunction.view_3d`.
-    The 3D function resides in V x R function space, where V is the function
-    space of the source function. The 3D function shares the data of the 2D
-    function.
-
-    Arguments:
-      mesh_3d: Extruded 3D mesh where the function will be extended to.
-
-    """
-
-    def __init__(self, *args, mesh_3d=None, **kwargs) -> None:
-        # create the 2d function
-        super().__init__(*args, **kwargs)
-        print(*args)
-        if mesh_3d is not None:
-            self.view_3d = extend_function_to_3d(self, mesh_3d)
 
 
 def get_functionspace(
@@ -447,18 +419,6 @@ class LayerAveraging:
         phi = max_value(min_value(1, (r - rp) / (rn - rp)), 0)
         val.assign(avg[-1])
         u.interpolate(u + val * phi)
-
-
-def timer_decorator(func):
-    def wrapper(*args, **kwargs):
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
-        return result
-
-    return wrapper
 
 
 class InteriorBC(DirichletBC):

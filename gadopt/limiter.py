@@ -23,13 +23,16 @@ def assert_function_space(
     product.
 
     Arguments:
-      fs: UFL function space
-      family: Name or names of the expected element families
-      degree: Expected polynomial degree of the function space
+      fs:
+        UFL function space
+      family:
+        Name or names of the expected element families
+      degree:
+        Expected polynomial degree of the function space
 
     Raises:
-      AssertionError: The family and/or degree of the function
-                      space don't match the expected values
+      AssertionError: The family and/or degree of the function space do not match the
+                      expected values.
 
     """
     fam_list = family
@@ -122,9 +125,10 @@ def get_facet_mask(
 class VertexBasedP1DGLimiter(VertexBasedLimiter):
     """Vertex-based limiter for P1DG tracer fields (Kuzmin, 2010).
 
-    Kuzmin, D. (2010). A vertex-based hierarchical slope limiter for p-adaptive
-    discontinuous Galerkin methods. Journal of computational and applied mathematics,
-    233(12), 3077-3085.
+    Kuzmin, D. (2010).
+    A vertex-based hierarchical slope limiter for p-adaptive discontinuous Galerkin
+    methods.
+    Journal of computational and applied mathematics, 233(12), 3077-3085.
 
     Arguments:
       p1dg_space: UFL P1DG function space

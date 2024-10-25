@@ -27,7 +27,7 @@ def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
 def write_output(output_file):
     """Write output fields to the output file."""
     if simulation.dimensional:
-        density.interpolate(rho)
+        density.interpolate(rho_material)
     else:
         compo_rayleigh.interpolate(Ra_c)
     viscosity.interpolate(mu)
@@ -152,15 +152,15 @@ output_fields = []
 # Set up material fields and the equation system
 approximation_parameters = {}
 if simulation.dimensional:
-    rho = ga.material_field(
+    rho_material = ga.material_field(
         level_set,
         [material.rho for material in simulation.materials],
         interface="sharp",
     )
-    density = fd.Function(func_space_output, name="Density").interpolate(rho)
+    density = fd.Function(func_space_output, name="Density").interpolate(rho_material)
     output_fields.append(density)
     approximation_parameters["rho"] = simulation.materials[0].rho
-    approximation_parameters["rho_material"] = rho
+    approximation_parameters["rho_material"] = rho_material
 else:
     Ra_c = ga.material_field(
         level_set,

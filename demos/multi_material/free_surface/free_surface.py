@@ -104,12 +104,12 @@ mu = material_field(psi, [mu_mantle, mu_slab], interface="geometric")
 
 rho_slab = 3300
 rho_mantle = 3200
-rho = material_field(psi, [rho_mantle, rho_slab], interface="sharp")
+rho_material = material_field(psi, [rho_mantle, rho_slab], interface="sharp")
 
 approximation = Approximation(
     "BA",
     dimensional=True,
-    parameters={"g": 9.81, "mu": mu, "rho": rho_mantle, "rho_material": rho},
+    parameters={"g": 9.81, "mu": mu, "rho": rho_mantle, "rho_material": rho_material},
 )
 # -
 

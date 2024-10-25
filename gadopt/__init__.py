@@ -8,8 +8,8 @@ from firedrake import *
 
 from .approximations import Approximation as Approximation
 from .diagnostics import GeodynamicalDiagnostics as GeodynamicalDiagnostics
-from .energy_solver import GenericTransportSolver as GenericTransportSolver
 from .energy_solver import EnergySolver as EnergySolver
+from .energy_solver import GenericTransportSolver as GenericTransportSolver
 from .level_set_tools import LevelSetSolver as LevelSetSolver
 from .level_set_tools import entrainment as entrainment
 from .level_set_tools import material_field as material_field
@@ -31,6 +31,5 @@ from .utility import TimestepAdaptor as TimestepAdaptor
 from .utility import interpolate_1d_profile as interpolate_1d_profile
 from .utility import log as log
 from .utility import node_coordinates as node_coordinates
-from .utility import timer_decorator as timer_decorator
 
 PETSc.Sys.popErrorHandler()

@@ -6,11 +6,11 @@ All terms implement the UFL residual as it would be on the RHS of the equation:
 
 This sign-convention is for compatibility with Thetis's time integrators. In general,
 however, we like to think about the terms as they are on the LHS. Therefore, in the
-function below, we assemble in F as it would be on the LHS:
+function below, we assemble in `F` as it would be on the LHS:
 
   dq/dt + F(q) = 0
 
-and at the very end return "-F".
+and at the very end return `-F`.
 """
 
 import firedrake as fd

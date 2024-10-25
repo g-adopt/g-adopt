@@ -9,7 +9,7 @@ providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
 import operator
 from abc import ABC, abstractmethod
 from numbers import Number
-from typing import Optional
+from typing import Callable
 
 import firedrake as fd
 import numpy as np
@@ -22,18 +22,20 @@ class TimeIntegratorBase(ABC):
     """Defines the API for all time integrators."""
 
     @abstractmethod
-    def advance(self, t: float, update_forcings: Optional[fd.Function] = None):
+    def advance(self, t: float, update_forcings: Callable | None = None):
         """Advances equations for one time step.
 
         Arguments:
-          t: Current simulation time
-          update_forcings: Firedrake function used to update any time-dependent boundary conditions
+          t:
+            Current simulation time
+          update_forcings:
+            Callable allowing to update any time-dependent equation forcings
 
         """
         raise NotImplementedError
 
     @abstractmethod
-    def initialize(self, init_solution):
+    def initialise(self, init_solution):
         """Initialises the time integrator.
 
         Arguments:
@@ -47,13 +49,18 @@ class TimeIntegrator(TimeIntegratorBase):
     """Time integrator object that marches a single equation.
 
     Args:
-      equation: G-ADOPT equation to integrate
-      solution: Firedrake function representing the equation's solution
-      dt: Integration time step
-      solution_old: Firedrake function representing the equation's solution
-                      at the previous timestep
-      solver_parameters: Dictionary of solver parameters provided to PETSc
-      strong_bcs: List of Firedrake Dirichlet boundary conditions
+      equation:
+        G-ADOPT equation to integrate
+      solution:
+        Firedrake function representing the equation's solution
+      dt:
+        Integration time step
+      solution_old:
+        Firedrake function representing the equation's solution at the previous timestep
+      solver_parameters:
+        Dictionary of solver parameters provided to PETSc
+      strong_bcs:
+        List of Firedrake Dirichlet boundary conditions
 
     """
 
@@ -62,7 +69,7 @@ class TimeIntegrator(TimeIntegratorBase):
         equation: Equation,
         solution: fd.Function,
         dt: fd.Constant | float,
-        solution_old: Optional[fd.Function] = None,
+        solution_old: fd.Function | None = None,
         solver_parameters: dict[str, str | Number] = {},
         strong_bcs: list[fd.DirichletBC] = [],
     ) -> None:
@@ -101,15 +108,15 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
     def solve_stage(self, i_stage, t, update_forcings=None):
         """Solves a single stage of step from t to t+dt.
 
-        All functions that the equation depends on must be at right state
-        corresponding to each sub-step.
+        All functions that the equation depends on must be at right state corresponding
+        to each sub-step.
         """
         raise NotImplementedError
 
     def advance(self, t, update_forcings=None) -> None:
         """Advances equations for one time step."""
-        if not self._initialized:
-            self.initialize(self.solution)
+        if not self._initialised:
+            self.initialise(self.solution)
 
         for i in range(self.n_stages):
             self.solve_stage(i, t, update_forcings)
@@ -143,7 +150,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         equation: Equation,
         solution: fd.Function,
         dt: fd.Constant | float,
-        solution_old: Optional[fd.Function] = None,
+        solution_old: fd.Function | None = None,
         solver_parameters: dict[str, str | Number] = {},
         strong_bcs: list[fd.DirichletBC] = [],
     ) -> None:
@@ -151,7 +158,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
             equation, solution, dt, solution_old, solver_parameters, strong_bcs
         )
 
-        self._initialized = False
+        self._initialised = False
 
         V = solution.function_space()
         assert V == equation.trial_space
@@ -194,9 +201,9 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
                 )
                 self.solver.append(solver)
 
-    def initialize(self, solution) -> None:
+    def initialise(self, solution) -> None:
         self.solution_old.assign(solution)
-        self._initialized = True
+        self._initialised = True
 
     def update_solution(self, i_stage) -> None:
         """Computes the solution of the i-th stage
@@ -254,7 +261,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         equation: Equation,
         solution: fd.Function,
         dt: fd.Constant | float,
-        solution_old: Optional[fd.Function] = None,
+        solution_old: fd.Function | None = None,
         solver_parameters: dict[str, str | Number] = {},
         strong_bcs: list[fd.DirichletBC] = [],
     ) -> None:
@@ -263,7 +270,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         )
 
         self.solver_parameters.setdefault("snes_type", "newtonls")
-        self._initialized = False
+        self._initialised = False
 
         fs = solution.function_space()
         assert fs == equation.trial_space
@@ -329,9 +336,9 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                 )
             )
 
-    def initialize(self, init_cond) -> None:
+    def initialise(self, init_cond) -> None:
         self.solution_old.assign(init_cond)
-        self._initialized = True
+        self._initialised = True
 
     def update_solution(self, i_stage) -> None:
         """Updates solution to i_stage sub-stage.
@@ -349,8 +356,8 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                 bci.apply(self.solution)
             self.solution_old.assign(self.solution)
 
-        if not self._initialized:
-            raise ValueError("Time integrator {:} is not initialized".format(self.name))
+        if not self._initialised:
+            raise ValueError("Time integrator {:} is not initialised".format(self.name))
 
         if update_forcings is not None:
             update_forcings(t + self.c[i_stage] * self.dt)
@@ -423,7 +430,8 @@ class AbstractRKScheme(ABC):
 
 
 def shu_osher_butcher(α_or_λ, β_or_μ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
+    """Produces a Butcher tableau from a Shu-Osher form.
+
     Generate arrays composing the Butcher tableau of a Runge-Kutta method from the
     coefficient arrays of the equivalent, original or modified, Shu-Osher form.
     Code adapted from RK-Opt written in MATLAB by David Ketcheson.
@@ -443,9 +451,7 @@ def shu_osher_butcher(α_or_λ, β_or_μ) -> tuple[np.ndarray, np.ndarray, np.nd
 
 
 class ForwardEulerAbstract(AbstractRKScheme):
-    """
-    Forward Euler method
-    """
+    """Forward Euler method"""
 
     a = [[0]]
     b = [1.0]
@@ -454,8 +460,7 @@ class ForwardEulerAbstract(AbstractRKScheme):
 
 
 class ERKLSPUM2Abstract(AbstractRKScheme):
-    """
-    ERKLSPUM2, 3-stage, 2nd order Explicit Runge Kutta method
+    """ERKLSPUM2, 3-stage, 2nd order Explicit Runge Kutta method
 
     From IMEX RK scheme (17) in Higureras et al. (2014).
 
@@ -471,15 +476,14 @@ class ERKLSPUM2Abstract(AbstractRKScheme):
 
 
 class ERKLPUM2Abstract(AbstractRKScheme):
-    """
-    ERKLPUM2, 3-stage, 2nd order
-    Explicit Runge Kutta method
+    """ERKLPUM2, 3-stage, 2nd order Explicit Runge Kutta method
 
     From IMEX RK scheme (20) in Higureras et al. (2014).
 
-    Higueras et al (2014). Optimized strong stability preserving IMEX
-    Runge-Kutta methods. Journal of Computational and Applied Mathematics
-    272(2014) 116-140. http://dx.doi.org/10.1016/j.cam.2014.05.011
+    Higueras et al (2014).
+    Optimized strong stability preserving IMEX Runge-Kutta methods.
+    Journal of Computational and Applied Mathematics 272(2014) 116-140.
+    http://dx.doi.org/10.1016/j.cam.2014.05.011
     """
 
     a = [[0, 0, 0], [1.0 / 2.0, 0, 0], [1.0 / 2.0, 1.0 / 2.0, 0]]
@@ -496,8 +500,7 @@ class ERKMidpointAbstract(AbstractRKScheme):
 
 
 class SSPRK33Abstract(AbstractRKScheme):
-    r"""
-    3rd order Strong Stability Preserving Runge-Kutta scheme, SSP(3,3).
+    r"""3rd order Strong Stability Preserving Runge-Kutta scheme, SSP(3,3).
 
     This scheme has Butcher tableau
 
@@ -826,9 +829,7 @@ class eSSPRKs10p3Abstract(AbstractRKScheme):
 
 
 class BackwardEulerAbstract(AbstractRKScheme):
-    """
-    Backward Euler method
-    """
+    """Backward Euler method"""
 
     a = [[1.0]]
     b = [1.0]
@@ -837,8 +838,7 @@ class BackwardEulerAbstract(AbstractRKScheme):
 
 
 class ImplicitMidpointAbstract(AbstractRKScheme):
-    r"""
-    Implicit midpoint method, second order.
+    r"""Implicit midpoint method, second order.
 
     This method has the Butcher tableau
 
@@ -868,8 +868,7 @@ class CrankNicolsonAbstract(AbstractRKScheme):
 
 
 class DIRK22Abstract(AbstractRKScheme):
-    r"""
-    2-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
+    r"""2-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
 
     This method has the Butcher tableau
 
@@ -897,8 +896,7 @@ class DIRK22Abstract(AbstractRKScheme):
 
 
 class DIRK23Abstract(AbstractRKScheme):
-    r"""
-    2-stage, 3rd order Diagonally Implicit Runge Kutta method
+    r"""2-stage, 3rd order Diagonally Implicit Runge Kutta method
 
     This method has the Butcher tableau
 
@@ -926,8 +924,7 @@ class DIRK23Abstract(AbstractRKScheme):
 
 
 class DIRK33Abstract(AbstractRKScheme):
-    """
-    3-stage, 3rd order, L-stable Diagonally Implicit Runge Kutta method
+    """3-stage, 3rd order, L-stable Diagonally Implicit Runge Kutta method
 
     From DIRK(3,4,3) IMEX scheme in Ascher et al. (1997)
 
@@ -946,8 +943,7 @@ class DIRK33Abstract(AbstractRKScheme):
 
 
 class DIRK43Abstract(AbstractRKScheme):
-    """
-    4-stage, 3rd order, L-stable Diagonally Implicit Runge Kutta method
+    """4-stage, 3rd order, L-stable Diagonally Implicit Runge Kutta method
 
     From DIRK(4,4,3) IMEX scheme in Ascher et al. (1997)
 
@@ -968,8 +964,7 @@ class DIRK43Abstract(AbstractRKScheme):
 
 
 class DIRKLSPUM2Abstract(AbstractRKScheme):
-    """
-    DIRKLSPUM2, 3-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
+    """DIRKLSPUM2, 3-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
 
     From IMEX RK scheme (17) in Higureras et al. (2014).
 
@@ -989,8 +984,7 @@ class DIRKLSPUM2Abstract(AbstractRKScheme):
 
 
 class DIRKLPUM2Abstract(AbstractRKScheme):
-    """
-    DIRKLPUM2, 3-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
+    """DIRKLPUM2, 3-stage, 2nd order, L-stable Diagonally Implicit Runge Kutta method
 
     From IMEX RK scheme (20) in Higureras et al. (2014).
 
