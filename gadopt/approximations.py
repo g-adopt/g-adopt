@@ -7,6 +7,7 @@ the hood, G-ADOPT queries attributes and methods from the approximation.
 """
 
 from numbers import Number
+from typing import Any
 
 import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
@@ -55,7 +56,12 @@ class Approximation:
     modfied viscosity and stress term accounting for the deviatoric stress at the
     previous timestep.
 
-    N.B. This implementation currently assumes all terms are dimensional.
+    When using SDVA in a non-dimensional system, one must define a Weissenberg number
+    (Wei). In the current G-ADOPT implementation of viscoelasticity, this number is
+    expressed as:
+    Wei = rho * g * d * (1 / G + dt / 2 / mu),
+    where d is the characteristic length scale, dt is the simulation time step, and all
+    other parameters are listed below.
 
     Zhong, S., Paulson, A., & Wahr, J. (2003).
     Three-dimensional finite-element modelling of Earth's viscoelastic deformation:
@@ -66,13 +72,13 @@ class Approximation:
         1. Reference dimensional parameters
             H: specific heat source
             kappa: thermal diffusivity
-            rho_diff: compositional density contrast
         2. Non-dimensional parameters
             Di: dissipation number
             Gamma: Grüneisen parameter
             Q: non-dimensional heat source
             Ra: Rayleigh number
             Ra_c: compositional Rayleigh number
+            Wei: Weissenberg number (only used in SDVA)
         3. Reference profiles
             alpha: coefficient of thermal expansion (varies only in TALA and ALA)
             # Treatise on Geophysics uses incompressibility (i.e. bulk modulus).
@@ -83,6 +89,7 @@ class Approximation:
             k: thermal conductivity
             mu: dynamic viscosity
             rho: densiy (varies only in TALA and ALA)
+            rho_material: material (compositional) density
             T: temperature (varies only in TALA and ALA)
 
     Reference profiles represent parameters that admit depth-dependent variations along
@@ -104,11 +111,11 @@ class Approximation:
     ]
     _momentum_components["SDVA"] = ["viscoelastic_buoyancy"]
 
-    _mass_components = {"BA": []}
+    _mass_components = {"BA": ["volume_continuity"]}
     _mass_components["EBA"] = _mass_components["BA"] + []
-    _mass_components["TALA"] = _mass_components["EBA"] + ["mass_advection"]
+    _mass_components["TALA"] = ["mass_continuity"]
     _mass_components["ALA"] = _mass_components["TALA"] + []
-    _mass_components["SDVA"] = []
+    _mass_components["SDVA"] = ["volume_continuity"]
 
     _energy_components = {"BA": ["heat_source"]}
     _energy_components["EBA"] = _energy_components["BA"] + [
@@ -161,7 +168,7 @@ class Approximation:
             self.set_compressible_stress()
 
         if hasattr(self, "mass_components"):
-            self.set_mass_advection()
+            self.set_flux_divergence()
 
         if hasattr(self, "energy_components"):
             self.check_thermal_diffusion()
@@ -175,8 +182,9 @@ class Approximation:
         for attribute in ["alpha", "chi", "cp", "G", "g", "k", "mu", "rho"]:
             if not hasattr(self, attribute):
                 setattr(self, attribute, fd.Constant(1.0))
-        if not hasattr(self, "T"):
-            setattr(self, "T", fd.Constant(0.0))
+        for attribute in ["rho_material", "T"]:
+            if not hasattr(self, attribute):
+                setattr(self, attribute, fd.Constant(0.0))
 
     def check_thermal_diffusion(self) -> None:
         """Ensures compatibility between terms defining thermal diffusivity."""
@@ -197,7 +205,7 @@ class Approximation:
             self.kappa = self.k / self.rho / self.cp
 
     def set_adiabatic_compression(self) -> None:
-        """Defines the adiabatic compression term in the energy conservation."""
+        """Defines the adiabatic compression factor in the energy conservation."""
         if "adiabatic_compression" in self.energy_components:
             self.adiabatic_compression = self.rho * self.alpha * self.g
             if not self.dimensional:
@@ -206,13 +214,15 @@ class Approximation:
             self.adiabatic_compression = 0.0
 
     def set_buoyancy(self) -> None:
-        """Defines buoyancy terms in the momentum conservation."""
+        """Defines buoyancy factors in the momentum conservation."""
         self.compositional_buoyancy = 0.0
         if "compositional_buoyancy" in self.momentum_components:
-            if self.dimensional and hasattr(self, "rho_diff"):
-                self.compositional_buoyancy = self.rho_diff * self.g
+            if self.dimensional and hasattr(self, "rho_material"):
+                self.compositional_buoyancy = (self.rho_material - self.rho) * self.g
             elif not self.dimensional and hasattr(self, "Ra_c"):
-                self.compositional_buoyancy = self.Ra_c
+                self.compositional_buoyancy = (
+                    self.Ra_c * (self.rho - self.rho_material) * self.g
+                )
 
         self.compressible_buoyancy = 0.0
         if "compressible_buoyancy" in self.momentum_components:
@@ -233,17 +243,15 @@ class Approximation:
 
         self.viscoelastic_buoyancy = 0.0
         if "viscoelastic_buoyancy" in self.momentum_components:
-            if self.dimensional:
-                self.viscoelastic_buoyancy = fd.grad(self.rho) * self.g
-            else:
-                raise ValueError("SDVA is only available for dimensional systems.")
+            self.viscoelastic_buoyancy = fd.grad(self.rho) * self.g
+            if not self.dimensional:
+                self.viscoelastic_buoyancy *= self.Wei
 
     def set_compressible_stress(self) -> None:
-        """Defines the compressible stress term in the momentum conservation."""
+        """Defines the compressible stress factor in the momentum conservation."""
+        self.compressible_stress = 0.0
         if "compressible_stress" in self.momentum_components:
             self.compressible_stress = 2 / 3 * self.mu
-        else:
-            self.compressible_stress = 0.0
 
     def set_heat_source(self) -> None:
         """Defines the heat source term in the energy conservation."""
@@ -254,22 +262,41 @@ class Approximation:
             elif not self.dimensional and hasattr(self, "Q"):
                 self.heat_source = self.Q
 
-    def set_mass_advection(self) -> None:
-        """Defines the advection term in the mass conservation."""
-        self.rho_mass = self.rho if "mass_advection" in self.mass_components else 1.0
+    def set_flux_divergence(self) -> None:
+        """Defines the density contribution to the flux in the mass conservation."""
+        self.rho_flux = 0.0
+        if "volume_continuity" in self.mass_components:
+            self.rho_flux = 1.0
+        elif "mass_continuity" in self.mass_components:
+            self.rho_flux = self.rho
 
     def set_viscous_dissipation(self) -> None:
         """Defines the viscous dissipation factor used in the energy conservation."""
+        self.viscous_dissipation_factor = 0.0
         if "viscous_dissipation" in self.energy_components:
             self.viscous_dissipation_factor = 1.0
             if not self.dimensional:
                 self.viscous_dissipation_factor *= self.Di / self.Ra
-        else:
-            self.viscous_dissipation_factor = 0.0
+
+    def get_buoyancy_free_surface(
+        self,
+        params_fs: dict[str, Any],
+        p: fd.ufl.indexed.Indexed = fd.Constant(0),
+        T: fd.Constant | fd.Function = fd.Constant(0),
+        displ: fd.Constant | fd.Function = fd.Constant(0),
+    ) -> fd.ufl.algebra.Product:
+        """Defines the free-surface buoyancy factor in the momentum conservation."""
+        buoyancy_free_surface = (self.rho - params_fs.get("rho_ext", 0)) * self.g
+        if not self.dimensional:
+            buoyancy_free_surface *= params_fs["Ra_fs"]
+        if params_fs.get("include_buoyancy_effects", True):
+            buoyancy_free_surface -= self.buoyancy(p, T, displ)
+
+        return buoyancy_free_surface
 
     def buoyancy(
         self,
-        p: fd.ufl.indexed.Indexed,
+        p: fd.Constant | fd.ufl.indexed.Indexed = fd.Constant(0),
         T: fd.Constant | fd.Function = fd.Constant(0),
         displ: fd.Constant | fd.Function = fd.Constant(0),
     ) -> fd.ufl.algebra.Sum:
@@ -303,7 +330,10 @@ class Approximation:
     def stress(
         self, u: fd.ufl.indexed.Indexed, stress_old: float | fd.Function = 0.0
     ) -> fd.ufl.algebra.Sum:
-        """Calculates the stress term in momentum and energy conservations."""
+        """Calculates the stress term in momentum and energy conservations.
+
+        Note: In the SDVA, the stress term includes its value at the previous time step.
+        """
         identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
 
         stokes_part = 2 * self.mu * fd.sym(fd.grad(u))
@@ -312,15 +342,6 @@ class Approximation:
             stress_old *= identity
 
         return stokes_part + compressible_part + stress_old
-
-    def viscoelastic_rheology(
-        self, dt: float | fd.Constant | fd.Function
-    ) -> fd.ufl.algebra.Division:
-        maxwell_time = self.mu / self.G
-        self.mu = self.mu / (maxwell_time + dt / 2)
-        stress_scale = (maxwell_time - dt / 2) / (maxwell_time + dt / 2)
-
-        return stress_scale
 
     def viscous_dissipation(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Product:
         """Calculates the viscous dissipation term in the energy conservation."""

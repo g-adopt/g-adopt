@@ -240,7 +240,7 @@
 # Using this gives
 
 # \begin{equation}
-#     \dfrac{\Delta t}{2} (\boldsymbol{\sigma}_{L1}^n + \boldsymbol{\sigma}_{L1}^{n-1}) + \dfrac{\eta}{ \mu} (\boldsymbol{\sigma}_{L1}^n - \boldsymbol{\sigma}_{L1}) = -\dfrac{\Delta t}{2} (p^n + p^{n-1}) \textbf{I} - \dfrac{\eta}{ \mu}(p^n - p^{n-1})  \textbf{I} + 2 \eta (\boldsymbol{\epsilon}^n - \boldsymbol{\epsilon}^{n-1}).
+#     \dfrac{\Delta t}{2} (\boldsymbol{\sigma}_{L1}^n + \boldsymbol{\sigma}_{L1}^{n-1}) + \dfrac{\eta}{ \mu} (\boldsymbol{\sigma}_{L1}^n - \boldsymbol{\sigma}_{L1}^{n-1}) = -\dfrac{\Delta t}{2} (p^n + p^{n-1}) \textbf{I} - \dfrac{\eta}{ \mu}(p^n - p^{n-1})  \textbf{I} + 2 \eta (\boldsymbol{\epsilon}^n - \boldsymbol{\epsilon}^{n-1}).
 # \end{equation}
 
 # Using Maxwell time, $\alpha = \eta / \mu$, this simplifies to
@@ -336,9 +336,10 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # We also specify functions to hold our solutions: `z` in the mixed function space,
 # noting that a symbolic representation of the two parts – incremental displacement and
 # pressure – is obtained with `split`. For later visualisation, we rename the
-# subfunctions of z.
+# subfunctions of `z` to *Incremental displacement* and *Pressure*.
 
-# We also need to initialise two functions `displacement` and `stress_old` that are used when timestepping the constitutive equation.
+# We also need to initialise two functions `displ` and `tau_old` that are used when
+# timestepping the constitutive equation.
 
 # +
 z = Function(Z)  # a field over the mixed function space Z
@@ -431,20 +432,24 @@ log(f"dt: {dt / year_in_seconds} years")
 log(f"Simulation start time: {time_start_years} years")
 # -
 
-# Next let's create a function to store our ice load. Following the long test from
-# Weeredesteijn et al. (2023), during the first 90,000 years of the simulation the ice
-# sheet will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice
-# free conditions in the next 10,000 years. Finally, the simulation will run for a
-# further 10,000 years to allow the system to relax towards isostatic equilibrium. This
-# is approximately the length of an interglacial-glacial cycle. The width of the ice
-# sheet is 100 km and we have used a hyperbolic tangent function again to smooth out the
-# transition from ice to ice-free regions.
+# Next let's set up our ice load. Following the long test from Weeredesteijn et al.
+# (2023), during the first 90,000 years of the simulation the ice sheet will grow to a
+# thickness of 1 km. The ice thickness will rapidly shrink to ice free conditions in the
+# next 10,000 years. Finally, the simulation will run for a further 10,000 years to
+# allow the system to relax towards isostatic equilibrium. This is approximately the
+# length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we
+# have used a hyperbolic tangent function again to smooth out the transition from ice to
+# ice-free regions.
+
+# As the loading and unloading cycle only varies linearly in time, let's write the ice
+# load as a symbolic expression.
+
+# Initialise ice loading
 
 # +
 rho_ice = 931
 g = 9.8125
 
-# Initialise ice loading
 t1_load = 90e3 * year_in_seconds
 t2_load = 100e3 * year_in_seconds
 ramp_after_t1 = conditional(
@@ -452,10 +457,10 @@ ramp_after_t1 = conditional(
 )
 ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
 
-# Disc ice load but with a smooth transition given by a tanh profile
+# Disc ice load but with a smooth transition given by a hyperbolic tangent profile
 disc_radius = 100e3
 disc_delta_x = 5e3
-k_disc = 2 * pi / 8 / disc_delta_x  # wavenumber for disk 2pi / lambda
+k_disc = 2 * pi / 8 / disc_delta_x  # wavenumber for disk 2 * pi / lambda
 disc = 0.5 * (1 - tanh(k_disc * (X[0] - disc_radius)))
 Hice = 1000
 
@@ -470,20 +475,18 @@ ice_load = ramp * rho_ice * g * Hice * disc
 # For the top surface we need to specify a normal stress, i.e. the weight of the ice
 # load, as well as indicating this is a free surface.
 
-# The `rho_diff` option accounts for the density contrast across the free surface
-# whether there is ice or air above a particular region of the mantle.
+# The `rho_ext` parameter represents the exterior density along the solid Earth free
+# surface, such as that of ice or air.
 
 # +
 # Setup boundary conditions
 rho_ext = conditional(time < t2_load, rho_ice * disc, 0)
 stokes_bcs = {
     bottom_id: {"uy": 0},
-    top_id: {"normal_stress": ice_load, "free_surface": {"rho_diff": rho - rho_ext}},
+    top_id: {"normal_stress": ice_load, "free_surface": {"rho_ext": rho_ext}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
-
-gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
 # -
 
 # We also need to specify a G-ADOPT approximation which sets up the various parameters
@@ -508,6 +511,8 @@ viscoelastic_solver = ViscoelasticSolver(
 # Create output file
 output_file = VTKFile("output.pvd")
 output_file.write(*z.subfunctions, displ, tau_old, mu, rho, G)
+
+gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time dt u_rms u_rms_surf ux_max disp_min disp_max")
@@ -545,10 +550,9 @@ for timestep in range(max_timesteps):
     )
 
 # Let's use the python package *PyVista* to plot the magnitude of the displacement field
-# through time. We will use the calculated displacement to artificially scale the mesh
-# in the vertical direction. We have exaggerated the vertical stretching by a factor of
-# 1500, **BUT...** it is important to remember this is just for ease of visualisation -
-# the mesh is not moving in reality!
+# through time. We will use the calculated displacement to artificially scale the mesh.
+# We have exaggerated the stretching by a factor of 1500, **BUT...** it is important to
+# remember this is just for ease of visualisation - the mesh is not moving in reality!
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt

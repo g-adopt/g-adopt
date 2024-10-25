@@ -167,7 +167,7 @@ def divergence_term(
 ) -> Form:
     assert normal_is_continuous(eq.u)
 
-    rho = eq.approximation.rho_mass
+    rho = eq.approximation.rho_flux
     F = -dot(eq.test, div(rho * eq.u)) * eq.dx
 
     # Add boundary integral for bcs that specify the normal component of u.

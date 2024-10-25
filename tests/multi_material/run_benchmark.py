@@ -160,7 +160,7 @@ if simulation.dimensional:
     density = fd.Function(func_space_output, name="Density").interpolate(rho)
     output_fields.append(density)
     approximation_parameters["rho"] = simulation.materials[0].rho
-    approximation_parameters["rho_diff"] = rho - simulation.materials[0].rho
+    approximation_parameters["rho_material"] = rho
 else:
     Ra_c = ga.material_field(
         level_set,

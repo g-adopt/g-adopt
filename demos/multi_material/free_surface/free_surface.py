@@ -109,7 +109,7 @@ rho = material_field(psi, [rho_mantle, rho_slab], interface="sharp")
 approximation = Approximation(
     "BA",
     dimensional=True,
-    parameters={"g": 9.81, "mu": mu, "rho": rho_mantle, "rho_diff": rho - rho_mantle},
+    parameters={"g": 9.81, "mu": mu, "rho": rho_mantle, "rho_material": rho},
 )
 # -
 
@@ -126,14 +126,13 @@ t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )  # Current level-set advection requires a CFL condition that should not exceed 0.6.
 
-# Boundary conditions are specified next: no slip at the top and bottom and free slip
-# on the left and ride sides. No boundary conditions are required for level set, as the
-# numerical domain is closed.
+# Boundary conditions are specified next: a free surface at the top and free slip at all
+# other boundaries. No boundary conditions are required for level set, as the numerical
+# domain is closed.
 
-rho_ext = 0
 stokes_bcs = {
     bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 0, "rho_diff": rho - rho_ext}},
+    top_id: {"free_surface": {"eta_index": 0, "rho_ext": 0}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }

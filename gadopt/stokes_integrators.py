@@ -8,6 +8,7 @@ instantiate the `StokesSolver` class by providing relevant parameters and call t
 import abc
 from collections import defaultdict
 from numbers import Number
+from statistics import geometric_mean
 
 from firedrake import *
 
@@ -372,15 +373,24 @@ class StokesSolver(MassMomentumBase):
     ) -> ufl.algebra.Product | ufl.algebra.Sum:
         """Sets the given boundary as a free surface.
 
-        This method sets an interior boundary condition away from the free surface
-        boundary and calculates the normal stress at that boundary. It also populates
-        the `free_surface_map` dictionary used to calculate free surface contribution to
-        the weak form.
+        This method calculates the normal stress at the free surface boundary and sets
+        a zero-interior strong condition away from that boundary. It also populates the
+        `free_surface_map` dictionary used to calculate the free-surface contribution to
+        the momentum weak form.
 
         Arguments:
           params_fs:
             A dictionary holding information about the free surface boundary.
-          bc_id;
+            Valid dictionary keys:
+              eta_index:
+                Index of eta function in mixed space (starts from 0)
+              rho_ext:
+                Exterior density along the free surface
+              Ra_fs:
+                Free-surface Rayleigh number (buoyancy along the free surface)
+              include_buoyancy_effects:
+                Whether the interior density should vary according to buoyancy effects
+          bc_id:
             An integer representing the index of the mesh boundary.
 
         Returns:
@@ -389,26 +399,20 @@ class StokesSolver(MassMomentumBase):
         eta_ind = params_fs["eta_index"]
         self.free_surface_map[bc_id] = eta_ind
 
+        p = self.solution_split[1]
         eta = self.solution_split[2 + eta_ind]
         func_space_eta = self.solution_space[2 + eta_ind]
+        self.eta_old[eta_ind] = Function(func_space_eta).interpolate(eta)
 
-        # Set internal dofs to zero to prevent singular matrix for free surface equation
+        # Set internal degrees of freedom to zero to prevent singular matrix
         self.strong_bcs.append(InteriorBC(func_space_eta, 0, bc_id))
 
-        self.eta_old[eta_ind] = Function(func_space_eta).interpolate(eta)
+        self.buoyancy_fs[eta_ind] = self.approximation.get_buoyancy_free_surface(
+            params_fs, p, self.T
+        )
         eta_theta = self.theta_fs * eta + (1 - self.theta_fs) * self.eta_old[eta_ind]
-        if self.approximation.dimensional:
-            self.buoyancy_fs[eta_ind] = params_fs["rho_diff"] * self.approximation.g
-        else:
-            self.buoyancy_fs[eta_ind] = params_fs["Ra_fs"]
-        # Depending on the variable_rho_fs boolean, the interior density below the free
-        # surface is either set to a constant density or varies spatially according to
-        # the buoyancy field.
-        # N.B. A constant reference density is needed for analytical cylindrical cases.
+
         normal_stress = self.buoyancy_fs[eta_ind] * eta_theta
-        if params_fs.get("variable_rho_fs", True):
-            p = self.solution_split[1]
-            normal_stress -= self.approximation.buoyancy(p, self.T) * eta_theta
 
         return normal_stress
 
@@ -431,13 +435,13 @@ class StokesSolver(MassMomentumBase):
             self.F -= eq.residual(self.solution_split[i])
 
         for bc_id, eta_ind in self.free_surface_map.items():
+            eta = self.solution_split[2 + eta_ind]
+            func_space_eta = self.solution_space[2 + eta_ind]
+
             # To ensure the top right and bottom left corners of the block matrix remain
             # symmetric we need to multiply the free surface equation (kinematic bc)
             # with `-theta * delta_rho * g`. This is similar to rescaling eta ->
             # eta_tilde in Kramer et al. (2012); see block matrix shown in Equation 23.
-            # N.B. In the case where the density contrast across the free surface is
-            # spatially variant due to interior buoyancy changes then the matrix will
-            # not be exactly symmetric.
             buoyancy_scale = -self.theta_fs * self.buoyancy_fs[eta_ind]
 
             eq_attrs = {
@@ -445,9 +449,6 @@ class StokesSolver(MassMomentumBase):
                 "buoyancy_scale": buoyancy_scale,
                 "u": self.solution_split[0],
             }
-
-            eta = self.solution_split[2 + eta_ind]
-            func_space_eta = self.solution_space[2 + eta_ind]
 
             eq_fs = Equation(
                 self.tests[2 + eta_ind],
@@ -535,7 +536,12 @@ class ViscoelasticSolver(MassMomentumBase):
         self.displ = displ
         self.tau_old = tau_old
 
-        self.stress_scale = self.approximation.viscoelastic_rheology(dt)
+        # Characteristic relaxation time
+        self.maxwell_time = approximation.mu / approximation.G
+        # Effective viscosity
+        approximation.mu = approximation.mu / (self.maxwell_time + dt / 2)
+        # Scaling factor for the previous stress
+        self.stress_scale = (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
@@ -545,7 +551,14 @@ class ViscoelasticSolver(MassMomentumBase):
         Arguments:
           params_fs:
             A dictionary holding information about the free surface boundary.
-          bc_id;
+            Valid dictionary keys:
+              rho_ext:
+                Exterior density along the free surface
+              Ra_fs:
+                Free-surface Rayleigh number (buoyancy along the free surface)
+              include_buoyancy_effects:
+                Whether the interior density should vary according to buoyancy effects
+          bc_id:
             An integer representing the index of the mesh boundary.
 
         Returns:
@@ -556,8 +569,10 @@ class ViscoelasticSolver(MassMomentumBase):
         # free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
         u = self.solution_split[0]
-        buoyancy = params_fs["rho_diff"] * self.approximation.g
-        normal_stress = buoyancy * vertical_component(u + self.displ)
+        buoyancy_fs = self.approximation.get_buoyancy_free_surface(
+            params_fs, displ=self.displ
+        )
+        normal_stress = buoyancy_fs * vertical_component(u + self.displ)
 
         return normal_stress
 
@@ -572,10 +587,13 @@ class ViscoelasticSolver(MassMomentumBase):
             {"u": self.solution_split[0]},
         ]
 
-        # This is a scaling factor roughly size of mantle Maxwell time to make sure that
-        # solve converges with strong bcs in parallel...
-        # scaling_factor = 1e-10
-
+        # Rescale equations using the Maxwell time to make sure that the solver
+        # converges with strong boundary conditions in parallel.
+        rescale_factor = geometric_mean(
+            Function(FunctionSpace(self.mesh, "CG", 2))
+            .interpolate(self.maxwell_time)
+            .dat.data
+        )
         for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):
             eq = Equation(
                 self.tests[i],
@@ -585,7 +603,7 @@ class ViscoelasticSolver(MassMomentumBase):
                 approximation=self.approximation,
                 bcs=self.weak_bcs,
                 quad_degree=self.quad_degree,
-                # rescale_factor=scaling_factor,
+                rescale_factor=rescale_factor,
             )
             self.F -= eq.residual(self.solution_split[i])
 

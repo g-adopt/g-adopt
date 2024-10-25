@@ -46,7 +46,7 @@ class Equation:
           Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
           where p is the polynomial degree of the trial space.
         rescale_factor:
-          UFL expression used to rescale mass and residual terms.
+          A constant factor used to rescale mass and residual terms.
 
     """
 
@@ -59,7 +59,7 @@ class Equation:
     approximation: Approximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[int | None] = None
-    rescale_factor: Number | fd.Constant | fd.Function = 1
+    rescale_factor: Number | fd.Constant = 1
 
     def __post_init__(
         self,

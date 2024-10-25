@@ -129,7 +129,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", G=1e11):
     # Setup boundary conditions
     stokes_bcs = {
         bottom_id: {"uy": 0},
-        top_id: {"normal_stress": rho * g * eta, "free_surface": {"rho_diff": rho}},
+        top_id: {"normal_stress": rho * g * eta, "free_surface": {"rho_ext": 0}},
         left_id: {"ux": 0},
         right_id: {"ux": 0},
     }

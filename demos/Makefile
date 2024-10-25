@@ -5,8 +5,8 @@ mc_dir="mantle_convection/"
 mm_cases := multi_material
 mm_demo_cases := multi_material/compositional_buoyancy multi_material/thermochemical_buoyancy
 
-gia_cases := viscoelastic
-gia_demo_cases := viscoelastic
+gia_cases := gia_base_case
+gia_demo_cases := gia_base_case
 gia_dir="glacial_isostatic_adjustment/"
 
 notebook_files := $(foreach case,$(demo_cases),$(case)/$(notdir $(case)).ipynb) adjoint/adjoint_forward.ipynb
