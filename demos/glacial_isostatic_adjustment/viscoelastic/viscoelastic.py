@@ -417,7 +417,7 @@ for timestep in range(max_timesteps):
         f"{displacement.dat.data[:, 1].min()} {displacement.dat.data[:, 1].max()}"
     )
 
-# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the calculated displacement to artifically scale the mesh in the vertical direction. We have exaggerated the vertical stretching by a factor of 1500, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
+# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the calculated displacement to artifically scale the mesh. We have exaggerated the stretching by a factor of 1500, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
