@@ -230,9 +230,9 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # +
 z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
-u_, p_ = z.subfunctions
-u_.rename("Incremental Displacement")
-p_.rename("Pressure")
+# Next rename for output:
+z.subfunctions[0].rename("Incremental Displacement")
+z.subfunctions[1].rename("Pressure")
 
 displacement = Function(V, name="displacement").assign(0)
 stress_old = Function(S, name="stress_old").assign(0)
@@ -379,7 +379,7 @@ effective_viscosity = Function(W, name='effective viscosity').interpolate(approx
 
 # Create output file
 output_file = VTKFile("output.pvd")
-output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
+output_file.write(*z.subfunctions, displacement, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
@@ -407,11 +407,10 @@ for timestep in range(max_timesteps):
     if timestep % output_frequency == 0:
         log("timestep", timestep)
 
-        output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
+        output_file.write(*z.subfunctions, displacement, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
-            checkpoint.save_function(u_, name="Incremental Displacement")
-            checkpoint.save_function(p_, name="Pressure")
+            checkpoint.save_function(z, name="Stokes")
             checkpoint.save_function(displacement, name="Displacement")
             checkpoint.save_function(stress_old, name="Deviatoric stress")
 
