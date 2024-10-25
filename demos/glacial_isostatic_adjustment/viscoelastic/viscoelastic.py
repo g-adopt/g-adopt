@@ -285,30 +285,6 @@ viscosity = Function(W, name="viscosity")
 initialise_background_field(viscosity, viscosity_values)
 # -
 
-# Next let's create a function to store our ice load. Following the long test from Weeredesteijn et al 2023, during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice free conditions in the next 10 thousand years. Finally, the simulation will run for a further 10 thousand years to allow the system to relax towards isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we have used a tanh function again to smooth out the transition from ice to ice-free regions.
-
-# +
-rho_ice = 931
-g = 9.8125
-
-# Initialise ice loading
-ice_load = Function(W, name="Ice load")
-Hice = 1000
-year_in_seconds = Constant(3600 * 24 * 365.25)
-T1_load = 90e3 * year_in_seconds
-T2_load = 100e3 * year_in_seconds
-
-# Disc ice load but with a smooth transition given by a tanh profile
-disc_radius = 100e3
-disc_dx = 5e3
-k_disc = 2*pi/(8*disc_dx)  # wavenumber for disk 2pi / lambda
-r = X[0]
-disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-ramp = Constant(0)
-
-
-# -
-
 # Next let's define the length of our time step. If we want to accurately resolve the elastic response we should choose a timestep lower than the Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation to 'catch up' with the initial, instantaneous elastic deformation.
 #
 # Let's print out the Maxwell time for each layer
@@ -337,6 +313,32 @@ output_frequency = round(dt_out / dt)
 log("output_frequency:", output_frequency)
 log(f"dt: {float(dt / year_in_seconds)} years")
 log(f"Simulation start time: {Tstart} years")
+# -
+
+# Next let's create a function to store our ice load. Following the long test from Weeredesteijn et al 2023, during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice free conditions in the next 10 thousand years. Finally, the simulation will run for a further 10 thousand years to allow the system to relax towards isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we have used a tanh function again to smooth out the transition from ice to ice-free regions.
+
+# +
+rho_ice = 931
+g = 9.8125
+
+# Initialise ice loading
+ice_load = Function(W, name="Ice load")
+Hice = 1000
+t1_load = 90e3 * year_in_seconds
+t2_load = 100e3 * year_in_seconds
+ramp_after_t1 = conditional(
+    time < t2_load, 1 - (time - t1_load) / (t2_load - t1_load), 0
+)
+ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
+
+# Disc ice load but with a smooth transition given by a tanh profile
+disc_radius = 100e3
+disc_dx = 5e3
+k_disc = 2*pi/(8*disc_dx)  # wavenumber for disk 2pi / lambda
+r = X[0]
+disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
+
+
 # -
 
 # We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing the string `ux` and `uy`, G-ADOPT knows to specify these as Strong Dirichlet boundary conditions.
@@ -392,12 +394,6 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 # Now let's run the simulation! We are going to control the ice thickness using the `ramp` parameter. At each step we call `solve` to calculate the incremental displacement and pressure fields. This will update the displacement at the surface and stress values accounting for the time dependent Maxwell consitutive equation.
 
 for timestep in range(max_timesteps):
-    ramp.assign(conditional(time < T1_load, time / T1_load,
-                            conditional(time < T2_load, 1 - (time - T1_load) / (T2_load - T1_load),
-                                        0)
-                            )
-                )
-
     ice_load.interpolate(ramp * rho_ice * g * Hice * disc)
 
     stokes_solver.solve()
