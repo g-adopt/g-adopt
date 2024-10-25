@@ -156,7 +156,7 @@
 # \end{equation}
 # Using this gives
 # \begin{equation}
-#     \dfrac{\Delta t}{2} (\boldsymbol{\sigma}_{L1}^n + \boldsymbol{\sigma}_{L1}^{n-1}) + \dfrac{\eta}{ \mu} (\boldsymbol{\sigma}_{L1}^n - \boldsymbol{\sigma}_{L1}) = -\dfrac{\Delta t}{2} (p^n + p^{n-1}) \textbf{I} - \dfrac{\eta}{ \mu}(p^n - p^{n-1})  \textbf{I} + 2 \eta (\boldsymbol{\epsilon}^n - \boldsymbol{\epsilon}^{n-1}).
+#     \dfrac{\Delta t}{2} (\boldsymbol{\sigma}_{L1}^n + \boldsymbol{\sigma}_{L1}^{n-1}) + \dfrac{\eta}{ \mu} (\boldsymbol{\sigma}_{L1}^n - \boldsymbol{\sigma}_{L1}^{n-1}) = -\dfrac{\Delta t}{2} (p^n + p^{n-1}) \textbf{I} - \dfrac{\eta}{ \mu}(p^n - p^{n-1})  \textbf{I} + 2 \eta (\boldsymbol{\epsilon}^n - \boldsymbol{\epsilon}^{n-1}).
 # \end{equation}
 # Using Maxwell time, $\alpha = \eta / \mu$, this simplifies to
 # \begin{equation}
@@ -223,16 +223,16 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # We also specify functions to hold our solutions: `z` in the mixed
 # function space, noting that a symbolic representation of the two
 # parts – incremental displacement and pressure – is obtained with `split`. For later
-# visualisation, we rename the subfunctions of z Incremental Displacement and Pressure.
+# visualisation, we rename the subfunctions of `z` to *Incremental Displacement* and *Pressure*.
 #
 # We also need to initialise two functions `displacement` and `stress_old` that are used when timestepping the constitutive equation.
 
 # +
 z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
-u_, p_ = z.subfunctions
-u_.rename("Incremental Displacement")
-p_.rename("Pressure")
+# Next rename for output:
+z.subfunctions[0].rename("Incremental Displacement")
+z.subfunctions[1].rename("Pressure")
 
 displacement = Function(V, name="displacement").assign(0)
 stress_old = Function(S, name="stress_old").assign(0)
@@ -285,34 +285,11 @@ viscosity = Function(W, name="viscosity")
 initialise_background_field(viscosity, viscosity_values)
 # -
 
-# Next let's create a function to store our ice load. Following the long test from Weeredesteijn et al 2023, during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice free conditions in the next 10 thousand years. Finally, the simulation will run for a further 10 thousand years to allow the system to relax towards isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we have used a tanh function again to smooth out the transition from ice to ice-free regions.
-
-# +
-rho_ice = 931
-g = 9.8125
-
-# Initialise ice loading
-ice_load = Function(W, name="Ice load")
-Hice = 1000
-year_in_seconds = Constant(3600 * 24 * 365.25)
-T1_load = 90e3 * year_in_seconds
-T2_load = 100e3 * year_in_seconds
-
-# Disc ice load but with a smooth transition given by a tanh profile
-disc_radius = 100e3
-disc_dx = 5e3
-k_disc = 2*pi/(8*disc_dx)  # wavenumber for disk 2pi / lambda
-r = X[0]
-disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-ramp = Constant(0)
-
-
-# -
-
 # Next let's define the length of our time step. If we want to accurately resolve the elastic response we should choose a timestep lower than the Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation to 'catch up' with the initial, instantaneous elastic deformation.
 #
 # Let's print out the Maxwell time for each layer
 
+year_in_seconds = 8.64e4 * 365.25
 for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
     log(f"Maxwell time: {float(layer_visc/layer_mu/year_in_seconds):.0f} years")
 
@@ -339,6 +316,28 @@ log(f"dt: {float(dt / year_in_seconds)} years")
 log(f"Simulation start time: {Tstart} years")
 # -
 
+# Next let'ssetup our ice load. Following the long test from Weeredesteijn et al 2023, during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice free conditions in the next 10 thousand years. Finally, the simulation will run for a further 10 thousand years to allow the system to relax towards isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The width of the ice sheet is 100 km and we have used a tanh function again to smooth out the transition from ice to ice-free regions.
+#
+# As the loading and unloading cycle only varies linearly in time, let's write the ice load as a symbolic expression.
+
+# Initialise ice loading
+rho_ice = 931
+g = 9.8125
+Hice = 1000
+t1_load = 90e3 * year_in_seconds
+t2_load = 100e3 * year_in_seconds
+ramp_after_t1 = conditional(
+    time < t2_load, 1 - (time - t1_load) / (t2_load - t1_load), 0
+)
+ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
+# Disc ice load but with a smooth transition given by a tanh profile
+disc_radius = 100e3
+disc_dx = 5e3
+k_disc = 2*pi/(8*disc_dx)  # wavenumber for disk 2pi / lambda
+r = X[0]
+disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
+ice_load = ramp * rho_ice * g * Hice * disc
+
 # We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing the string `ux` and `uy`, G-ADOPT knows to specify these as Strong Dirichlet boundary conditions.
 #
 # For the top surface we need to specify a normal stress, i.e. the weight of the ice load, as well as indicating this is a free surface.
@@ -347,7 +346,7 @@ log(f"Simulation start time: {Tstart} years")
 
 # +
 # Setup boundary conditions
-exterior_density = conditional(time < T2_load, rho_ice*disc, 0)
+exterior_density = conditional(time < t2_load, rho_ice*disc, 0)
 stokes_bcs = {
     bottom_id: {'uy': 0},
     top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - exterior_density}},
@@ -374,12 +373,9 @@ stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximat
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
 # +
-prefactor_prestress = Function(W, name='prefactor prestress').interpolate(approximation.prefactor_prestress(dt))
-effective_viscosity = Function(W, name='effective viscosity').interpolate(approximation.effective_viscosity(dt))
-
 # Create output file
 output_file = VTKFile("output.pvd")
-output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
+output_file.write(*z.subfunctions, displacement)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
@@ -392,14 +388,6 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 # Now let's run the simulation! We are going to control the ice thickness using the `ramp` parameter. At each step we call `solve` to calculate the incremental displacement and pressure fields. This will update the displacement at the surface and stress values accounting for the time dependent Maxwell consitutive equation.
 
 for timestep in range(max_timesteps):
-    ramp.assign(conditional(time < T1_load, time / T1_load,
-                            conditional(time < T2_load, 1 - (time - T1_load) / (T2_load - T1_load),
-                                        0)
-                            )
-                )
-
-    ice_load.interpolate(ramp * rho_ice * g * Hice * disc)
-
     stokes_solver.solve()
 
     time.assign(time+dt)
@@ -407,11 +395,10 @@ for timestep in range(max_timesteps):
     if timestep % output_frequency == 0:
         log("timestep", timestep)
 
-        output_file.write(u_, displacement, p_, stress_old, shear_modulus, viscosity, density, prefactor_prestress, effective_viscosity, ice_load)
+        output_file.write(*z.subfunctions, displacement)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
-            checkpoint.save_function(u_, name="Incremental Displacement")
-            checkpoint.save_function(p_, name="Pressure")
+            checkpoint.save_function(z, name="Stokes")
             checkpoint.save_function(displacement, name="Displacement")
             checkpoint.save_function(stress_old, name="Deviatoric stress")
 
@@ -422,7 +409,7 @@ for timestep in range(max_timesteps):
         f"{displacement.dat.data[:, 1].min()} {displacement.dat.data[:, 1].max()}"
     )
 
-# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the calculated displacement to artifically scale the mesh in the vertical direction. We have exaggerated the vertical stretching by a factor of 1500, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
+# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the calculated displacement to artifically scale the mesh. We have exaggerated the stretching by a factor of 1500, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
