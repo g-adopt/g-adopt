@@ -155,7 +155,7 @@ def momentum_source_term(
     T = getattr(eq, "T", 0.0)
     displ = getattr(eq, "displ", 0.0)
 
-    source = eq.approximation.buoyancy(p, T, displ) * upward_normal(eq.mesh)
+    source = eq.approximation.buoyancy(p=p, T=T, displ=displ) * upward_normal(eq.mesh)
 
     F = -dot(eq.test, source) * eq.dx
 

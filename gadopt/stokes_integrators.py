@@ -407,8 +407,8 @@ class StokesSolver(MassMomentumBase):
         # Set internal degrees of freedom to zero to prevent singular matrix
         self.strong_bcs.append(InteriorBC(func_space_eta, 0, bc_id))
 
-        self.buoyancy_fs[eta_ind] = self.approximation.get_buoyancy_free_surface(
-            params_fs, p, self.T
+        self.buoyancy_fs[eta_ind] = self.approximation.buoyancy(
+            p=p, T=self.T, params_fs=params_fs
         )
         eta_theta = self.theta_fs * eta + (1 - self.theta_fs) * self.eta_old[eta_ind]
 
@@ -568,9 +568,9 @@ class ViscoelasticSolver(MassMomentumBase):
         # `incremental displacement' (u) that we are solving for. Then, calculate the
         # free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
-        u = self.solution_split[0]
-        buoyancy_fs = self.approximation.get_buoyancy_free_surface(
-            params_fs, displ=self.displ
+        u, p = self.solution_split[:2]
+        buoyancy_fs = self.approximation.buoyancy(
+            p=p, displ=self.displ, params_fs=params_fs
         )
         normal_stress = buoyancy_fs * vertical_component(u + self.displ)
 
@@ -770,7 +770,7 @@ def ala_right_nullspace(
     p = Function(W, name="Pressure nullspace")
 
     F = inner(grad(q), grad(p)) * dx
-    F += vertical_component(grad(q) * approximation.buoyancy(p)) * dx
+    F += vertical_component(grad(q) * approximation.buoyancy(p=p)) * dx
 
     # Fix the solution at the top boundary
     solve(F == 0, p, bcs=DirichletBC(W, 1.0, top_subdomain_id))

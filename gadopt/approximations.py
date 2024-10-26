@@ -278,41 +278,42 @@ class Approximation:
             if not self.dimensional:
                 self.viscous_dissipation_factor *= self.Di / self.Ra
 
-    def get_buoyancy_free_surface(
-        self,
-        params_fs: dict[str, Any],
-        p: fd.ufl.indexed.Indexed = fd.Constant(0),
-        T: fd.Constant | fd.Function = fd.Constant(0),
-        displ: fd.Constant | fd.Function = fd.Constant(0),
-    ) -> fd.ufl.algebra.Product:
-        """Defines the free-surface buoyancy factor in the momentum conservation."""
-        buoyancy_free_surface = (self.rho - params_fs.get("rho_ext", 0)) * self.g
-        if not self.dimensional:
-            buoyancy_free_surface *= params_fs["Ra_fs"]
-        if params_fs.get("include_buoyancy_effects", True):
-            buoyancy_free_surface -= self.buoyancy(p, T, displ)
-
-        return buoyancy_free_surface
-
     def buoyancy(
         self,
+        *,
         p: fd.Constant | fd.ufl.indexed.Indexed = fd.Constant(0),
         T: fd.Constant | fd.Function = fd.Constant(0),
         displ: fd.Constant | fd.Function = fd.Constant(0),
+        params_fs: dict[str, Any] | None = None,
     ) -> fd.ufl.algebra.Sum:
         """Calculates the buoyancy term in the momentum conservation.
+
+        Either returns the buoyancy term for the interior of the domain or that of the
+        free surface described by `params_fs`.
 
         Note: In a dimensional system, T represents the difference between actual
         temperature and reference temperature.
         """
         if self.dimensional and self.thermal_buoyancy != 0:
             T -= self.T
-        return (
+
+        buoyancy = (  # Calculates domain interior buoyancy
             self.thermal_buoyancy * T
             - self.compressible_buoyancy * p
             - self.compositional_buoyancy
             + fd.inner(self.viscoelastic_buoyancy, displ)
         )
+
+        if params_fs is not None:  # Calculates free-surface buoyancy
+            buoyancy_free_surface = (self.rho - params_fs.get("rho_ext", 0)) * self.g
+            if not self.dimensional:
+                buoyancy_free_surface *= params_fs["Ra_fs"]
+            if params_fs.get("include_buoyancy_effects", True):
+                buoyancy_free_surface -= buoyancy
+
+            return buoyancy_free_surface
+
+        return buoyancy
 
     def energy_source(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
         """Calculates the energy source term in the energy conservation.

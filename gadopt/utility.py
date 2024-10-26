@@ -5,7 +5,6 @@ depending on what they would like to achieve.
 """
 
 import os
-import time
 from logging import getLevelName
 
 import numpy as np
