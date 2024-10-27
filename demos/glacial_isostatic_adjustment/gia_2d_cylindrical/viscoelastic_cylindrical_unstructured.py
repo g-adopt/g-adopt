@@ -49,13 +49,13 @@ dz = D / nz
 bottom_id, top_id = 1, 2
 
 surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name='surface_mesh')
-mesh = Mesh("unstructured_annulus.msh") # ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type='radial')
+mesh = Mesh("unstructured_annulus_refined_surface.msh") # ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type='radial')
 
 mesh.cartesian = False
 
 
 # -
-# We next set up the unction spaces, and specify functions to hold our solutions,
+# We next set up the function spaces, and specify functions to hold our solutions,
 # as with our previous tutorials.
 
 # +
@@ -199,8 +199,8 @@ plotter.add_mesh(
   #  scalars="viscosity",
     component=None,
     lighting=False,
-    #show_edges=True,
-    #edge_color='white',
+   # show_edges=True,
+   # edge_color='white',
     #clim=[0, 70],
     cmap=boring_cmap,
     scalar_bar_args={
@@ -432,7 +432,7 @@ for timestep in range(1, max_timesteps+1):
 # plotter.open_gif("displacement_warp.gif")
 #
 # # Make a colour map
-# boring_cmap = plt.get_cmap("viridis", 25)
+# boring_cmap = plt.get_cmap("inferno", 25)
 #
 # # Fix camera in default position otherwise mesh appears to jumpy around!
 # #plotter.camera_position = 'xy'
@@ -441,8 +441,6 @@ for timestep in range(1, max_timesteps+1):
 # for i in range(len(reader.time_values)):
 #     reader.set_active_time_point(i)
 #     data = reader.read()[0]
-#     edges = mesh_data.extract_all_edges()
-#     plotter.add_mesh(edges)
 #     # Artificially warp the output data in the vertical direction by the free surface height
 #     # Note the mesh is not really moving!
 #     warped = data.warp_by_vector(vectors="displacement", factor=1500)
@@ -452,11 +450,11 @@ for timestep in range(1, max_timesteps+1):
 #     # Add the warped displacement field to the frame
 #     plotter.add_mesh(
 #         warped,
-#         scalars="displacement",
+#         scalars="viscosity",
 #         component=None,
 #         lighting=False,
 #        # show_edges=True,
-#         clim=[0, 400],
+#         clim=[0, 600],
 #         cmap=boring_cmap,
 #         scalar_bar_args={
 #             "title": 'Displacement (m)',
@@ -474,7 +472,7 @@ for timestep in range(1, max_timesteps+1):
 #     plotter.camera_position = [(0, 0, rmax*5),
 #                                  (0.0, 0.0, 0.0),
 #                                  (0.0, 1.0, 0.0)]
-#     plotter.add_text(f"Time: {i*1000:6} years", name='time-label')
+#     plotter.add_text(f"Time: {i*2000:6} years", name='time-label')
 #     print(plotter.camera_position)
 #     # Write end frame multiple times to give a pause before gif starts again!
 #     for j in range(5):
@@ -494,21 +492,20 @@ for timestep in range(1, max_timesteps+1):
 
 # ![SegmentLocal](displacement_warp.gif "segment")
 
-# +
-mesh_data = pv.read("output/output_0.vtu")
-edges = mesh_data.extract_all_edges()
-plotter = pv.Plotter(notebook=True)
-
-plotter.add_mesh(
-        mesh_data,
-        scalars="viscosity",
-        component=None,
-        lighting=False,
-        show_edges=True,
-    )
-plotter.add_mesh(edges, color="white", opacity=1)
-plotter.camera_position = "xy"
-plotter.show(jupyter_backend="static", interactive=False)
+# mesh_data = pv.read("output/output_0.vtu")
+# edges = mesh_data.extract_all_edges()
+# plotter = pv.Plotter(notebook=True)
+#
+# plotter.add_mesh(
+#         mesh_data,
+#         scalars="viscosity",
+#         component=None,
+#         lighting=False,
+#         show_edges=True,
+#     )
+# plotter.add_mesh(edges, color="white", opacity=1)
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
 
 # +
 mesh_data = pv.read("viscosity/viscosity_0.vtu")
