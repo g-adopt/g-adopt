@@ -9,7 +9,7 @@ required by Firedrake solvers.
 from collections.abc import Iterable
 from dataclasses import KW_ONLY, InitVar, dataclass, field
 from numbers import Number
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 from warnings import warn
 
 import firedrake as fd
@@ -33,7 +33,7 @@ class Equation:
         trial_space:
           Firedrake function space of the trial function.
         residual_terms:
-          List of equation terms contributing to the residual.
+          Equation term or a list thereof contributing to the residual.
         mass_term:
           Callable returning the equation's mass term.
         eq_attrs:
@@ -41,12 +41,12 @@ class Equation:
         approximation:
           G-ADOPT approximation for the system of equations considered.
         bcs:
-          Dictionary of identifier-value pairs specifying weak boundary conditions.
+          Dictionary specifying weak boundary conditions (identifier, type, and value).
         quad_degree:
           Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
           where p is the polynomial degree of the trial space.
         rescale_factor:
-          UFL expression used to rescale mass and residual terms.
+          A constant factor used to rescale mass and residual terms.
 
     """
 
@@ -54,18 +54,18 @@ class Equation:
     trial_space: fd.functionspaceimpl.WithGeometry
     residual_terms: InitVar[Callable | list[Callable]]
     _: KW_ONLY
-    mass_term: Optional[Callable] = None
+    mass_term: Callable | None = None
     eq_attrs: InitVar[dict[str, Any]] = {}
-    approximation: Optional[BaseApproximation] = None
+    approximation: BaseApproximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
-    quad_degree: InitVar[Optional[int]] = None
-    rescale_factor: Number | fd.Constant | fd.Function = 1
+    quad_degree: InitVar[int | None] = None
+    rescale_factor: Number | fd.Constant = 1
 
     def __post_init__(
         self,
         residual_terms: Callable | list[Callable],
         eq_attrs: dict[str, Any],
-        quad_degree: Optional[int],
+        quad_degree: int | None,
     ) -> None:
         if not isinstance(residual_terms, Iterable):
             residual_terms = [residual_terms]
@@ -157,11 +157,13 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
 
 def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
     """Interior Penalty method
+
     For details on the choice of sigma, see
     https://www.researchgate.net/publication/260085826
-    We use Equations (3.20) and (3.23). Instead of getting the maximum over two
-    adjacent cells (+ and -), we just sum (i.e. 2 * avg) and have an extra 0.5 for for
-    internal facets.
+
+    We use Equations (3.20) and (3.23). Instead of getting the maximum over two adjacent
+    cells (+ and -), we just sum (i.e. 2 * avg) and have an extra 0.5 for internal
+    facets.
     """
     degree = eq.trial_space.ufl_element().degree()
     if not isinstance(degree, int):

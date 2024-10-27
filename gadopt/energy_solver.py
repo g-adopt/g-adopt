@@ -1,8 +1,8 @@
-r"""This module provides a minimal solver for generic transport equations, which may
-include advection, diffusion, sink, and source terms, and a fine-tuned solver class for
-the energy conservation equation. Users instantiate the `GenericTransportSolver` or
-`EnergySolver` classes by providing the appropriate documented parameters and call the
-`solve` method to request a solver update.
+r"""This module provides a minimal solver, independent of any approximation, for generic
+transport equations, which may include advection, diffusion, sink, and source terms, and
+a fine-tuned solver class for the energy conservation equation. Users instantiate the
+`GenericTransportSolver` or `EnergySolver` classes by providing the appropriate
+documented parameters and call the `solve` method to request a solver update.
 
 """
 
@@ -77,7 +77,7 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 
     Note: The solution field is updated in place.
 
-    Arguments:
+    Args:
       solution:
         Firedrake function for the field of interest
       delta_t:
@@ -262,7 +262,7 @@ class GenericTransportSolver(GenericTransportBase):
 
     Note: The solution field is updated in place.
 
-    Arguments:
+    Args:
       terms:
         List of equation terms (refer to terms_mapping)
       solution:
@@ -300,12 +300,10 @@ class GenericTransportSolver(GenericTransportBase):
         self.terms = [terms] if isinstance(terms, str) else terms
 
     def set_equation(self) -> None:
-        eq_terms = [self.terms_mapping[term] for term in self.terms]
-
         self.equation = Equation(
             self.test,
             self.solution_space,
-            eq_terms,
+            residual_terms=[self.terms_mapping[term] for term in self.terms],
             mass_term=scalar_eq.mass_term,
             eq_attrs=self.eq_attrs,
             bcs=self.weak_bcs,
@@ -317,7 +315,7 @@ class EnergySolver(GenericTransportBase):
 
     Note: The solution field is updated in place.
 
-    Arguments:
+    Args:
       solution:
         Firedrake function for temperature
       u:
@@ -353,8 +351,8 @@ class EnergySolver(GenericTransportBase):
     ) -> None:
         super().__init__(solution, delta_t, timestepper, **kwargs)
 
-        self.approximation = approximation
         self.u = u
+        self.approximation = approximation
 
         self.T_old = self.solution_old
 
@@ -370,12 +368,10 @@ class EnergySolver(GenericTransportBase):
             "u": self.u,
         }
 
-        eq_terms = self.terms_mapping.values()
-
         self.equation = Equation(
             self.test,
             self.solution_space,
-            eq_terms,
+            residual_terms=self.terms_mapping.values(),
             mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
             eq_attrs=self.eq_attrs,
             approximation=self.approximation,
