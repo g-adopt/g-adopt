@@ -43,13 +43,19 @@ class ParameterLog:
 class TimestepAdaptor:
     """Computes timestep based on CFL condition for provided velocity field
 
-    Arguments:
-      dt_const: Constant whose value will be updated by the timestep adaptor
-      u: Velocity to base CFL condition on
-      V: FunctionSpace for reference velocity, usually velocity space
-      target_cfl: CFL number to target with chosen timestep
-      increase_tolerance: Maximum tolerance timestep is allowed to change by
-      maximum_timestep: Maximum allowable timestep
+    Args:
+      dt_const:
+        Constant whose value will be updated by the timestep adaptor
+      u:
+        Velocity to base CFL condition on
+      V:
+        Function space for reference velocity, usually velocity space
+      target_cfl:
+        CFL number to target with chosen timestep
+      increase_tolerance:
+        Maximum tolerance timestep is allowed to change by
+      maximum_timestep:
+        Maximum allowable timestep
 
     """
 
@@ -58,9 +64,9 @@ class TimestepAdaptor:
         dt_const,
         u,
         V,
-        target_cfl=1.0,
-        increase_tolerance=1.5,
-        maximum_timestep=None,
+        target_cfl: float = 1.0,
+        increase_tolerance: float = 1.5,
+        maximum_timestep: float | None = None,
     ) -> None:
         self.dt_const = dt_const
         self.u = u
@@ -128,12 +134,12 @@ class CombinedSurfaceMeasure(ufl.Measure):
     the integral over horizontal top and bottom facets. The vertical boundary facets are identified with
     the same surface ids as ds_v. The top and bottom surfaces are identified via the "top" and "bottom" ids."""
 
-    def __init__(self, domain, degree) -> None:
+    def __init__(self, domain, degree: int) -> None:
         self.ds_v = ds_v(domain=domain, degree=degree)
         self.ds_t = ds_t(domain=domain, degree=degree)
         self.ds_b = ds_b(domain=domain, degree=degree)
 
-    def __call__(self, subdomain_id, **kwargs):
+    def __call__(self, subdomain_id: int | str, **kwargs):
         if subdomain_id == "top":
             return self.ds_t(**kwargs)
         elif subdomain_id == "bottom":
@@ -287,7 +293,7 @@ def get_functionspace(
 class LayerAveraging:
     """A manager for computing a vertical profile of horizontal layer averages.
 
-    Arguments:
+    Args:
       mesh: The mesh over which to compute averages
       r1d: An array of either depth coordinates or radii,
              at which to compute layer averages. If not provided, and
@@ -296,7 +302,7 @@ class LayerAveraging:
 
     """
 
-    def __init__(self, mesh, r1d=None, quad_degree=None) -> None:
+    def __init__(self, mesh, r1d=None, quad_degree: int | None = None) -> None:
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
@@ -424,7 +430,7 @@ class InteriorBC(DirichletBC):
     """DirichletBC applied to anywhere that is *not* on the specified boundary"""
 
     @utils.cached_property
-    def nodes(self):
+    def nodes(self) -> np.ndarray:
         return np.array(
             list(set(range(self._function_space.node_count)) - set(super().nodes))
         )
@@ -435,7 +441,7 @@ def absv(u):
     return as_vector([abs(ui) for ui in u])
 
 
-def step_func(r, centre, mag, increasing=True, sharpness=50):
+def step_func(r, centre, mag, increasing: bool = True, sharpness=50):
     """A step function designed to represent viscosity jumps.
 
     Builds a step centred at "centre" with given magnitude.
@@ -445,7 +451,7 @@ def step_func(r, centre, mag, increasing=True, sharpness=50):
     return mag * (0.5 * (1 + tanh(sign * (r - centre) * sharpness)))
 
 
-def node_coordinates(function):
+def node_coordinates(function: Function):
     """Extract mesh coordinates and interpolate them onto the relevant function space"""
     func_space = function.function_space()
     vec_space = VectorFunctionSpace(func_space.ufl_domain(), func_space.ufl_element())

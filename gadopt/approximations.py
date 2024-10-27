@@ -53,7 +53,7 @@ class Approximation:
     displacement, i.e. velocity * dt, where dt is the timestep. This produces a mixed
     Stokes system for incremental displacement and pressure which can be solved in the
     same way as mantle convection (where unknowns are velocity and pressure), with a
-    modfied viscosity and stress term accounting for the deviatoric stress at the
+    modified viscosity and a stress term accounting for the deviatoric stress at the
     previous timestep.
 
     When using SDVA in a non-dimensional system, one must define a Weissenberg number
@@ -72,6 +72,7 @@ class Approximation:
         1. Reference dimensional parameters
             H: specific heat source
             kappa: thermal diffusivity
+            rho_material: material (compositional) density
         2. Non-dimensional parameters
             Di: dissipation number
             Gamma: Grüneisen parameter
@@ -80,28 +81,26 @@ class Approximation:
             Ra_c: compositional Rayleigh number
             Wei: Weissenberg number (only used in SDVA)
         3. Reference profiles
-            alpha: coefficient of thermal expansion (varies only in TALA and ALA)
-            # Treatise on Geophysics uses incompressibility (i.e. bulk modulus).
+            alpha: coefficient of thermal expansion (considered constant under BA)
             chi: isothermal compressibility
-            cp: isobaric specific heat capacity (varies only in TALA and ALA)
+            cp: isobaric specific heat capacity (considered constant under BA)
             G: shear modulus (only used in SDVA)
             g: acceleration of gravity
             k: thermal conductivity
             mu: dynamic viscosity
-            rho: densiy (varies only in TALA and ALA)
-            rho_material: material (compositional) density
-            T: temperature (varies only in TALA and ALA)
+            rho: density (considered constant under BA)
+            T: temperature (considered constant under BA)
 
     Reference profiles represent parameters that admit depth-dependent variations along
     the hydrostatic adiabat. These parameters arise both in the dimensional and
     non-dimensional equation systems. Depending on the selected approximation, some
     parameters should have constant reference profiles. For example, only the
     acceleration of gravity, the dynamic viscosity, and the thermal conductivity should
-    have depth-dependent variations in the Boussinesq approximation.
+    have depth-dependent variations under the Boussinesq approximation.
     """
 
     _presets = ["BA", "EBA", "TALA", "ALA", "SDVA"]
-    _components = ["momentum", "mass", "energy"]
+    _equations = ["momentum", "mass", "energy"]
 
     _momentum_components = {"BA": ["compositional_buoyancy", "thermal_buoyancy"]}
     _momentum_components["EBA"] = _momentum_components["BA"] + []
@@ -128,6 +127,7 @@ class Approximation:
     def __init__(
         self,
         preset_or_components: str | dict[str, list[str]],
+        /,
         *,
         dimensional: bool,
         parameters: dict[str, Number | fd.Constant | fd.Function] = {},
@@ -136,25 +136,18 @@ class Approximation:
             assert preset_or_components in self._presets, "Unknown preset provided."
             self.preset = preset_or_components
 
-            if self.preset in self._momentum_components:
-                self.momentum_components = self._momentum_components[self.preset]
-            if self.preset in self._mass_components:
-                self.mass_components = self._mass_components[self.preset]
-            if self.preset in self._energy_components:
-                self.energy_components = self._energy_components[self.preset]
+            for equation in self._equations:
+                setattr(
+                    self,
+                    f"{equation}_components",
+                    getattr(self, f"_{equation}_components").get(self.preset),
+                )
         else:
             self.preset = None
 
-            assert all(
-                component in self._components for component in preset_or_components
-            ), "Unknown component provided."
-
-            if "momentum" in preset_or_components:
-                self.momentum_components = preset_or_components["momentum"]
-            if "mass" in preset_or_components:
-                self.mass_components = preset_or_components["mass"]
-            if "energy" in preset_or_components:
-                self.energy_components = preset_or_components["energy"]
+            for equation, components in preset_or_components.items():
+                assert equation in self._equations, "Unknown equation provided."
+                setattr(self, f"{equation}_components", components)
 
         self.dimensional = dimensional
         for parameter, value in parameters.items():
@@ -163,14 +156,14 @@ class Approximation:
         if not self.dimensional:
             self.check_reference_profiles()
 
-        if hasattr(self, "momentum_components"):
+        if getattr(self, "momentum_components", None) is not None:
             self.set_buoyancy()
             self.set_compressible_stress()
 
-        if hasattr(self, "mass_components"):
+        if getattr(self, "mass_components", None) is not None:
             self.set_flux_divergence()
 
-        if hasattr(self, "energy_components"):
+        if getattr(self, "energy_components", None) is not None:
             self.check_thermal_diffusion()
 
             self.set_adiabatic_compression()
@@ -182,36 +175,34 @@ class Approximation:
         for attribute in ["alpha", "chi", "cp", "G", "g", "k", "mu", "rho"]:
             if not hasattr(self, attribute):
                 setattr(self, attribute, fd.Constant(1.0))
-        for attribute in ["rho_material", "T"]:
+
+        for attribute in ["T"]:
             if not hasattr(self, attribute):
                 setattr(self, attribute, fd.Constant(0.0))
 
     def check_thermal_diffusion(self) -> None:
-        """Ensures compatibility between terms defining thermal diffusivity."""
+        """Ensures compatibility between parameters defining thermal diffusivity."""
         if hasattr(self, "kappa"):
-            if not hasattr(self, "energy_components") or self.energy_components == [
-                "heat_source"
-            ]:
+            if all(
+                component not in self.energy_components
+                for component in ["adiabatic_compression", "viscous_dissipation"]
+            ):
                 self.k = self.kappa
                 self.cp = 1 / self.rho
-
-            if hasattr(self, "k") and not hasattr(self, "cp"):
+            elif hasattr(self, "k") and not hasattr(self, "cp"):
                 self.cp = self.k / self.rho / self.kappa
             elif not hasattr(self, "k") and hasattr(self, "cp"):
                 self.k = self.kappa * self.rho * self.cp
             else:
                 assert self.kappa == self.k / self.rho / self.cp
-        elif hasattr(self, "k") and hasattr(self, "cp"):
-            self.kappa = self.k / self.rho / self.cp
 
     def set_adiabatic_compression(self) -> None:
         """Defines the adiabatic compression factor in the energy conservation."""
+        self.adiabatic_compression = 0.0
         if "adiabatic_compression" in self.energy_components:
             self.adiabatic_compression = self.rho * self.alpha * self.g
             if not self.dimensional:
                 self.adiabatic_compression *= self.Di
-        else:
-            self.adiabatic_compression = 0.0
 
     def set_buoyancy(self) -> None:
         """Defines buoyancy factors in the momentum conservation."""
@@ -220,16 +211,13 @@ class Approximation:
             if self.dimensional and hasattr(self, "rho_material"):
                 self.compositional_buoyancy = (self.rho_material - self.rho) * self.g
             elif not self.dimensional and hasattr(self, "Ra_c"):
-                self.compositional_buoyancy = (
-                    self.Ra_c * (self.rho - self.rho_material) * self.g
-                )
+                self.compositional_buoyancy = self.Ra_c * self.g
 
         self.compressible_buoyancy = 0.0
         if "compressible_buoyancy" in self.momentum_components:
-            # This term looks similar to the thermal contribution, but I cannot seem to
-            # recover it using chapter 7.02 of Treatise on Geophysics. Relevant
-            # discussion there starts from page 18. The article also mentions that cp
-            # and cv should be equal under the anelastic liquid approximation.
+            # How does one obtain this term using chapter 7.02 of Treatise on
+            # Geophysics? The article mentions that specific heats should be equal under
+            # the anelastic liquid approximation.
             self.compressible_buoyancy = self.rho * self.chi * self.g
             if not self.dimensional:
                 self.compressible_buoyancy *= self.Di / self.Gamma
@@ -264,11 +252,12 @@ class Approximation:
 
     def set_flux_divergence(self) -> None:
         """Defines the density contribution to the flux in the mass conservation."""
-        self.rho_flux = 0.0
         if "volume_continuity" in self.mass_components:
             self.rho_flux = 1.0
         elif "mass_continuity" in self.mass_components:
             self.rho_flux = self.rho
+        else:
+            raise ValueError("Unknown continuity equation.")
 
     def set_viscous_dissipation(self) -> None:
         """Defines the viscous dissipation factor used in the energy conservation."""

@@ -20,7 +20,6 @@ from .stokes_integrators import StokesSolver as StokesSolver
 from .stokes_integrators import ViscoelasticSolver as ViscoelasticSolver
 from .stokes_integrators import create_stokes_nullspace as create_stokes_nullspace
 from .time_stepper import BackwardEuler as BackwardEuler
-from .time_stepper import CrankNicolsonRK as CrankNicolsonRK
 from .time_stepper import ImplicitMidpoint as ImplicitMidpoint
 from .time_stepper import eSSPRKs3p3 as eSSPRKs3p3
 from .time_stepper import eSSPRKs10p3 as eSSPRKs10p3

@@ -1,6 +1,6 @@
-r"""This module provides a class to simplify computing of diagnostics typically encountered
-in geodynamical simulations. Users instantiate the class by providing relevant
-parameters and call individual class methods to compute associated diagnostics.
+r"""This module provides a class to automate computing of diagnostics typically
+encountered in geodynamical simulations. Users instantiate the class by providing
+relevant parameters and call individual class methods to compute associated diagnostics.
 
 """
 
@@ -14,25 +14,35 @@ from .utility import CombinedSurfaceMeasure
 class GeodynamicalDiagnostics:
     """Typical simulation diagnostics used in geodynamical simulations.
 
-    Arguments:
-      bottom_id:    Bottom boundary identifier
-      top_id:       Top boundary identifier
-      z:            Firedrake function for mixed Stokes function space (velocity, pressure)
-      T:            Firedrake function for temperature
-      quad_degree:  Degree of polynomial quadrature approximation
+    Args:
+      z:
+        Firedrake function for mixed Stokes function space (velocity, pressure)
+      T:
+        Firedrake function for temperature
+      bottom_id:
+        Bottom boundary identifier
+      top_id:
+        Top boundary identifier
+      quad_degree:
+        Degree of polynomial quadrature approximation
 
-    Note:
-      All diagnostics are returned as floats.
-
-    Functions:
-      u_rms: Root-mean squared velocity
-      u_rms_top: Root-mean squared velocity along the top boundary
-      Nu_top: Nusselt number at the top boundary
-      Nu_bottom: Nusselt number at the bottom boundary
-      T_avg: Average temperature in the domain
-      T_min: Minimum temperature in domain
-      T_max: Maximum temperature in domain
-      ux_max: Maximum velocity (optionally over a given boundary)
+    Methods:
+      u_rms:
+        Root-mean squared velocity
+      u_rms_top:
+        Root-mean squared velocity along the top boundary
+      Nu_top:
+        Nusselt number at the top boundary
+      Nu_bottom:
+        Nusselt number at the bottom boundary
+      T_avg:
+        Average temperature in the domain
+      T_min:
+        Minimum temperature in domain
+      T_max:
+        Maximum temperature in domain
+      ux_max:
+        Maximum velocity (optionally over a given boundary)
 
     """
 

@@ -123,7 +123,7 @@ class MetaPostInit(abc.ABCMeta):
 class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
     """Solver for a system involving mass and momentum conservation.
 
-    Arguments:
+    Args:
       solution:
         Firedrake function representing the field over the mixed Stokes space.
       approximation:
@@ -315,7 +315,7 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 class StokesSolver(MassMomentumBase):
     """Solver for the Stokes system.
 
-    Arguments:
+    Args:
       solution:
         Firedrake function representing the field over the mixed Stokes space.
       approximation:
@@ -378,7 +378,7 @@ class StokesSolver(MassMomentumBase):
         `free_surface_map` dictionary used to calculate the free-surface contribution to
         the momentum weak form.
 
-        Arguments:
+        Args:
           params_fs:
             A dictionary holding information about the free surface boundary.
             Valid dictionary keys:
@@ -493,7 +493,7 @@ class StokesSolver(MassMomentumBase):
 class ViscoelasticSolver(MassMomentumBase):
     """Solves the Stokes system assuming a Maxwell viscoelastic rheology.
 
-    Arguments:
+    Args:
       solution:
         Firedrake function representing the field over the mixed Stokes space.
       approximation:
@@ -548,7 +548,7 @@ class ViscoelasticSolver(MassMomentumBase):
     ) -> ufl.algebra.Product | ufl.algebra.Sum:
         """Sets the given boundary as a free surface.
 
-        Arguments:
+        Args:
           params_fs:
             A dictionary holding information about the free surface boundary.
             Valid dictionary keys:
@@ -589,11 +589,9 @@ class ViscoelasticSolver(MassMomentumBase):
 
         # Rescale equations using the Maxwell time to make sure that the solver
         # converges with strong boundary conditions in parallel.
-        rescale_factor = geometric_mean(
-            Function(FunctionSpace(self.mesh, "CG", 2))
-            .interpolate(self.maxwell_time)
-            .dat.data
-        )
+        func = Function(FunctionSpace(self.mesh, "CG", 2))
+        rescale_factor = geometric_mean(func.interpolate(self.maxwell_time).dat.data)
+
         for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):
             eq = Equation(
                 self.tests[i],
@@ -626,7 +624,7 @@ def create_stokes_nullspace(
 ) -> nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
 
-    Arguments:
+    Args:
       Z:
         Firedrake mixed function space associated with the Stokes system
       closed:
@@ -706,7 +704,7 @@ def ala_right_nullspace(
 ) -> Function:
     r"""Compute pressure nullspace for Anelastic Liquid Approximation.
 
-    Arguments:
+    Args:
       W: pressure function space
       approximation: AnelasticLiquidApproximation with equation parameters
       top_subdomain_id: boundary id of top surface

@@ -38,7 +38,7 @@ reconstructions = {
 }
 
 
-def check_and_get_absolute_paths(base_path: Path, filenames: dict):
+def check_and_get_absolute_paths(base_path: Path, filenames: dict) -> dict:
     # Check if all files are present
     all_files_present = all(
         (base_path / filename).exists()
@@ -48,7 +48,8 @@ def check_and_get_absolute_paths(base_path: Path, filenames: dict):
 
     if not all_files_present:
         raise FileNotFoundError(
-            "Some files are missing. Cannot proceed without downloading the required files."
+            "Some files are missing. Cannot proceed without downloading the required "
+            "files."
         )
 
     # Return absolute paths of the files
@@ -58,7 +59,7 @@ def check_and_get_absolute_paths(base_path: Path, filenames: dict):
     }
 
 
-def ensure_reconstruction(reconstruction: str, base_path: str | Path):
+def ensure_reconstruction(reconstruction: str, base_path: str | Path) -> dict:
     if reconstruction not in reconstructions:
         raise ValueError(f"Invalid reconstruction dataset {reconstruction}")
 

@@ -14,17 +14,16 @@ from firedrake.adjoint import *
 from mpi4py import MPI
 from pyadjoint import MinimizationProblem
 
-# emulate the previous behaviour of firedrake_adjoint by automatically
-# starting the tape
+# Emulate the previous behaviour of firedrake.adjoint by automatically starting the tape
 continue_annotation()
 
-# As a part of ROL checkpointing, when a CheckpointedROLVector is encountered,
-# we leverage Firedrake's checkpoint functionality to write the underlying vector
-# to disk. Then we only need to serialise the filename for this checkpoint, and the
-# inner product type. The loading process is a bit more complicated, because
-# the vectors need to be loaded on a consistent mesh. Because of this, all
-# the vectors that are loaded from a checkpoint register themselves in this list,
-# where they can be processed to load the underlying data on the correct mesh.
+# As a part of ROL checkpointing, when a CheckpointedROLVector is encountered, we
+# leverage Firedrake's checkpoint functionality to write the underlying vector to disk.
+# Then we only need to serialise the filename for this checkpoint, and the inner
+# product type. The loading process is a bit more complicated, because the vectors need
+# to be loaded on a consistent mesh. Because of this, all the vectors that are loaded
+# from a checkpoint register themselves in this list, where they can be processed to
+# load the underlying data on the correct mesh.
 _vector_registry = []
 
 
@@ -75,21 +74,26 @@ class LinMoreOptimiser:
     ) -> None:
         """The management class for Lin-More trust region optimisation using ROL.
 
-        This class sets up ROL to use the Lin-More trust region method, with a limited-memory
-        BFGS secant for determining the steps. A pyadjoint problem has to be set up first,
-        containing the optimisation functional and other constraints (like bounds).
+        This class sets up ROL to use the Lin-More trust region method, with a
+        limited-memory BFGS secant for determining the steps. A pyadjoint problem has to
+        be set up first, containing the optimisation functional and other constraints
+        (like bounds).
 
-        This optimiser also supports checkpointing ROL's state, to allow resumption of
-        a previous optimisation without having to refill the L-BFGS memory. The underlying
+        This optimiser also supports checkpointing ROL's state, to allow resumption of a
+        previous optimisation without having to refill the L-BFGS memory. The underlying
         objects will be configured for checkpointing if `checkpoint_dir` is specified,
         and optionally the automatic checkpointing each iteration can be disabled by the
         `auto_checkpoint` parameter.
 
-        Params:
-            problem (pyadjoint.MinimizationProblem): The actual problem to solve.
-            parameters (dict): A dictionary containing the parameters governing ROL.
-            checkpoint_dir (Optional[str]): A path to hold any checkpoints that are saved.
-            auto_checkpoint (Optional[bool]): Whether to automatically checkpoint each iteration.
+        Args:
+          problem:
+            A pyadjoint MinimizationProblem describing the problem to solve.
+          parameters:
+            A dictionary containing the parameters governing ROL.
+          checkpoint_dir:
+            An optional string specifying a path where to save checkpoints.
+          auto_checkpoint:
+            An optional boolean to set automatic checkpointing at each iteration.
         """
 
         self.iteration = -1
@@ -119,8 +123,7 @@ class LinMoreOptimiser:
             self.rol_secant = ROL.lBFGS(
                 parameters["General"]["Secant"]["Maximum Storage"]
             )
-        except KeyError:
-            # Use the default storage value
+        except KeyError:  # Use the default storage value
             self.rol_secant = ROL.lBFGS()
 
         self.rol_algorithm = ROL.LinMoreAlgorithm(self.rol_parameters, self.rol_secant)
@@ -153,7 +156,7 @@ class LinMoreOptimiser:
             for i, func in enumerate(self.rol_solver.rolvector.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def restore(self, iteration=None) -> None:
+    def restore(self, iteration: int | None = None) -> None:
         """Restores the ROL state from disk.
 
         The last stored iteration in `checkpoint_dir` is used unless a given iteration
@@ -185,9 +188,9 @@ class LinMoreOptimiser:
         # count in sync
         self.iteration -= 1
 
-        # The various ROLVector objects can load all their metadata, but can't actually
-        # restore from the Firedrake checkpoint. They register themselves, so we can access
-        # them through a flat list.
+        # The various ROLVector objects can load all their metadata but cannot actually
+        # restore from the Firedrake checkpoint. They register themselves, so we can
+        # access them through a flat list.
         vec = self.rol_solver.rolvector.dat
         for v in _vector_registry:
             x = [p.copy(deepcopy=True) for p in vec]
@@ -241,8 +244,8 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
     and links ROL to the underlying Firedrake vectors.
 
     When the serialisation library hits a ROL.Vector on the C++ side, it will pickle
-    this object, so we provide implementations of `__getstate__` and `__setstate__`
-    that will correctly participate in the serialisation pipeline.
+    this object, so we provide implementations of `__getstate__` and `__setstate__` that
+    will correctly participate in the serialisation pipeline.
     """
 
     def __init__(
@@ -278,8 +281,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
     def save(self, checkpoint_path) -> None:
         """Checkpoints the data within this vector to disk.
 
-        Called when this object is pickled as part of the ROL
-        state serialisation.
+        Called when this object is pickled as part of the ROL state serialisation.
         """
 
         with CheckpointFile(str(checkpoint_path), "w") as f:
@@ -289,9 +291,8 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
     def load(self, mesh) -> None:
         """Loads the checkpointed data for this vector from disk.
 
-        Called by the parent Optimiser after the ROL state has
-        been deserialised. The pickling routine will register
-        this vector within the registry.
+        Called by the parent Optimiser after the ROL state has been deserialised. The
+        pickling routine will register this vector within the registry.
         """
 
         with CheckpointFile(str(self.checkpoint_path), "r") as f:
@@ -305,8 +306,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
         separately set, then self.load() can be called.
         """
 
-        # initialise C++ state
-        super().__init__(state)
+        super().__init__(state)  # initialise C++ state
         self.checkpoint_path, self.inner_product = state
 
         _vector_registry.append(self)

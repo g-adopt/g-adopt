@@ -72,10 +72,9 @@ def viscosity_term(
         F -= inner(avg(mu * nabla_grad(eq.test)), trial_tensor_jump) * eq.dS
         F -= inner(tensor_jump(eq.n, eq.test), avg(stress)) * eq.dS
 
-    # NOTE: Unspecified boundaries are equivalent to free stress (i.e. free in all
-    # directions).
-    # NOTE: "un" can be combined with "stress" provided the stress force is tangential
-    # (e.g. no normal flow with wind)
+    # NOTE: Unspecified boundaries result in free stress (i.e. free in all directions).
+    # NOTE: "un" can be combined with "stress" provided the stress component is
+    # tangential (e.g. no normal flow with wind)
     for bc_id, bc in eq.bcs.items():
         if "u" in bc and any(bc_type in bc for bc_type in ["stress", "un"]):
             raise ValueError(

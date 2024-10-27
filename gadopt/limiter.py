@@ -4,8 +4,6 @@ parameters and call the `apply` method to update the function.
 
 """
 
-from typing import Optional
-
 import numpy as np
 from firedrake import *
 from pyop2 import op2
@@ -22,7 +20,7 @@ def assert_function_space(
     If the function space lies on an extruded mesh, checks both spaces of the outer
     product.
 
-    Arguments:
+    Args:
       fs:
         UFL function space
       family:
@@ -69,7 +67,7 @@ def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
 
     In case of a non-extruded mesh, returns the element itself.
 
-    Arguments:
+    Args:
       ufl_element: UFL element from which to extract the base element
 
     Returns:
@@ -92,7 +90,7 @@ def get_facet_mask(
     """The meaning of top/bottom depends on the extrusion's direction. Here, we assume
     that the mesh has been extruded upwards (along the positive z axis).
 
-    Arguments:
+    Args:
       function_space: UFL function space
       facet: String specifying the facet ("bottom" or "top")
 
@@ -130,18 +128,21 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
     methods.
     Journal of computational and applied mathematics, 233(12), 3077-3085.
 
-    Arguments:
-      p1dg_space: UFL P1DG function space
-      clip_min: Minimal threshold to apply
-      clip_max: Maximal threshold to apply
+    Args:
+      p1dg_space:
+        UFL P1DG function space
+      clip_min:
+        Minimal threshold to apply
+      clip_max:
+        Maximal threshold to apply
 
     """
 
     def __init__(
         self,
         p1dg_space: functionspaceimpl.WithGeometry,
-        clip_min: Optional[float] = None,
-        clip_max: Optional[float] = None,
+        clip_min: float | None = None,
+        clip_max: float | None = None,
     ) -> None:
         assert_function_space(p1dg_space, ["Discontinuous Lagrange", "DQ"], 1)
 
@@ -194,7 +195,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         Executes as part of the call to the parent `compute_bounds` method.
 
-        Arguments:
+        Args:
           field: Firedrake function onto which the limiter is applied
 
         """
@@ -204,7 +205,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
     def compute_bounds(self, field: Function) -> None:
         """Re-computes min/max values of all neighbouring centroids.
 
-        Arguments:
+        Args:
           field: Firedrake function onto which the limiter is applied
 
         """

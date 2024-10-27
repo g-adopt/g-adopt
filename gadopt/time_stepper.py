@@ -25,7 +25,7 @@ class TimeIntegratorBase(ABC):
     def advance(self, t: float, update_forcings: Callable | None = None):
         """Advances equations for one time step.
 
-        Arguments:
+        Args:
           t:
             Current simulation time
           update_forcings:
@@ -38,7 +38,7 @@ class TimeIntegratorBase(ABC):
     def initialise(self, init_solution):
         """Initialises the time integrator.
 
-        Arguments:
+        Args:
           init_solution: Firedrake function representing the initial solution.
 
         """
@@ -69,6 +69,8 @@ class TimeIntegrator(TimeIntegratorBase):
         equation: Equation,
         solution: fd.Function,
         dt: fd.Constant | float,
+        /,
+        *,
         solution_old: fd.Function | None = None,
         solver_parameters: dict[str, str | Number] = {},
         strong_bcs: list[fd.DirichletBC] = [],
@@ -105,7 +107,9 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         raise NotImplementedError
 
     @abstractmethod
-    def solve_stage(self, i_stage, t, update_forcings=None):
+    def solve_stage(
+        self, i_stage: int, t: float, update_forcings: Callable | None = None
+    ):
         """Solves a single stage of step from t to t+dt.
 
         All functions that the equation depends on must be at right state corresponding
@@ -113,7 +117,7 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         """
         raise NotImplementedError
 
-    def advance(self, t, update_forcings=None) -> None:
+    def advance(self, t: float, update_forcings: Callable | None = None) -> None:
         """Advances equations for one time step."""
         if not self._initialised:
             self.initialise(self.solution)
@@ -129,7 +133,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
 
     Implements the Butcher form. All terms in the equation are treated explicitly.
 
-    Arguments:
+    Args:
       equation:
         G-ADOPT equation to solve
       solution:
@@ -150,6 +154,8 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         equation: Equation,
         solution: fd.Function,
         dt: fd.Constant | float,
+        /,
+        *,
         solution_old: fd.Function | None = None,
         solver_parameters: dict[str, str | Number] = {},
         strong_bcs: list[fd.DirichletBC] = [],
@@ -241,7 +247,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
     All derived classes must define the Butcher tableau coefficients :attr:`a`,
     :attr:`b`, :attr:`c`.
 
-    Arguments:
+    Args:
       equation:
         G-ADOPT equation to solve
       solution:
@@ -261,6 +267,8 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         equation: Equation,
         solution: fd.Function,
         dt: fd.Constant | float,
+        /,
+        *,
         solution_old: fd.Function | None = None,
         solver_parameters: dict[str, str | Number] = {},
         strong_bcs: list[fd.DirichletBC] = [],
@@ -437,7 +445,7 @@ def shu_osher_butcher(α_or_λ, β_or_μ) -> tuple[np.ndarray, np.ndarray, np.nd
     Code adapted from RK-Opt written in MATLAB by David Ketcheson.
     See also Ketcheson, Macdonald, and Gottlieb (2009).
 
-    Function arguments:
+    Function Args:
     α_or_λ : array_like, shape (n + 1, n)
     β_or_μ : array_like, shape (n + 1, n)
     """

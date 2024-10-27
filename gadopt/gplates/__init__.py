@@ -1,4 +1,3 @@
-from .gplates import GplatesVelocityFunction, pyGplatesConnector
-from .gplatesfiles import ensure_reconstruction
-
-__all__ = ["GplatesVelocityFunction", "pyGplatesConnector", "ensure_reconstruction"]
+from .gplates import GplatesVelocityFunction as GplatesVelocityFunction
+from .gplates import pyGplatesConnector as pyGplatesConnector
+from .gplatesfiles import ensure_reconstruction as ensure_reconstruction

@@ -33,7 +33,7 @@ def mass_term(
 ) -> fd.Form:
     r"""Mass term \int test * trial * ds for the free surface time discretisation.
 
-    Arguments:
+    Args:
         eq:
           G-ADOPT Equation.
         trial:

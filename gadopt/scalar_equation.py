@@ -142,7 +142,7 @@ def sink_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
 def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
     """UFL form for the mass term used in the time discretisation.
 
-    Arguments:
+    Args:
         eq:
           G-ADOPT Equation.
         trial:

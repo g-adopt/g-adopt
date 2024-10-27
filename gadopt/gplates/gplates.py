@@ -5,7 +5,7 @@ import numpy as np
 import pygplates
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 
 from ..utility import log
 
@@ -13,17 +13,17 @@ __all__ = ["GplatesVelocityFunction", "pyGplatesConnector"]
 
 
 class GPlatesFunctionalityMixin:
-    def update_plate_reconstruction(self, ndtime):
+    def update_plate_reconstruction(self, ndtime: float):
         """A placeholder method to update the Function with data from GPlates.
         Updates the function based on plate tectonics data for a given model time.
 
-        This method fetches the plate velocities from the GPlates connector based on
-        the provided model time and applies them to the function's data at the top
-        boundary nodes.
+        This method fetches the plate velocities from the GPlates connector based on the
+        provided model time and applies them to the function's data at the top boundary
+        nodes.
 
         Args:
-            ndtime (float): The model time for which to update the plate
-                velocities. This should be non-dimensionalised time.
+            ndtime: A float specifying the model time for which to update the plate
+                    velocities. This should be non-dimensionalised time.
         """
 
         # Print ndtime translated to geological age
@@ -57,27 +57,35 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
     """Extends `firedrake.Function` to incorporate velocities calculated by
     Gplates, coming from plate tectonics reconstion.
 
-    `GplatesVelocityFunction` is designed to associate a Firedrake function with a GPlates
-    connector, allowing the integration of plate tectonics reconstructions. This is particularly
-    useful when setting "top" boundary condition for the Stokes systems when performing
-    data assimilation (sequential or adjoint).
+    `GplatesVelocityFunction` is designed to associate a Firedrake function with a
+    GPlates connector, allowing the integration of plate tectonics reconstructions. This
+    is particularly useful when setting "top" boundary condition for the Stokes systems
+    when performing data assimilation (sequential or adjoint).
 
     Attributes:
-        dbc (firedrake.DirichletBC): A Dirichlet boundary condition that applies the function
-            only to the top boundary.
-        boundary_coords (numpy.ndarray): The coordinates of the function located at the
-            "top" boundary, normalised, so that it is meaningful for pygplates.
-        gplates_connector: The GPlates connector instance used for fetching plate
-            tectonics data.
+        dbc:
+          A Dirichlet boundary condition that applies the function only to the top
+          boundary.
+        boundary_coords:
+          A NumPy array storing the coordinates of the function located at the "top"
+          boundary. Coordinates are normalised for compatibility with PyGPlates.
+        gplates_connector:
+          The GPlates connector instance used for fetching plate tectonics data.
 
     Args:
-        function_space: The function space on which the GplatesVelocityFunction is defined.
-        gplates_connector: An instance of a pyGplatesConnector, used to integrate
-            GPlates functionality or data. See Documentation for pyGplatesConnector.
-        top_boundary_marker (defaults to "top"): marker for the top boundary.
-        val (optional): Initial values for the function. Defaults to None.
-        name (str, optional): Name for the function. Defaults to None.
-        dtype (data type, optional): Data type for the function. Defaults to ScalarType.
+        function_space:
+          The function space on which the GplatesVelocityFunction is defined.
+        gplates_connector:
+          An instance of a pyGplatesConnector, used to integrate GPlates functionality
+          or data. See Documentation for pyGplatesConnector.
+        top_boundary_marker:
+          Marker for the top boundary; defaults to "top".
+        val:
+          Optional initial values for the function. Defaults to None.
+        name (str, optional):
+          Optional string specifying the function's name. Defaults to None.
+        dtype:
+          Optional data type for the function. Defaults to ScalarType.
 
     Methods:
         update_plate_reconstruction(ndtime):
@@ -87,9 +95,9 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
             **Note** model time is non-dimensionalised
 
     Examples:
-        >>> gplates_function = GplatesVelocityFunction(V,
-        ...                                    gplates_connector=pl_rec_model,
-        ...                                    name="GplateVelocity")
+        >>> gplates_function = GplatesVelocityFunction(
+        ...     V, gplates_connector=pl_rec_model, name="GplateVelocity"
+        ... )
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
     """
 
@@ -102,14 +110,15 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         function_space,
         *args,
         gplates_connector=None,
-        top_boundary_marker="top",
+        top_boundary_marker: int | str = "top",
         **kwargs,
     ):
         # Initialize as a Firedrake Function
         super().__init__(function_space, *args, **kwargs)
 
-        # Cache all the necessary information that will be used to assign surface velocities
-        # the marker for surface boundary. This is typically "top" in extruded mesh.
+        # Cache all the necessary information that will be used to assign surface
+        # velocities the marker for surface boundary. This is typically "top" in
+        # extruded mesh.
         self.top_boundary_marker = top_boundary_marker
         # establishing the DirichletBC that will be used to find surface nodes
         self.dbc = fd.DirichletBC(
@@ -162,29 +171,41 @@ class pyGplatesConnector(object):
         nseeds=1e5,
         nneighbours=4,
     ):
-        """An interface to pygplates, used for updating top Dirichlet boundary conditions
-        using plate tectonic reconstructions.
+        """An interface to PyGPlates, used for updating top Dirichlet boundary
+        conditions using plate tectonic reconstructions.
 
-        This class provides functionality to assign plate velocities at different geological
-        ages to the boundary conditions specified with dbc. Due to potential challenges in
-        identifying the plate id for a given point with pygplates, especially in high-resolution
-        simulations, this interface employs a method of calculating velocities at a number
-        of equidistant points on a sphere. It then interpolates these velocities for points
-        assigned a plate id. A warning is raised for any point not assigned a plate id.
+        This class provides functionality to assign plate velocities at different
+        geological ages to the boundary conditions specified with dbc. Due to potential
+        challenges in identifying the plate id for a given point with pygplates,
+        especially in high-resolution simulations, this interface employs a method of
+        calculating velocities at a number of equidistant points on a sphere. It then
+        interpolates these velocities for points assigned a plate id. A warning is
+        raised for any point not assigned a plate id.
 
         Arguments:
-            rotation_filenames (Union[str, List[str]]): Collection of rotation file names for pygplates.
-            topology_filenames (Union[str, List[str]]): Collection of topology file names for pygplates.
-            oldest_age (float): The oldest age present in the plate reconstruction model.
-            delta_t (Optional[float]): The t window range outside which plate velocities are updated.
-            scaling_factor (Optional[float]): Scaling factor for surface velocities.
-            nseeds (Optional[int]): Number of seed points used in the Fibonacci sphere generation. Higher
-                    seed point numbers result in finer representation of boundaries in pygpaltes. Notice that
-                    the finer velocity variations will then result in more challenging Stokes solves.
-            nneighbours (Optional[int]): Number of neighboring points when interpolating velocity for each grid point. Default is 4.
+            rotation_filenames (Union[str, List[str]]):
+              Collection of rotation file names for pygplates.
+            topology_filenames (Union[str, List[str]]):
+              Collection of topology file names for pygplates.
+            oldest_age (float):
+              The oldest age present in the plate reconstruction model.
+            delta_t (Optional[float]):
+              The t window range outside which plate velocities are updated.
+            scaling_factor (Optional[float]):
+              Scaling factor for surface velocities.
+            nseeds (Optional[int]):
+              Number of seed points used in the Fibonacci sphere generation. Higher seed
+              point numbers result in finer representation of boundaries in pygpaltes.
+              Notice that the finer velocity variations will then result in more
+              challenging Stokes solves.
+            nneighbours (Optional[int]):
+              Number of neighboring points when interpolating velocity for each grid
+              point. Default is 4.
 
         Examples:
-            >>> connector = pyGplatesConnector(rotation_filenames, topology_filenames, oldest_age)
+            >>> connector = pyGplatesConnector(
+            ...     rotation_filenames, topology_filenames, oldest_age
+            ... )
             >>> connector.get_plate_velocities(ndtime=100)
         """
 
@@ -222,35 +243,41 @@ class pyGplatesConnector(object):
 
     # setting the time that we are interested in
     def get_plate_velocities(self, target_coords, ndtime):
-        """Returns plate velocities for the specified target coordinates at the top boundary of a sphere,
-        for a given non-dimensional time, by integrating plate tectonic reconstructions from pyGplates.
+        """Returns plate velocities for the specified target coordinates at the top
+        boundary of a sphere, for a given non-dimensional time, by integrating plate
+        tectonic reconstructions from pyGplates.
 
-        This method calculates new plate velocities.
-        It utilizes the cKDTree data structure for efficient nearest neighbor
-        searches to interpolate velocities onto the mesh nodes.
+        This method calculates new plate velocities. It utilizes the KDTree data
+        structure for efficient nearest neighbor searches to interpolate velocities onto
+        the mesh nodes.
 
         Args:
-            target_coords (array-like): Coordinates of the points at the top of the sphere.
-            ndtime (float): The non-dimensional time for which plate velocities are to be calculated and assigned.
-                This time is converted to geological age and used to extract relevant plate motions
-                from the pyGplates model.
+            target_coords (array-like):
+              Coordinates of the points at the top of the sphere.
+            ndtime (float):
+              The non-dimensional time for which plate velocities are to be calculated
+              and assigned. This time is converted to geological age and used to extract
+              relevant plate motions from the pyGplates model.
 
         Raises:
-            Exception: If the requested ndt ime is a negative age (in the future), indicating an issue with
-                the time conversion.
+            Exception: If the requested ndt ime is a negative age (in the future),
+                       indicating an issue with the time conversion.
 
         Notes:
-            - The method uses conversions between non-dimensionalised time and geologic age.
-            - Velocities are non-dimensionalised and scaled for the simulation before being applied.
+            - The method uses conversions between non-dimensionalised time and geologic
+              age.
+            - Velocities are non-dimensionalised and scaled for the simulation before
+              being applied.
         """
 
         # Raising an error if the user is asking for invalid time
         if self.ndtime2age(ndtime=ndtime) < 0:
             raise ValueError(
                 (
-                    "Input non-dimensionalised time corresponds to negative age (it is in the future)!"
-                    f"maximum non-dimensionalised time:"
-                    f" {self.oldest_age/(pyGplatesConnector.time_dimDmyrs2sec/self.scaling_factor)}"
+                    "Input non-dimensionalised time corresponds to negative age (it is "
+                    "in the future)!\n"
+                    f"maximum non-dimensionalised time: "
+                    f"{self.oldest_age / (pyGplatesConnector.time_dimDmyrs2sec / self.scaling_factor)}"
                 )
             )
 
@@ -260,14 +287,14 @@ class pyGplatesConnector(object):
         self.interpolated_u = self._interpolate_seeds_u(target_coords)
         return self.interpolated_u
 
-    def ndtime2age(self, ndtime):
+    def ndtime2age(self, ndtime: float) -> float:
         """Converts non-dimensionalised time to age (Myrs before present day).
 
         Args:
-            ndtime (float): The non-dimensionalised time to be converted.
+          ndtime: The non-dimensionalised time to be converted.
 
         Returns:
-            float: The converted geologic age in millions of years before present day(Ma).
+          The converted geologic age in millions of years before present day (Ma).
         """
 
         return (
@@ -275,32 +302,34 @@ class pyGplatesConnector(object):
             - float(ndtime) * pyGplatesConnector.time_dimDmyrs2sec / self.scaling_factor
         )
 
-    def age2ndtime(self, age):
+    def age2ndtime(self, age: float) -> float:
         """Converts geologic age (years before present day in Myrs (Ma) to non-dimensionalised time.
 
-                Args:
-                    age (float): geologic age (before present day in Myrs)
+        Args:
+          age: geologic age (before present day in Myrs)
 
-                Returns:
-        -            float: non-dimensionalised time
+        Returns:
+          non-dimensionalised time
         """
         return (self.oldest_age - age) * (
             self.scaling_factor / pyGplatesConnector.time_dimDmyrs2sec
         )
 
     # convert seeds to Gplate features
-    def _make_GPML_velocity_feature(self, coords):
+    def _make_GPML_velocity_feature(
+        self, coords: np.ndarray
+    ) -> pygplates.FeatureCollection:
         """Creates a pygplates.GPML velocity feature from specified coordinates.
 
-        This function takes a set of coordinates and converts them
-        into a GPML velocity feature, at those points.
+        This function takes a set of coordinates and converts them into a GPML velocity
+        feature, at those points.
 
         Args:
-            coords (numpy.ndarray): An array of coordinates (shape [# of points, 3]) representing
-                                    points on a sphere where velocities are to be calculated.
+          coords: An array of coordinates (shape [# of points, 3]) representing points
+                  on a sphere where velocities are to be calculated.
 
         Returns:
-            pygplates.FeatureCollection: A feature collection containing the velocity mesh nodes.
+          A feature collection containing the velocity mesh nodes.
         """
 
         # Add points to a multipoint geometry
@@ -324,7 +353,7 @@ class pyGplatesConnector(object):
 
         return output_feature_collection
 
-    def _interpolate_seeds_u(self, target_coords):
+    def _interpolate_seeds_u(self, target_coords: np.ndarray) -> np.ndarray:
         """Interpolates seed velocities onto target coordinates.
 
         This method generates a KD-tree of seed points with numerical values, then uses
@@ -334,10 +363,10 @@ class pyGplatesConnector(object):
         it directly assigns the seed's velocity to avoid division by zero errors.
 
         Args:
-            target_coords (numpy.ndarray): Array of target coordinates for velocity interpolation.
+          target_coords: Array of target coordinates for velocity interpolation.
 
         Returns:
-            numpy.ndarray: Interpolated velocities at the target coordinates.
+          Interpolated velocities at the target coordinates.
         """
         # calculate velocities here
         seeds_u = self._calc_velocities(
@@ -357,7 +386,7 @@ class pyGplatesConnector(object):
         non_nan_values = ~np.isnan(seeds_u[:, 0])
 
         # generate a KD-tree of the seeds points that have a numerical value
-        tree = cKDTree(data=self.seeds[non_nan_values, :], leafsize=16)
+        tree = KDTree(data=self.seeds[non_nan_values, :], leafsize=16)
 
         # find the neighboring points
         dists, idx = tree.query(x=target_coords, k=self.nneighbours)
@@ -384,45 +413,61 @@ class pyGplatesConnector(object):
         return res_u
 
     def _calc_velocities(
-        self, velocity_domain_features, topology_features, rotation_model, age, delta_t
-    ):
-        """Calculates velocity vectors for domain points at a specific geological age (Myrs before present day).
+        self,
+        velocity_domain_features,
+        topology_features,
+        rotation_model,
+        age: float,
+        delta_t: float,
+    ) -> list:
+        """Calculates velocity vectors for domain points at a specific geological age
+        (Myrs before present day).
 
-        This method calculates the velocities for all points in the velocity domain
-        at the specified geological age, using pyGplates to account for tectonic plate
+        This method calculates the velocities for all points in the velocity domain at
+        the specified geological age, using pyGplates to account for tectonic plate
         motions. It utilizes a plate partitioner to determine the tectonic plate each
-        point belongs to and computes the velocity based on the rotation model and
-        the change over the specified time interval.
+        point belongs to and computes the velocity based on the rotation model and the
+        change over the specified time interval.
 
         Args:
-            velocity_domain_features: Domain features representing the points at which velocities are to be calculated.
-            topology_features: Topological features of tectonic plates used in the partitioning.
-            rotation_model: The rotation model defining plate movements over ages.
-            age (float): The geological age at which velocities are to be calculated.
-            delta_t (float): The time interval over which velocity is calculated.
+          velocity_domain_features:
+            Domain features representing the points at which velocities are to be
+            calculated.
+          topology_features:
+            Topological features of tectonic plates used in the partitioning.
+          rotation_model:
+            The rotation model defining plate movements over ages.
+          age:
+            The geological age at which velocities are to be calculated.
+          delta_t:
+            The time interval over which velocity is calculated.
 
         Returns:
             list of pygplates.Vector3D: Velocity vectors for all domain points.
 
         Warns:
-            RuntimeWarning: If no plate ID is found for a given point, indicating an issue with the reconstruction model.
+            RuntimeWarning: If no plate ID is found for a given point, indicating an
+                            issue with the reconstruction model.
         """
-        # All domain points and associated (magnitude, azimuth, inclination) velocities for the current age.
+        # All domain points and associated (magnitude, azimuth, inclination) velocities
+        # for the current age.
         all_domain_points = []
         all_velocities = []
 
-        # Gplates works particularly with rounded ages in Myrs and does not work well with ages between
+        # Gplates works particularly with rounded ages in Myrs and does not work well
+        # with ages between
         age_rounded = round(age, 0)
 
-        # Partition our velocity domain features into our topological plate polygons at the current 'age'.
+        # Partition our velocity domain features into our topological plate polygons at
+        # the current 'age'.
         # Note: pygplates can only deal with rounded ages in million years
         plate_partitioner = pygplates.PlatePartitioner(
             topology_features, rotation_model, age_rounded
         )
 
         for velocity_domain_feature in velocity_domain_features:
-            # A velocity domain feature usually has a single geometry but we'll assume it can be any number.
-            # Iterate over them all.
+            # A velocity domain feature usually has a single geometry but we will assume
+            # it can be any number. Iterate over them all.
             for velocity_domain_geometry in velocity_domain_feature.get_geometries():
                 for velocity_domain_point in velocity_domain_geometry.get_points():
                     all_domain_points.append(velocity_domain_point)
@@ -431,18 +476,21 @@ class pyGplatesConnector(object):
                         velocity_domain_point
                     )
                     if partitioning_plate:
-                        # We need the newly assigned plate ID to get the equivalent stage rotation of that tectonic plate.
+                        # We need the newly assigned plate ID to get the equivalent
+                        # stage rotation of that tectonic plate.
                         partitioning_plate_id = partitioning_plate.get_feature().get_reconstruction_plate_id()
 
-                        # Get the stage rotation of partitioning plate from 'age + delta_t' to 'age'.
-                        # Note: pygplates can only deal with rounded ages in million years
+                        # Get the stage rotation of partitioning plate from
+                        # 'age + delta_t' to 'age'.
+                        # Note: PyGPlates can only deal with rounded ages in million years
                         equivalent_stage_rotation = rotation_model.get_rotation(
                             age_rounded, partitioning_plate_id, age_rounded + delta_t
                         )
 
-                        # Calculate velocity at the velocity domain point.
-                        # This is from 'age + delta_t' to 'age' on the partitioning plate.
-                        # NB: velocity unit is fixed to cm/yr, but we convert it to m/yr and further on non-dimensionalise it later.
+                        # Calculate velocity at the velocity domain point. This is from
+                        # 'age + delta_t' to 'age' on the partitioning plate.
+                        # NB: velocity unit is fixed to cm/yr, but we convert it to m/yr
+                        # and further on non-dimensionalise it later.
                         velocity_vectors = pygplates.calculate_velocities(
                             [velocity_domain_point],
                             equivalent_stage_rotation,
@@ -465,35 +513,35 @@ class pyGplatesConnector(object):
 
         return all_velocities
 
-    def _fibonacci_sphere(self, samples):
+    def _fibonacci_sphere(self, samples: int) -> np.ndarray:
         """Generates points on a sphere using the Fibonacci sphere algorithm, which
         distributes points approximately evenly over the surface of a sphere.
 
         This method calculates coordinates for each point using the golden angle,
-        ensuring that each point is equidistant from its neighbors. The algorithm
-        is particularly useful for creating evenly spaced points on a sphere's
-        surface without clustering at the poles, a common issue in other spherical
-        point distribution methods.
+        ensuring that each point is equidistant from its neighbors. The algorithm is
+        particularly useful for creating evenly spaced points on a sphere's surface
+        without clustering at the poles, a common issue in other spherical point
+        distribution methods.
 
         Args:
-            samples (int): The number of points to generate on the sphere's surface.
+          samples: The number of points to generate on the sphere's surface.
 
         Returns:
-            numpy.ndarray: A 2D array of shape (samples, 3), where each row
-                           contains the [x, y, z] coordinates of a point on the
-                           sphere.
+          A 2D array of shape (samples, 3), where each row contains the [x, y, z]
+          coordinates of a point on the sphere.
 
         Example:
-            >>> sphere = _fibonacci_sphere(100)
-            >>> print(sphere.shape)
-            (100, 3)
+          >>> sphere = _fibonacci_sphere(100)
+          >>> print(sphere.shape)
+          (100, 3)
 
         Note:
-            We use this method for generating seed points that can be interpolated onto our mesh
+          We use this method for generating seed points that can be interpolated onto
+          our mesh.
 
         References:
-            The algorithm is based on the concept of the golden angle, derived from
-            the Fibonacci sequence and the golden ratio.
+          The algorithm is based on the concept of the golden angle, derived from the
+          Fibonacci sequence and the golden ratio.
         """
 
         phi = np.pi * (3.0 - np.sqrt(5.0))  # golden angle in radians

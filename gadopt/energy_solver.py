@@ -1,8 +1,8 @@
-r"""This module provides a minimal solver for generic transport equations, which may
-include advection, diffusion, sink, and source terms, and a fine-tuned solver class for
-the energy conservation equation. Users instantiate the `GenericTransportSolver` or
-`EnergySolver` classes by providing the appropriate documented parameters and call the
-`solve` method to request a solver update.
+r"""This module provides a minimal solver, independent of any approximation, for generic
+transport equations, which may include advection, diffusion, sink, and source terms, and
+a fine-tuned solver class for the energy conservation equation. Users instantiate the
+`GenericTransportSolver` or `EnergySolver` classes by providing the appropriate
+documented parameters and call the `solve` method to request a solver update.
 
 """
 
@@ -77,7 +77,7 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 
     Note: The solution field is updated in place.
 
-    Arguments:
+    Args:
       solution:
         Firedrake function for the field of interest
       delta_t:
@@ -262,7 +262,7 @@ class GenericTransportSolver(GenericTransportBase):
 
     Note: The solution field is updated in place.
 
-    Arguments:
+    Args:
       terms:
         List of equation terms (refer to terms_mapping)
       solution:
@@ -315,7 +315,7 @@ class EnergySolver(GenericTransportBase):
 
     Note: The solution field is updated in place.
 
-    Arguments:
+    Args:
       solution:
         Firedrake function for temperature
       u:
