@@ -14,7 +14,7 @@ jobs:
           python-version: '3.10'
       - name: Install linter
         run: |
-          python3 -m pip install flake8 pylint
+          python3 -m pip install ruff
       - name: Lint
         run: |
           make lint
