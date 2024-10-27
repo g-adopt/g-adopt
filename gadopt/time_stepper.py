@@ -155,14 +155,9 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         solution: fd.Function,
         dt: fd.Constant | float,
         /,
-        *,
-        solution_old: fd.Function | None = None,
-        solver_parameters: dict[str, str | Number] = {},
-        strong_bcs: list[fd.DirichletBC] = [],
+        **kwargs,
     ) -> None:
-        super(ERKGeneric, self).__init__(
-            equation, solution, dt, solution_old, solver_parameters, strong_bcs
-        )
+        super(ERKGeneric, self).__init__(equation, solution, dt, **kwargs)
 
         self._initialised = False
 
@@ -268,14 +263,9 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         solution: fd.Function,
         dt: fd.Constant | float,
         /,
-        *,
-        solution_old: fd.Function | None = None,
-        solver_parameters: dict[str, str | Number] = {},
-        strong_bcs: list[fd.DirichletBC] = [],
+        **kwargs,
     ) -> None:
-        super(DIRKGeneric, self).__init__(
-            equation, solution, dt, solution_old, solver_parameters, strong_bcs
-        )
+        super(DIRKGeneric, self).__init__(equation, solution, dt, **kwargs)
 
         self.solver_parameters.setdefault("snes_type", "newtonls")
         self._initialised = False
