@@ -50,9 +50,9 @@ dt = 0.01
 terms = ["advection", "diffusion"]
 eq_attrs = {"diffusivity": kappa, "u": u}
 # strongly applied dirichlet bcs on top and bottom
-q_left = conditional(y < 0.2, 0.0, 1.0)
-q_bottom = 0
-bcs = {3: {'T': q_bottom}, 1: {'T': q_left}}
+g_left = conditional(y < 0.2, 0.0, 1.0)
+g_bottom = 0
+bcs = {3: {"g": g_bottom}, 1: {"g": g_left}}
 adv_diff_solver = GenericTransportSolver(
     terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_diffusivity=kappa
 )

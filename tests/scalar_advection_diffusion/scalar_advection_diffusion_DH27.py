@@ -59,10 +59,10 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     dt = 0.01
 
     # Set up boundary conditions
-    q_left = 0.0
-    q_right = 0.0
+    g_left = 0.0
+    g_right = 0.0
     # 'T' sets strong dirichlet boundary conditions for G-ADOPT's energy solver
-    bcs = {1: {'T': q_left}, 2: {'T': q_right}}
+    bcs = {1: {"g": g_left}, 2: {"g": g_right}}
 
     # Use G-ADOPT's GenericTransportSolver to advect the tracer. The system is
     # considered non-dimensional and controlled only by the thermal diffusivity and heat

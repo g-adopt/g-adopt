@@ -141,7 +141,7 @@ class GenericTransportBase(abc.ABC):
             weak_bc = {}
 
             for bc_type, value in bc.items():
-                if bc_type == "T":
+                if bc_type == self.strong_bcs_tag:
                     if self.continuous_solution:
                         strong_bc = DirichletBC(self.solution_space, value, bc_id)
                         self.strong_bcs.append(strong_bc)
@@ -275,6 +275,8 @@ class GenericTransportSolver(GenericTransportBase):
 
     """
 
+    strong_bcs_tag = "g"
+
     def __init__(
         self,
         terms: str | list[str],
@@ -327,6 +329,8 @@ class EnergySolver(GenericTransportBase):
         corresponding diffusivity
 
     """
+
+    strong_bcs_tag = "T"
 
     def __init__(
         self,
