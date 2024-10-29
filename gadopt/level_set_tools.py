@@ -67,23 +67,23 @@ class LevelSetSolver:
 
     Attributes:
         mesh:
-          The UFL mesh where values of the level set function exist.
-        level_set:
-          The Firedrake function for the level set.
+          The Firedrake mesh of the simulation
+        solution:
+          The Firedrake function for the level set
         func_space_lsgp:
-          The UFL function space for the projected level-set gradient.
+          The Firedrake function space for the projected level-set gradient
         ls_grad_proj:
-          The Firedrake function for the projected level-set gradient.
+          The Firedrake function for the projected level-set gradient
         proj_solver:
-          A Firedrake LinearVariationalSolver to project the level-set gradient.
+          A Firedrake LinearVariationalSolver to project the level-set gradient
         reini_params:
-          A dictionary containing parameters used in the reinitialisation approach.
+          A dictionary containing parameters used in the reinitialisation approach
         ls_solver:
-          The G-ADOPT timestepper object for the advection equation.
+          The G-ADOPT timestepper object for the advection equation
         reini_ts:
-          The G-ADOPT timestepper object for the reinitialisation equation.
+          The G-ADOPT timestepper object for the reinitialisation equation
         subcycles:
-          An integer specifying the number of advection solves to perform.
+          An integer specifying the number of advection solves to perform
     """
 
     def __init__(
@@ -102,24 +102,24 @@ class LevelSetSolver:
 
         Args:
             level_set:
-              The Firedrake function for the level set.
+              The Firedrake function for the level set
             velocity:
-              The UFL expression for the velocity.
+              The UFL expression for the velocity
             tstep:
-              The Firedrake function over the Real space for the simulation time step.
+              The Firedrake function over the Real space for the simulation time step
             tstep_alg:
-              The class for the timestepping algorithm used in the advection solver.
+              The class for the timestepping algorithm used in the advection solver
             subcycles:
-              An integer specifying the number of advection solves to perform.
+              An integer specifying the number of advection solves to perform
             epsilon:
-              A UFL constant denoting the thickness of the hyperbolic tangent profile.
+              A UFL constant denoting the thickness of the hyperbolic tangent profile
             reini_params:
-              A dictionary containing parameters used in the reinitialisation approach.
+              A dictionary containing parameters used in the reinitialisation approach
             bcs:
-              Dictionary of identifier-value pairs specifying boundary conditions
+              Dictionary specifying boundary conditions (identifier, type, and value)
             solver_params:
               A dictionary containing solver parameters used in the advection and
-              reinitialisation approaches.
+              reinitialisation approaches
         """
         self.solution = level_set
         self.u = velocity
@@ -263,14 +263,14 @@ def material_field_recursive(
 
     Args:
         level_set:
-          A Firedrake function for the level set (or a list of these).
+          A Firedrake function for the level set (or a list of these)
         field_values:
-          A list of physical property values relevant for each material.
+          A list of physical property values relevant for each material
         interface:
-          A string specifying how property transitions between materials are calculated.
+          A string specifying how property transitions between materials are calculated
 
     Returns:
-        A UFL expression representing the physical property throughout the domain.
+        A UFL expression representing the physical property throughout the domain
 
     """
     ls = fd.max_value(fd.min_value(level_set.pop(), 1), 0)
@@ -321,14 +321,14 @@ def material_field(
 
     Args:
         level_set:
-          A Firedrake function for the level set (or a list of these).
+          A Firedrake function for the level set (or a list of these)
         field_values:
-          A list of physical property values relevant for each material.
+          A list of physical property values relevant for each material
         interface:
-          A string specifying how property transitions between materials are calculated.
+          A string specifying how property transitions between materials are calculated
 
     Returns:
-        A UFL expression representing the physical property throughout the domain.
+        A UFL expression representing the physical property throughout the domain
 
     Raises:
         ValueError: Incorrect interface strategy supplied.
@@ -352,15 +352,15 @@ def entrainment(
 
     Args:
         level_set:
-          A Firedrake function for the level set field.
+          A Firedrake function for the level set field
         material_area:
-          An integer or a float representing the total area occupied by a material.
+          An integer or a float representing the total area occupied by a material
         entrainment_height:
           An integer or a float representing the height above which the entrainment
-          diagnostic is determined.
+          diagnostic is determined
 
     Returns:
-        A float corresponding to the calculated entrainment diagnostic.
+        A float corresponding to the calculated entrainment diagnostic
     """
     mesh_coords = fd.SpatialCoordinate(level_set.function_space().mesh())
     target_region = mesh_coords[1] >= entrainment_height
@@ -375,22 +375,20 @@ def entrainment(
 def min_max_height(
     level_set: fd.Function, epsilon: fd.Constant, side: int, mode: str
 ) -> float:
-    """Calculates the maximum or minimum height of the level set.
-
-    Determines the location.
+    """Calculates the maximum or minimum height of a material interface.
 
     Args:
         level_set:
-          A Firedrake function for the level set field.
+          A Firedrake function for the level-set field
         epsilon:
-          A Firedrake constant for the thickness of the hyperbolic tangent profile.
+          A Firedrake constant for the thickness of the hyperbolic tangent profile
         side:
-          An integer indicating the level set side making up the geometric object.
+          An integer indicating the level-set value making up the geometric object
         mode:
-          A string indicating whether the maximum or minimum height is sought.
+          A string indicating whether the maximum or minimum height is sought
 
     Returns:
-        A float corresponding to the level set maximum or minimum height.
+        A float corresponding to the level set maximum or minimum height
     """
 
     match side:

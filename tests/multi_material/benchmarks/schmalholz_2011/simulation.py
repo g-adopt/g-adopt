@@ -25,8 +25,8 @@ def generate_mesh(mesh_path):
     line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
     gmsh.model.geo.extrude(
-        [(1, line_1)], mesh_fine_layer_min_x, 0, 0, numElements=[21], recombine=True
-    )  # Horizontal resolution: 20 km
+        [(1, line_1)], mesh_fine_layer_min_x, 0, 0, numElements=[14], recombine=True
+    )  # Horizontal resolution: 30 km
 
     num_layers = int(mesh_fine_layer_width / mesh_fine_layer_hor_res)
     gmsh.model.geo.extrude(
@@ -43,9 +43,9 @@ def generate_mesh(mesh_path):
         domain_dims[0] - mesh_fine_layer_min_x - mesh_fine_layer_width,
         0,
         0,
-        numElements=[21],
+        numElements=[14],
         recombine=True,
-    )  # Horizontal resolution: 20 km
+    )  # Horizontal resolution: 30 km
 
     gmsh.model.geo.synchronize()
 
@@ -173,10 +173,10 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (1e6, 6.6e5)
 mesh_gen = "gmsh"
-mesh_vert_res = 1.5e4
+mesh_vert_res = 1e4
 mesh_fine_layer_min_x = 4.2e5
 mesh_fine_layer_width = 1.6e5
-mesh_fine_layer_hor_res = 8e3
+mesh_fine_layer_hor_res = 4e3
 
 # The following two lists must be ordered such that, unpacking from the end, each
 # pair of arguments enables initialising a level set whose 0-contour corresponds to

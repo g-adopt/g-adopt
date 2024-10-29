@@ -300,7 +300,7 @@ while True:
 # restart the simulation, if required.
 
 # +
-output_file.write(*z.subfunctions, psi, time=time_now)
+output_file.write(*z.subfunctions, T, psi, time=time_now)
 plog.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
