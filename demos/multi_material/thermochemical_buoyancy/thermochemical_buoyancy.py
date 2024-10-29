@@ -24,7 +24,7 @@
 # development of adaptive mesh refinement in Firedrake is complete. We describe below
 # the current implementation of this problem in G-ADOPT.
 
-# As with all examples, the first step is to import the `gadopt` module, which
+# As with all examples, the first step is to import the `gadopt` package, which also
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
@@ -49,9 +49,8 @@ point_2 = gmsh.model.geo.addPoint(lx, 0, 0, mesh_hor_res)
 
 line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
-gmsh.model.geo.extrude(
-    [(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True
-)  # Vertical resolution: 5e-3
+# Vertical resolution: 5e-3
+gmsh.model.geo.extrude([(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True)
 
 gmsh.model.geo.extrude(
     [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 20, 0, numElements=[15], recombine=True
@@ -81,8 +80,7 @@ gmsh.finalize()
 
 # +
 mesh = Mesh(mesh_file)  # Load the GMSH mesh using Firedrake
-mesh.cartesian = True
-
+mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -93,9 +91,9 @@ K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinu
 R = FunctionSpace(mesh, "R", 0)  # Real space for time step
 
 z = Function(Z)  # A field over the mixed function space Z
-u, p = split(z)  # Symbolic UFL expressions for velocity and pressure
-z.subfunctions[0].rename("Velocity")  # Associated Firedrake velocity function
-z.subfunctions[1].rename("Pressure")  # Associated Firedrake pressure function
+u, p = split(z)  # Indexed expressions for velocity and pressure
+z.subfunctions[0].rename("Velocity")  # Associated Firedrake function for velocity
+z.subfunctions[1].rename("Pressure")  # Associated Firedrake function for pressure
 T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
@@ -126,15 +124,10 @@ interface_y = straight_line(interface_x, *isd_params)
 line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
 sl.prepare(line_string)
 
-# Extract node coordinates
-node_coords_x, node_coords_y = node_coordinates(psi)
 # Determine to which material nodes belong and calculate distance to interface
 node_relation_to_curve = [
-    (
-        node_coord_y > straight_line(node_coord_x, *isd_params),
-        line_string.distance(sl.Point(node_coord_x, node_coord_y)),
-    )
-    for node_coord_x, node_coord_y in zip(node_coords_x, node_coords_y)
+    (y > straight_line(x, *isd_params), line_string.distance(sl.Point(x, y)))
+    for x, y in node_coordinates(psi)
 ]
 
 # Define the signed-distance function and overwrite its value array
@@ -151,29 +144,23 @@ epsilon = Constant(min_mesh_edge_length / 4)
 psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # -
 
-# We next define materials present in the simulation using the `Material` class. Here,
-# the problem is non-dimensionalised and can be described by the product of the
-# expressions for the Rayleigh and buoyancy numbers, RaB, which is also referred to as
-# compositional Rayleigh number. Therefore, we provide a value for thermal and
-# compositional Rayleigh numbers to define our approximation. Material fields, such as
-# RaB, are created using the `field_interface` function, which generates a unique field
-# over the numerical domain based on the level-set field(s) and values or expressions
-# associated with each material. At the interface between two materials, the transition
-# between values or expressions can be represented as sharp or diffuse, with the latter
-# using averaging schemes, such as arithmetic, geometric, and harmonic means.
+# We next define the material fields and instantiate the approximation. Here, the system
+# of equations is non-dimensional and includes compositional and thermal buoyancy terms
+# under the Boussinesq approximation. Moreover, physical parameters are constant through
+# space apart from density. As a result, the system is fully defined by the values of
+# the thermal and compositional Rayleigh numbers. We use the `material_field` function
+# to define the compositional Rayleigh number throughout the domain (including the shape
+# of the material interface transition). Both non-dimensional numbers are provided to
+# our approximation, alongside other parameters already mentioned.
 
 # +
-dense_material = Material(RaB=4.5e5)
-reference_material = Material(RaB=0)
-materials = [dense_material, reference_material]
+Ra = 3e5
 
-Ra = 3e5  # Thermal Rayleigh number
+Ra_c_reference = 0
+Ra_c_dense = 4.5e5
+Ra_c = material_field(psi, [Ra_c_dense, Ra_c_reference], interface="sharp")
 
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
-
-approximation = BoussinesqApproximation(Ra, RaB=RaB)
+approximation = BoussinesqApproximation(Ra, Ra_c=Ra_c)
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -249,9 +236,6 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 # Here, we set up the variational problem for the energy, Stokes, and level-set
 # systems. The Stokes and energy systems depend on the approximation defined above,
 # and the level-set system includes both advection and reinitialisation components.
-# Subcycling is available for level-set advection and is mainly useful when the
-# problem at hand involves multiple CFL conditions, with the CFL for level-set
-# advection being the most restrictive.
 
 # +
 energy_solver = EnergySolver(
@@ -267,10 +251,7 @@ stokes_solver = StokesSolver(
     transpose_nullspace=Z_nullspace,
 )
 
-subcycles = 1  # Number of advection solves to perform within one time step
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
-# Increase the reinitialisation time step to make up for the coarseness of the mesh
-level_set_solver.reini_params["tstep"] *= 20
+level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -283,7 +264,7 @@ time_end = 0.02  # Will be changed to 0.05 once mesh adaptivity is available
 while True:
     # Write output
     if time_now >= output_counter * output_frequency:
-        output_file.write(*z.subfunctions, T, psi)
+        output_file.write(*z.subfunctions, T, psi, time=time_now)
         output_counter += 1
 
     # Update timestep
@@ -314,11 +295,12 @@ while True:
         break
 # -
 
-# At the end of the simulation, once a steady-state has been achieved, we close our
-# logging file and checkpoint solution fields to disk. These can later be used to
+# At the end of the simulation, we write the final state for visualisation, close our
+# logging file, and checkpoint solution fields to disk. These can later be used to
 # restart the simulation, if required.
 
 # +
+output_file.write(*z.subfunctions, psi, time=time_now)
 plog.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
@@ -328,7 +310,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_function(psi, name="Level set")
 # -
 
-# We can visualise the final temperature and level set fields using Firedrake's
+# We can visualise the final temperature and level-set fields using Firedrake's
 # built-in plotting functionality.
 
 # + tags=["active-ipynb"]

@@ -441,14 +441,12 @@ def absv(u):
     return as_vector([abs(ui) for ui in u])
 
 
-def node_coordinates(function):
+def node_coordinates(function: Function) -> Function:
     """Extract mesh coordinates and interpolate them onto the relevant function space"""
     func_space = function.function_space()
-    mesh_coords = SpatialCoordinate(func_space.mesh())
+    vec_space = VectorFunctionSpace(func_space.ufl_domain(), func_space.ufl_element())
 
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]
+    return Function(vec_space).interpolate(SpatialCoordinate(function)).dat.data
 
 
 def interpolate_1d_profile(function: Function, one_d_filename: str):
