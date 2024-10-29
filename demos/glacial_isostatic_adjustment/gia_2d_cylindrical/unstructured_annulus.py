@@ -71,7 +71,7 @@ gmsh.model.mesh.field.setNumber(2, "InField", 1)
 gmsh.model.mesh.field.setNumber(2, "SizeMin", lc / 2.5)
 gmsh.model.mesh.field.setNumber(2, "SizeMax", lc)
 gmsh.model.mesh.field.setNumber(2, "DistMin", 400e3)
-gmsh.model.mesh.field.setNumber(2, "DistMax", 1500e3)
+gmsh.model.mesh.field.setNumber(2, "DistMax", 2000e3)
 
 
 gmsh.model.mesh.field.setAsBackgroundMesh(2)
