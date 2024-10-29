@@ -53,7 +53,7 @@
 # throughout the remainder of the simulation. We describe below how to implement this
 # problem using G-ADOPT.
 
-# As with all examples, the first step is to import the `gadopt` package, which
+# As with all examples, the first step is to import the `gadopt` package, which also
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
@@ -66,7 +66,7 @@ nx, ny = 128, 128  # Number of cells in x and y directions
 lx, ly = 0.9142, 1  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
-mesh.cartesian = True
+mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -76,9 +76,9 @@ K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinu
 R = FunctionSpace(mesh, "R", 0)  # Real space for time step
 
 z = Function(Z)  # A field over the mixed function space Z
-u, p = split(z)  # Symbolic UFL expressions for velocity and pressure
-z.subfunctions[0].rename("Velocity")  # Associated Firedrake velocity function
-z.subfunctions[1].rename("Pressure")  # Associated Firedrake pressure function
+u, p = split(z)  # Indexed expressions for velocity and pressure
+z.subfunctions[0].rename("Velocity")  # Associated Firedrake function for velocity
+z.subfunctions[1].rename("Pressure")  # Associated Firedrake function for pressure
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
@@ -140,7 +140,6 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # +
 Ra_c_buoyant = 0
 Ra_c_dense = 1
-# Material fields defined based on each material value and location
 Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="sharp")
 
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
@@ -152,7 +151,7 @@ approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c}
 # output frequency (in time units).
 
 time_now = 0  # Initial time
-delta_t = Function(R).assign(1)  # Initial time step
+delta_t = Function(R).assign(1.0)  # Initial time step
 output_frequency = 10  # Frequency (based on simulation time) at which to output
 t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
@@ -164,7 +163,7 @@ t_adapt = TimestepAdaptor(
 Z_nullspace = create_stokes_nullspace(Z)
 
 # Boundary conditions are specified next: no slip at the top and bottom and free slip
-# on the left and ride sides. No boundary conditions are required for level set, as the
+# on the left and right sides. No boundary conditions are required for level set, as the
 # numerical domain is closed.
 
 stokes_bcs = {
@@ -193,9 +192,7 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # Here, we set up the variational problem for the Stokes and level-set systems. The
 # former depends on the approximation defined above, and the latter includes both
-# advection and reinitialisation components. Subcycling is available for level-set
-# advection and is mainly useful when the problem at hand involves multiple CFL
-# conditions, with the CFL for level-set advection being the most restrictive.
+# advection and reinitialisation components.
 
 # +
 stokes_solver = StokesSolver(

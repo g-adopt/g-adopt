@@ -24,7 +24,7 @@
 # development of adaptive mesh refinement in Firedrake is complete. We describe below
 # the current implementation of this problem in G-ADOPT.
 
-# As with all examples, the first step is to import the `gadopt` module, which
+# As with all examples, the first step is to import the `gadopt` package, which also
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
@@ -80,8 +80,7 @@ gmsh.finalize()
 
 # +
 mesh = Mesh(mesh_file)  # Load the GMSH mesh using Firedrake
-mesh.cartesian = True
-
+mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -92,9 +91,9 @@ K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinu
 R = FunctionSpace(mesh, "R", 0)  # Real space for time step
 
 z = Function(Z)  # A field over the mixed function space Z
-u, p = split(z)  # Symbolic UFL expressions for velocity and pressure
-z.subfunctions[0].rename("Velocity")  # Associated Firedrake velocity function
-z.subfunctions[1].rename("Pressure")  # Associated Firedrake pressure function
+u, p = split(z)  # Indexed expressions for velocity and pressure
+z.subfunctions[0].rename("Velocity")  # Associated Firedrake function for velocity
+z.subfunctions[1].rename("Pressure")  # Associated Firedrake function for pressure
 T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
@@ -127,7 +126,7 @@ sl.prepare(line_string)
 
 # Determine to which material nodes belong and calculate distance to interface
 node_relation_to_curve = [
-    (y > cosine_curve(x, *isd_params), line_string.distance(sl.Point(x, y)))
+    (y > straight_line(x, *isd_params), line_string.distance(sl.Point(x, y)))
     for x, y in node_coordinates(psi)
 ]
 
@@ -157,10 +156,7 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # +
 Ra_c_reference = 0
 Ra_c_dense = 4.5e5
-# Material fields defined based on each material value and location
 Ra_c = material_field(psi, [Ra_c_dense, Ra_c_reference], interface="sharp")
-
-Ra = 3e5
 
 approximation = Approximation(
     "BA", dimensional=False, parameters={"Ra": Ra, "Ra_c": Ra_c}
@@ -240,9 +236,6 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 # Here, we set up the variational problem for the energy, Stokes, and level-set
 # systems. The Stokes and energy systems depend on the approximation defined above,
 # and the level-set system includes both advection and reinitialisation components.
-# Subcycling is available for level-set advection and is mainly useful when the
-# problem at hand involves multiple CFL conditions, with the CFL for level-set
-# advection being the most restrictive.
 
 # +
 energy_solver = EnergySolver(
@@ -316,7 +309,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_function(psi, name="Level set")
 # -
 
-# We can visualise the final temperature and level set fields using Firedrake's
+# We can visualise the final temperature and level-set fields using Firedrake's
 # built-in plotting functionality.
 
 # + tags=["active-ipynb"]

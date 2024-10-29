@@ -1,33 +1,35 @@
 # Idealised 2-D mantle convection problem inside an annulus
-# =====================================================================
-#
-# In this tutorial, we analyse mantle flow in a 2-D annulus domain. We define our domain by the radii
-# of the inner ($r_{\text{min}}$) and outer ($r_{\text{max}}$) boundaries. These are chosen such that
-# the non-dimensional depth of the mantle, $z = r_{\text{max}} - r_{\text{min}} = 1$, and the ratio of
-# the inner and outer radii, $f=r_{\text{min}} / r_{\text{max}} = 0.55$, thus approximating the ratio
-# between the radii of Earth's surface and core-mantle-boundary (CMB). Specifically, we set
+# =========================================================
+
+# In this tutorial, we analyse mantle flow in a 2-D annulus domain. We define our domain
+# by the radii of the inner ($r_{\text{min}}$) and outer ($r_{\text{max}}$) boundaries.
+# These are chosen such that the non-dimensional depth of the mantle,
+# $z = r_{\text{max}} - r_{\text{min}} = 1$, and the ratio of the inner and outer radii,
+# $f=r_{\text{min}} / r_{\text{max}} = 0.55$, thus approximating the ratio between the
+# radii of Earth's surface and core-mantle-boundary (CMB). Specifically, we set
 # $r_{\text{min}} = 1.208$ and $r_{\text{max}} = 2.208$.
-#
-# This example focusses on differences between incompressible isoviscous, and compressible (TALA)
-# variable viscosity simulations in a 2-D annulus. It also incorporates a DG discretisation of temperature.
-# Key differences can be summarised as follows:
+
+# This example focusses on differences between incompressible isoviscous and
+# compressible (TALA) variable viscosity simulations in a 2-D annulus. It also
+# incorporates a DG discretisation of temperature. Key differences can be summarised as
+# follows:
 # 1. Function space for temperature.
 # 2. Specification of TALA approximation and associated reference fields.
-# 3. Specification of 1-D viscosity profile from a file, and variations around this profile due to temperature.
-#
-# The example is configured at $Ra = 5e7$. Boundary conditions are free-slip at the surface and base of the domain.
-#
-#
-# The first step is to import the gadopt module, which
-# provides access to Firedrake and associated functionality.
-# We also import pyvista, which is used for plotting vtk output.
+# 3. Specification of 1-D viscosity profile from a file and variations around this
+#    profile due to temperature.
+
+# The example is configured at $Ra = 5e7$. Boundary conditions are free-slip at the
+# surface and base of the domain.
+
+# The first step is to import the gadopt module, which provides access to Firedrake and
+# associated functionality.
 
 from gadopt import *
 
 rmin, rmax, ncells, nlayers = 1.208, 2.208, 512, 128
 
-# In this example, we load the mesh from a checkpoint, although the following code was used to generate
-# the original mesh. It is included here for completeness.
+# In this example, we load the mesh from a checkpoint, although the following code was
+# used to generate the original mesh. It is included here for completeness.
 
 
 def original_mesh():
@@ -55,6 +57,8 @@ def original_mesh():
 
 with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
     mesh = f.load_mesh("firedrake_default_extruded")
+    z = f.load_function(mesh, "Stokes")  # Load velocity and pressure from checkpoint
+    T = f.load_function(mesh, "Temperature")  # Load temperature from checkpoint
 # We set the mesh `cartesian` attribute to False, which ensures that
 # the unit vector points radially, in the direction opposite to gravity.
 mesh.cartesian = False
@@ -66,7 +70,6 @@ W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
-z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
@@ -122,6 +125,7 @@ for param, data in approximation_sources.items():
 
     approximation_profiles[param] = f
 
+# We next set up and initialise auxiliary fields associated with temperature:
 Tbar = approximation_profiles["T"]
 FullT = Function(Q, name="FullTemperature").assign(T + Tbar)
 T_avg = Function(Q, name="Layer_Averaged_Temp")
@@ -160,28 +164,37 @@ t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.8, maximum_timestep=0.1, increase_tolerance=1.5
 )
 
-# With a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
-# of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e. this case incorporates a velocity nullspace,
-# as well as a pressure nullspace). These lead to null-modes (eigenvectors) for the linear system, rendering the resulting matrix singular.
-# In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at every iteration. We do that below,
-# setting up a nullspace object as we did in the previous tutorial, albeit speciying the `rotational` keyword argument to be True.
-# This removes the requirement for a user to configure these options, further simplifying the task of setting up a (valid) geodynamical simulation.
+# With a free-slip boundary condition on both boundaries, one can add an arbitrary
+# rotation of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e.
+# this case incorporates a velocity nullspace, as well as a pressure nullspace). These
+# lead to null-modes (eigenvectors) for the linear system, rendering the resulting
+# matrix singular. In preconditioned Krylov methods these null-modes must be subtracted
+# from the approximate solution at every iteration. We do that below, setting up a
+# nullspace object as we did in the previous tutorial, albeit speciying the `rotational`
+# keyword argument to be True. This removes the requirement for a user to configure
+# these options, further simplifying the task of setting up a (valid) geodynamical
+# simulation.
 
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 
-# Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative
-# solver parameters. As noted in our previous 3-D Cartesian tutorial, G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
-# for the velocity block of the Stokes system, to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
-# translational modes.
+# Given the increased computational expense (typically requiring more degrees of
+# freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative solver parameters. As
+# noted in our previous 3-D Cartesian tutorial, G-ADOPT's iterative solver setup is
+# configured to use the GAMG preconditioner for the velocity block of the Stokes system,
+# to which we must provide near-nullspace information, which, in 2-D, consists of two
+# rotational and two translational modes.
 
 Z_near_nullspace = create_stokes_nullspace(
     Z, closed=False, rotational=True, translations=[0, 1]
 )
 
-# Boundary conditions are next specified. Boundary conditions for temperature are set to $T = 0$ at the surface ($r_{\text{max}}$) and $T = 1 - adiabatic contribution$
-# at the base ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries. We incorporate these **weakly** through
-# the _Nitsche_ approximation. This illustrates a key advantage of the G-ADOPT framework: the user only specifies that the normal component
-# of velocity is zero and all required changes are handled under the hood.
+# Boundary conditions are next specified. Boundary conditions for temperature are set to
+# $T = 0$ at the surface ($r_{\text{max}}$) and $T = 1 - adiabatic contribution$ at the
+# base ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both
+# boundaries. We incorporate these **weakly** through the _Nitsche_ approximation. This
+# illustrates a key advantage of the G-ADOPT framework: the user only specifies that the
+# normal component of velocity is zero and all required changes are handled under the
+# hood.
 
 # +
 stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
@@ -190,13 +203,13 @@ stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
 temp_bcs = {bottom_id: {"T": 1.0 - 930 / 3700.0}, top_id: {"T": 0.0}}
 # -
 
-# We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation, nullspace and near-nullspace information configured above.
+# We can now setup and solve the variational problem, for both the energy and Stokes
+# equations, passing in the approximation, nullspace and near-nullspace information
+# configured above.
 
 energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
-energy_solver.solver_parameters["ksp_rtol"] = 1e-4
 
 stokes_solver = StokesSolver(
     z,
@@ -210,10 +223,6 @@ stokes_solver = StokesSolver(
     },
 )
 stokes_solver.solver_parameters["snes_rtol"] = 1e-2
-stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
-stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-3
-stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
-stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-2
 
 # We next setup our output, in VTK format.
 # We also open a file for logging and calculate our diagnostic outputs.

@@ -61,7 +61,13 @@ Note:
 
 
 class MetaPostInit(abc.ABCMeta):
-    """Calls the user-defined __post_init__ method after __init__ returns."""
+    """Calls the implemented __post_init__ method after __init__ returns.
+
+    The implemented behaviour allows any subclass __init__ method to first call its
+    parent class's __init__ through super(), then execute its own code, and finally call
+    __post_init__. The latter call is automatic and does not require any attention from
+    the developer or user.
+    """
 
     def __call__(cls, *args, **kwargs):
         class_instance = super().__call__(*args, **kwargs)
