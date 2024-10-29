@@ -60,17 +60,7 @@ Note:
 """
 
 
-class MetaPostInit(abc.ABCMeta):
-    """Calls the user-defined __post_init__ method after __init__ returns."""
-
-    def __call__(cls, *args, **kwargs):
-        class_instance = super().__call__(*args, **kwargs)
-        class_instance.__post_init__()
-
-        return class_instance
-
-
-class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
+class GenericTransportBase(abc.ABC):
     """Base class for advancing a generic transport equation in time.
 
     All combinations of advection, diffusion, sink, and source terms are handled.
@@ -137,7 +127,6 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         # Solver object is set up later to permit editing default solver options.
         self._solver_ready = False
 
-    def __post_init__(self) -> None:
         self.set_boundary_conditions()
         self.set_su_nubar()
         self.set_equation()
@@ -295,9 +284,9 @@ class GenericTransportSolver(GenericTransportBase):
         timestepper: RungeKuttaTimeIntegrator,
         **kwargs,
     ) -> None:
-        super().__init__(solution, delta_t, timestepper, **kwargs)
-
         self.terms = [terms] if isinstance(terms, str) else terms
+
+        super().__init__(solution, delta_t, timestepper, **kwargs)
 
     def set_equation(self) -> None:
         self.equation = Equation(
@@ -349,10 +338,10 @@ class EnergySolver(GenericTransportBase):
         timestepper: RungeKuttaTimeIntegrator,
         **kwargs,
     ) -> None:
-        super().__init__(solution, delta_t, timestepper, **kwargs)
-
         self.u = u
         self.approximation = approximation
+
+        super().__init__(solution, delta_t, timestepper, **kwargs)
 
         self.T_old = self.solution_old
 

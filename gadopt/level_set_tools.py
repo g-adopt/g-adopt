@@ -16,9 +16,9 @@ import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
 
 from . import scalar_equation as scalar_eq
-from .energy_solver import GenericTransportSolver
 from .equations import Equation
 from .time_stepper import eSSPRKs3p3
+from .transport_solver import GenericTransportSolver
 
 __all__ = [
     "LevelSetSolver",

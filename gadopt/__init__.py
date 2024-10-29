@@ -8,7 +8,6 @@ from .approximations import (
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
-from .energy_solver import GenericTransportSolver, EnergySolver
 from .level_set_tools import (
     LevelSetSolver,
     Material,
@@ -26,6 +25,7 @@ from .time_stepper import (
     eSSPRKs3p3,
     eSSPRKs10p3,
 )
+from .transport_solver import EnergySolver, GenericTransportSolver
 from .utility import (
     InteriorBC,
     LayerAveraging,
