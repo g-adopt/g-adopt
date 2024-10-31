@@ -81,8 +81,7 @@ X = SpatialCoordinate(mesh)
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
-# Let's initialise the viscosity by normaling by 1e23 Pas and then using log10
-viscosity_values = [2, -2, -2, -1.698970004]
+viscosity_values = [2, -2, -2, -1.698970004]  # viscosity = 1e23 * 10**viscosity_values
 # N.b. that we have modified the viscosity of the Lithosphere viscosity from
 # Spada et al 2011 because we are using coarse grid resolution
 
@@ -524,7 +523,6 @@ for timestep in range(max_timesteps+1):
 #
 #     add_ice(plotter)
 #
-#
 #     # Write end frame multiple times to give a pause before gif starts again!
 #     for j in range(10):
 #         plotter.write_frame()
@@ -539,6 +537,6 @@ for timestep in range(max_timesteps+1):
 # # Closes and finalizes movie
 # plotter.close()
 # -
-# Looking at the animation, we can see that as the weight of the ice load builds up the mantle deforms, pushing up material away from the ice load. This forebulge will eventually grow enough that it balances the weight of the ice, i.e the mantle is in isostatic isostatic equilbrium and the deformation due to the ice load stops.
+# Looking at the animation, we can see that the weight of the ice load deforms the mantle, sinking beneath the ice load and pushing up material away from the ice load. This forebulge grows through the simulation and by 10,000 years is close to isostatic equilibrium. As the ice load is applied instantaneously the highest velocity occurs within the first timestep and gradually decays as the simulation goes on, though there is still a small amount of deformation ongoing after 10,000 years. We can also clearly see that the lateral viscosity variations give rise to assymetrical displacement patterns. This is especially true near the South Pole, where the low viscosity region has enabled the isostatic relaxation to happen much faster than the surrounding regions.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
