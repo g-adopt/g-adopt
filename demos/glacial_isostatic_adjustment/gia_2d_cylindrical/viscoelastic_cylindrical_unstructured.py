@@ -1,7 +1,7 @@
 # Idealised 2-D viscoelastic loading problem in an annulus
 # =======================================================
 #
-# In this tutorial, we examine an idealised 2-D loading problem in an annulus domain. 
+# In this tutorial, we examine an idealised 2-D loading problem in an annulus domain.
 #
 # This example focusses on differences between running simulations in a 2-D annulus and 2-D Cartesian domain. These can be summarised as follows:
 # 1. The geometry of the problem - i.e. the computational mesh.
@@ -10,7 +10,7 @@
 
 # This example
 # -------------
-# Let's get started! 
+# Let's get started!
 # The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality. We also import pyvista and matplotlib, for plotting.
 
@@ -30,6 +30,7 @@ D = 2891e3  # Depth of domain in m
 mesh = Mesh("unstructured_annulus_refined_surface.msh")
 bottom_id, top_id = 1, 2
 mesh.cartesian = False
+
 # We next set up the function spaces, and specify functions to hold our solutions. As our mesh is now made up of triangles instead of quadrilaterals, the syntax for defining our finite elements changes slighty. We need to specify *Continuous Galerkin* elements, i.e. replace `Q` with `CG` instead.
 
 # +
@@ -58,7 +59,7 @@ log("Number of Incremental Displacement DOF:", V.dim())
 log("Number of Pressure DOF:", W.dim())
 log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
 
-# We can now visualise the resulting mesh. As you can see there is finer resolutation near the surface compared with the lower mantle. 
+# We can now visualise the resulting mesh. As you can see there is finer resolutation near the surface compared with the lower mantle.
 
 VTKFile("mesh.pvd").write(Function(V))
 mesh_data = pv.read("mesh/mesh_0.vtu")
@@ -80,9 +81,11 @@ X = SpatialCoordinate(mesh)
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
-viscosity_values =  [2, -2, -2, -1.698970004] #[1e25, 1e21, 1e21, 2e21]
+# Let's initialise the viscosity by normaling by 1e23 Pas and then using log10
+viscosity_values = [2, -2, -2, -1.698970004]
 # N.b. that we have modified the viscosity of the Lithosphere viscosity from
 # Spada et al 2011 because we are using coarse grid resolution
+
 
 def initialise_background_field(field, background_values, vertical_tanh_width=40e3):
     profile = background_values[0]
@@ -95,6 +98,7 @@ def initialise_background_field(field, background_values, vertical_tanh_width=40
 
     field.interpolate(profile)
 
+
 density = Function(W, name="density")
 initialise_background_field(density, density_values)
 
@@ -104,7 +108,7 @@ initialise_background_field(shear_modulus, shear_modulus_values)
 
 # -
 
-# Let's have a quick look at the density field using pyvista. We can see that the mesh is still quite coarse, but it is able to capture the layered structure. 
+# Let's have a quick look at the density field using pyvista. We can see that the mesh is still quite coarse, but it is able to capture the layered structure.
 
 # +
 # Read the PVD file
@@ -158,29 +162,29 @@ def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=
 
 
 def setup_heterogenous_viscosity(viscosity):
-        heterogenous_viscosity_field = Function(viscosity.function_space(), name='viscosity')
-        antarctica_x, antarctica_y = -2e6, -5.5e6
+    heterogenous_viscosity_field = Function(viscosity.function_space(), name='viscosity')
+    antarctica_x, antarctica_y = -2e6, -5.5e6
 
-        low_viscosity_antarctica = bivariate_gaussian(X[0], X[1], antarctica_x, antarctica_y, 1.5e6, 0.5e6, -0.4)
-        heterogenous_viscosity_field.interpolate(-3*low_viscosity_antarctica + viscosity * (1-low_viscosity_antarctica))
-        
-        llsvp1_x, llsvp1_y = 3.5e6, 0
-        llsvp1 = bivariate_gaussian(X[0], X[1], llsvp1_x, llsvp1_y, 0.75e6, 1e6, 0)
-        heterogenous_viscosity_field.interpolate(-3*llsvp1 + heterogenous_viscosity_field * (1-llsvp1))
-        
-        llsvp2_x, llsvp2_y = -3.5e6, 0
-        llsvp2 = bivariate_gaussian(X[0], X[1], llsvp2_x, llsvp2_y, 0.75e6, 1e6, 0)
-        heterogenous_viscosity_field.interpolate(-3*llsvp2 + heterogenous_viscosity_field * (1-llsvp2))
+    low_viscosity_antarctica = bivariate_gaussian(X[0], X[1], antarctica_x, antarctica_y, 1.5e6, 0.5e6, -0.4)
+    heterogenous_viscosity_field.interpolate(-3*low_viscosity_antarctica + viscosity * (1-low_viscosity_antarctica))
 
-        slab_x, slab_y = 3e6, 4.5e6
-        slab = bivariate_gaussian(X[0], X[1], slab_x, slab_y, 0.7e6, 0.35e6, 0.7)
-        heterogenous_viscosity_field.interpolate(-1*slab + heterogenous_viscosity_field * (1-slab))
+    llsvp1_x, llsvp1_y = 3.5e6, 0
+    llsvp1 = bivariate_gaussian(X[0], X[1], llsvp1_x, llsvp1_y, 0.75e6, 1e6, 0)
+    heterogenous_viscosity_field.interpolate(-3*llsvp1 + heterogenous_viscosity_field * (1-llsvp1))
 
-        high_viscosity_craton_x, high_viscosity_craton_y = 0, 6.2e6
-        high_viscosity_craton = bivariate_gaussian(X[0], X[1], high_viscosity_craton_x, high_viscosity_craton_y, 1.5e6, 0.5e6, 0.2)
-        heterogenous_viscosity_field.interpolate(-1*high_viscosity_craton + heterogenous_viscosity_field * (1-high_viscosity_craton))
+    llsvp2_x, llsvp2_y = -3.5e6, 0
+    llsvp2 = bivariate_gaussian(X[0], X[1], llsvp2_x, llsvp2_y, 0.75e6, 1e6, 0)
+    heterogenous_viscosity_field.interpolate(-3*llsvp2 + heterogenous_viscosity_field * (1-llsvp2))
 
-        return heterogenous_viscosity_field
+    slab_x, slab_y = 3e6, 4.5e6
+    slab = bivariate_gaussian(X[0], X[1], slab_x, slab_y, 0.7e6, 0.35e6, 0.7)
+    heterogenous_viscosity_field.interpolate(-1*slab + heterogenous_viscosity_field * (1-slab))
+
+    high_viscosity_craton_x, high_viscosity_craton_y = 0, 6.2e6
+    high_viscosity_craton = bivariate_gaussian(X[0], X[1], high_viscosity_craton_x, high_viscosity_craton_y, 1.5e6, 0.5e6, 0.2)
+    heterogenous_viscosity_field.interpolate(-1*high_viscosity_craton + heterogenous_viscosity_field * (1-high_viscosity_craton))
+
+    return heterogenous_viscosity_field
 
 
 normalised_viscosity = Function(W, name="Normalised viscosity")
@@ -232,7 +236,6 @@ plotter.close()
 # Now let's setup the ice load. For this tutorial we will have two synthetic ice sheets. Let's put one a larger one over the South Pole, with a total horizontal extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify things let's keep the ice load fixed in time.
 
 # +
-
 rho_ice = 931
 g = 9.8125
 
@@ -242,7 +245,7 @@ year_in_seconds = Constant(3600 * 24 * 365.25)
 # Disc ice load but with a smooth transition given by a tanh profile
 disc_halfwidth1 = (2*pi/360) * 10  # Disk half width in radians
 disc_halfwidth2 = (2*pi/360) * 20  # Disk half width in radians
-surface_dx=200*1e3
+surface_dx = 200*1e3
 ncells = 2*pi*radius_values[0] / surface_dx
 surface_resolution_radians = 2*pi / ncells
 colatitude = atan2(X[0], X[1])
@@ -256,12 +259,12 @@ ice_load = Function(W).interpolate(Constant(1)*rho_ice * g * (Hice1 * disc1 + Hi
 # -
 
 
-# Let's visualise the ice thickness using pyvista.
+# Let's visualise the ice thickness using pyvista, by plotting a ring outside our synthetic Earth.
 
 # +
 # Read the PVD file
 ice_thickness = Function(W, name="Ice thickness").interpolate(Hice1 * disc1 + Hice2 * disc2)
-zero_ice_thickness = Function(W, name="zero").assign(0) # Used for plotting later
+zero_ice_thickness = Function(W, name="zero").assign(0)  # Used for plotting later
 ice_thickness_file = VTKFile('ice.pvd').write(ice_thickness, zero_ice_thickness)
 reader = pv.get_reader("ice.pvd")
 data = reader.read()[0]  # MultiBlock mesh with only 1 block
@@ -314,7 +317,11 @@ plotter.add_mesh(
         "font_family": "arial",
     }
 )
-plotter.add_mesh(transformed_arc_data, line_width=10, cmap=ice_cmap, scalar_bar_args={
+plotter.add_mesh(
+    transformed_arc_data,
+    line_width=10,
+    cmap=ice_cmap,
+    scalar_bar_args={
         "title": 'Ice thickness (m)',
         "position_x": 0.1,
         "position_y": 0.3,
@@ -323,7 +330,8 @@ plotter.add_mesh(transformed_arc_data, line_width=10, cmap=ice_cmap, scalar_bar_
         "label_font_size": 16,
         "fmt": "%.0f",
         "font_family": "arial",
-    })
+    }
+)
 plotter.camera_position = 'xy'
 plotter.show()
 # Closes and finalizes movie
@@ -361,16 +369,10 @@ do_write = True
 #
 # The `delta_rho_fs` option accounts for the density contrast across the free surface whether there is ice or air above a particular region of the mantle.
 
-# +
 # Setup boundary conditions
-stokes_bcs = {
-            top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - rho_ice*(disc1+disc2)}},
-            bottom_id: {'un': 0}
-        }
-
-
-gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
-# -
+stokes_bcs = {top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - rho_ice*(disc1+disc2)}},
+              bottom_id: {'un': 0}
+              }
 
 
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields needed for the viscoelastic loading problem.
@@ -392,7 +394,7 @@ if do_write:
     # Create a velocity function for plotting
     velocity = Function(V, name="velocity")
     velocity.interpolate(z.subfunctions[0]/dt)
-     
+
     # Create output file
     output_file = VTKFile("output.pvd")
     output_file.write(*z.subfunctions, displacement, velocity)
@@ -403,6 +405,8 @@ plog.log_str(
 )
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
+
+gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
 # -
 
 # Now let's run the simulation! We are going to control the ice thickness using the `ramp` parameter. At each step we call `solve` to calculate the incremental displacement and pressure fields. This will update the displacement at the surface and stress values accounting for the time dependent Maxwell consitutive equation.
@@ -468,9 +472,9 @@ for timestep in range(max_timesteps+1):
 #         "font_family": "arial",
 #     })
 #
-# # Make a list of output times (non-uniform because also 
-# # outputing first (elastic) solve 
-# times = [0, dt_years] 
+# # Make a list of output times (non-uniform because also
+# # outputing first (quasi-elastic) solve
+# times = [0, dt_years]
 # for i in range(len(reader.time_values)):
 #     times.append((i+1)*1000 )
 #
@@ -506,25 +510,25 @@ for timestep in range(max_timesteps+1):
 #         }
 #     )
 #
-#     
+#
 #     plotter.camera_position = [(0, 0, radius_values[0]*5),
 #                                  (0.0, 0.0, 0.0),
 #                                  (0.0, 1.0, 0.0)]
-#     
+#
 #     plotter.add_text(f"Time: {times[i]:6} years", name='time-label')
 #
 #     if i == 0:
 #         add_ice(plotter, scalar="zero")
 #         for j in range(10):
 #             plotter.write_frame()
-#         
+#
 #     add_ice(plotter)
-#       
-#     
+#
+#
 #     # Write end frame multiple times to give a pause before gif starts again!
 #     for j in range(10):
 #         plotter.write_frame()
-#     
+#
 #     if i == len(reader.time_values)-1:
 #         # Write end frame multiple times to give a pause before gif starts again!
 #         for j in range(20):
@@ -535,6 +539,6 @@ for timestep in range(max_timesteps+1):
 # # Closes and finalizes movie
 # plotter.close()
 # -
-# Looking at the animation, we can see that as the weight of the ice load builds up the mantle deforms, pushing up material away from the ice load. This forebulge will eventually grow enough that it balances the weight of the ice, i.e the mantle is in isostatic isostatic equilbrium and the deformation due to the ice load stops. 
+# Looking at the animation, we can see that as the weight of the ice load builds up the mantle deforms, pushing up material away from the ice load. This forebulge will eventually grow enough that it balances the weight of the ice, i.e the mantle is in isostatic isostatic equilbrium and the deformation due to the ice load stops.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
