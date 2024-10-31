@@ -65,64 +65,54 @@ def generate_mesh(mesh_path):
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     epsilon = float(diag_vars["epsilon"])
     level_set = diag_vars["level_set"][0]
-    level_set_data = level_set.dat.data_ro_with_halos
-    coords_data = (
-        fd.Function(
-            fd.VectorFunctionSpace(level_set.ufl_domain(), level_set.ufl_element())
-        )
-        .interpolate(fd.SpatialCoordinate(level_set))
-        .dat.data_ro_with_halos
-    )
 
-    mask_ls_outside = (
+    mesh = level_set.ufl_domain()
+
+    coords_space = fd.VectorFunctionSpace(mesh, level_set.ufl_element())
+    coords = fd.Function(coords_space).interpolate(mesh.coordinates)
+    coords_data = coords.dat.data_ro_with_halos
+    ls_data = level_set.dat.data_ro_with_halos
+
+    mask_location = (
         (coords_data[:, 0] <= domain_dims[0] / 2)
-        & (coords_data[:, 1] < domain_dims[1] - lithosphere_thickness - 2e4)
+        & (coords_data[:, 0] > domain_dims[0] / 2 - slab_width)
+        & (coords_data[:, 1] <= domain_dims[1] - lithosphere_thickness - mesh_vert_res)
         & (coords_data[:, 1] > domain_dims[1] - lithosphere_thickness - slab_length)
-        & (level_set_data < 0.5)
     )
-    mask_ls_inside = (
-        (coords_data[:, 0] <= domain_dims[0] / 2)
-        & (coords_data[:, 1] < domain_dims[1] - lithosphere_thickness - 2e4)
-        & (coords_data[:, 1] > domain_dims[1] - lithosphere_thickness - slab_length)
-        & (level_set_data >= 0.5)
-    )
-    if mask_ls_outside.any():
-        ind_outside = coords_data[mask_ls_outside, 0].argmax()
-        hor_coord_outside = coords_data[mask_ls_outside, 0][ind_outside]
-        if not mask_ls_outside.all():
-            ver_coord_outside = coords_data[mask_ls_outside, 1][ind_outside]
-            mask_ver_coord = (
-                abs(coords_data[mask_ls_inside, 1] - ver_coord_outside) < 1e3
-            )
-            if mask_ver_coord.any():
-                ind_inside = coords_data[mask_ls_inside, 0][mask_ver_coord].argmin()
-                hor_coord_inside = coords_data[mask_ls_inside, 0][mask_ver_coord][
-                    ind_inside
-                ]
+    mask_ls_out = mask_location & (ls_data < 0.5)
+    mask_ls_in = mask_location & (ls_data >= 0.5)
 
-                ls_outside = max(
-                    1e-6, min(1 - 1e-6, level_set_data[mask_ls_outside][ind_outside])
+    if mask_ls_out.any():
+        ind_out = coords_data[mask_ls_out, 0].argmax()
+        hor_coord_out = coords_data[mask_ls_out, 0][ind_out]
+
+        if not mask_ls_out.all():
+            vert_coord_out = coords_data[mask_ls_out, 1][ind_out]
+            mask_vert_coord = abs(coords_data[mask_ls_in, 1] - vert_coord_out) < epsilon
+
+            if mask_vert_coord.any():
+                ind_in = coords_data[mask_ls_in, 0][mask_vert_coord].argmin()
+                hor_coord_in = coords_data[mask_ls_in, 0][mask_vert_coord][ind_in]
+
+                ls_out = max(1e-6, min(ls_data[mask_ls_out][ind_out], 1 - 1e-6))
+                sdls_out = epsilon * np.log(ls_out / (1 - ls_out))
+
+                ls_in = max(
+                    1e-6, min(ls_data[mask_ls_in][mask_vert_coord][ind_in], 1 - 1e-6)
                 )
-                sdls_outside = epsilon * np.log(ls_outside / (1 - ls_outside))
+                sdls_in = epsilon * np.log(ls_in / (1 - ls_in))
 
-                ls_inside = max(
-                    1e-6,
-                    min(
-                        1 - 1e-6,
-                        level_set_data[mask_ls_inside][mask_ver_coord][ind_inside],
-                    ),
-                )
-                sdls_inside = epsilon * np.log(ls_inside / (1 - ls_inside))
-
-                ls_dist = sdls_inside / (sdls_inside - sdls_outside)
+                sdls_dist = sdls_in / (sdls_in - sdls_out)
                 hor_coord_interface = (
-                    ls_dist * hor_coord_outside + (1 - ls_dist) * hor_coord_inside
+                    sdls_dist * hor_coord_out + (1 - sdls_dist) * hor_coord_in
                 )
                 min_width = domain_dims[0] - 2 * hor_coord_interface
             else:
-                min_width = domain_dims[0] - 2 * hor_coord_outside
+                min_width = domain_dims[0] - 2 * hor_coord_out
+
         else:
-            min_width = domain_dims[0] - 2 * hor_coord_outside
+            min_width = domain_dims[0] - 2 * hor_coord_out
+
     else:
         min_width = np.inf
 
@@ -176,7 +166,7 @@ mesh_gen = "gmsh"
 mesh_vert_res = 1e4
 mesh_fine_layer_min_x = 4.2e5
 mesh_fine_layer_width = 1.6e5
-mesh_fine_layer_hor_res = 4e3
+mesh_fine_layer_hor_res = 2e3
 
 # The following two lists must be ordered such that, unpacking from the end, each
 # pair of arguments enables initialising a level set whose 0-contour corresponds to

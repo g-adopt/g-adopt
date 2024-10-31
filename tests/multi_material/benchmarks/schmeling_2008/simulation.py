@@ -13,16 +13,18 @@ import numpy as np
 from mpi4py import MPI
 from pandas import read_excel
 
-from gadopt.level_set_tools import min_max_height
+from gadopt.level_set_tools import interface_height
 
 from .materials import air, lithosphere, mantle
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
-    height = min_max_height(diag_vars["level_set"][1], diag_vars["epsilon"], 1, "min")
+    min_height = interface_height(
+        diag_vars["level_set"][1], diag_vars["epsilon"], 1, "min"
+    )
 
     diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e6)
-    diag_fields["slab_tip_depth"].append((domain_dims[1] - 5e4 - height) / 1e3)
+    diag_fields["slab_tip_depth"].append((domain_dims[1] - 5e4 - min_height) / 1e3)
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(

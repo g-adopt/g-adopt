@@ -58,30 +58,21 @@ def isd_rectangle(parameters, level_set):
 
 def isd_schmalholz(parameters, level_set):
     """Initialise signed-distance function from the model setup of Schmalholz (2011)"""
-    rectangle_lith = sl.Polygon(
-        [(0, 6.6e5), (1e6, 6.6e5), (1e6, 5.8e5), (0, 5.8e5), (0, 6.6e5)]
-    )
-    sl.prepare(rectangle_lith)
-    rectangle_slab = sl.Polygon(
-        [
-            (4.6e5, 5.8e5),
-            (5.4e5, 5.8e5),
-            (5.4e5, 3.3e5),
-            (4.6e5, 3.3e5),
-            (4.6e5, 5.8e5),
-        ]
-    )
-    sl.prepare(rectangle_slab)
-    polygon_lith = sl.union(rectangle_lith, rectangle_slab)
-    sl.prepare(polygon_lith)
-
-    interface_x = np.array([0, 4.6e5, 4.6e5, 5.4e5, 5.4e5, 1e6])
-    interface_y = np.array([5.8e5, 5.8e5, 3.3e5, 3.3e5, 5.8e5, 5.8e5])
-    curve = sl.LineString([*np.column_stack((interface_x, interface_y))])
-    sl.prepare(curve)
+    interface_coords = [
+        (0, 5.8e5),
+        (4.6e5, 5.8e5),
+        (4.6e5, 3.3e5),
+        (5.4e5, 3.3e5),
+        (5.4e5, 5.8e5),
+        (1e6, 5.8e5),
+    ]
+    interface = sl.LineString(interface_coords)
+    lithosphere = sl.Polygon(interface_coords + [(1e6, 6.6e5), (0, 6.6e5), (0, 5.8e5)])
+    sl.prepare(interface)
+    sl.prepare(lithosphere)
 
     node_relation_to_curve = [
-        (polygon_lith.contains(sl.Point(x, y)), curve.distance(sl.Point(x, y)))
+        (lithosphere.contains(sl.Point(x, y)), interface.distance(sl.Point(x, y)))
         for x, y in ga.node_coordinates(level_set)
     ]
     return [dist if is_inside else -dist for is_inside, dist in node_relation_to_curve]

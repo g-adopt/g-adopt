@@ -241,10 +241,7 @@ t_adapt = TimestepAdaptor(
     target_cfl=0.6,
     maximum_timestep=simulation.dump_period,
 )
-output_file = VTKFile(
-    output_path / f"output_{simulation.checkpoint_restart}_check.pvd",
-    target_continuity=ufl.sobolevspace.SobolevSpace("H1"),
-)
+output_file = VTKFile(output_path / f"output_{simulation.checkpoint_restart}_check.pvd")
 checkpoint_file = CheckpointFile(
     f"{output_path}/checkpoint_{simulation.checkpoint_restart + 1}.h5", mode="w"
 )

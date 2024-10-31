@@ -372,7 +372,7 @@ def entrainment(
     )
 
 
-def min_max_height(
+def interface_height(
     level_set: fd.Function, epsilon: fd.Constant, side: int, mode: str
 ) -> float:
     """Calculates the maximum or minimum height of a material interface.

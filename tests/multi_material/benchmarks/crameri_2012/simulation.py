@@ -13,13 +13,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 
-from gadopt.level_set_tools import min_max_height
+from gadopt.level_set_tools import interface_height
 
 from .materials import air, lithosphere, mantle
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
-    max_topo = min_max_height(diag_vars["level_set"][1], diag_vars["epsilon"], 0, "max")
+    max_topo = interface_height(
+        diag_vars["level_set"][1], diag_vars["epsilon"], 0, "max"
+    )
     max_topo_analytical = (
         top_interface_deflection / 1e3 * np.exp(relaxation_rate * simu_time)
     )
