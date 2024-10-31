@@ -160,10 +160,12 @@ print(F"Mismatch functional J={J}")
 # And plot the final temperature state (T) for comparison with the true final state (T_target)
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots(1,2)
+# fig, axes = plt.subplots(1,2,figsize=[8,4],subplot_kw={'aspect':1.0})
 # ax1 = tripcolor(T, axes=axes[0], cmap='magma', vmax=0.15)
 # ax2 = tripcolor(T_target, axes=axes[1], cmap='magma', vmax=0.15)
-# fig.colorbar(ax2);
+# fig.subplots_adjust(right=0.82)
+# cbar_ax = fig.add_axes([0.85, 0.15, 0.02, 0.68])
+# fig.colorbar(ax2,cax=cbar_ax);
 # -
 
 # Now we have run the forward model and populated the tape with all operations required for the inverse
@@ -258,7 +260,10 @@ functional_values = []
 
 
 def record_value(value, *args):
-    functional_values.append(value)
+    if functional_values:
+        functional_values.append(min(value,min(functional_values)))
+    else:
+        functional_values.append(value)
 
 
 reduced_functional.eval_cb_post = record_value
@@ -281,7 +286,9 @@ optimiser.run()
 # And visualise the optimised initial condition. Let's plot that and compare to the reference initial condition:
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots(1,2)
+# fig, axes = plt.subplots(1,2,figsize=[8,4],subplot_kw={'aspect':1.0})
 # ax1 = tripcolor(T0.block_variable.checkpoint, axes=axes[0], cmap='magma', vmax=0.15)
 # ax2 = tripcolor(T0_ref, axes=axes[1], cmap='magma', vmax=0.15)
-# fig.colorbar(ax2);
+# fig.subplots_adjust(right=0.82)
+# cbar_ax = fig.add_axes([0.85, 0.15, 0.02, 0.68])
+# fig.colorbar(ax2,cax=cbar_ax);
