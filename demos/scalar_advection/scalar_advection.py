@@ -69,11 +69,11 @@ u_outfile.write(u)
 
 T = 2*pi
 dt = T/600.0
-g_in = Constant(1.0)
+q_in = Constant(1.0)
 
 # Use G-ADOPT's GenericTransportSolver to advect the tracer. We only include an
 # advection term and apply weak boundary conditions on inflow regions.
-bc_in = {"g": g_in}
+bc_in = {"q": q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 eq_attrs = {"u": u}
 adv_solver = GenericTransportSolver(
