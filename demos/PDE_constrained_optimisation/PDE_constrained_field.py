@@ -34,6 +34,7 @@ left, right, bottom, top = 1, 2, 3, 4  # Boundary IDs
 V = VectorFunctionSpace(mesh, "CG", 2)  # Function space for velocity
 Q = FunctionSpace(mesh, "CG", 1)  # Function space for the scalar (Temperature)
 T = Function(Q, name='Temperature')
+T0 = Function(Q, name='Initial_Temperature')  # Initial condition for temperature which we will invert for
 
 # Set up prescribed velocity field -- an anti-clockwise rotation around (0.5, 0.5):
 x, y = SpatialCoordinate(mesh)
@@ -52,7 +53,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 x0, y0 = 0.75, 0.5
 w = .1
 r2 = (x-x0)**2 + (y-y0)**2
-T.interpolate(exp(-r2/w**2))
+T0.interpolate(exp(-r2/w**2))
 # -
 
 
@@ -61,12 +62,14 @@ T.interpolate(exp(-r2/w**2))
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='magma', vmax=0.15)
+# collection = tripcolor(T0, axes=axes, cmap='magma', vmax=0.15)
 # fig.colorbar(collection);
 # -
 
-# We can next run the forward model, for 10 timesteps. Pretty simple, huh?
+# After setting the initial condition for T, we can next run the forward model, for 10 timesteps.
+# Pretty simple, huh?
 
+T.project(T0)
 for timestep in range(10):
     energy_solver.solve()
 
@@ -97,12 +100,13 @@ with CheckpointFile("Final_State.h5", "r") as final_checkpoint:
     mesh = final_checkpoint.load_mesh()
     T_target = final_checkpoint.load_function(mesh, name="Temperature")
 
-# With this information stored, we now setup the model exactly as before:
+# With this information stored, we now set up the model exactly as before:
 
 # +
 V = VectorFunctionSpace(mesh, "CG", 2)
 Q = FunctionSpace(mesh, "CG", 1)
 T = Function(Q, name='Temperature')
+T0 = Function(Q, name='Initial_Temperature')
 
 x, y = SpatialCoordinate(mesh)
 u = interpolate(as_vector((-y+0.5, x-0.5)), V)
@@ -115,10 +119,10 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 # -
 
 # This time, however, we don't want to use the known initial condition. Instead we will start with
-# the final state from our synthetic forward model, which will then be further rotated and diffused. After again
+# the final state from our synthetic forward model, which will then be further rotated and diffused. After
 # ten timesteps we compute the mismatch between the predicted final state, and the checkpointed final state from
 # our synthetic twin. This computation, the ten timesteps and the mismatch calculation, forms the forward model
-# that we want to invert. Its adjoint will be created automatically from the tape that registers all
+# that we want to invert. Its adjoint will be created automatically from the tape, which registers all
 # operations in the model. Since the tape was automatically started at the top when we imported
 # `gadopt.inverse`, we must ensure we don't get mixed up with any operations that
 # happened in our initial synthetic twin model, so we first clear everything that has already
@@ -131,15 +135,15 @@ tape.clear_tape()
 # state of our synthetic forward run). We do this by interpolating T_target to T. Note that in theory, we could
 # start from an arbitrary initial condition here, provided it is bounded between 0 and 1.
 
-T.interpolate(T_target)
+T0.project(T_target)
 
-# We want to optimise for the _initial_ (current) state of T, and so we specify the current state of T
-# as the control:
+# We want to optimise for the initial temperature state, T0, and so we specify this as the control:
 
-m = Control(T)
+m = Control(T0)
 
 # Based on our guess for the initial temperature, we run the model for 10 timesteps:
 
+T.project(T0)
 for timestep in range(10):
     energy_solver.solve()
 
@@ -180,16 +184,17 @@ print(Jhat(T_target))
 # use the correct initial condition, exactly matching that used in our twin experiment:
 
 # +
+T0_ref = Function(Q, name='Reference_Initial_Temperature')
 x0, y0 = 0.75, 0.5
 w = .1
 r2 = (x-x0)**2 + (y-y0)**2
-T0 = interpolate(exp(-r2/w**2), Q)
+T0_ref.interpolate(exp(-r2/w**2))
 
-print(Jhat(T0))
+print(Jhat(T0_ref))
 # -
 
 # Using the "correct" initial condition, we reach the same final state as in our twin model, and thus
-# the functional ends up being exactly zero!
+# the functional ends up being almost exactly zero!
 
 # In addition to re-running the model by evaluating the reduced functional, we can also calculate
 # its derivative. This computes the sensitivity of the model with respect to its control (the initial
@@ -230,22 +235,63 @@ gradJ = Jhat.derivative(options={"riesz_representation": "L2"})
 # The L-BFGS-B allows for "box constraints", min and max values for the control, which we can
 # provide as functions in the same functionspace as the control:
 
-Tmin = Function(Q).assign(0.0)
-Tmax = Function(Q).assign(1.0)
+T_lb = Function(Q).assign(0.0)
+T_ub = Function(Q).assign(1.0)
 
-# Select L-BFGS-B as the method and provide bounds. Note that the tolerance is an absolute tolerance on
-# the norm of the gradient which should be reduced to near zero.
+# Define the minimisation problem, with the goal to minimise the reduced functional.
+# Note: in some scenarios, the goal might be to maximise (rather than minimise) the functional.
 
-# Minimize() returns the best-guess optimal control, i.e. best fit initial condition:
+minimisation_problem = MinimizationProblem(Jhat, bounds=(T_lb, T_ub))
+minimisation_parameters["Status Test"]["Iteration Limit"] = 20
 
-T_opt = minimize(Jhat, method='L-BFGS-B', bounds=[Tmin, Tmax], tol=1e-10)
+# Define the LinMore Optimiser class:
+optimiser = LinMoreOptimiser(
+    minimisation_problem,
+    minimisation_parameters,
+)
+
+# For sake of book-keeping the simulation, we have implemented a means to
+# record information that might be used to check the optimisation performance. This
+# callback function will be executed at the end of each iteration. Here, we write out
+# the control field, i.e., the reconstructed intial temperature field, at the end of
+# each iteration. We also record the values of the reduced
+# functional directly in order to produce a plot of the convergence.
+
+# +
+functional_values = []
+
+
+def record_value(value, *args):
+    functional_values.append(value)
+
+
+Jhat.eval_cb_post = record_value
+
+# If it existed, we could restore the optimisation from last checkpoint:
+# optimiser.restore()
+
+# Run the optimisation
+optimiser.run()
+# -
+
+# At this point a total number of 20 iterations are performed.
+# Now we can look at the solution visually and plot convergence.
+
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+# plt.plot(functional_values)
+# plt.xlabel("Optimisation iteration")
+# plt.ylabel("Reduced functional")
+# plt.title("Optimisation convergence")
+# -
+
 
 # Let's see how well we have done. We first plot the optimal initial condition and compare to the reference initial condition:
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots(1,2)
-# ax1 = tripcolor(T_opt, axes=axes[0], cmap='magma', vmax=0.15)
-# ax2 = tripcolor(T0, axes=axes[1], cmap='magma', vmax=0.15)
+# ax1 = tripcolor(T0.block_variable.checkpoint, axes=axes[0], cmap='magma', vmax=0.15)
+# ax2 = tripcolor(T0_ref, axes=axes[1], cmap='magma', vmax=0.15)
 # fig.colorbar(ax2);
 # -
 
