@@ -34,9 +34,7 @@ left, right, bottom, top = 1, 2, 3, 4  # Boundary IDs.
 V = VectorFunctionSpace(mesh, "CG", 2)  # Function space for velocity.
 Q = FunctionSpace(mesh, "CG", 1)  # Function space for the scalar (Temperature).
 T = Function(Q, name="Temperature")
-T0 = Function(
-    Q, name="Initial_Temperature"
-)  # Initial condition for temperature which we will invert for.
+T0 = Function(Q, name="Initial_Temperature")  # T Initial condition which we will invert for.
 
 # Set up prescribed velocity field -- an anti-clockwise rotation around (0.5, 0.5):
 x, y = SpatialCoordinate(mesh)
@@ -54,7 +52,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
 x0, y0 = 0.75, 0.5
 w = 0.1
 r2 = (x - x0) ** 2 + (y - y0) ** 2
-T0.interpolate(exp(-r2 / w**2))
+T0 = interpolate(exp(-r2 / w**2), Q)
 # -
 
 
@@ -117,6 +115,7 @@ u.rename("Velocity")
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
+energy_solver.solver_parameters.pop('ksp_converged_reason')
 # -
 
 # This time, however, we don't want to use the known initial condition. Instead we will start with
@@ -240,12 +239,12 @@ T_lb = Function(Q).assign(0.0)
 T_ub = Function(Q).assign(1.0)
 
 # Our goal is to minimise the reduced functional. As such, we next define the minimisation problem,
-# passing on the bounds specified above. Here, we set the number of iterations to only 20,
+# passing on the bounds specified above. Here, we set the number of iterations to only 10,
 # as opposed to the default 100. Note that in some scenarios, the goal might be to
 # maximise (rather than minimise) the functional.
 
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
-minimisation_parameters["Status Test"]["Iteration Limit"] = 20
+minimisation_parameters["Status Test"]["Iteration Limit"] = 10
 
 # Define the LinMore Optimiser class:
 optimiser = LinMoreOptimiser(
@@ -274,15 +273,15 @@ reduced_functional.eval_cb_post = record_value
 # We next run the optimisation
 optimiser.run()
 
-
-# At this point a total number of 20 iterations are performed. Once the optimisation
-# is complete, we can plot convergence:
+# At this point a total number of 10 iterations are performed. Once the optimisation
+# is complete, we can plot convergence, with the functional value decreasing by
+# roughly two orders of magnitude:
 
 # + tags=["active-ipynb"]
-# plt.plot(functional_values)
-# plt.xlabel("Optimisation iteration")
-# plt.ylabel("Reduced functional")
-# plt.title("Optimisation convergence")
+# plt.semilogy(functional_values)
+# plt.xlabel("Iteration #")
+# plt.ylabel("Functional value")
+# plt.title("Convergence")
 # -
 
 # And visualise the optimised initial condition. Let's plot that and compare to the reference initial condition:
@@ -294,3 +293,9 @@ optimiser.run()
 # fig.subplots_adjust(right=0.82)
 # cbar_ax = fig.add_axes([0.85, 0.15, 0.02, 0.68])
 # fig.colorbar(ax2,cax=cbar_ax);
+# -
+
+
+# You can see that it has recovered the initial condition reasonably well, albeit with small
+# local errors. These are reduced further if the number of optimisation iterations are increased
+# from 10 to 20, for example, with the functional value dropping by another order of magnitude.
