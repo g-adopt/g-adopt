@@ -61,7 +61,7 @@ T.interpolate(exp(-r2/w**2))
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='coolwarm')
+# collection = tripcolor(T, axes=axes, cmap='magma', vmax=0.15)
 # fig.colorbar(collection);
 # -
 
@@ -74,7 +74,7 @@ for timestep in range(10):
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='coolwarm')
+# collection = tripcolor(T, axes=axes, cmap='magma', vmax=0.15)
 # fig.colorbar(collection);
 # -
 
@@ -150,24 +150,17 @@ for timestep in range(10):
 scaling = 1./assemble(T_target**2*dx)
 J = assemble(scaling * (T-T_target)**2*dx)
 
-# We can print the mismatch:
+# We can print the mismatch
 
 print(F"Mismatch functional J={J}")
 
-# And plot the final temperature state:
+# And plot the final temperature state (T) for comparison with the true final state (T_target)
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
-# -
-
-# This can be compared to the true final state, T_target:
-
-# + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# collection = tripcolor(T_target, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
+# fig, axes = plt.subplots(1,2)
+# ax1 = tripcolor(T, axes=axes[0], cmap='magma', vmax=0.15)
+# ax2 = tripcolor(T_target, axes=axes[1], cmap='magma', vmax=0.15)
+# fig.colorbar(ax2);
 # -
 
 # Now we have run the forward model and populated the tape with all operations required for the inverse
@@ -179,7 +172,7 @@ Jhat = ReducedFunctional(J, m)
 # The reduced functional allows us to rerun the forward model for different values of the control. It
 # can be used as a function that takes in any choice of the control, runs the forward model and
 # computes the functional. For instance we can rerun the model again using `T_target` as the initial
-# condition, i.e. rerunnnig the exact same model we have just run:
+# condition, i.e. re-running the exact same model we have just run:
 
 print(Jhat(T_target))
 
@@ -198,7 +191,7 @@ print(Jhat(T0))
 # Using the "correct" initial condition, we reach the same final state as in our twin model, and thus
 # the functional ends up being exactly zero!
 
-# In addition to rerunning the model by evaluating the reduced functional, we can also calculate
+# In addition to re-running the model by evaluating the reduced functional, we can also calculate
 # its derivative. This computes the sensitivity of the model with respect to its control (the initial
 # condition). Here it tells us in what locations a (small) increase in the initial condition will
 # lead to an increase in the functional.
@@ -215,7 +208,7 @@ gradJ = Jhat.derivative(options={"riesz_representation": "L2"})
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(gradJ, axes=axes, cmap='coolwarm')
+# collection = tripcolor(gradJ, axes=axes, cmap='viridis', vmin=-40, vmax=40)
 # fig.colorbar(collection);
 # -
 
@@ -231,35 +224,29 @@ gradJ = Jhat.derivative(options={"riesz_representation": "L2"})
 # `minimize()` function that is exported by `gadopt.inverse` provides a wrapper around
 # [scipy's minimize](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html)
 # to translate between G-ADOPT/Firedrake objects and numpy arrays. G-ADOPT also provides an interface
-# to the [ROL optimisation library](https://trilinos.github.io/) library, which we generally
+# to the [ROL optimisation library](https://trilinos.github.io/), which we generally
 # recommend over the scipy interface. We will see this in later tutorials.
 
 # The L-BFGS-B allows for "box constraints", min and max values for the control, which we can
 # provide as functions in the same functionspace as the control:
 
-Tmin = Function(Q).assign(0)
-Tmax = Function(Q).assign(1)
+Tmin = Function(Q).assign(0.0)
+Tmax = Function(Q).assign(1.0)
 
 # Select L-BFGS-B as the method and provide bounds. Note that the tolerance is an absolute tolerance on
-# the norm of the gradient which should be reduced to near zero minimize() returns the found optimal
-# control, i.e. best fit initial condition:
+# the norm of the gradient which should be reduced to near zero.
+
+# Minimize() returns the best-guess optimal control, i.e. best fit initial condition:
 
 T_opt = minimize(Jhat, method='L-BFGS-B', bounds=[Tmin, Tmax], tol=1e-10)
 
-# Let's see how well we have done. We first plot the optimal initial condition:
+# Let's see how well we have done. We first plot the optimal initial condition and compare to the reference initial condition:
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# collection = tripcolor(T_opt, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
-# -
-
-# And next plot the reference initial condition:
-
-# + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# collection = tripcolor(T0, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
+# fig, axes = plt.subplots(1,2)
+# ax1 = tripcolor(T_opt, axes=axes[0], cmap='magma', vmax=0.15)
+# ax2 = tripcolor(T0, axes=axes[1], cmap='magma', vmax=0.15)
+# fig.colorbar(ax2);
 # -
 
 # We can also compare these by calculating the difference and plotting. TO DO.
