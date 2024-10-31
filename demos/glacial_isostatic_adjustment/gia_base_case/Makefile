@@ -1,6 +1,6 @@
 all: params.log
 
-params.log: viscoelastic.py
+params.log: gia_base_case.py
 	echo "running $<" >&2
 	/usr/bin/time --format="$@ finished in %E" tsp -f python3 $<
 
