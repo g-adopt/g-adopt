@@ -28,56 +28,58 @@ with CheckpointFile("forward_checkpoint.h5", "r") as forward_check:
     z = forward_check.load_function(mesh, "Stokes")
     psi = forward_check.load_function(mesh, "Level set")
 
-nx, ny = 80, 80
-lx, ly = 0.9142, 1
+nx, ny = 128, 32
+lx, ly = 3e6, 7e5
 
 mesh.cartesian = True
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4
 
 R = FunctionSpace(mesh, "R", 0)
 
-u, p = split(z)
+u, p, eta = split(z)
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
+z.subfunctions[2].rename("Free surface")
 psi_control = Function(psi, name="Level-set control")
 psi_obs = Function(psi, name="Level-set observation")
 psi_opt = Function(psi, name="Level-set optimisation")
 
 psi.assign(psi_control)
 
-min_mesh_edge_length = min(lx / nx, ly / ny)
-epsilon = Constant(min_mesh_edge_length / 4)
+local_min_mesh_size = mesh.cell_sizes.dat.data.min()
+epsilon = Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
 
-Ra_c_buoyant = 0
-Ra_c_dense = 1
-Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="arithmetic")
+mu_slab = 1e23
+mu_mantle = 1e21
+mu = material_field(psi, [mu_mantle, mu_slab], interface="geometric")
 
-approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
+rho_slab = 3300
+rho_mantle = 3200
+rho_material = material_field(psi, [rho_mantle, rho_slab], interface="arithmetic")
 
-Z_nullspace = create_stokes_nullspace(z.function_space())
+approximation = Approximation(
+    "BA",
+    dimensional=True,
+    parameters={"g": 9.81, "mu": mu, "rho": rho_mantle, "rho_material": rho_material},
+)
+
+delta_t = Function(R).assign(1e13)
+t_adapt = TimestepAdaptor(delta_t, u, z.function_space()[0], target_cfl=0.6)
 
 stokes_bcs = {
-    bottom_id: {"u": 0},
-    top_id: {"u": 0},
+    bottom_id: {"uy": 0},
+    top_id: {"free_surface": {"eta_index": 0, "rho_ext": 0}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
 
-stokes_solver = StokesSolver(
-    z,
-    approximation,
-    bcs=stokes_bcs,
-    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
-)
+stokes_solver = StokesSolver(z, approximation, bcs=stokes_bcs, timestep_fs=delta_t)
 del stokes_solver.solver_parameters["snes_monitor"]
-
-delta_t = Function(R).assign(1.0)
-t_adapt = TimestepAdaptor(delta_t, u, z.function_space()[0], target_cfl=0.6)
 
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 psi_grad_proj = level_set_solver.ls_grad_proj
 
-time_now, time_end = 0, 100
+time_now, time_end = 0, 1e7 * 365.25 * 8.64e4
 
 output_file = VTKFile("inverse_output.pvd")
 output_file.write(*z.subfunctions, psi, psi_grad_proj, time=time_now)
