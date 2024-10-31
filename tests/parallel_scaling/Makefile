@@ -1,7 +1,7 @@
 levels := 5 6 7
 levels := $(addsuffix .txt,$(addprefix profile_,$(levels)))
 
-.PHONY: longtest clean
+.PHONY: longtest clean check
 
 longtest: $(levels)
 
@@ -17,3 +17,6 @@ clean:
 
 longtest_output:
 	tail -n +1 level_*.{err,out}
+
+check: $(levels)
+	python3 -m pytest

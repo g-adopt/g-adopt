@@ -14,3 +14,7 @@ adjoint-demo-checkpoint-state.h5: ../../demos/adjoint/adjoint_forward.py
 
 clean:
 	rm -f *.h5 *.conv *.dat
+	rm -rf __pycache__
+
+check: $(addsuffix .conv,$(cases))
+	python -m pytest

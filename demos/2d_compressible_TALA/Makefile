@@ -1,5 +1,6 @@
 all: params.log
 
+current_dir := $(notdir $(patsubst %/,%,$(CURDIR)))
 ncpus := 4
 
 params.log: 2d_compressible_TALA.py
@@ -8,3 +9,7 @@ params.log: 2d_compressible_TALA.py
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
+	rm -rf output reference_state
+
+check: params.log
+	python3 -m pytest ../test_all.py -k $(current_dir)
