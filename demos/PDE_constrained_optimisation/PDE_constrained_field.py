@@ -33,13 +33,15 @@ left, right, bottom, top = 1, 2, 3, 4  # Boundary IDs.
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Function space for velocity.
 Q = FunctionSpace(mesh, "CG", 1)  # Function space for the scalar (Temperature).
-T = Function(Q, name='Temperature')
-T0 = Function(Q, name='Initial_Temperature')  # Initial condition for temperature which we will invert for.
+T = Function(Q, name="Temperature")
+T0 = Function(
+    Q, name="Initial_Temperature"
+)  # Initial condition for temperature which we will invert for.
 
 # Set up prescribed velocity field -- an anti-clockwise rotation around (0.5, 0.5):
 x, y = SpatialCoordinate(mesh)
-u = interpolate(as_vector((-y+0.5, x-0.5)), V)
-u.rename('Velocity')
+u = interpolate(as_vector((-y + 0.5, x - 0.5)), V)
+u.rename("Velocity")
 
 # The Rayleigh number, Ra, is not actually used here, but we set a value for the diffusivity, kappa.
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
@@ -50,9 +52,9 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
 # This will be the initial condition we will try to invert for later.
 
 x0, y0 = 0.75, 0.5
-w = .1
-r2 = (x-x0)**2 + (y-y0)**2
-T0.interpolate(exp(-r2/w**2))
+w = 0.1
+r2 = (x - x0) ** 2 + (y - y0) ** 2
+T0.interpolate(exp(-r2 / w**2))
 # -
 
 
@@ -105,12 +107,12 @@ with CheckpointFile("Final_State.h5", "r") as final_checkpoint:
 # +
 V = VectorFunctionSpace(mesh, "CG", 2)
 Q = FunctionSpace(mesh, "CG", 1)
-T = Function(Q, name='Temperature')
-T0 = Function(Q, name='Initial_Temperature')
+T = Function(Q, name="Temperature")
+T0 = Function(Q, name="Initial_Temperature")
 
 x, y = SpatialCoordinate(mesh)
-u = interpolate(as_vector((-y+0.5, x-0.5)), V)
-u.rename('Velocity')
+u = interpolate(as_vector((-y + 0.5, x - 0.5)), V)
+u.rename("Velocity")
 
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
@@ -150,12 +152,12 @@ for timestep in range(num_timesteps):
 # change the optimal solution. In the following lines, we define our scaled *functional* (J) to be the l2
 # misfit between predicted and true final state:
 
-scaling = 1./assemble(T_target**2*dx)
-J = assemble(scaling * (T-T_target)**2*dx)
+scaling = 1.0 / assemble(T_target**2 * dx)
+J = assemble(scaling * (T - T_target) ** 2 * dx)
 
 # We can print the (scaled) mismatch:
 
-print(F"Mismatch functional J={J}")
+print(f"Mismatch functional J={J}")
 
 # And plot the final temperature state (T) for comparison with the true final state (T_target)
 
@@ -184,11 +186,11 @@ print(reduced_functional(T_target))
 # As expected it produces the same functional value. Now we can try to see what happens if we
 # use the correct initial condition, exactly matching that used in our twin experiment:
 
-T0_ref = Function(Q, name='Reference_Initial_Temperature')
+T0_ref = Function(Q, name="Reference_Initial_Temperature")
 x0, y0 = 0.75, 0.5
-w = .1
-r2 = (x-x0)**2 + (y-y0)**2
-T0_ref.interpolate(exp(-r2/w**2))
+w = 0.1
+r2 = (x - x0) ** 2 + (y - y0) ** 2
+T0_ref.interpolate(exp(-r2 / w**2))
 
 # For which the functional can be printed:
 
@@ -261,7 +263,7 @@ functional_values = []
 
 def record_value(value, *args):
     if functional_values:
-        functional_values.append(min(value,min(functional_values)))
+        functional_values.append(min(value, min(functional_values)))
     else:
         functional_values.append(value)
 
