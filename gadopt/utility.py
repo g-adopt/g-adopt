@@ -6,7 +6,7 @@ depending on what they would like to achieve.
 
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
+from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
 from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
 from firedrake.ufl_expr import extract_unique_domain
@@ -441,28 +441,12 @@ def absv(u):
     return as_vector([abs(ui) for ui in u])
 
 
-def su_nubar(u, J, Pe):
-    """SU stabilisation viscosity as a function of velocity, Jacobian and grid Peclet number"""
-    # SU(PG) ala Donea & Huerta:
-    # Columns of Jacobian J are the vectors that span the quad/hex
-    # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
-    # thus u^T J is (dx * u , dy * v)
-    # and following (2.44c) Pe = u^T J / (2*nu)
-    # beta(Pe) is the xibar vector in (2.44a)
-    # then we get artifical viscosity nubar from (2.49)
-    beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
-
-    return dot(absv(dot(u, J)), beta_pe)/2
-
-
-def node_coordinates(function):
+def node_coordinates(function: Function) -> Function:
     """Extract mesh coordinates and interpolate them onto the relevant function space"""
     func_space = function.function_space()
-    mesh_coords = SpatialCoordinate(func_space.mesh())
+    vec_space = VectorFunctionSpace(func_space.ufl_domain(), func_space.ufl_element())
 
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]
+    return Function(vec_space).interpolate(SpatialCoordinate(function)).dat.data
 
 
 def interpolate_1d_profile(function: Function, one_d_filename: str):

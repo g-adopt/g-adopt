@@ -14,21 +14,17 @@ def cosine_curve(x, amplitude, wavelength, vertical_shift):
     return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
 
 
-def isd_simple_curve(domain_origin_x, domain_dim_x, curve, parameters, level_set):
+def isd_simple_curve(domain_dim_x, curve, parameters, level_set):
     """Initialise signed-distance function from a simple curve described by a
     mathematical function"""
-    interface_x = np.linspace(domain_origin_x, domain_origin_x + domain_dim_x, 1000)
+    interface_x = np.linspace(0, domain_dim_x, 1000)
     interface_y = curve(interface_x, *parameters)
     line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
     sl.prepare(line_string)
 
-    node_coords_x, node_coords_y = ga.node_coordinates(level_set)
     node_relation_to_curve = [
-        (
-            node_coord_y > curve(node_coord_x, *parameters),
-            line_string.distance(sl.Point(node_coord_x, node_coord_y)),
-        )
-        for node_coord_x, node_coord_y in zip(node_coords_x, node_coords_y)
+        (y > curve(x, *parameters), line_string.distance(sl.Point(x, y)))
+        for x, y in ga.node_coordinates(level_set)
     ]
     return [dist if is_above else -dist for is_above, dist in node_relation_to_curve]
 
@@ -48,14 +44,12 @@ def isd_rectangle(parameters, level_set):
     )
     sl.prepare(rectangle)
 
-    node_coords_x, node_coords_y = ga.node_coordinates(level_set)
     node_relation_to_rectangle = [
         (
-            rectangle.contains(sl.Point(x, y))
-            or rectangle.boundary.contains(sl.Point(x, y)),
+            rectangle.contains(sl.Point(x, y)),
             rectangle.boundary.distance(sl.Point(x, y)),
         )
-        for x, y in zip(node_coords_x, node_coords_y)
+        for x, y in ga.node_coordinates(level_set)
     ]
     return [
         dist if is_inside else -dist for is_inside, dist in node_relation_to_rectangle
@@ -64,36 +58,22 @@ def isd_rectangle(parameters, level_set):
 
 def isd_schmalholz(parameters, level_set):
     """Initialise signed-distance function from the model setup of Schmalholz (2011)"""
-    rectangle_lith = sl.Polygon(
-        [(0, 6.6e5), (1e6, 6.6e5), (1e6, 5.8e5), (0, 5.8e5), (0, 6.6e5)]
-    )
-    sl.prepare(rectangle_lith)
-    rectangle_slab = sl.Polygon(
-        [
-            (4.6e5, 5.8e5),
-            (5.4e5, 5.8e5),
-            (5.4e5, 3.3e5),
-            (4.6e5, 3.3e5),
-            (4.6e5, 5.8e5),
-        ]
-    )
-    sl.prepare(rectangle_slab)
-    polygon_lith = sl.union(rectangle_lith, rectangle_slab)
-    sl.prepare(polygon_lith)
+    interface_coords = [
+        (0, 5.8e5),
+        (4.6e5, 5.8e5),
+        (4.6e5, 3.3e5),
+        (5.4e5, 3.3e5),
+        (5.4e5, 5.8e5),
+        (1e6, 5.8e5),
+    ]
+    interface = sl.LineString(interface_coords)
+    lithosphere = sl.Polygon(interface_coords + [(1e6, 6.6e5), (0, 6.6e5), (0, 5.8e5)])
+    sl.prepare(interface)
+    sl.prepare(lithosphere)
 
-    interface_x = np.array([0, 4.6e5, 4.6e5, 5.4e5, 5.4e5, 1e6])
-    interface_y = np.array([5.8e5, 5.8e5, 3.3e5, 3.3e5, 5.8e5, 5.8e5])
-    curve = sl.LineString([*np.column_stack((interface_x, interface_y))])
-    sl.prepare(curve)
-
-    node_coords_x, node_coords_y = ga.node_coordinates(level_set)
     node_relation_to_curve = [
-        (
-            polygon_lith.contains(sl.Point(x, y))
-            or polygon_lith.boundary.contains(sl.Point(x, y)),
-            curve.distance(sl.Point(x, y)),
-        )
-        for x, y in zip(node_coords_x, node_coords_y)
+        (lithosphere.contains(sl.Point(x, y)), interface.distance(sl.Point(x, y)))
+        for x, y in ga.node_coordinates(level_set)
     ]
     return [dist if is_inside else -dist for is_inside, dist in node_relation_to_curve]
 
@@ -102,7 +82,7 @@ def isd_schmeling(parameters, level_set):
     """Initialise signed-distance function from the model setup of
     Schmeling et al. (2008)"""
     rectangle_lith = sl.Polygon(
-        [(1e6, 7e5), (3e6, 7e5), (3e6, 6e5), (1e6, 6e5), (1e6, 7e5)]
+        [(1e6, 7e5), (3e6 + 1e5, 7e5), (3e6 + 1e5, 6e5), (1e6, 6e5), (1e6, 7e5)]
     )
     sl.prepare(rectangle_lith)
     rectangle_slab = sl.Polygon(
@@ -112,13 +92,11 @@ def isd_schmeling(parameters, level_set):
     polygon_lith = sl.union(rectangle_lith, rectangle_slab)
     sl.prepare(polygon_lith)
 
-    node_coords_x, node_coords_y = ga.node_coordinates(level_set)
     node_relation_to_curve = [
         (
-            polygon_lith.contains(sl.Point(x, y))
-            or polygon_lith.boundary.contains(sl.Point(x, y)),
+            polygon_lith.contains(sl.Point(x, y)),
             polygon_lith.boundary.distance(sl.Point(x, y)),
         )
-        for x, y in zip(node_coords_x, node_coords_y)
+        for x, y in ga.node_coordinates(level_set)
     ]
     return [dist if is_inside else -dist for is_inside, dist in node_relation_to_curve]

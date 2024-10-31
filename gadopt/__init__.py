@@ -8,18 +8,18 @@ from .approximations import (
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
-from .energy_solver import EnergySolver
-from .level_set_tools import (
-    LevelSetSolver,
-    Material,
-    density_RaB,
-    entrainment,
-    field_interface,
-)
+from .level_set_tools import LevelSetSolver, entrainment, material_field
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .stokes_integrators import StokesSolver, create_stokes_nullspace
-from .time_stepper import BackwardEuler, CrankNicolsonRK, ImplicitMidpoint, eSSPRKs3p3, eSSPRKs10p3
+from .time_stepper import (
+    BackwardEuler,
+    CrankNicolsonRK,
+    ImplicitMidpoint,
+    eSSPRKs3p3,
+    eSSPRKs10p3,
+)
+from .transport_solver import EnergySolver, GenericTransportSolver
 from .utility import (
     InteriorBC,
     LayerAveraging,

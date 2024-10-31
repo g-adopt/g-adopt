@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-base = Path(__file__).parent.resolve()
+base = (Path(__file__).parent / "benchmarks").resolve()
 
 diagnostics = {
     "crameri_2012": [
@@ -13,7 +13,7 @@ diagnostics = {
                 np.subtract(data["max_topography"], data["max_topography_analytical"])
             ).max(),
             operator.le,
-            0.15,
+            0.06,
         )
     ],
     "gerya_2003": [
@@ -24,8 +24,8 @@ diagnostics = {
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 282.4), operator.le, 0.1),
-        (lambda data: abs(max(data["entrainment"]) - 0.929), operator.le, 0.001),
+        (lambda data: abs(max(data["rms_velocity"]) - 285.0), operator.le, 0.1),
+        (lambda data: abs(max(data["entrainment"]) - 0.930), operator.le, 0.001),
     ],
     "schmalholz_2011": [
         (
@@ -33,10 +33,10 @@ diagnostics = {
                 np.asarray(data["normalised_time"])[
                     np.asarray(data["slab_necking"]) <= 0.2
                 ].min()
-                - 0.83
+                - 0.82
             ),
             operator.le,
-            0.002,
+            0.01,
         ),
     ],
     "schmeling_2008": [
@@ -45,7 +45,7 @@ diagnostics = {
                 np.asarray(data["output_time"])[
                     np.asarray(data["slab_tip_depth"]) >= 600
                 ].min()
-                - 43
+                - 45.8
             ),
             operator.le,
             0.1,
@@ -72,8 +72,8 @@ diagnostics = {
         ),
     ],
     "van_keken_1997_isothermal": [
-        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 3e-5),
-        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 5e-3),
+        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 1e-4),
+        (lambda data: abs(max(data["entrainment"]) - 0.804), operator.le, 1e-3),
     ],
     "van_keken_1997_thermochemical": [
         (
