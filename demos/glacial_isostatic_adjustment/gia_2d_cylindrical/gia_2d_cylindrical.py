@@ -15,7 +15,7 @@
 # provides access to Firedrake and associated functionality. We also import pyvista and matplotlib, for plotting.
 
 from gadopt import *
-from gadopt.utility import step_func
+from gadopt.utility import step_func, vertical_component
 import pyvista as pv
 import matplotlib.pyplot as plt
 
@@ -406,6 +406,10 @@ plog.log_str(
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
 gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
+
+# Initialise a (scalar!) function for logging vertical displacement
+U = FunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (scalar)
+vertical_displacement = Function(U, name="Vertical displacement")
 # -
 
 # Now let's run the simulation! We are going to control the ice thickness using the `ramp` parameter. At each step we call `solve` to calculate the incremental displacement and pressure fields. This will update the displacement at the surface and stress values accounting for the time dependent Maxwell consitutive equation.
@@ -430,14 +434,16 @@ for timestep in range(max_timesteps+1):
             checkpoint.save_function(displacement, name="Displacement")
             checkpoint.save_function(stress_old, name="Deviatoric stress")
 
+    vertical_displacement.interpolate(vertical_component(displacement))
+
     # Log diagnostics:
     plog.log_str(
         f"{timestep} {float(time)} {float(dt)} "
         f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} "
-        f"{displacement.dat.data[:, 1].min()} {displacement.dat.data[:, 1].max()}"
+        f"{vertical_displacement.dat.data.min()} {vertical_displacement.dat.data.max()}"
     )
 
-# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the calculated displacement to artifically scale the mesh in the vertical direction. We have exaggerated the vertical stretching by a factor of 1500, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
+# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the calculated displacement to artifically scale the mesh. We have exaggerated the stretching by a factor of 1500, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt

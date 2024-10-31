@@ -18,6 +18,7 @@ cases = {
     "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]},
     "../tests/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
     f"{gia_path}/gia_base_case": {"extra_checks": ["disp_min", "disp_max"]},
+    f"{gia_path}/gia_2d_cylindrical": {"extra_checks": ["disp_min", "disp_max"]},
 }
 
 
