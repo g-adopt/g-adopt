@@ -1,4 +1,4 @@
-r"""Scalar terms and equations (e.g. for temperature and salinity transport).
+r"""Scalar terms (e.g. for temperature and salinity transport).
 
 All terms are considered as if they were on the right-hand side of the equation, leading
 to the following UFL expression returned by the `residual` method:

@@ -61,7 +61,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     # Set up boundary conditions
     g_left = 0.0
     g_right = 0.0
-    # 'T' sets strong dirichlet boundary conditions for G-ADOPT's energy solver
+    # 'g' sets strong Dirichlet boundary conditions for G-ADOPT's transport solver
     bcs = {1: {"g": g_left}, 2: {"g": g_right}}
 
     # Use G-ADOPT's GenericTransportSolver to advect the tracer. The system is

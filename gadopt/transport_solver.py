@@ -196,17 +196,19 @@ class GenericTransportBase(abc.ABC):
 
     def set_solver_options(self) -> None:
         """Sets PETSc solver parameters."""
-        if isinstance(solver_preset := self.solver_parameters, dict):
+        if isinstance(self.solver_parameters, dict):
             return
 
-        if solver_preset is not None:
-            match solver_preset:
+        if self.solver_parameters is not None:
+            match self.solver_parameters:
                 case "direct":
                     self.solver_parameters = direct_energy_solver_parameters.copy()
                 case "iterative":
                     self.solver_parameters = iterative_energy_solver_parameters.copy()
                 case _:
-                    raise ValueError(f"Solver type '{solver_preset}' not implemented.")
+                    raise ValueError(
+                        f"Solver type '{self.solver_parameters}' not implemented."
+                    )
         elif self.mesh.topological_dimension() == 2:
             self.solver_parameters = direct_energy_solver_parameters.copy()
         else:
@@ -247,13 +249,22 @@ class GenericTransportBase(abc.ABC):
 class GenericTransportSolver(GenericTransportBase):
     """Advances in time a generic transport equation.
 
-    All combinations of advection, diffusion, sink, and source terms are handled.
+    This solver handles all combinations of advection, diffusion, sink, and source
+    terms. Depending on the included terms, specific attributes must be provided
+    according to:
+
+    Term            Required attribute(s)                Optional attribute(s)
+    ------------------------------------------------------------------------------------
+    advection       u                          advective_velocity_scaling, su_nubar
+    diffusion       diffusivity                reference_for_diffusion, interior_penalty
+    source          source
+    sink            sink_coeff
 
     Note: The solution field is updated in place.
 
     Args:
       terms:
-        List of equation terms (refer to terms_mapping)
+        List of equation terms to include (a string for a single term is accepted)
       solution:
         Firedrake function for the field of interest
       delta_t:
