@@ -18,6 +18,7 @@ from gadopt.inverse import *
 
 # +
 mesh = UnitSquareMesh(40, 40)
+mesh.cartesian = True
 left, right, bottom, top = 1, 2, 3, 4  # Boundary IDs
 
 V = VectorFunctionSpace(mesh, "CG", 2)
@@ -50,7 +51,7 @@ T0 = interpolate(exp(-r2/w**2), Q)
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
-# collection = tripcolor(T0, axes=axes, cmap='magma', vmax=0.15)
+# collection = tripcolor(T0, axes=axes, cmap='magma', vmax=0.5)
 # fig.colorbar(collection);
 # -
 
@@ -73,7 +74,7 @@ with CheckpointFile("Model_State.h5", "w") as model_checkpoint:
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='magma', vmax=0.05)
+# collection = tripcolor(T, axes=axes, cmap='magma', vmax=0.02)
 # fig.colorbar(collection);
 # -
 
@@ -86,6 +87,7 @@ with CheckpointFile("Model_State.h5", "w") as model_checkpoint:
 
 with CheckpointFile("Model_State.h5", "r") as model_checkpoint:
     mesh = model_checkpoint.load_mesh()
+    mesh.cartesian = True
 
 # We now set up the model exactly as before:
 
@@ -136,6 +138,7 @@ m = Control(T0)
 J = AdjFloat(0.0)  # Initialise functional
 factor = AdjFloat(0.5)  # First & final boundary integral weighted by 0.5 to implement mid-point rule time-integration.
 
+T.project(T0)
 with CheckpointFile("Model_State.h5", "r") as model_checkpoint:
     for timestep in range(num_timesteps):
         T_target = model_checkpoint.load_function(mesh, 'Temperature', idx=timestep)
@@ -158,7 +161,7 @@ reduced_functional = ReducedFunctional(J, m)
 print(reduced_functional(T_wrong))
 
 
-# Now we rerun the model with the "correct" initial condition from the twin experiment, ending up with 
+# Now we re run the model with the "correct" initial condition from the twin experiment, ending up with
 # a near-zero misfit.
 
 # +
@@ -186,7 +189,7 @@ gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(gradJ, axes=axes, cmap='viridis')
+# collection = tripcolor(gradJ, axes=axes, cmap='viridis', vmin=-20, vmax=20)
 # fig.colorbar(collection);
 # -
 
@@ -194,7 +197,7 @@ gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
 # --------------------------------------------------------------------------------
 #
 # As in the previous example, we can now use ROL to invert for the inital condition.
-# We have last evaluated the reduced functional with a zero initial condition as the control value,
+# We last evaluated the reduced functional with a zero initial condition as the control value,
 # so this will be our initial guess.
 
 # We first set lower and upper bound values for the control, which we can
@@ -203,10 +206,11 @@ gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
 T_lb = Function(Q).assign(0.0)
 T_ub = Function(Q).assign(1.0)
 
-# We next specify our minimisation problem using the LinMore algorithm:
+# We next specify our minimisation problem using the LinMore algorithm. As this case is a
+# little more challenging, we specify 20 iterations as the limit.
 
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
-minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+minimisation_parameters["Status Test"]["Iteration Limit"] = 20
 
 # Define the LinMore Optimiser class:
 optimiser = LinMoreOptimiser(
@@ -233,7 +237,7 @@ reduced_functional.eval_cb_post = record_value
 # We next run the optimisation
 optimiser.run()
 
-# Let's see how well we have done. At this point a total number of 10 iterations
+# Let's see how well we have done. At this point a total number of 40 iterations
 # have been performed so lets plot convergence:
 
 # + tags=["active-ipynb"]
@@ -243,20 +247,21 @@ optimiser.run()
 # plt.title("Convergence")
 # -
 
-# We next plot the optimal initial condition:
+# This demonstrates that the functional value decreases by roughly two orders of
+# magnitude over the 40 iterations considered. As with the previous tutorial, the
+# functional value can be reduced further if more iterations are specified, or if
+# the optimisation procedure is configured to continue until a specified tolerance
+# is achieved. We can also visualise the optimised initial condition and compare to
+# the true initial condition:
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# collection = tripcolor(T_, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
+# fig, axes = plt.subplots(1,2,figsize=[8,4],subplot_kw={'aspect':1.0})
+# ax1 = tripcolor(T0.block_variable.checkpoint, axes=axes[0], cmap='magma', vmax=0.5)
+# ax2 = tripcolor(T0_ref, axes=axes[1], cmap='magma', vmax=0.5)
+# fig.subplots_adjust(right=0.82)
+# cbar_ax = fig.add_axes([0.85, 0.15, 0.02, 0.68])
+# fig.colorbar(ax2,cax=cbar_ax);
 # -
 
-# And next plot the reference initial condition:
 
-# + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# collection = tripcolor(T0, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
-# -
-
-# We can also compare these by calculating the difference and plotting.
+# Note bad. Not bad at all! Thank you for listening! Crowd. Goes. Wild.

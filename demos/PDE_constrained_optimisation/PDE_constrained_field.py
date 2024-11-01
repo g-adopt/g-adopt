@@ -29,6 +29,7 @@ from gadopt.inverse import *
 
 # +
 mesh = UnitSquareMesh(40, 40)
+mesh.cartesian = True
 left, right, bottom, top = 1, 2, 3, 4  # Boundary IDs.
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Function space for velocity.
@@ -98,6 +99,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 with CheckpointFile("Final_State.h5", "r") as final_checkpoint:
     mesh = final_checkpoint.load_mesh()
+    mesh.cartesian = True
     T_target = final_checkpoint.load_function(mesh, name="Temperature")
 
 # With this information stored, we now set up the model exactly as before:
@@ -216,7 +218,7 @@ gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(gradJ, axes=axes, cmap='viridis', vmin=-40, vmax=40)
+# collection = tripcolor(gradJ, axes=axes, cmap='viridis', vmin=-30, vmax=40)
 # fig.colorbar(collection);
 # -
 
