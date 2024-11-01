@@ -3,7 +3,7 @@ demo_cases := base_case 2d_cylindrical 3d_spherical 2d_compressible_ALA visualis
 
 notebook_files := $(foreach case,$(demo_cases),$(case)/$(notdir $(case)).ipynb) adjoint/adjoint_forward.ipynb
 
-.PHONY: all convert_demos $(cases) $(demo_cases) clean generate
+.PHONY: all convert_demos $(cases) $(demo_cases) clean generate check
 
 all: $(cases)
 
@@ -27,6 +27,10 @@ generate:
 	python3 generate_expected.py
 
 clean: $(cases)
+	rm -rf __pycache__
+
+check:
+	python3 -m pytest -m demo
 
 # pattern rule for executing demo scripts as a notebook
 %.ipynb: %.py

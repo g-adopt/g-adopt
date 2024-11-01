@@ -6,3 +6,4 @@ params.log: free_surface.py
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
+	rm -rf output
