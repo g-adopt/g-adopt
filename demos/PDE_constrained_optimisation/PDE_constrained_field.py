@@ -118,7 +118,7 @@ approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
 # Make our solver output a little less verbose, aiding interpretation of optimisation output below:
-energy_solver.solver_parameters.pop('ksp_converged_reason')
+del energy_solver.solver_parameters["ksp_converged_reason"]
 # -
 
 # This time, however, we don't want to use the known initial condition. Instead we will start with

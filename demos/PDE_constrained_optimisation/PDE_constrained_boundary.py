@@ -112,7 +112,7 @@ delta_t = 0.1
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 # Make our solver output a little less verbose:
-energy_solver.solver_parameters.pop('ksp_converged_reason')
+del energy_solver.solver_parameters["ksp_converged_reason"]
 # -
 
 # As a first guess we use a Gaussian that is in the wrong place: centred around $(0.7, 0.7)$
