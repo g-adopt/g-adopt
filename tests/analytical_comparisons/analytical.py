@@ -73,7 +73,6 @@ cases = {
 
 
 def get_case(cases, config):
-    print(config)
     config = config.split("_", maxsplit=2)
     while config:
         cases = cases[config.pop(0)]
