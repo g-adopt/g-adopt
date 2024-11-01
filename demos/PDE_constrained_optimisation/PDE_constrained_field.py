@@ -115,6 +115,7 @@ u.rename("Velocity")
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
+# Make our solver output a little less verbose:
 energy_solver.solver_parameters.pop('ksp_converged_reason')
 # -
 
@@ -232,7 +233,7 @@ gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
 # only permitted to lie in the range [0, 1]. This means that the optimisation problem should not search
 # for solutions beyond these values.
 
-# We therefore set lower and upper bounda values for the control, which we can
+# We therefore set lower and upper bound values for the control, which we can
 # provide as functions in the same function space as the control:
 
 T_lb = Function(Q).assign(0.0)

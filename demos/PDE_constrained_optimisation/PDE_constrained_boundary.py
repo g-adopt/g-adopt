@@ -23,6 +23,7 @@ left, right, bottom, top = 1, 2, 3, 4  # Boundary IDs
 V = VectorFunctionSpace(mesh, "CG", 2)
 Q = FunctionSpace(mesh, "CG", 1)
 T = Function(Q, name='Temperature')
+T0 = Function(Q, name="Initial_Temperature")  # T Initial condition which we will invert for.
 
 x, y = SpatialCoordinate(mesh)
 u = interpolate(as_vector((-y, x)), V)
@@ -44,33 +45,35 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 x0, y0 = 0.5, 0.5
 w = .2
 r2 = (x-x0)**2 + (y-y0)**2
-T.interpolate(exp(-r2/w**2))
+T0 = interpolate(exp(-r2/w**2), Q)
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='coolwarm')
+# collection = tripcolor(T0, axes=axes, cmap='magma', vmax=0.15)
 # fig.colorbar(collection);
 # -
 
-# We run this simulation for twenty timesteps to ensure the entire Gaussian has left the domain.
-# For this example, we checkpoint the solution at every timestep, so that we can later use it as the
-# target boundary values.
+# After setting the initial condition for T, we run this simulation for twenty timesteps to ensure
+# the entire Gaussian has left the domain. For this example, we checkpoint the solution at every
+# timestep, so that we can later use it as the target boundary values.
 
+num_timesteps = 20
+T.project(T0)
 with CheckpointFile("Model_State.h5", "w") as model_checkpoint:
     model_checkpoint.save_mesh(mesh)
-    for timestep in range(20):
+    for timestep in range(num_timesteps):
         model_checkpoint.save_function(T, idx=timestep)
         energy_solver.solve()
     # After saving idx=0, 19 at beginning of each timestep, we include idx=20 for the solution at
     # the end of the final timestep:
     model_checkpoint.save_function(T, idx=timestep)
 
-# As expected the solution has almost completely disappeared:
+# As expected the solution has almost completely disappeared (note the different scalebar):
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='coolwarm')
+# collection = tripcolor(T, axes=axes, cmap='magma', vmax=0.05)
 # fig.colorbar(collection);
 # -
 
@@ -79,17 +82,19 @@ with CheckpointFile("Model_State.h5", "w") as model_checkpoint:
 #
 # As with our previous example, we again set up the model with the same configuration, albeit where we
 # do not know the initial condition. We will try to find the optimal initial condition such that we closely
-# match the recored outflow boundary values.
+# match the recorded outflow boundary values.
 
 with CheckpointFile("Model_State.h5", "r") as model_checkpoint:
     mesh = model_checkpoint.load_mesh()
 
-# We now setup the model exactly as before:
+# We now set up the model exactly as before:
 
 # +
 V = VectorFunctionSpace(mesh, "CG", 2)
 Q = FunctionSpace(mesh, "CG", 1)
 T = Function(Q, name='Temperature')
+T0 = Function(Q, name="Initial_Temperature")
+T_wrong = Function(Q, name="Wrong_Initial_Temperature")
 
 x, y = SpatialCoordinate(mesh)
 u = interpolate(as_vector((-y, x)), V)
@@ -112,7 +117,7 @@ energy_solver.solver_parameters.pop('ksp_converged_reason')
 x0, y0 = 0.7, 0.7
 w = .2
 r2 = (x-x0)**2 + (y-y0)**2
-Twrong = interpolate(exp(-r2/w**2), Q)
+T_wrong = interpolate(exp(-r2/w**2), Q)
 
 # As in our first example, we make sure to clear the tape before our actual model starts and
 # specify the control at the right stage. During the model we load back in the solutions from the synthetic twin,
@@ -124,15 +129,15 @@ Twrong = interpolate(exp(-r2/w**2), Q)
 tape = get_working_tape()
 tape.clear_tape()
 
-T.interpolate(Twrong)
+T0.project(T_wrong)
 
-m = Control(T)
+m = Control(T0)
 
-J = AdjFloat(0.0)
-factor = AdjFloat(0.5)  # Note that the first and final boundary integral is weighted by 0.5 to implement mid-point rule time-integration.
+J = AdjFloat(0.0)  # Initialise functional
+factor = AdjFloat(0.5)  # First & final boundary integral weighted by 0.5 to implement mid-point rule time-integration.
 
 with CheckpointFile("Model_State.h5", "r") as model_checkpoint:
-    for timestep in range(20):
+    for timestep in range(num_timesteps):
         T_target = model_checkpoint.load_function(mesh, 'Temperature', idx=timestep)
         J = J + factor * assemble((T-T_target)**2*ds(left))
         factor = 1.0  # Remaining timesteps weighted by 1
@@ -146,63 +151,103 @@ print(J)
 # -
 
 # We define the reduced functional using the final value of `J` and the specified control. This allows us to rerun
-# the model with an arbitrary initial condition. Again we first try to simply rerun the model with the same "wrong"
-# initial condition.
+# the model with an arbitrary initial condition. As with our previous example, we first try to simply rerun the
+# model with the same "wrong" initial condition, and print the functional.
 
-Jhat = ReducedFunctional(J, m)
-Jhat(Twrong)
+reduced_functional = ReducedFunctional(J, m)
+print(reduced_functional(T_wrong))
 
 
-# Now try to rerun the model with "correct" initial condition from the twin experiment, and we see that indeed we end
-# up with a near-zero misfit.
+# Now we rerun the model with the "correct" initial condition from the twin experiment, ending up with 
+# a near-zero misfit.
 
 # +
+T0_ref = Function(Q, name="Reference_Initial_Temperature")
 x0, y0 = 0.5, 0.5
 w = .2
 r2 = (x-x0)**2 + (y-y0)**2
-T0 = interpolate(exp(-r2/w**2), Q)
+T0_ref = interpolate(exp(-r2/w**2), Q)
 
-Jhat(T0)
+print(reduced_functional(T0_ref))
 # -
 
 
 # We can again look at the gradient, but this time the gradient is a lot less intuitive. We evaluate the gradient
-# around an initial guess of T=0 as the initial condition
+# around an initial guess of T=0 as the initial condition, noting that when a Function is created its associated
+# data values are zero.
 
-T_init = Function(Q)
-Jhat(T_init)
+T_wrong.assign(0.0)
+reduced_functional(T_wrong)
 
 # In unstructured mesh optimisation problems, it is important to work in the L2 Riesz representation
 # to ensure a grid-independent result:
 
-gradJ = Jhat.derivative(options={"riesz_representation": "L2"})
+gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(gradJ, axes=axes, cmap='coolwarm')
+# collection = tripcolor(gradJ, axes=axes, cmap='viridis')
 # fig.colorbar(collection);
 # -
 
 # Invert for optimal initial condition using gradient-based optimisation algorithm
 # --------------------------------------------------------------------------------
 #
-# As in the previous example, we can now use L-BFGS-B to invert for the inital condition.
+# As in the previous example, we can now use ROL to invert for the inital condition.
 # We have last evaluated the reduced functional with a zero initial condition as the control value,
 # so this will be our initial guess.
 
-# First specify bounds of 0 and 1 which will be enforced during the optimisation:
+# We first set lower and upper bound values for the control, which we can
+# provide as functions in the same function space as the control:
 
-Tmin = Function(Q).assign(0.0)
-Tmax = Function(Q).assign(1.0)
+T_lb = Function(Q).assign(0.0)
+T_ub = Function(Q).assign(1.0)
 
-# And subsequently run the L-BFGS-B algorithm:
-T_opt = minimize(Jhat, method='L-BFGS-B', bounds=[Tmin, Tmax], tol=1e-10)
+# We next specify our minimisation problem using the LinMore algorithm:
 
-# Let's see how well we have done. We first plot the optimal initial condition:
+minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
+minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+
+# Define the LinMore Optimiser class:
+optimiser = LinMoreOptimiser(
+    minimisation_problem,
+    minimisation_parameters,
+)
+
+# And again use our callback function to record convergence:
+
+# +
+functional_values = []
+
+
+def record_value(value, *args):
+    if functional_values:
+        functional_values.append(min(value, min(functional_values)))
+    else:
+        functional_values.append(value)
+
+
+reduced_functional.eval_cb_post = record_value
+# -
+
+# We next run the optimisation
+optimiser.run()
+
+# Let's see how well we have done. At this point a total number of 10 iterations
+# have been performed so lets plot convergence:
+
+# + tags=["active-ipynb"]
+# plt.semilogy(functional_values)
+# plt.xlabel("Iteration #")
+# plt.ylabel("Functional value")
+# plt.title("Convergence")
+# -
+
+# We next plot the optimal initial condition:
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(T_opt, axes=axes, cmap='coolwarm')
+# collection = tripcolor(T_, axes=axes, cmap='coolwarm')
 # fig.colorbar(collection);
 # -
 
