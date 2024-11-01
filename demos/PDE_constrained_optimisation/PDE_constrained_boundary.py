@@ -2,7 +2,8 @@
 # ===========================================================
 #
 # In this tutorial, we undertake an inversion for an (unknown) initial condition, to match given
-# time-dependent boundary values.
+# time-dependent boundary values. This differs to our previous tutorial, where our goal was to
+# match a given final state.
 #
 # We start with our usual imports:
 
@@ -33,13 +34,8 @@ u.rename('Velocity')
 
 approximation = BoussinesqApproximation(Ra=1, kappa=5e-2)
 
-# Unlike the previous tutorial, we specify a zero Dirichlet boundary condition for temperature at
-# the bottom inflow boundary:
-temp_bcs = {
-    bottom: {'T': 0},
-}
 delta_t = 0.1
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
 # -
 
 # The initial condition that we, again, later will invert for, is now centered in the domain.
@@ -56,18 +52,18 @@ T0_ref.interpolate(exp(-r2/w**2))
 # fig.colorbar(collection);
 # -
 
-# After setting the initial condition for T, we run this simulation for twenty timesteps to ensure
+# After setting the initial condition for T, we run this simulation for 20 timesteps to ensure
 # the entire Gaussian has left the domain. For this example, we checkpoint the solution at every
 # timestep, so that we can later use it as the target boundary values.
 
-num_timesteps = 15
+num_timesteps = 20
 T.project(T0_ref)
 with CheckpointFile("Model_State.h5", "w") as model_checkpoint:
     model_checkpoint.save_mesh(mesh)
     for timestep in range(num_timesteps):
         model_checkpoint.save_function(T, idx=timestep)
         energy_solver.solve()
-    # After saving idx=0, 14 at beginning of each timestep, we include idx=15 for the solution at
+    # After saving idx=0, 19 at beginning of each timestep, we include idx=20 for the solution at
     # the end of the final timestep:
     model_checkpoint.save_function(T, idx=timestep)
 
@@ -105,11 +101,8 @@ u = interpolate(as_vector((-y, x)), V)
 u.rename('Velocity')
 
 approximation = BoussinesqApproximation(Ra=1, kappa=5e-2)
-temp_bcs = {
-    bottom: {'T': 0},
-}
 delta_t = 0.1
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
 
 # Make our solver output a little less verbose:
 del energy_solver.solver_parameters["ksp_converged_reason"]
@@ -133,7 +126,7 @@ T_wrong.interpolate(exp(-r2/w**2))
 tape = get_working_tape()
 tape.clear_tape()
 
-T0.project(T_wrong, bcs=energy_solver.strong_bcs)
+T0.project(T_wrong)
 
 m = Control(T0)
 
@@ -188,7 +181,7 @@ gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(gradJ, axes=axes, cmap='viridis', vmin=-20, vmax=20)
+# collection = tripcolor(gradJ, axes=axes, cmap='viridis', vmin=-10, vmax=10)
 # fig.colorbar(collection);
 # -
 
@@ -206,7 +199,7 @@ T_lb = Function(Q).assign(0.0)
 T_ub = Function(Q).assign(1.0)
 
 # We next specify our minimisation problem using the LinMore algorithm. As this case is a
-# little more challenging, we specify 50 iterations as the limit.
+# little more challenging than our previous tutorial, we specify 50 iterations as the limit.
 
 # +
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
