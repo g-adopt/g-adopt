@@ -53,7 +53,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
 x0, y0 = 0.75, 0.5
 w = 0.1
 r2 = (x - x0) ** 2 + (y - y0) ** 2
-T0 = interpolate(exp(-r2 / w**2), Q)
+T0.interpolate(exp(-r2 / w**2))
 # -
 
 
@@ -117,7 +117,7 @@ u.rename("Velocity")
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
-# Make our solver output a little less verbose:
+# Make our solver output a little less verbose, aiding interpretation of optimisation output below:
 energy_solver.solver_parameters.pop('ksp_converged_reason')
 # -
 

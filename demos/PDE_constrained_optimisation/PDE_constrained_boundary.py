@@ -47,7 +47,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 x0, y0 = 0.5, 0.5
 w = .2
 r2 = (x-x0)**2 + (y-y0)**2
-T0_ref = interpolate(exp(-r2/w**2), Q)
+T0_ref.interpolate(exp(-r2/w**2))
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
@@ -121,7 +121,7 @@ energy_solver.solver_parameters.pop('ksp_converged_reason')
 x0, y0 = 0.7, 0.7
 w = .2
 r2 = (x-x0)**2 + (y-y0)**2
-T_wrong = interpolate(exp(-r2/w**2), Q)
+T_wrong.interpolate(exp(-r2/w**2))
 
 # As in our first example, we make sure to clear the tape before our actual model starts and
 # specify the control at the right stage. During the model we load back in the solutions from the synthetic twin,
@@ -169,7 +169,7 @@ print(reduced_functional(T_wrong))
 x0, y0 = 0.5, 0.5
 w = .2
 r2 = (x-x0)**2 + (y-y0)**2
-T0_ref = interpolate(exp(-r2/w**2), Q)
+T0_ref.interpolate(exp(-r2/w**2))
 
 print(reduced_functional(T0_ref))
 
