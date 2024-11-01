@@ -41,6 +41,10 @@ generate:
 	python3 generate_expected.py
 
 clean: $(cases)
+	rm -rf __pycache__
+
+check:
+	python3 -m pytest -m demo
 
 # pattern rule for executing demo scripts as a notebook
 %.ipynb: %.py

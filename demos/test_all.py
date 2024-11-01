@@ -22,6 +22,16 @@ cases = {
 }
 
 
+def construct_pytest_params():
+    out = []
+    for case in cases:
+        if case.startswith(".."):
+            out.append(case)
+        else:
+            out.append(pytest.param(case, marks=pytest.mark.demo))
+    return out
+
+
 def get_convergence(base):
     return pd.read_csv(base / "params.log", sep="\\s+", header=0).iloc[-1]
 
@@ -42,7 +52,7 @@ def check_series(
     assert abs(actual.name - expected.name) <= convergence_tolerance
 
 
-@pytest.mark.parametrize("benchmark", cases.keys())
+@pytest.mark.parametrize("benchmark", construct_pytest_params())
 def test_benchmark(benchmark):
     """Test a benchmark case against the expected convergence result.
 
