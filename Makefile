@@ -18,3 +18,9 @@ longtest_output:
 # convert demo Python scripts to executed notebooks
 convert_demos:
 	$(MAKE) -C demos convert_demos
+
+clean:
+	$(MAKE) -C demos clean & $(MAKE) -C tests clean & wait
+
+check:
+	python -m pytest -m 'not longtest'

@@ -12,9 +12,21 @@ cases = {
     "3d_spherical": {"extra_checks": ["t_dev_avg"]},
     "3d_cartesian": {"rtol": 1e-4},
     "gplates_global": {"extra_checks": ["u_rms_top"]},
-    "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["avg_t", "FullT_min", "FullT_max"]},
+    "../tests/2d_cylindrical_TALA_DG": {
+        "extra_checks": ["avg_t", "FullT_min", "FullT_max"]
+    },
     "../tests/viscoplastic_case_dg": {"extra_checks": ["avg_t"]},
 }
+
+
+def construct_pytest_params():
+    out = []
+    for case in cases:
+        if case.startswith(".."):
+            out.append(case)
+        else:
+            out.append(pytest.param(case, marks=pytest.mark.demo))
+    return out
 
 
 def get_convergence(base):
@@ -30,14 +42,16 @@ def check_series(
     extra_checks,
 ):
     pd.testing.assert_series_equal(
-        actual[["u_rms", "nu_top"] + extra_checks], expected,
-        check_names=False, **compare_params
+        actual[["u_rms", "nu_top"] + extra_checks],
+        expected,
+        check_names=False,
+        **compare_params,
     )
 
     assert abs(actual.name - expected.name) <= convergence_tolerance
 
 
-@pytest.mark.parametrize("benchmark", cases.keys())
+@pytest.mark.parametrize("benchmark", construct_pytest_params())
 def test_benchmark(benchmark):
     """Test a benchmark case against the expected convergence result.
 
