@@ -274,6 +274,7 @@ reduced_functional.eval_cb_post = record_value
 # -
 
 # We next run the optimisation
+
 optimiser.run()
 
 # At this point a total number of 10 iterations are performed. Once the optimisation

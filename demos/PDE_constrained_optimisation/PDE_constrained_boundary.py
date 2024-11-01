@@ -25,6 +25,7 @@ V = VectorFunctionSpace(mesh, "CG", 2)
 Q = FunctionSpace(mesh, "CG", 1)
 T = Function(Q, name='Temperature')
 T0 = Function(Q, name="Initial_Temperature")  # T Initial condition which we will invert for.
+T0_ref = Function(Q, name="Reference_Initial_Temperature")
 
 x, y = SpatialCoordinate(mesh)
 u = interpolate(as_vector((-y, x)), V)
@@ -46,12 +47,12 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 x0, y0 = 0.5, 0.5
 w = .2
 r2 = (x-x0)**2 + (y-y0)**2
-T0 = interpolate(exp(-r2/w**2), Q)
+T0_ref = interpolate(exp(-r2/w**2), Q)
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
-# collection = tripcolor(T0, axes=axes, cmap='magma', vmax=0.5)
+# collection = tripcolor(T0_ref, axes=axes, cmap='magma', vmax=0.5)
 # fig.colorbar(collection);
 # -
 
@@ -59,22 +60,22 @@ T0 = interpolate(exp(-r2/w**2), Q)
 # the entire Gaussian has left the domain. For this example, we checkpoint the solution at every
 # timestep, so that we can later use it as the target boundary values.
 
-num_timesteps = 20
-T.project(T0)
+num_timesteps = 15
+T.project(T0_ref)
 with CheckpointFile("Model_State.h5", "w") as model_checkpoint:
     model_checkpoint.save_mesh(mesh)
     for timestep in range(num_timesteps):
         model_checkpoint.save_function(T, idx=timestep)
         energy_solver.solve()
-    # After saving idx=0, 19 at beginning of each timestep, we include idx=20 for the solution at
+    # After saving idx=0, 14 at beginning of each timestep, we include idx=15 for the solution at
     # the end of the final timestep:
     model_checkpoint.save_function(T, idx=timestep)
 
-# As expected the solution has almost completely disappeared (note the different scalebar):
+# The solution has almost completely disappeared (note the different scalebar):
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='magma', vmax=0.02)
+# collection = tripcolor(T, axes=axes, cmap='magma', vmax=0.1)
 # fig.colorbar(collection);
 # -
 
@@ -96,6 +97,7 @@ V = VectorFunctionSpace(mesh, "CG", 2)
 Q = FunctionSpace(mesh, "CG", 1)
 T = Function(Q, name='Temperature')
 T0 = Function(Q, name="Initial_Temperature")
+T0_ref = Function(Q, name="Reference_Initial_Temperature")
 T_wrong = Function(Q, name="Wrong_Initial_Temperature")
 
 x, y = SpatialCoordinate(mesh)
@@ -131,7 +133,7 @@ T_wrong = interpolate(exp(-r2/w**2), Q)
 tape = get_working_tape()
 tape.clear_tape()
 
-T0.project(T_wrong)
+T0.project(T_wrong, bcs=energy_solver.strong_bcs)
 
 m = Control(T0)
 
@@ -164,15 +166,12 @@ print(reduced_functional(T_wrong))
 # Now we re run the model with the "correct" initial condition from the twin experiment, ending up with
 # a near-zero misfit.
 
-# +
-T0_ref = Function(Q, name="Reference_Initial_Temperature")
 x0, y0 = 0.5, 0.5
 w = .2
 r2 = (x-x0)**2 + (y-y0)**2
 T0_ref = interpolate(exp(-r2/w**2), Q)
 
 print(reduced_functional(T0_ref))
-# -
 
 
 # We can again look at the gradient, but this time the gradient is a lot less intuitive. We evaluate the gradient
@@ -207,16 +206,18 @@ T_lb = Function(Q).assign(0.0)
 T_ub = Function(Q).assign(1.0)
 
 # We next specify our minimisation problem using the LinMore algorithm. As this case is a
-# little more challenging, we specify 20 iterations as the limit.
+# little more challenging, we specify 50 iterations as the limit.
 
+# +
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
-minimisation_parameters["Status Test"]["Iteration Limit"] = 20
+minimisation_parameters["Status Test"]["Iteration Limit"] = 50
 
 # Define the LinMore Optimiser class:
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
 )
+# -
 
 # And again use our callback function to record convergence:
 
@@ -234,11 +235,12 @@ def record_value(value, *args):
 reduced_functional.eval_cb_post = record_value
 # -
 
-# We next run the optimisation
+# We next run the optimisation:
+
 optimiser.run()
 
-# Let's see how well we have done. At this point a total number of 40 iterations
-# have been performed so lets plot convergence:
+# Let's see how well we have done. At this point a total number of 50 iterations
+# have been performed so let's plot convergence:
 
 # + tags=["active-ipynb"]
 # plt.semilogy(functional_values)
@@ -247,8 +249,8 @@ optimiser.run()
 # plt.title("Convergence")
 # -
 
-# This demonstrates that the functional value decreases by roughly two orders of
-# magnitude over the 40 iterations considered. As with the previous tutorial, the
+# This demonstrates that the functional value decreases by roughly three orders of
+# magnitude over the 50 iterations considered. As with the previous tutorial, the
 # functional value can be reduced further if more iterations are specified, or if
 # the optimisation procedure is configured to continue until a specified tolerance
 # is achieved. We can also visualise the optimised initial condition and compare to
