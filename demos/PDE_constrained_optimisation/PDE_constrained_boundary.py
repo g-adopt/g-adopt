@@ -167,9 +167,9 @@ T0_ref.interpolate(exp(-r2/w**2))
 print(reduced_functional(T0_ref))
 
 
-# We can again look at the gradient, but this time the gradient is a lot less intuitive. We evaluate the gradient
-# around an initial guess of T=0 as the initial condition, noting that when a Function is created its associated
-# data values are zero.
+# We can again look at the gradient. We evaluate the gradient
+# around an initial guess of T=0 as the initial condition, noting
+# that when a Function is created its associated data values are zero.
 
 T_wrong.assign(0.0)
 reduced_functional(T_wrong)
@@ -181,7 +181,7 @@ gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(gradJ, axes=axes, cmap='viridis', vmin=-10, vmax=10)
+# collection = tripcolor(gradJ, axes=axes, cmap='viridis', vmin=-5, vmax=5)
 # fig.colorbar(collection);
 # -
 
