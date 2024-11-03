@@ -54,6 +54,8 @@ def original_mesh():
 
 with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
     mesh = f.load_mesh("firedrake_default_extruded")
+    T = f.load_function(mesh, "Temperature")  # Load temperature from checkpoint
+    z = f.load_function(mesh, "Stokes")  # Load velocity and pressure from checkpoint
 # We set the mesh `cartesian` attribute to False, which ensures that
 # the unit vector points radially, in the direction opposite to gravity.
 mesh.cartesian = False
@@ -65,7 +67,6 @@ W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
-z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
@@ -123,12 +124,7 @@ Tbar = approximation_profiles["Tbar"]
 mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
 interpolate_1d_profile(function=mu_rad, one_d_filename="initial_condition_mat_prop/mu2_radial.txt")
 
-# We next set up and initialise our Temperature field from a checkpoint:
-X = SpatialCoordinate(mesh)
-T = Function(Q, name="Temperature")
-r = sqrt(X[0]**2 + X[1]**2)
-with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
-    T = f.load_function(mesh, "Temperature")
+# We next set up and initialise auxiliary fields associated with temperature:
 FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
 T_avg = Function(Q, name='Layer_Averaged_Temp')
 averager = LayerAveraging(mesh, quad_degree=6)
@@ -205,16 +201,16 @@ gd = GeodynamicalDiagnostics(z, FullT, bottom_id, top_id, quad_degree=6)
 # passing in the approximation, nullspace and near-nullspace information configured above.
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
 stokes_solver.solver_parameters['snes_rtol'] = 1e-2
 stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-3
+stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-7
 stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
+stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
+
 
 # We now initiate the time loop, which runs for the number of timesteps specified above.
 
