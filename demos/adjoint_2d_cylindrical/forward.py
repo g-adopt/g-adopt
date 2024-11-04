@@ -6,25 +6,6 @@ final condition, and synthetic forcing (surface velocity observations).
 from gadopt import *
 import numpy as np
 
-newton_stokes_solver_parameters = {
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-10,
-    "snes_rtol": 1e-5,
-    "snes_stol": 0,
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-    "snes_converged_reason": None,
-    "fieldsplit_0": {
-        "ksp_converged_reason": None,
-    },
-    "fieldsplit_1": {
-        "ksp_converged_reason": None,
-    },
-}
-
 
 def run_forward():
     # Set up geometry:
@@ -54,7 +35,6 @@ def run_forward():
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
     Ra = Constant(1e7)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
 
     # Define time stepping parameters:
     max_timesteps = 200
@@ -102,6 +82,9 @@ def run_forward():
 
     mu_function = Function(W, name="Viscosity")
 
+    # Configure approximation
+    approximation = BoussinesqApproximation(Ra, mu=mu)
+
     # Calculate the layer average of the initial state
     averager = LayerAveraging(
         mesh, np.linspace(rmin, rmax, nlayers * 2), quad_degree=6
@@ -136,13 +119,17 @@ def run_forward():
         z,
         T,
         approximation,
-        mu=mu,
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace,
-        solver_parameters=newton_stokes_solver_parameters,
+        near_nullspace=Z_near_nullspace
     )
+
+    # Overwrite detault solver parameters to use a direct solver for Stokes system.
+    stokes_solver.solver_parameters["mat_type"] = "aij"
+    stokes_solver.solver_parameters["ksp_type"] = "preonly"
+    stokes_solver.solver_parameters["pc_type"] = "lu"
+    stokes_solver.solver_parameters["pc_factor_mat_solver_type"] = "mumps"
 
     # Create output file and select output_frequency
     output_file = VTKFile("vtu-files/output.pvd")

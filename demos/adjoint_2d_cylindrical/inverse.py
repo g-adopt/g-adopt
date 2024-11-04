@@ -10,25 +10,6 @@ from gadopt.inverse import *
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
-newton_stokes_solver_parameters = {
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-10,
-    "snes_rtol": 1e-5,
-    "snes_stol": 0,
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-    "snes_converged_reason": None,
-    "fieldsplit_0": {
-        "ksp_converged_reason": None,
-    },
-    "fieldsplit_1": {
-        "ksp_converged_reason": None,
-    },
-}
-
 
 def main():
     inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
@@ -79,7 +60,6 @@ def inverse(alpha_u, alpha_d, alpha_s):
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
     Ra = Constant(1e7)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
 
     # Define time stepping parameters:
     max_timesteps = 200
@@ -135,6 +115,9 @@ def inverse(alpha_u, alpha_d, alpha_s):
     mu_eff = 2 * (mu_lin * mu_plast) / (mu_lin + mu_plast)
     mu = conditional(mu_eff > 0.4, mu_eff, 0.4)
 
+    # Configure approximation
+    approximation = BoussinesqApproximation(Ra, mu=mu)
+
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(
@@ -159,13 +142,17 @@ def inverse(alpha_u, alpha_d, alpha_s):
         z,
         T,
         approximation,
-        mu=mu,
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace,
-        solver_parameters=newton_stokes_solver_parameters,
+        near_nullspace=Z_near_nullspace
     )
+
+    # Overwrite detault solver parameters to use a direct solver for Stokes system.
+    stokes_solver.solver_parameters["mat_type"] = "aij"
+    stokes_solver.solver_parameters["ksp_type"] = "preonly"
+    stokes_solver.solver_parameters["pc_type"] = "lu"
+    stokes_solver.solver_parameters["pc_factor_mat_solver_type"] = "mumps"
 
     # Control variable for optimisation
     control = Control(Tic)
@@ -241,6 +228,9 @@ def inverse(alpha_u, alpha_d, alpha_s):
     T_ub.assign(1.0)
 
     minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
+
+    # Here we limit the number of optimisation iterations to 10, for CI and demo tractability.
+    minimisation_parameters["Status Test"]["Iteration Limit"] = 10
 
     optimiser = LinMoreOptimiser(
         minimisation_problem,
