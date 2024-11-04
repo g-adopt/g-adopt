@@ -1,6 +1,6 @@
 all: params.log
 
-ncpus := 16
+ncpus := 4
 
 params.log: 2d_cylindrical_TALA_DG.py
 	echo "running $<" >&2
