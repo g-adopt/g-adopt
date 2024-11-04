@@ -154,6 +154,7 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # our approximation, alongside other parameters already mentioned.
 
 # +
+Ra = 3e5
 Ra_c_reference = 0
 Ra_c_dense = 4.5e5
 Ra_c = material_field(psi, [Ra_c_dense, Ra_c_reference], interface="sharp")
@@ -299,7 +300,7 @@ while True:
 # restart the simulation, if required.
 
 # +
-output_file.write(*z.subfunctions, psi, time=time_now)
+output_file.write(*z.subfunctions, T, psi, time=time_now)
 plog.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:

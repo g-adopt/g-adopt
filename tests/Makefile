@@ -1,7 +1,7 @@
 cases := analytical_comparisons multi_material optimisation_checkpointing scalar_advection_diffusion Drucker-Prager_rheology adjoint viscoplastic_case_dg free_surface viscoelastic
 long_cases := analytical_comparisons parallel_scaling 2d_cylindrical_TALA_DG
 
-.PHONY: all longtest longtest_output $(cases) $(long_cases) clean
+.PHONY: all longtest longtest_output $(cases) $(long_cases) clean check longcheck
 
 all: $(cases)
 
@@ -14,3 +14,10 @@ $(sort $(cases) $(long_cases)):
 	$(MAKE) -C $@ $(MAKECMDGOALS)
 
 clean: $(cases)
+	rm -rf __pycache__
+
+check:
+	python -m pytest . ../demos -m 'not demo and not longtest'
+
+longcheck:
+	python -m pytest -m longtest

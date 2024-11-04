@@ -7,3 +7,12 @@ all: $(cases)
 $(cases):
 	echo "running $@ multi-material benchmark"
 	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 run_benchmark.py $@
+
+clean:
+	@$(foreach case, $(cases), \
+		rm -rf $(case) ; \
+	)
+	rm -rf __pycache__ benchmarks/*.msh benchmarks/__pycache__
+
+check: $(cases)
+	python3 -m pytest

@@ -4,7 +4,7 @@ demo_type := $(notdir $(realpath $(dir $(CURDIR))))
 demo_name := $(notdir $(CURDIR))
 ncpus := 4
 
-params.log: 3d_spherical.py
+params.log: thermochemical_buoyancy.py
 	$(info running $<)
 	/usr/bin/time --format="$< finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 

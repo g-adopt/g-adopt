@@ -4,7 +4,9 @@ import pandas as pd
 import pytest
 
 mc_path = "mantle_convection"
+mm_path = "multi_material"
 gia_path = "glacial_isostatic_adjustment"
+tests_path = "../tests"
 
 cases = {
     f"{mc_path}/base_case": {"extra_checks": ["nu_top"]},
@@ -16,9 +18,24 @@ cases = {
     f"{mc_path}/3d_spherical": {"extra_checks": ["nu_top", "t_dev_avg"]},
     f"{mc_path}/3d_cartesian": {"extra_checks": ["nu_top"], "rtol": 1e-4},
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
-    "../tests/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
+    f"{mm_path}/compositional_buoyancy": {"extra_checks": ["entrainment"]},
+    f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
     f"{gia_path}/gia_base_case": {"extra_checks": ["disp_min", "disp_max"]},
+    f"{tests_path}/2d_cylindrical_TALA_DG": {
+        "extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]
+    },
+    f"{tests_path}/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
 }
+
+
+def construct_pytest_params():
+    out = []
+    for case in cases:
+        if case.startswith(".."):
+            out.append(case)
+        else:
+            out.append(pytest.param(case, marks=pytest.mark.demo))
+    return out
 
 
 def get_convergence(base):
@@ -34,13 +51,16 @@ def check_series(
     extra_checks,
 ):
     pd.testing.assert_series_equal(
-        actual[["u_rms"] + extra_checks], expected, check_names=False, **compare_params
+        actual[["u_rms"] + extra_checks],
+        expected,
+        check_names=False,
+        **compare_params,
     )
 
     assert abs(actual.name - expected.name) <= convergence_tolerance
 
 
-@pytest.mark.parametrize("benchmark", cases.keys())
+@pytest.mark.parametrize("benchmark", construct_pytest_params())
 def test_benchmark(benchmark):
     """Test a benchmark case against the expected convergence result.
 
