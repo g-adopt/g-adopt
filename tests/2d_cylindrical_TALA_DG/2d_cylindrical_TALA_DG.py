@@ -205,7 +205,6 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                              near_nullspace=Z_near_nullspace)
-stokes_solver.solver_parameters['snes_rtol'] = 1e-2
 stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
 stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
 
