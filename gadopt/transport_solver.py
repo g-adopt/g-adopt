@@ -36,9 +36,11 @@ iterative_energy_solver_parameters: dict[str, Any] = {
 
 Configured to use the GMRES Krylov scheme with Successive Over Relaxation (SOR)
 preconditioning. Note that default energy solver parameters can be augmented or adjusted
-by accessing the solver_parameter dictionary, for example:
-energy_solver.solver_parameters['ksp_converged_reason'] = None
-energy_solver.solver_parameters['ksp_rtol'] = 1e-4
+by accessing the solver_parameter dictionary.
+
+Examples:
+    >>> energy_solver.solver_parameters['ksp_converged_reason'] = None
+    >>> energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 
 Note:
   G-ADOPT defaults to iterative solvers in 3-D.
@@ -65,7 +67,7 @@ class GenericTransportBase(abc.ABC):
 
     All combinations of advection, diffusion, sink, and source terms are handled.
 
-    Note: The solution field is updated in place.
+    **Note**: The solution field is updated in place.
 
     Args:
       solution:
@@ -249,18 +251,19 @@ class GenericTransportBase(abc.ABC):
 class GenericTransportSolver(GenericTransportBase):
     """Advances in time a generic transport equation.
 
-    This solver handles all combinations of advection, diffusion, sink, and source
-    terms. Depending on the included terms, specific attributes must be provided
-    according to:
+    **Note**: The solution field is updated in place.
 
-    Term            Required attribute(s)                Optional attribute(s)
-    ------------------------------------------------------------------------------------
-    advection       u                          advective_velocity_scaling, su_nubar
-    diffusion       diffusivity                reference_for_diffusion, interior_penalty
-    source          source
-    sink            sink_coeff
+    Terms and Attributes:
+        This solver handles all combinations of advection, diffusion, sink, and source
+        terms. Depending on the included terms, specific attributes must be provided
+        according to:
 
-    Note: The solution field is updated in place.
+        |   Term    | Required attribute(s) |           Optional attribute(s)           |
+        | --------- | --------------------- | ----------------------------------------- |
+        | advection | u                     | advective_velocity_scaling, su_nubar      |
+        | diffusion | diffusivity           | reference_for_diffusion, interior_penalty |
+        | source    | source                |                                           |
+        | sink      | sink_coeff            |                                           |
 
     Args:
       terms:
@@ -315,7 +318,7 @@ class GenericTransportSolver(GenericTransportBase):
 class EnergySolver(GenericTransportBase):
     """Advances in time the energy conservation equation.
 
-    Note: The solution field is updated in place.
+    **Note**: The solution field is updated in place.
 
     Args:
       solution:
