@@ -57,8 +57,8 @@ def original_mesh():
 
 with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
     mesh = f.load_mesh("firedrake_default_extruded")
-    z = f.load_function(mesh, "Stokes")  # Load velocity and pressure from checkpoint
     T = f.load_function(mesh, "Temperature")  # Load temperature from checkpoint
+    z = f.load_function(mesh, "Stokes")  # Load velocity and pressure from checkpoint
 # We set the mesh `cartesian` attribute to False, which ensures that
 # the unit vector points radially, in the direction opposite to gravity.
 mesh.cartesian = False
@@ -222,7 +222,8 @@ stokes_solver = StokesSolver(
         "near_nullspace": Z_near_nullspace,
     },
 )
-stokes_solver.solver_parameters["snes_rtol"] = 1e-2
+stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
+stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
 
 # We next setup our output, in VTK format.
 # We also open a file for logging and calculate our diagnostic outputs.
