@@ -8,7 +8,7 @@ params.log: $(demo_name).py
 	/usr/bin/time --format="$< finished in %E" tsp -f python3 $<
 
 clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.gif
+	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.gif *.msh
 	rm -rf density ice mesh output viscosity
 
 check: params.log
