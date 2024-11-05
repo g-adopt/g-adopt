@@ -190,9 +190,9 @@ T.project(Tic, bcs=energy_solver.strong_bcs)
 u_misfit = 0.0
 
 # Next populate the tape by running the forward simulation. ** NOTE ** for the purpose of this tutorial, we only
-# invert for a total of 20 time-steps. This makes it tractable to run this within a tutorial session. To run for
-# the simulation's full duration, change the initial time-step to `0` instead of `timesteps - 20`.
-initial_timestep = timesteps - 20
+# invert for a total of 10 time-steps. This makes it tractable to run this within a tutorial session. To run for
+# the simulation's full duration, change the initial time-step to `0` instead of `timesteps - 10`.
+initial_timestep = timesteps - 10
 for time_idx in range(initial_timestep, timesteps):
     stokes_solver.solve()
     energy_solver.solve()
@@ -419,7 +419,7 @@ optimiser.run()
 # -
 
 # At this point a total number of 10 iterations are performed. For the example
-# case here with 20 timesteps this should result an adequete reduction
+# case here with 10 timesteps this should result an adequete reduction
 # in the objective functional. Now we can look at the solution
 # visually. For the actual simulation with 80 time-steps, this solution
 # could be compared to `Tic_ref` as the "true solution".
