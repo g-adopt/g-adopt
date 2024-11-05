@@ -14,15 +14,10 @@
 # -------------
 # Let's get started!
 # The first step is to import the gadopt module, which provides access to Firedrake and
-# associated functionality. We also import pyvista and matplotlib, for plotting.
-
-# +
-import matplotlib.pyplot as plt
-import pyvista as pv
+# associated functionality.
 
 from gadopt import *
 from gadopt.utility import step_func, vertical_component
-# -
 
 # In this tutorial we are going to use a fully unstructured mesh, created using
 # [Gmsh](https://gmsh.info/). We have used Gmsh to construct a triangular mesh with a
@@ -81,13 +76,18 @@ log(f"Number of Incremental displacement and Pressure DOF: {V.dim() + W.dim()}")
 # We can now visualise the resulting mesh. As you can see there is finer resolution near
 # the surface compared with the lower mantle.
 
-VTKFile("mesh.pvd").write(Function(V))
-mesh_data = pv.read("mesh/mesh_0.vtu")
-edges = mesh_data.extract_all_edges()
-plotter = pv.Plotter(notebook=True)
-plotter.add_mesh(edges, color="black")
-plotter.camera_position = "xy"
-plotter.show(jupyter_backend="static", interactive=False)
+# + tags=["active-ipynb"]
+# import pyvista as pv
+# import matplotlib.pyplot as plt
+
+# VTKFile("mesh.pvd").write(Function(V))
+# mesh_data = pv.read("mesh/mesh_0.vtu")
+# edges = mesh_data.extract_all_edges()
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(edges, color="black")
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
+# -
 
 # Let's start initialising some parameters. First of all let's get the (symbolic)
 # spatial coordinates of the mesh.
@@ -131,39 +131,39 @@ initialise_background_field(G, G_values)
 # Let's have a quick look at the density field using PyVista. We can see that the mesh
 # is still quite coarse, but it is able to capture the layered structure.
 
-# +
-# Read the PVD file
-VTKFile("density.pvd").write(rho)
-reader = pv.get_reader("density.pvd")
-data = reader.read()[0]  # MultiBlock mesh with only 1 block
+# + tags=["active-ipynb"]
+# # Read the PVD file
+# VTKFile("density.pvd").write(rho)
+# reader = pv.get_reader("density.pvd")
+# data = reader.read()[0]  # MultiBlock mesh with only 1 block
 
-# Create a plotter object
-plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+# # Create a plotter object
+# plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
 
-# Make a colour map
-boring_cmap = plt.get_cmap("viridis", 25)
-# Add the warped displacement field to the frame
-plotter.add_mesh(
-    data,
-    component=None,
-    lighting=False,
-    show_edges=True,
-    edge_color="grey",
-    cmap=boring_cmap,
-    scalar_bar_args={
-        "title": "Density (kg / m^3)",
-        "position_x": 0.8,
-        "position_y": 0.2,
-        "vertical": True,
-        "title_font_size": 20,
-        "label_font_size": 16,
-        "fmt": "%.0f",
-        "font_family": "arial",
-    },
-)
-plotter.camera_position = "xy"
-plotter.show()
-plotter.close()  # Closes and finalizes movie
+# # Make a colour map
+# boring_cmap = plt.get_cmap("viridis", 25)
+# # Add the warped displacement field to the frame
+# plotter.add_mesh(
+#     data,
+#     component=None,
+#     lighting=False,
+#     show_edges=True,
+#     edge_color="grey",
+#     cmap=boring_cmap,
+#     scalar_bar_args={
+#         "title": "Density (kg / m^3)",
+#         "position_x": 0.8,
+#         "position_y": 0.2,
+#         "vertical": True,
+#         "title_font_size": 20,
+#         "label_font_size": 16,
+#         "fmt": "%.0f",
+#         "font_family": "arial",
+#     },
+# )
+# plotter.camera_position = "xy"
+# plotter.show()
+# plotter.close()  # Closes and finalizes movie
 # -
 
 # Next let's initialise the viscosity field. In this tutorial we are going to make
@@ -233,39 +233,39 @@ mu = Function(mu_scaled, name="Viscosity").interpolate(1e23 * 10**mu_scaled)
 
 # Now let's plot the normalised viscosity viscosity field on a log plot (we have divided the viscosity by 1x10$^{23}$ Pa s). Again although we are using a coarse mesh we are able to capture the key features of the viscosity field.
 
-# +
-# Read the PVD file
-VTKFile("viscosity.pvd").write(mu_scaled)
-reader = pv.get_reader("viscosity.pvd")
-data = reader.read()[0]  # MultiBlock mesh with only 1 block
+# + tags=["active-ipynb"]
+# # Read the PVD file
+# VTKFile("viscosity.pvd").write(mu_scaled)
+# reader = pv.get_reader("viscosity.pvd")
+# data = reader.read()[0]  # MultiBlock mesh with only 1 block
 
-# Create a plotter object
-plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+# # Create a plotter object
+# plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
 
-# Make a colour map
-boring_cmap = plt.get_cmap("inferno_r", 25)
-# Add the warped displacement field to the frame
-plotter.add_mesh(
-    data,
-    component=None,
-    lighting=False,
-    show_edges=True,
-    edge_color="grey",
-    cmap=boring_cmap,
-    scalar_bar_args={
-        "title": "Normalised viscosity",
-        "position_x": 0.8,
-        "position_y": 0.2,
-        "vertical": True,
-        "title_font_size": 20,
-        "label_font_size": 16,
-        "fmt": "%.0f",
-        "font_family": "arial",
-    },
-)
-plotter.camera_position = "xy"
-plotter.show()
-plotter.close()  # Closes and finalizes movie
+# # Make a colour map
+# boring_cmap = plt.get_cmap("inferno_r", 25)
+# # Add the warped displacement field to the frame
+# plotter.add_mesh(
+#     data,
+#     component=None,
+#     lighting=False,
+#     show_edges=True,
+#     edge_color="grey",
+#     cmap=boring_cmap,
+#     scalar_bar_args={
+#         "title": "Normalised viscosity",
+#         "position_x": 0.8,
+#         "position_y": 0.2,
+#         "vertical": True,
+#         "title_font_size": 20,
+#         "label_font_size": 16,
+#         "fmt": "%.0f",
+#         "font_family": "arial",
+#     },
+# )
+# plotter.camera_position = "xy"
+# plotter.show()
+# plotter.close()  # Closes and finalizes movie
 # -
 
 # Now let's setup the ice load. For this tutorial we will have two synthetic ice sheets.
@@ -302,82 +302,82 @@ ice_load = rho_ice * g * (Hice_1 * disc_1 + Hice_2 * disc_2)
 # Let's visualise the ice thickness using PyVista by plotting a ring outside our
 # synthetic Earth.
 
-# +
-# Read the PVD file
-ice_thickness = Function(W, name="Ice thickness").interpolate(
-    Hice_1 * disc_1 + Hice_2 * disc_2
-)
-zero_ice_thickness = Function(W, name="Zero ice thickness")  # Used for plotting later
-VTKFile("ice.pvd").write(ice_thickness, zero_ice_thickness)
-reader = pv.get_reader("ice.pvd")
-data = reader.read()[0]  # MultiBlock mesh with only 1 block
-# Make two points at the bounds of the mesh and one at the center to construct a
-# circular arc.
-center = [0, 0, 0]
-normal = [0, 0, 1]
-polar = [radius_values[0] - surface_dx / 2, 0, 0]
-angle = 360.0
-arc = pv.CircularArcFromNormal(center, 500, normal, polar, angle)
-arc_data = arc.sample(data)
+# + tags=["active-ipynb"]
+# # Read the PVD file
+# ice_thickness = Function(W, name="Ice thickness").interpolate(
+#     Hice_1 * disc_1 + Hice_2 * disc_2
+# )
+# zero_ice_thickness = Function(W, name="Zero ice thickness")  # Used for plotting later
+# VTKFile("ice.pvd").write(ice_thickness, zero_ice_thickness)
+# reader = pv.get_reader("ice.pvd")
+# data = reader.read()[0]  # MultiBlock mesh with only 1 block
+# # Make two points at the bounds of the mesh and one at the center to construct a
+# # circular arc.
+# center = [0, 0, 0]
+# normal = [0, 0, 1]
+# polar = [radius_values[0] - surface_dx / 2, 0, 0]
+# angle = 360.0
+# arc = pv.CircularArcFromNormal(center, 500, normal, polar, angle)
+# arc_data = arc.sample(data)
 
-# Stretch line by 20%
-transform_matrix = np.array(
-    [
-        [1.2, 0, 0, 0],
-        [0, 1.2, 0, 0],
-        [0, 0, 1.2, 0],
-        [0, 0, 0, 1],
-    ]
-)
+# # Stretch line by 20%
+# transform_matrix = np.array(
+#     [
+#         [1.2, 0, 0, 0],
+#         [0, 1.2, 0, 0],
+#         [0, 0, 1.2, 0],
+#         [0, 0, 0, 1],
+#     ]
+# )
 
-transformed_arc_data = arc_data.transform(transform_matrix)
-ice_cmap = plt.get_cmap("Blues", 25)
+# transformed_arc_data = arc_data.transform(transform_matrix)
+# ice_cmap = plt.get_cmap("Blues", 25)
 
-reader = pv.get_reader("viscosity.pvd")
-data = reader.read()[0]  # MultiBlock mesh with only 1 block
+# reader = pv.get_reader("viscosity.pvd")
+# data = reader.read()[0]  # MultiBlock mesh with only 1 block
 
-# Create a plotter object
-plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+# # Create a plotter object
+# plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
 
-# Make a colour map
-boring_cmap = plt.get_cmap("inferno_r", 25)
-# Add the warped displacement field to the frame
-plotter.add_mesh(
-    data,
-    component=None,
-    lighting=False,
-    show_edges=True,
-    edge_color="grey",
-    cmap=boring_cmap,
-    scalar_bar_args={
-        "title": "Normalised viscosity",
-        "position_x": 0.8,
-        "position_y": 0.3,
-        "vertical": True,
-        "title_font_size": 20,
-        "label_font_size": 16,
-        "fmt": "%.0f",
-        "font_family": "arial",
-    },
-)
-plotter.add_mesh(
-    transformed_arc_data,
-    line_width=10,
-    cmap=ice_cmap,
-    scalar_bar_args={
-        "title": "Ice thickness (m)",
-        "position_x": 0.1,
-        "position_y": 0.3,
-        "vertical": True,
-        "title_font_size": 20,
-        "label_font_size": 16,
-        "fmt": "%.0f",
-        "font_family": "arial",
-    },
-)
-plotter.camera_position = "xy"
-plotter.show()
-plotter.close()  # Closes and finalizes movie
+# # Make a colour map
+# boring_cmap = plt.get_cmap("inferno_r", 25)
+# # Add the warped displacement field to the frame
+# plotter.add_mesh(
+#     data,
+#     component=None,
+#     lighting=False,
+#     show_edges=True,
+#     edge_color="grey",
+#     cmap=boring_cmap,
+#     scalar_bar_args={
+#         "title": "Normalised viscosity",
+#         "position_x": 0.8,
+#         "position_y": 0.3,
+#         "vertical": True,
+#         "title_font_size": 20,
+#         "label_font_size": 16,
+#         "fmt": "%.0f",
+#         "font_family": "arial",
+#     },
+# )
+# plotter.add_mesh(
+#     transformed_arc_data,
+#     line_width=10,
+#     cmap=ice_cmap,
+#     scalar_bar_args={
+#         "title": "Ice thickness (m)",
+#         "position_x": 0.1,
+#         "position_y": 0.3,
+#         "vertical": True,
+#         "title_font_size": 20,
+#         "label_font_size": 16,
+#         "fmt": "%.0f",
+#         "font_family": "arial",
+#     },
+# )
+# plotter.camera_position = "xy"
+# plotter.show()
+# plotter.close()  # Closes and finalizes movie
 # -
 
 # Let's setup the timestepping parameters with a timestep of 200 years and an output frequency of 1000 years.

@@ -9,7 +9,7 @@ params.log: $(demo_name).py
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.gif *.msh
-	rm -rf density ice mesh output viscosity
+	rm -rf output
 
 check: params.log
 	python3 -m pytest ../../test_all.py -k $(demo_type)/$(demo_name)
