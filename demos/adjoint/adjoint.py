@@ -61,6 +61,9 @@ Tobs.rename("Observed Temperature")
 # Load the reference initial state - i.e. the state that we wish to recover:
 Tic_ref = checkpoint_file.load_function(mesh, "Temperature", idx=int(temperature_timestepping_info["index"][0]))
 Tic_ref.rename("Reference Initial Temperature")
+# Load the 1-D profile, `Taverage` - which will later be used for the smoothing term in our objective functional,
+# and will also be used for our initial guess.
+Taverage = checkpoint_file.load_function(mesh, "Average Temperature", idx=int(temperature_timestepping_info["index"][0]))
 checkpoint_file.close()
 
 # These fields can be visualised using standard VTK software, such as Paraview or pyvista.
@@ -163,19 +166,20 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
 # Define control function space:
 Q1 = FunctionSpace(mesh, "CG", 1)
 
-# Create a function for the initial temperature field:
-Tic = Function(Q1, name="Initial Temperature")
+# Create a function for the unknown initial temperature condition, which we will be inverting for. Our initial
+# guess is set to the 1-D average of the forward model:
+Tic = Function(Q1, name="Initial_Condition_Temperature").assign(Taverage)
 
-# Project the temperature field from the reference simulation's final time-step onto the control space as our
-# initial guess:
-with CheckpointFile(checkpoint_filename, mode="r") as fi:
-    Tic.project(fi.load_function(mesh, "Temperature", idx=timesteps - 1))
-# -
+# Given that Tic will be updated during the optimisation, we also create a function to store our initial guess,
+# which we will later use for smoothing. Note that sinces smoothing is executed in the control space, we must
+# specify boundary conditions on this term in that same Q1 space.
+T0_bcs = [DirichletBC(Q1, 0., top_id), DirichletBC(Q1, 1., bottom_id)]
+T0 = Function(Q1, name="Initial_Guess_Temperature").project(Tic, bcs=T0_bcs)
 
 # We next make pyadjoint aware of our control problem:
 control = Control(Tic)
 
-# Take our initial guess and project from Q1 to Q2, simultaneously imposing strong temperature boundary conditions.
+# Take our initial guess and project to T, simultaneously applying boundary conditions in the Q2 space:
 T.project(Tic, bcs=energy_solver.strong_bcs)
 
 # We continue by integrating the solutions at each time-step.
@@ -186,9 +190,9 @@ T.project(Tic, bcs=energy_solver.strong_bcs)
 u_misfit = 0.0
 
 # Next populate the tape by running the forward simulation. ** NOTE ** for the purpose of this tutorial, we only
-# invert for a total of 5 time-steps. This makes it tractable to run this within a tutorial session. To run for
-# the simulation's full duration, change the initial time-step to `0` instead of `timesteps - 5`.
-initial_timestep = timesteps - 5
+# invert for a total of 20 time-steps. This makes it tractable to run this within a tutorial session. To run for
+# the simulation's full duration, change the initial time-step to `0` instead of `timesteps - 20`.
+initial_timestep = timesteps - 20
 for time_idx in range(initial_timestep, timesteps):
     stokes_solver.solve()
     energy_solver.solve()
@@ -211,13 +215,6 @@ for time_idx in range(initial_timestep, timesteps):
 # the reference simulation as our regularisation constraint. This profile, referred to below as `Taverage`, helps
 # stabilise the inversion process by providing a benchmark that guides the solution towards physically plausible states.
 #
-# The 1-D profile, `Taverage`, is also loaded from the checkpoint file
-
-# Load the 1-D average temperature profile from checkpoint file:
-Taverage = Function(Q1, name="Average Temperature")
-with CheckpointFile(checkpoint_filename, mode="r") as fi:
-    Taverage.project(fi.load_function(mesh, "Average Temperature", idx=0))
-
 # We use `Taverage` as a part of the damping and smoothing terms in our regularisation.
 # Consequently, the complete objective functional is defined mathematically as follows:
 #
@@ -246,9 +243,9 @@ with CheckpointFile(checkpoint_filename, mode="r") as fi:
 
 # +
 # Define component terms of overall objective functional and their normalisation terms:
-damping = assemble((Tic - Taverage) ** 2 * dx)
+damping = assemble((T0 - Taverage) ** 2 * dx)
 norm_damping = assemble(Taverage**2 * dx)
-smoothing = assemble(dot(grad(Tic - Taverage), grad(Tic - Taverage)) * dx)
+smoothing = assemble(dot(grad(T0 - Taverage), grad(T0 - Taverage)) * dx)
 norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
 norm_obs = assemble(Tobs**2 * dx)
 norm_u_surface = assemble(dot(uobs, uobs) * ds_t)
@@ -422,7 +419,7 @@ optimiser.run()
 # -
 
 # At this point a total number of 10 iterations are performed. For the example
-# case here with 5 timesteps this should result an adequete reduction
+# case here with 20 timesteps this should result an adequete reduction
 # in the objective functional. Now we can look at the solution
 # visually. For the actual simulation with 80 time-steps, this solution
 # could be compared to `Tic_ref` as the "true solution".
