@@ -363,10 +363,10 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # optimisation problems.
 #
 # For our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`.
-# Here, we set the number of iterations to only 10, as opposed to the default 100. We also adjust the step-length for this problem,
+# Here, we set the number of iterations to only 5, as opposed to the default 100. We also adjust the step-length for this problem,
 # by setting it to a lower value than our default.
 
-minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+minimisation_parameters["Status Test"]["Iteration Limit"] = 5
 minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1e-2
 
 # A notable feature of this optimisation approach in ROL is its checkpointing capability. For every iteration,
@@ -418,7 +418,7 @@ reduced_functional.eval_cb_post = record_value
 optimiser.run()
 # -
 
-# At this point a total number of 10 iterations are performed. For the example
+# At this point a total number of 5 iterations are performed. For the example
 # case here with 10 timesteps this should result an adequete reduction
 # in the objective functional. Now we can look at the solution
 # visually. For the actual simulation with 80 time-steps, this solution
@@ -432,7 +432,7 @@ optimiser.run()
 # plotter = pv.Plotter()
 # # Add the dataset to the plotter
 # plotter.add_mesh(dataset, scalars=dataset[0].array_names[0], cmap='coolwarm')
-# plotter.add_text("Solution after 10 iterations", font_size=10)
+# plotter.add_text("Solution after 5 iterations", font_size=10)
 # # Adjust the camera position
 # plotter.camera_position = [(0.5, 0.5, 2.5), (0.5, 0.5, 0), (0, 1, 0)]
 # # Show the plot
