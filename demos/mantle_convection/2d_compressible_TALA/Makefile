@@ -4,7 +4,7 @@ demo_type := $(notdir $(realpath $(dir $(CURDIR))))
 demo_name := $(notdir $(CURDIR))
 ncpus := 4
 
-params.log: 2d_compressible_TALA.py
+params.log: $(demo_name).py
 	$(info running $<)
 	/usr/bin/time --format="$< finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 

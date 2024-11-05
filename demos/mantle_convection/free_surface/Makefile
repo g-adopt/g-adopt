@@ -3,7 +3,7 @@ all: params.log
 demo_type := $(notdir $(realpath $(dir $(CURDIR))))
 demo_name := $(notdir $(CURDIR))
 
-params.log: free_surface.py
+params.log: $(demo_name).py
 	$(info running $<)
 	/usr/bin/time --format="$< finished in %E" tsp -f python3 $<
 

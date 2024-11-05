@@ -1,18 +1,19 @@
-cases := crameri_2012 gerya_2003 robey_2019 schmalholz_2011 schmeling_2008 tosi_2015 trim_2023 van_keken_1997_isothermal van_keken_1997_thermochemical
-
+case_dir=benchmarks
+cases := $(notdir $(wildcard ${case_dir}/*))
 ncpus := 8
 
 all: $(cases)
 
 $(cases):
-	echo "running $@ multi-material benchmark"
+	$(info running $@ multi-material benchmark)
 	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 run_benchmark.py $@
 
 clean:
-	@$(foreach case, $(cases), \
-		rm -rf $(case) ; \
-	)
-	rm -rf __pycache__ benchmarks/*.msh benchmarks/__pycache__
+	rm -rf __pycache__
+	@$(foreach case,$(cases),rm -rf ${case_dir}/$(case)/__pycache__;)
+	@$(foreach case,$(cases),rm -rf ${case_dir}/$(case)/outputs;)
+	@$(foreach case,$(cases),rm -f ${case_dir}/$(case)/*.pdf;)
+	@$(foreach case,$(cases),rm -f ${case_dir}/$(case)/*.npz;)
 
 check: $(cases)
 	python3 -m pytest

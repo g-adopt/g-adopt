@@ -1,9 +1,10 @@
 all: params.log
 
+demo_name := $(notdir $(CURDIR))
 ncpus := 4
 
-params.log: viscoplastic_case_DG.py
-	echo "running $<" >&2
+params.log: $(demo_name).py
+	$(info running $<)
 	/usr/bin/time --format="$< finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 
 clean:
@@ -11,4 +12,4 @@ clean:
 	rm -rf output __pycache__
 
 check: params.log
-	python3 -m pytest ../../demos/test_all.py -k "../tests/viscoplastic_case_dg"
+	python3 -m pytest ../../demos/test_all.py -k ../tests/$(demo_name)
