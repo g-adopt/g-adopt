@@ -638,5 +638,8 @@ class ViscoelasticStokesSolver(StokesSolver):
     def solve(self):
         super().solve()
         # Update history stress term for using as a RHS explicit forcing in the next timestep
-        self.stress_old.interpolate(self.approximation.prefactor_prestress(self.dt) * self.approximation.stress(self.u, self.stress_old, self.dt))
-        self.displacement.interpolate(self.displacement+self.u)
+        # Interpolating with adjoint seems to need subfunction...
+        # otherwise 'map toset must be same as Dataset' error
+        u_sub = self.solution.subfunctions[0]
+        self.stress_old.interpolate(self.approximation.prefactor_prestress(self.dt) * self.approximation.stress(u_sub, self.stress_old, self.dt))
+        self.displacement.interpolate(self.displacement+u_sub)
