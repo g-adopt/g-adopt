@@ -26,10 +26,12 @@ import matplotlib.pyplot as plt
 # attribute to `False`. This ensures the correct configuration of a radially inward vertical direction.
 
 # Set up geometry:
-D = 2891e3  # Depth of domain in m
+from unstructured_annulus import generate_mesh
+generate_mesh()
 mesh = Mesh("unstructured_annulus_refined_surface.msh")
 bottom_id, top_id = 1, 2
 mesh.cartesian = False
+D = 2891e3  # Depth of domain in m
 
 # We next set up the function spaces, and specify functions to hold our solutions. As our mesh is now made up of triangles instead of quadrilaterals, the syntax for defining our finite elements changes slighty. We need to specify *Continuous Galerkin* elements, i.e. replace `Q` with `CG` instead.
 
