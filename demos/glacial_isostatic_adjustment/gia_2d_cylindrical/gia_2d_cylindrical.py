@@ -255,7 +255,7 @@ disc1_centre = (2*pi/360) * 25  # centre of disc1
 disc2_centre = pi  # centre of disc2
 disc1 = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surface_resolution_radians)))
 disc2 = 0.5*(1-tanh((abs(abs(colatitude)-disc2_centre) - disc_halfwidth2) / (2*surface_resolution_radians)))
-ice_load = Function(W).interpolate(Constant(1)*rho_ice * g * (Hice1 * disc1 + Hice2 * disc2))
+ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 
 
 # -
