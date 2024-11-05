@@ -323,15 +323,15 @@ S = TensorFunctionSpace(mesh, "DQ", 2)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 # Output function space information:
-log("Number of Velocity DOF:", V.dim())
-log("Number of Pressure DOF:", W.dim())
-log("Number of Velocity and Pressure DOF:", V.dim() + W.dim())
+log(f"Number of Incremental displacement DOF: {V.dim()}")
+log(f"Number of Pressure DOF: {W.dim()}")
+log(f"Number of Incremental displacement and Pressure DOF: {V.dim() + W.dim()}")
 
 # Function spaces can be combined in the natural way to create mixed function spaces,
 # combining the incremental displacement and pressure spaces to form a function space
 # for the mixed Stokes problem, `Z`.
 
-Z = MixedFunctionSpace([V, W])  # Mixed function space.
+Z = MixedFunctionSpace([V, W])  # Mixed function space
 
 # We also specify functions to hold our solutions: `z` in the mixed function space,
 # noting that a symbolic representation of the two parts – incremental displacement and
@@ -345,7 +345,6 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 z = Function(Z)  # a field over the mixed function space Z
 z.subfunctions[0].rename("Incremental displacement")
 z.subfunctions[1].rename("Pressure")
-u, p = split(z)  # Returns indexed UFL expressions for u and p
 
 displ = Function(V, name="Displacement")
 tau_old = Function(S, name="Deviatoric stress (old)")
@@ -360,7 +359,6 @@ X = SpatialCoordinate(mesh)
 # the density, shear modulus, and viscosity only vary in the vertical direction. We will
 # approximate the series of layers using a smooth hyperbolic tangent function with a
 # width of 20 km.
-
 
 # +
 def initialise_background_field(field, background_values, vertical_tanh_width=20e3):
@@ -420,8 +418,8 @@ time_end = time_end_years * year_in_seconds
 time = Function(R).assign(time_start)
 
 dt_years = 250
-dt_out_years = 2e3
 dt = dt_years * year_in_seconds
+dt_out_years = 2e3
 dt_out = dt_out_years * year_in_seconds
 
 max_timesteps = round((time_end - time_start) / dt)
@@ -447,9 +445,6 @@ log(f"Simulation start time: {time_start_years} years")
 # Initialise ice loading
 
 # +
-rho_ice = 931
-g = 9.8125
-
 t1_load = 90e3 * year_in_seconds
 t2_load = 100e3 * year_in_seconds
 ramp_after_t1 = conditional(
@@ -457,19 +452,22 @@ ramp_after_t1 = conditional(
 )
 ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
 
+rho_ice = 931
+g = 9.8125
+Hice = 1000
+
 # Disc ice load but with a smooth transition given by a hyperbolic tangent profile
 disc_radius = 100e3
 disc_delta_x = 5e3
 k_disc = 2 * pi / 8 / disc_delta_x  # wavenumber for disk 2 * pi / lambda
 disc = 0.5 * (1 - tanh(k_disc * (X[0] - disc_radius)))
-Hice = 1000
 
 ice_load = ramp * rho_ice * g * Hice * disc
 # -
 
 # We can now define the boundary conditions to be used in this simulation. Let's set the
 # bottom and side boundaries to be free slip with no normal flow
-# $\textbf{u} \cdot \textbf{n} =0$. By passing the string `ux` and `uy`, G-ADOPT knows
+# $\textbf{u} \cdot \textbf{n} = 0$. By passing the string `ux` and `uy`, G-ADOPT knows
 # to specify these as strong Dirichlet boundary conditions.
 
 # For the top surface we need to specify a normal stress, i.e. the weight of the ice

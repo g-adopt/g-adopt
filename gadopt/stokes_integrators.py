@@ -640,9 +640,9 @@ def create_stokes_nullspace(
       translations:
         List of translations to include
       approximation:
-        AnelasticLiquidApproximation for calculating (non-constant) right nullspace
+        Approximation (ALA) for calculating (non-constant) right nullspace
       top_subdomain_id:
-        Boundary id of top surface. Required when providing approximation.
+        Boundary id of top surface; required when providing approximation
 
     Returns:
       A Firedrake mixed vector space basis incorporating the null space components

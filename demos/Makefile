@@ -8,7 +8,7 @@ mm_dir=multi_material
 mm_demos := compositional_buoyancy thermochemical_buoyancy
 
 gia_dir=glacial_isostatic_adjustment
-gia_demos := gia_base_case
+gia_demos := gia_base_case gia_2d_cylindrical
 
 notebook_files := $(foreach case,$(mc_demos),$(mc_dir)/$(case)/$(notdir $(case)).ipynb)
 notebook_files := $(foreach case,$(mm_demos),$(mm_dir)/$(case)/$(notdir $(case)).ipynb)
