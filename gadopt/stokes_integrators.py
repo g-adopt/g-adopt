@@ -598,7 +598,7 @@ class ViscoelasticStokesSolver(StokesSolver):
         approximation.mu = approximation.effective_viscosity(self.dt)
 
         # This isn't used in the viscoelastic code but StokesSolver currently assumes temperature is required as an argument
-        T_placeholder = approximation.density
+        T_placeholder = fd.Constant(0)
 
         super().__init__(z, T_placeholder, approximation, bcs=bcs,
                          quad_degree=quad_degree, solver_parameters=solver_parameters,
