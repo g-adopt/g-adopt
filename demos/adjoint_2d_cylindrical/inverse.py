@@ -7,9 +7,6 @@ used as the goal condition for nonlinear optimisation using ROL.
 from gadopt import *
 from gadopt.inverse import *
 
-ds_t = ds_t(degree=6)
-dx = dx(degree=6)
-
 
 def main():
     inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
@@ -145,14 +142,9 @@ def inverse(alpha_u, alpha_d, alpha_s):
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace
+        near_nullspace=Z_near_nullspace,
+        solver_parameters="direct"
     )
-
-    # Overwrite detault solver parameters to use a direct solver for Stokes system.
-    stokes_solver.solver_parameters["mat_type"] = "aij"
-    stokes_solver.solver_parameters["ksp_type"] = "preonly"
-    stokes_solver.solver_parameters["pc_type"] = "lu"
-    stokes_solver.solver_parameters["pc_factor_mat_solver_type"] = "mumps"
 
     # Control variable for optimisation
     control = Control(Tic)

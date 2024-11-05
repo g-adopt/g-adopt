@@ -11,9 +11,6 @@ import sys
 
 from cases import cases
 
-ds_t = ds_t(degree=6)
-dx = dx(degree=6)
-
 
 def annulus_taylor_test(case):
     """
@@ -147,14 +144,9 @@ def annulus_taylor_test(case):
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace
+        near_nullspace=Z_near_nullspace,
+        solver_parameters="direct"
     )
-
-    # Overwrite detault solver parameters to use a direct solver for Stokes system.
-    stokes_solver.solver_parameters["mat_type"] = "aij"
-    stokes_solver.solver_parameters["ksp_type"] = "preonly"
-    stokes_solver.solver_parameters["pc_type"] = "lu"
-    stokes_solver.solver_parameters["pc_factor_mat_solver_type"] = "mumps"
 
     # Control variable for optimisation
     control = Control(Tic)
