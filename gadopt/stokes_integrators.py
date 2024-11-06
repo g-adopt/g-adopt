@@ -357,7 +357,7 @@ class StokesSolver(MassMomentumBase):
         self,
         solution: Function,
         approximation: Approximation,
-        T: Function = Constant(0.0),
+        T: Function | float = 0.0,
         /,
         *,
         timestep_fs: float | None = None,
@@ -492,8 +492,8 @@ class StokesSolver(MassMomentumBase):
 
     def solver_callback(self) -> None:
         # The old free surface height must be updated for an implicit free surface.
-        for eta, eta_old in zip(self.solution_split[2:], self.eta_old):
-            eta_old.interpolate(eta)
+        for eta, eta_old in zip(self.solution.subfunctions[2:], self.eta_old):
+            eta_old.assign(eta)
 
 
 class ViscoelasticSolver(MassMomentumBase):

@@ -5,6 +5,7 @@ depending on what they would like to achieve.
 """
 
 import os
+from functools import cached_property
 from logging import getLevelName
 
 import numpy as np
@@ -429,7 +430,7 @@ class LayerAveraging:
 class InteriorBC(DirichletBC):
     """DirichletBC applied to anywhere that is *not* on the specified boundary"""
 
-    @utils.cached_property
+    @cached_property
     def nodes(self) -> np.ndarray:
         return np.array(
             list(set(range(self._function_space.node_count)) - set(super().nodes))

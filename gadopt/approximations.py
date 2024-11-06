@@ -270,9 +270,9 @@ class Approximation:
     def buoyancy(
         self,
         *,
-        p: fd.Constant | fd.ufl.indexed.Indexed = fd.Constant(0),
-        T: fd.Constant | fd.Function = fd.Constant(0),
-        displ: fd.Constant | fd.Function = fd.Constant(0),
+        p: fd.ufl.indexed.Indexed | float = 0.0,
+        T: fd.Function | float = 0.0,
+        displ: fd.Function | float = 0.0,
         params_fs: dict[str, Any] | None = None,
     ) -> fd.ufl.algebra.Sum:
         """Calculates the buoyancy term in the momentum conservation.
