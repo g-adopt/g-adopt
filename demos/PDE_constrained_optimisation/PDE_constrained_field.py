@@ -115,8 +115,10 @@ u = Function(V, name="Velocity").interpolate(as_vector((-y + 0.5, x - 0.5)))
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
+
 # Make our solver output a little less verbose, aiding interpretation of optimisation output below:
-del energy_solver.solver_parameters["ksp_converged_reason"]
+if "ksp_converged_reason" in energy_solver.solver_parameters:
+    del energy_solver.solver_parameters["ksp_converged_reason"]
 # -
 
 # This time, however, we don't want to use the known initial condition. Instead we will start with
