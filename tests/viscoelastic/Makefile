@@ -8,4 +8,7 @@ errors-%-zhong-free-surface.dat: zhong_viscoelastic_free_surface.py
 	/usr/bin/time --format="$< $* finished in %E" tsp -f python3 $< --case $*
 	
 clean:
-	rm -rf errors*.dat
+	rm -rf errors*.dat __pycache__
+
+check: $(output_files)
+	python3 -m pytest

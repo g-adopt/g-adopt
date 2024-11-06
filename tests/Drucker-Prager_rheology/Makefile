@@ -7,4 +7,7 @@ $(cases): spiegelman.py
 	/usr/bin/time --format="spiegelman $@ finished in %E" tsp -f python3 $< $@
 
 clean:
-	rm -rf $(addprefix spiegelman_,$(cases))
+	rm -rf $(addprefix spiegelman_,$(cases)) __pycache__
+
+check: $(addprefix spiegelman_,$(cases))
+	python -m pytest

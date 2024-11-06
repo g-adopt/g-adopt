@@ -17,9 +17,19 @@ cases = {
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
     "../tests/2d_cylindrical_TALA_DG": {"extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]},
     "../tests/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
-    f"{gia_path}/gia_base_case": {"extra_checks": ["disp_min", "disp_max"]},
-    f"{gia_path}/gia_2d_cylindrical": {"extra_checks": ["disp_min", "disp_max"]},
+    f"{gia_path}/base_case": {"extra_checks": ["disp_min", "disp_max"]},
+    f"{gia_path}/2d_cylindrical": {"extra_checks": ["disp_min", "disp_max"]},
 }
+
+
+def construct_pytest_params():
+    out = []
+    for case in cases:
+        if case.startswith(".."):
+            out.append(case)
+        else:
+            out.append(pytest.param(case, marks=pytest.mark.demo))
+    return out
 
 
 def get_convergence(base):
@@ -42,7 +52,7 @@ def check_series(
     assert abs(actual.name - expected.name) <= convergence_tolerance
 
 
-@pytest.mark.parametrize("benchmark", cases.keys())
+@pytest.mark.parametrize("benchmark", construct_pytest_params())
 def test_benchmark(benchmark):
     """Test a benchmark case against the expected convergence result.
 
