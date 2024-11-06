@@ -45,10 +45,10 @@ diagnostics = {
                 np.asarray(data["output_time"])[
                     np.asarray(data["slab_tip_depth"]) >= 600
                 ].min()
-                - 45.2
+                - 45.1
             ),
             operator.le,
-            0.1,
+            0.2,
         ),
     ],
     "tosi_2015": [

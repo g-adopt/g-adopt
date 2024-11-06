@@ -9,7 +9,7 @@ params.log: $(demo_name).py
 	/usr/bin/time --format="$< finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 
 clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
+	rm -f *.pvd *.vtu *.pvtu *.h5 *.msh params.log
 	rm -rf output
 
 check: params.log
