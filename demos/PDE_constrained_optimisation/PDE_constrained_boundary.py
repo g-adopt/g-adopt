@@ -259,4 +259,4 @@ optimiser.run()
 # -
 
 
-# Note bad. Not bad at all! Thank you for listening! Crowd. Goes. Wild.
+# Not bad. Not bad at all! Thank you for listening! Crowd. Goes. Wild.
