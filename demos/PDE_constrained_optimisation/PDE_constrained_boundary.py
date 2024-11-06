@@ -29,8 +29,7 @@ T0 = Function(Q, name="Initial_Temperature")  # T Initial condition which we wil
 T0_ref = Function(Q, name="Reference_Initial_Temperature")
 
 x, y = SpatialCoordinate(mesh)
-u = interpolate(as_vector((-y, x)), V)
-u.rename('Velocity')
+u = Function(V, name="Velocity").interpolate(as_vector((-y, x)))
 
 approximation = BoussinesqApproximation(Ra=1, kappa=5e-2)
 
@@ -97,8 +96,7 @@ T0_ref = Function(Q, name="Reference_Initial_Temperature")
 T_wrong = Function(Q, name="Wrong_Initial_Temperature")
 
 x, y = SpatialCoordinate(mesh)
-u = interpolate(as_vector((-y, x)), V)
-u.rename('Velocity')
+u = Function(V, name="Velocity").interpolate(as_vector((-y, x)))
 
 approximation = BoussinesqApproximation(Ra=1, kappa=5e-2)
 delta_t = 0.1

@@ -39,8 +39,7 @@ T0 = Function(Q, name="Initial_Temperature")  # T Initial condition which we wil
 
 # Set up prescribed velocity field -- an anti-clockwise rotation around (0.5, 0.5):
 x, y = SpatialCoordinate(mesh)
-u = interpolate(as_vector((-y + 0.5, x - 0.5)), V)
-u.rename("Velocity")
+u = Function(V, name="Velocity").interpolate(as_vector((-y + 0.5, x - 0.5)))
 
 # The Rayleigh number, Ra, is not actually used here, but we set a value for the diffusivity, kappa.
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
@@ -111,8 +110,7 @@ T = Function(Q, name="Temperature")
 T0 = Function(Q, name="Initial_Temperature")
 
 x, y = SpatialCoordinate(mesh)
-u = interpolate(as_vector((-y + 0.5, x - 0.5)), V)
-u.rename("Velocity")
+u = Function(V, name="Velocity").interpolate(as_vector((-y + 0.5, x - 0.5)))
 
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
