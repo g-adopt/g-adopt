@@ -416,6 +416,10 @@ reduced_functional.eval_cb_post = record_value
 
 # Run the optimisation
 optimiser.run()
+
+# Write the functional values to a file
+with open("functional.txt", "w") as f:
+    f.write("\n".join(str(x) for x in functional_values))
 # -
 
 # At this point a total number of 5 iterations are performed. For the example
