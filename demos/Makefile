@@ -20,7 +20,7 @@ $(mc_dir)/free_surface/free_surface.ipynb: $(mc_dir)/base_case/base_case.ipynb
 
 ### make mantle_convection/base_case should just run the mantle_convection/base_case demo
 ### make mantle_convection should run all mantle convection demos
-$(mc_cases) $(mm_cases) $(gia_cases) $(mc_dir) $(mm_dir) $(gia_dir):
+$(all_cases) $(mc_dir) $(mm_dir) $(gia_dir):
 	$(MAKE) -C $@
 
 generate:
@@ -28,7 +28,7 @@ generate:
 
 clean:
 	rm -rf __pycache__
-	@$(foreach case, $(mc_cases) $(mm_cases) $(gia_cases), \
+	@$(foreach case, $(all_cases), \
 		$(MAKE) -C $(case) $(MAKECMDGOALS) ; \
 	)
 
