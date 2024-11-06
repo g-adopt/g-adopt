@@ -2,7 +2,7 @@ all: params.log
 current_dir := $(notdir $(patsubst %/,%,$(CURDIR)))
 test_class := $(notdir $(patsubst %/,%,$(dir $(CURDIR))))
 
-params.log: gia_base_case.py
+params.log: base_case.py
 	echo "running $<" >&2
 	/usr/bin/time --format="$@ finished in %E" tsp -f python3 $<
 

@@ -19,4 +19,4 @@ gia_demos := $(addprefix $(gia_dir)/,$(gia_demos))
 # sort to remove duplicates which define both tests and demos
 gia_cases := $(addprefix $(gia_dir)/,$(sort $(gia_tests) $(gia_demos)))
 
-notebook_files := $(foreach case,$(mc_demos) $(mm_demos) $(gia_demos),$(case)/$(notdir $(case)).ipynb) adjoint/adjoint_forward.ipynb
+notebook_files := $(foreach case,$(mc_demos) $(mm_demos) $(gia_demos),$(case)/$(notdir $(case)).ipynb) $(mc_dir)/adjoint/adjoint_forward.ipynb
