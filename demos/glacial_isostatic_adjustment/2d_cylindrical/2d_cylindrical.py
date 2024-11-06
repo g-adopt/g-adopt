@@ -589,4 +589,108 @@ for timestep in range(max_timesteps+1):
 
 # ![SegmentLocal](displacement_warp.gif "segment")
 
+# + endofcell="--"
+# # +
+from gadopt import *
+import pyvista as pv
+import matplotlib.pyplot as plt
 
+# Mesh parameters
+rmin = 3480e3
+rmax = 6371e3
+nz=32
+ncells = 170
+D = rmax-rmin
+dz = D / nz
+
+
+def setup_mesh(degree):
+    # Set up geometry:
+    surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=degree, name='surface_mesh')
+    return ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type='radial')
+
+
+def setup_ice_thickness(mesh):
+    W = FunctionSpace(mesh,"CG", 1)
+    Hice = 1000
+    disc_halfwidth1 = (2*pi/360) * 10  # Disk half width in radians
+    surface_resolution_radians = 2*pi / ncells
+    X = SpatialCoordinate(mesh)
+    colatitude = atan2(X[0], X[1])
+    disc1_centre = (2*pi/360) * 25  # centre of disc1
+    disc1 = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surface_resolution_radians)))
+    return Function(W, name="Ice thickness").interpolate(Hice * disc1)
+
+
+def make_ice_ring(reader):
+    data = reader.read()[0]
+
+    normal = [0, 0, 1]
+    polar = [rmax-dz/2, 0, 0]
+    center = [0, 0, 0]
+    angle = 360.0
+    res = 10000
+    arc = pv.CircularArcFromNormal(center, res, normal, polar, angle)
+    
+    arc_data = arc.sample(data)
+    print(arc_data.get_array("Ice thickness").max())
+
+    # Stretch line by 20%
+    transform_matrix = np.array(
+        [
+            [1.2, 0, 0, 0],
+            [0, 1.2, 0, 0],
+            [0, 0, 1.2, 0],
+            [0, 0, 0, 1],
+        ]
+    )
+    return arc_data.transform(transform_matrix)
+
+
+def make_ice_plot(ice_ring):
+    ice_cmap = plt.get_cmap("Blues", 25)
+    plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+    
+    plotter.add_mesh(
+        ice_ring,
+        line_width=10,
+        cmap=ice_cmap,
+        scalar_bar_args={
+            "title": 'Ice thickness (m)',
+            "position_x": 0.1,
+            "position_y": 0.3,
+            "vertical": True,
+            "title_font_size": 20,
+            "label_font_size": 16,
+            "fmt": "%.0f",
+            "font_family": "arial",
+        }
+    )
+    plotter.camera_position = 'xy'
+    plotter.show()
+    # Closes and finalizes movie
+    plotter.close()
+
+# Plot ice with degree = 1 mesh
+mesh1 = setup_mesh(1)
+ice_thickness1 = setup_ice_thickness(mesh1)
+ice_thickness_file1 = VTKFile('ice1.pvd').write(ice_thickness1)
+reader = pv.get_reader("ice1.pvd")
+ice_ring = make_ice_ring(reader)
+make_ice_plot(ice_ring)
+
+
+
+# Plot ice with degree = 2 mesh
+mesh2 = setup_mesh(2)
+ice_thickness2 = setup_ice_thickness(mesh2)
+ice_thickness_file2 = VTKFile('ice2.pvd').write(ice_thickness2)
+reader2 = pv.get_reader("ice2.pvd")
+ice_ring2 = make_ice_ring(reader2)
+make_ice_plot(ice_ring2)
+
+# -
+
+
+
+# --
