@@ -1,5 +1,6 @@
 all: params.log
 current_dir := $(notdir $(patsubst %/,%,$(CURDIR)))
+test_class := $(notdir $(patsubst %/,%,$(dir $(CURDIR))))
 
 params.log: base_case.py
 	echo "running $<" >&2
@@ -10,4 +11,4 @@ clean:
 	rm -rf output
 
 check: params.log
-	python3 -m pytest ../test_all.py -k $(current_dir)
+	python3 -m pytest ../../test_all.py -k $(test_class)/$(current_dir)
