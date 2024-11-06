@@ -230,6 +230,11 @@ reduced_functional.eval_cb_post = record_value
 
 optimiser.run()
 
+# And we'll write the functional values to a file so that we can test them.
+
+with open("functional_boundary.txt", "w") as f:
+    f.write("\n".join(str(x) for x in functional_values))
+
 # Let's see how well we have done. At this point a total number of 50 iterations
 # have been performed so let's plot convergence:
 
