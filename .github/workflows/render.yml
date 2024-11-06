@@ -44,7 +44,7 @@ jobs:
       - name: Get Muller et al 2022 plate reconstructions
         run: |
           s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
-          unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/gplates_global
+          unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
       - name: Convert notebooks
         run: |
