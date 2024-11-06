@@ -23,21 +23,44 @@ from gadopt.utility import step_func, vertical_component
 # As this problem is not formulated in a Cartesian geometry we set the `mesh.cartesian`
 # attribute to `False`. This ensures the correct configuration of a radially inward vertical direction.
 
+# +
 # Set up geometry:
-from unstructured_annulus import generate_mesh
-generate_mesh()
-mesh = Mesh("unstructured_annulus_refined_surface.msh")
-bottom_id, top_id = 1, 2
+#from unstructured_annulus import generate_mesh
+#generate_mesh()
+#mesh = Mesh("unstructured_annulus_refined_surface.msh")
+
+radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
+# Set up geometry:
+rmin = radius_values[-1]
+rmax = radius_values[0]
+D = rmax-rmin
+# Construct a circle mesh and then extrude into a cylinder:
+radius_earth = 6371e3
+target_dx=600*1e3
+nz=32
+ncells = 180 #round(2 * pi * radius_earth / target_dx)
+print(ncells)
+surface_dx = 2 * pi * radius_earth / ncells
+log("target surface resolution = ", target_dx)
+log("actual surface resolution = ", surface_dx)
+dz = D / nz
+bottom_id, top_id = "bottom", "top"
+
+surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name='surface_mesh')
+mesh = ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type='radial')
+
+bottom_id, top_id = "bottom", "top"
 mesh.cartesian = False
 D = 2891e3  # Depth of domain in m
+# -
 
 # We next set up the function spaces, and specify functions to hold our solutions. As our mesh is now made up of triangles instead of quadrilaterals, the syntax for defining our finite elements changes slighty. We need to specify *Continuous Galerkin* elements, i.e. replace `Q` with `CG` instead.
 
 # +
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
-V = VectorFunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-TP1 = TensorFunctionSpace(mesh, "DG", 2)  # (Discontinuous) Stress tensor function space (tensor)
+V = VectorFunctionSpace(mesh, "Q", 2)  # (Incremental) Displacement function space (vector)
+W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
+TP1 = TensorFunctionSpace(mesh, "DQ", 2)  # (Discontinuous) Stress tensor function space (tensor)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
@@ -130,8 +153,8 @@ initialise_background_field(shear_modulus, shear_modulus_values)
 #     data,
 #     component=None,
 #     lighting=False,
-#     show_edges=True,
-#     edge_color='grey',
+#     show_edges=False,
+#     #edge_color='grey',
 #     cmap=boring_cmap,
 #     scalar_bar_args={
 #         "title": 'Density (kg / m^3)',
@@ -215,7 +238,7 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 #     data,
 #     component=None,
 #     lighting=False,
-#     show_edges=True,
+#     show_edges=False,
 #     edge_color='grey',
 #     cmap=boring_cmap,
 #     scalar_bar_args={
@@ -273,12 +296,13 @@ ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 # # Make two points at the bounds of the mesh and one at the center to
 # # construct a circular arc.
 # normal = [0, 0, 1]
-# polar = [radius_values[0]-surface_dx/2, 0, 0]
+# polar = [radius_values[0]-dz/2, 0, 0]
 # center = [0, 0, 0]
 # angle = 360.0
-# arc = pv.CircularArcFromNormal(center, 500, normal, polar, angle)
+# arc = pv.CircularArcFromNormal(center, 10000, normal, polar, angle)
 # arc_data = arc.sample(data)
-#
+# print("arc_data", arc_data.get_array('Ice thickness').max())
+# print("nana?", np.isnan(arc_data.get_array('Ice thickness')))
 # # Stretch line by 20%
 # transform_matrix = np.array(
 #     [
@@ -304,9 +328,10 @@ ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 # plotter.add_mesh(
 #     data,
 #     component=None,
+#     scalars=None,
 #     lighting=False,
 #     show_edges=True,
-#     edge_color='grey',
+#     edge_color='black',
 #     cmap=boring_cmap,
 #     scalar_bar_args={
 #         "title": 'Normalised viscosity',
@@ -382,12 +407,26 @@ stokes_bcs = {top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs
 
 approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
 
+Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
+
+Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
+
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `z` and various fields needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
+# +
 stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
-                                         dt, bcs=stokes_bcs)
+                                         dt, bcs=stokes_bcs, constant_jacobian=True,
+                                         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                                         near_nullspace=Z_near_nullspace)
+
+#stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+#stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-7
+#stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+
+#stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
+# -
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
@@ -549,3 +588,5 @@ for timestep in range(max_timesteps+1):
 # Looking at the animation, we can see that the weight of the ice load deforms the mantle, sinking beneath the ice load and pushing up material away from the ice load. This forebulge grows through the simulation and by 10,000 years is close to isostatic equilibrium. As the ice load is applied instantaneously the highest velocity occurs within the first timestep and gradually decays as the simulation goes on, though there is still a small amount of deformation ongoing after 10,000 years. We can also clearly see that the lateral viscosity variations give rise to assymetrical displacement patterns. This is especially true near the South Pole, where the low viscosity region has enabled the isostatic relaxation to happen much faster than the surrounding regions.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
+
+
