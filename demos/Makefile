@@ -1,8 +1,8 @@
 include makefile.cases.inc
 
-.PHONY: all convert_demos clean generate $(mc_cases) $(mm_cases) $(gia_cases) $(mc_dir) $(mm_dir) $(gia_dir)
+.PHONY: all convert_demos clean generate $(mc_cases) $(mm_cases) $(gia_cases) $(extra_cases) $(mc_dir) $(mm_dir) $(gia_dir)
 
-all: $(mc_cases) $(mm_cases) $(gia_cases)
+all: $(mc_cases) $(mm_cases) $(gia_cases) $(extra_cases)
 
 convert_demos: $(notebook_files) .pages .diagram.mermaid
 	tar --transform='s/.pages/CONTENTS.md/' --create --file artifact.tar .pages .diagram.mermaid
