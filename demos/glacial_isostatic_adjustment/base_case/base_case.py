@@ -242,7 +242,7 @@ stress_old = Function(S, name="stress_old").assign(0)
 # of freedom (DOF).
 
 # Output function space information:
-log("Number of Velocity DOF:", V.dim())
+log("Number of Incremental Displacement DOF:", V.dim())
 log("Number of Pressure DOF:", W.dim())
 log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
 
