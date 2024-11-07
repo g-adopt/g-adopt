@@ -6,7 +6,7 @@ ncpus := 4
 
 params.log: viscoplastic_case.py
 	echo "running $<" >&2
-	/usr/bin/time --format="$< finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
+	/usr/bin/time --format="$< finished in %E" tsp -L mantle_convection -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log

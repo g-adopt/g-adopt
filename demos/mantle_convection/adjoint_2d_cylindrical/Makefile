@@ -6,11 +6,11 @@ ncpus := 4
 
 %.conv: taylor_test.py Checkpoint_State.h5
 	echo "running $< on case $*" >&2
-	tsp -N $(ncpus) -nf mpiexec -np $(ncpus) python3 $< $*
+	tsp -L mantle_convection -N $(ncpus) -nf mpiexec -np $(ncpus) python3 $< $*
 
 Checkpoint_State.h5: forward.py
 	echo "running forward adjoint case" >&2
-	tsp -N $(ncpus) -nf mpiexec -np $(ncpus) python3 $<
+	tsp -L mantle_convection -N $(ncpus) -nf mpiexec -np $(ncpus) python3 $<
 
 clean:
 	rm -f *.h5 *.conv
