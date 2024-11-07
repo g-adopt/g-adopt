@@ -7,6 +7,7 @@
 # 1. The geometry of the problem - i.e. the computational mesh.
 # 2. The radial direction of gravity (as opposed to the vertical direction in a Cartesian domain).
 # 3. Solving a problem with laterally varying viscosity.
+# 4. Accounting for a (rotational) velocity nullspace.
 
 # This example
 # -------------
@@ -18,49 +19,38 @@ from gadopt import *
 from gadopt.utility import step_func, vertical_component
 
 
-# In this tutorial we are going to use a fully unstructured mesh, created using [Gmsh](https://gmsh.info/). We have used Gmsh to construct a triangular mesh with a target resolution of 200km near the surface of the Earth coarsening to 500 km in the interior. Gmsh is a widely used open source software for creating finite element meshes and Firedrake has inbuilt functionaly to read Gmsh '.msh' files. Take a look at the *annulus_unstructured.py* script in this folder which creates the mesh using Gmsh's Python api.
+# We generate a circular manifold mesh (with 180 elements) and extrude in the radial direction,
+# using the optional keyword argument `extrusion_type`, forming 32 layers. To better represent the
+# curvature of the domain and ensure accuracy of our quadratic representation of incremental displacement, we
+# approximate the curved cylindrical shell domain quadratically, using the optional keyword argument `degree`$=2$.
 #
 # As this problem is not formulated in a Cartesian geometry we set the `mesh.cartesian`
 # attribute to `False`. This ensures the correct configuration of a radially inward vertical direction.
 
 # +
 # Set up geometry:
-#from unstructured_annulus import generate_mesh
-#generate_mesh()
-#mesh = Mesh("unstructured_annulus_refined_surface.msh")
-
-radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
-# Set up geometry:
-rmin = radius_values[-1]
-rmax = radius_values[0]
+rmin = 3480e3
+rmax = 6371e3
 D = rmax-rmin
-# Construct a circle mesh and then extrude into a cylinder:
-radius_earth = 6371e3
-target_dx=600*1e3
-nz=32
-ncells = 180 #round(2 * pi * radius_earth / target_dx)
-print(ncells)
-surface_dx = 2 * pi * radius_earth / ncells
-log("target surface resolution = ", target_dx)
-log("actual surface resolution = ", surface_dx)
+nz = 32
+ncells = 180
 dz = D / nz
-bottom_id, top_id = "bottom", "top"
 
+# Construct a circle mesh and then extrude into a cylinder:
 surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name='surface_mesh')
 mesh = ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type='radial')
 
 bottom_id, top_id = "bottom", "top"
 mesh.cartesian = False
-D = 2891e3  # Depth of domain in m
 # -
 
-# We next set up the function spaces, and specify functions to hold our solutions. As our mesh is now made up of triangles instead of quadrilaterals, the syntax for defining our finite elements changes slighty. We need to specify *Continuous Galerkin* elements, i.e. replace `Q` with `CG` instead.
+# We next set up the function spaces, and specify functions to hold our solutions.
 
 # +
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "Q", 2)  # (Incremental) Displacement function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
-TP1 = TensorFunctionSpace(mesh, "DQ", 2)  # (Discontinuous) Stress tensor function space (tensor)
+S = TensorFunctionSpace(mesh, "DQ", 2)  # (Discontinuous) Stress tensor function space (tensor)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
@@ -71,7 +61,7 @@ z.subfunctions[0].rename("Incremental Displacement")
 z.subfunctions[1].rename("Pressure")
 
 displacement = Function(V, name="displacement").assign(0)
-stress_old = Function(TP1, name="stress_old").assign(0)
+stress_old = Function(S, name="stress_old").assign(0)
 # -
 
 # We can output function space information, for example the number of degrees
@@ -82,7 +72,7 @@ log("Number of Incremental Displacement DOF:", V.dim())
 log("Number of Pressure DOF:", W.dim())
 log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
 
-# We can now visualise the resulting mesh. As you can see there is finer resolutation near the surface compared with the lower mantle.
+# We can now visualise the resulting mesh.
 
 # + tags=["active-ipynb"]
 # import pyvista as pv
@@ -106,7 +96,7 @@ X = SpatialCoordinate(mesh)
 
 # +
 # layer properties from spada et al 2011
-radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
+radius_values = [6371e3, 6301e3, 5951e3, 5701e3]
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [2, -2, -2, -1.698970004]  # viscosity = 1e23 * 10**viscosity_values
@@ -135,7 +125,7 @@ initialise_background_field(shear_modulus, shear_modulus_values)
 
 # -
 
-# Let's have a quick look at the density field using pyvista. We can see that the mesh is still quite coarse, but it is able to capture the layered structure.
+# Let's have a quick look at the density field using pyvista.
 
 # + tags=["active-ipynb"]
 # # Read the PVD file
@@ -154,7 +144,6 @@ initialise_background_field(shear_modulus, shear_modulus_values)
 #     component=None,
 #     lighting=False,
 #     show_edges=False,
-#     #edge_color='grey',
 #     cmap=boring_cmap,
 #     scalar_bar_args={
 #         "title": 'Density (kg / m^3)',
@@ -168,7 +157,7 @@ initialise_background_field(shear_modulus, shear_modulus_values)
 #     }
 # )
 # plotter.camera_position = 'xy'
-# plotter.show()
+# plotter.show(jupyter_backend="static", interactive=False)
 # # Closes and finalizes movie
 # plotter.close()
 # -
@@ -220,7 +209,7 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 
 # -
 
-# Now let's plot the normalised viscosity viscosity field on a log plot (we have divided the viscosity by 1x10$^{23}$ Pa s). Again although we are using a coarse mesh we are able to capture the key features of the viscosity field.
+# Now let's plot the normalised viscosity viscosity field in log space (we have divided the viscosity by 1x10$^{23}$ Pa s). Although we are using a fairly coarse mesh we are able to capture the key features of the viscosity field.
 
 # + tags=["active-ipynb"]
 # # Read the PVD file
@@ -239,7 +228,6 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 #     component=None,
 #     lighting=False,
 #     show_edges=False,
-#     edge_color='grey',
 #     cmap=boring_cmap,
 #     scalar_bar_args={
 #         "title": 'Normalised viscosity',
@@ -253,17 +241,15 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 #     }
 # )
 # plotter.camera_position = 'xy'
-# plotter.show()
+# plotter.show(jupyter_backend="static", interactive=False)
 # # Closes and finalizes movie
 # plotter.close()
 # -
 
 # Now let's setup the ice load. For this tutorial we will have two synthetic ice sheets. Let's put one a larger one over the South Pole, with a total horizontal extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify things let's keep the ice load fixed in time.
 
-# +
 rho_ice = 931
 g = 9.8125
-
 Hice1 = 1000
 Hice2 = 2000
 year_in_seconds = Constant(3600 * 24 * 365.25)
@@ -281,40 +267,62 @@ disc2 = 0.5*(1-tanh((abs(abs(colatitude)-disc2_centre) - disc_halfwidth2) / (2*s
 ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 
 
-# -
-
-
 # Let's visualise the ice thickness using pyvista, by plotting a ring outside our synthetic Earth.
 
 # + tags=["active-ipynb"]
-# # Read the PVD file
+# def make_ice_ring(reader):
+#     data = reader.read()[0]
+#
+#     normal = [0, 0, 1]
+#     polar = [rmax-dz/2, 0, 0]
+#     center = [0, 0, 0]
+#     angle = 360.0
+#     res = 10000
+#     arc = pv.CircularArcFromNormal(center, res, normal, polar, angle)
+#
+#     arc_data = arc.sample(data)
+#
+#     # Stretch line by 20%
+#     transform_matrix = np.array(
+#         [
+#             [1.2, 0, 0, 0],
+#             [0, 1.2, 0, 0],
+#             [0, 0, 1.2, 0],
+#             [0, 0, 0, 1],
+#         ]
+#     )
+#     return arc_data.transform(transform_matrix)
+#
+#
+# def plot_ice_ring(plotter, ice_ring, scalar="Ice thickness"):
+#     ice_cmap = plt.get_cmap("Blues", 25)
+#
+#     plotter.add_mesh(
+#         ice_ring,
+#         scalars=scalar,
+#         line_width=10,
+#         cmap=ice_cmap,
+#         clim=[0, 2000],
+#         scalar_bar_args={
+#             "title": 'Ice thickness (m)',
+#             "position_x": 0.05,
+#             "position_y": 0.3,
+#             "vertical": True,
+#             "title_font_size": 20,
+#             "label_font_size": 16,
+#             "fmt": "%.0f",
+#             "font_family": "arial",
+#         }
+#     )
+#
+#
+# # Write ice thicknesss .pvd file
 # ice_thickness = Function(W, name="Ice thickness").interpolate(Hice1 * disc1 + Hice2 * disc2)
 # zero_ice_thickness = Function(W, name="zero").assign(0)  # Used for plotting later
 # ice_thickness_file = VTKFile('ice.pvd').write(ice_thickness, zero_ice_thickness)
-# reader = pv.get_reader("ice.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
-# # Make two points at the bounds of the mesh and one at the center to
-# # construct a circular arc.
-# normal = [0, 0, 1]
-# polar = [radius_values[0]-dz/2, 0, 0]
-# center = [0, 0, 0]
-# angle = 360.0
-# arc = pv.CircularArcFromNormal(center, 10000, normal, polar, angle)
-# arc_data = arc.sample(data)
-# print("arc_data", arc_data.get_array('Ice thickness').max())
-# print("nana?", np.isnan(arc_data.get_array('Ice thickness')))
-# # Stretch line by 20%
-# transform_matrix = np.array(
-#     [
-#         [1.2, 0, 0, 0],
-#         [0, 1.2, 0, 0],
-#         [0, 0, 1.2, 0],
-#         [0, 0, 0, 1],
-#     ]
-# )
 #
-# transformed_arc_data = arc_data.transform(transform_matrix)
-# ice_cmap = plt.get_cmap("Blues", 25)
+# ice_reader = pv.get_reader("ice.pvd")
+# ice_ring = make_ice_ring(ice_reader)
 #
 # reader = pv.get_reader("viscosity.pvd")
 # data = reader.read()[0]  # MultiBlock mesh with only 1 block
@@ -330,8 +338,7 @@ ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 #     component=None,
 #     scalars=None,
 #     lighting=False,
-#     show_edges=True,
-#     edge_color='black',
+#     show_edges=False,
 #     cmap=boring_cmap,
 #     scalar_bar_args={
 #         "title": 'Normalised viscosity',
@@ -344,35 +351,23 @@ ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 #         "font_family": "arial",
 #     }
 # )
-# plotter.add_mesh(
-#     transformed_arc_data,
-#     line_width=10,
-#     cmap=ice_cmap,
-#     scalar_bar_args={
-#         "title": 'Ice thickness (m)',
-#         "position_x": 0.1,
-#         "position_y": 0.3,
-#         "vertical": True,
-#         "title_font_size": 20,
-#         "label_font_size": 16,
-#         "fmt": "%.0f",
-#         "font_family": "arial",
-#     }
-# )
+#
+# plot_ice_ring(plotter, ice_ring)
+#
 # plotter.camera_position = 'xy'
-# plotter.show()
+# plotter.show(jupyter_backend="static", interactive=False)
 # # Closes and finalizes movie
 # plotter.close()
 # -
 
-# Let's setup the timestepping parameters with a timestep of 200 years and an output frequency of 1000 years.
+# Let's setup the timestepping parameters with a timestep of 250 years and an output frequency of 1000 years.
 
 # +
 # Timestepping parameters
 Tstart = 0
 time = Function(R).assign(Tstart * year_in_seconds)
 
-dt_years = 200
+dt_years = 250
 dt = Constant(dt_years * year_in_seconds)
 Tend_years = 10e3
 Tend = Constant(Tend_years * year_in_seconds)
@@ -382,12 +377,10 @@ dt_out = Constant(dt_out_years * year_in_seconds)
 max_timesteps = round((Tend - Tstart * year_in_seconds) / dt)
 log("max timesteps: ", max_timesteps)
 
-dump_period = round(dt_out / dt)
-log("dump_period:", dump_period)
+output_frequency = round(dt_out / dt)
+log("output_frequency:", output_frequency)
 log(f"dt: {float(dt / year_in_seconds)} years")
 log(f"Simulation start time: {Tstart} years")
-
-do_write = True
 # -
 
 # We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing the string `ux` and `uy`, G-ADOPT knows to specify these as Strong Dirichlet boundary conditions.
@@ -397,7 +390,8 @@ do_write = True
 # The `delta_rho_fs` option accounts for the density contrast across the free surface whether there is ice or air above a particular region of the mantle.
 
 # Setup boundary conditions
-stokes_bcs = {top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - rho_ice*(disc1+disc2)}},
+exterior_density = rho_ice * (disc1+disc2)
+stokes_bcs = {top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - exterior_density}},
               bottom_id: {'un': 0}
               }
 
@@ -407,7 +401,17 @@ stokes_bcs = {top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs
 
 approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
 
+# As noted above, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
+# of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution. These lead to null-modes (eigenvectors) for the linear system, rendering the resulting matrix singular.
+# In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at every iteration. We do that below,
+# setting up a nullspace object, specifying the `rotational` keyword argument to be True. Note that we do not include a pressure nullspace as the top surface of the model is open.
+
 Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
+
+# Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative
+# solver parameters. As noted in our previous 3-D Cartesian tutorial, G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
+# for the velocity block of the Stokes system, to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
+# translational modes.
 
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
@@ -415,30 +419,20 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # objects for the Stokes system created. We pass in the solution fields `z` and various fields needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
-# +
 stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
                                          dt, bcs=stokes_bcs, constant_jacobian=True,
                                          nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                          near_nullspace=Z_near_nullspace)
 
-#stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-#stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-7
-#stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-
-#stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
-# -
-
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
 # +
-if do_write:
-    # Create a velocity function for plotting
-    velocity = Function(V, name="velocity")
-    velocity.interpolate(z.subfunctions[0]/dt)
-
-    # Create output file
-    output_file = VTKFile("output.pvd")
-    output_file.write(*z.subfunctions, displacement, velocity)
+# Create a velocity function for plotting
+velocity = Function(V, name="velocity")
+velocity.interpolate(z.subfunctions[0]/dt)
+# Create output file
+output_file = VTKFile("output.pvd")
+output_file.write(*z.subfunctions, displacement, velocity)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
@@ -454,7 +448,7 @@ U = FunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (s
 vertical_displacement = Function(U, name="Vertical displacement")
 # -
 
-# Now let's run the simulation! We are going to control the ice thickness using the `ramp` parameter. At each step we call `solve` to calculate the incremental displacement and pressure fields. This will update the displacement at the surface and stress values accounting for the time dependent Maxwell consitutive equation.
+# Now let's run the simulation! At each step we call `solve` to calculate the incremental displacement and pressure fields. This will update the displacement at the surface and stress values accounting for the time dependent Maxwell consitutive equation.
 
 for timestep in range(max_timesteps+1):
 
@@ -462,14 +456,13 @@ for timestep in range(max_timesteps+1):
 
     time.assign(time+dt)
 
-    if timestep % dump_period == 0:
+    if timestep % output_frequency == 0:
         # First output step is after one solve i.e. roughly elastic displacement
         # provided dt < maxwell time.
         log("timestep", timestep)
 
-        if do_write:
-            velocity.interpolate(z.subfunctions[0]/dt)
-            output_file.write(*z.subfunctions, displacement, velocity)
+        velocity.interpolate(z.subfunctions[0]/dt)
+        output_file.write(*z.subfunctions, displacement, velocity)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(z, name="Stokes")
@@ -507,18 +500,6 @@ for timestep in range(max_timesteps+1):
 # # Fix camera in default position otherwise mesh appears to jumpy around!
 # #plotter.camera_position = 'xy'
 #
-# def add_ice(p, scalar="Ice thickness"):
-#     p.add_mesh(transformed_arc_data, scalars=scalar, line_width=10, clim=[0, 2000], cmap=ice_cmap, scalar_bar_args={
-#         "title": 'Ice thickness (m)',
-#         "position_x": 0.04,
-#         "position_y": 0.3,
-#         "vertical": True,
-#         "title_font_size": 20,
-#         "label_font_size": 16,
-#         "fmt": "%.0f",
-#         "font_family": "arial",
-#     })
-#
 # # Make a list of output times (non-uniform because also
 # # outputing first (quasi-elastic) solve
 # times = [0, dt_years]
@@ -547,8 +528,8 @@ for timestep in range(max_timesteps+1):
 #         cmap=boring_cmap,
 #         scalar_bar_args={
 #             "title": 'Displacement (m)',
-#             "position_x": 0.87,
-#             "position_y": 0.2,
+#             "position_x": 0.85,
+#             "position_y": 0.3,
 #             "vertical": True,
 #             "title_font_size": 20,
 #             "label_font_size": 16,
@@ -565,11 +546,11 @@ for timestep in range(max_timesteps+1):
 #     plotter.add_text(f"Time: {times[i]:6} years", name='time-label')
 #
 #     if i == 0:
-#         add_ice(plotter, scalar="zero")
+#         plot_ice_ring(plotter, ice_ring, scalar="zero")
 #         for j in range(10):
 #             plotter.write_frame()
 #
-#     add_ice(plotter)
+#     plot_ice_ring(plotter, ice_ring)
 #
 #     # Write end frame multiple times to give a pause before gif starts again!
 #     for j in range(10):
@@ -588,109 +569,3 @@ for timestep in range(max_timesteps+1):
 # Looking at the animation, we can see that the weight of the ice load deforms the mantle, sinking beneath the ice load and pushing up material away from the ice load. This forebulge grows through the simulation and by 10,000 years is close to isostatic equilibrium. As the ice load is applied instantaneously the highest velocity occurs within the first timestep and gradually decays as the simulation goes on, though there is still a small amount of deformation ongoing after 10,000 years. We can also clearly see that the lateral viscosity variations give rise to assymetrical displacement patterns. This is especially true near the South Pole, where the low viscosity region has enabled the isostatic relaxation to happen much faster than the surrounding regions.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
-
-# + endofcell="--"
-# # +
-from gadopt import *
-import pyvista as pv
-import matplotlib.pyplot as plt
-
-# Mesh parameters
-rmin = 3480e3
-rmax = 6371e3
-nz=32
-ncells = 170
-D = rmax-rmin
-dz = D / nz
-
-
-def setup_mesh(degree):
-    # Set up geometry:
-    surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=degree, name='surface_mesh')
-    return ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type='radial')
-
-
-def setup_ice_thickness(mesh):
-    W = FunctionSpace(mesh,"CG", 1)
-    Hice = 1000
-    disc_halfwidth1 = (2*pi/360) * 10  # Disk half width in radians
-    surface_resolution_radians = 2*pi / ncells
-    X = SpatialCoordinate(mesh)
-    colatitude = atan2(X[0], X[1])
-    disc1_centre = (2*pi/360) * 25  # centre of disc1
-    disc1 = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surface_resolution_radians)))
-    return Function(W, name="Ice thickness").interpolate(Hice * disc1)
-
-
-def make_ice_ring(reader):
-    data = reader.read()[0]
-
-    normal = [0, 0, 1]
-    polar = [rmax-dz/2, 0, 0]
-    center = [0, 0, 0]
-    angle = 360.0
-    res = 10000
-    arc = pv.CircularArcFromNormal(center, res, normal, polar, angle)
-    
-    arc_data = arc.sample(data)
-    print(arc_data.get_array("Ice thickness").max())
-
-    # Stretch line by 20%
-    transform_matrix = np.array(
-        [
-            [1.2, 0, 0, 0],
-            [0, 1.2, 0, 0],
-            [0, 0, 1.2, 0],
-            [0, 0, 0, 1],
-        ]
-    )
-    return arc_data.transform(transform_matrix)
-
-
-def make_ice_plot(ice_ring):
-    ice_cmap = plt.get_cmap("Blues", 25)
-    plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
-    
-    plotter.add_mesh(
-        ice_ring,
-        line_width=10,
-        cmap=ice_cmap,
-        scalar_bar_args={
-            "title": 'Ice thickness (m)',
-            "position_x": 0.1,
-            "position_y": 0.3,
-            "vertical": True,
-            "title_font_size": 20,
-            "label_font_size": 16,
-            "fmt": "%.0f",
-            "font_family": "arial",
-        }
-    )
-    plotter.camera_position = 'xy'
-    plotter.show()
-    # Closes and finalizes movie
-    plotter.close()
-
-# Plot ice with degree = 1 mesh
-mesh1 = setup_mesh(1)
-ice_thickness1 = setup_ice_thickness(mesh1)
-ice_thickness_file1 = VTKFile('ice1.pvd').write(ice_thickness1)
-reader = pv.get_reader("ice1.pvd")
-ice_ring = make_ice_ring(reader)
-make_ice_plot(ice_ring)
-
-
-
-# Plot ice with degree = 2 mesh
-mesh2 = setup_mesh(2)
-ice_thickness2 = setup_ice_thickness(mesh2)
-ice_thickness_file2 = VTKFile('ice2.pvd').write(ice_thickness2)
-reader2 = pv.get_reader("ice2.pvd")
-ice_ring2 = make_ice_ring(reader2)
-make_ice_plot(ice_ring2)
-
-# -
-
-
-
-# --
