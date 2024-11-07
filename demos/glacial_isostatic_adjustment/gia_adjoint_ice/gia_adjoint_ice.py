@@ -25,7 +25,6 @@ import matplotlib.pyplot as plt
 
 tape = get_working_tape()
 tape.clear_tape()
-print(tape)
 # -
 
 # In this tutorial we are going to use a fully unstructured mesh, created using [Gmsh](https://gmsh.info/). We have used Gmsh to construct a triangular mesh with a target resolution of 200km near the surface of the Earth coarsening to 500 km in the interior. Gmsh is a widely used open source software for creating finite element meshes and Firedrake has inbuilt functionaly to read Gmsh '.msh' files. Take a look at the *annulus_unstructured.py* script in this folder which creates the mesh using Gmsh's Python api.
@@ -385,10 +384,10 @@ with CheckpointFile(checkpoint_file, 'r') as afile:
 displacement_error = displacement - target_displacement
 displacement_scale = 50
 displacement_misfit = assemble(dot(displacement_error, displacement_error) / (circumference * displacement_scale**2) * ds(top_id))
-damping = assemble((normalised_ice_thickness) ** 2 /circumference * ds)
-smoothing = assemble(dot(grad(normalised_ice_thickness), grad(normalised_ice_thickness)) / circumference * ds)
+damping = assemble((normalised_ice_thickness) ** 2 /circumference * ds(top_id))
+smoothing = assemble(dot(grad(normalised_ice_thickness), grad(normalised_ice_thickness)) / circumference * ds(top_id))
 
-alpha_smoothing = 0.1
+alpha_smoothing = 1e12
 alpha_damping = 0.1
 J = displacement_misfit + alpha_damping * damping + alpha_smoothing * smoothing
 log("J = ", J)
@@ -409,9 +408,9 @@ def eval_cb(J, m):
     circumference = 2 * pi * radius_values[0] 
     # Define the component terms of the overall objective functional
     damping = assemble((normalised_ice_thickness.block_variable.checkpoint) ** 2 /circumference * ds)
-    #smoothing = assemble(dot(grad(normalised_ice_thickness.block_variable.checkpoint), grad(normalised_ice_thickness.block_variable.checkpoint)) / circumference * ds)
+    smoothing = assemble(dot(grad(normalised_ice_thickness.block_variable.checkpoint), grad(normalised_ice_thickness.block_variable.checkpoint)) / circumference * ds)
     log("damping", damping)
-   # log("smoothing", smoothing)
+    log("smoothing", smoothing)
     
     updated_ice_thickness.assign(m)
     updated_ice_thickness_file.write(updated_ice_thickness, target_normalised_ice_thickness)
@@ -426,23 +425,13 @@ reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 log("J", J)
 log("replay tape RF", reduced_functional(normalised_ice_thickness))
 
-grad = reduced_functional.derivative()
+dJdm = reduced_functional.derivative()
 
 
-# +
 h = Function(normalised_ice_thickness)
 h.dat.data[:] = np.random.random(h.dat.data_ro.shape)
 
 taylor_test(reduced_functional, normalised_ice_thickness, h)
-
-# +
-
-
-grad = reduced_functional.derivative()
-h = Function(normalised_ice_thickness)
-h.dat.data[:] = np.random.random(h.dat.data_ro.shape)
-
-#taylor_test(reduced_functional, normalised_ice_thickness, h)
 
 
 # Perform a bounded nonlinear optimisation for the viscosity
@@ -456,12 +445,16 @@ bounds = [ice_thickness_lb, ice_thickness_ub]
 #minimize(reduced_functional, bounds=bounds, options={"disp": True})
 
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=bounds)
-
+minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1e4
+minimisation_parameters["Step"]["Trust Region"]["Maximum Radius"] = 1e30
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
     checkpoint_dir=f"optimisation_checkpoint",
 )
+# Restart file for optimisation...
+updated_ice_thickness_file = File(f"update_ice_thickness.pvd")
+updated_out_file = File(f"updated_out.pvd")
 optimiser.run()
 
 # If we're performing mulitple successive optimisations, we want
