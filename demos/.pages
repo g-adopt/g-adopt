@@ -23,3 +23,6 @@
 - Glacial isostatic adjustment
     - [base_case](glacial_isostatic_adjustment/base_case.ipynb)
     - [2d_cylindrical](glacial_isostatic_adjustment/2d_cylindrical.ipynb)
+- PDE-constrained optimisation
+    - [pde_constrained_boundary](PDE_constrained_boundary.ipynb)
+    - [pde_constrained_field](PDE_constrained_field.ipynb)
