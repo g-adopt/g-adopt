@@ -19,3 +19,6 @@
 - Adjoint
     - [adjoint_forward](adjoint_forward.ipynb)
     - [adjoint](adjoint.ipynb)
+- PDE-constrained optimisation
+    - [pde_constrained_boundary](PDE_constrained_boundary.ipynb)
+    - [pde_constrained_field](PDE_constrained_field.ipynb)

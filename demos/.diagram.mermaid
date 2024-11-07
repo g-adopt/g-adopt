@@ -1,33 +1,41 @@
 graph TD
   base[Base]
 
-  subgraph physical[Physical]
-  tala[TALA] --> ala[ALA] --> visualise_ala[ALA Nullspace]
-  viscoplastic[Viscoplastic]
+  subgraph adjoint[Adjoint]
+  adjoint_forward[Forward] --> inverse[Inverse]
+  end
+
+  subgraph geometry[Geometry]
+  cylindrical_2d[2D Cylindrical] --> spherical_3d[3D Spherical]
+  end
+
+  subgraph gplates[GPlates]
+  gplates_global["Global GPlates"]
   end
 
   subgraph dimension[Dimension]
   cartesian_3d[3D Cartesian]
   end
 
-  subgraph geometry["Geometry & Boundary Condition"]
-  cylindrical_2d[2D Cylindrical] --> spherical_3d[3D Spherical] --> gplates_global["Global GPlates"]
+  subgraph bcs[Boundary Conditions]
   free_surface[Free Surface]
   end
 
-  subgraph multimaterial[Multi-material]
-  isothermal["2-Material (isothermal)"] --> thermochemical["2-Material (thermochemical)"]
+  subgraph compressibility[Compressibility]
+  tala[TALA] --> ala[ALA] --> visualise_ala[ALA Nullspace]
   end
 
-  subgraph adjoint[Adjoint]
-  adjoint_forward[Forward] --> inverse[Inverse]
+  subgraph rheology[Rheology]
+  viscoplastic[Viscoplastic]
   end
 
-  base --> physical
   base --> dimension
+  base --> compressibility
+  base --> rheology
   base --> geometry
-  base --> multimaterial
+  base --> bcs
   base --> adjoint
+  geometry --> gplates
 
   click base "base_case"
   click tala "2d_compressible_TALA"
@@ -37,8 +45,6 @@ graph TD
   click cartesian_3d "3d_cartesian"
   click cylindrical_2d "2d_cylindrical"
   click spherical_3d "3d_spherical"
-  click isothermal "compositional_buoyancy"
-  click thermochemical "thermochemical_buoyancy"
   click gplates_global "gplates_global"
   click adjoint_forward "adjoint_forward"
   click inverse "adjoint"
