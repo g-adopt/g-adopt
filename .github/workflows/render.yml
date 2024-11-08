@@ -10,7 +10,7 @@ jobs:
   render:
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake:latest
+      image: ghcr.io/g-adopt/firedrake:2024-11-05
       options: --shm-size 2g
 
     env:
