@@ -1,21 +1,28 @@
 - [Tutorials](index.md)
-- Base case
-    - [base_case](base_case.ipynb)
-- Physical approximation
-    - [2d_compressible_TALA](2d_compressible_TALA.ipynb)
-    - [2d_compressible_ALA](2d_compressible_ALA.ipynb)
-    - [visualise_ALA_p_nullspace](visualise_ALA_p_nullspace.ipynb)
-    - [viscoplastic_case](viscoplastic_case.ipynb)
-- Dimension
-    - [3d_cartesian](3d_cartesian.ipynb)
-- Geometry & Boundary Conditions
-    - [2d_cylindrical](2d_cylindrical.ipynb)
-    - [3d_spherical](3d_spherical.ipynb)
-    - [free_surface](free_surface.ipynb)
-    - [gplates_global](gplates_global.ipynb)
+- Mantle convection
+    - Base case
+        - [base_case](mantle_convection/base_case.ipynb)
+    - Physical approximation
+        - [2d_compressible_TALA](mantle_convection/2d_compressible_TALA.ipynb)
+        - [2d_compressible_ALA](mantle_convection/2d_compressible_ALA.ipynb)
+        - [visualise_ALA_p_nullspace](mantle_convection/visualise_ALA_p_nullspace.ipynb)
+        - [viscoplastic_case](mantle_convection/viscoplastic_case.ipynb)
+    - Dimension
+        - [3d_cartesian](mantle_convection/3d_cartesian.ipynb)
+    - Geometry & Boundary Conditions
+        - [2d_cylindrical](mantle_convection/2d_cylindrical.ipynb)
+        - [3d_spherical](mantle_convection/3d_spherical.ipynb)
+        - [free_surface](mantle_convection/free_surface.ipynb)
+        - [gplates_global](mantle_convection/gplates_global.ipynb)
+    - Adjoint
+        - [adjoint_forward](mantle_convection/adjoint_forward.ipynb)
+        - [adjoint](mantle_convection/adjoint.ipynb)
 - Multi-material
-    - [compositional_buoyancy](compositional_buoyancy.ipynb)
-    - [thermochemical_buoyancy](thermochemical_buoyancy.ipynb)
-- Adjoint
-    - [adjoint_forward](adjoint_forward.ipynb)
-    - [adjoint](adjoint.ipynb)
+    - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
+    - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)
+- Glacial isostatic adjustment
+    - [base_case](glacial_isostatic_adjustment/base_case.ipynb)
+    - [2d_cylindrical](glacial_isostatic_adjustment/2d_cylindrical.ipynb)
+- PDE-constrained optimisation
+    - [pde_constrained_boundary](PDE_constrained_optimisation/PDE_constrained_boundary.ipynb)
+    - [pde_constrained_field](PDE_constrained_optimisation/PDE_constrained_field.ipynb)

@@ -1,5 +1,5 @@
 include ../makefile.cases.inc
-cases := $(notdir $(mm_cases))
+cases := $(notdir $(gia_cases))
 
 .PHONY: all $(cases)
 
@@ -14,4 +14,4 @@ clean:
 	)
 
 check:
-	python -m pytest ../test_all.py -k $(mm_dir)
+	python -m pytest ../test_all.py -k $(gia_dir)

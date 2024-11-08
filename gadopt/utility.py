@@ -455,6 +455,15 @@ def su_nubar(u, J, Pe):
     return dot(absv(dot(u, J)), beta_pe)/2
 
 
+def step_func(r, centre, mag, increasing=True, sharpness=50):
+    # A step function designed to design viscosity jumps
+    # Build a step centred at "centre" with given magnitude
+    # Increase with radius if "increasing" is True
+    return mag * (
+        0.5 * (1 + tanh((1 if increasing else -1) * (r - centre) * sharpness))
+    )
+
+
 def node_coordinates(function):
     """Extract mesh coordinates and interpolate them onto the relevant function space"""
     func_space = function.function_space()
