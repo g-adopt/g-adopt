@@ -79,7 +79,7 @@ jobs:
       - name: Get Muller et al 2022 plate reconstructions
         run: |
           s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
-          unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/gplates_global
+          unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v4
@@ -128,10 +128,13 @@ jobs:
           declare -A timings
           declare -A success
 
+          digest="$(tsp)"
+
           # extract info
-          for id in $(tsp | awk 'NR>1 { print $1 }'); do
+          for id in $(awk 'NR>1 { print $1 }' <<< "$digest"); do
             st="$(tsp -i $id)"
-            command=$(sed -En 's/^Command.*python3? //p' <<< "$st")
+            label=$(awk "/^$id[[:space:]]/ { if (match(\$0, /\[[^]]*\]/)) { print substr(\$0, RSTART+1, RLENGTH-2) } }" <<< "$digest")
+            command=$label${label:+: }$(sed -En 's/^Command.*python3? //p' <<< "$st")
             timings["$command"]=$(sed -n 's/^Time run: //p' <<< "$st")
 
             if grep -q "exit code 0" <<< "$st"; then
