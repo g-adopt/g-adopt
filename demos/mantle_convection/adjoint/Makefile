@@ -12,3 +12,6 @@ adjoint-demo-checkpoint-state.h5: adjoint_forward.py
 
 clean:
 	rm -rf functional.txt *.h5 *.pvd solutions solution visualisation_vtk optimisation_checkpoint
+
+check: functional.txt
+	python3 -m pytest
