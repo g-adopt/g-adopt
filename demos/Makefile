@@ -1,10 +1,8 @@
-include makefile.cases.inc
+include makefile.demos.inc
 
-.PHONY: all convert_demos generate clean check
-.PHONY: $(mc_cases) $(mm_cases) $(gia_cases)
-.PHONY: $(mc_dir) $(mm_dir) $(gia_dir)
+.PHONY: all convert_demos generate clean check $(all_demo_paths) $(all_dirs)
 
-all: $(mc_cases) $(mm_cases) $(gia_cases)
+all: $(all_demo_paths)
 
 convert_demos: $(notebook_files) .pages .diagram.mermaid
 	tar --transform='s/.pages/CONTENTS.md/' --create --file artifact.tar .pages .diagram.mermaid
@@ -20,7 +18,7 @@ $(mc_dir)/free_surface/free_surface.ipynb: $(mc_dir)/base_case/base_case.ipynb
 
 # Invoke as `make mantle_convection/base_case` to only run the mantle_convection/base_case
 # demo or `make mantle_convection` to run all mantle convection demos.
-$(mc_cases) $(mm_cases) $(gia_cases) $(mc_dir) $(mm_dir) $(gia_dir):
+$(all_demo_paths) $(all_dirs):
 	$(MAKE) -C $@
 
 generate:
@@ -28,7 +26,7 @@ generate:
 
 clean:
 	rm -rf __pycache__
-	@$(foreach case,$(mc_cases) $(mm_cases) $(gia_cases),$(MAKE) -C $(case) $(MAKECMDGOALS);)
+	@$(foreach demo,$(all_demo_paths),$(MAKE) -C $(demo) $(MAKECMDGOALS);)
 
 check:
 	python3 -m pytest -m demo

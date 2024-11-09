@@ -26,7 +26,7 @@ with CheckpointFile("forward_checkpoint.h5", "r") as forward_check:
     mesh = forward_check.load_mesh("firedrake_default")
 
     z = forward_check.load_function(mesh, "Stokes")
-    psi = forward_check.load_function(mesh, "Level set")
+    psi_obs = forward_check.load_function(mesh, "Level set")
 
 nx, ny = 128, 32
 lx, ly = 3e6, 7e5
@@ -34,17 +34,19 @@ lx, ly = 3e6, 7e5
 mesh.cartesian = True
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4
 
+C = FunctionSpace(mesh, FiniteElement("DQ", quadrilateral, 1, variant="equispaced"))
 R = FunctionSpace(mesh, "R", 0)
 
 u, p, eta = split(z)
 z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 z.subfunctions[2].rename("Free surface")
-psi_control = Function(psi, name="Level-set control")
-psi_obs = Function(psi, name="Level-set observation")
-psi_opt = Function(psi, name="Level-set optimisation")
+psi = Function(psi_obs, name="Level-set observation")
+psi_control = Function(C, name="Level-set control")
+psi_opt = Function(C, name="Level-set optimisation")
 
-psi.assign(psi_control)
+psi_control.project(psi_obs)
+psi.project(psi_control)
 
 local_min_mesh_size = mesh.cell_sizes.dat.data.min()
 epsilon = Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
@@ -79,7 +81,7 @@ del stokes_solver.solver_parameters["snes_monitor"]
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 psi_grad_proj = level_set_solver.ls_grad_proj
 
-time_now, time_end = 0, 1e7 * 365.25 * 8.64e4
+time_now, time_end = 0, 25e6 * 365.25 * 8.64e4
 
 output_file = VTKFile("inverse_output.pvd")
 output_file.write(*z.subfunctions, psi, psi_grad_proj, time=time_now)

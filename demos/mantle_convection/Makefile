@@ -1,4 +1,4 @@
-include ../makefile.cases.inc
+include ../makefile.demos.inc
 
 .PHONY: all $(mc_demos)
 

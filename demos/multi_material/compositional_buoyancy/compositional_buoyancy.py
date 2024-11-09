@@ -1,57 +1,61 @@
-# Rayleigh-Taylor instability
-# ===========================
-#
+# # Rayleigh-Taylor instability
+# ---
+
 # Rationale
-# ---------
-#
+# -
+
 # One may wish to simulate a geodynamical flow involving multiple physical phases. A
-# possible approach is to approximate phases as immiscible and forming a single fluid
-# whose dynamics can still be described as a single-phase Stokes flow. Under this
-# approximation, it is common to refer to immiscible phases as materials and to the
-# resulting simulations as multi-material. In such simulations, each material occupies
-# part of the numerical domain and is characterised by its own physical properties,
-# such as density and viscosity. Along material boundaries, physical properties are
-# averaged according to a chosen mathematical scheme.
-#
+# possible approach is to approximate phases as immiscible, forming a single fluid that
+# still behaves as a single-phase Stokes flow. Under this approximation, it is usual to
+# refer to immiscible phases as materials and the resulting simulations as
+# multi-material. In such simulations, each material occupies part of the numerical
+# domain and has intrinsic physical properties, such as density and viscosity. Across a
+# material interface, physical properties transition from one value to another, either
+# sharply or progressively. In the former case, physical property fields exhibit
+# discontinuities, whilst, in the latter case, an averaging scheme weights contributions
+# from each material.
+
 # Numerical approach
-# ------------------
-#
-# To model the coexistence of multiple materials in the numerical domain, we employ an
-# interface-capturing approach called the conservative level-set method. Level-set
-# methods associate each material interface to a mathematical field representing a
-# measure of distance from that interface. In the conservative level-set approach, the
-# classic signed-distance function, $\phi$, employed in the level-set method is
-# transformed into a smooth step function, $\psi$, according to
-#
+# -
+
+# We employ an interface-capturing approach called the conservative level-set method
+# ([Olsson and Kreiss, 2005](
+# https://www.sciencedirect.com/science/article/pii/S0021999105002184)) to model the
+# coexistence of multiple materials in the numerical domain. Level-set methods associate
+# each material interface to a mathematical field measuring the distance from that
+# interface. In the conservative level-set approach, the classic signed-distance
+# function, $\phi$, employed in the level-set method is transformed into a smooth step
+# function, $\psi$:
+
 # $$\psi(\mathbf{x}, t) = \frac{1}{2} \left[
 # \mathrm{tanh} \left( \frac{\phi(\mathbf{x}, t)}{2\epsilon} \right) + 1
 # \right]$$
-#
+
 # Throughout the simulation, the level-set field is advected with the flow:
-#
+
 # $$\frac{\partial \psi}{\partial t} + \nabla \cdot \left( \mathbf{u}\psi \right) = 0$$
-#
+
 # Advection of the level set modifies the shape of the initial profile. In other words,
 # the signed-distance property underpinning the smooth step function is lost. To
-# maintain the original profile as the simulation proceeds, a reinitialisation
+# maintain the original profile whilst the simulation proceeds, a reinitialisation
 # procedure is employed. We choose the equation proposed in [Parameswaran and Mandal
 # (2023)](https://www.sciencedirect.com/science/article/pii/S0997754622001364):
-#
+
 # $$\frac{\partial \psi}{\partial \tau_{n}} = \theta \left[
 # -\psi \left( 1 - \psi \right) \left( 1 - 2\psi \right)
 # + \epsilon \left( 1 - 2\psi \right) \lvert\nabla\psi\rvert
 # \right]$$
-#
+
 # This example
-# ------------
-#
+# -
+
 # Here, we consider the isoviscous Rayleigh-Taylor instability presented in [van Keken
 # et al. (1997)](https://agupubs.onlinelibrary.wiley.com/doi/abs/10.1029/97JB01353).
 # Inside a 2-D domain, a buoyant, lighter material sits beneath a denser material. The
 # initial material interface promotes the development of a rising instability on the
-# domain's left-hand side, and further smaller-scale convective dynamics take place
-# throughout the remainder of the simulation. We describe below how to implement this
-# problem using G-ADOPT.
+# domain's left-hand side, and further convective dynamics occur throughout the
+# remainder of the simulation. We describe below the implementation of this problem
+# using G-ADOPT.
 
 # As with all examples, the first step is to import the `gadopt` package, which also
 # provides access to Firedrake and associated functionality.
@@ -73,7 +77,7 @@ V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Stokes function space (mixed)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
-R = FunctionSpace(mesh, "R", 0)  # Real space for time step
+R = FunctionSpace(mesh, "R", 0)  # Real space (constants across the domain)
 
 z = Function(Z)  # A field over the mixed function space Z
 u, p = split(z)  # Indexed expressions for velocity and pressure
@@ -157,21 +161,34 @@ t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )  # Current level-set advection requires a CFL condition that should not exceed 0.6.
 
-# This problem setup has a constant pressure nullspace, which corresponds to the
-# default case handled in G-ADOPT.
+# Here, we set up the variational problem for the Stokes and level-set systems. The
+# former depends on the approximation defined above, and the latter includes both
+# advection and reinitialisation components.
 
+# +
+# This problem setup has a constant pressure nullspace, which corresponds to the default
+# case handled in G-ADOPT.
 Z_nullspace = create_stokes_nullspace(Z)
 
-# Boundary conditions are specified next: no slip at the top and bottom and free slip
-# on the left and right sides. No boundary conditions are required for level set, as the
+# Boundary conditions are specified next: no slip at the top and bottom and free slip on
+# the left and right sides. No boundary conditions are required for level set, as the
 # numerical domain is closed.
-
 stokes_bcs = {
     bottom_id: {"u": 0},
     top_id: {"u": 0},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
+
+stokes_solver = StokesSolver(
+    z,
+    approximation,
+    bcs=stokes_bcs,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+)
+
+level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
+# -
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
 # that uses the XML-based VTK file format. We also open a file for logging, instantiate
@@ -188,21 +205,6 @@ gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
 
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
-# -
-
-# Here, we set up the variational problem for the Stokes and level-set systems. The
-# former depends on the approximation defined above, and the latter includes both
-# advection and reinitialisation components.
-
-# +
-stokes_solver = StokesSolver(
-    z,
-    approximation,
-    bcs=stokes_bcs,
-    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
-)
-
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is

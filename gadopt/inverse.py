@@ -6,6 +6,7 @@ relevant parameters and call the `run` method to perform the optimisation.
 
 import uuid
 from pathlib import Path, PosixPath
+from typing import Callable
 
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
@@ -128,6 +129,7 @@ class LinMoreOptimiser:
 
         self.rol_algorithm = ROL.LinMoreAlgorithm(self.rol_parameters, self.rol_secant)
         self.callbacks = []
+        self.callback_args = []
 
         self._add_statustest()
 
@@ -222,18 +224,19 @@ class LinMoreOptimiser:
                     self._ensure_checkpoint_dir()
                     self.checkpoint()
 
-                for callback in self.callbacks:
-                    callback()
+                for callback, args in zip(self.callbacks, self.callback_args):
+                    callback(*args)
 
                 return super().check(status)
 
         # Don't chain with the default status test
         self.rol_algorithm.setStatusTest(StatusTest(self.rol_parameters), False)
 
-    def add_callback(self, callback) -> None:
+    def add_callback(self, callback: Callable, *args) -> None:
         """Adds a callback to run after every optimisation iteration."""
 
         self.callbacks.append(callback)
+        self.callback_args.append(args)
 
 
 class CheckpointedROLVector(pyadjoint_rol.ROLVector):

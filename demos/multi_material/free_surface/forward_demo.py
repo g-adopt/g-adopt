@@ -91,7 +91,7 @@ stokes_solver.solve()
 
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 
-time_now, time_end = 0, 1e7 * 365.25 * 8.64e4
+time_now, time_end = 0, 25e6 * 365.25 * 8.64e4
 
 output_file = VTKFile("forward_output.pvd")
 output_file.write(*z.subfunctions, psi, time=time_now)

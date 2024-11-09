@@ -8,15 +8,15 @@ def cosine_curve(x, amplitude, wavelength, vertical_shift):
     return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
 
 
-nx, ny = 80, 80
+nx, ny = 64, 64
 lx, ly = 0.9142, 1
 
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
 mesh.cartesian = True
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4
 
-V = VectorFunctionSpace(mesh, "CG", 2)
-W = FunctionSpace(mesh, "CG", 1)
+V = VectorFunctionSpace(mesh, "Q", 2)
+W = FunctionSpace(mesh, "Q", 1)
 Z = MixedFunctionSpace([V, W])
 K = FunctionSpace(mesh, "DQ", 2)
 R = FunctionSpace(mesh, "R", 0)
@@ -48,8 +48,7 @@ signed_dist_to_interface.dat.data[:] = [
     dist if is_above else -dist for is_above, dist in node_relation_to_curve
 ]
 
-min_mesh_edge_length = min(lx / nx, ly / ny)
-epsilon = Constant(min_mesh_edge_length / 4)
+epsilon = Constant(mesh.cell_sizes.dat.data.min() / 4)
 
 psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 
@@ -81,7 +80,7 @@ t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 
-time_now, time_end = 0, 100
+time_now, time_end = 0, 400
 
 output_file = VTKFile("forward_output.pvd")
 output_file.write(*z.subfunctions, psi, time=time_now)
@@ -91,7 +90,7 @@ while True:
     t_adapt.maximum_timestep = time_end - time_now
     t_adapt.update_timestep()
 
-    level_set_solver.solve(step, equation="advection")
+    level_set_solver.solve(step)
     stokes_solver.solve()
 
     time_now += float(delta_t)
@@ -104,6 +103,4 @@ while True:
 
 with CheckpointFile("forward_checkpoint.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
-
-    final_checkpoint.save_function(z, name="Stokes")
     final_checkpoint.save_function(psi, name="Level set")

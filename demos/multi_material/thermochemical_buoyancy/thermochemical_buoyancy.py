@@ -1,17 +1,17 @@
 # Thermochemical convection
-# ===========================
-#
+# ---
+
 # Rationale
-# ---------
-#
+# -
+
 # Our previous tutorial introduced multi-material simulations in G-ADOPT by
 # investigating compositional effects on buoyancy. We extend that tutorial to include
 # thermal effects, thereby simulating thermochemical convection, which is, for example,
 # essential to modelling Earth's mantle evolution.
-#
+
 # This example
-# ------------
-#
+# -
+
 # Here, we consider the entrainment of a thin, compositionally dense layer by thermal
 # convection presented in [van Keken et al. (1997)]
 # (https://agupubs.onlinelibrary.wiley.com/doi/abs/10.1029/97JB01353). Inside a 2-D
@@ -164,35 +164,6 @@ approximation = Approximation(
 )
 # -
 
-# As with the previous examples, we set up an instance of the `TimestepAdaptor` class
-# for controlling the time-step length (via a CFL criterion) whilst the simulation
-# advances in time. We specify the initial time, initial time step $\Delta t$, and
-# output frequency (in time units).
-
-time_now = 0  # Initial time
-delta_t = Function(R).assign(1e-6)  # Initial time step
-output_frequency = 1e-4  # Frequency (based on simulation time) at which to output
-t_adapt = TimestepAdaptor(
-    delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
-)  # Current level-set advection requires a CFL condition that should not exceed 0.6.
-
-# This problem setup has a constant pressure nullspace, which corresponds to the
-# default case handled in G-ADOPT.
-
-Z_nullspace = create_stokes_nullspace(Z)
-
-# Boundary conditions are specified next: free slip on all sides, heating from below,
-# and cooling from above. No boundary conditions are required for level set, as the
-# numerical domain is closed.
-
-stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"uy": 0},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
-}
-temp_bcs = {bottom_id: {"T": 1}, top_id: {"T": 0}}
-
 # We move on to initialising the temperature field.
 
 # +
@@ -217,6 +188,53 @@ DirichletBC(Q, 1, bottom_id).apply(T)
 DirichletBC(Q, 0, top_id).apply(T)
 # -
 
+# As with the previous examples, we set up an instance of the `TimestepAdaptor` class
+# for controlling the time-step length (via a CFL criterion) whilst the simulation
+# advances in time. We specify the initial time, initial time step $\Delta t$, and
+# output frequency (in time units).
+
+time_now = 0  # Initial time
+delta_t = Function(R).assign(1e-6)  # Initial time step
+output_frequency = 1e-4  # Frequency (based on simulation time) at which to output
+t_adapt = TimestepAdaptor(
+    delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
+)  # Current level-set advection requires a CFL condition that should not exceed 0.6.
+
+# Here, we set up the variational problem for the energy, Stokes, and level-set
+# systems. The Stokes and energy systems depend on the approximation defined above,
+# and the level-set system includes both advection and reinitialisation components.
+
+# +
+# This problem setup has a constant pressure nullspace, which corresponds to the
+# default case handled in G-ADOPT.
+Z_nullspace = create_stokes_nullspace(Z)
+
+# Boundary conditions are specified next: free slip on all sides, heating from below,
+# and cooling from above. No boundary conditions are required for level set, as the
+# numerical domain is closed.
+stokes_bcs = {
+    bottom_id: {"uy": 0},
+    top_id: {"uy": 0},
+    left_id: {"ux": 0},
+    right_id: {"ux": 0},
+}
+temp_bcs = {bottom_id: {"T": 1}, top_id: {"T": 0}}
+
+energy_solver = EnergySolver(
+    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
+)
+
+stokes_solver = StokesSolver(
+    z,
+    approximation,
+    T,
+    bcs=stokes_bcs,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+)
+
+level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
+# -
+
 # We now set up our output. To do so, we create the output file as a ParaView Data file
 # that uses the XML-based VTK file format. We also open a file for logging, instantiate
 # G-ADOPT geodynamical diagnostic utility, and define some parameters specific to this
@@ -232,26 +250,6 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
-# -
-
-# Here, we set up the variational problem for the energy, Stokes, and level-set
-# systems. The Stokes and energy systems depend on the approximation defined above,
-# and the level-set system includes both advection and reinitialisation components.
-
-# +
-energy_solver = EnergySolver(
-    T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
-)
-
-stokes_solver = StokesSolver(
-    z,
-    approximation,
-    T,
-    bcs=stokes_bcs,
-    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
-)
-
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
