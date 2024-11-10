@@ -9,6 +9,7 @@
 # 2. The radial direction of gravity (as opposed to the vertical direction in a
 #    Cartesian domain);
 # 3. Solving a problem with laterally varying viscosity.
+# 4. Accounting for a (rotational) velocity nullspace.
 
 # This example
 # -------------
@@ -32,11 +33,18 @@ from gadopt.utility import step_func, vertical_component
 
 # +
 # Set up geometry:
-from unstructured_annulus import generate_mesh
+rmin = 3480e3
+rmax = 6371e3
+D = rmax - rmin
+nz = 32
+ncells = 180
+dz = D / nz
 
-generate_mesh()
-mesh = Mesh("unstructured_annulus_refined_surface.msh")
-bottom_id, top_id = 1, 2
+# Construct a circle mesh and then extrude into a cylinder:
+surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name="surface_mesh")
+mesh = ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type="radial")
+
+bottom_id, top_id = "bottom", "top"
 mesh.cartesian = False
 # -
 
@@ -48,10 +56,10 @@ mesh.cartesian = False
 # +
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 # (Incremental) Displacement function space (vector)
-V = VectorFunctionSpace(mesh, "CG", 2)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+V = VectorFunctionSpace(mesh, "Q", 2)
+W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
 # (Discontinuous) Stress tensor function space (tensor)
-S = TensorFunctionSpace(mesh, "DG", 2)
+S = TensorFunctionSpace(mesh, "DQ", 2)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 Z = MixedFunctionSpace([V, W])  # Mixed function space
@@ -147,8 +155,7 @@ initialise_background_field(G, G_values)
 #     data,
 #     component=None,
 #     lighting=False,
-#     show_edges=True,
-#     edge_color="grey",
+#     show_edges=False,
 #     cmap=boring_cmap,
 #     scalar_bar_args={
 #         "title": "Density (kg / m^3)",
@@ -162,7 +169,7 @@ initialise_background_field(G, G_values)
 #     },
 # )
 # plotter.camera_position = "xy"
-# plotter.show()
+# plotter.show(jupyter_backend="static", interactive=False)
 # plotter.close()  # Closes and finalizes movie
 # -
 
@@ -249,8 +256,7 @@ mu = Function(mu_scaled, name="Viscosity").interpolate(1e23 * 10**mu_scaled)
 #     data,
 #     component=None,
 #     lighting=False,
-#     show_edges=True,
-#     edge_color="grey",
+#     show_edges=False,
 #     cmap=boring_cmap,
 #     scalar_bar_args={
 #         "title": "Normalised viscosity",
@@ -264,7 +270,7 @@ mu = Function(mu_scaled, name="Viscosity").interpolate(1e23 * 10**mu_scaled)
 #     },
 # )
 # plotter.camera_position = "xy"
-# plotter.show()
+# plotter.show(jupyter_backend="static", interactive=False)
 # plotter.close()  # Closes and finalizes movie
 # -
 
@@ -302,36 +308,63 @@ ice_load = rho_ice * g * (Hice_1 * disc_1 + Hice_2 * disc_2)
 # Let's visualise the ice thickness using PyVista by plotting a ring outside our
 # synthetic Earth.
 
+
 # + tags=["active-ipynb"]
-# # Read the PVD file
+# def make_ice_ring(reader):
+#     data = reader.read()[0]
+
+#     normal = [0, 0, 1]
+#     polar = [rmax - dz / 2, 0, 0]
+#     center = [0, 0, 0]
+#     angle = 360.0
+#     res = 10000
+#     arc = pv.CircularArcFromNormal(center, res, normal, polar, angle)
+
+#     arc_data = arc.sample(data)
+
+#     # Stretch line by 20%
+#     transform_matrix = np.array(
+#         [
+#             [1.2, 0, 0, 0],
+#             [0, 1.2, 0, 0],
+#             [0, 0, 1.2, 0],
+#             [0, 0, 0, 1],
+#         ]
+#     )
+#     return arc_data.transform(transform_matrix)
+
+
+# def plot_ice_ring(plotter, ice_ring, scalar="Ice thickness"):
+#     ice_cmap = plt.get_cmap("Blues", 25)
+
+#     plotter.add_mesh(
+#         ice_ring,
+#         scalars=scalar,
+#         line_width=10,
+#         cmap=ice_cmap,
+#         clim=[0, 2000],
+#         scalar_bar_args={
+#             "title": "Ice thickness (m)",
+#             "position_x": 0.05,
+#             "position_y": 0.3,
+#             "vertical": True,
+#             "title_font_size": 20,
+#             "label_font_size": 16,
+#             "fmt": "%.0f",
+#             "font_family": "arial",
+#         },
+#     )
+
+
+# # Write ice thicknesss .pvd file
 # ice_thickness = Function(W, name="Ice thickness").interpolate(
-#     Hice_1 * disc_1 + Hice_2 * disc_2
+#     Hice1 * disc1 + Hice2 * disc2
 # )
-# zero_ice_thickness = Function(W, name="Zero ice thickness")  # Used for plotting later
-# VTKFile("ice.pvd").write(ice_thickness, zero_ice_thickness)
-# reader = pv.get_reader("ice.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
-# # Make two points at the bounds of the mesh and one at the center to construct a
-# # circular arc.
-# center = [0, 0, 0]
-# normal = [0, 0, 1]
-# polar = [radius_values[0] - surface_dx / 2, 0, 0]
-# angle = 360.0
-# arc = pv.CircularArcFromNormal(center, 500, normal, polar, angle)
-# arc_data = arc.sample(data)
+# zero_ice_thickness = Function(W, name="zero").assign(0)  # Used for plotting later
+# ice_thickness_file = VTKFile("ice.pvd").write(ice_thickness, zero_ice_thickness)
 
-# # Stretch line by 20%
-# transform_matrix = np.array(
-#     [
-#         [1.2, 0, 0, 0],
-#         [0, 1.2, 0, 0],
-#         [0, 0, 1.2, 0],
-#         [0, 0, 0, 1],
-#     ]
-# )
-
-# transformed_arc_data = arc_data.transform(transform_matrix)
-# ice_cmap = plt.get_cmap("Blues", 25)
+# ice_reader = pv.get_reader("ice.pvd")
+# ice_ring = make_ice_ring(ice_reader)
 
 # reader = pv.get_reader("viscosity.pvd")
 # data = reader.read()[0]  # MultiBlock mesh with only 1 block
@@ -345,9 +378,9 @@ ice_load = rho_ice * g * (Hice_1 * disc_1 + Hice_2 * disc_2)
 # plotter.add_mesh(
 #     data,
 #     component=None,
+#     scalars=None,
 #     lighting=False,
-#     show_edges=True,
-#     edge_color="grey",
+#     show_edges=False,
 #     cmap=boring_cmap,
 #     scalar_bar_args={
 #         "title": "Normalised viscosity",
@@ -360,23 +393,11 @@ ice_load = rho_ice * g * (Hice_1 * disc_1 + Hice_2 * disc_2)
 #         "font_family": "arial",
 #     },
 # )
-# plotter.add_mesh(
-#     transformed_arc_data,
-#     line_width=10,
-#     cmap=ice_cmap,
-#     scalar_bar_args={
-#         "title": "Ice thickness (m)",
-#         "position_x": 0.1,
-#         "position_y": 0.3,
-#         "vertical": True,
-#         "title_font_size": 20,
-#         "label_font_size": 16,
-#         "fmt": "%.0f",
-#         "font_family": "arial",
-#     },
-# )
+
+# plot_ice_ring(plotter, ice_ring)
+
 # plotter.camera_position = "xy"
-# plotter.show()
+# plotter.show(jupyter_backend="static", interactive=False)
 # plotter.close()  # Closes and finalizes movie
 # -
 
@@ -391,7 +412,7 @@ time_end_years = 10e3
 time_end = time_end_years * year_in_seconds
 time = Function(R).assign(time_start)
 
-dt_years = 200
+dt_years = 250
 dt = dt_years * year_in_seconds
 dt_out_years = 1e3
 dt_out = dt_out_years * year_in_seconds
@@ -430,12 +451,44 @@ approximation = Approximation(
     "SDVA", dimensional=True, parameters={"G": G, "g": g, "mu": mu, "rho": rho}
 )
 
+# As noted above, with a free-slip boundary condition on both boundaries, one can add an
+# arbitrary rotation of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity
+# solution. These lead to null-modes (eigenvectors) for the linear system, rendering the
+# resulting matrix singular. In preconditioned Krylov methods these null-modes must be
+# subtracted from the approximate solution at every iteration. We do that below, setting
+# up a nullspace object, specifying the `rotational` keyword argument to be True. Note
+# that we do not include a pressure nullspace as the top surface of the model is open.
+
+Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
+
+# Given the increased computational expense (typically requiring more degrees of
+# freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative solver parameters. As
+# noted in our previous 3-D Cartesian tutorial, G-ADOPT's iterative solver setup is
+# configured to use the GAMG preconditioner for the velocity block of the Stokes system,
+# to which we must provide near-nullspace information, which, in 2-D, consists of two
+# rotational and two translational modes.
+
+Z_near_nullspace = create_stokes_nullspace(
+    Z, closed=False, rotational=True, translations=[0, 1]
+)
+
 # We finally come to solving the variational problem, with solver objects for the Stokes
 # system created. We pass in the solution fields `z` and various fields needed for the
-# solve along with the approximation, timestep, and boundary conditions.
+# solve along with the approximation, timestep and boundary conditions.
 
 viscoelastic_solver = ViscoelasticSolver(
-    z, displ, tau_old, approximation, dt, bcs=stokes_bcs
+    z,
+    displ,
+    tau_old,
+    approximation,
+    dt,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace={
+        "nullspace": Z_nullspace,
+        "transpose_nullspace": Z_nullspace,
+        "near_nullspace": Z_near_nullspace,
+    },
 )
 
 # We next set up our output, in VTK format. This format can be read by programs like
@@ -519,27 +572,6 @@ for timestep in range(max_timesteps + 1):
 # # Fix camera in default position otherwise mesh appears to jumpy around!
 # # plotter.camera_position = 'xy'
 
-
-# def add_ice(p, scalar="Ice thickness"):
-#     p.add_mesh(
-#         transformed_arc_data,
-#         scalars=scalar,
-#         line_width=10,
-#         clim=[0, 2000],
-#         cmap=ice_cmap,
-#         scalar_bar_args={
-#             "title": "Ice thickness (m)",
-#             "position_x": 0.04,
-#             "position_y": 0.3,
-#             "vertical": True,
-#             "title_font_size": 20,
-#             "label_font_size": 16,
-#             "fmt": "%.0f",
-#             "font_family": "arial",
-#         },
-#     )
-
-
 # # Make a list of output times (non-uniform because also
 # # outputing first (quasi-elastic) solve
 # times = [0, dt_years]
@@ -571,8 +603,8 @@ for timestep in range(max_timesteps + 1):
 #         cmap=boring_cmap,
 #         scalar_bar_args={
 #             "title": "Displacement (m)",
-#             "position_x": 0.87,
-#             "position_y": 0.2,
+#             "position_x": 0.85,
+#             "position_y": 0.3,
 #             "vertical": True,
 #             "title_font_size": 20,
 #             "label_font_size": 16,
@@ -594,7 +626,7 @@ for timestep in range(max_timesteps + 1):
 #         for j in range(10):
 #             plotter.write_frame()
 
-#     add_ice(plotter)
+#     plot_ice_ring(plotter, ice_ring)
 
 #     # Write end frame multiple times to give a pause before gif starts again!
 #     for j in range(10):

@@ -32,7 +32,7 @@ T0_ref = Function(Q, name="Reference_Initial_Temperature")
 x, y = SpatialCoordinate(mesh)
 u = Function(V, name="Velocity").interpolate(as_vector((-y, x)))
 
-approximation = BoussinesqApproximation(Ra=1, kappa=5e-2)
+approximation = Approximation("BA", dimensional=False, parameters={"kappa": 5e-2})
 
 delta_t = 0.1
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)

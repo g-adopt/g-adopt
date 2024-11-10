@@ -87,7 +87,7 @@ def simulation(iteration: int) -> None:
             reduced_functional, bounds=(psi_lb, psi_ub)
         )
 
-        minimisation_parameters["Status Test"]["Iteration Limit"] = 20
+        minimisation_parameters["Status Test"]["Iteration Limit"] = 50
         optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
         optimiser.add_callback(
             callback, psi_control, psi_opt, optimisation_file, optimiser, objective
@@ -111,7 +111,7 @@ V = VectorFunctionSpace(mesh, "Q", 2)
 W = FunctionSpace(mesh, "Q", 1)
 Z = MixedFunctionSpace([V, W])
 R = FunctionSpace(mesh, "R", 0)
-C = FunctionSpace(mesh, FiniteElement("Q", quadrilateral, 1, variant="equispaced"))
+C = FunctionSpace(mesh, FiniteElement("DQ", quadrilateral, 1, variant="equispaced"))
 
 z = Function(Z)
 u, p = split(z)
