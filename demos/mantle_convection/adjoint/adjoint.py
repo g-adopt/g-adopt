@@ -79,7 +79,7 @@ checkpoint_file.close()
 # plotter.show(jupyter_backend="static")
 # -
 
-# The inverse code
+# The Inverse Code
 # ----------------
 #
 # The novelty of using the overloading approach provided by pyadjoint is that it requires
@@ -150,6 +150,17 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace, constant_jacobian=True)
 # -
 
+# Specify Problem Length
+# ------------------------
+#
+# For the purpose of this demo, we only invert for a total of 10 time-steps. This makes it
+# tractable to run this within a tutorial session.
+#
+# To run for the simulation's full duration, change the initial_timestep to `0` below, rather than
+# `timesteps - 10`.
+
+initial_timestep = timesteps - 10
+
 # Define the Control Space
 # ------------------------
 #
@@ -163,19 +174,23 @@ stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
 # Define control function space:
 Q1 = FunctionSpace(mesh, "CG", 1)
 
-# Create a function for the initial temperature field:
-Tic = Function(Q1, name="Initial Temperature")
+# Create a function for the unknown initial temperature condition, which we will be inverting for. Our initial
+# guess is set to the 1-D average of the forward model. We first load that, at the relevant timestep.
+# Note that this layer average will later be used for the smoothing term in our objective functional.
+with CheckpointFile(checkpoint_filename, mode="r") as checkpoint_file:
+    Taverage = checkpoint_file.load_function(mesh, "Average_Temperature", idx=initial_timestep)
+Tic = Function(Q1, name="Initial_Condition_Temperature").assign(Taverage)
 
-# Project the temperature field from the reference simulation's final time-step onto the control space as our
-# initial guess:
-with CheckpointFile(checkpoint_filename, mode="r") as fi:
-    Tic.project(fi.load_function(mesh, "Temperature", idx=timesteps - 1))
-# -
+# Given that Tic will be updated during the optimisation, we also create a function to store our initial guess,
+# which we will later use for smoothing. Note that since smoothing is executed in the control space, we must
+# specify boundary conditions on this term in that same Q1 space.
+T0_bcs = [DirichletBC(Q1, 0., top_id), DirichletBC(Q1, 1., bottom_id)]
+T0 = Function(Q1, name="Initial_Guess_Temperature").project(Tic, bcs=T0_bcs)
 
 # We next make pyadjoint aware of our control problem:
 control = Control(Tic)
 
-# Take our initial guess and project from Q1 to Q2, simultaneously imposing strong temperature boundary conditions.
+# Take our initial guess and project to T, simultaneously applying boundary conditions in the Q2 space:
 T.project(Tic, bcs=energy_solver.strong_bcs)
 
 # We continue by integrating the solutions at each time-step.
@@ -185,16 +200,13 @@ T.project(Tic, bcs=energy_solver.strong_bcs)
 # +
 u_misfit = 0.0
 
-# Next populate the tape by running the forward simulation. ** NOTE ** for the purpose of this tutorial, we only
-# invert for a total of 5 time-steps. This makes it tractable to run this within a tutorial session. To run for
-# the simulation's full duration, change the initial time-step to `0` instead of `timesteps - 5`.
-initial_timestep = timesteps - 5
+# Next populate the tape by running the forward simulation.
 for time_idx in range(initial_timestep, timesteps):
     stokes_solver.solve()
     energy_solver.solve()
     # Update the accumulated surface velocity misfit using the observed value.
-    with CheckpointFile(checkpoint_filename, mode="r") as fi:
-        uobs = fi.load_function(mesh, name="Velocity", idx=time_idx)
+    with CheckpointFile(checkpoint_filename, mode="r") as checkpoint_file:
+        uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=time_idx)
     u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
 # -
 
@@ -211,13 +223,6 @@ for time_idx in range(initial_timestep, timesteps):
 # the reference simulation as our regularisation constraint. This profile, referred to below as `Taverage`, helps
 # stabilise the inversion process by providing a benchmark that guides the solution towards physically plausible states.
 #
-# The 1-D profile, `Taverage`, is also loaded from the checkpoint file
-
-# Load the 1-D average temperature profile from checkpoint file:
-Taverage = Function(Q1, name="Average Temperature")
-with CheckpointFile(checkpoint_filename, mode="r") as fi:
-    Taverage.project(fi.load_function(mesh, "Average Temperature", idx=0))
-
 # We use `Taverage` as a part of the damping and smoothing terms in our regularisation.
 # Consequently, the complete objective functional is defined mathematically as follows:
 #
@@ -246,20 +251,20 @@ with CheckpointFile(checkpoint_filename, mode="r") as fi:
 
 # +
 # Define component terms of overall objective functional and their normalisation terms:
-damping = assemble((Tic - Taverage) ** 2 * dx)
+damping = assemble((T0 - Taverage) ** 2 * dx)
 norm_damping = assemble(Taverage**2 * dx)
-smoothing = assemble(dot(grad(Tic - Taverage), grad(Tic - Taverage)) * dx)
+smoothing = assemble(dot(grad(T0 - Taverage), grad(T0 - Taverage)) * dx)
 norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
 norm_obs = assemble(Tobs**2 * dx)
 norm_u_surface = assemble(dot(uobs, uobs) * ds_t)
 
-# Temperature misfit between final state solution and observation:
+# Define temperature misfit between final state solution and observation:
 t_misfit = assemble((T - Tobs) ** 2 * dx)
 
 # Weighting terms
 alpha_u = 1e-1
-alpha_d = 1e-2
-alpha_s = 1e-1
+alpha_d = 1e-3
+alpha_s = 1e-3
 
 # Define overall objective functional:
 objective = (
@@ -352,7 +357,7 @@ T_ub.assign(1.0)
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
 # -
 
-# Using the Lin-Moré Optimiser
+# Using the Lin-Moré optimiser
 # ----------------------------
 #
 # In this tutorial, we employ the trust region method of Lin and Moré (1999) implemented in ROL (Rapid Optimization Library).
@@ -366,10 +371,10 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # optimisation problems.
 #
 # For our solution of the optimisation problem we use the pre-defined paramters set in gadopt by using `minimsation_parameters`.
-# Here, we set the number of iterations to only 10, as opposed to the default 100. We also adjust the step-length for this problem,
+# Here, we set the number of iterations to only 5, as opposed to the default 100. We also adjust the step-length for this problem,
 # by setting it to a lower value than our default.
 
-minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+minimisation_parameters["Status Test"]["Iteration Limit"] = 5
 minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1e-2
 
 # A notable feature of this optimisation approach in ROL is its checkpointing capability. For every iteration,
@@ -419,10 +424,14 @@ reduced_functional.eval_cb_post = record_value
 
 # Run the optimisation
 optimiser.run()
+
+# Write the functional values to a file
+with open("functional.txt", "w") as f:
+    f.write("\n".join(str(x) for x in functional_values))
 # -
 
-# At this point a total number of 10 iterations are performed. For the example
-# case here with 5 timesteps this should result an adequete reduction
+# At this point a total number of 5 iterations are performed. For the example
+# case here with 10 timesteps this should result an adequete reduction
 # in the objective functional. Now we can look at the solution
 # visually. For the actual simulation with 80 time-steps, this solution
 # could be compared to `Tic_ref` as the "true solution".
@@ -435,7 +444,7 @@ optimiser.run()
 # plotter = pv.Plotter()
 # # Add the dataset to the plotter
 # plotter.add_mesh(dataset, scalars=dataset[0].array_names[0], cmap='coolwarm')
-# plotter.add_text("Solution after 10 iterations", font_size=10)
+# plotter.add_text("Solution after 5 iterations", font_size=10)
 # # Adjust the camera position
 # plotter.camera_position = [(0.5, 0.5, 2.5), (0.5, 0.5, 0), (0, 1, 0)]
 # # Show the plot

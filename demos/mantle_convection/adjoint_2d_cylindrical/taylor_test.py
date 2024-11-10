@@ -11,28 +11,6 @@ import sys
 
 from cases import cases
 
-ds_t = ds_t(degree=6)
-dx = dx(degree=6)
-
-newton_stokes_solver_parameters = {
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-10,
-    "snes_rtol": 1e-5,
-    "snes_stol": 0,
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-    "snes_converged_reason": None,
-    "fieldsplit_0": {
-        "ksp_converged_reason": None,
-    },
-    "fieldsplit_1": {
-        "ksp_converged_reason": None,
-    },
-}
-
 
 def annulus_taylor_test(case):
     """
@@ -79,7 +57,6 @@ def annulus_taylor_test(case):
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
     Ra = Constant(1e7)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
 
     # Define time stepping parameters:
     max_timesteps = 200
@@ -133,6 +110,9 @@ def annulus_taylor_test(case):
     mu_eff = 2 * (mu_lin * mu_plast) / (mu_lin + mu_plast)
     mu = conditional(mu_eff > 0.4, mu_eff, 0.4)
 
+    # Configure approximation
+    approximation = BoussinesqApproximation(Ra, mu=mu)
+
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(
@@ -161,12 +141,11 @@ def annulus_taylor_test(case):
         z,
         T,
         approximation,
-        mu=mu,
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
-        solver_parameters=newton_stokes_solver_parameters,
+        solver_parameters="direct"
     )
 
     # Control variable for optimisation
