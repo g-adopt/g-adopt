@@ -8,6 +8,8 @@ convert_demos: $(notebook_files) .pages .diagram.mermaid
 	tar --transform='s/.pages/CONTENTS.md/' --create --file artifact.tar .pages .diagram.mermaid
 	tar --transform='s|/.*/|/|' --append --file artifact.tar $(notebook_files)
 	tar --append --file artifact.tar $(mc_dir)/free_surface/temperature_warp.gif
+	tar --append --file artifact.tar $(gia_dir)/base_case/displacement_warp.gif
+	tar --append --file artifact.tar $(gia_dir)/2d_cylindrical/displacement_warp.gif
 
 # Explicit dependencies between notebooks
 # adjoint uses the checkpoint from the forward run

@@ -360,6 +360,7 @@ X = SpatialCoordinate(mesh)
 # approximate the series of layers using a smooth hyperbolic tangent function with a
 # width of 20 km.
 
+
 # +
 def initialise_background_field(field, background_values, vertical_tanh_width=20e3):
     profile = background_values[0]

@@ -6,7 +6,7 @@ ncpus := 4
 
 params.log: $(demo_name).py
 	$(info running $<)
-	/usr/bin/time --format="$< finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
+	/usr/bin/time --format="$< finished in %E" tsp -L multi_material -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 *.msh params.log

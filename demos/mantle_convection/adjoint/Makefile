@@ -8,7 +8,7 @@ solutions.pvd: adjoint.py adjoint-demo-checkpoint-state.h5
 
 adjoint-demo-checkpoint-state.h5: adjoint_forward.py
 	$(info running $<)
-	/usr/bin/time --format="$@ finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
+	/usr/bin/time --format="$@ finished in %E" tsp -L mantle_convection -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 
 clean:
 	rm -rf *.h5 *.pvd solutions solution visualisation_vtk optimisation_checkpoint
