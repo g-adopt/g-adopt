@@ -92,18 +92,19 @@ log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
 
 X = SpatialCoordinate(mesh)
 
-# Now we can set up the background profiles for the material properties. In this case the density and shear modulus
-# vary in the vertical direction. We will approximate the series of layers using a smooth tanh function with a width of 40 km.
+# Now we can set up the background profiles for the material properties.
+# In this case the density and shear modulus vary in the vertical direction.
+# We will approximate the series of layers using a smooth tanh function with a width of 40 km.
+# The layer properties specified are from spada et al. (2011).
+# N.b. that we have modified the viscosity of the Lithosphere viscosity from
+# Spada et al. (2011) because we are using coarse grid resolution.
 
 
 # +
-# layer properties from spada et al 2011
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3]
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [2, -2, -2, -1.698970004]  # viscosity = 1e23 * 10**viscosity_values
-# N.b. that we have modified the viscosity of the Lithosphere viscosity from
-# Spada et al 2011 because we are using coarse grid resolution
 
 
 def initialise_background_field(field, background_values, vertical_tanh_width=40e3):
@@ -168,7 +169,8 @@ initialise_background_field(shear_modulus, shear_modulus_values)
 # going to make things a bit more interesting by using a laterally
 # varying viscosity field. We'll put some regions of low viscosity
 # near the South Pole (inspired by West Antarctica) as well as in the lower mantle.
-# We've also put some relatively higher patches of mantle in the northern hemisphere to represent a downgoing slab.
+# We've also put some relatively higher viscosity patches of mantle in the
+# northern hemisphere to represent a downgoing slab.
 
 # +
 def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
@@ -498,7 +500,8 @@ for timestep in range(max_timesteps+1):
     plog.log_str(
         f"{timestep} {float(time)} {float(dt)} "
         f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} "
-        f"{vertical_displacement.dat.data.min()} {vertical_displacement.dat.data.max()}"
+        f"{vertical_displacement.dat.data.min()} "
+        f"{vertical_displacement.dat.data.max()} "
     )
 
 # Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the

@@ -298,16 +298,16 @@ X = SpatialCoordinate(mesh)
 # Now we can set up the background profiles for the material properties.
 # In this case the density, shear modulus and viscosity only vary in the vertical direction.
 # We will approximate the series of layers using a smooth tanh function with a width of 20 km.
+# The layer properties specified are from spada et al. (2011).
+# N.b. that we have modified the viscosity of the Lithosphere viscosity from
+# Spada et al. (2011) because we are using coarse grid resolution.
 
 
 # +
-# layer properties from spada et al 2011
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3]
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [1e25, 1e21, 1e21, 2e21]
-# N.b. that we have modified the viscosity of the Lithosphere from
-# Spada et al 2011 because we are using coarse grid resolution
 
 
 def initialise_background_field(field, background_values, vertical_tanh_width=20e3):
