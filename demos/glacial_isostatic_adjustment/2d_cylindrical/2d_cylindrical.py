@@ -3,7 +3,8 @@
 #
 # In this tutorial, we examine an idealised 2-D loading problem in an annulus domain.
 #
-# This example focusses on differences between running simulations in a 2-D annulus and 2-D Cartesian domain. These can be summarised as follows:
+# This example focusses on differences between running simulations in a 2-D annulus and 2-D Cartesian domain.
+# These can be summarised as follows:
 # 1. The geometry of the problem - i.e. the computational mesh.
 # 2. The radial direction of gravity (as opposed to the vertical direction in a Cartesian domain).
 # 3. Solving a problem with laterally varying viscosity.
@@ -48,8 +49,8 @@ mesh.cartesian = False
 
 # +
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
-V = VectorFunctionSpace(mesh, "Q", 2)  # (Incremental) Displacement function space (vector)
-W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
+V = VectorFunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (vector)
+W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 S = TensorFunctionSpace(mesh, "DQ", 2)  # (Discontinuous) Stress tensor function space (tensor)
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
@@ -91,7 +92,8 @@ log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
 
 X = SpatialCoordinate(mesh)
 
-# Now we can set up the background profiles for the material properties. In this case the density and shear modulus vary in the vertical direction. We will approximate the series of layers using a smooth tanh function with a width of 40 km.
+# Now we can set up the background profiles for the material properties. In this case the density and shear modulus
+# vary in the vertical direction. We will approximate the series of layers using a smooth tanh function with a width of 40 km.
 
 
 # +
@@ -162,7 +164,11 @@ initialise_background_field(shear_modulus, shear_modulus_values)
 # plotter.close()
 # -
 
-# Next let's initialise the viscosity field. In this tutorial we are going to make things a bit more interesting by using a laterally varying viscosity field. We'll put some regions of low viscosity near the South Pole (inspired by West Antarctica) as well as in the lower mantle. We've also put some relatively higher patches of mantle in the northern hemisphere to represent a downgoing slab.
+# Next let's initialise the viscosity field. In this tutorial we are
+# going to make things a bit more interesting by using a laterally
+# varying viscosity field. We'll put some regions of low viscosity
+# near the South Pole (inspired by West Antarctica) as well as in the lower mantle.
+# We've also put some relatively higher patches of mantle in the northern hemisphere to represent a downgoing slab.
 
 # +
 def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
@@ -209,7 +215,9 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 
 # -
 
-# Now let's plot the normalised viscosity viscosity field in log space (we have divided the viscosity by 1x10$^{23}$ Pa s). Although we are using a fairly coarse mesh we are able to capture the key features of the viscosity field.
+# Now let's plot the normalised viscosity viscosity field in log space
+# (we have divided the viscosity by 1x10$^{23}$ Pa s). Although we are using a fairly
+# coarse mesh we are able to capture the key features of the viscosity field.
 
 # + tags=["active-ipynb"]
 # # Read the PVD file
@@ -246,7 +254,11 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 # plotter.close()
 # -
 
-# Now let's setup the ice load. For this tutorial we will have two synthetic ice sheets. Let's put one a larger one over the South Pole, with a total horizontal extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify things let's keep the ice load fixed in time.
+# Now let's setup the ice load. For this tutorial we will have two synthetic ice sheets.
+# Let's put one a larger one over the South Pole, with a total horizontal
+# extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the
+# North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify things let's
+# keep the ice load fixed in time.
 
 rho_ice = 931
 g = 9.8125
@@ -383,11 +395,16 @@ log(f"dt: {float(dt / year_in_seconds)} years")
 log(f"Simulation start time: {Tstart} years")
 # -
 
-# We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing the string `ux` and `uy`, G-ADOPT knows to specify these as Strong Dirichlet boundary conditions.
+# We can now define the boundary conditions to be used in this
+# simulation.  Let's set the bottom and side boundaries to be free
+# slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing the string `ux` and `uy`,
+# G-ADOPT knows to specify these as Strong Dirichlet boundary conditions.
 #
-# For the top surface we need to specify a normal stress, i.e. the weight of the ice load, as well as indicating this is a free surface.
+# For the top surface we need to specify a normal stress, i.e. the weight of the ice load, as well as
+# indicating this is a free surface.
 #
-# The `delta_rho_fs` option accounts for the density contrast across the free surface whether there is ice or air above a particular region of the mantle.
+# The `delta_rho_fs` option accounts for the density contrast across the free surface whether there
+# is ice or air above a particular region of the mantle.
 
 # Setup boundary conditions
 exterior_density = rho_ice * (disc1+disc2)
@@ -402,21 +419,25 @@ stokes_bcs = {top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs
 approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
 
 # As noted above, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
-# of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution. These lead to null-modes (eigenvectors) for the linear system, rendering the resulting matrix singular.
-# In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at every iteration. We do that below,
-# setting up a nullspace object, specifying the `rotational` keyword argument to be True. Note that we do not include a pressure nullspace as the top surface of the model is open.
+# of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity
+# solution. These lead to null-modes (eigenvectors) for the linear system, rendering the resulting matrix singular.
+# In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at
+# every iteration. We do that below, setting up a nullspace object, specifying the `rotational` keyword argument to be
+# True. Note that we do not include a pressure nullspace as the top surface of the model is open.
 
 Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
 
-# Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative
-# solver parameters. As noted in our previous 3-D Cartesian tutorial, G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
-# for the velocity block of the Stokes system, to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
+# Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain,
+# G-ADOPT defaults to iterative solver parameters. As noted in our previous 3-D Cartesian tutorial, G-ADOPT's
+# iterative solver setup is configured to use the GAMG preconditioner for the velocity block of the Stokes system,
+# to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
 # translational modes.
 
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
 # We finally come to solving the variational problem, with solver
-# objects for the Stokes system created. We pass in the solution fields `z` and various fields needed for the solve along with the approximation, timestep and boundary conditions.
+# objects for the Stokes system created. We pass in the solution fields `z` and various fields needed for the solve
+# along with the approximation, timestep and boundary conditions.
 #
 
 stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
@@ -448,7 +469,9 @@ U = FunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (s
 vertical_displacement = Function(U, name="Vertical displacement")
 # -
 
-# Now let's run the simulation! At each step we call `solve` to calculate the incremental displacement and pressure fields. This will update the displacement at the surface and stress values accounting for the time dependent Maxwell consitutive equation.
+# Now let's run the simulation! At each step we call `solve` to calculate the incremental displacement and
+#pressure fields. This will update the displacement at the surface and stress values accounting for the time
+# dependent Maxwell consitutive equation.
 
 for timestep in range(max_timesteps+1):
 
@@ -478,7 +501,9 @@ for timestep in range(max_timesteps+1):
         f"{vertical_displacement.dat.data.min()} {vertical_displacement.dat.data.max()}"
     )
 
-# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the calculated displacement to artifically scale the mesh. We have exaggerated the stretching by a factor of 1500, **BUT...** it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
+# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the
+# calculated displacement to artifically scale the mesh. We have exaggerated the stretching by a factor of 1500, **BUT...**
+# it is important to remember this is just for ease of visualisation - the mesh is not moving in reality!
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
@@ -566,6 +591,12 @@ for timestep in range(max_timesteps+1):
 # # Closes and finalizes movie
 # plotter.close()
 # -
-# Looking at the animation, we can see that the weight of the ice load deforms the mantle, sinking beneath the ice load and pushing up material away from the ice load. This forebulge grows through the simulation and by 10,000 years is close to isostatic equilibrium. As the ice load is applied instantaneously the highest velocity occurs within the first timestep and gradually decays as the simulation goes on, though there is still a small amount of deformation ongoing after 10,000 years. We can also clearly see that the lateral viscosity variations give rise to assymetrical displacement patterns. This is especially true near the South Pole, where the low viscosity region has enabled the isostatic relaxation to happen much faster than the surrounding regions.
+# Looking at the animation, we can see that the weight of the ice load deforms the mantle, sinking
+# beneath the ice load and pushing up material away from the ice load. This forebulge grows through the
+# simulation and by 10,000 years is close to isostatic equilibrium. As the ice load is applied instantaneously the
+# highest velocity occurs within the first timestep and gradually decays as the simulation goes on, though there is
+# still a small amount of deformation ongoing after 10,000 years. We can also clearly see that the lateral viscosity
+# variations give rise to assymetrical displacement patterns. This is especially true near the South Pole, where the low
+# viscosity region has enabled the isostatic relaxation to happen much faster than the surrounding regions.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
