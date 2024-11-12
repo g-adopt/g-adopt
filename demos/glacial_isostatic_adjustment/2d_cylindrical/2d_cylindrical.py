@@ -470,7 +470,7 @@ vertical_displacement = Function(U, name="Vertical displacement")
 # -
 
 # Now let's run the simulation! At each step we call `solve` to calculate the incremental displacement and
-#pressure fields. This will update the displacement at the surface and stress values accounting for the time
+# pressure fields. This will update the displacement at the surface and stress values accounting for the time
 # dependent Maxwell consitutive equation.
 
 for timestep in range(max_timesteps+1):

@@ -530,7 +530,7 @@ for timestep in range(max_timesteps):
 #         }
 #     )
 #
-#     # Fix camera in default position otherwise mesh appears to jumpy around!
+#     # Fix camera in default position otherwise mesh appears to jump around!
 #     plotter.camera_position = [(750000.0, 1445500.0, 6291991.008627122),
 #                         (750000.0, 1445500.0, 0.0),
 #                         (0.0, 1.0, 0.0)]
