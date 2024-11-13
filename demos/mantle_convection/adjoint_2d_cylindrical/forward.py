@@ -3,27 +3,9 @@ This runs the forward portion of the adjoint test case, to generate the referenc
 final condition, and synthetic forcing (surface velocity observations).
 """
 
-from gadopt import *
 import numpy as np
 
-newton_stokes_solver_parameters = {
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-10,
-    "snes_rtol": 1e-5,
-    "snes_stol": 0,
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-    "snes_converged_reason": None,
-    "fieldsplit_0": {
-        "ksp_converged_reason": None,
-    },
-    "fieldsplit_1": {
-        "ksp_converged_reason": None,
-    },
-}
+from gadopt import *
 
 
 def run_forward():
@@ -54,7 +36,6 @@ def run_forward():
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
     Ra = Constant(1e7)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
 
     # Define time stepping parameters:
     max_timesteps = 200
@@ -102,10 +83,13 @@ def run_forward():
 
     mu_function = Function(W, name="Viscosity")
 
-    # Calculate the layer average of the initial state
-    averager = LayerAveraging(
-        mesh, np.linspace(rmin, rmax, nlayers * 2), quad_degree=6
+    # Configure approximation
+    approximation = Approximation(
+        "BA", dimensional=False, parameters={"Ra": Ra, "mu": mu}
     )
+
+    # Calculate the layer average of the initial state
+    averager = LayerAveraging(mesh, np.linspace(rmin, rmax, nlayers * 2), quad_degree=6)
     averager.extrapolate_layer_average(Taverage, averager.get_layer_average(T))
 
     checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
@@ -134,14 +118,13 @@ def run_forward():
 
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
-        mu=mu,
+        T,
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
-        solver_parameters=newton_stokes_solver_parameters,
+        solver_parameters="direct",
     )
 
     # Create output file and select output_frequency

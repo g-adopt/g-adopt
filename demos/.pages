@@ -2,17 +2,19 @@
 - Mantle convection
     - Base case
         - [base_case](mantle_convection/base_case.ipynb)
-    - Physical approximation
+    - Physical approximation (rheology)
+        - [viscoplastic_case](mantle_convection/viscoplastic_case.ipynb)
+    - Physical approximation (compressibility)
         - [2d_compressible_TALA](mantle_convection/2d_compressible_TALA.ipynb)
         - [2d_compressible_ALA](mantle_convection/2d_compressible_ALA.ipynb)
         - [visualise_ALA_p_nullspace](mantle_convection/visualise_ALA_p_nullspace.ipynb)
-        - [viscoplastic_case](mantle_convection/viscoplastic_case.ipynb)
+    - Boundary conditions
+        - [free_surface](mantle_convection/free_surface.ipynb)
     - Dimension
         - [3d_cartesian](mantle_convection/3d_cartesian.ipynb)
-    - Geometry & Boundary Conditions
+    - Geometry
         - [2d_cylindrical](mantle_convection/2d_cylindrical.ipynb)
         - [3d_spherical](mantle_convection/3d_spherical.ipynb)
-        - [free_surface](mantle_convection/free_surface.ipynb)
         - [gplates_global](mantle_convection/gplates_global.ipynb)
     - Adjoint
         - [adjoint_forward](mantle_convection/adjoint_forward.ipynb)

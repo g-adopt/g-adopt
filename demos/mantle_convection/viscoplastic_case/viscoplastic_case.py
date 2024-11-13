@@ -80,7 +80,7 @@ epsii = sqrt(inner(epsilon, epsilon) + 1e-10)
 # linear component of rheological formulation
 mu_lin = exp(-gamma_T * T + gamma_Z * (1 - X[1]))
 mu_plast = mu_star + (sigma_y / epsii)  # plastic component of rheological formulation
-mu = (2.0 * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
+mu = (2 * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
 
 approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e2, "mu": mu})
 # -
@@ -218,7 +218,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # + tags=["active-ipynb"]
 # mu_field = Function(W, name="Viscosity")
-# mu_field.interpolate(mu)
+# mu_field.interpolate(ln(mu) / ln(10))
 # fig, axes = plt.subplots()
 # collection = tripcolor(mu_field, axes=axes, cmap='coolwarm')
 # fig.colorbar(collection);

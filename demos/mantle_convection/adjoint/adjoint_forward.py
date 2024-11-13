@@ -66,11 +66,10 @@ T.interpolate(
 )
 # -
 
-# Calculating the Layer Average
-# ------------------------------
-# We calculate the layer average of the initial state. This average
-# temperature will serve as a regularisation constraint in the
-# inversion process.
+# Configuring Layer Average Calculation
+# -------------------------------------
+# We calculate the depth average of model temperature at every timestep. This average
+# temperature will serve as a regularisation constraint in the inversion process.
 
 Taverage = Function(Q1, name="Average Temperature")
 averager = LayerAveraging(mesh, np.linspace(0, 1.0, 150 * 2), quad_degree=6)
@@ -78,15 +77,14 @@ averager.extrapolate_layer_average(Taverage, averager.get_layer_average(T))
 
 # Checkpointing of fields
 # -----------------------
-# We checkpoint the velocity field and temperature initially and finally to capture the essential states of our
-# simulation. This allows us to retrieve these states later using the indices and timestepping history, which are
-# crucial for the adjoint inversion process. By saving the initial state, we can compare it against the final state to
-# see how the system evolved, which is analogous to how seismic tomography uses initial models to interpret Earth's
-# interior after simulation.
+# We checkpoint the temperature at the start and end of our simulation to capture the essential states of our system.
+# We checkpoint velocity and layer average temperature (in time loop below) at every timestep. This allows us to retrieve
+# these states later using the indices and timestepping history, which are crucial for the adjoint inversion process.
+# By saving the initial state, we can compare it against the final state to see how the system evolved, which is analogous
+# to how seismic tomography uses initial models to interpret Earth's interior after simulation.
 
 checkpoint_file = CheckpointFile("adjoint-demo-checkpoint-state.h5", "w")
 checkpoint_file.save_mesh(mesh)
-checkpoint_file.save_function(Taverage, name="Average Temperature", idx=0)
 checkpoint_file.save_function(T, name="Temperature", idx=0)
 
 # Physical Setup
@@ -146,9 +144,14 @@ stokes_solver = StokesSolver(
 # the velocity field for later use, and periodically output the results.
 
 # +
+output_file = VTKFile("output.pvd")  # Create output file for visualisation.
 for timestep in range(timesteps):
+    output_file.write(*z.subfunctions, T, Taverage)
     stokes_solver.solve()
     energy_solver.solve()
+    averager.extrapolate_layer_average(
+        Taverage, averager.get_layer_average(T)
+    )  # Calculate layer average
 
     # Store the velocity field for use in the adjoint problem.
     checkpoint_file.save_function(
