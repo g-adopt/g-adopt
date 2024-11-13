@@ -4,9 +4,33 @@ depending on what they would like to achieve.
 
 """
 
-from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
-from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble
+from firedrake import (
+    outer,
+    ds_v,
+    ds_t,
+    ds_b,
+    CellDiameter,
+    CellVolume,
+    dot,
+    JacobianInverse,
+)
+from firedrake import (
+    sqrt,
+    Function,
+    FiniteElement,
+    TensorProductElement,
+    FunctionSpace,
+    VectorFunctionSpace,
+)
+from firedrake import (
+    as_vector,
+    SpatialCoordinate,
+    Constant,
+    max_value,
+    min_value,
+    dx,
+    assemble,
+)
 from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
 from firedrake.ufl_expr import extract_unique_domain
@@ -35,7 +59,7 @@ class ParameterLog:
     def __init__(self, filename, mesh):
         self.comm = mesh.comm
         if self.comm.rank == 0:
-            self.f = open(filename, 'w')
+            self.f = open(filename, "w")
 
     def log_str(self, str):
         if self.comm.rank == 0:
@@ -60,7 +84,15 @@ class TimestepAdaptor:
 
     """
 
-    def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
+    def __init__(
+        self,
+        dt_const,
+        u,
+        V,
+        target_cfl=1.0,
+        increase_tolerance=1.5,
+        maximum_timestep=None,
+    ):
         self.dt_const = dt_const
         self.u = u
         self.target_cfl = target_cfl
@@ -71,10 +103,12 @@ class TimestepAdaptor:
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
+        self.ref_vel_interpolator = Interpolator(
+            abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX
+        )
 
     def compute_timestep(self):
-        max_ts = float(self.dt_const)*self.increase_tolerance
+        max_ts = float(self.dt_const) * self.increase_tolerance
         if self.maximum_timestep is not None:
             max_ts = min(max_ts, self.maximum_timestep)
 
@@ -95,18 +129,18 @@ class TimestepAdaptor:
 def upward_normal(mesh):
     if mesh.cartesian:
         n = mesh.geometric_dimension()
-        return as_vector([0]*(n-1) + [1])
+        return as_vector([0] * (n - 1) + [1])
     else:
         X = SpatialCoordinate(mesh)
-        r = sqrt(sum([x ** 2 for x in X]))
-        return X/r
+        r = sqrt(sum([x**2 for x in X]))
+        return X / r
 
 
 def vertical_component(u):
     mesh = extract_unique_domain(u)
 
     if mesh.cartesian:
-        return u[u.ufl_shape[0]-1]
+        return u[u.ufl_shape[0] - 1]
     else:
         n = upward_normal(mesh)
         return sum([n_i * u_i for n_i, u_i in zip(n, u)])
@@ -131,9 +165,9 @@ class CombinedSurfaceMeasure(ufl.Measure):
         self.ds_b = ds_b(domain=domain, degree=degree)
 
     def __call__(self, subdomain_id, **kwargs):
-        if subdomain_id == 'top':
+        if subdomain_id == "top":
             return self.ds_t(**kwargs)
-        elif subdomain_id == 'bottom':
+        elif subdomain_id == "bottom":
             return self.ds_b(**kwargs)
         else:
             return self.ds_v(subdomain_id, **kwargs)
@@ -141,7 +175,7 @@ class CombinedSurfaceMeasure(ufl.Measure):
     def __rmul__(self, other):
         """This is to handle terms to be integrated over all surfaces in the form of other*ds.
         Here the CombinedSurfaceMeasure ds is not called, instead we just split it up as below."""
-        return other*self.ds_v + other*self.ds_t + other*self.ds_b
+        return other * self.ds_v + other * self.ds_t + other * self.ds_b
 
 
 def _get_element(ufl_or_element):
@@ -160,7 +194,9 @@ def is_continuous(expr):
         if isinstance(elem, finat.ufl.MixedElement):
             # the second operand is a MultiIndex
             assert len(expr.ufl_operands[1]) == 1
-            sub_element_index, _ = elem.extract_subelement_component(int(expr.ufl_operands[1][0]))
+            sub_element_index, _ = elem.extract_subelement_component(
+                int(expr.ufl_operands[1][0])
+            )
             elem = elem.sub_elements[sub_element_index]
     else:
         elem = _get_element(expr)
@@ -185,7 +221,7 @@ def normal_is_continuous(expr):
 
 
 def cell_size(mesh):
-    if hasattr(mesh.ufl_cell(), 'sub_cells'):
+    if hasattr(mesh.ufl_cell(), "sub_cells"):
         return sqrt(CellVolume(mesh))
     else:
         return CellDiameter(mesh)
@@ -201,7 +237,7 @@ def tensor_jump(v, n):
     vectorial UFL jump operator `ufl.jump` which represents div(u).
     The equivalent of nabla_grad(u) is given by tensor_jump(n, u).
     """
-    return outer(v('+'), n('+')) + outer(v('-'), n('-'))
+    return outer(v("+"), n("+")) + outer(v("-"), n("-"))
 
 
 def extend_function_to_3d(func, mesh_extruded):
@@ -212,16 +248,18 @@ def extend_function_to_3d(func, mesh_extruded):
     function.
     """
     fs = func.function_space()
-#    assert fs.mesh().geometric_dimension() == 2, 'Function must be in 2D space'
+    #    assert fs.mesh().geometric_dimension() == 2, 'Function must be in 2D space'
     ufl_elem = fs.ufl_element()
     family = ufl_elem.family()
     degree = ufl_elem.degree()
     name = func.name()
     if isinstance(ufl_elem, VectorElement):
         # vector function space
-        fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0, dim=2, vector=True)
+        fs_extended = get_functionspace(
+            mesh_extruded, family, degree, "R", 0, dim=2, vector=True
+        )
     else:
-        fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0)
+        fs_extended = get_functionspace(mesh_extruded, family, degree, "R", 0)
     func_extended = Function(fs_extended, name=name, val=func.dat._data)
     func_extended.source = func
     return func_extended
@@ -248,27 +286,42 @@ class ExtrudedFunction(Function):
             self.view_3d = extend_function_to_3d(self, mesh_3d)
 
 
-def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
-                      vector=False, hdiv=False, variant=None, v_variant=None,
-                      **kwargs):
+def get_functionspace(
+    mesh,
+    h_family,
+    h_degree,
+    v_family=None,
+    v_degree=None,
+    vector=False,
+    hdiv=False,
+    variant=None,
+    v_variant=None,
+    **kwargs,
+):
     cell_dim = mesh.cell_dimension()
     print(cell_dim)
-    assert cell_dim in [2, (2, 1), (1, 1)], 'Unsupported cell dimension'
+    assert cell_dim in [2, (2, 1), (1, 1)], "Unsupported cell dimension"
     hdiv_families = [
-        'RT', 'RTF', 'RTCF', 'RAVIART-THOMAS',
-        'BDM', 'BDMF', 'BDMCF', 'BREZZI-DOUGLAS-MARINI',
+        "RT",
+        "RTF",
+        "RTCF",
+        "RAVIART-THOMAS",
+        "BDM",
+        "BDMF",
+        "BDMCF",
+        "BREZZI-DOUGLAS-MARINI",
     ]
     if variant is None:
         if h_family.upper() in hdiv_families:
-            if h_family in ['RTCF', 'BDMCF']:
-                variant = 'equispaced'
+            if h_family in ["RTCF", "BDMCF"]:
+                variant = "equispaced"
             else:
-                variant = 'integral'
+                variant = "integral"
         else:
             print("var = equi")
-            variant = 'equispaced'
+            variant = "equispaced"
     if v_variant is None:
-        v_variant = 'equispaced'
+        v_variant = "equispaced"
     if cell_dim == (2, 1) or (1, 1):
         if v_family is None:
             v_family = h_family
@@ -304,7 +357,7 @@ class LayerAveraging:
         XYZ = SpatialCoordinate(mesh)
 
         if mesh.cartesian:
-            self.r = XYZ[len(XYZ)-1]
+            self.r = XYZ[len(XYZ) - 1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))
 
@@ -318,7 +371,9 @@ class LayerAveraging:
             try:
                 nlayers = mesh.layers
             except AttributeError:
-                raise ValueError("For non-extruded mesh need to specify depths array r1d.")
+                raise ValueError(
+                    "For non-extruded mesh need to specify depths array r1d."
+                )
             CG1 = FunctionSpace(mesh, "CG", 1)
             r_func = Function(CG1).interpolate(self.r)
             self.r1d = r_func.dat.data[:nlayers]
@@ -332,7 +387,7 @@ class LayerAveraging:
         r = self.r
         rc = Constant(self.r1d[0])
         rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rp = Constant(0.0)
 
         # radial P1 hat function in rp < r < rn with maximum at rc
         phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
@@ -353,7 +408,11 @@ class LayerAveraging:
         rn = Constant(self.r1d[1])
 
         # overlapping product between two basis functions in rp < r < rn
-        overlap = max_value((rn - r) / (rn - rp), 0) * max_value((r - rp) / (rn - rp), 0) * self.dx
+        overlap = (
+            max_value((rn - r) / (rn - rp), 0)
+            * max_value((r - rp) / (rn - rp), 0)
+            * self.dx
+        )
 
         for i, rin in enumerate(self.r1d[1:]):
             rn.assign(rin)
@@ -366,7 +425,7 @@ class LayerAveraging:
         r = self.r
         rc = Constant(self.r1d[0])
         rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rp = Constant(0.0)
 
         phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
 
@@ -391,18 +450,17 @@ class LayerAveraging:
         return solveh_banded(self.mass, self.rhs, lower=True)
 
     def extrapolate_layer_average(self, u, avg):
-        """Given an array of layer averages avg, extrapolate to `Function` u
-        """
+        """Given an array of layer averages avg, extrapolate to `Function` u"""
 
         r = self.r
         rc = Constant(self.r1d[0])
         rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rp = Constant(0.0)
 
         u.assign(0.0)
 
         phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
-        val = Constant(0.)
+        val = Constant(0.0)
 
         for a, rin in zip(avg[:-1], self.r1d[1:]):
             val.assign(a)
@@ -426,14 +484,18 @@ def timer_decorator(func):
         elapsed_time = end_time - start_time
         log(f"Time taken for {func.__name__}: {elapsed_time} seconds")
         return result
+
     return wrapper
 
 
 class InteriorBC(DirichletBC):
     """DirichletBC applied to anywhere that is *not* on the specified boundary"""
+
     @utils.cached_property
     def nodes(self):
-        return np.array(list(set(range(self._function_space.node_count)) - set(super().nodes)))
+        return np.array(
+            list(set(range(self._function_space.node_count)) - set(super().nodes))
+        )
 
 
 def absv(u):
@@ -446,9 +508,7 @@ def node_coordinates(function):
     func_space = function.function_space()
     mesh_coords = SpatialCoordinate(func_space.mesh())
 
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]
+    return [Function(func_space).interpolate(coords).dat.data for coords in mesh_coords]
 
 
 def interpolate_1d_profile(function: Function, one_d_filename: str):

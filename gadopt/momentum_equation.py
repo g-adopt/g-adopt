@@ -23,7 +23,7 @@ and then return `-F`.
 from firedrake import *
 
 from .equations import Equation, interior_penalty_factor
-from .utility import is_continuous, normal_is_continuous, tensor_jump, upward_normal
+from .utility import is_continuous, normal_is_continuous, tensor_jump
 
 
 def viscosity_term(
@@ -167,8 +167,7 @@ def divergence_term(
 def momentum_source_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
-    source = eq.approximation.buoyancy(eq.p, eq.T) * upward_normal(eq.mesh)
-    F = -dot(eq.test, source) * eq.dx
+    F = -dot(eq.test, eq.source) * eq.dx
 
     return -F
 
@@ -179,7 +178,7 @@ pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
 divergence_term.required_attrs = {"u", "rho_mass"}
 divergence_term.optional_attrs = set()
-momentum_source_term.required_attrs = {"p", "T"}
+momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
 
 residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]

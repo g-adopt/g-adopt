@@ -5,6 +5,7 @@ from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
     ExtendedBoussinesqApproximation,
+    SmallDisplacementViscoelasticApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
@@ -17,7 +18,11 @@ from .level_set_tools import (
 )
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
-from .stokes_integrators import StokesSolver, create_stokes_nullspace
+from .stokes_integrators import (
+    StokesSolver,
+    ViscoelasticStokesSolver,
+    create_stokes_nullspace,
+)
 from .time_stepper import (
     BackwardEuler,
     CrankNicolsonRK,
