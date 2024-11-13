@@ -8,8 +8,6 @@ from firedrake import *
 
 from .approximations import Approximation as Approximation
 from .diagnostics import GeodynamicalDiagnostics as GeodynamicalDiagnostics
-from .energy_solver import EnergySolver as EnergySolver
-from .energy_solver import GenericTransportSolver as GenericTransportSolver
 from .level_set_tools import LevelSetSolver as LevelSetSolver
 from .level_set_tools import entrainment as entrainment
 from .level_set_tools import material_field as material_field
@@ -23,6 +21,8 @@ from .time_stepper import BackwardEuler as BackwardEuler
 from .time_stepper import ImplicitMidpoint as ImplicitMidpoint
 from .time_stepper import eSSPRKs3p3 as eSSPRKs3p3
 from .time_stepper import eSSPRKs10p3 as eSSPRKs10p3
+from .transport_solver import EnergySolver as EnergySolver
+from .transport_solver import GenericTransportSolver as GenericTransportSolver
 from .utility import InteriorBC as InteriorBC
 from .utility import LayerAveraging as LayerAveraging
 from .utility import ParameterLog as ParameterLog

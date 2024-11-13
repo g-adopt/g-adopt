@@ -14,9 +14,9 @@ import numpy as np
 from mpi4py import MPI
 
 from . import scalar_equation as scalar_eq
-from .energy_solver import GenericTransportSolver
 from .equations import Equation
 from .time_stepper import RungeKuttaTimeIntegrator, eSSPRKs3p3
+from .transport_solver import GenericTransportSolver
 
 __all__ = ["LevelSetSolver", "entrainment", "material_field"]
 

@@ -55,13 +55,13 @@ T = 10.0
 dt = T / 600.0
 
 # Use G-ADOPT's GenericTransportSolver to advect the tracer. We use the diagonally
-# implicit DIRK33 Runge-Kutta method for timestepping. 'T' means that the boundary
+# implicit DIRK33 Runge-Kutta method for timestepping. 'g' means that the boundary
 # conditions will be applied strongly by the solver.
 terms = ["advection", "diffusion"]
 eq_attrs = {"diffusivity": kappa, "u": u}
-q_top = 1.0
-q_bottom = 0.0
-bcs = {3: {"T": q_bottom}, 4: {"T": q_top}}
+g_top = 1.0
+g_bottom = 0.0
+bcs = {3: {"g": g_bottom}, 4: {"g": g_top}}
 adv_diff_solver = GenericTransportSolver(
     terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_diffusivity=kappa
 )
