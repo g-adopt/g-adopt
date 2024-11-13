@@ -36,5 +36,9 @@ check:
 	python3 -m pytest -m demo
 
 # pattern rule for executing demo scripts as a notebook
+# because jupyter is an insane jumble of components, there's absolutely no way to configure it
+# to try to bind to its control port when it needs it. instead, the provisioner checks for a free
+# port and writes that to a connection file. this is of course completely prone to race conditions.
+# instead of trying to fix it at the jupyter level, we can serialise the startup with a semaphore
 %.ipynb: %.py
-	python3 -m jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))
+	(flock 9; sleep 1 && flock -u 9 & python3 -m jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))) 9>render.lock
