@@ -17,15 +17,15 @@ ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
 
-def rectangle_taylor_test(case):
+def rectangle_taylor_test(case: str):
     """
-    Perform a second-order Taylor remainder convergence test
-    for one term in the objective functional for the rectangular case
-    and asserts if convergence is above 1.9
+    Perform a second-order Taylor remainder convergence test for one term in the
+    objective functional for the rectangular case and asserts if convergence is above
+    1.98.
 
     Args:
-        case (str): name of the objective functional term
-            either of "damping", "smooothing", "Tobs", "uobs"
+        case: name of the objective functional term; either damping, smoothing, Tobs, or
+              uobs
     """
     checkpoint_filename = (
         Path(__file__).resolve().parent / "adjoint-demo-checkpoint-state.h5"
