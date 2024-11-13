@@ -36,9 +36,11 @@ iterative_energy_solver_parameters: dict[str, Any] = {
 
 Configured to use the GMRES Krylov scheme with Successive Over Relaxation (SOR)
 preconditioning. Note that default energy solver parameters can be augmented or adjusted
-by accessing the solver_parameter dictionary, for example:
-energy_solver.solver_parameters['ksp_converged_reason'] = None
-energy_solver.solver_parameters['ksp_rtol'] = 1e-4
+by accessing the solver_parameter dictionary.
+
+Examples:
+    >>> energy_solver.solver_parameters['ksp_converged_reason'] = None
+    >>> energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 
 Note:
   G-ADOPT defaults to iterative solvers in 3-D.
@@ -81,7 +83,7 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 
     All combinations of advection, diffusion, sink, and source terms are handled.
 
-    Note: The solution field is updated in place.
+    **Note**: The solution field is updated in place.
 
     Args:
       solution:
@@ -158,7 +160,7 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
             weak_bc = {}
 
             for bc_type, value in bc.items():
-                if bc_type == "T":
+                if bc_type == self.strong_bcs_tag:
                     if self.continuous_solution:
                         strong_bc = DirichletBC(self.solution_space, value, bc_id)
                         self.strong_bcs.append(strong_bc)
@@ -213,17 +215,19 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 
     def set_solver_options(self) -> None:
         """Sets PETSc solver parameters."""
-        if isinstance(solver_preset := self.solver_parameters, dict):
+        if isinstance(self.solver_parameters, dict):
             return
 
-        if solver_preset is not None:
-            match solver_preset:
+        if self.solver_parameters is not None:
+            match self.solver_parameters:
                 case "direct":
                     self.solver_parameters = direct_energy_solver_parameters.copy()
                 case "iterative":
                     self.solver_parameters = iterative_energy_solver_parameters.copy()
                 case _:
-                    raise ValueError(f"Solver type '{solver_preset}' not implemented.")
+                    raise ValueError(
+                        f"Solver type '{self.solver_parameters}' not implemented."
+                    )
         elif self.mesh.topological_dimension() == 2:
             self.solver_parameters = direct_energy_solver_parameters.copy()
         else:
@@ -264,13 +268,23 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 class GenericTransportSolver(GenericTransportBase):
     """Advances in time a generic transport equation.
 
-    All combinations of advection, diffusion, sink, and source terms are handled.
+    **Note**: The solution field is updated in place.
 
-    Note: The solution field is updated in place.
+    Terms and Attributes:
+        This solver handles all combinations of advection, diffusion, sink, and source
+        terms. Depending on the included terms, specific attributes must be provided
+        according to:
+
+        |   Term    | Required attribute(s) |           Optional attribute(s)           |
+        | --------- | --------------------- | ----------------------------------------- |
+        | advection | u                     | advective_velocity_scaling, su_nubar      |
+        | diffusion | diffusivity           | reference_for_diffusion, interior_penalty |
+        | source    | source                |                                           |
+        | sink      | sink_coeff            |                                           |
 
     Args:
       terms:
-        List of equation terms (refer to terms_mapping)
+        List of equation terms to include (a string for a single term is accepted)
       solution:
         Firedrake function for the field of interest
       delta_t:
@@ -291,6 +305,8 @@ class GenericTransportSolver(GenericTransportBase):
         corresponding diffusivity
 
     """
+
+    strong_bcs_tag = "g"
 
     def __init__(
         self,
@@ -319,7 +335,7 @@ class GenericTransportSolver(GenericTransportBase):
 class EnergySolver(GenericTransportBase):
     """Advances in time the energy conservation equation.
 
-    Note: The solution field is updated in place.
+    **Note**: The solution field is updated in place.
 
     Args:
       solution:
@@ -344,6 +360,8 @@ class EnergySolver(GenericTransportBase):
         corresponding diffusivity
 
     """
+
+    strong_bcs_tag = "T"
 
     def __init__(
         self,
