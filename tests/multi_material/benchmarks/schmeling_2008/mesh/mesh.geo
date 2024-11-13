@@ -28,4 +28,3 @@ Physical Curve(3) = {1};
 Physical Curve(4) = {10};
 
 Physical Surface(1) = {5, 9, 13};
-

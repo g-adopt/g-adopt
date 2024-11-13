@@ -54,15 +54,18 @@ def get_data(level, base_path=None):
         "pressure": [],
     }
 
-    with open(output_path, "r") as f:
+    with open(output_path) as f:
         for line in f:
-            if m := re.match(r"\s+Linear (\S+) solve converged due to CONVERGED_RTOL iterations (\d+)", line):
+            if m := re.match(
+                r"\s+Linear (\S+) solve converged due to CONVERGED_RTOL iterations (\d+)",
+                line,
+            ):
                 iterations[iteration_component_map[m.group(1)]].append(int(m.group(2)))
 
     for k, v in iterations.items():
         data[f"{k}_iterations"] = np.mean(np.array(v))
 
-    with open(profile_path, "r") as f:
+    with open(profile_path) as f:
         for line in f:
             if "stokes_solve:" in line:
                 data["stokes_solve"] = float(line.split()[2])
@@ -93,12 +96,16 @@ def run_subcommand(args):
 def submit_subcommand(args):
     config = cases[args.level]
     cores = config.pop("cores")
-    command = args.template.format(cores=cores, mem=4*cores, level=args.level)
+    command = args.template.format(cores=cores, mem=4 * cores, level=args.level)
 
     proc = subprocess.Popen(
         [
-            *command.split(), sys.executable, sys.argv[0],
-            "run", str(args.level), *[str(v) for v in config.values()],
+            *command.split(),
+            sys.executable,
+            sys.argv[0],
+            "run",
+            str(args.level),
+            *[str(v) for v in config.values()],
         ],
     )
     if proc.wait() != 0:
@@ -113,14 +120,26 @@ if __name__ == "__main__":
     )
     subparsers = parser.add_subparsers(title="subcommands")
 
-    parser_run = subparsers.add_parser("run", help="run a specific configuration of a case (usually not manually invoked)")
+    parser_run = subparsers.add_parser(
+        "run",
+        help="run a specific configuration of a case (usually not manually invoked)",
+    )
     parser_run.add_argument("level", type=int)
     parser_run.add_argument("layers", type=int)
     parser_run.add_argument("timestep", type=float)
-    parser_run.add_argument("-n", "--steps", type=int, help="number of timesteps to run")
+    parser_run.add_argument(
+        "-n", "--steps", type=int, help="number of timesteps to run"
+    )
     parser_run.set_defaults(func=run_subcommand)
-    parser_submit = subparsers.add_parser("submit", help="submit a PBS job to run a specific case")
-    parser_submit.add_argument("-t", "--template", default="mpiexec -np {cores}", help="template command for running commands under MPI")
+    parser_submit = subparsers.add_parser(
+        "submit", help="submit a PBS job to run a specific case"
+    )
+    parser_submit.add_argument(
+        "-t",
+        "--template",
+        default="mpiexec -np {cores}",
+        help="template command for running commands under MPI",
+    )
     parser_submit.add_argument("level", type=int)
     parser_submit.set_defaults(func=submit_subcommand)
 

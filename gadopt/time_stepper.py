@@ -410,7 +410,7 @@ class AbstractRKScheme(ABC):
         raise NotImplementedError
 
     def __init__(self) -> None:
-        super(AbstractRKScheme, self).__init__()
+        super().__init__()
         self.a = np.array(self.a)
         self.b = np.array(self.b)
         self.c = np.array(self.c)

@@ -15,7 +15,9 @@ iteration_components = {
 
 
 @pytest.mark.longtest
-@pytest.mark.parametrize("level,component", product(levels, iteration_components.keys()))
+@pytest.mark.parametrize(
+    "level,component", product(levels, iteration_components.keys())
+)
 def test_scaling_iterations(level, component):
     b = Path(__file__).parent.resolve()
     mean_iterations = get_data(level, b)[f"{component}_iterations"]

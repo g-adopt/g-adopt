@@ -197,7 +197,7 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
         normal_stress_fs = None
 
         for bc_id, bc in self.bcs.items():
-            weak_bc = defaultdict(lambda: 0.0)
+            weak_bc = defaultdict(float)
 
             for bc_type, value in bc.items():
                 if bc_type == "u":

@@ -43,23 +43,23 @@ def assert_function_space(
 
     if ufl_elem.family() == "TensorProductElement":  # extruded mesh
         A, B = ufl_elem.sub_elements
-        assert A.family() in fam_list, "horizontal space must be one of {0:s}".format(
+        assert A.family() in fam_list, "horizontal space must be one of {:s}".format(
             fam_list
         )
-        assert B.family() in fam_list, "vertical space must be {0:s}".format(fam_list)
-        assert A.degree() == degree, "degree of horizontal space must be {0:d}".format(
+        assert B.family() in fam_list, "vertical space must be {:s}".format(fam_list)
+        assert A.degree() == degree, "degree of horizontal space must be {:d}".format(
             degree
         )
-        assert B.degree() == degree, "degree of vertical space must be {0:d}".format(
+        assert B.degree() == degree, "degree of vertical space must be {:d}".format(
             degree
         )
     else:  # assume 2D mesh
         assert (
             ufl_elem.family() in fam_list
-        ), "function space must be one of {0:s}".format(fam_list)
+        ), "function space must be one of {:s}".format(fam_list)
         assert (
             ufl_elem.degree() == degree
-        ), "degree of function space must be {0:d}".format(degree)
+        ), "degree of function space must be {:d}".format(degree)
 
 
 def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
@@ -149,9 +149,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         self.is_vector = p1dg_space.value_size > 1
         if self.is_vector:
             p1dg_scalar_space = FunctionSpace(p1dg_space.mesh(), "DG", 1)
-            super(VertexBasedP1DGLimiter, self).__init__(p1dg_scalar_space)
+            super().__init__(p1dg_scalar_space)
         else:
-            super(VertexBasedP1DGLimiter, self).__init__(p1dg_space)
+            super().__init__(p1dg_space)
 
         self.mesh = self.P0.mesh()
         self.dim = self.mesh.geometric_dimension()
@@ -210,7 +210,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         """
         # Call general-purpose bound computation.
-        super(VertexBasedP1DGLimiter, self).compute_bounds(field)
+        super().compute_bounds(field)
 
         # Add the average of lateral boundary facets to min/max fields
         # NOTE this just computes the arithmetic mean of nodal values on the facet,
@@ -329,8 +329,8 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 fs = field.function_space()
                 for i in range(fs.value_size):
                     tmp_func.dat.data_with_halos[:] = field.dat.data_with_halos[:, i]
-                    super(VertexBasedP1DGLimiter, self).apply(tmp_func)
+                    super().apply(tmp_func)
                     field.dat.data_with_halos[:, i] = tmp_func.dat.data_with_halos[:]
                 self.P1DG.restore_work_function(tmp_func)
             else:
-                super(VertexBasedP1DGLimiter, self).apply(field)
+                super().apply(field)

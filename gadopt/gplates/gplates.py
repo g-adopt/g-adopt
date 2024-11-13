@@ -138,7 +138,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         self.gplates_connector = gplates_connector
 
 
-class pyGplatesConnector(object):
+class pyGplatesConnector:
     # Non-dimensionalisation constants
     # Factor to non-dimensionalise gplates velocities: d/kappa
     #   u [metre/sec] * velocity_non_dim_factor = u []
@@ -273,12 +273,10 @@ class pyGplatesConnector(object):
         # Raising an error if the user is asking for invalid time
         if self.ndtime2age(ndtime=ndtime) < 0:
             raise ValueError(
-                (
-                    "Input non-dimensionalised time corresponds to negative age (it is "
-                    "in the future)!\n"
-                    f"maximum non-dimensionalised time: "
-                    f"{self.oldest_age / (pyGplatesConnector.time_dimDmyrs2sec / self.scaling_factor)}"
-                )
+                "Input non-dimensionalised time corresponds to negative age (it is "
+                "in the future)!\n"
+                f"maximum non-dimensionalised time: "
+                f"{self.oldest_age / (pyGplatesConnector.time_dimDmyrs2sec / self.scaling_factor)}"
             )
 
         # cache the reconstruction age

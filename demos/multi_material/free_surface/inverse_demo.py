@@ -115,7 +115,7 @@ log(f"Reduced functional: {reduced_functional(psi_control)}")
 log(f"Objective: {objective}")
 
 perturbation = Function(psi_control, name="Level set perturbation")
-perturbation.interpolate((0.5 - abs(min_value(max_value(psi_control, 0), 1) - 0.5)))
+perturbation.interpolate(0.5 - abs(min_value(max_value(psi_control, 0), 1) - 0.5))
 
 random_scale = np.random.default_rng().normal(
     5e-2, 1e-3, size=perturbation.dat.data.shape

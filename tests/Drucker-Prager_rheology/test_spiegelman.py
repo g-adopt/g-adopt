@@ -22,10 +22,10 @@ def residual(ui, mui, nx, ny, picard_iterations, stabilisation):
         / f"spiegelman_{ui}_{mui}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
     )
 
-    with open(output_dir / "picard.txt", "r") as f:
+    with open(output_dir / "picard.txt") as f:
         picard_residuals = np.array([float(line.split()[1]) for line in f])
 
-    with open(output_dir / "newton.txt", "r") as f:
+    with open(output_dir / "newton.txt") as f:
         newton_residuals = np.array([float(line.split()[4]) for line in f])
 
     residuals = np.concatenate((picard_residuals, newton_residuals))
