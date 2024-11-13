@@ -67,7 +67,6 @@ z.subfunctions[1].rename("Pressure")
 # depends on temperature here, we setup and initialise our temperature earlier than in the previous tutorials.
 
 # +
-
 X = SpatialCoordinate(mesh)
 T = Function(Q, name="Temperature")
 T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
@@ -79,13 +78,13 @@ epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with tolerance t
 mu_lin = exp(-gamma_T*T + gamma_Z*(1 - X[1]))  # linear component of rheological formulation
 mu_plast = mu_star + (sigma_y / epsii)  # plastic component of rheological formulation
 mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
+# -
 
 # Now that we have defined our expression for the viscosity field
 # we can pass this to our approximation.
 
 Ra = Constant(100)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra, mu=mu)
-# -
 
 # As with the previous examples, we set up a *Timestep Adaptor*,
 # for controlling the time-step length (via a CFL
@@ -212,7 +211,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # + tags=["active-ipynb"]
 # mu_field = Function(W, name="Viscosity")
-# mu_field.interpolate(mu)
+# mu_field.interpolate(ln(mu) / ln(10))
 # fig, axes = plt.subplots()
 # collection = tripcolor(mu_field, axes=axes, cmap='coolwarm')
 # fig.colorbar(collection);
