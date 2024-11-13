@@ -30,6 +30,7 @@ from firedrake import (
     min_value,
     dx,
     assemble,
+    tanh,
 )
 from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
@@ -501,6 +502,15 @@ class InteriorBC(DirichletBC):
 def absv(u):
     """Component-wise absolute value of vector for SU stabilisation"""
     return as_vector([abs(ui) for ui in u])
+
+
+def step_func(r, centre, mag, increasing=True, sharpness=50):
+    # A step function designed to design viscosity jumps
+    # Build a step centred at "centre" with given magnitude
+    # Increase with radius if "increasing" is True
+    return mag * (
+        0.5 * (1 + tanh((1 if increasing else -1) * (r - centre) * sharpness))
+    )
 
 
 def node_coordinates(function):
