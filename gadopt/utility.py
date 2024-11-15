@@ -21,6 +21,8 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
+from collections import namedtuple
+from typing import NamedTuple
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -515,3 +517,35 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
     averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
+
+
+def get_boundary_ids(mesh) -> NamedTuple:
+    # Firedrake adds these labels itself when creating
+    # its utility meshes.
+    if mesh.topology_dm.hasLabel("Face Sets"):
+        # This ordering is consistent among all meshed firedrake can create
+        fields = ["left", "right", "bottom", "top", "front", "back"]
+        dim = mesh.geometric_dimension()
+        if dim > 3:
+            raise ValueError(f"Cannot handle {dim} dimensional mesh")
+        Boundary = namedtuple("Boundary", fields[:2*dim])  # noqa: E225,E226
+        # Recover the boundary ids Firedrake has inserted
+        mesh.topology_dm.markBoundaryFaces("TEMP_LABEL")
+        if mesh.topology_dm.getStratumSize("TEMP_LABEL", 1) > 0:
+            ids = {
+                mesh.topology_dm.getLabelValue("Face Sets", i)
+                for i in mesh.topology_dm.getStratumIS("TEMP_LABEL", 1).getIndices()
+            }
+        # Extruded standard firedrake meshes can contain numerical subdomain
+        # ids as well as "top", "bottom" labels, handle that here
+        kwargs = {i: j if j in ids else i for i, j in enumerate(fields)}
+        mesh.topology_dm.removeLabel("TEMP_LABEL")
+        return Boundary(**kwargs)
+    # A Firedrake extruded mesh does not set boundary IDs - when this happens
+    # the boundary subdomain becomes property of the CombinedSurfaceMeasure
+    # constructed in this module, and therefore only contains "top" and
+    # "bottom" subdomains
+    else:
+        Boundary = namedtuple("Boundary", ["bottom", "top"])
+        return Boundary("bottom", "top")
+    # Not sure what to do with gmsh files and the like
