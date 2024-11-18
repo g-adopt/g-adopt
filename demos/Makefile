@@ -41,4 +41,4 @@ check:
 # port and writes that to a connection file. this is of course completely prone to race conditions.
 # instead of trying to fix it at the jupyter level, we can serialise the startup with a semaphore
 %.ipynb: %.py
-	(flock 9; sleep 1 && flock -u 9 & python3 -m jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))) 9>render.lock
+	jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))

@@ -16,7 +16,7 @@ jobs:
     runs-on: self-hosted
     container:
       image: ghcr.io/g-adopt/firedrake:2024-11-05
-      options: --shm-size 2g
+      options: --shm-size 2g --cap-add=SYS_ADMIN
 
     env:
       OMP_NUM_THREADS: 1
@@ -50,6 +50,16 @@ jobs:
         run: |
           s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
+
+      - name: Set up for network namespacing
+        run: |
+          sudo sed -i 's/ubuntu/firedrake/' /etc/subuid
+          sudo sed -i 's/ubuntu/firedrake/' /etc/subgid
+          sudo apt install -y uidmap
+          . /home/firedrake/firedrake/bin/activate
+          jupytext_location="$(which jupytext)"
+          cp .testing/jupytext "$jupytext_location"
+          chmod +x "$jupytext_location"
 
       - name: Convert notebooks
         run: |
