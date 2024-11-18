@@ -350,8 +350,8 @@ exterior_density = conditional(time < t2_load, rho_ice*disc, 0)
 stokes_bcs = {
     boundary.bottom: {'uy': 0},
     boundary.top: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - exterior_density}},
-    1: {'ux': 0},
-    2: {'ux': 0},
+    boundary.left: {'ux': 0},
+    boundary.right: {'ux': 0},
 }
 
 gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)

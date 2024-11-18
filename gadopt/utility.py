@@ -519,8 +519,8 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
 
 
 def get_boundary_ids(mesh) -> SimpleNamespace:
-    # Firedrake adds these labels itself when creating
-    # its utility meshes.
+    # PETSc creates these labels when loading meshes from files, Firedrake imitates it
+    # in its own mesh creation functions.
     if mesh.topology_dm.hasLabel("Face Sets"):
         # This ordering is consistent among (almost) all meshes firedrake can create
         fields = ["left", "right", "bottom", "top", "front", "back"]
@@ -536,7 +536,7 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
             }
         else:
             ids = set()
-        # Not every MPI rank has every boundary of the mesh, so we to get the set of all boundaries
+        # Not every MPI rank has every boundary of the mesh, gather all boundaries
         # seen by all MPI ranks
         final_ids = set.union(*mesh.comm.allgather(ids))
         mesh.topology_dm.removeLabel("TEMP_LABEL")
@@ -555,11 +555,11 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
                 "top": "top",
             }
         else:
-            kwargs = {j: i + 1 if i + 1 in final_ids else j for i, j in enumerate(fields[:2*dim])}  # noqa: E225,E226
-    # A Firedrake extruded mesh does not set boundary IDs - when this happens
-    # the boundary subdomain becomes property of the CombinedSurfaceMeasure
-    # constructed in this module, and therefore only contains "top" and
-    # "bottom" subdomains
+            kwargs = {bnd: i + 1 if i + 1 in final_ids else bnd for i, bnd in enumerate(fields[:2*dim])}  # noqa: E225,E226
+    # Integer subdomain meshes are only assigned by petsc or the firedrake utility mesh
+    # module. If the "Face Sets" label is missing from the mesh, it was not created by
+    # either of these and therefore will only have the "bottom" and "top" labels
+    # utilised by 'CombinedSurfaceMeasure' above
     else:
         kwargs = {"bottom": "bottom", "top": "top"}
     return SimpleNamespace(**kwargs)
