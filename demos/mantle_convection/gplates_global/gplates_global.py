@@ -44,7 +44,6 @@ mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
 mesh.cartesian = False
 bottom_id, top_id = "bottom", "top"
-domain_volume = assemble(1*dx(domain=mesh))  # Required for a diagnostic calculation.
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
@@ -190,8 +189,8 @@ plate_reconstruction_model = pyGplatesConnector(
 # For example, the starting time (zero time) and present-day time (zero age) are:
 
 # + tags=["active-ipynb"]
-# log(f"Oldest age is {plate_reconstruction_model.ndtime2age(0.0)}")
-# log(f"non-dimensionalised present-day time: {plate_reconstruction_model.age2ndtime(0.0)}")
+# log(f"Oldest age is {plate_reconstruction_model.ndtime2age(0.0)} Ma")
+# log(f"Non-dimensionalised present-day time: {plate_reconstruction_model.age2ndtime(0.0)}")
 # -
 
 # With the plate reconstruction model loaded using
