@@ -1,5 +1,6 @@
 import numpy as np
 import shapely as sl
+from mpi4py import MPI
 
 from gadopt import *
 
@@ -35,27 +36,17 @@ isd_params = (interface_deflection, interface_wavelength, material_interface_y)
 
 interface_x = np.linspace(0, lx, 1000)
 interface_y = cosine_curve(interface_x, *isd_params)
-line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
-sl.prepare(line_string)
+interface = sl.LineString([*np.column_stack((interface_x, interface_y))])
+sl.prepare(interface)
 
-node_relation_to_curve = [
-    (y > cosine_curve(x, *isd_params), line_string.distance(sl.Point(x, y)))
+signed_distance = [
+    (1 if y > cosine_curve(x, *isd_params) else -1) * interface.distance(sl.Point(x, y))
     for x, y in node_coordinates(psi)
 ]
+epsilon = psi.comm.allreduce(mesh.cell_sizes.dat.data.min() / 4, MPI.MIN)
+psi.dat.data[:] = (1 + np.tanh(np.asarray(signed_distance) / 2 / epsilon)) / 2
 
-signed_dist_to_interface = Function(K)
-signed_dist_to_interface.dat.data[:] = [
-    dist if is_above else -dist for is_above, dist in node_relation_to_curve
-]
-
-epsilon = Constant(mesh.cell_sizes.dat.data.min() / 4)
-
-psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
-
-Ra_c_buoyant = 0
-Ra_c_dense = 1
-Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="arithmetic")
-
+Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="sharp")
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
 
 Z_nullspace = create_stokes_nullspace(Z)
@@ -80,7 +71,7 @@ t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 
-time_now, time_end = 0, 400
+time_now, time_end = 0, 150
 
 output_file = VTKFile("forward_output.pvd")
 output_file.write(*z.subfunctions, psi, time=time_now)

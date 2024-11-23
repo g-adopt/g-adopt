@@ -116,7 +116,7 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (1, 1)
 mesh_gen = "firedrake"
-mesh_elements = (128, 128)
+mesh_elements = (256, 256)
 
 # Parameters to initialise level sets
 slope = 0
@@ -159,7 +159,7 @@ stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 initial_timestep = 1e-6
 dump_period = 1e-4
 checkpoint_period = 5
-time_end = 0.01
+time_end = 0.0025
 
 # Diagnostic objects
 diag_fields = {

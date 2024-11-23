@@ -79,10 +79,10 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if args.benchmark == "trim_2023":
-        epsilon = fd.Constant(1 / 2 / simulation.k)
+        epsilon = 1 / 2 / simulation.k
     else:  # Empirical calibration that seems to be robust
         local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+        epsilon = mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4
 else:  # Initialise mesh and key functions
     match simulation.mesh_gen:  # Generate mesh
         case "gmsh":
@@ -121,10 +121,10 @@ else:  # Initialise mesh and key functions
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if args.benchmark == "trim_2023":
-        epsilon = fd.Constant(1 / 2 / simulation.k)
+        epsilon = 1 / 2 / simulation.k
     else:  # Empirical calibration; adjust if necessary
         local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+        epsilon = mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4
 
     # Initialise level set
     signed_dist_to_interface = fd.Function(level_set[0].function_space())

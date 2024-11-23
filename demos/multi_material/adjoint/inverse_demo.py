@@ -6,7 +6,7 @@ def reinitialisation_steady(psi, psi_grad):
     return -psi * (1 - psi) + epsilon * sqrt(inner(psi_grad, psi_grad))
 
 
-def callback(psi_control, psi_opt, optimisation_file, optimiser, objective):
+def callback(psi_control, psi_opt, optimisation_file):
     psi_opt.assign(psi_control.block_variable.checkpoint)
     optimisation_file.write(psi_opt)
 
@@ -20,10 +20,6 @@ def callback(psi_control, psi_opt, optimisation_file, optimiser, objective):
 
     log(f"Level-set misfit: {misfit}")
     log(f"Level-set reinitialisation: {reinitialisation}")
-
-    if misfit + reinitialisation <= 1e-3 * objective:
-        plist = ROL.ParameterList({"Status Test": {"Iteration Limit": 0}}, "Parameters")
-        optimiser.rol_algorithm.setStatusTest(ROL.StatusTest(plist), False)
 
 
 def simulation(iteration: int) -> None:
@@ -47,7 +43,7 @@ def simulation(iteration: int) -> None:
         t_adapt.maximum_timestep = time_increment - time_now
         t_adapt.update_timestep()
 
-        level_set_solver.solve(step)
+        level_set_solver.solve(step, equation="advection")
         level_set_solver.update_level_set_gradient()
         stokes_solver.solve()
 
@@ -87,11 +83,10 @@ def simulation(iteration: int) -> None:
             reduced_functional, bounds=(psi_lb, psi_ub)
         )
 
+        minimisation_parameters["Status Test"]["Gradient Tolerance"] = 5e-4
         minimisation_parameters["Status Test"]["Iteration Limit"] = 50
         optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
-        optimiser.add_callback(
-            callback, psi_control, psi_opt, optimisation_file, optimiser, objective
-        )
+        optimiser.add_callback(callback, psi_control, psi_opt, optimisation_file)
         optimiser.run()
 
     psi_obs.project(psi_opt)
@@ -111,7 +106,7 @@ V = VectorFunctionSpace(mesh, "Q", 2)
 W = FunctionSpace(mesh, "Q", 1)
 Z = MixedFunctionSpace([V, W])
 R = FunctionSpace(mesh, "R", 0)
-C = FunctionSpace(mesh, FiniteElement("DQ", quadrilateral, 1, variant="equispaced"))
+C = FunctionSpace(mesh, "Q", 1)
 
 z = Function(Z)
 u, p = split(z)
@@ -119,12 +114,9 @@ z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 psi = Function(psi_obs, name="Level-set")
 
-epsilon = Constant(mesh.cell_sizes.dat.data.min() / 4)
+epsilon = psi.comm.allreduce(mesh.cell_sizes.dat.data.min() / 4, MPI.MIN)
 
-Ra_c_buoyant = 0
-Ra_c_dense = 1
-Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="arithmetic")
-
+Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="arithmetic")
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
 
 Z_nullspace = create_stokes_nullspace(Z)
@@ -149,10 +141,9 @@ del stokes_solver.solver_parameters["snes_monitor"]
 
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 psi_grad_proj = level_set_solver.ls_grad_proj
-level_set_solver.set_up_solvers()
 
-target_time = 400
-time_increment = 80
+target_time = 150
+time_increment = 30
 
 for iteration in range(target_time // time_increment):
     simulation(iteration + 1)

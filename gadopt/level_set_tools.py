@@ -7,7 +7,9 @@ The `entrainment` function enables users to easily calculate material entrainmen
 """
 
 import operator
+from math import ceil
 from numbers import Number
+from typing import Any
 
 import firedrake as fd
 import numpy as np
@@ -30,9 +32,9 @@ solver_params_default = {
 }
 # Default parameters used to set up level-set reinitialisation
 reini_params_default = {
-    "tstep": 5e-2,
+    "tstep": 0.1,
     "tstep_alg": eSSPRKs3p3,
-    "frequency": 5,
+    "frequency": None,
     "iterations": 1,
 }
 
@@ -68,7 +70,7 @@ class LevelSetSolver:
     Attributes:
         mesh:
           The UFL mesh where values of the level set function exist.
-        level_set:
+        solution:
           The Firedrake function for the level set.
         func_space_lsgp:
           The UFL function space for the projected level-set gradient.
@@ -92,11 +94,11 @@ class LevelSetSolver:
         velocity: fd.ufl.tensors.ListTensor,
         tstep: fd.Constant,
         tstep_alg: type[RungeKuttaTimeIntegrator],
-        epsilon: fd.Constant,
+        epsilon: float,
         subcycles: int = 1,
         bcs: dict = {},
-        reini_params: dict | None = None,
-        solver_params: dict | None = None,
+        reini_params: dict[str, Any] | None = None,
+        solver_params: dict[str, str] | None = None,
     ) -> None:
         """Initialises the solver instance.
 
@@ -109,30 +111,40 @@ class LevelSetSolver:
               The Firedrake function over the Real space for the simulation time step.
             tstep_alg:
               The class for the timestepping algorithm used in the advection solver.
+            epsilon:
+              A float denoting the thickness of the hyperbolic tangent profile.
             subcycles:
               An integer specifying the number of advection solves to perform.
-            epsilon:
-              A UFL constant denoting the thickness of the hyperbolic tangent profile.
-            reini_params:
-              A dictionary containing parameters used in the reinitialisation approach.
             bcs:
               Dictionary of identifier-value pairs specifying boundary conditions
+            reini_params:
+              A dictionary containing parameters used in the reinitialisation approach.
             solver_params:
               A dictionary containing solver parameters used in the advection and
               reinitialisation approaches.
         """
         self.solution = level_set
-        self.u = velocity
         self.tstep = tstep
         self.tstep_alg = tstep_alg
         self.subcycles = subcycles
         self.bcs = bcs
 
-        self.reini_params = reini_params or reini_params_default
-        self.solver_params = solver_params or solver_params_default
+        self.reini_params = reini_params or reini_params_default.copy()
+        self.solver_params = solver_params or solver_params_default.copy()
 
         self.func_space = level_set.function_space()
         self.mesh = self.func_space.mesh()
+        self.solution_old = fd.Function(self.func_space)
+
+        if self.reini_params["frequency"] is None:
+            max_coords = self.mesh.coordinates.dat.data.max(axis=0)
+            min_coords = self.mesh.coordinates.dat.data.min(axis=0)
+            for i in range(len(max_coords)):
+                max_coords[i] = level_set.comm.allreduce(max_coords[i], MPI.MAX)
+                min_coords[i] = level_set.comm.allreduce(min_coords[i], MPI.MIN)
+            max_mesh_dimension = max(max_coords - min_coords)
+
+            self.reini_params["frequency"] = ceil(0.02 / epsilon * max_mesh_dimension)
 
         self.func_space_lsgp = fd.VectorFunctionSpace(
             self.mesh, "CG", self.func_space.finat_element.degree
@@ -192,9 +204,6 @@ class LevelSetSolver:
 
     def set_up_solvers(self) -> None:
         """Sets up the time steppers for advection and reinitialisation."""
-        test = fd.TestFunction(self.func_space)
-        self.solution_old = fd.Function(self.func_space)
-
         self.ls_solver = GenericTransportSolver(
             "advection",
             self.solution,
@@ -207,7 +216,7 @@ class LevelSetSolver:
         )
 
         reinitialisation_equation = Equation(
-            test,
+            fd.TestFunction(self.func_space),
             self.func_space,
             reinitialisation_term,
             mass_term=scalar_eq.mass_term,
