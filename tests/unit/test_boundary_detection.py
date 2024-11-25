@@ -150,8 +150,6 @@ geo_files = (Path(__file__).parents[1] / "multi_material" / "benchmarks").glob("
 
 
 @pytest.mark.parametrize("geo_name", geo_files)
-# Both of these are 2-dimensional and (I think) specifically define boundary regions in their
-# resulting mesh files
 def test_gmsh_from_geo(geo_name):
     with tempfile.NamedTemporaryFile(suffix=".msh") as fp:
         run(["gmsh", "-2", str(geo_name), "-o", fp.name])
