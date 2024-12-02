@@ -3,7 +3,7 @@
 #
 # In this tutorial, we examine an idealised 2-D problem in square box.
 # The case is identical to our base case demo, but mesh generation is
-# done through gmsh rather than Firedrake. 
+# done through gmsh rather than Firedrake.
 #
 # Let's get started! The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
