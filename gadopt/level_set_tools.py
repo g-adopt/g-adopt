@@ -18,6 +18,7 @@ from firedrake.ufl_expr import extract_unique_domain
 from . import scalar_equation as scalar_eq
 from .equations import Equation
 from .time_stepper import eSSPRKs3p3
+from .transport_solver import GenericTransportSolver
 
 __all__ = [
     "LevelSetSolver",
@@ -167,7 +168,7 @@ class LevelSetSolver:
           An integer or a float representing the reference density.
         reini_params:
           A dictionary containing parameters used in the reinitialisation approach.
-        ls_ts:
+        ls_solver:
           The G-ADOPT timestepper object for the advection equation.
         reini_ts:
           The G-ADOPT timestepper object for the reinitialisation equation.
@@ -208,6 +209,7 @@ class LevelSetSolver:
               reinitialisation approaches.
         """
         self.level_set = level_set
+        self.u = velocity
         self.tstep = tstep
         self.tstep_alg = tstep_alg
         self.subcycles = subcycles
@@ -283,17 +285,12 @@ class LevelSetSolver:
         """Sets up the time steppers for advection and reinitialisation."""
         test = fd.TestFunction(self.func_space)
 
-        advection_equation = Equation(
-            test,
-            self.func_space,
-            scalar_eq.advection_term,
-            mass_term=scalar_eq.mass_term,
-            eq_attrs=self.ls_eq_attrs,
-        )
-        self.ls_ts = self.tstep_alg(
-            advection_equation,
+        self.ls_solver = GenericTransportSolver(
+            "advection",
             self.level_set,
             self.tstep / self.subcycles,
+            self.tstep_alg,
+            eq_attrs={"u": self.u},
             solver_parameters=self.solver_params,
         )
 
@@ -327,7 +324,7 @@ class LevelSetSolver:
             self.solvers_ready = True
 
         for subcycle in range(self.subcycles):
-            self.ls_ts.advance(0)
+            self.ls_solver.solve()
 
             if step >= self.reini_params["frequency"]:
                 self.reini_ts.solution_old.assign(self.level_set)
@@ -338,7 +335,7 @@ class LevelSetSolver:
                         0, update_forcings=self.update_level_set_gradient
                     )
 
-                self.ls_ts.solution_old.assign(self.level_set)
+                self.ls_solver.solution_old.assign(self.level_set)
 
 
 def field_interface_recursive(
