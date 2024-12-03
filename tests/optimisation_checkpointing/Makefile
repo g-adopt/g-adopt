@@ -1,12 +1,11 @@
-all: checkpointing
+all: full_optimisation_np1.dat full_optimisation_np2.dat
 
-checkpointing: helmholtz.py
-	echo "running helmholtz checkpointing" >&2
-	/usr/bin/time --format="helmholtz checkpointing took %E" tsp -f python3 $<
-	echo 'done' > checkpointing
+full_optimisation_np%.dat: helmholtz.py
+	echo "running helmholtz checkpointing (np $*)" >&2
+	/usr/bin/time --format="helmholtz checkpointing (np $*) took %E" tsp -N $* -f mpiexec -np $* python3 $<
 
 clean:
-	rm -rf optimisation_checkpoint __pycache__ *.h5 *.dat checkpointing
+	rm -rf optimisation_checkpoint_* __pycache__ *.h5 *.dat
 
-check: checkpointing
+check: full_optimisation_np1.dat full_optimisation_np2.dat
 	python -m pytest
