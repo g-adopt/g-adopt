@@ -15,8 +15,8 @@ from gadopt import *
 # temperature.
 #
 # We first need a mesh. For this test, we use a gmsh derived square mesh.
-# Tag 1 corresponds to the plane $x=0$; 2 to the $x=1$ plane; 3 to the $y=0$ plane;
-# and 4 to the $y=1$ plane. We name these `left`, `right`, `bottom` and `top`,
+# Tag 14 corresponds to the plane $x=0$; 12 to the $x=1$ plane; 11 to the $y=0$ plane;
+# and 13 to the $y=1$ plane. We name these `left`, `right`, `bottom` and `top`,
 # respectively.
 #
 # On the mesh, we also denote that our geometry is Cartesian, i.e. gravity points
