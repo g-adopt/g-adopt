@@ -18,7 +18,7 @@ if mesh_md5 != expected_md5:
     """
     warnings.warn(UserWarning(warn_str))
 else:
-    warn_str=''
+    warn_str = ""
 
 
 @pytest.mark.xfail(mesh_md5 != expected_md5, reason=warn_str)
@@ -26,9 +26,9 @@ def test_base_case():
     b = Path(__file__).parent.resolve()
     df = pd.read_csv(b / "params.log", sep="\\s+", header=0).iloc[-1]
     expected = pd.read_pickle(b / "expected.pkl")
-    kwargs={'check_names':False}
+    kwargs = {"check_names": False}
     if mesh_md5 != expected_md5:
-        kwargs|={'rtol':1e-4}
+        kwargs |= {"rtol": 1e-4}
     pd.testing.assert_series_equal(df[["u_rms", "nu_top"]], expected, **kwargs)
     if mesh_md5 == expected_md5:
         assert abs(df.name - expected.name) <= 2
