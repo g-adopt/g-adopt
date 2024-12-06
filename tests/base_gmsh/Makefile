@@ -1,6 +1,6 @@
 all: params.log
 
-.PHONY: all base_case.py
+.PHONY: all clean
 
 %.msh: %.geo
 	gmsh -2 $<
