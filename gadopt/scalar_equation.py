@@ -1,4 +1,4 @@
-r"""Scalar terms and equations (e.g. for temperature and salinity transport).
+r"""Scalar terms (e.g. for temperature and salinity transport).
 
 All terms are considered as if they were on the right-hand side of the equation, leading
 to the following UFL expression returned by the `residual` method:
@@ -142,7 +142,7 @@ def sink_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
 def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
     """UFL form for the mass term used in the time discretisation.
 
-    Arguments:
+    Args:
         eq:
           G-ADOPT Equation.
         trial:
