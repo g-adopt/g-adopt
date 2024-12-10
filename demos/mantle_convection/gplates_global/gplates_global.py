@@ -190,8 +190,8 @@ plate_reconstruction_model = pyGplatesConnector(
 # For example, the starting time (zero time) and present-day time (zero age) are:
 
 # + tags=["active-ipynb"]
-# log(f"Oldest age is {plate_reconstruction_model.ndtime2age(0.0)}")
-# log(f"non-dimensionalised present-day time: {plate_reconstruction_model.age2ndtime(0.0)}")
+# log(f"Oldest age is {plate_reconstruction_model.ndtime2age(0.0)} Ma")
+# log(f"Non-dimensionalised present-day time: {plate_reconstruction_model.age2ndtime(0.0)}")
 # -
 
 # With the plate reconstruction model loaded using
