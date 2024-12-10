@@ -249,7 +249,7 @@ left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 # function space's computational implementation, recording the
 # association of degrees of freedom with the mesh and pointing to the
 # finite element basis. We will choose Q2-Q1 for the mixed incremental displacement-pressure similar to our mantle convection demos.
-# This is a Taylor-Hood element pair which has good properties for Stokes modelling. We also initilaise a discontinuous tensor function
+# This is a Taylor-Hood element pair which has good properties for Stokes modelling. We also initialise a discontinuous tensor function
 # space that wil store our previous values of the deviatoric stress, as the gradient of the continous incremental displacement field will
 # be discontinuous.
 
