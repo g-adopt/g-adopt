@@ -130,12 +130,22 @@ jobs:
 
           digest="$(tsp)"
 
+          mkdir test_outputs
+
           # extract info
           for id in $(awk 'NR>1 { print $1 }' <<< "$digest"); do
             st="$(tsp -i $id)"
             label=$(awk "/^$id[[:space:]]/ { if (match(\$0, /\[[^]]*\]/)) { print substr(\$0, RSTART+1, RLENGTH-2) } }" <<< "$digest")
-            command=$label${label:+: }$(sed -En 's/^Command.*python3? //p' <<< "$st")
+            command=$(sed -En 's/^Command.*python3? //p' <<< "$st")
+            if [ -z "$label" ]; then
+              outfile=$command
+            else
+              outfile="[$label]$command"
+            fi
+            command="$label${label:+: }$command"
             timings["$command"]=$(sed -n 's/^Time run: //p' <<< "$st")
+
+            tsp -c $id >> "test_outputs/$outfile" || true
 
             if grep -q "exit code 0" <<< "$st"; then
               success["$command"]=Yes
@@ -143,8 +153,8 @@ jobs:
               success["$command"]=No
               echo "$command failed:"
               tsp -c $id | tail -n 10 || true
-              echo $command >> test_output.log
-              tsp -c $id >> test_output.log || true
+              echo $command >> test_outputs/test_output.log
+              tsp -c $id >> test_outputs/test_output.log || true
             fi
           done
 
@@ -159,9 +169,9 @@ jobs:
             printf "%s | %s | %s\n" "$case" ${timings["$case"]} ${success["$case"]} >> "$GITHUB_STEP_SUMMARY"
           done
 
-      - name: Upload failed run log
-        if: steps.run_tests.conclusion == 'failure'
+      - name: Upload run log
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: run-log
-          path: test_output.log
+          path: test_outputs
