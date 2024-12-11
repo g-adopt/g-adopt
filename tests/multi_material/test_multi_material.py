@@ -13,7 +13,7 @@ diagnostics = {
                 np.subtract(data["max_topography"], data["max_topography_analytical"])
             ).max(),
             operator.le,
-            0.06,
+            0.05,
         )
     ],
     "gerya_2003": [
@@ -24,7 +24,7 @@ diagnostics = {
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 284.0), operator.le, 0.1),
+        (lambda data: abs(max(data["rms_velocity"]) - 283.7), operator.le, 0.1),
         (lambda data: abs(max(data["entrainment"]) - 0.930), operator.le, 0.001),
     ],
     "schmalholz_2011": [
@@ -45,7 +45,7 @@ diagnostics = {
                 np.asarray(data["output_time"])[
                     np.asarray(data["slab_tip_depth"]) >= 600
                 ].min()
-                - 45.5
+                - 44.1
             ),
             operator.le,
             0.1,
@@ -64,7 +64,7 @@ diagnostics = {
     ],
     "van_keken_1997_isothermal": [
         (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 5e-5),
-        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 2e-3),
+        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 3e-3),
     ],
     "van_keken_1997_thermochemical": [
         (
@@ -84,7 +84,7 @@ diagnostics = {
 
 @pytest.mark.parametrize("bench_name,bench_diagnostics", diagnostics.items())
 def test_multi_material(bench_name, bench_diagnostics):
-    diag_file = np.load(base / bench_name / "output_0_check.npz", allow_pickle=True)
+    diag_file = np.load(base / bench_name / "output_0_reference.npz", allow_pickle=True)
     for diag_function, diag_operator, diag_threshold in bench_diagnostics:
         diag_data = diag_file["diag_fields"][()]
         assert diag_operator(diag_function(diag_data), diag_threshold)

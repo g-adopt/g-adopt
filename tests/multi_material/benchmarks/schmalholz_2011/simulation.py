@@ -6,7 +6,6 @@ Earth and Planetary Science Letters, 304(1-2), 45-54.
 
 import firedrake as fd
 import gmsh
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
@@ -133,7 +132,7 @@ def diagnostics(simu_time, geo_diag, diag_vars, output_path):
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(
-            f"{output_path}/output_{checkpoint_restart}_check", diag_fields=diag_fields
+            f"{output_path}/output_{checkpoint_restart}_{tag}", diag_fields=diag_fields
         )
 
 
@@ -162,9 +161,13 @@ def plot_diagnostics(output_path):
 
         ax.legend()
 
-        fig.savefig(f"{output_path}/slab_necking.pdf", dpi=300, bbox_inches="tight")
+        fig.savefig(
+            f"{output_path}/slab_necking_{tag}.pdf", dpi=300, bbox_inches="tight"
+        )
 
 
+# A simulation name tag
+tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
 
@@ -178,20 +181,35 @@ mesh_fine_layer_min_x = 4.2e5
 mesh_fine_layer_width = 1.6e5
 mesh_fine_layer_hor_res = 8e3
 
-# The following two lists must be ordered such that, unpacking from the end, each
-# pair of arguments enables initialising a level set whose 0-contour corresponds to
-# the entire interface between a given material and the remainder of the numerical
-# domain. By convention, the material thereby isolated occupies the positive side
-# of the signed-distance level set.
-initialise_signed_distance = [isd.isd_schmalholz]
-isd_params = [None]
+# Parameters to initialise level set
+interface_coords = [
+    (0, 5.8e5),
+    (4.6e5, 5.8e5),
+    (4.6e5, 3.3e5),
+    (5.4e5, 3.3e5),
+    (5.4e5, 5.8e5),
+    (domain_dims[0], 5.8e5),
+]
 
-# Material ordering must follow the logic implemented in the above two lists. In
-# other words, the last material in the below list corresponds to the portion of
-# the numerical domain entirely isolated by the level set initialised using the
-# last pair of arguments in the above two lists. The first material in the below list
-# must, therefore, occupy the negative side of the signed-distance level set initialised
-# from the first pair of arguments above.
+boundary_coords = [(domain_dims[0], domain_dims[1]), (0, domain_dims[1]), (0, 5.8e5)]
+# Keyword arguments to define the signed-distance function
+signed_distance_kwargs = {
+    "interface_coordinates": interface_coords,
+    "interface_geometry": "Polygon",
+    "boundary_coordinates": boundary_coords,
+}
+# The following list must be ordered such that, unpacking from the end, each dictionary
+# contains the keyword arguments required to initialise the signed-distance array
+# corresponding to the interface between a given material and the remainder of the
+# numerical domain (all previous materials excluded). By convention, the material thus
+# isolated occupies the positive side of the signed-distance array.
+signed_distance_kwargs_list = [signed_distance_kwargs]
+
+# Material ordering must follow the logic implemented in the above list. In other words,
+# the last material in the below list must correspond to the portion of the numerical
+# domain isolated by the signed-distance array calculated using the last dictionary in
+# the above list. The first material in the below list will, therefore, occupy the
+# negative side of the signed-distance array calculated from the first dictionary above.
 materials = [mantle, lithosphere]
 
 # Approximation parameters
@@ -199,7 +217,7 @@ dimensional = True
 g = 9.81
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
-stokes_bcs = {1: {"ux": 0, "uy": 0}, 2: {"ux": 0, "uy": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
+stokes_bcs = {1: {"u": 0}, 2: {"u": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
 # Timestepping objects
 initial_timestep = 1e11

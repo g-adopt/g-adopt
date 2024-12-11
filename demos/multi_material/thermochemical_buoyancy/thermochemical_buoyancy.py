@@ -121,27 +121,19 @@ isd_params = (interface_slope, material_interface_y)
 # Shapely LineString representation of the material interface
 interface_x = np.linspace(0, lx, 1000)  # Enough points to capture the interface shape
 interface_y = straight_line(interface_x, *isd_params)
-line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
-sl.prepare(line_string)
+interface = sl.LineString([*np.column_stack((interface_x, interface_y))])
 
-# Determine to which material nodes belong and calculate distance to interface
-node_relation_to_curve = [
-    (y > straight_line(x, *isd_params), line_string.distance(sl.Point(x, y)))
+# Define the signed-distance function from the Shapely object
+signed_distance = [
+    (1 if y > straight_line(x, *isd_params) else -1)
+    * interface.distance(sl.Point(x, y))
     for x, y in node_coordinates(psi)
 ]
-
-# Define the signed-distance function and overwrite its value array
-signed_dist_to_interface = Function(K)
-signed_dist_to_interface.dat.data[:] = [
-    dist if is_above else -dist for is_above, dist in node_relation_to_curve
-]
-
-# Define thickness of the hyperbolic tangent profile
-min_mesh_edge_length = 5e-3
-epsilon = Constant(min_mesh_edge_length / 4)
-
-# Initialise level set as a smooth step function
-psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
+# Overwrite level-set data array using a smooth step function. The latter is defined by
+# a hyperbolic tangent profile, whose thickness corresponds to a quarter of the minimum
+# cell size across the mesh.
+epsilon = interface_thickness(mesh)
+psi.dat.data[:] = conservative_level_set(signed_distance, epsilon)
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -151,14 +143,13 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # the thermal and compositional Rayleigh numbers. We use the `material_field` function
 # to define the compositional Rayleigh number throughout the domain (including the shape
 # of the material interface transition). Both non-dimensional numbers are provided to
-# our approximation, alongside other parameters already mentioned.
+# our approximation.
 
 # +
 Ra = 3e5
-Ra_c_reference = 0
-Ra_c_dense = 4.5e5
-Ra_c = material_field(psi, [Ra_c_dense, Ra_c_reference], interface="sharp")
-
+Ra_c = material_field(
+    psi, [Ra_c_dense := 4.5e5, Ra_c_reference := 0], interface="sharp"
+)
 approximation = Approximation(
     "BA", dimensional=False, parameters={"Ra": Ra, "Ra_c": Ra_c}
 )
@@ -219,11 +210,12 @@ stokes_bcs = {
     right_id: {"ux": 0},
 }
 temp_bcs = {bottom_id: {"T": 1}, top_id: {"T": 0}}
-
+# Instantiate a solver object for the energy conservation system.
 energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
-
+# Instantiate a solver object for the Stokes system and perform a solve to obtain
+# initial pressure and velocity.
 stokes_solver = StokesSolver(
     z,
     approximation,
@@ -231,7 +223,8 @@ stokes_solver = StokesSolver(
     bcs=stokes_bcs,
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
-
+stokes_solver.solve()
+# Instantiate a solver object for level-set advection and reinitialisation.
 level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 # -
 
@@ -272,14 +265,14 @@ while True:
     time_now += float(delta_t)
     step += 1
 
-    # Solve Stokes sytem
-    stokes_solver.solve()
-
     # Temperature system
     energy_solver.solve()
 
     # Advect level set
     level_set_solver.solve(step)
+
+    # Solve Stokes sytem
+    stokes_solver.solve()
 
     # Calculate proportion of material entrained above a given height
     buoy_entr = entrainment(psi, material_area, entrainment_height)

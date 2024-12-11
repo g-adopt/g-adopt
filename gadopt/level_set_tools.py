@@ -1,48 +1,227 @@
-r"""This module provides a set of classes and functions enabling multi-material
-capabilities. The `material_field` function provides a simple way to define a UFL
-expression for a physical field depending on material properties. The `LevelSetSolver`
-class instantiates the advection and reinitialisation systems for a single level set.
-The `entrainment` function enables users to easily calculate material entrainment.
+"""Provides a set of classes and functions enabling multi-material capabilities
 
+The `interface_thickness` and `conservative_level_set` functions provide default
+strategies to initialise a level-set field. The `material_field` function enables
+defining a UFL expression for a physical field depending on material properties. The
+`LevelSetSolver` class instantiates the advection and reinitialisation systems for a
+single level set. The `entrainment` function enables users to easily calculate material
+entrainment.
 """
 
 import operator
-from math import ceil
-from numbers import Number
-from typing import Any
+import re
+from typing import Any, Callable
 
 import firedrake as fd
 import numpy as np
+import shapely as sl
 from mpi4py import MPI
 
 from . import scalar_equation as scalar_eq
 from .equations import Equation
-from .time_stepper import RungeKuttaTimeIntegrator, eSSPRKs3p3
+from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
+from .utility import node_coordinates
 
-__all__ = ["LevelSetSolver", "entrainment", "material_field"]
+
+def curve_interface(
+    interface_coords_x: np.ndarray, *, curve: str | Callable, curve_args: tuple
+) -> dict:
+    """Material interface defined by a curve.
+
+    Implemented curve types and associated arguments:
+    | Curve  |               Arguments               |
+    | :----- | :-----------------------------------: |
+    | line   | slope, intercept                      |
+    | cosine | amplitude, wavelength, vertical_shift |
+
+    Args:
+      interface_coords_x:
+        A NumPy array holding the x-coordinates of the curve
+      curve:
+        A string matching an implemented curve or a callable implementing a new curve
+      curve_args:
+        A tuple of arguments defining the curve
+
+    Returns:
+      A dictionary with the keyword arguments to initialise a signed-distance function
+    """
+
+    def line(x, slope, intercept):
+        """Straight line equation"""
+        return slope * x + intercept
+
+    def cosine(x, amplitude, wavelength, vertical_shift):
+        """Cosine function with an amplitude and a vertical shift."""
+        return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
+
+    curves = {"line": line, "cosine": cosine}
+    if isinstance(curve, str):
+        curve = curves[curve]
+
+    interface_coords_y = curve(interface_coords_x, *curve_args)
+    interface_coords = np.column_stack((interface_coords_x, interface_coords_y))
+
+    signed_distance_kwargs = {
+        "interface_coordinates": interface_coords,
+        "interface_geometry": "LineString",
+        "interface_callable": curve,
+        "interface_args": curve_args,
+    }
+
+    return signed_distance_kwargs
 
 
-# Default solver options for level-set advection and reinitialisation
-solver_params_default = {
-    "mat_type": "aij",
-    "ksp_type": "preonly",
-    "pc_type": "bjacobi",
-    "sub_pc_type": "ilu",
-}
-# Default parameters used to set up level-set reinitialisation
-reini_params_default = {
-    "tstep": 0.1,
-    "tstep_alg": eSSPRKs3p3,
-    "frequency": None,
-    "iterations": 1,
-}
+def rectangle_interface(ref_vertex_coords: tuple[float], edge_sizes: tuple[float]):
+    """Material interface defined by a rectangle.
+
+    Edges are aligned with Cartesian directions and do not overlap domain boundaries.
+
+    Args:
+      ref_vertex_coords:
+        A tuple holding the coordinates of the lower-left vertex
+      edge_sizes:
+        A tuple holding the edge sizes
+
+    Returns:
+      A dictionary with the keyword arguments to initialise a signed-distance function
+    """
+    interface_coords = [
+        (ref_vertex_coords[0], ref_vertex_coords[1]),
+        (ref_vertex_coords[0] + edge_sizes[0], ref_vertex_coords[1]),
+        (ref_vertex_coords[0] + edge_sizes[0], ref_vertex_coords[1] + edge_sizes[1]),
+        (ref_vertex_coords[0], ref_vertex_coords[1] + edge_sizes[1]),
+        (ref_vertex_coords[0], ref_vertex_coords[1]),
+    ]
+
+    signed_distance_kwargs = {
+        "interface_coordinates": interface_coords,
+        "interface_geometry": "Polygon",
+    }
+
+    return signed_distance_kwargs
+
+
+def signed_distance(
+    level_set: fd.Function,
+    /,
+    interface_coordinates: list[list[float]] | np.ndarray,
+    *,
+    interface_geometry: str,
+    interface_callable: Callable | None = None,
+    interface_args: tuple | None = None,
+    boundary_coordinates: list[list[float]] | np.ndarray | None = None,
+) -> list:
+    """Generates signed-distance function values at level-set nodes.
+
+    Two scenarios are currently implemented:
+    - The material interface is described by a mathematical function y = f(x). In this
+      case, `interface_geometry` should be "LineString" and `interface_callable` must be
+      provided along with any `interface_args` to implementat of the aforementioned
+      mathematical function.
+    - The material interface is a polygon, and `interface_geometry` takes the value
+      "Polygon". In this case, `interface_coordinates` must exclude the polygon sides
+      that do not act as a material interface and coincide with domain boundaries. The
+      coordinates of these sides should be provided using the `boundary_coordinates`
+      argument such that the concatenation of the two coordinate objects describes a
+      closed polygonal chain.
+
+    Args:
+      level_set:
+        A Firedrake function for the targeted level-set field
+      interface_coordinates:
+        A sequence of numeric coordinate pairs or an array-like with shape (N, 2)
+      interface_geometry:
+        A string specifying the Shapely geometry to create
+      interface_callable:
+        A callable implementing the mathematical function depicting the interface
+      interface_args:
+        A tuple of arguments provided to the interface callable
+      boundary_coordinates:
+        A sequence of numeric coordinate pairs or an array-like with shape (N, 2)
+
+    Returns:
+        A float corresponding to the level set maximum or minimum height
+    """
+    match interface_geometry:
+        case "LineString":
+            interface = sl.LineString(interface_coordinates)
+
+            signed_distance = [
+                (1 if y > interface_callable(x, *interface_args) else -1)
+                * interface.distance(sl.Point(x, y))
+                for x, y in node_coordinates(level_set)
+            ]
+        case "Polygon":
+            if boundary_coordinates is None:
+                interface = sl.Polygon(interface_coordinates)
+                sl.prepare(interface)
+
+                signed_distance = [
+                    (1 if interface.contains(sl.Point(x, y)) else -1)
+                    * interface.boundary.distance(sl.Point(x, y))
+                    for x, y in node_coordinates(level_set)
+                ]
+            else:
+                interface = sl.LineString(interface_coordinates)
+                interface_with_boundaries = sl.Polygon(
+                    np.vstack((interface_coordinates, boundary_coordinates))
+                )
+                sl.prepare(interface_with_boundaries)
+
+                signed_distance = [
+                    (1 if interface_with_boundaries.contains(sl.Point(x, y)) else -1)
+                    * interface.distance(sl.Point(x, y))
+                    for x, y in node_coordinates(level_set)
+                ]
+        case _:
+            raise ValueError("`interface_geometry` must be 'LineString' or 'Polygon'.")
+
+    return signed_distance
+
+
+def interface_thickness(level_set: fd.Function, scale: float = 0.25) -> fd.Function:
+    """Default strategy for the thickness of the conservative level set profile.
+
+    Args:
+      level_set:
+        A Firedrake function for the level-set field
+      scale:
+        A float to control thickness values relative to cell sizes
+
+    Returns:
+      A Firedrake function holding the interface thickness values
+    """
+    epsilon = fd.Function(level_set, name="Interface thickness")
+    epsilon.interpolate(scale * level_set.ufl_domain().cell_sizes)
+
+    return epsilon
+
+
+def conservative_level_set(
+    signed_distance: list | np.ndarray, epsilon: float | fd.Function
+) -> np.ndarray:
+    """Returns the conservative level set profile for a given signed-distance function.
+
+    Args:
+      signed_distance:
+        A list or NumPy array holding the signed-distance function values
+      epsilon:
+        A float or Firedrake function representing the interface thickness
+
+    Returns:
+      A NumPy array holding the conservative level-set node values
+    """
+    if isinstance(epsilon, fd.Function):
+        epsilon = epsilon.dat.data
+
+    return (1 + np.tanh(np.asarray(signed_distance) / 2 / epsilon)) / 2
 
 
 def reinitialisation_term(
     eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
 ) -> fd.Form:
-    """Term for the conservative level set reinitialisation equation.
+    """Term for the conservative-level-set reinitialisation equation.
 
     Implements terms on the right-hand side of Equation 17 from
     Parameswaran, S., & Mandal, J. C. (2023).
@@ -62,130 +241,193 @@ def reinitialisation_term(
     return sharpen_term + balance_term
 
 
+reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
+reinitialisation_term.optional_attrs = set()
+
+
 class LevelSetSolver:
     """Solver for the conservative level-set approach.
 
-    Solves the advection and reinitialisation equations for a level set function.
+    Advects and reinitialises a level-set field.
 
     Attributes:
-        mesh:
-          The UFL mesh where values of the level set function exist.
-        solution:
-          The Firedrake function for the level set.
-        func_space_lsgp:
-          The UFL function space for the projected level-set gradient.
-        ls_grad_proj:
-          The Firedrake function for the projected level-set gradient.
-        proj_solver:
-          A Firedrake LinearVariationalSolver to project the level-set gradient.
-        reini_params:
-          A dictionary containing parameters used in the reinitialisation approach.
-        ls_solver:
-          The G-ADOPT timestepper object for the advection equation.
-        reini_ts:
-          The G-ADOPT timestepper object for the reinitialisation equation.
-        subcycles:
-          An integer specifying the number of advection solves to perform.
+      solution:
+        The Firedrake function holding current level-set values
+      solution_old:
+        The Firedrake function holding previous level-set values
+      solution_grad:
+        The Firedrake function holding current level-set gradient values
+      solution_space:
+        The Firedrake function space where the level set lives
+      mesh:
+        The Firedrake mesh representing the numerical domain
+      advection:
+        A boolean specifying whether advection is set up
+      reinitialisation:
+        A boolean specifying whether reinitialisation is set up
+      adv_kwargs:
+        A dictionary holding the parameters used to set up advection
+      reini_kwargs:
+        A dictionary holding the parameters used to set up reinitialisation
+      adv_solver:
+        A G-ADOPT GenericTransportSolver tackling advection
+      proj_solver:
+        A Firedrake LinearVariationalSolver to project the level-set gradient
+      reini_integrator:
+        A G-ADOPT time integrator tackling reinitialisation
+      step:
+        An integer representing the number of advection steps already made
     """
 
     def __init__(
         self,
         level_set: fd.Function,
-        velocity: fd.ufl.tensors.ListTensor,
-        tstep: fd.Constant,
-        tstep_alg: type[RungeKuttaTimeIntegrator],
-        epsilon: float,
-        subcycles: int = 1,
-        bcs: dict = {},
-        reini_params: dict[str, Any] | None = None,
-        solver_params: dict[str, str] | None = None,
+        /,
+        *,
+        adv_kwargs: dict[str, Any] | None = None,
+        reini_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialises the solver instance.
 
+        Valid keys for `adv_kwargs`:
+        |    Argument     | Required |                   Description                   |
+        | --------------- | :------: | :---------------------------------------------: |
+        | u               | True     | Velocity field (`Function`)                     |
+        | timestep        | True     | Integration time step (`Constant`)              |
+        | time_integrator | False    | Time integrator (class in `time_stepper.py`)    |
+        | bcs             | False    | Boundary conditions (`dict`, G-ADOPT API)       |
+        | solver_params   | False    | Solver parameters (`dict`, PETSc API)           |
+        | subcycles       | False    | Advection iterations in one time step (`int`)   |
+
+        Valid keys for `reini_kwargs`:
+        |    Argument     | Required |                   Description                   |
+        | --------------- | :------: | :---------------------------------------------: |
+        | epsilon         | True     | Interface thickness (`float` or `Function`)     |
+        | timestep        | False    | Integration step in pseudo-time (`int`)         |
+        | time_integrator | False    | Time integrator (class in `time_stepper.py`)    |
+        | solver_params   | False    | Solver parameters (`dict`, PETSc API)           |
+        | steps           | False    | Pseudo-time integration steps (`int`)           |
+        | frequency       | False    | Advection steps before reinitialisation (`int`) |
+
         Args:
-            level_set:
-              The Firedrake function for the level set.
-            velocity:
-              The UFL expression for the velocity.
-            tstep:
-              The Firedrake function over the Real space for the simulation time step.
-            tstep_alg:
-              The class for the timestepping algorithm used in the advection solver.
-            epsilon:
-              A float denoting the thickness of the hyperbolic tangent profile.
-            subcycles:
-              An integer specifying the number of advection solves to perform.
-            bcs:
-              Dictionary of identifier-value pairs specifying boundary conditions
-            reini_params:
-              A dictionary containing parameters used in the reinitialisation approach.
-            solver_params:
-              A dictionary containing solver parameters used in the advection and
-              reinitialisation approaches.
+          level_set:
+            The Firedrake function holding the level-set field
+          adv_kwargs:
+            A dictionary with parameters used to set up advection
+          reini_kwargs:
+            A dictionary with parameters used to set up reinitialisation
         """
         self.solution = level_set
-        self.tstep = tstep
-        self.tstep_alg = tstep_alg
-        self.subcycles = subcycles
-        self.bcs = bcs
+        self.solution_space = level_set.function_space()
+        self.advection = False
+        self.reinitialisation = False
 
-        self.reini_params = reini_params or reini_params_default.copy()
-        self.solver_params = solver_params or solver_params_default.copy()
+        if isinstance(adv_kwargs, dict):
+            self.advection = True
+            self.adv_kwargs = adv_kwargs
 
-        self.func_space = level_set.function_space()
-        self.mesh = self.func_space.mesh()
-        self.solution_old = fd.Function(self.func_space)
+            self.set_default_advection_args()
 
-        if self.reini_params["frequency"] is None:
-            max_coords = self.mesh.coordinates.dat.data.max(axis=0)
-            min_coords = self.mesh.coordinates.dat.data.min(axis=0)
-            for i in range(len(max_coords)):
-                max_coords[i] = level_set.comm.allreduce(max_coords[i], MPI.MAX)
-                min_coords[i] = level_set.comm.allreduce(min_coords[i], MPI.MIN)
-            max_mesh_dimension = max(max_coords - min_coords)
+        if isinstance(reini_kwargs, dict):
+            self.reinitialisation = True
+            self.reini_kwargs = reini_kwargs
 
-            self.reini_params["frequency"] = ceil(0.02 / epsilon * max_mesh_dimension)
+            self.mesh = self.solution.ufl_domain()
 
-        self.func_space_lsgp = fd.VectorFunctionSpace(
-            self.mesh, "CG", self.func_space.finat_element.degree
-        )
-        self.ls_grad_proj = fd.Function(
-            self.func_space_lsgp,
-            name=f"Level-set gradient (projection) #{level_set.name()[-1]}",
-        )
+            self.set_default_reinitialisation_args()
 
-        self.proj_solver = self.gradient_L2_proj()
+            self.proj_solver = self.gradient_L2_proj()
 
-        self.ls_eq_attrs = {"u": velocity}
-        self.reini_eq_attrs = {"level_set_grad": self.ls_grad_proj, "epsilon": epsilon}
+        self._solvers_ready = False
 
-        self.solvers_ready = False
+    def set_default_advection_args(self) -> None:
+        """Set default values of optional arguments if not provided."""
+        if "time_integrator" not in self.adv_kwargs:
+            self.adv_kwargs["time_integrator"] = eSSPRKs10p3
+        if "bcs" not in self.adv_kwargs:
+            self.adv_kwargs["bcs"] = {}
+        if "solver_params" not in self.adv_kwargs:
+            self.adv_kwargs["solver_params"] = {
+                "mat_type": "aij",
+                "ksp_type": "preonly",
+                "pc_type": "bjacobi",
+                "sub_pc_type": "ilu",
+            }
+        if "subcycles" not in self.adv_kwargs:
+            self.adv_kwargs["subcycles"] = 1
 
-    def gradient_L2_proj(self) -> fd.variational_solver.LinearVariationalSolver:
+    def set_default_reinitialisation_args(self) -> None:
+        """Set default values of optional parameters if not provided."""
+        if "timestep" not in self.reini_kwargs:
+            self.reini_kwargs["timestep"] = 0.02
+        if "time_integrator" not in self.reini_kwargs:
+            self.reini_kwargs["time_integrator"] = eSSPRKs3p3
+        if "solver_params" not in self.reini_kwargs:
+            self.reini_kwargs["solver_params"] = {
+                "mat_type": "aij",
+                "ksp_type": "preonly",
+                "pc_type": "bjacobi",
+                "sub_pc_type": "ilu",
+            }
+        if "steps" not in self.reini_kwargs:
+            self.reini_kwargs["steps"] = 1
+        if "frequency" not in self.reini_kwargs and self.mesh.cartesian:
+            self.reini_kwargs["frequency"] = self.reinitialisation_frequency()
+
+    def reinitialisation_frequency(self) -> int:
+        """Implements default strategy for the reinitialisation frequency.
+
+        Reinitialisation becomes less frequent as mesh resolution increases, with the
+        underlying assumption that the minimum cell size occurs along the material
+        interface. The current strategy is to apply reinitialisation at every time step
+        up to a certain cell size and then scale the frequency with the decrease in cell
+        size.
+        """
+        max_coords = self.mesh.coordinates.dat.data.max(axis=0)
+        min_coords = self.mesh.coordinates.dat.data.min(axis=0)
+        for i in range(len(max_coords)):
+            max_coords[i] = self.mesh.comm.allreduce(max_coords[i], MPI.MAX)
+            min_coords[i] = self.mesh.comm.allreduce(min_coords[i], MPI.MIN)
+        domain_size = np.sqrt(np.sum((max_coords - min_coords) ** 2))
+
+        epsilon = self.reini_kwargs["epsilon"]
+        if isinstance(epsilon, fd.Function):
+            epsilon = self.mesh.comm.allreduce(epsilon.dat.data.min(), MPI.MIN)
+
+        return max(1, round(4.9e-3 * domain_size / epsilon - 0.25))
+
+    def gradient_L2_proj(self) -> fd.LinearVariationalSolver:
         """Constructs a projection solver.
 
         Projects the level-set gradient from a discontinuous function space to the
         equivalent continuous one.
 
         Returns:
-            A Firedrake solver capable of projecting a discontinuous gradient field on
-            a continuous function space.
+          A Firedrake solver capable of projecting a discontinuous gradient field on a
+          continuous function space
         """
-        test_function = fd.TestFunction(self.func_space_lsgp)
-        trial_function = fd.TrialFunction(self.func_space_lsgp)
+        grad_name = "Level-set gradient"
+        if number_match := re.search(r"\s#\d+$", self.solution.name()):
+            grad_name += number_match.group()
 
-        mass_term = fd.inner(test_function, trial_function) * fd.dx(domain=self.mesh)
-        residual_element = (
-            self.solution * fd.div(test_function) * fd.dx(domain=self.mesh)
+        gradient_space = fd.VectorFunctionSpace(
+            self.mesh, "CG", self.solution.ufl_element().degree()
         )
+        self.solution_grad = fd.Function(gradient_space, name=grad_name)
+
+        test = fd.TestFunction(gradient_space)
+        trial = fd.TrialFunction(gradient_space)
+
+        mass_term = fd.inner(test, trial) * fd.dx(domain=self.mesh)
+        residual_element = self.solution * fd.div(test) * fd.dx(domain=self.mesh)
         residual_boundary = (
             self.solution
-            * fd.dot(test_function, fd.FacetNormal(self.mesh))
+            * fd.dot(test, fd.FacetNormal(self.mesh))
             * fd.ds(domain=self.mesh)
         )
         residual = -residual_element + residual_boundary
-        problem = fd.LinearVariationalProblem(mass_term, residual, self.ls_grad_proj)
 
+        problem = fd.LinearVariationalProblem(mass_term, residual, self.solution_grad)
         solver_params = {
             "mat_type": "aij",
             "ksp_type": "preonly",
@@ -195,91 +437,110 @@ class LevelSetSolver:
 
         return fd.LinearVariationalSolver(problem, solver_parameters=solver_params)
 
-    def update_level_set_gradient(self, *args, **kwargs) -> None:
+    def set_up_solvers(self) -> None:
+        """Sets up time integrators for advection and reinitialisation as required."""
+        self.solution_old = fd.Function(self.solution_space)
+
+        if self.advection:
+            self.adv_solver = GenericTransportSolver(
+                "advection",
+                self.solution,
+                self.adv_kwargs["timestep"] / self.adv_kwargs["subcycles"],
+                self.adv_kwargs["time_integrator"],
+                solution_old=self.solution_old,
+                eq_attrs={"u": self.adv_kwargs["u"]},
+                bcs=self.adv_kwargs["bcs"],
+                solver_parameters=self.adv_kwargs["solver_params"],
+            )
+
+        if self.reinitialisation:
+            reinitialisation_equation = Equation(
+                fd.TestFunction(self.solution_space),
+                self.solution_space,
+                reinitialisation_term,
+                mass_term=scalar_eq.mass_term,
+                eq_attrs={
+                    "level_set_grad": self.solution_grad,
+                    "epsilon": self.reini_kwargs["epsilon"],
+                },
+            )
+
+            self.reini_integrator = self.reini_kwargs["time_integrator"](
+                reinitialisation_equation,
+                self.solution,
+                self.reini_kwargs["timestep"],
+                solution_old=self.solution_old,
+                solver_parameters=self.reini_kwargs["solver_params"],
+            )
+
+        self.step = 0
+        self._solvers_ready = True
+
+    def update_level_set_gradient(self) -> None:
         """Calls the gradient projection solver.
 
-        Can be used as a callback.
+        Can be provided as a callback to time integrators.
         """
         self.proj_solver.solve()
 
-    def set_up_solvers(self) -> None:
-        """Sets up the time steppers for advection and reinitialisation."""
-        self.ls_solver = GenericTransportSolver(
-            "advection",
-            self.solution,
-            self.tstep / self.subcycles,
-            self.tstep_alg,
-            solution_old=self.solution_old,
-            eq_attrs=self.ls_eq_attrs,
-            bcs=self.bcs,
-            solver_parameters=self.solver_params,
-        )
+    def reinitialise(self) -> None:
+        """Performs reinitialisation steps."""
+        for _ in range(self.reini_kwargs["steps"]):
+            self.reini_integrator.advance(
+                update_forcings=self.update_level_set_gradient
+            )
 
-        reinitialisation_equation = Equation(
-            fd.TestFunction(self.func_space),
-            self.func_space,
-            reinitialisation_term,
-            mass_term=scalar_eq.mass_term,
-            eq_attrs=self.reini_eq_attrs,
-        )
-
-        self.reini_ts = self.reini_params["tstep_alg"](
-            reinitialisation_equation,
-            self.solution,
-            self.reini_params["tstep"],
-            solution_old=self.solution_old,
-            solver_parameters=self.solver_params,
-        )
-
-    def solve(self, step: int, equation: str | None = None) -> None:
-        """Updates the level-set function.
-
-        Calls advection and reinitialisation solvers within a subcycling loop.
-        The reinitialisation solver can be iterated and may not be called at each
-        simulation time step.
+    def solve(
+        self,
+        disable_advection: bool = False,
+        disable_reinitialisation: bool = False,
+    ) -> None:
+        """Updates the level-set function by means of advection and reinitialisation.
 
         Args:
-            step:
-              An integer representing the current time-loop iteration.
-            equation:
-              An optional string specifying which equation to solve if not both.
+          disable_advection:
+            A boolean to disable the advection solve.
+          disable_reinitialisation:
+            A boolean to disable the reinitialisation solve.
         """
-        if not self.solvers_ready:
+        if not self._solvers_ready:
             self.set_up_solvers()
-            self.solvers_ready = True
 
-        for subcycle in range(self.subcycles):
-            if equation != "reinitialisation":
-                self.ls_solver.solve()
+        if self.advection and not disable_advection:
+            for _ in range(self.adv_kwargs["subcycles"]):
+                self.adv_solver.solve()
+                self.step += 1
 
-            if equation != "advection" and step % self.reini_params["frequency"] == 0:
-                for reini_step in range(self.reini_params["iterations"]):
-                    self.reini_ts.advance(
-                        t=0, update_forcings=self.update_level_set_gradient
-                    )
+                if self.reinitialisation and not disable_reinitialisation:
+                    if self.step % self.reini_kwargs["frequency"] == 0:
+                        self.reinitialise()
+
+        elif self.reinitialisation and not disable_reinitialisation:
+            if self.step % self.reini_kwargs["frequency"] == 0:
+                self.reinitialise()
 
 
-def material_field_recursive(
+def material_field_from_copy(
     level_set: fd.Function | list[fd.Function],
-    field_values: list[fd.ufl.core.expr.Expr],
+    field_values: list,
     interface: str,
-) -> fd.ufl.core.expr.Expr:
-    """Sets physical property expressions reflecting material distribution.
+) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
+    """Generates UFL algebra describing a physical property across the domain.
 
     Ensures that the correct expression is assigned to each material based on the
-    level-set functions. Property transition across material interfaces are expressed
-    according to the provided averaging scheme.
+    level-set functions. Property transitions across material interfaces are expressed
+    according to the provided strategy.
 
     Args:
-        level_set:
-          A Firedrake function for the level set (or a list of these).
-        field_values:
-          A list of physical property values relevant for each material.
-        interface:
-          A string specifying how property transitions between materials are calculated.
+      level_set:
+        A Firedrake function for the level set (or a list of these)
+      field_values:
+        A list of physical property values specific to each material
+      interface:
+        A string specifying how property transitions between materials are calculated
 
     Returns:
-        A UFL expression representing the physical property throughout the domain.
+      UFL algebra representing the physical property throughout the domain
 
     """
     ls = fd.max_value(fd.min_value(level_set.pop(), 1), 0)
@@ -288,22 +549,22 @@ def material_field_recursive(
         match interface:
             case "sharp":
                 heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
-                return field_values.pop() * heaviside + material_field_recursive(
+                return field_values.pop() * heaviside + material_field_from_copy(
                     level_set, field_values, interface
                 ) * (1 - heaviside)
             case "arithmetic":
-                return field_values.pop() * ls + material_field_recursive(
+                return field_values.pop() * ls + material_field_from_copy(
                     level_set, field_values, interface
                 ) * (1 - ls)
             case "geometric":
-                return field_values.pop() ** ls * material_field_recursive(
+                return field_values.pop() ** ls * material_field_from_copy(
                     level_set, field_values, interface
                 ) ** (1 - ls)
             case "harmonic":
                 return 1 / (
                     ls / field_values.pop()
                     + (1 - ls)
-                    / material_field_recursive(level_set, field_values, interface)
+                    / material_field_from_copy(level_set, field_values, interface)
                 )
     else:  # Final level set; specify values for both sides of the interface
         match interface:
@@ -320,27 +581,27 @@ def material_field_recursive(
 
 def material_field(
     level_set: fd.Function | list[fd.Function],
-    field_values: list[fd.ufl.core.expr.Expr],
+    field_values: list,
     interface: str,
-) -> fd.ufl.core.expr.Expr:
-    """Executes material_field_recursive providing a copy of the level-set list.
+) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
+    """Generates UFL algebra describing a physical property across the domain.
 
-    Providing a copy of the level-set list prevents the original one from being consumed
-    by the function call.
+    Calls `material_field_from_copy` using a copy of the level-set list, preventing the
+    original one from being consumed by the function call.
 
     Args:
-        level_set:
-          A Firedrake function for the level set (or a list of these).
-        field_values:
-          A list of physical property values relevant for each material.
-        interface:
-          A string specifying how property transitions between materials are calculated.
+      level_set:
+        A Firedrake function for the level set (or a list of these)
+      field_values:
+        A list of physical property values specific to each material
+      interface:
+        A string specifying how property transitions between materials are calculated
 
     Returns:
-        A UFL expression representing the physical property throughout the domain.
+      UFL algebra representing the physical property throughout the domain
 
     Raises:
-        ValueError: Incorrect interface strategy supplied.
+      ValueError: Incorrect interface strategy supplied
     """
     if not isinstance(level_set, list):
         level_set = [level_set]
@@ -349,29 +610,28 @@ def material_field(
     if interface not in _impl_interface:
         raise ValueError(f"Interface must be one of {_impl_interface}.")
 
-    return material_field_recursive(level_set.copy(), field_values, interface)
+    return material_field_from_copy(level_set.copy(), field_values, interface)
 
 
 def entrainment(
-    level_set: fd.Function, material_area: Number, entrainment_height: Number
+    level_set: fd.Function, material_area: float, entrainment_height: float
 ) -> float:
     """Calculates the entrainment diagnostic.
 
-    Determines the proportion of a material that is located above a given height.
+    Determines the proportion of a material located above a given height.
 
     Args:
-        level_set:
-          A Firedrake function for the level set field.
-        material_area:
-          An integer or a float representing the total area occupied by a material.
-        entrainment_height:
-          An integer or a float representing the height above which the entrainment
-          diagnostic is determined.
+      level_set:
+        A Firedrake function for the level-set field
+      material_area:
+        A float representing the total area occupied by a material
+      entrainment_height:
+        A float representing the height above which to calculate entrainment
 
     Returns:
-        A float corresponding to the calculated entrainment diagnostic.
+      A float corresponding to the calculated entrainment diagnostic
     """
-    mesh_coords = fd.SpatialCoordinate(level_set.function_space().mesh())
+    mesh_coords = fd.SpatialCoordinate(level_set.ufl_domain())
     target_region = mesh_coords[1] >= entrainment_height
     material_entrained = fd.conditional(level_set < 0.5, 1, 0)
 
@@ -382,24 +642,22 @@ def entrainment(
 
 
 def min_max_height(
-    level_set: fd.Function, epsilon: fd.Constant, side: int, mode: str
+    level_set: fd.Function, epsilon: float | fd.Function, side: int, mode: str
 ) -> float:
-    """Calculates the maximum or minimum height of the level set.
-
-    Determines the location.
+    """Calculates the maximum or minimum height of a material interface.
 
     Args:
-        level_set:
-          A Firedrake function for the level set field.
-        epsilon:
-          A Firedrake constant for the thickness of the hyperbolic tangent profile.
-        side:
-          An integer indicating the level set side making up the geometric object.
-        mode:
-          A string indicating whether the maximum or minimum height is sought.
+      level_set:
+        A Firedrake function for the level set field
+      epsilon:
+        A float or Firedrake function denoting the thickness of the material interface
+      side:
+        An integer (0 or 1) indicating the level-set side of the target material
+      mode:
+        A string ("min" or "max") specifying which extremum height is sought
 
     Returns:
-        A float corresponding to the level set maximum or minimum height.
+      A float corresponding to the material interface extremum height
     """
 
     match side:
@@ -430,6 +688,10 @@ def min_max_height(
     coords = fd.Function(coords_space).interpolate(mesh.coordinates)
     coords_data = coords.dat.data_ro_with_halos
     ls_data = level_set.dat.data_ro_with_halos
+    if isinstance(epsilon, float):
+        eps_data = epsilon * np.ones_like(ls_data)
+    else:
+        eps_data = epsilon.dat.data_ro_with_halos
 
     mask_ls = comparison(ls_data, 0.5)
     if mask_ls.any():
@@ -441,8 +703,7 @@ def min_max_height(
             hor_dist_vec = coords_data[~mask_ls, :-1] - hor_coords
             hor_dist = np.sqrt(np.sum(hor_dist_vec**2, axis=1))
 
-            epsilon = float(epsilon)
-            mask_hor_coords = hor_dist < epsilon
+            mask_hor_coords = hor_dist < eps_data[~mask_ls]
 
             if mask_hor_coords.any():
                 ind_outside = abs(
@@ -451,10 +712,12 @@ def min_max_height(
                 height_outside = coords_data[~mask_ls, -1][mask_hor_coords][ind_outside]
 
                 ls_inside = ls_data[mask_ls][ind_inside]
-                sdls_inside = epsilon * np.log(ls_inside / (1 - ls_inside))
+                eps_inside = eps_data[mask_ls][ind_inside]
+                sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
 
                 ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
-                sdls_outside = epsilon * np.log(ls_outside / (1 - ls_outside))
+                eps_outside = eps_data[~mask_ls][mask_hor_coords][ind_outside]
+                sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
 
                 sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
                 height = sdls_dist * height_inside + (1 - sdls_dist) * height_outside
@@ -470,7 +733,3 @@ def min_max_height(
     height_global = level_set.comm.allreduce(height, mpi_comparison)
 
     return height_global
-
-
-reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
-reinitialisation_term.optional_attrs = set()

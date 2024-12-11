@@ -6,31 +6,26 @@ an evaluation of the 'sticky air' method.
 Geophysical Journal International, 189(1), 38-54.
 """
 
-from functools import partial
-
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 
-from gadopt.level_set_tools import min_max_height
+from gadopt.level_set_tools import curve_interface, min_max_height
 
 from .materials import air, lithosphere, mantle
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     max_topo = min_max_height(diag_vars["level_set"][1], diag_vars["epsilon"], 0, "max")
-    max_topo_analytical = (
-        top_interface_deflection / 1e3 * np.exp(relaxation_rate * simu_time)
-    )
+    max_topo_analytical = surface_deflection / 1e3 * np.exp(relaxation_rate * simu_time)
 
     diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
-    diag_fields["max_topography"].append((max_topo - top_material_interface_y) / 1e3)
+    diag_fields["max_topography"].append((max_topo - surface_coord_y) / 1e3)
     diag_fields["max_topography_analytical"].append(max_topo_analytical)
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(
-            f"{output_path}/output_{checkpoint_restart}_check", diag_fields=diag_fields
+            f"{output_path}/output_{checkpoint_restart}_{tag}", diag_fields=diag_fields
         )
 
 
@@ -57,10 +52,12 @@ def plot_diagnostics(output_path):
         ax.legend()
 
         fig.savefig(
-            f"{output_path}/maximum_topography.pdf", dpi=300, bbox_inches="tight"
+            f"{output_path}/maximum_topography_{tag}.pdf", dpi=300, bbox_inches="tight"
         )
 
 
+# A simulation name tag
+tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
 
@@ -70,31 +67,39 @@ checkpoint_restart = 0
 domain_dims = (2.8e6, 8e5)
 mesh_gen = "gmsh"
 
-# Parameters to initialise level sets
-bottom_material_interface_y = 6e5
-bottom_interface_slope = 0
-top_material_interface_y = 7e5
-top_interface_deflection = 7e3
-# The following two lists must be ordered such that, unpacking from the end, each
-# pair of arguments enables initialising a level set whose 0-contour corresponds to
-# the entire interface between a given material and the remainder of the numerical
-# domain. By convention, the material thereby isolated occupies the positive side
-# of the signed-distance level set.
-initialise_signed_distance = [
-    partial(isd.isd_simple_curve, domain_dims[0], isd.straight_line),
-    partial(isd.isd_simple_curve, domain_dims[0], isd.cosine_curve),
-]
-isd_params = [
-    (bottom_interface_slope, bottom_material_interface_y),
-    (top_interface_deflection, domain_dims[0], top_material_interface_y),
+# Parameters to initialise surface level set
+interface_coords_x = np.linspace(0.0, domain_dims[0], int(domain_dims[0] / 1e3) + 1)
+interface_args = (
+    surface_deflection := 7e3,
+    surface_perturbation_wavelentgh := domain_dims[0],
+    surface_coord_y := 7e5,
+)
+# Generate keyword arguments to define the signed-distance function
+surface_signed_distance_kwargs = curve_interface(
+    interface_coords_x, curve="cosine", curve_args=interface_args
+)
+# Parameters to initialise LAB level set
+interface_coords_x = np.array([0.0, domain_dims[0]])
+interface_args = (lab_slope := 0, lab_coord_y := 6e5)
+# Generate keyword arguments to define the signed-distance function
+lab_signed_distance_kwargs = curve_interface(
+    interface_coords_x, curve="line", curve_args=interface_args
+)
+# The following list must be ordered such that, unpacking from the end, each dictionary
+# contains the keyword arguments required to initialise the signed-distance array
+# corresponding to the interface between a given material and the remainder of the
+# numerical domain (all previous materials excluded). By convention, the material thus
+# isolated occupies the positive side of the signed-distance array.
+signed_distance_kwargs_list = [
+    lab_signed_distance_kwargs,
+    surface_signed_distance_kwargs,
 ]
 
-# Material ordering must follow the logic implemented in the above two lists. In
-# other words, the last material in the below list corresponds to the portion of
-# the numerical domain entirely isolated by the level set initialised using the
-# last pair of arguments in the above two lists. The first material in the below list
-# must, therefore, occupy the negative side of the signed-distance level set initialised
-# from the first pair of arguments above.
+# Material ordering must follow the logic implemented in the above list. In other words,
+# the last material in the below list must correspond to the portion of the numerical
+# domain isolated by the signed-distance array calculated using the last dictionary in
+# the above list. The first material in the below list will, therefore, occupy the
+# negative side of the signed-distance array calculated from the first dictionary above.
 materials = [mantle, lithosphere, air]
 
 # Approximation parameters
@@ -102,7 +107,7 @@ dimensional = True
 g = 10
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
-stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"ux": 0, "uy": 0}, 4: {"uy": 0}}
+stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"u": 0}, 4: {"uy": 0}}
 
 # Timestepping objects
 initial_timestep = 1e10

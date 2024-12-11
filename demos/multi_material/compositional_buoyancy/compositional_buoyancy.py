@@ -12,7 +12,7 @@
 # domain and has intrinsic physical properties, such as density and viscosity. Across a
 # material interface, physical properties transition from one value to another, either
 # sharply or progressively. In the former case, physical property fields exhibit
-# discontinuities, whilst, in the latter case, an averaging scheme weights contributions
+# discontinuities, whilst in the latter case, an averaging scheme weights contributions
 # from each material.
 
 # Numerical approach
@@ -73,8 +73,8 @@ mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
 mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
-V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
+W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Stokes function space (mixed)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space (constants across the domain)
@@ -86,51 +86,35 @@ z.subfunctions[1].rename("Pressure")  # Associated Firedrake function for pressu
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
-# We now provide initial conditions for the level-set field. To this end, we use the
-# `shapely` library to represent the initial location of the material interface and
-# derive the signed-distance function. Finally, we apply the transformation to obtain a
-# smooth step function profile.
+# We now initialise the level-set field. All we have to provide to G-ADOPT is a
+# mathematical description of the interface location and use the available API. In this
+# case, the interface can be represented as a cosine. Under the hood, G-ADOPT uses the
+# `shapely` library to determine the signed-distance function associated with the
+# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
+# from the signed-distance function.
+
 
 # +
-import numpy as np  # noqa: E402
-import shapely as sl  # noqa: E402
+from numpy import linspace  # noqa: E402
 
+# Mathematical description of the interface location
+interface_coords_x = linspace(0, lx, 1000)
+interface_args = (
+    interface_deflection := 0.02,
+    perturbation_wavelentgh := 2 * lx,
+    initial_interface_y := 0.2,
+)
+# Generate keyword arguments to define the signed-distance function
+signed_distance_kwargs = curve_interface(
+    interface_coords_x, curve_type="cosine", curve_args=interface_args
+)
 
-def cosine_curve(x, amplitude, wavelength, vertical_shift):
-    """Cosine curve equation with an amplitude and a vertical shift"""
-    return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
-
-
-interface_deflection = 0.02  # Amplitude of the cosine function marking the interface
-interface_wavelength = 2 * lx  # Wavelength of the cosine function
-material_interface_y = 0.2  # Vertical shift of the interface along the y axis
-# Group parameters defining the cosine profile
-isd_params = (interface_deflection, interface_wavelength, material_interface_y)
-
-# Shapely LineString representation of the material interface
-interface_x = np.linspace(0, lx, 1000)  # Enough points to capture the interface shape
-interface_y = cosine_curve(interface_x, *isd_params)
-line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
-sl.prepare(line_string)
-
-# Determine to which material nodes belong and calculate distance to interface
-node_relation_to_curve = [
-    (y > cosine_curve(x, *isd_params), line_string.distance(sl.Point(x, y)))
-    for x, y in node_coordinates(psi)
-]
-
-# Define the signed-distance function and overwrite its value array
-signed_dist_to_interface = Function(K)
-signed_dist_to_interface.dat.data[:] = [
-    dist if is_above else -dist for is_above, dist in node_relation_to_curve
-]
-
-# Define thickness of the hyperbolic tangent profile
-min_mesh_edge_length = min(lx / nx, ly / ny)
-epsilon = Constant(min_mesh_edge_length / 4)
-
-# Initialise level set as a smooth step function
-psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
+# Initialise the level-set field. First, determine the signed-distance function at each
+# level-set node. Then, define the thickness of the hyperbolic tangent profile used in
+# the conservative level-set approach. Finally, overwrite level-set data array.
+signed_distance_array = signed_distance(psi, **signed_distance_kwargs)
+epsilon = interface_thickness(psi)
+psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -139,13 +123,10 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # apart from density. As a result, the system is fully defined by the compositional
 # Rayleigh number. We use the `material_field` function to define its value throughout
 # the domain (including the shape of the material interface transition) and provide it
-# to our approximation, alongside other parameters already mentioned.
+# to our approximation.
 
 # +
-Ra_c_buoyant = 0
-Ra_c_dense = 1
-Ra_c = material_field(psi, [Ra_c_buoyant, Ra_c_dense], interface="sharp")
-
+Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="sharp")
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
 # -
 
@@ -170,24 +151,30 @@ t_adapt = TimestepAdaptor(
 # case handled in G-ADOPT.
 Z_nullspace = create_stokes_nullspace(Z)
 
-# Boundary conditions are specified next: no slip at the top and bottom and free slip on
-# the left and right sides. No boundary conditions are required for level set, as the
-# numerical domain is closed.
+# Boundary conditions for the Stokes system: no slip at the top and bottom and free slip
+# on the left and right sides.
 stokes_bcs = {
     bottom_id: {"u": 0},
     top_id: {"u": 0},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
-
+# Instantiate a solver object for the Stokes system and perform a solve to obtain
+# initial pressure and velocity.
 stokes_solver = StokesSolver(
     z,
     approximation,
     bcs=stokes_bcs,
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
+stokes_solver.solve()
 
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
+# Instantiate a solver object for level-set advection and reinitialisation. G-ADOPT
+# provides default values for most arguments; we only provide those that do not have
+# one. No boundary conditions are required, as the numerical domain is closed.
+adv_kwargs = {"u": u, "timestep": delta_t}
+reini_kwargs = {"epsilon": epsilon}
+level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 # -
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
@@ -197,13 +184,14 @@ level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
 
 # +
 output_file = VTKFile("output.pvd")
+output_file.write(*z.subfunctions, psi, time=time_now)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
 
-material_area = material_interface_y * lx  # Area of tracked material in the domain
+material_area = initial_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
@@ -211,56 +199,50 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 # attained.
 
 # +
-step = 0  # A counter to keep track of looping
-output_counter = 0  # A counter to keep track of outputting
+step = 0  # A counter to keep track of loop iterations
+output_counter = 1  # A counter to keep track of outputting
 time_end = 2000
 while True:
+    # Update timestep
+    if time_end - time_now < output_frequency:
+        t_adapt.maximum_timestep = time_end - time_now
+    t_adapt.update_timestep()
+
+    # Advect level set
+    level_set_solver.solve()
+    # Solve Stokes sytem
+    stokes_solver.solve()
+
+    # Increment iteration count and time
+    step += 1
+    time_now += float(delta_t)
+
+    # Calculate proportion of material entrained above a given height
+    buoy_entr = entrainment(psi, material_area, entrainment_height)
+    # Log diagnostics
+    plog.log_str(f"{step} {time_now} {float(delta_t)} {gd.u_rms()} {buoy_entr}")
+
     # Write output
     if time_now >= output_counter * output_frequency:
         output_file.write(*z.subfunctions, psi, time=time_now)
         output_counter += 1
 
-    # Update timestep
-    if time_end is not None:
-        t_adapt.maximum_timestep = min(output_frequency, time_end - time_now)
-    t_adapt.update_timestep()
-    time_now += float(delta_t)
-    step += 1
-
-    # Solve Stokes sytem
-    stokes_solver.solve()
-
-    # Advect level set
-    level_set_solver.solve(step)
-
-    # Calculate proportion of material entrained above a given height
-    buoy_entr = entrainment(psi, material_area, entrainment_height)
-
-    # Log diagnostics
-    plog.log_str(f"{step} {time_now} {float(delta_t)} {gd.u_rms()} {buoy_entr}")
-
     # Check if simulation has completed
     if time_now >= time_end:
+        plog.close()  # Close logging file
+
+        # Checkpoint solution fields to disk
+        with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
+            final_checkpoint.save_mesh(mesh)
+            final_checkpoint.save_function(z, name="Stokes")
+            final_checkpoint.save_function(psi, name="Level set")
+
         log("Reached end of simulation -- exiting time-step loop")
         break
 # -
 
-# At the end of the simulation, we write the final state for visualisation, close our
-# logging file, and checkpoint solution fields to disk. These can later be used to
-# restart the simulation, if required.
-
-# +
-output_file.write(*z.subfunctions, psi, time=time_now)
-plog.close()
-
-with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
-    final_checkpoint.save_mesh(mesh)
-    final_checkpoint.save_function(z, name="Stokes")
-    final_checkpoint.save_function(psi, name="Level set")
-# -
-
-# We can visualise the final level-set field using Firedrake's built-in plotting
-# functionality.
+# We can visualise the location of the material interface at the end of the simulation
+# using Firedrake's built-in plotting functionality.
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt

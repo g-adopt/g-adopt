@@ -5,15 +5,12 @@ A benchmark comparison of spontaneous subduction models—Towards a free surface
 Physics of the Earth and Planetary Interiors, 171(1-4), 198-223.
 """
 
-from functools import partial
-
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 from pandas import read_excel
 
-from gadopt.level_set_tools import min_max_height
+from gadopt.level_set_tools import curve_interface, min_max_height
 
 from .materials import air, lithosphere, mantle
 
@@ -26,7 +23,7 @@ def diagnostics(simu_time, geo_diag, diag_vars, output_path):
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(
-            f"{output_path}/output_{checkpoint_restart}_check", diag_fields=diag_fields
+            f"{output_path}/output_{checkpoint_restart}_{tag}", diag_fields=diag_fields
         )
 
 
@@ -95,9 +92,13 @@ def plot_diagnostics(output_path):
 
         ax.legend()
 
-        fig.savefig(f"{output_path}/slab_tip_depth.pdf", dpi=300, bbox_inches="tight")
+        fig.savefig(
+            f"{output_path}/slab_tip_depth_{tag}.pdf", dpi=300, bbox_inches="tight"
+        )
 
 
+# A simulation name tag
+tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
 
@@ -107,26 +108,43 @@ checkpoint_restart = 0
 domain_dims = (3e6, 7.5e5)
 mesh_gen = "gmsh"
 
-# Parameters to initialise level sets
-material_interface_y = 7e5
-interface_slope = 0
-# The following two lists must be ordered such that, unpacking from the end, each
-# pair of arguments enables initialising a level set whose 0-contour corresponds to
-# the entire interface between a given material and the remainder of the numerical
-# domain. By convention, the material thereby isolated occupies the positive side
-# of the signed-distance level set.
-initialise_signed_distance = [
-    partial(isd.isd_simple_curve, domain_dims[0], isd.straight_line),
-    isd.isd_schmeling,
+# Parameters to initialise surface level set
+interface_coords_x = np.array([0.0, domain_dims[0]])
+interface_args = (surface_slope := 0, surface_coord_y := 7e5)
+# Generate keyword arguments to define the signed-distance function
+surface_signed_distance_kwargs = curve_interface(
+    interface_coords_x, curve="line", curve_args=interface_args
+)
+# Parameters to initialise slab level set
+slab_interface_coords = [
+    (domain_dims[0], 7e5),
+    (1e6, 7e5),
+    (1e6, 5e5),
+    (1.1e6, 5e5),
+    (1.1e6, 6e5),
+    (domain_dims[0], 6e5),
 ]
-isd_params = [(interface_slope, material_interface_y), None]
+slab_boundary_coords = [(domain_dims[0], 7e5)]
+slab_signed_distance_kwargs = {
+    "interface_coordinates": slab_interface_coords,
+    "interface_geometry": "Polygon",
+    "boundary_coordinates": slab_boundary_coords,
+}
+# The following list must be ordered such that, unpacking from the end, each dictionary
+# contains the keyword arguments required to initialise the signed-distance array
+# corresponding to the interface between a given material and the remainder of the
+# numerical domain (all previous materials excluded). By convention, the material thus
+# isolated occupies the positive side of the signed-distance array.
+signed_distance_kwargs_list = [
+    surface_signed_distance_kwargs,
+    slab_signed_distance_kwargs,
+]
 
-# Material ordering must follow the logic implemented in the above two lists. In
-# other words, the last material in the below list corresponds to the portion of
-# the numerical domain entirely isolated by the level set initialised using the
-# last pair of arguments in the above two lists. The first material in the below list
-# must, therefore, occupy the negative side of the signed-distance level set initialised
-# from the first pair of arguments above.
+# Material ordering must follow the logic implemented in the above list. In other words,
+# the last material in the below list must correspond to the portion of the numerical
+# domain isolated by the signed-distance array calculated using the last dictionary in
+# the above list. The first material in the below list will, therefore, occupy the
+# negative side of the signed-distance array calculated from the first dictionary above.
 materials = [mantle, air, lithosphere]
 
 # Approximation parameters

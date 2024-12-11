@@ -1,4 +1,4 @@
-horizontal_resolution = 2e4;
+horizontal_resolution = 1e4;
 
 domain_dimension_x = 2.8e6;
 domain_dimension_y = 8e5;

@@ -83,7 +83,7 @@ def simulation(iteration: int) -> None:
             reduced_functional, bounds=(psi_lb, psi_ub)
         )
 
-        minimisation_parameters["Status Test"]["Gradient Tolerance"] = 5e-4
+        minimisation_parameters["Status Test"]["Gradient Tolerance"] = 3e-4
         minimisation_parameters["Status Test"]["Iteration Limit"] = 50
         optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
         optimiser.add_callback(callback, psi_control, psi_opt, optimisation_file)

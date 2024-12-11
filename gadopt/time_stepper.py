@@ -22,14 +22,14 @@ class TimeIntegratorBase(ABC):
     """Defines the API for all time integrators."""
 
     @abstractmethod
-    def advance(self, t: float, update_forcings: Callable | None = None):
+    def advance(self, update_forcings: Callable | None = None, t: float | None = None):
         """Advances equations for one time step.
 
         Args:
+          update_forcings:
+            Callable updating any time-dependent equation forcings
           t:
             Current simulation time
-          update_forcings:
-            Callable allowing to update any time-dependent equation forcings
 
         """
         raise NotImplementedError
@@ -108,7 +108,10 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
 
     @abstractmethod
     def solve_stage(
-        self, i_stage: int, t: float, update_forcings: Callable | None = None
+        self,
+        i_stage: int,
+        update_forcings: Callable | None = None,
+        t: float | None = None,
     ):
         """Solves a single stage of step from t to t+dt.
 
@@ -117,13 +120,15 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         """
         raise NotImplementedError
 
-    def advance(self, t: float, update_forcings: Callable | None = None) -> None:
+    def advance(
+        self, update_forcings: Callable | None = None, t: float | None = None
+    ) -> None:
         """Advances equations for one time step."""
         if not self._initialised:
             self.initialise(self.solution)
 
         for i in range(self.n_stages):
-            self.solve_stage(i, t, update_forcings)
+            self.solve_stage(i, update_forcings, t)
 
         self.get_final_solution()
 
@@ -216,11 +221,13 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         if self._nontrivial and i_stage > 0:
             self.solution += self.sol_expressions[i_stage]
 
-    def solve_tendency(self, i_stage, t, update_forcings=None) -> None:
+    def solve_tendency(self, i_stage, update_forcings, t) -> None:
         """Evaluates the tendency of i-th stage"""
         if self._nontrivial:
-            if update_forcings is not None:
+            if update_forcings is not None and t is not None:
                 update_forcings(t + self.c[i_stage] * self.dt)
+            elif update_forcings is not None:
+                update_forcings()
 
             self.solver[i_stage].solve()
 
@@ -231,9 +238,9 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
 
         self.solution_old.assign(self.solution)
 
-    def solve_stage(self, i_stage, t, update_forcings=None) -> None:
+    def solve_stage(self, i_stage, update_forcings, t) -> None:
         self.update_solution(i_stage)
-        self.solve_tendency(i_stage, t, update_forcings)
+        self.solve_tendency(i_stage, update_forcings, t)
 
 
 class DIRKGeneric(RungeKuttaTimeIntegrator):
@@ -346,7 +353,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         """
         self.solution.assign(self.solution_old + self.sol_expressions[i_stage])
 
-    def solve_tendency(self, i_stage, t, update_forcings=None) -> None:
+    def solve_tendency(self, i_stage, update_forcings, t) -> None:
         """Evaluates the tendency of i-th stage"""
         if i_stage == 0:
             # NOTE: solution may have changed in coupled system
@@ -357,15 +364,18 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         if not self._initialised:
             raise ValueError("Time integrator {:} is not initialised".format(self.name))
 
-        if update_forcings is not None:
+        if update_forcings is not None and t is not None:
             update_forcings(t + self.c[i_stage] * self.dt)
+        elif update_forcings is not None:
+            update_forcings()
+
         self.solver[i_stage].solve()
 
     def get_final_solution(self) -> None:
         self.solution.assign(self.final_sol_expr)
 
-    def solve_stage(self, i_stage, t, update_forcings=None) -> None:
-        self.solve_tendency(i_stage, t, update_forcings)
+    def solve_stage(self, i_stage, update_forcings, t) -> None:
+        self.solve_tendency(i_stage, update_forcings, t)
         self.update_solution(i_stage)
 
 

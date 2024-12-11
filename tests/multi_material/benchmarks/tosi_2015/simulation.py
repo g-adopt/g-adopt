@@ -5,13 +5,12 @@ A community benchmark for viscoplastic thermal convection in a 2‐D square box.
 Geochemistry, Geophysics, Geosystems, 16(7), 2175-2196.
 """
 
-from functools import partial
-
 import firedrake as fd
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
+
+import gadopt as ga
 
 from .materials import material
 
@@ -41,7 +40,7 @@ def diagnostics(simu_time, geo_diag, diag_vars, output_path):
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(
-            f"{output_path}/output_{checkpoint_restart}_check", diag_fields=diag_fields
+            f"{output_path}/output_{checkpoint_restart}_{tag}", diag_fields=diag_fields
         )
 
 
@@ -67,9 +66,13 @@ def plot_diagnostics(output_path):
         ax[1, 1].plot(diag_fields["output_time"], diag_fields["min_visc"])
         ax[1, 2].plot(diag_fields["output_time"], diag_fields["max_visc"])
 
-        fig.savefig(f"{output_path}/diagnostics.pdf", dpi=300, bbox_inches="tight")
+        fig.savefig(
+            f"{output_path}/diagnostics_{tag}.pdf", dpi=300, bbox_inches="tight"
+        )
 
 
+# A simulation name tag
+tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
 
@@ -80,25 +83,25 @@ domain_dims = (1, 1)
 mesh_gen = "firedrake"
 mesh_elements = (64, 64)
 
-# Parameters to initialise level sets
-material_interface_y = 0.5
-interface_slope = 0
-# The following two lists must be ordered such that, unpacking from the end, each
-# pair of arguments enables initialising a level set whose 0-contour corresponds to
-# the entire interface between a given material and the remainder of the numerical
-# domain. By convention, the material thereby isolated occupies the positive side
-# of the signed-distance level set.
-initialise_signed_distance = [
-    partial(isd.isd_simple_curve, domain_dims[0], isd.straight_line)
-]
-isd_params = [(interface_slope, material_interface_y)]
+# Parameters to initialise level set
+interface_coords_x = np.array([0.0, domain_dims[0]])
+interface_args = (interface_slope := 0, interface_coord_y := 0.5)
+# Generate keyword arguments to define the signed-distance function
+signed_distance_kwargs = ga.curve_interface(
+    interface_coords_x, curve="line", curve_args=interface_args
+)
+# The following list must be ordered such that, unpacking from the end, each dictionary
+# contains the keyword arguments required to initialise the signed-distance array
+# corresponding to the interface between a given material and the remainder of the
+# numerical domain (all previous materials excluded). By convention, the material thus
+# isolated occupies the positive side of the signed-distance array.
+signed_distance_kwargs_list = [signed_distance_kwargs]
 
-# Material ordering must follow the logic implemented in the above two lists. In
-# other words, the last material in the below list corresponds to the portion of
-# the numerical domain entirely isolated by the level set initialised using the
-# last pair of arguments in the above two lists. The first material in the below list
-# must, therefore, occupy the negative side of the signed-distance level set initialised
-# from the first pair of arguments above.
+# Material ordering must follow the logic implemented in the above list. In other words,
+# the last material in the below list must correspond to the portion of the numerical
+# domain isolated by the signed-distance array calculated using the last dictionary in
+# the above list. The first material in the below list will, therefore, occupy the
+# negative side of the signed-distance array calculated from the first dictionary above.
 materials = [material, material]
 
 # Approximation parameters
@@ -116,7 +119,7 @@ stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 initial_timestep = 1e-6
 dump_period = 1e-3
 checkpoint_period = 5
-steady_state_threshold = 1e-6
+steady_state_threshold = 1e-5
 
 # Diagnostic objects
 diag_fields = {

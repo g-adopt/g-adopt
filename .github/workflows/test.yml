@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - update_approx
   pull_request:
   workflow_dispatch:
 

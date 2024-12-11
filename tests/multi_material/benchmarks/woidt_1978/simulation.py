@@ -1,17 +1,17 @@
 """Compositional benchmark.
-Van Keken, P. E., King, S. D., Schmeling, H., Christensen, U. R., Neumeister, D.,
-& Doin, M. P. (1997).
-A comparison of methods for the modeling of thermochemical convection.
-Journal of Geophysical Research: Solid Earth, 102(B10), 22477-22495.
+Woidt, W. D. (1978).
+Finite element calculations applied to salt dome analysis.
+Tectonophysics, 50(2-3), 369-386.
 """
 
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
+from scipy.constants import g as g
 
 import gadopt as ga
 
-from .materials import buoyant_material, dense_material
+from .materials import overburden, salt
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
@@ -33,31 +33,15 @@ def diagnostics(simu_time, geo_diag, diag_vars, output_path):
 
 def plot_diagnostics(output_path):
     if MPI.COMM_WORLD.rank == 0:
-        rms_vel_van_keken = np.loadtxt("data/pvk80_001.vrms.dat")
-        entr_van_keken = np.loadtxt("data/pvk80_001.entr.dat")
-
         fig, ax = plt.subplots(1, 2, figsize=(18, 10), constrained_layout=True)
 
         ax[0].grid()
         ax[1].grid()
 
-        ax[0].set_xlabel("Time (non-dimensional)")
-        ax[1].set_xlabel("Time (non-dimensional)")
-        ax[0].set_ylabel("Root-mean-square velocity (non-dimensional)")
+        ax[0].set_xlabel("Time (Myr)")
+        ax[1].set_xlabel("Time (Myr)")
+        ax[0].set_ylabel("Root-mean-square velocity (m/s)")
         ax[1].set_ylabel("Entrainment (non-dimensional)")
-
-        ax[0].plot(
-            rms_vel_van_keken[:, 0],
-            rms_vel_van_keken[:, 1],
-            linestyle="dotted",
-            label="PvK (van Keken et al., 1997)",
-        )
-        ax[1].plot(
-            entr_van_keken[:, 0],
-            entr_van_keken[:, 1],
-            linestyle="dotted",
-            label="PvK (van Keken et al., 1997)",
-        )
 
         ax[0].plot(
             diag_fields["output_time"],
@@ -80,6 +64,18 @@ def plot_diagnostics(output_path):
         )
 
 
+def symmetric_cubic(x, centre, support, amplitude, vertical_shift):
+    """Symmetric cubic with a support, an amplitude, and a vertical shift"""
+    return (
+        np.where(
+            abs(x - centre) > support / 2,
+            0,
+            amplitude * (support / 2 - abs(x - centre)) ** 3 / (support / 2) ** 3,
+        )
+        + vertical_shift
+    )
+
+
 # A simulation name tag
 tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
@@ -88,20 +84,21 @@ checkpoint_restart = 0
 # Mesh resolution should be sufficient to capture eventual small-scale dynamics
 # in the neighbourhood of material interfaces tracked by the level-set approach.
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-domain_dims = (0.9142, 1)
+domain_dims = (64e3, 4.8e3)
 mesh_gen = "firedrake"
-mesh_elements = (128, 128)
+mesh_elements = (512, 32)
 
 # Parameters to initialise level set
-interface_coords_x = np.linspace(0, domain_dims[0], 1000)
+interface_coords_x = np.array([0.0, domain_dims[0]])
 interface_args = (
-    interface_deflection := 0.02,
-    perturbation_wavelentgh := 2 * domain_dims[0],
-    initial_interface_y := 0.2,
+    perturbation_x := domain_dims[0] / 2,
+    perturbation_support := 6e3,
+    interface_deflection := 1,
+    initial_interface_y := 2.5e3,
 )
 # Generate keyword arguments to define the signed-distance function
 signed_distance_kwargs = ga.curve_interface(
-    interface_coords_x, curve="cosine", curve_args=interface_args
+    interface_coords_x, curve=symmetric_cubic, curve_args=interface_args
 )
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
@@ -115,23 +112,24 @@ signed_distance_kwargs_list = [signed_distance_kwargs]
 # domain isolated by the signed-distance array calculated using the last dictionary in
 # the above list. The first material in the below list will, therefore, occupy the
 # negative side of the signed-distance array calculated from the first dictionary above.
-materials = [buoyant_material, dense_material]
+materials = [salt, overburden]
 
 # Approximation parameters
-dimensional = False
+dimensional = True
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
-stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"u": 0}, 4: {"u": 0}}
+stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"u": 0}, 4: {"uy": 0}}
 
 # Timestepping objects
-initial_timestep = 1
-dump_period = 10
+myr_to_sec = 1e6 * 365.25 * 8.64e4
+initial_timestep = 0.01 * myr_to_sec
+dump_period = 0.1 * myr_to_sec
 checkpoint_period = 5
-time_end = 2000
+time_end = 21.3 * myr_to_sec
 
 # Diagnostic objects
 diag_fields = {"output_time": [], "rms_velocity": [], "entrainment": []}
-entrainment_height = 0.2
+entrainment_height = initial_interface_y
 diag_params = {
     "domain_dim_x": domain_dims[0],
     "initial_interface_y": initial_interface_y,

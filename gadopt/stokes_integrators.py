@@ -646,7 +646,6 @@ def create_stokes_nullspace(
 
     Returns:
       A Firedrake mixed vector space basis incorporating the null space components
-
     """
     # approximation and top_subdomain_id are both needed when calculating right
     # nullspace for ala

@@ -255,12 +255,14 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         """Optional instructions to execute right after a solve."""
         pass
 
-    def solve(self, t: Number = 0, update_forcings: Callable | None = None) -> None:
+    def solve(
+        self, update_forcings: Callable | None = None, t: float | None = None
+    ) -> None:
         """Advances solver in time."""
         if not self._solver_ready:
             self.setup_solver()
 
-        self.ts.advance(t, update_forcings)
+        self.ts.advance(update_forcings, t)
 
         self.solver_callback()
 

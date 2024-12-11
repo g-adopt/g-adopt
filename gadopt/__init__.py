@@ -9,8 +9,13 @@ from firedrake import *
 from .approximations import Approximation as Approximation
 from .diagnostics import GeodynamicalDiagnostics as GeodynamicalDiagnostics
 from .level_set_tools import LevelSetSolver as LevelSetSolver
+from .level_set_tools import conservative_level_set as conservative_level_set
+from .level_set_tools import curve_interface as curve_interface
 from .level_set_tools import entrainment as entrainment
+from .level_set_tools import interface_thickness as interface_thickness
 from .level_set_tools import material_field as material_field
+from .level_set_tools import rectangle_interface as rectangle_interface
+from .level_set_tools import signed_distance as signed_distance
 from .limiter import VertexBasedP1DGLimiter as VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC as FreeSurfaceMassInvPC
 from .preconditioners import SPDAssembledPC as SPDAssembledPC
@@ -19,8 +24,6 @@ from .stokes_integrators import ViscoelasticSolver as ViscoelasticSolver
 from .stokes_integrators import create_stokes_nullspace as create_stokes_nullspace
 from .time_stepper import BackwardEuler as BackwardEuler
 from .time_stepper import ImplicitMidpoint as ImplicitMidpoint
-from .time_stepper import eSSPRKs3p3 as eSSPRKs3p3
-from .time_stepper import eSSPRKs10p3 as eSSPRKs10p3
 from .transport_solver import EnergySolver as EnergySolver
 from .transport_solver import GenericTransportSolver as GenericTransportSolver
 from .utility import InteriorBC as InteriorBC
