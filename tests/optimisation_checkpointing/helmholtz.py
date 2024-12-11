@@ -22,10 +22,12 @@ def run(optimiser, rf, rank, filename):
 
 
 mesh = UnitIntervalMesh(10)
+num_processes = mesh.comm.size
+mesh_checkpoint = f"mesh_helmholtz_np{num_processes}.h5"
 # create a checkpointable mesh by writing to disk and restoring
-with CheckpointFile("mesh_helmholtz.h5", "w") as f:
+with CheckpointFile(mesh_checkpoint, "w") as f:
     f.save_mesh(mesh)
-with CheckpointFile("mesh_helmholtz.h5", "r") as f:
+with CheckpointFile(mesh_checkpoint, "r") as f:
     mesh = f.load_mesh("firedrake_default")
 
 V = FunctionSpace(mesh, "CG", 1)
@@ -54,22 +56,28 @@ minimisation_problem = MinimizationProblem(rf, bounds=(T_lb, T_ub))
 minimisation_parameters["Status Test"]["Iteration Limit"] = 10
 
 # run full optimisation, checkpointing every iteration
+checkpoint_dir = f"optimisation_checkpoint_np{num_processes}"
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
-    checkpoint_dir="optimisation_checkpoint",
+    checkpoint_dir=checkpoint_dir,
 )
-run(optimiser, rf, mesh.comm.rank, "full_optimisation.dat")
+run(optimiser, rf, mesh.comm.rank, f"full_optimisation_np{num_processes}.dat")
 
 # re-initialise optimiser, and restore from checkpoint 5
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
-    checkpoint_dir="optimisation_checkpoint",
+    checkpoint_dir=checkpoint_dir,
     auto_checkpoint=False,
 )
 optimiser.restore(5)
-run(optimiser, rf, mesh.comm.rank, "restored_optimisation_from_it_5.dat")
+run(
+    optimiser,
+    rf,
+    mesh.comm.rank,
+    f"restored_optimisation_from_it_5_np{num_processes}.dat",
+)
 
 # re-initialise optimiser, and restore from last stored checkpoint
 
@@ -77,8 +85,13 @@ minimisation_parameters["Status Test"]["Iteration Limit"] = 15
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
-    checkpoint_dir="optimisation_checkpoint",
+    checkpoint_dir=checkpoint_dir,
     auto_checkpoint=False,
 )
 optimiser.restore()
-run(optimiser, rf, mesh.comm.rank, "restored_optimisation_from_last_it.dat")
+run(
+    optimiser,
+    rf,
+    mesh.comm.rank,
+    f"restored_optimisation_from_last_it_np{num_processes}.dat",
+)

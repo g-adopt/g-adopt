@@ -108,6 +108,8 @@ X = SpatialCoordinate(mesh)
 
 # +
 # Layer properties from Spada et al. (2011)
+# N.B.We  have modified the viscosity of the Lithosphere viscosity from
+# Spada et al. (2011) because we are using coarse grid resolution.
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 rho_values = [3037, 3438, 3871, 4978]
 G_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
@@ -238,7 +240,9 @@ mu_scaled = set_heterogenous_viscosity(mu_scaled)
 mu = Function(mu_scaled, name="Viscosity").interpolate(1e23 * 10**mu_scaled)
 # -
 
-# Now let's plot the normalised viscosity viscosity field on a log plot (we have divided the viscosity by 1x10$^{23}$ Pa s). Again although we are using a coarse mesh we are able to capture the key features of the viscosity field.
+# Now let's plot the normalised viscosity viscosity field on a log plot (we have divided
+# the viscosity by 1x10$^{23}$ Pa s). Again although we are using a coarse mesh we are
+# able to capture the key features of the viscosity field.
 
 # + tags=["active-ipynb"]
 # # Read the PVD file

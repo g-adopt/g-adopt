@@ -1,5 +1,5 @@
-cases := 2d_cylindrical_TALA_DG adjoint analytical_comparisons Drucker-Prager_rheology
-cases += free_surface multi_material optimisation_checkpointing
+cases := 2d_cylindrical_TALA_DG adjoint analytical_comparisons base_gmsh
+cases += Drucker-Prager_rheology free_surface multi_material optimisation_checkpointing
 cases += scalar_advection_diffusion viscoelastic viscoplastic_case_DG
 long_cases := analytical_comparisons parallel_scaling
 
