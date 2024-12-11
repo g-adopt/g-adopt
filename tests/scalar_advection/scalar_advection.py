@@ -105,4 +105,4 @@ L2_err = sqrt(assemble((q - q_init)*(q - q_init)*dx))
 L2_init = sqrt(assemble(q_init*q_init*dx))
 print(L2_err/L2_init)
 
-np.savetxt(f"final_error.log", [L2_err/L2_init])
+np.savetxt("final_error.log", [L2_err/L2_init])

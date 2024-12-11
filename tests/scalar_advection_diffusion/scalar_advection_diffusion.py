@@ -89,4 +89,4 @@ while t < T - 0.5*dt:
 
 # Write out integrated scalar for testing
 L2 = sqrt(assemble(q**2*dx))
-np.savetxt(f"integrated_q.log", [L2])
+np.savetxt("integrated_q.log", [L2])
