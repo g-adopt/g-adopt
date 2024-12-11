@@ -68,11 +68,6 @@ q_bottom = 0.0
 bcs = {3: {'T': q_bottom}, 4: {'T': q_top}}
 energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
 
-# Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
-nubar_outfile = VTKFile("CG_SUadvdiff_nubar.pvd")
-nubar_outfile.write(nubar)
-
 # Here is the time stepping loop, with an output every 20 steps.
 t = 0.0
 step = 0
@@ -86,3 +81,7 @@ while t < T - 0.5*dt:
     if step % 10 == 0:
         outfile.write(q)
         log("t=", t)
+
+# Write out integrated scalar for testing
+L2 = sqrt(assemble(q**2*dx))
+np.savetxt(f"integrated_q.log", [L2])
