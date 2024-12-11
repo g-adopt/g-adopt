@@ -1,6 +1,6 @@
-# Demo for scalar advection-diffusion - this is adapted from the scalar
-# advection demo again using G-ADOPT's Energy solver and a CG discretisation
-# with Streamline Upwind (SU) stabilisation but here we introduce some explicit diffusion.
+# Demo for scalar advection-diffusion - this is adapted from the scalar advection demo
+# again using G-ADOPT's GenericTransportSolver and a CG discretisation with Streamline
+# Upwind (SU) stabilisation, albeit here we introduce some explicit diffusion.
 
 from gadopt import *
 from gadopt.time_stepper import DIRK33
@@ -57,23 +57,28 @@ outfile.write(q)
 T = 10.
 dt = T/600.0
 
+# Use G-ADOPT's GenericTransportSolver to advect the tracer. We use the diagonally
+# implicit DIRK33 Runge-Kutta method for timestepping. 'g' means that the boundary
+# conditions will be applied strongly by the solver.
+terms = ["advection", "diffusion"]
+eq_attrs = {"diffusivity": kappa, "u": u}
+g_top = 1.0
+g_bottom = 0.0
+bcs = {3: {"g": g_bottom}, 4: {"g": g_top}}
+adv_diff_solver = GenericTransportSolver(
+    terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_diffusivity=kappa
+)
 
-# Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
-# the choice of units is up to the user. We use the diagonaly implicit DIRK33 Runge-Kutta
-# method for timestepping. 'T' means that the boundary conditions will be applied strongly
-# by the energy solver.
-approximation = BoussinesqApproximation(Ra=1, kappa=kappa)
-q_top = 1.0
-q_bottom = 0.0
-bcs = {3: {'T': q_bottom}, 4: {'T': q_top}}
-energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
+# Get nubar (additional SU diffusion) for plotting
+nubar = Function(Q).interpolate(adv_diff_solver.equation.su_nubar)
+nubar_outfile = VTKFile("CG_SUadvdiff_nubar.pvd")
+nubar_outfile.write(nubar)
 
 # Here is the time stepping loop, with an output every 20 steps.
 t = 0.0
 step = 0
 while t < T - 0.5*dt:
-
-    energy_solver.solve()
+    adv_diff_solver.solve()
 
     step += 1
     t += dt
