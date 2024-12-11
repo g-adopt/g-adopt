@@ -5,11 +5,10 @@ from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
     ExtendedBoussinesqApproximation,
-    TruncatedAnelasticLiquidApproximation,
     SmallDisplacementViscoelasticApproximation,
+    TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
-from .energy_solver import EnergySolver
 from .level_set_tools import (
     LevelSetSolver,
     Material,
@@ -19,8 +18,19 @@ from .level_set_tools import (
 )
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
-from .stokes_integrators import StokesSolver, ViscoelasticStokesSolver, create_stokes_nullspace
-from .time_stepper import BackwardEuler, CrankNicolsonRK, ImplicitMidpoint, eSSPRKs3p3, eSSPRKs10p3
+from .stokes_integrators import (
+    StokesSolver,
+    ViscoelasticStokesSolver,
+    create_stokes_nullspace,
+)
+from .time_stepper import (
+    BackwardEuler,
+    CrankNicolsonRK,
+    ImplicitMidpoint,
+    eSSPRKs3p3,
+    eSSPRKs10p3,
+)
+from .transport_solver import EnergySolver, GenericTransportSolver
 from .utility import (
     InteriorBC,
     LayerAveraging,

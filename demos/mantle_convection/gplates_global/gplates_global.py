@@ -44,7 +44,6 @@ mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
-domain_volume = assemble(1*dx(domain=mesh))  # Required for a diagnostic calculation.
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)

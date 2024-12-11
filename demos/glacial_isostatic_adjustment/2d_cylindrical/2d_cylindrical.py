@@ -500,7 +500,8 @@ for timestep in range(max_timesteps+1):
     plog.log_str(
         f"{timestep} {float(time)} {float(dt)} "
         f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-        f"{vertical_displacement.dat.data.min()} {vertical_displacement.dat.data.max()}"
+        f"{vertical_displacement.dat.data.min()} "
+        f"{vertical_displacement.dat.data.max()} "
     )
 
 # Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the

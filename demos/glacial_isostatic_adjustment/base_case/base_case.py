@@ -224,6 +224,7 @@ from gadopt.utility import step_func
 # Firedrake. By contrast, a non-Cartesian geometry is assumed to have gravity
 # pointing in the radially inward direction.
 #
+
 # Boundaries are automatically tagged by the built-in meshes supported by Firedrake. For the `RectangleMesh` being used here, tag 1 corresponds
 # to the plane $x=0$; 2 to the $x=L$ plane; 3 to the $y=0$ plane; and 4 to the $y=D$ plane. The `get_boundary_ids` function will inspect the mesh
 # to detect this and allow the boundaries to be referred to more intuitively (e.g. `boundary.left`, `boundary.top`, etc.).

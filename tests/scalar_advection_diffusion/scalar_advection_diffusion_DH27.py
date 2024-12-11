@@ -59,26 +59,35 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     dt = 0.01
 
     # Set up boundary conditions
-    q_left = 0.0
-    q_right = 0.0
-    # 'T' sets strong dirichlet boundary conditions for G-ADOPT's energy solver
-    bcs = {1: {'T': q_left}, 2: {'T': q_right}}
+    g_left = 0.0
+    g_right = 0.0
+    # 'g' sets strong Dirichlet boundary conditions for G-ADOPT's transport solver
+    bcs = {1: {"g": g_left}, 2: {"g": g_right}}
 
-    # Use G-ADOPT's Energy Solver to advect the tracer. By setting the Rayleigh number to 1
-    # the choice of units is up to the user.
-    approximation = BoussinesqApproximation(Ra=1, kappa=kappa)
-    approximation.energy_source = Constant(1)  # Provide a source term to force the equations.
-
-    energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=su_advection)
+    # Use G-ADOPT's GenericTransportSolver to advect the tracer. The system is
+    # considered non-dimensional and controlled only by the thermal diffusivity and heat
+    # source values. We use the diagonally implicit DIRK33 Runge-Kutta method for
+    # timestepping.
+    terms = ["advection", "diffusion", "source"]
+    eq_attrs = {"diffusivity": kappa, "source": 1, "u": u}
+    adv_diff_solver = GenericTransportSolver(
+        terms,
+        q,
+        dt,
+        DIRK33,
+        eq_attrs=eq_attrs,
+        bcs=bcs,
+        su_diffusivity=kappa if su_advection else None,
+    )
 
     steady_state_tolerance = 1e-7  # this may need tweaking for different length runs/Pe values
     t = 0.0
     step = 0
     while t < T - 0.5*dt:
-        energy_solver.solve()
+        adv_diff_solver.solve()
 
         # Calculate L2-norm of change in temperature:
-        maxchange = sqrt(assemble((q - energy_solver.T_old)**2 * dx))
+        maxchange = sqrt(assemble((q - adv_diff_solver.solution_old) ** 2 * dx))
         log("maxchange", maxchange)
 
         step += 1
@@ -89,7 +98,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
             outfile.write(q)
 
         if maxchange < steady_state_tolerance:
-            log("Steady-state acheieved -- exiting time-step loop")
+            log("Steady-state achieved -- exiting time-step loop")
             break
 
         # analytical solution from equation 2.23 in Chapter 2 Steady transport problems
