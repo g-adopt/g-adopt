@@ -99,10 +99,11 @@ approximation = Approximation(
 # advances in time. We specify the initial time, initial time step $\Delta t$, and
 # output frequency (in time units).
 
+myr_to_seconds = 1e6 * 365.25 * 8.64e4
 time_now = 0  # Initial time
 delta_t = Function(R).assign(1e11)  # Initial time step
 # Frequency (based on simulation time) at which to output
-output_frequency = 8e5 * 365.25 * 8.64e4
+output_frequency = 0.8 * myr_to_seconds
 t_adapt = TimestepAdaptor(
     delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )  # Current level-set advection requires a CFL condition that should not exceed 0.6.
@@ -143,7 +144,7 @@ level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini
 
 # +
 output_file = VTKFile("output.pvd")
-output_file.write(*z.subfunctions, psi, time=time_now)
+output_file.write(*z.subfunctions, psi, time=time_now / myr_to_seconds)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms slab_tip_depth")
@@ -159,7 +160,7 @@ from gadopt.level_set_tools import min_max_height  # noqa: E402
 
 step = 0  # A counter to keep track of looping
 output_counter = 0  # A counter to keep track of outputting
-time_end = 6e7 * 365.25 * 8.64e4
+time_end = 60 * myr_to_seconds
 while True:
     # Update timestep
     if time_end - time_now < output_frequency:
@@ -177,13 +178,13 @@ while True:
 
     # Log diagnostics
     plog.log_str(
-        f"{step} {time_now} {float(delta_t)} {gd.u_rms()}"
+        f"{step} {time_now} {float(delta_t)} {gd.u_rms()} "
         f"{(ly - min_max_height(psi, epsilon, side=1, mode='min')) / 1e3}"
     )
 
     # Write output
     if time_now >= output_counter * output_frequency:
-        output_file.write(*z.subfunctions, psi, time=time_now)
+        output_file.write(*z.subfunctions, psi, time=time_now / myr_to_seconds)
         output_counter += 1
 
     # Check if simulation has completed

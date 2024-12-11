@@ -1,11 +1,13 @@
 cases := $(wildcard benchmarks/*)
+archive := output_0_reference.npz
+outputs := $(foreach case,$(cases),$(case)/${archive})
 ncpus := 8
 
-all: $(cases)
+all: $(outputs)
 
-$(cases):
-	$(info running $@ multi-material benchmark)
-	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 run_benchmark.py $@
+%/${archive}: %
+	$(info running $(notdir $<) multi-material benchmark)
+	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 run_benchmark.py $<
 
 clean:
 	rm -rf __pycache__
