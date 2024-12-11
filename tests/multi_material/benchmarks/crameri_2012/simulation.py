@@ -16,7 +16,9 @@ from .materials import air, lithosphere, mantle
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
-    max_topo = min_max_height(diag_vars["level_set"][1], diag_vars["epsilon"], 0, "max")
+    max_topo = min_max_height(
+        diag_vars["level_set"][1], diag_vars["epsilon"], side=0, mode="max"
+    )
     max_topo_analytical = surface_deflection / 1e3 * np.exp(relaxation_rate * simu_time)
 
     diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
@@ -71,7 +73,7 @@ mesh_gen = "gmsh"
 interface_coords_x = np.linspace(0.0, domain_dims[0], int(domain_dims[0] / 1e3) + 1)
 interface_args = (
     surface_deflection := 7e3,
-    surface_perturbation_wavelentgh := domain_dims[0],
+    surface_perturbation_wavelength := domain_dims[0],
     surface_coord_y := 7e5,
 )
 # Generate keyword arguments to define the signed-distance function

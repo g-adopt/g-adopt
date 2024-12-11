@@ -15,7 +15,7 @@ from .materials import overburden, salt
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
-    diag_fields["output_time"].append(simu_time)
+    diag_fields["output_time"].append(simu_time / myr_to_sec)
     diag_fields["rms_velocity"].append(geo_diag.u_rms())
     diag_fields["entrainment"].append(
         ga.entrainment(
@@ -89,7 +89,7 @@ mesh_gen = "firedrake"
 mesh_elements = (512, 32)
 
 # Parameters to initialise level set
-interface_coords_x = np.array([0.0, domain_dims[0]])
+interface_coords_x = np.linspace(0.0, domain_dims[0], int(domain_dims[0] / 1e3) + 1)
 interface_args = (
     perturbation_x := domain_dims[0] / 2,
     perturbation_support := 6e3,

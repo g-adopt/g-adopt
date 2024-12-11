@@ -62,66 +62,57 @@ def generate_mesh(mesh_path):
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
-    epsilon = float(diag_vars["epsilon"])
     level_set = diag_vars["level_set"][0]
-    level_set_data = level_set.dat.data_ro_with_halos
-    coords_data = (
-        fd.Function(
-            fd.VectorFunctionSpace(level_set.ufl_domain(), level_set.ufl_element())
-        )
-        .interpolate(fd.SpatialCoordinate(level_set))
-        .dat.data_ro_with_halos
-    )
+    epsilon = diag_vars["epsilon"]
 
-    mask_ls_outside = (
+    mesh = level_set.ufl_domain()
+    coords_space = fd.VectorFunctionSpace(mesh, level_set.ufl_element())
+    coords = fd.Function(coords_space).interpolate(mesh.coordinates)
+
+    coords_data = coords.dat.data_ro_with_halos
+    ls_data = level_set.dat.data_ro_with_halos
+    if isinstance(epsilon, float):
+        eps_data = epsilon * np.ones_like(ls_data)
+    else:
+        eps_data = epsilon.dat.data_ro_with_halos
+
+    mask_ls_out = (
         (coords_data[:, 0] <= domain_dims[0] / 2)
         & (coords_data[:, 1] < domain_dims[1] - lithosphere_thickness - 2e4)
         & (coords_data[:, 1] > domain_dims[1] - lithosphere_thickness - slab_length)
-        & (level_set_data < 0.5)
+        & (ls_data < 0.5)
     )
-    mask_ls_inside = (
+    mask_ls_in = (
         (coords_data[:, 0] <= domain_dims[0] / 2)
         & (coords_data[:, 1] < domain_dims[1] - lithosphere_thickness - 2e4)
         & (coords_data[:, 1] > domain_dims[1] - lithosphere_thickness - slab_length)
-        & (level_set_data >= 0.5)
+        & (ls_data >= 0.5)
     )
-    if mask_ls_outside.any():
-        ind_outside = coords_data[mask_ls_outside, 0].argmax()
-        hor_coord_outside = coords_data[mask_ls_outside, 0][ind_outside]
-        if not mask_ls_outside.all():
-            ver_coord_outside = coords_data[mask_ls_outside, 1][ind_outside]
-            mask_ver_coord = (
-                abs(coords_data[mask_ls_inside, 1] - ver_coord_outside) < 1e3
-            )
-            if mask_ver_coord.any():
-                ind_inside = coords_data[mask_ls_inside, 0][mask_ver_coord].argmin()
-                hor_coord_inside = coords_data[mask_ls_inside, 0][mask_ver_coord][
-                    ind_inside
-                ]
+    if mask_ls_out.any():
+        ind_out = coords_data[mask_ls_out, 0].argmax()
+        x_out = coords_data[mask_ls_out, 0][ind_out]
+        if not mask_ls_out.all():
+            y_out = coords_data[mask_ls_out, 1][ind_out]
+            mask_y = abs(coords_data[mask_ls_in, 1] - y_out) < 1e3
+            if mask_y.any():
+                ind_in = coords_data[mask_ls_in, 0][mask_y].argmin()
+                x_in = coords_data[mask_ls_in, 0][mask_y][ind_in]
 
-                ls_outside = max(
-                    1e-6, min(1 - 1e-6, level_set_data[mask_ls_outside][ind_outside])
-                )
-                sdls_outside = epsilon * np.log(ls_outside / (1 - ls_outside))
+                ls_out = max(1e-6, min(1 - 1e-6, ls_data[mask_ls_out][ind_out]))
+                eps_out = eps_data[mask_ls_out][ind_out]
+                sdls_out = eps_out * np.log(ls_out / (1 - ls_out))
 
-                ls_inside = max(
-                    1e-6,
-                    min(
-                        1 - 1e-6,
-                        level_set_data[mask_ls_inside][mask_ver_coord][ind_inside],
-                    ),
-                )
-                sdls_inside = epsilon * np.log(ls_inside / (1 - ls_inside))
+                ls_in = max(1e-6, min(1 - 1e-6, ls_data[mask_ls_in][mask_y][ind_in]))
+                eps_in = eps_data[mask_ls_in][mask_y][ind_in]
+                sdls_in = eps_in * np.log(ls_in / (1 - ls_in))
 
-                ls_dist = sdls_inside / (sdls_inside - sdls_outside)
-                hor_coord_interface = (
-                    ls_dist * hor_coord_outside + (1 - ls_dist) * hor_coord_inside
-                )
-                min_width = domain_dims[0] - 2 * hor_coord_interface
+                ls_dist = sdls_in / (sdls_in - sdls_out)
+                x_interface = ls_dist * x_out + (1 - ls_dist) * x_in
+                min_width = domain_dims[0] - 2 * x_interface
             else:
-                min_width = domain_dims[0] - 2 * hor_coord_outside
+                min_width = domain_dims[0] - 2 * x_out
         else:
-            min_width = domain_dims[0] - 2 * hor_coord_outside
+            min_width = domain_dims[0] - 2 * x_out
     else:
         min_width = np.inf
 

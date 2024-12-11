@@ -5,7 +5,7 @@
 # ------------
 
 # Here, we consider the spontaneous subduction benchmark presented in [Schmeling et al.
-# (2008)](https://).
+# (2008)](https://doi.org/10.1016/j.pepi.2008.06.028).
 # Inside a 2-D domain, a lithosphere sinks into the upper mantle under its own negative
 # buoyancy. Here we consider the scenario where the top boundary is modelled as a free
 # surface. We describe below how to implement this problem using G-ADOPT.
@@ -43,12 +43,12 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 # We now initialise the level-set field. All we have to provide to G-ADOPT is a
 # mathematical description of the interface location and use the available API. In this
 # case, the interface can be represented as a cosine. Under the hood, G-ADOPT uses the
-# `shapely` library to determine the signed-distance function associated with the
+# `Shapely` library to determine the signed-distance function associated with the
 # interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
 # from the signed-distance function.
 
-
 # +
+# Mathematical description of the interface location
 interface_coords = [
     (lx, ly),
     (1e6, ly),
@@ -58,16 +58,16 @@ interface_coords = [
     (lx, 6e5),
 ]
 boundary_coords = [(lx, ly)]
-signed_distance_kwargs = {
-    "interface_coordinates": interface_coords,
-    "interface_geometry": "Polygon",
-    "boundary_coordinates": boundary_coords,
-}
 
 # Initialise the level-set field. First, determine the signed-distance function at each
 # level-set node. Then, define the thickness of the hyperbolic tangent profile used in
 # the conservative level-set approach. Finally, overwrite level-set data array.
-signed_distance_array = signed_distance(psi, **signed_distance_kwargs)
+signed_distance_array = signed_distance(
+    psi,
+    interface_coordinates=interface_coords,
+    interface_geometry="Polygon",
+    boundary_coordinates=boundary_coords,
+)
 epsilon = interface_thickness(psi)
 psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 # -
@@ -82,13 +82,10 @@ psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 
 # +
 # Material fields defined based on each material value and location
-mu_slab = 1e23
-mu_mantle = 1e21
-mu = material_field(psi, [mu_mantle, mu_slab], interface="geometric")
-
-rho_slab = 3300
-rho_mantle = 3200
-rho_material = material_field(psi, [rho_mantle, rho_slab], interface="sharp")
+mu = material_field(psi, [mu_mantle := 1e21, mu_slab := 1e23], interface="geometric")
+rho_material = material_field(
+    psi, [rho_mantle := 3200, rho_slab := 3300], interface="sharp"
+)
 
 approximation = Approximation(
     "BA",
@@ -149,7 +146,9 @@ output_file = VTKFile("output.pvd")
 output_file.write(*z.subfunctions, psi, time=time_now)
 
 plog = ParameterLog("params.log", mesh)
-plog.log_str("step time dt slab_tip_depth")
+plog.log_str("step time dt u_rms slab_tip_depth")
+
+gd = GeodynamicalDiagnostics(z)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -178,8 +177,8 @@ while True:
 
     # Log diagnostics
     plog.log_str(
-        f"{step} {time_now} {float(delta_t)} "
-        f"{(ly - min_max_height(psi, epsilon, 1, 'min')) / 1e3}"
+        f"{step} {time_now} {float(delta_t)} {gd.u_rms()}"
+        f"{(ly - min_max_height(psi, epsilon, side=1, mode='min')) / 1e3}"
     )
 
     # Write output

@@ -21,7 +21,7 @@ def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
                 )
         else:
             checkpoint_file.save_function(field, name=field_name, idx=dump_counter)
-    checkpoint_file.set_attr("/", "Time", time_now)
+    checkpoint_file.set_attr("/", "time", time_now)
 
 
 def write_output(output_file):
@@ -31,7 +31,7 @@ def write_output(output_file):
     else:
         compo_rayleigh.interpolate(Ra_c)
     viscosity.interpolate(mu)
-    if args.benchmark == "trim_2023":
+    if benchmark == "trim_2023":
         simulation.internal_heating_rate(Q, time_now)
 
     output_file.write(
@@ -48,19 +48,21 @@ def write_output(output_file):
 parser = ArgumentParser()
 parser.add_argument("benchmark")
 args = parser.parse_args()
-simulation = import_module(f"benchmarks.{args.benchmark}.simulation")
+
+benchmark = args.benchmark.split("/")[-1]
+simulation = import_module(f"{args.benchmark.rstrip("/").replace("/", ".")}.simulation")
 
 # Set benchmark paths
-benchmark_path = Path(f"benchmarks/{args.benchmark}")
+benchmark_path = Path(args.benchmark)
 mesh_path = benchmark_path / "mesh"
 output_path = benchmark_path / "outputs"
 
 if simulation.checkpoint_restart:  # Restore mesh and key functions
     with fd.CheckpointFile(
-        output_path / f"checkpoint_{simulation.restart_from_checkpoint}.h5", "r"
+        str(output_path / f"checkpoint_{simulation.checkpoint_restart}.h5"), "r"
     ) as h5_check:
         mesh = h5_check.load_mesh("firedrake_default")
-        dump_counter = h5_check.get_timestepping_history(mesh, "Time")["index"][-1]
+        dump_counter = h5_check.get_timestepping_history(mesh, "Stokes")["index"][-1]
         stokes_function = h5_check.load_function(mesh, "Stokes", idx=dump_counter)
         temperature = h5_check.load_function(mesh, "Temperature", idx=dump_counter)
 
@@ -75,10 +77,10 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
             except RuntimeError:
                 break
 
-        time_now = h5_check.get_attr("/", "Time")
+        time_now = h5_check.get_attr("/", "time")
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if args.benchmark == "trim_2023":
+    if benchmark == "trim_2023":
         epsilon = 1 / 2 / simulation.k
     else:
         epsilon = ga.interface_thickness(level_set[0])
@@ -119,7 +121,7 @@ else:  # Initialise mesh and key functions
     ]
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if args.benchmark == "trim_2023":
+    if benchmark == "trim_2023":
         epsilon = 1 / 2 / simulation.k
     else:
         epsilon = ga.interface_thickness(level_set[0])
@@ -150,7 +152,7 @@ if simulation.dimensional:
     rho_material = ga.material_field(
         level_set,
         [material.rho for material in simulation.materials],
-        interface="arithmetic" if args.benchmark == "woidt_1978" else "sharp",
+        interface="arithmetic" if benchmark == "woidt_1978" else "sharp",
     )
     density = fd.Function(func_space_output, name="Density")
     output_fields.append(density)
@@ -160,7 +162,7 @@ else:
     Ra_c = ga.material_field(
         level_set,
         [material.Ra_c for material in simulation.materials],
-        interface="arithmetic" if args.benchmark == "trim_2023" else "sharp",
+        interface="arithmetic" if benchmark == "trim_2023" else "sharp",
     )
     compo_rayleigh = fd.Function(func_space_output, name="Ra_c")
     output_fields.append(compo_rayleigh)
@@ -169,13 +171,13 @@ else:
 mu = ga.material_field(
     level_set,
     [material.mu(velocity, temperature) for material in simulation.materials],
-    interface="sharp" if args.benchmark == "schmalholz_2011" else "geometric",
+    interface="sharp" if benchmark == "schmalholz_2011" else "geometric",
 )
 viscosity = fd.Function(func_space_output, name="Viscosity")
 output_fields.append(viscosity)
 approximation_parameters["mu"] = mu
 
-if args.benchmark == "trim_2023":
+if benchmark == "trim_2023":
     Q = fd.Function(temperature.function_space(), name="Internal heating rate")
     output_fields.append(Q)
     approximation_parameters["Q"] = Q
@@ -225,7 +227,7 @@ if hasattr(simulation, "steady_state_threshold"):
 # Set up level-set solvers
 adv_kwargs = {"u": velocity, "timestep": timestep}
 reini_kwargs = {"epsilon": epsilon}
-if args.benchmark == "tosi_2015":
+if benchmark == "tosi_2015":
     reini_kwargs["frequency"] = 10
 level_set_solver = [
     ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
@@ -263,7 +265,7 @@ geo_diag = ga.GeodynamicalDiagnostics(
     stokes_function, temperature, bottom_id=3, top_id=4
 )
 
-if args.benchmark == "trim_2023":
+if benchmark == "trim_2023":
     # Omit level-set reinitialisation
     disable_reinitialisation = True
     # Function to be coupled with the energy solver

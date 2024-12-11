@@ -117,7 +117,7 @@ def signed_distance(
     Two scenarios are currently implemented:
     - The material interface is described by a mathematical function y = f(x). In this
       case, `interface_geometry` should be "LineString" and `interface_callable` must be
-      provided along with any `interface_args` to implementat of the aforementioned
+      provided along with any `interface_args` to implement the aforementioned
       mathematical function.
     - The material interface is a polygon, and `interface_geometry` takes the value
       "Polygon". In this case, `interface_coordinates` must exclude the polygon sides
@@ -642,7 +642,7 @@ def entrainment(
 
 
 def min_max_height(
-    level_set: fd.Function, epsilon: float | fd.Function, side: int, mode: str
+    level_set: fd.Function, epsilon: float | fd.Function, *, side: int, mode: str
 ) -> float:
     """Calculates the maximum or minimum height of a material interface.
 

@@ -13,14 +13,13 @@
 # -
 
 # Here, we consider the entrainment of a thin, compositionally dense layer by thermal
-# convection presented in [van Keken et al. (1997)]
-# (https://agupubs.onlinelibrary.wiley.com/doi/abs/10.1029/97JB01353). Inside a 2-D
-# domain heated from below, a denser material sits at the bottom boundary beneath a
-# lighter material. Whilst the compositional stratification is stable, heat transfer
-# from the boundary generates positive buoyancy in the denser material, allowing thin
-# tendrils to be entrained in the convective circulation. To resolve these tendrils
-# using the level-set approach, significant mesh refinement is needed, making the
-# simulation computationally expensive. This tutorial will be updated once the
+# convection presented in [van Keken et al. (1997)](https://doi.org/10.1029/97JB01353).
+# Inside a 2-D domain heated from below, a denser material sits at the bottom boundary
+# beneath a lighter material. Whilst the compositional stratification is stable, heat
+# transfer from the boundary generates positive buoyancy in the denser material,
+# allowing thin tendrils to be entrained in the convective circulation. To resolve these
+# tendrils using the level-set approach, significant mesh refinement is needed, making
+# the simulation computationally expensive. This tutorial will be updated once the
 # development of adaptive mesh refinement in Firedrake is complete. We describe below
 # the current implementation of this problem in G-ADOPT.
 
@@ -36,43 +35,46 @@ from gadopt import *
 
 # +
 import gmsh
+from mpi4py import MPI
 
 lx, ly = 2, 1  # Domain dimensions in x and y directions
 mesh_hor_res = lx / 100  # Uniform horizontal mesh resolution
 mesh_file = "mesh.msh"  # Output mesh file
 
-gmsh.initialize()
-gmsh.model.add("mesh")
+if MPI.COMM_WORLD.rank == 0:
+    gmsh.initialize()
+    gmsh.model.add("mesh")
 
-point_1 = gmsh.model.geo.addPoint(0, 0, 0, mesh_hor_res)
-point_2 = gmsh.model.geo.addPoint(lx, 0, 0, mesh_hor_res)
+    point_1 = gmsh.model.geo.addPoint(0, 0, 0, mesh_hor_res)
+    point_2 = gmsh.model.geo.addPoint(lx, 0, 0, mesh_hor_res)
 
-line_1 = gmsh.model.geo.addLine(point_1, point_2)
+    line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
-# Vertical resolution: 5e-3
-gmsh.model.geo.extrude([(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True)
+    gmsh.model.geo.extrude(
+        [(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True
+    )  # Vertical resolution: 5e-3
 
-gmsh.model.geo.extrude(
-    [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 20, 0, numElements=[15], recombine=True
-)  # Vertical resolution: 5e-2
+    gmsh.model.geo.extrude(
+        [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 10, 0, numElements=[35], recombine=True
+    )  # Vertical resolution: 2e-2
 
-gmsh.model.geo.extrude(
-    [(1, line_1 + 5)], 0, ly / 20, 0, numElements=[10], recombine=True
-)  # Vertical resolution: 5e-3
+    gmsh.model.geo.extrude(
+        [(1, line_1 + 5)], 0, ly / 10, 0, numElements=[20], recombine=True
+    )  # Vertical resolution: 5e-3
 
-gmsh.model.geo.synchronize()
+    gmsh.model.geo.synchronize()
 
-gmsh.model.addPhysicalGroup(1, [line_1 + 2, line_1 + 6, line_1 + 10], tag=1)
-gmsh.model.addPhysicalGroup(1, [line_1 + 3, line_1 + 7, line_1 + 11], tag=2)
-gmsh.model.addPhysicalGroup(1, [line_1], tag=3)
-gmsh.model.addPhysicalGroup(1, [line_1 + 9], tag=4)
+    gmsh.model.addPhysicalGroup(1, [line_1 + 2, line_1 + 6, line_1 + 10], tag=1)
+    gmsh.model.addPhysicalGroup(1, [line_1 + 3, line_1 + 7, line_1 + 11], tag=2)
+    gmsh.model.addPhysicalGroup(1, [line_1], tag=3)
+    gmsh.model.addPhysicalGroup(1, [line_1 + 9], tag=4)
 
-gmsh.model.addPhysicalGroup(2, [line_1 + 4, line_1 + 8, line_1 + 12], tag=1)
+    gmsh.model.addPhysicalGroup(2, [line_1 + 4, line_1 + 8, line_1 + 12], tag=1)
 
-gmsh.model.mesh.generate(2)
+    gmsh.model.mesh.generate(2)
 
-gmsh.write(mesh_file)
-gmsh.finalize()
+    gmsh.write(mesh_file)
+    gmsh.finalize()
 # -
 
 # We next set up the mesh and function spaces and specify functions to hold our
@@ -83,10 +85,10 @@ mesh = Mesh(mesh_file)  # Load the GMSH mesh using Firedrake
 mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
-V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
+W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Stokes function space (mixed)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+Q = FunctionSpace(mesh, "Q", 2)  # Temperature function space (scalar)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space for time step
 
@@ -98,42 +100,30 @@ T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
-# We now provide initial conditions for the level-set field. To this end, we use the
-# `shapely` library to represent the initial location of the material interface and
-# derive the signed-distance function. Finally, we apply the transformation to obtain a
-# smooth step function profile.
+# We now initialise the level-set field. All we have to provide to G-ADOPT is a
+# mathematical description of the interface location and use the available API. In this
+# case, the interface can be represented as a cosine. Under the hood, G-ADOPT uses the
+# `Shapely` library to determine the signed-distance function associated with the
+# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
+# from the signed-distance function.
 
 # +
-import numpy as np  # noqa: E402
-import shapely as sl  # noqa: E402
+from numpy import array  # noqa: E402
 
+# Mathematical description of the interface location
+interface_coords_x = array([0.0, lx])
+interface_args = (interface_slope := 0, interface_y := 0.025)
+# Generate keyword arguments to define the signed-distance function
+signed_distance_kwargs = curve_interface(
+    interface_coords_x, curve="line", curve_args=interface_args
+)
 
-def straight_line(x, slope, intercept):
-    """Straight line equation"""
-    return slope * x + intercept
-
-
-interface_slope = 0  # Slope of the interface
-material_interface_y = 0.025  # Vertical shift of the interface along the y axis
-# Group parameters defining the straight-line profile
-isd_params = (interface_slope, material_interface_y)
-
-# Shapely LineString representation of the material interface
-interface_x = np.linspace(0, lx, 1000)  # Enough points to capture the interface shape
-interface_y = straight_line(interface_x, *isd_params)
-interface = sl.LineString([*np.column_stack((interface_x, interface_y))])
-
-# Define the signed-distance function from the Shapely object
-signed_distance = [
-    (1 if y > straight_line(x, *isd_params) else -1)
-    * interface.distance(sl.Point(x, y))
-    for x, y in node_coordinates(psi)
-]
-# Overwrite level-set data array using a smooth step function. The latter is defined by
-# a hyperbolic tangent profile, whose thickness corresponds to a quarter of the minimum
-# cell size across the mesh.
-epsilon = interface_thickness(mesh)
-psi.dat.data[:] = conservative_level_set(signed_distance, epsilon)
+# Initialise the level-set field. First, determine the signed-distance function at each
+# level-set node. Then, define the thickness of the hyperbolic tangent profile used in
+# the conservative level-set approach. Finally, overwrite level-set data array.
+signed_distance_array = signed_distance(psi, **signed_distance_kwargs)
+epsilon = interface_thickness(psi)
+psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -224,8 +214,13 @@ stokes_solver = StokesSolver(
     nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 stokes_solver.solve()
-# Instantiate a solver object for level-set advection and reinitialisation.
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
+
+# Instantiate a solver object for level-set advection and reinitialisation. G-ADOPT
+# provides default values for most arguments; we only provide those that do not have
+# one. No boundary conditions are required, as the numerical domain is closed.
+adv_kwargs = {"u": u, "timestep": delta_t}
+reini_kwargs = {"epsilon": epsilon}
+level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 # -
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
@@ -239,9 +234,9 @@ output_file = VTKFile("output.pvd")
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
+gd = GeodynamicalDiagnostics(z)
 
-material_area = material_interface_y * lx  # Area of tracked material in the domain
+material_area = interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
@@ -253,52 +248,45 @@ step = 0  # A counter to keep track of looping
 output_counter = 0  # A counter to keep track of outputting
 time_end = 0.02  # Will be changed to 0.05 once mesh adaptivity is available
 while True:
+    # Update timestep
+    if time_end - time_now < output_frequency:
+        t_adapt.maximum_timestep = time_end - time_now
+    t_adapt.update_timestep()
+
+    # Advect level set
+    level_set_solver.solve()
+    # Solve energy system
+    energy_solver.solve()
+    # Solve Stokes sytem
+    stokes_solver.solve()
+
+    # Increment iteration count and time
+    step += 1
+    time_now += float(delta_t)
+
+    # Calculate proportion of material entrained above a given height
+    buoy_entr = entrainment(psi, material_area, entrainment_height)
+    # Log diagnostics
+    plog.log_str(f"{step} {time_now} {float(delta_t)} {gd.u_rms()} {buoy_entr}")
+
     # Write output
     if time_now >= output_counter * output_frequency:
         output_file.write(*z.subfunctions, T, psi, time=time_now)
         output_counter += 1
 
-    # Update timestep
-    if time_end is not None:
-        t_adapt.maximum_timestep = min(output_frequency, time_end - time_now)
-    t_adapt.update_timestep()
-    time_now += float(delta_t)
-    step += 1
-
-    # Temperature system
-    energy_solver.solve()
-
-    # Advect level set
-    level_set_solver.solve(step)
-
-    # Solve Stokes sytem
-    stokes_solver.solve()
-
-    # Calculate proportion of material entrained above a given height
-    buoy_entr = entrainment(psi, material_area, entrainment_height)
-
-    # Log diagnostics
-    plog.log_str(f"{step} {time_now} {float(delta_t)} {gd.u_rms()} {buoy_entr}")
-
     # Check if simulation has completed
     if time_now >= time_end:
+        plog.close()  # Close logging file
+
+        # Checkpoint solution fields to disk
+        with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
+            final_checkpoint.save_mesh(mesh)
+            final_checkpoint.save_function(T, name="Temperature")
+            final_checkpoint.save_function(z, name="Stokes")
+            final_checkpoint.save_function(psi, name="Level set")
+
         log("Reached end of simulation -- exiting time-step loop")
         break
-# -
-
-# At the end of the simulation, we write the final state for visualisation, close our
-# logging file, and checkpoint solution fields to disk. These can later be used to
-# restart the simulation, if required.
-
-# +
-output_file.write(*z.subfunctions, T, psi, time=time_now)
-plog.close()
-
-with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
-    final_checkpoint.save_mesh(mesh)
-    final_checkpoint.save_function(T, name="Temperature")
-    final_checkpoint.save_function(z, name="Stokes")
-    final_checkpoint.save_function(psi, name="Level set")
 # -
 
 # We can visualise the final temperature and level-set fields using Firedrake's

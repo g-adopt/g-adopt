@@ -9,7 +9,7 @@ mc_demos += adjoint
 mc_demo_paths := $(addprefix $(mc_dir)/, $(mc_demos))
 
 mm_dir := multi_material
-mm_demos := compositional_buoyancy thermochemical_buoyancy
+mm_demos := compositional_buoyancy free_surface thermochemical_buoyancy
 mm_demo_paths := $(addprefix $(mm_dir)/, $(mm_demos))
 
 gia_dir := glacial_isostatic_adjustment

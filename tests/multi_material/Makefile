@@ -1,5 +1,4 @@
-case_dir := benchmarks
-cases := $(notdir $(wildcard ${case_dir}/*))
+cases := $(wildcard benchmarks/*)
 ncpus := 8
 
 all: $(cases)
@@ -10,11 +9,11 @@ $(cases):
 
 clean:
 	rm -rf __pycache__
-	@$(foreach case,$(cases),rm -rf ${case_dir}/$(case)/__pycache__;)
-	@$(foreach case,$(cases),rm -rf ${case_dir}/$(case)/outputs;)
-	@$(foreach case,$(cases),rm -f ${case_dir}/$(case)/*.pdf;)
-	@$(foreach case,$(cases),rm -f ${case_dir}/$(case)/*.npz;)
-	@$(foreach case,$(cases),rm -f ${case_dir}/$(case)/mesh/*.msh;)
+	@$(foreach case,$(cases),rm -rf $(case)/__pycache__;)
+	@$(foreach case,$(cases),rm -rf $(case)/outputs;)
+	@$(foreach case,$(cases),rm -f $(case)/*.pdf;)
+	@$(foreach case,$(cases),rm -f $(case)/*.npz;)
+	@$(foreach case,$(cases),rm -f $(case)/mesh/*.msh;)
 
 check: $(cases)
 	python3 -m pytest

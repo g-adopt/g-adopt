@@ -16,7 +16,9 @@ from .materials import air, lithosphere, mantle
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
-    height = min_max_height(diag_vars["level_set"][1], diag_vars["epsilon"], 1, "min")
+    height = min_max_height(
+        diag_vars["level_set"][1], diag_vars["epsilon"], side=1, mode="min"
+    )
 
     diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e6)
     diag_fields["slab_tip_depth"].append((domain_dims[1] - 5e4 - height) / 1e3)

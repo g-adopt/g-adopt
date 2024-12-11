@@ -19,8 +19,7 @@
 # -
 
 # We employ an interface-capturing approach called the conservative level-set method
-# ([Olsson and Kreiss, 2005](
-# https://www.sciencedirect.com/science/article/pii/S0021999105002184)) to model the
+# ([Olsson and Kreiss, 2005](https://doi.org/10.1016/j.jcp.2005.04.007)) to model the
 # coexistence of multiple materials in the numerical domain. Level-set methods associate
 # each material interface to a mathematical field measuring the distance from that
 # interface. In the conservative level-set approach, the classic signed-distance
@@ -39,7 +38,7 @@
 # the signed-distance property underpinning the smooth step function is lost. To
 # maintain the original profile whilst the simulation proceeds, a reinitialisation
 # procedure is employed. We choose the equation proposed in [Parameswaran and Mandal
-# (2023)](https://www.sciencedirect.com/science/article/pii/S0997754622001364):
+# (2023)](https://doi.org/10.1016/j.euromechflu.2022.11.001):
 
 # $$\frac{\partial \psi}{\partial \tau_{n}} = \theta \left[
 # -\psi \left( 1 - \psi \right) \left( 1 - 2\psi \right)
@@ -50,12 +49,11 @@
 # -
 
 # Here, we consider the isoviscous Rayleigh-Taylor instability presented in [van Keken
-# et al. (1997)](https://agupubs.onlinelibrary.wiley.com/doi/abs/10.1029/97JB01353).
-# Inside a 2-D domain, a buoyant, lighter material sits beneath a denser material. The
-# initial material interface promotes the development of a rising instability on the
-# domain's left-hand side, and further convective dynamics occur throughout the
-# remainder of the simulation. We describe below the implementation of this problem
-# using G-ADOPT.
+# et al. (1997)](https://doi.org/10.1029/97JB01353). Inside a 2-D domain, a buoyant,
+# lighter material sits beneath a denser material. The initial material interface
+# promotes the development of a rising instability on the domain's left-hand side, and
+# further convective dynamics occur throughout the remainder of the simulation. We
+# describe below the implementation of this problem using G-ADOPT.
 
 # As with all examples, the first step is to import the `gadopt` package, which also
 # provides access to Firedrake and associated functionality.
@@ -89,10 +87,9 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 # We now initialise the level-set field. All we have to provide to G-ADOPT is a
 # mathematical description of the interface location and use the available API. In this
 # case, the interface can be represented as a cosine. Under the hood, G-ADOPT uses the
-# `shapely` library to determine the signed-distance function associated with the
+# `Shapely` library to determine the signed-distance function associated with the
 # interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
 # from the signed-distance function.
-
 
 # +
 from numpy import linspace  # noqa: E402
@@ -101,12 +98,12 @@ from numpy import linspace  # noqa: E402
 interface_coords_x = linspace(0, lx, 1000)
 interface_args = (
     interface_deflection := 0.02,
-    perturbation_wavelentgh := 2 * lx,
+    perturbation_wavelength := 2 * lx,
     initial_interface_y := 0.2,
 )
 # Generate keyword arguments to define the signed-distance function
 signed_distance_kwargs = curve_interface(
-    interface_coords_x, curve_type="cosine", curve_args=interface_args
+    interface_coords_x, curve="cosine", curve_args=interface_args
 )
 
 # Initialise the level-set field. First, determine the signed-distance function at each
@@ -189,7 +186,7 @@ output_file.write(*z.subfunctions, psi, time=time_now)
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
+gd = GeodynamicalDiagnostics(z)
 
 material_area = initial_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
