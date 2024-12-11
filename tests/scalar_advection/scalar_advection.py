@@ -4,6 +4,7 @@
 
 from gadopt import *
 from gadopt.time_stepper import DIRK33
+import numpy as np
 
 # We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
@@ -59,7 +60,6 @@ q = Function(Q).assign(q_init)
 outfile = VTKFile("CG_SUadv_q.pvd")
 outfile.write(q)
 
-
 u_outfile = VTKFile("CG_SUadv_u.pvd")
 u_outfile.write(u)
 # We will run for time :math:`2\pi`, a full rotation.  We take 600 steps, giving
@@ -79,11 +79,6 @@ approximation = BoussinesqApproximation(Ra=1, kappa=Constant(0))
 bc_in = {'q': q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 energy_solver = EnergySolver(q, u, approximation, dt, DIRK33, bcs=bcs, su_advection=True)
-
-# Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(energy_solver.fields['su_nubar'])
-nubar_outfile = VTKFile("CG_SUadv_nubar.pvd")
-nubar_outfile.write(nubar)
 
 # Here is the time stepping loop, with an output every 20 steps.
 t = 0.0
@@ -105,3 +100,5 @@ while t < T - 0.5*dt:
 L2_err = sqrt(assemble((q - q_init)*(q - q_init)*dx))
 L2_init = sqrt(assemble(q_init*q_init*dx))
 print(L2_err/L2_init)
+
+np.savetxt(f"final_error.log", [L2_err/L2_init])
