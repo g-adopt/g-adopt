@@ -548,7 +548,6 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
         identified = dict.fromkeys([i[1] for i in boundary_cells])
         nvert = -1
         for cell, face_id in boundary_cells:
-            face_coords = mesh.topology_dm.vecGetClosure(coord_sec, coords, cell)
             if identified[face_id] is None:
                 face_coords = mesh.topology_dm.vecGetClosure(coord_sec, coords, cell)
                 if nvert == -1:
