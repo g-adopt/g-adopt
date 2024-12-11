@@ -161,3 +161,18 @@ def test_gmsh_from_geo(geo_name):
     assert boundary.top == 4
     assert not hasattr(boundary, "front")
     assert not hasattr(boundary, "back")
+
+
+def test_gmsh_explicit_boundary():
+    # Special test for a .geo file in which boundaries are explicitly labeled
+    geo_name = Path(__file__).parents[1] / "base_gmsh" / "square.geo"
+    with tempfile.NamedTemporaryFile(suffix=".msh") as fp:
+        run(["gmsh", "-2", str(geo_name), "-o", fp.name])
+        mesh = fd.Mesh(fp.name)
+    boundary = get_boundary_ids(mesh)
+    assert boundary.left == 14
+    assert boundary.right == 12
+    assert boundary.bottom == 11
+    assert boundary.top == 13
+    assert not hasattr(boundary, "front")
+    assert not hasattr(boundary, "back")

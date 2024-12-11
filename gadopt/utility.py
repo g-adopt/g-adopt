@@ -521,41 +521,77 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
 def get_boundary_ids(mesh) -> SimpleNamespace:
     # PETSc creates these labels when loading meshes from files, Firedrake imitates it
     # in its own mesh creation functions.
+
     if mesh.topology_dm.hasLabel("Face Sets"):
-        # This ordering is consistent among (almost) all meshes firedrake can create
-        fields = ["left", "right", "bottom", "top", "front", "back"]
+        axis_extremes_order = [["left", "right"], ["bottom", "top"], ["front", "back"]]
         dim = mesh.geometric_dimension()
+        plex_dim = mesh.topology_dm.getCoordinateDim()  # In an extruded mesh, this is different to the
+        # firedrake-assigned geometric_dimension
+        if dim == 3 and plex_dim == 2:
+            # For extruded 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
+            axis_extremes_order = [["left", "right"], ["front", "back"], ["bottom", "top"]]
+        bounding_box = mesh.topology_dm.getBoundingBox()
+        boundary_tol = [abs(dim[1] - dim[0]) * 1e-6 for dim in bounding_box]
         if dim > 3:
             raise ValueError(f"Cannot handle {dim} dimensional mesh")
         # Recover the boundary ids Firedrake has inserted
-        mesh.topology_dm.markBoundaryFaces("TEMP_LABEL")
+        coords = mesh.topology_dm.getCoordinatesLocal()
+        coord_sec = mesh.topology_dm.getCoordinateSection()
+        mesh.topology_dm.markBoundaryFaces("TEMP_LABEL", 1)
         if mesh.topology_dm.getStratumSize("TEMP_LABEL", 1) > 0:
-            ids = {
-                mesh.topology_dm.getLabelValue("Face Sets", i)
+            boundary_cells = [
+                (i, mesh.topology_dm.getLabelValue("Face Sets", i))
                 for i in mesh.topology_dm.getStratumIS("TEMP_LABEL", 1).getIndices()
-            }
+            ]
         else:
-            ids = set()
+            boundary_cells = []
+        identified = dict.fromkeys([i[1] for i in boundary_cells])
+        nvert = -1
+        for cell, face_id in boundary_cells:
+            face_coords = mesh.topology_dm.vecGetClosure(coord_sec, coords, cell)
+            if identified[face_id] is None:
+                face_coords = mesh.topology_dm.vecGetClosure(coord_sec, coords, cell)
+                if nvert == -1:
+                    nvert = len(face_coords) // plex_dim
+                # Flattened version of axis_extremes_order
+                tmp_bdys = [None] * 2 * plex_dim
+                for idim in range(plex_dim):
+                    if all(
+                        [
+                            abs(face_coords[idim + plex_dim * i] - bounding_box[idim][0]) < boundary_tol[idim]
+                            for i in range(nvert)
+                        ]
+                    ):
+                        tmp_bdys[2 * idim] = axis_extremes_order[idim][0]
+                    if all(
+                        [
+                            abs(face_coords[idim + plex_dim * i] - bounding_box[idim][1]) < boundary_tol[idim]
+                            for i in range(nvert)
+                        ]
+                    ):
+                        tmp_bdys[2 * idim + 1] = axis_extremes_order[idim][1]
+                # Found a cell unambiguously on one boundary
+                if tmp_bdys.count(None) == len(tmp_bdys) - 1:
+                    identified[face_id] = [bdy for bdy in tmp_bdys if bdy is not None][0]
         # Not every MPI rank has every boundary of the mesh, gather all boundaries
         # seen by all MPI ranks
-        final_ids = set.union(*mesh.comm.allgather(ids))
+        gathered_boundaries = mesh.comm.allgather(identified)
         mesh.topology_dm.removeLabel("TEMP_LABEL")
-        # Extruded standard firedrake meshes can contain numerical subdomain
-        # ids as well as "top", "bottom" labels, if the number of ids is less than
-        # the number of dimensions * 2, the string ids will always be "bottom" and "top"
-        # therefore the only time 'fields' ever appears out-of-order is if dim==3 and len(ids) < 6
-        # this implies that a 2d cartesian mesh has been extruded to a 3d cartesian mesh
-        if dim == 3 and len(final_ids) < 6:
-            kwargs = {
-                "left": 1,
-                "right": 2,
-                "front": 3,
-                "back": 4,
-                "bottom": "bottom",
-                "top": "top",
-            }
-        else:
-            kwargs = {bnd: i + 1 if i + 1 in final_ids else bnd for i, bnd in enumerate(fields[:2*dim])}  # noqa: E225,E226
+        kwargs = {}
+        for face_id in [face_id for proc_bdy in gathered_boundaries for face_id in proc_bdy]:
+            # If there is any disagreement about which label belongs to which boundary,
+            # the value found on the lowest rank of the mesh communicator is selected here
+            kwargs[
+                [
+                    proc_bdy[face_id]
+                    for proc_bdy in gathered_boundaries
+                    if face_id in proc_bdy and proc_bdy[face_id] is not None
+                ][0]
+            ] = face_id
+        # Get remaining dimensions (if any)
+        for idim in range(plex_dim, dim):
+            for axis_label in axis_extremes_order[idim]:
+                kwargs[axis_label] = axis_label
     # Integer subdomain meshes are only assigned by petsc or the firedrake utility mesh
     # module. If the "Face Sets" label is missing from the mesh, it was not created by
     # either of these and therefore will only have the "bottom" and "top" labels
