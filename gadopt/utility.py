@@ -21,6 +21,7 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
+from types import SimpleNamespace
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -501,3 +502,85 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
     averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
+
+
+def get_boundary_ids(mesh) -> SimpleNamespace:
+    # PETSc creates these labels when loading meshes from files, Firedrake imitates it
+    # in its own mesh creation functions.
+
+    if mesh.topology_dm.hasLabel("Face Sets"):
+        axis_extremes_order = [["left", "right"], ["bottom", "top"], ["front", "back"]]
+        dim = mesh.geometric_dimension()
+        plex_dim = mesh.topology_dm.getCoordinateDim()  # In an extruded mesh, this is different to the
+        # firedrake-assigned geometric_dimension
+        if dim == 3 and plex_dim == 2:
+            # For extruded 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
+            axis_extremes_order = [["left", "right"], ["front", "back"], ["bottom", "top"]]
+        bounding_box = mesh.topology_dm.getBoundingBox()
+        boundary_tol = [abs(dim[1] - dim[0]) * 1e-6 for dim in bounding_box]
+        if dim > 3:
+            raise ValueError(f"Cannot handle {dim} dimensional mesh")
+        # Recover the boundary ids Firedrake has inserted
+        coords = mesh.topology_dm.getCoordinatesLocal()
+        coord_sec = mesh.topology_dm.getCoordinateSection()
+        mesh.topology_dm.markBoundaryFaces("TEMP_LABEL", 1)
+        if mesh.topology_dm.getStratumSize("TEMP_LABEL", 1) > 0:
+            boundary_cells = [
+                (i, mesh.topology_dm.getLabelValue("Face Sets", i))
+                for i in mesh.topology_dm.getStratumIS("TEMP_LABEL", 1).getIndices()
+            ]
+        else:
+            boundary_cells = []
+        identified = dict.fromkeys([i[1] for i in boundary_cells])
+        nvert = -1
+        for cell, face_id in boundary_cells:
+            if identified[face_id] is None:
+                face_coords = mesh.topology_dm.vecGetClosure(coord_sec, coords, cell)
+                if nvert == -1:
+                    nvert = len(face_coords) // plex_dim
+                # Flattened version of axis_extremes_order
+                tmp_bdys = [None] * 2 * plex_dim
+                for idim in range(plex_dim):
+                    if all(
+                        [
+                            abs(face_coords[idim + plex_dim * i] - bounding_box[idim][0]) < boundary_tol[idim]
+                            for i in range(nvert)
+                        ]
+                    ):
+                        tmp_bdys[2 * idim] = axis_extremes_order[idim][0]
+                    if all(
+                        [
+                            abs(face_coords[idim + plex_dim * i] - bounding_box[idim][1]) < boundary_tol[idim]
+                            for i in range(nvert)
+                        ]
+                    ):
+                        tmp_bdys[2 * idim + 1] = axis_extremes_order[idim][1]
+                # Found a cell unambiguously on one boundary
+                if tmp_bdys.count(None) == len(tmp_bdys) - 1:
+                    identified[face_id] = [bdy for bdy in tmp_bdys if bdy is not None][0]
+        # Not every MPI rank has every boundary of the mesh, gather all boundaries
+        # seen by all MPI ranks
+        gathered_boundaries = mesh.comm.allgather(identified)
+        mesh.topology_dm.removeLabel("TEMP_LABEL")
+        kwargs = {}
+        for face_id in [face_id for proc_bdy in gathered_boundaries for face_id in proc_bdy]:
+            # If there is any disagreement about which label belongs to which boundary,
+            # the value found on the lowest rank of the mesh communicator is selected here
+            kwargs[
+                [
+                    proc_bdy[face_id]
+                    for proc_bdy in gathered_boundaries
+                    if face_id in proc_bdy and proc_bdy[face_id] is not None
+                ][0]
+            ] = face_id
+        # Get remaining dimensions (if any)
+        for idim in range(plex_dim, dim):
+            for axis_label in axis_extremes_order[idim]:
+                kwargs[axis_label] = axis_label
+    # Integer subdomain meshes are only assigned by petsc or the firedrake utility mesh
+    # module. If the "Face Sets" label is missing from the mesh, it was not created by
+    # either of these and therefore will only have the "bottom" and "top" labels
+    # utilised by 'CombinedSurfaceMeasure' above
+    else:
+        kwargs = {"bottom": "bottom", "top": "top"}
+    return SimpleNamespace(**kwargs)
