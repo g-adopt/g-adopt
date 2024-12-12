@@ -7,6 +7,7 @@ base = Path(__file__).parent.resolve()
 
 case_name = ["integrated_q", "integrated_q_DH219"]
 
+
 @pytest.mark.parametrize("case_name", case_name)
 def test_scalar_advection_diffusion(case_name):
     expected_intq = np.load(base / f"expected_{case_name}.npy")
