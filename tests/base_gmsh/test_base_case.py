@@ -10,7 +10,7 @@ import pytest
 # the tests to xfail
 b = Path(__file__).parent.resolve()
 expected_md5 = "41b8157a5e18f467dbd1e7538d1236d6"
-with open(b / "square.msh", "r") as f:
+with open(b / "square.msh") as f:
     mesh_md5 = h = hashlib.md5(f.read().encode()).hexdigest()
 if mesh_md5 != expected_md5:
     warn_str = f"""

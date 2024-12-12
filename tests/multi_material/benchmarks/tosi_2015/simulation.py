@@ -1,7 +1,7 @@
 """Thermal benchmark.
 Tosi, N., Stein, C., Noack, L., Hüttig, C., Maierova, P., Samuel, H., ...
 & Tackley, P. J. (2015).
-A community benchmark for viscoplastic thermal convection in a 2‐D square box.
+A community benchmark for viscoplastic thermal convection in a 2-D square box.
 Geochemistry, Geophysics, Geosystems, 16(7), 2175-2196.
 """
 
@@ -81,7 +81,7 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (1, 1)
 mesh_gen = "firedrake"
-mesh_elements = (64, 64)
+mesh_elements = (48, 48)
 
 # Parameters to initialise level set
 interface_coords_x = np.array([0.0, domain_dims[0]])

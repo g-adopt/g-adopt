@@ -19,7 +19,7 @@ from gadopt import *
 # solutions, as in our previous tutorials.
 
 # +
-nx, ny = 512, 128  # Number of cells in x and y directions
+nx, ny = 256, 64  # Number of cells in x and y directions
 lx, ly = 3e6, 7e5  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
@@ -159,7 +159,7 @@ gd = GeodynamicalDiagnostics(z)
 from gadopt.level_set_tools import min_max_height  # noqa: E402
 
 step = 0  # A counter to keep track of looping
-output_counter = 0  # A counter to keep track of outputting
+output_counter = 1  # A counter to keep track of outputting
 time_end = 60 * myr_to_seconds
 while True:
     # Update timestep

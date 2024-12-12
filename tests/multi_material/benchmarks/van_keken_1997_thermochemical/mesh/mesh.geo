@@ -1,11 +1,11 @@
-horizontal_resolution = 0.02;
+horizontal_resolution = 0.04;
 
 domain_dimension_x = 2;
 domain_dimension_y = 1;
 
 bottom_thickness = 0.2;
 top_thickness = 0.1;
-layer_resolution = 0.005;
+layer_resolution = 0.00625;
 
 Point(1) = {0, 0, 0, horizontal_resolution};
 Point(2) = {domain_dimension_x, 0, 0, horizontal_resolution};

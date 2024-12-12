@@ -4,7 +4,8 @@ relevant parameters and call the `run` method to perform the optimisation.
 
 """
 
-from pathlib import Path
+from pathlib import Path, PosixPath
+from typing import Callable
 
 import firedrake.utils
 import pyadjoint.optimization.rol_solver as pyadjoint_rol

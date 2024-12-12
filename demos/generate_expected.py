@@ -8,7 +8,9 @@ if __name__ == "__main__":
 
     if sys.argv[1:]:
         requested_cases = set(sys.argv[1:])
-        cases = [case for case in all_cases.keys() if case in requested_cases]
+        cases = [
+            case.rstrip("/") for case in all_cases.keys() if case in requested_cases
+        ]
 
     for case in cases:
         extra_checks = all_cases[case].get("extra_checks", [])

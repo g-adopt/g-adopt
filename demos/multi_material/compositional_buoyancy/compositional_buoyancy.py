@@ -64,7 +64,7 @@ from gadopt import *
 # solutions, as in our previous tutorials.
 
 # +
-nx, ny = 128, 128  # Number of cells in x and y directions
+nx, ny = 64, 64  # Number of cells in x and y directions
 lx, ly = 0.9142, 1  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)

@@ -38,7 +38,7 @@ import gmsh
 from mpi4py import MPI
 
 lx, ly = 2, 1  # Domain dimensions in x and y directions
-mesh_hor_res = lx / 100  # Uniform horizontal mesh resolution
+mesh_hor_res = lx / 50  # Uniform horizontal mesh resolution
 mesh_file = "mesh.msh"  # Output mesh file
 
 if MPI.COMM_WORLD.rank == 0:
@@ -51,16 +51,16 @@ if MPI.COMM_WORLD.rank == 0:
     line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
     gmsh.model.geo.extrude(
-        [(1, line_1)], 0, ly / 5, 0, numElements=[40], recombine=True
-    )  # Vertical resolution: 5e-3
+        [(1, line_1)], 0, ly / 5, 0, numElements=[20], recombine=True
+    )  # Vertical resolution: 1e-2
 
     gmsh.model.geo.extrude(
-        [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 10, 0, numElements=[35], recombine=True
-    )  # Vertical resolution: 2e-2
+        [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 10, 0, numElements=[20], recombine=True
+    )  # Vertical resolution: 3.5e-2
 
     gmsh.model.geo.extrude(
-        [(1, line_1 + 5)], 0, ly / 10, 0, numElements=[20], recombine=True
-    )  # Vertical resolution: 5e-3
+        [(1, line_1 + 5)], 0, ly / 10, 0, numElements=[10], recombine=True
+    )  # Vertical resolution: 1e-2
 
     gmsh.model.geo.synchronize()
 
@@ -230,6 +230,7 @@ level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini
 
 # +
 output_file = VTKFile("output.pvd")
+output_file.write(*z.subfunctions, T, psi, time=time_now)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
@@ -245,8 +246,8 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 
 # +
 step = 0  # A counter to keep track of looping
-output_counter = 0  # A counter to keep track of outputting
-time_end = 0.02  # Will be changed to 0.05 once mesh adaptivity is available
+output_counter = 1  # A counter to keep track of outputting
+time_end = 0.03  # Will be changed to 0.05 once mesh adaptivity is available
 while True:
     # Update timestep
     if time_end - time_now < output_frequency:
@@ -270,7 +271,7 @@ while True:
     plog.log_str(f"{step} {time_now} {float(delta_t)} {gd.u_rms()} {buoy_entr}")
 
     # Write output
-    if time_now >= output_counter * output_frequency:
+    if time_now >= output_counter * output_frequency - 1e-16:
         output_file.write(*z.subfunctions, T, psi, time=time_now)
         output_counter += 1
 

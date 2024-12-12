@@ -1,42 +1,47 @@
 # Visco-plastic 2-D mantle convection problem in a square box
 # ===========================================================
-#
+
 # To illustrate the changes necessary to incorporate a visco-plastic rheology, which is
-# more representative of deformation within Earth's mantle and lithosphere, we examine a case
-# from Tosi et al. (2015), a benchmark study intended to form a straightforward extension to
-# Blankenbach et al. (1989) - the example that was considered in our first tutorial. Aside
-# from the viscosity and reference Rayleigh Number ($Ra_{0}=10^2$), all other aspects of this
-# case are identical to that first tutorial.
-#
-# The viscosity field, $\mu$, is calculated as the harmonic mean between a linear component,
-# $\mu_{\text{lin}}$, and a nonlinear, plastic component, $\mu_{\text{plast}}$, which is dependent
-# on the strain-rate, as follows:
-#
-# $$    \mu(T,z,\dot \epsilon) = 2 \Biggl(\frac{1}{\mu_{\text{lin}(T,z)}} + \frac{1}{\mu_{\text{plast}(\dot\epsilon)}} \Biggr)^{-1}. $$
-#
-# The linear part is given by an Arrhenius law (the so-called Frank-Kamenetskii approximation):
-#
+# more representative of deformation within Earth's mantle and lithosphere, we examine a
+# case from [Tosi et al. (2015)](https://doi.org/10.1002/2015GC005807), a benchmark
+# study intended to form a straightforward extension to
+# [Blankenbach et al. (1989)](https://doi.org/10.1111/j.1365-246X.1989.tb05511.x) — the
+# example that was considered in our first tutorial. Aside from the viscosity and
+# reference Rayleigh Number ($Ra_{0}=10^2$), all other aspects of this case are
+# identical to that first tutorial.
+
+# The viscosity field, $\mu$, is calculated as the harmonic mean between a linear
+# component, $\mu_{\text{lin}}$, and a nonlinear, plastic component,
+# $\mu_{\text{plast}}$, which is dependent on the strain-rate, as follows:
+
+# $$ \mu(T,z,\dot \epsilon) = 2 \Biggl(\frac{1}{\mu_{\text{lin}(T,z)}} + \frac{1}{\mu_{\text{plast}(\dot\epsilon)}} \Biggr)^{-1}. $$
+
+# The linear part is given by an Arrhenius law (the so-called Frank-Kamenetskii
+# approximation):
+
 # $$ \mu_{\text{lin}(T,z)} = \exp(-\gamma_{T}T + \gamma_{z}z),$$
-#
-# where $\gamma_{T}=\ln(\Delta\mu_T)$ and $\gamma_{z}=\ln(\Delta\mu_z)$ are parameters controlling the total
-# viscosity contrast due to temperature and depth, respectively. The nonlinear component is given by:
-#
+
+# where $\gamma_{T}=\ln(\Delta\mu_T)$ and $\gamma_{z}=\ln(\Delta\mu_z)$ are parameters
+# controlling the total viscosity contrast due to temperature and depth, respectively.
+# The nonlinear component is given by:
+
 # $$ \mu_{\text{plast}}(\dot\epsilon) = \mu^{\star} + \frac{\sigma_{y}}{\sqrt{\dot\epsilon : \dot\epsilon}} $$
-#
-# where $\mu^\star$ is a constant representing the effective viscosity at high stresses and $\sigma_{y}$ is the yield stress.
-# The denominator of the second term represents the second invariant of the strain-rate tensor.
-# The visco-plastic flow law leads to linear viscous deformation at low stresses and plastic deformation
-# at stresses that exceed $\sigma_{y}$, with the decrease in viscosity limited by the choice of $\mu^\star$.
-#
+
+# where $\mu^\star$ is a constant representing the effective viscosity at high stresses
+# and $\sigma_{y}$ is the yield stress. The denominator of the second term represents
+# the second invariant of the strain-rate tensor. The visco-plastic flow law leads to
+# linear viscous deformation at low stresses and plastic deformation at stresses that
+# exceed $\sigma_{y}$, with the decrease in viscosity limited by the choice of
+# $\mu^\star$.
+
 # This example
 # ------------
-#
+
 # In this example, we simulate incompressible convection, for a material with a rheology
-# like that described above. We specify $Ra_{0}=10^2$.
-# The model is heated from below (T = 1.0), cooled from the top (T=0)
-# in an enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
-# conditions on all boundaries).
-#
+# like that described above. We specify $Ra_{0}=10^2$. The model is heated from below
+# (T = 1.0), cooled from the top (T=0) in an enclosed 2-D Cartesian box (i.e. free-slip
+# mechanical boundary conditions on all boundaries).
+
 # As with all examples, the first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
 
@@ -62,9 +67,10 @@ z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 # -
 
-# We next provide the important constants for this problem, which includes those associated
-# with our rheological formulation, and define our approximation. Given that viscosity
-# depends on temperature here, we setup and initialise our temperature earlier than in the previous tutorials.
+# We next provide the important constants for this problem, which includes those
+# associated with our rheological formulation, and define our approximation. Given that
+# viscosity depends on temperature here, we setup and initialise our temperature earlier
+# than in the previous tutorials.
 
 # +
 X = SpatialCoordinate(mesh)
@@ -85,14 +91,12 @@ mu = (2 * mu_lin * mu_plast) / (mu_lin + mu_plast)  # harmonic mean
 approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e2, "mu": mu})
 # -
 
-# As with the previous examples, we set up a *Timestep Adaptor*,
-# for controlling the time-step length (via a CFL
-# criterion) as the simulation advances in time. For the latter,
-# we specify the initial time, initial timestep $\Delta t$, and number of
-# timesteps. Given the low Ra, a steady-state tolerance is also specified,
-# allowing the simulation to exit when a steady-state has been achieved.
-# The steady-state tolerance specified here is tight, and can be increased
-# to speed up the simulation, as required.
+# As with the previous examples, we set up a *Timestep Adaptor*, for controlling the
+# time-step length (via a CFL criterion) as the simulation advances in time. For the
+# latter, we specify the initial time, initial timestep $\Delta t$, and number of
+# timesteps. Given the low Ra, a steady-state tolerance is also specified, allowing the
+# simulation to exit when a steady-state has been achieved. The steady-state tolerance
+# specified here is tight, and can be increased to speed up the simulation, as required.
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
@@ -101,8 +105,8 @@ t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_toleranc
 # Used to determine if solution has reached a steady state.
 steady_state_tolerance = 1e-9
 
-# This problem has a constant pressure nullspace, handled identically to our
-# previous tutorials.
+# This problem has a constant pressure nullspace, handled identically to our previous
+# tutorials.
 
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
@@ -119,9 +123,9 @@ stokes_bcs = {
 temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 # -
 
-# We next set up our output, in VTK format. To do so, we create the output file
-# and specify the output_frequency in timesteps.
-# We also open a file for logging and calculate our diagnostic outputs.
+# We next set up our output, in VTK format. To do so, we create the output file and
+# specify the output_frequency in timesteps. We also open a file for logging and
+# calculate our diagnostic outputs.
 
 # +
 output_file = VTKFile("output.pvd")
@@ -135,12 +139,13 @@ plog.log_str(
 gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 # -
 
-# We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation configured above. Note that given viscosity varies with both
-# space and time, we can no longer specify the keyword constant_jacobian = True. We also make
-# the solver aware of this spatial and temporal variation using the mu keyword. The latter is
-# particularly relevant for iterative solvers and preconditioners that can make use of this
-# information to improve convergence.
+# We can now setup and solve the variational problem, for both the energy and Stokes
+# equations, passing in the approximation configured above. Note that given viscosity
+# varies with both space and time, we can no longer specify the keyword
+# `constant_jacobian=True`. We also make the solver aware of this spatial and temporal
+# variation using the mu keyword. The latter is particularly relevant for iterative
+# solvers and preconditioners that can make use of this information to improve
+# convergence.
 
 # +
 energy_solver = EnergySolver(
@@ -156,7 +161,7 @@ stokes_solver = StokesSolver(
 )
 # -
 
-# Next, we initiate the time loop, which runs until a steady-state solution has been attained.
+# Next, we initiate the time loop, which runs until a steady-state solution is attained.
 
 for timestep in range(timesteps):
     # Write output:
@@ -190,9 +195,9 @@ for timestep in range(timesteps):
         log("Steady-state achieved -- exiting time-step loop")
         break
 
-# At the end of the simulation, once a steady-state has been achieved, we close our logging file
-# and checkpoint steady state temperature and Stokes solution fields to disk. These can later be
-# used to restart a simulation, if required.
+# At the end of the simulation, once a steady-state has been achieved, we close our
+# logging file and checkpoint steady state temperature and Stokes solution fields to
+# disk. These can later be used to restart a simulation, if required.
 
 # +
 plog.close()
@@ -213,8 +218,8 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # fig.colorbar(collection);
 # -
 
-# The same can be done for the viscosity field, although that must
-# first be interpolated onto a function space, as the viscosity $\\mu$ is currently only specified in UFL.
+# The same can be done for the viscosity field, although that must first be interpolated
+# onto a function space, as the viscosity $\\mu$ is currently only specified in UFL.
 
 # + tags=["active-ipynb"]
 # mu_field = Function(W, name="Viscosity")
