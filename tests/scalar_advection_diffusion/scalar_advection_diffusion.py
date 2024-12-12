@@ -86,3 +86,7 @@ while t < T - 0.5*dt:
     if step % 10 == 0:
         outfile.write(q)
         log("t=", t)
+
+# Write out integrated scalar for testing
+L2 = sqrt(assemble(q**2*dx))
+np.savetxt("integrated_q.log", [L2])

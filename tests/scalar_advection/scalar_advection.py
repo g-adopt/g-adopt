@@ -4,6 +4,7 @@
 
 from gadopt import *
 from gadopt.time_stepper import DIRK33
+import numpy as np
 
 # We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
@@ -59,7 +60,6 @@ q = Function(Q).assign(q_init)
 outfile = VTKFile("CG_SUadv_q.pvd")
 outfile.write(q)
 
-
 u_outfile = VTKFile("CG_SUadv_u.pvd")
 u_outfile.write(u)
 # We will run for time :math:`2\pi`, a full rotation.  We take 600 steps, giving
@@ -104,3 +104,5 @@ while t < T - 0.5*dt:
 L2_err = sqrt(assemble((q - q_init)*(q - q_init)*dx))
 L2_init = sqrt(assemble(q_init*q_init*dx))
 print(L2_err/L2_init)
+
+np.savetxt("final_error.log", [L2_err/L2_init])
