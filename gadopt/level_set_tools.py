@@ -105,7 +105,7 @@ def rectangle_interface(ref_vertex_coords: tuple[float], edge_sizes: tuple[float
 def signed_distance(
     level_set: fd.Function,
     /,
-    interface_coordinates: list[list[float]] | np.ndarray,
+    interface_coordinates: list[list[float]] | np.ndarray | list[tuple[float], float],
     *,
     interface_geometry: str,
     interface_callable: Callable | None = None,
@@ -114,7 +114,7 @@ def signed_distance(
 ) -> list:
     """Generates signed-distance function values at level-set nodes.
 
-    Two scenarios are currently implemented:
+    Three scenarios are currently implemented:
     - The material interface is described by a mathematical function y = f(x). In this
       case, `interface_geometry` should be "LineString" and `interface_callable` must be
       provided along with any `interface_args` to implement the aforementioned
@@ -125,12 +125,17 @@ def signed_distance(
       coordinates of these sides should be provided using the `boundary_coordinates`
       argument such that the concatenation of the two coordinate objects describes a
       closed polygonal chain.
+    - The material interface is a circle, and `interface_geometry` takes the value
+      "Circle" (strictly speaking, Shapely will create a `Polygon`). In this case,
+      `interface_coordinates` is a list holding the coordinates of the circle's centre
+      and the circle radius. No other arguments are required.
 
     Args:
       level_set:
         A Firedrake function for the targeted level-set field
       interface_coordinates:
-        A sequence of numeric coordinate pairs or an array-like with shape (N, 2)
+        A sequence or an array-like with shape (N, 2) of numeric coordinate pairs or a
+        list containing the centre coordinates and radius
       interface_geometry:
         A string specifying the Shapely geometry to create
       interface_callable:
@@ -174,6 +179,16 @@ def signed_distance(
                     * interface.distance(sl.Point(x, y))
                     for x, y in node_coordinates(level_set)
                 ]
+        case "Circle":
+            centre, radius = interface_coordinates
+            interface = sl.Point(centre).buffer(radius)
+            sl.prepare(interface)
+
+            signed_distance = [
+                (1 if interface.contains(sl.Point(x, y)) else -1)
+                * interface.boundary.distance(sl.Point(x, y))
+                for x, y in node_coordinates(level_set)
+            ]
         case _:
             raise ValueError("`interface_geometry` must be 'LineString' or 'Polygon'.")
 
