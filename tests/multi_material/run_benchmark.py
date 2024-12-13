@@ -49,7 +49,7 @@ parser = ArgumentParser()
 parser.add_argument("benchmark")
 args = parser.parse_args()
 
-benchmark = args.benchmark.split("/")[-1]
+benchmark = args.benchmark.split("/")[1]
 simulation = import_module(f"{args.benchmark.rstrip('/').replace('/', '.')}.simulation")
 
 # Set benchmark paths

@@ -1,10 +1,10 @@
 # Idealised 2-D mantle convection problem in a square box
 # =======================================================
-#
-# In this tutorial, we examine an idealised 2-D problem in square box.
-# The case is identical to our base case demo, but mesh generation is
-# done through gmsh rather than Firedrake.
-#
+
+# In this tutorial, we examine an idealised 2-D problem in square box. The case is
+# identical to our base case demo, but mesh generation is done through Gmsh rather than
+# Firedrake.
+
 # Let's get started! The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
 
@@ -13,12 +13,12 @@ from gadopt import *
 # We will set up the problem using a bilinear quadrilateral element
 # pair (Q2-Q1) for velocity and pressure, with Q2 elements for
 # temperature.
-#
+
 # We first need a mesh. For this test, we use a gmsh derived square mesh.
 # Tag 14 corresponds to the plane $x=0$; 12 to the $x=1$ plane; 11 to the $y=0$ plane;
 # and 13 to the $y=1$ plane. We name these `left`, `right`, `bottom` and `top`,
 # respectively.
-#
+
 # On the mesh, we also denote that our geometry is Cartesian, i.e. gravity points
 # in the negative z-direction. This attribute is used by gadopt specifically, not
 # Firedrake. By contrast, a non-Cartesian geometry is assumed to have gravity
@@ -26,7 +26,7 @@ from gadopt import *
 
 nx, ny = 60, 60  # Number of cells in x and y directions.
 
-mesh = Mesh("square.msh", quadrilateral=True)  # Square mesh generated via gmsh
+mesh = Mesh("square.msh", quadrilateral=True)  # Square mesh generated via Gmsh
 mesh.cartesian = True
 left_id, right_id, bottom_id, top_id = 14, 12, 11, 13  # Boundary IDs
 
@@ -81,17 +81,15 @@ z.subfunctions[1].rename("Pressure")
 # allowing the simulation to exit when a steady-state has been achieved.
 
 # +
-Ra = Constant(1e4)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e4})
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20000  # Maximum number of timesteps
+timesteps = 20_000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
-steady_state_tolerance = (
-    1e-9  # Used to determine if solution has reached a steady state.
-)
+# Used to determine if solution has reached a steady state.
+steady_state_tolerance = 1e-9
 # -
 
 # Mantle convection is an initial and boundary-value problem. We
@@ -147,10 +145,7 @@ stokes_bcs = {
     right_id: {"ux": 0},
 }
 
-temp_bcs = {
-    bottom_id: {"T": 1.0},
-    top_id: {"T": 0.0},
-}
+temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 # -
 
 # We next set up our output, in VTK format. To do so, we create the output file
@@ -173,7 +168,7 @@ plog.log_str(
     "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t"
 )
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 # -
 
 # We finally come to solving the variational problem, with solver
@@ -195,12 +190,11 @@ energy_solver = EnergySolver(
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
-    nullspace=Z_nullspace,
-    transpose_nullspace=Z_nullspace,
     constant_jacobian=True,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 # -
 
@@ -213,7 +207,7 @@ stokes_solver = StokesSolver(
 # the change in temperature and, once this drops below the steady_state_tolerance specified above,
 # we exit the timeloop.
 
-for timestep in range(0, timesteps):
+for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T)
@@ -231,7 +225,7 @@ for timestep in range(0, timesteps):
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
 
     # Calculate L2-norm of change in temperature:
-    maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
+    maxchange = sqrt(assemble((T - energy_solver.solution_old) ** 2 * dx))
 
     # Log diagnostics:
     plog.log_str(

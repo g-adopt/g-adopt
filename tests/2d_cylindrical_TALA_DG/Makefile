@@ -1,7 +1,7 @@
-all: params.log
-
 demo_name := $(notdir $(CURDIR))
 ncpus := 16
+
+all: params.log
 
 params.log: $(demo_name).py
 	$(info running $<)

@@ -1,27 +1,27 @@
 # Idealised 2-D mantle convection problem in a square box
 # =======================================================
-#
+
 # In this tutorial, we examine an idealised 2-D problem in square box.
-#
+
 # Governing equations
 # -------------------
-#
+
 # The equations governing mantle convection are derived from the
 # conservation laws of mass, momentum and energy.  The simplest
 # mathematical formulation assumes incompressibility and the
 # Boussinesq approximation, under which the non–dimensional
 # momentum and continuity equations are given by:
-#
+
 # $$\nabla \cdot \mathbb{\sigma} + Ra_0 \ T \ \hat{k} = 0,$$
 # $$\nabla \cdot \vec{u} = 0$$
-#
+
 # where $\sigma$ is the stress tensor, $\vec{u}$ is the velocity and T
 # temperature. $\hat{k}$ is the unit vector in the direction opposite
 # to gravity and $Ra_0$ denotes the Rayleigh number, a dimensionless
 # number that quantifies the vigor of convection:
-#
+
 # $$Ra0 = \frac{\rho_0 \alpha \Delta T g d^3}{\mu_0 \kappa}$$
-#
+
 # Here, $\rho_0$ denotes reference density, $\alpha$ the thermal
 # expansion coefficient, $\Delta T$ the characteristic temperature
 # change across the domain, $g$ the gravitational acceleration, $d$
@@ -29,7 +29,7 @@
 # and $\kappa$ the thermal diffusivity. The mantle's Rayleigh number
 # is estimated to be between $10^7$ and $10^9$, but we will focus on
 # cases at a lower convective vigor in this notebook.
-#
+
 # When simulating incompressible flow, the full stress tensor,
 # $\sigma$, is decomposed into deviatoric and volumetric components:
 # $$ \sigma = \tau - p I,$$
@@ -37,31 +37,31 @@
 # pressure and $I$ is the identity matrix. Substituting this into the
 # first equation presented above and utilizing the constitutive
 # relation,
-#
+
 # $$\tau = 2\mu \dot\epsilon =
 #   2\mu \operatorname{sym}(\nabla \vec{u}) =
 #   \mu\left[ \nabla \vec{u} + \left(\nabla \vec{u}\right)^T\right] $$
-#
+
 # which relates the deviatoric stress tensor, $\tau$, to the
 # strain-rate tensor, $\dot\epsilon=\operatorname{sym}(\nabla
 # \vec{u})$, yields:
-#
+
 # $$ \nabla \cdot \mu \left[{\nabla\vec{u}} + \left(\nabla\vec{u}\right)^T\right]
 #   - \nabla p + Ra_{0} T\hat{\vec{k}} = 0. $$
-#
+
 # The viscous flow problem can thus be posed in terms of pressure,
 # $p$, velocity, $\vec{u}$, and temperature, $T$.
-#
+
 # The evolution of the thermal field is controlled by an
 # advection-diffusion equation, where, for simplicity, we ignore
 # internal heating:
 # $$ \frac{\partial T}{\partial t} + \vec{u}\cdot \nabla T - \nabla \cdot \left(\kappa \nabla T\right) = 0 $$
 # These governing equations are sufficient to solve for the three
 # unknowns, together with adequate boundary and initial conditions.
-#
+
 # Weak formulation
 # ----------------
-#
+
 # For the finite element discretisation of these equations, we start
 # by writing them in their weak form.  We select appropriate function
 # spaces V, W, and Q that contain, respectively, the solution fields
@@ -69,28 +69,28 @@
 # test functions v, w and q. The weak form is then obtained by
 # multiplying these equations with the test functions and integrating
 # over the domain $\Omega$,
-#
+
 # $$\int_\Omega (\nabla \vec{v})\colon \mu \left[ \nabla \vec{u} + \left( \nabla \vec{u} \right)^T\right] \ dx
 #  - \int_{\Omega} \left( \nabla \cdot \vec{v}\right)\ p \ dx
 #  - \int_{\Omega} Ra_0\ T\ \vec{v}\cdot\hat{k} \ dx = 0 \ \text{ for all } v\in V,$$
-#
+
 # $$ \int_\Omega w \nabla \cdot \vec{u} \ dx\ \text{ for all } v\in V,$$
-#
+
 # $$  \int_\Omega q\frac{\partial T}{\partial t} \ dx
 #   + \int_\Omega q \vec{u}\cdot \nabla T \ dx
 #   + \int_\Omega \left(\nabla q\right) \cdot \left(\kappa \nabla T\right) \ dx = 0   \text{ for all } q\in Q.$$
-#
+
 # Note that we have integrated by parts the viscosity and pressure
 # gradient terms in the Stokes equations, and the diffusion term in
 # the energy equation, but have omitted the corresponding boundary
 # terms.
-#
+
 # Solution procedure
 # ------------------
-#
+
 # For temporal integration, we apply a simple $\theta$ scheme to the
 # energy equation:
-#
+
 # $$
 #   F_{\text{energy}}(q; T^{n+1}) :=
 #     \int_\Omega q \frac{T^{n+1} - T^n}{\Delta t} dx
@@ -99,23 +99,23 @@
 #   T^{n+\theta}\right) dx = 0
 #   \text{ for all } q\in Q,
 # $$
-#
+
 # where
 # $$
 #   T^{n+\theta} = \theta T^{n+1} + (1-\theta) T^n
 # $$
-#
+
 # is interpolated between the temperature solutions $T^n$ and
 # $T^{n+1}$ at the beginning and end of the $n+1$-th time step using a
 # parameter $0\leq\theta\leq 1$.  In this example we use an
 # implicit mid-point scheme, where $\theta = 0.5$.
-#
+
 # To simplify we will solve for velocity and pressure, $\vec{u}$ and
 # $p$, in a separate step before solving for temperature
 # $T$. Since these weak equations need to hold for all test
 # functions $\vec{v}\in V$ and $w\in W$ we can equivalently write,
 # using a single residual functional $F_{\text{Stokes}}$:
-#
+
 # $$
 #   F_{\text{Stokes}}(\vec{v},w; \vec{u}, p) =
 #     \int_\Omega \left(\nabla \vec{v}\right) \colon \mu \left[{\nabla\vec{u}}
@@ -126,24 +126,24 @@
 #   \text{ for all } \vec{v}\in V,
 #   w\in W,
 # $$
-#
+
 # where we have multiplied the continuity equation with $-1$ to ensure
 # symmetry between the $\nabla p$ and $\nabla\cdot u$ terms. This
 # combined weak form that we simultaneously solve for a velocity $u\in
 # V$ and pressure $p\in W$ is referred to as a mixed problem, and the
 # combined solution $(\vec{u}, p)$ is said to be found in the mixed function
 # space $V\oplus W$.
-#
+
 # This example
 # ------------
-#
+
 # Firedrake provides a complete framework for solving finite element
 # problems, highlighted herein with the most
 # basic mantle dynamics problem - isoviscous, incompressible
 # convection, heated from below (T=1), cooled from the top (T=0) in an
 # enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
 # conditions on all boundaries), from Blankenbach et al. (1989).
-#
+
 # Let's get started! The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
 
@@ -152,7 +152,7 @@ from gadopt import *
 # We will set up the problem using a bilinear quadrilateral element
 # pair (Q2-Q1) for velocity and pressure, with Q2 elements for
 # temperature.
-#
+
 # We first need a mesh: for simple domains such as the unit square,
 # Firedrake provides built-in meshing functions. As such, the
 # following code defines the mesh, with 40 quadrilateral elements in x
@@ -162,14 +162,14 @@ from gadopt import *
 # corresponds to the plane $x=0$; 2 to the $x=1$ plane; 3 to the $y=0$ plane;
 # and 4 to the $y=1$ plane. We name these `left`, `right`, `bottom` and `top`,
 # respectively.
-#
+
 # On the mesh, we also denote that our geometry is Cartesian, i.e. gravity points
 # in the negative z-direction. This attribute is used by gadopt specifically, not
 # Firedrake. By contrast, a non-Cartesian geometry is assumed to have gravity
 # pointing in the radially inward direction.
 
 nx, ny = 40, 40  # Number of cells in x and y directions.
-mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
+mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via Firedrake
 mesh.cartesian = True
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 

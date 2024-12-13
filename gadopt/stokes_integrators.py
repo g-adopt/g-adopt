@@ -502,12 +502,12 @@ class ViscoelasticSolver(MassMomentumBase):
     Args:
       solution:
         Firedrake function representing the field over the mixed Stokes space.
-      approximation:
-        G-ADOPT approximation defining terms in the system of equations.
       displ:
         Firedrake function representing the total displacement.
       tau_old:
         Firedrake function representing the deviatoric stress at the previous time step.
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations.
       dt:
         Float representing the simulation's timestep.
       bcs:
@@ -596,7 +596,9 @@ class ViscoelasticSolver(MassMomentumBase):
         # Rescale equations using the Maxwell time to make sure that the solver
         # converges with strong boundary conditions in parallel.
         func = Function(FunctionSpace(self.mesh, "CG", 2))
-        rescale_factor = geometric_mean(func.interpolate(self.maxwell_time).dat.data)
+        rescale_factor = geometric_mean(
+            func.interpolate(1 / self.maxwell_time).dat.data
+        )
 
         for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, eqs_attrs)):
             eq = Equation(

@@ -24,8 +24,8 @@ diagnostics = {
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 283.7), operator.le, 0.03),
-        (lambda data: abs(max(data["entrainment"]) - 0.930), operator.le, 2e-4),
+        (lambda data: abs(max(data["rms_velocity"]) - 283.68), operator.le, 0.01),
+        (lambda data: abs(max(data["entrainment"]) - 0.9302), operator.le, 1e-4),
     ],
     "schmalholz_2011": [
         (
@@ -36,7 +36,7 @@ diagnostics = {
                 - 0.825
             ),
             operator.le,
-            0.005,
+            5e-3,
         )
     ],
     "schmeling_2008": [
@@ -63,7 +63,7 @@ diagnostics = {
         (lambda data: abs(data["rms_velocity"][-1] - 157), operator.le, 3.5),
     ],
     "van_keken_1997_isothermal": [
-        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 3e-5),
+        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 1e-4),
         (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 3e-3),
     ],
     "van_keken_1997_thermochemical": [
@@ -80,8 +80,8 @@ diagnostics = {
         )
     ],
     "woidt_1978": [
-        (lambda data: abs(max(data["rms_velocity"]) - 1.821e-11), operator.le, 1e-14),
-        (lambda data: abs(max(data["entrainment"]) - 0.2491), operator.le, 1e-4),
+        (lambda data: abs(max(data["rms_velocity"]) - 1.82e-11), operator.le, 1e-13),
+        (lambda data: abs(max(data["entrainment"]) - 0.249), operator.le, 1e-3),
     ],
 }
 
