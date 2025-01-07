@@ -11,7 +11,7 @@ def callback():
     optimisation_file.write(psi_opt)
 
     psi_check = psi.block_variable.checkpoint
-    psi_grad_check = psi_grad_proj.block_variable.checkpoint
+    psi_grad_check = psi_grad.block_variable.checkpoint
 
     misfit = assemble((psi_check - psi_obs) ** 2 * dx)
     reinitialisation = assemble(
@@ -48,8 +48,7 @@ psi_opt = Function(C, name="Level-set optimisation")
 psi_control.project(psi_obs)
 psi.project(psi_control)
 
-local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-epsilon = Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+epsilon = interface_thickness(psi)
 
 mu_slab = 1e23
 mu_mantle = 1e21
@@ -70,7 +69,7 @@ t_adapt = TimestepAdaptor(delta_t, u, z.function_space()[0], target_cfl=0.6)
 
 stokes_bcs = {
     bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 0, "rho_ext": 0}},
+    top_id: {"free_surface": {"eta_index": 2, "rho_ext": 0}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
@@ -78,13 +77,15 @@ stokes_bcs = {
 stokes_solver = StokesSolver(z, approximation, bcs=stokes_bcs, timestep_fs=delta_t)
 del stokes_solver.solver_parameters["snes_monitor"]
 
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
-psi_grad_proj = level_set_solver.ls_grad_proj
+adv_kwargs = {"u": u, "timestep": delta_t}
+reini_kwargs = {"epsilon": epsilon}
+level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
+psi_grad = level_set_solver.solution_grad
 
 time_now, time_end = 0, 25e6 * 365.25 * 8.64e4
 
 output_file = VTKFile("inverse_output.pvd")
-output_file.write(*z.subfunctions, psi, psi_grad_proj, time=time_now)
+output_file.write(*z.subfunctions, psi, psi_grad, time=time_now)
 optimisation_file = VTKFile("optimisation_output.pvd")
 
 step = 0
@@ -92,20 +93,20 @@ while True:
     t_adapt.maximum_timestep = time_end - time_now
     t_adapt.update_timestep()
 
-    level_set_solver.solve(step, equation="advection")
+    level_set_solver.solve(disable_reinitialisation=True)
     level_set_solver.update_level_set_gradient()
     stokes_solver.solve()
 
     time_now += float(delta_t)
     step += 1
 
-    output_file.write(*z.subfunctions, psi, psi_grad_proj, time=time_now)
+    output_file.write(*z.subfunctions, psi, psi_grad, time=time_now)
 
     if time_now >= time_end:
         break
 
 psi_misfit = assemble((psi - psi_obs) ** 2 * dx)
-psi_reini = assemble(reinitialisation_steady(psi, psi_grad_proj) ** 2 * dx)
+psi_reini = assemble(reinitialisation_steady(psi, psi_grad) ** 2 * dx)
 objective = psi_misfit + psi_reini
 reduced_functional = ReducedFunctional(objective, Control(psi_control))
 

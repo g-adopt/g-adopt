@@ -129,7 +129,9 @@ approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e4})
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 20_000  # Maximum number of timesteps
-t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+t_adapt = TimestepAdaptor(
+    delta_t, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=0.1
+)
 steady_state_tolerance = 1e-9
 
 # We set up the initial conditions for the temperature field.
@@ -173,7 +175,7 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 # +
 stokes_bcs = {
     bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 0, "Ra_fs": 1e5}},
+    top_id: {"free_surface": {"eta_index": 2, "Ra_fs": 1e5}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
@@ -181,7 +183,7 @@ stokes_bcs = {
 temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
 # -
 
-# Let's setup some output files.
+# Let's set up some output files.
 
 # +
 output_file = VTKFile("output.pvd")
@@ -195,7 +197,7 @@ plog.log_str(
 gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 # -
 
-# Now let's setup the solver objects.
+# Now let's set up the solver objects.
 
 # First of all, as the Stokes equation now includes a time dependent
 # boundary condition we need to pass the timestep to the Stokes solver.
@@ -213,8 +215,9 @@ energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
-stokes_solver = StokesSolver(z, approximation, T, bcs=stokes_bcs, timestep_fs=delta_t)
-
+stokes_solver = StokesSolver(
+    z, approximation, T, coupled_tstep=delta_t, theta=0.5, bcs=stokes_bcs
+)
 # -
 
 # Now let's run the simulation!

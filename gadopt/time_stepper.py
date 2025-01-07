@@ -32,7 +32,6 @@ class TimeIntegratorBase(ABC):
             Current simulation time
 
         """
-        raise NotImplementedError
 
     @abstractmethod
     def initialise(self, init_solution):
@@ -42,7 +41,6 @@ class TimeIntegratorBase(ABC):
           init_solution: Firedrake function representing the initial solution.
 
         """
-        raise NotImplementedError
 
 
 class TimeIntegrator(TimeIntegratorBase):
@@ -104,7 +102,6 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
     @abstractmethod
     def get_final_solution(self):
         """Evaluates the final solution"""
-        raise NotImplementedError
 
     @abstractmethod
     def solve_stage(
@@ -118,7 +115,6 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         All functions that the equation depends on must be at right state corresponding
         to each sub-step.
         """
-        raise NotImplementedError
 
     def advance(
         self, update_forcings: Callable | None = None, t: float | None = None
@@ -395,19 +391,16 @@ class AbstractRKScheme(ABC):
     @abstractmethod
     def a(self):
         """Runge-Kutta matrix :math:`a_{i,j}` of the Butcher tableau"""
-        raise NotImplementedError
 
     @property
     @abstractmethod
     def b(self):
         """weights :math:`b_{i}` of the Butcher tableau"""
-        raise NotImplementedError
 
     @property
     @abstractmethod
     def c(self):
         """nodes :math:`c_{i}` of the Butcher tableau"""
-        raise NotImplementedError
 
     @property
     @abstractmethod
@@ -417,7 +410,6 @@ class AbstractRKScheme(ABC):
         Value 1.0 corresponds to Forward Euler time step.
 
         """
-        raise NotImplementedError
 
     def __init__(self) -> None:
         super().__init__()

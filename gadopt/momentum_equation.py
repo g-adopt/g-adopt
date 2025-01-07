@@ -23,7 +23,7 @@ and then return `-F`.
 from firedrake import *
 
 from .equations import Equation, interior_penalty_factor
-from .utility import is_continuous, normal_is_continuous, tensor_jump, upward_normal
+from .utility import is_continuous, tensor_jump, upward_normal
 
 
 def viscosity_term(
@@ -48,8 +48,9 @@ def viscosity_term(
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
+    m = getattr(eq, "m", ())
     stress_old = getattr(eq, "stress_old", 0.0)
-    stress = eq.approximation.stress(trial, stress_old)
+    stress = eq.approximation.stress(trial, m=m, stress_old=stress_old)
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
     dim = eq.mesh.geometric_dimension()
@@ -78,11 +79,11 @@ def viscosity_term(
     for bc_id, bc in eq.bcs.items():
         if "u" in bc and any(bc_type in bc for bc_type in ["stress", "un"]):
             raise ValueError(
-                '"stress" or "un" cannot be specified if "u" is already given.'
+                "'stress' or 'un' cannot be specified if 'u' is already given."
             )
         if "normal_stress" in bc and any(bc_type in bc for bc_type in ["u", "un"]):
             raise ValueError(
-                '"u" or "un" cannot be specified if "normal_stress" is already given.'
+                "'u' or 'un' cannot be specified if 'normal_stress' is already given."
             )
 
         if "u" in bc:
@@ -133,7 +134,7 @@ def viscosity_term(
 def pressure_gradient_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
-    assert normal_is_continuous(eq.test)
+    assert is_continuous(eq.test, normal=True)
 
     F = -dot(div(eq.test), eq.p) * eq.dx
 
@@ -164,7 +165,7 @@ def momentum_source_term(
 def divergence_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
-    assert normal_is_continuous(eq.u)
+    assert is_continuous(eq.u, normal=True)
 
     rho = eq.approximation.rho_flux
     F = -dot(eq.test, div(rho * eq.u)) * eq.dx
@@ -180,7 +181,7 @@ def divergence_term(
 
 
 viscosity_term.required_attrs = set()
-viscosity_term.optional_attrs = {"stress_old", "interior_penalty"}
+viscosity_term.optional_attrs = {"m", "stress_old", "interior_penalty"}
 pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
 momentum_source_term.required_attrs = set()
@@ -188,6 +189,8 @@ momentum_source_term.optional_attrs = {"p", "T", "displ"}
 divergence_term.required_attrs = {"u"}
 divergence_term.optional_attrs = set()
 
-residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]
+residual_terms_momentum = [viscosity_term, pressure_gradient_term, momentum_source_term]
 residual_terms_mass = divergence_term
 residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]
+
+residual_terms_compressible_viscoelastic = [momentum_source_term, viscosity_term]

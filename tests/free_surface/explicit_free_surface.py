@@ -146,11 +146,7 @@ class ExplicitFreeSurfaceModel:
             self.z, self.approximation, bcs=self.stokes_bcs
         )
 
-        eq_attrs = {
-            "boundary_id": self.top_id,
-            "buoyancy_scale": 1,
-            "u": self.stokes_vars[0],
-        }
+        eq_attrs = {"boundary_id": self.top_id, "buoyancy": 1, "u": self.stokes_vars[0]}
 
         # Setup remaining free surface parameters needed for explicit coupling
         eta_eq = Equation(

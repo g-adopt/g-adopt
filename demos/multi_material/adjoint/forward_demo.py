@@ -1,6 +1,4 @@
-import numpy as np
-import shapely as sl
-from mpi4py import MPI
+from numpy import linspace
 
 from gadopt import *
 
@@ -28,23 +26,19 @@ z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 psi = Function(K, name="Level set")
 
-interface_deflection = 0.1
-interface_wavelength = 2 * lx
-material_interface_y = 0.2
+interface_coords_x = linspace(0, lx, 1000)
+interface_args = (
+    interface_deflection := 0.1,
+    perturbation_wavelength := 2 * lx,
+    initial_interface_y := 0.2,
+)
+signed_distance_kwargs = curve_interface(
+    interface_coords_x, curve="cosine", curve_args=interface_args
+)
 
-isd_params = (interface_deflection, interface_wavelength, material_interface_y)
-
-interface_x = np.linspace(0, lx, 1000)
-interface_y = cosine_curve(interface_x, *isd_params)
-interface = sl.LineString([*np.column_stack((interface_x, interface_y))])
-sl.prepare(interface)
-
-signed_distance = [
-    (1 if y > cosine_curve(x, *isd_params) else -1) * interface.distance(sl.Point(x, y))
-    for x, y in node_coordinates(psi)
-]
-epsilon = psi.comm.allreduce(mesh.cell_sizes.dat.data.min() / 4, MPI.MIN)
-psi.dat.data[:] = (1 + np.tanh(np.asarray(signed_distance) / 2 / epsilon)) / 2
+signed_distance_array = signed_distance(psi, **signed_distance_kwargs)
+epsilon = interface_thickness(psi)
+psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 
 Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="sharp")
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
@@ -69,7 +63,9 @@ stokes_solver.solve()
 delta_t = Function(R).assign(1.0)
 t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
+adv_kwargs = {"u": u, "timestep": delta_t}
+reini_kwargs = {"epsilon": epsilon}
+level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 
 time_now, time_end = 0, 150
 
@@ -81,7 +77,7 @@ while True:
     t_adapt.maximum_timestep = time_end - time_now
     t_adapt.update_timestep()
 
-    level_set_solver.solve(step)
+    level_set_solver.solve()
     stokes_solver.solve()
 
     time_now += float(delta_t)

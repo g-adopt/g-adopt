@@ -154,30 +154,45 @@ class CombinedSurfaceMeasure(ufl.Measure):
         return other * self.ds_v + other * self.ds_t + other * self.ds_b
 
 
-def _get_element(ufl_or_element):
-    if isinstance(ufl_or_element, ufl.AbstractFiniteElement):
-        return ufl_or_element
-    else:
-        return ufl_or_element.ufl_element()
+def is_continuous(expr, normal: bool = False) -> bool:
+    element_space = ufl.HDiv if normal else ufl.H1
 
+    ufl_algebra = (ufl.algebra.Division, ufl.algebra.Product, ufl.algebra.Sum)
+    compatible_types = (Function, ufl.indexed.Indexed, ufl.tensors.ListTensor)
 
-def is_continuous(expr) -> bool:
-    if isinstance(expr, ufl.tensors.ListTensor):
-        return all(is_continuous(x) for x in expr.ufl_operands)
-
-    if isinstance(expr, ufl.indexed.Indexed):
+    if isinstance(expr, AbstractFiniteElement):
+        return expr in element_space
+    elif isinstance(expr, (functionspaceimpl.WithGeometry, Function)):
+        return expr.ufl_element() in element_space
+    elif isinstance(expr, ufl.indexed.Indexed):
         elem = expr.ufl_operands[0].ufl_element()
-        if isinstance(elem, MixedElement):
-            # the second operand is a MultiIndex
-            assert len(expr.ufl_operands[1]) == 1
-            sub_element_index, _ = elem.extract_subelement_component(
-                int(expr.ufl_operands[1][0])
-            )
-            elem = elem.sub_elements[sub_element_index]
-    else:
-        elem = _get_element(expr)
 
-    return elem in ufl.H1
+        if isinstance(elem, MixedElement):
+            multi_index = expr.ufl_operands[1]
+            assert len(multi_index) == 1
+            return True
+            sub_elem_index, _ = elem.extract_subelement_component(multi_index[0])
+            elem = elem.sub_elements[sub_elem_index]
+
+        return elem in element_space
+    elif isinstance(expr, ufl.tensors.ListTensor):
+        return all(is_continuous(operand) for operand in expr.ufl_operands)
+    elif isinstance(expr, ufl_algebra):
+        continuity = []
+        expr_list = [expr]
+
+        while expr_list:
+            for operand in expr_list.pop().ufl_operands:
+                if isinstance(operand, compatible_types):
+                    continuity.append(is_continuous(operand))
+                elif isinstance(operand, ufl_algebra):
+                    expr_list.append(operand)
+                else:
+                    continue
+
+        return all(continuity)
+    else:
+        raise ValueError(f"Continuity test not implemented for {type(expr)}.")
 
 
 def depends_on(ufl_expr, terminal) -> bool:
@@ -186,17 +201,6 @@ def depends_on(ufl_expr, terminal) -> bool:
         return False
     else:
         return terminal in traverse_unique_terminals(ufl_expr)
-
-
-def normal_is_continuous(expr) -> bool:
-    # if we get some list expression, we can't guarantee its normal is continuous
-    # unless all components are
-    if isinstance(expr, ufl.tensors.ListTensor):
-        return is_continuous(expr)
-
-    elem = _get_element(expr)
-
-    return elem in ufl.HDiv
 
 
 def tensor_jump(v, n):

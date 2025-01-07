@@ -229,7 +229,9 @@ approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e4})
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
 timesteps = 20_000  # Maximum number of timesteps
-t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
+t_adapt = TimestepAdaptor(
+    delta_t, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=0.1
+)
 
 # Used to determine if solution has reached a steady state.
 steady_state_tolerance = 1e-9
@@ -341,14 +343,14 @@ stokes_solver = StokesSolver(
 )
 # -
 
-# We can now initiate the time-loop, with the Stokes and energy
-# systems solved seperately. These `solve` calls once again convert
-# symbolic mathematics into computation. In the time loop, set here to
-# run for a maximum of 20000 time-steps, we output in VTK format every 50 timesteps.
-# The timestep itself is updated, using the update_timestep function, with diagnostics logged via the log utility
-# at every timestep. At the end of each time step, we calculate the L2-norm of
-# the change in temperature and, once this drops below the steady_state_tolerance specified above,
-# we exit the timeloop.
+# We can now initiate the time-loop, with the Stokes and energy systems solved
+# separately. These `solve` calls once again convert symbolic mathematics into
+# computation. In the time loop, set here to run for a maximum of 20,000 time-steps, we
+# output in VTK format every 50 timesteps. The timestep itself is updated, using the
+# update_timestep function, with diagnostics recorded via the log utility at every
+# timestep. At the end of each time step, we calculate the L2-norm of the change in
+# temperature and, once this drops below the steady-state tolerance specified above, we
+# exit the timeloop.
 
 for timestep in range(timesteps):
     # Write output:

@@ -39,8 +39,8 @@ args = parser.parse_args()
 def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", G=1e11):
     # Set up geometry:
     nz = nx  # Number of vertical cells
-    D = 3e6  # Length of domain in m
-    L = D / 2  # Depth of the domain in m
+    D = 3e6  # Depth of the domain in m
+    L = D / 2  # Length of domain in m
     mesh = RectangleMesh(nx, nz, L, D)  # Rectangle mesh generated via Firedrake
     mesh.cartesian = True
     mesh.coordinates.dat.data[:, -1] -= D

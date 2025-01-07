@@ -86,6 +86,7 @@ class Approximation:
             cp: isobaric specific heat capacity (considered constant under BA)
             G: shear modulus (only used in SDVA)
             g: acceleration of gravity
+            K: bulk modulus (only used in CIVA)
             k: thermal conductivity
             mu: dynamic viscosity
             rho: density (considered constant under BA)
@@ -99,30 +100,36 @@ class Approximation:
     have depth-dependent variations under the Boussinesq approximation.
     """
 
-    _presets = ["BA", "EBA", "TALA", "ALA", "SDVA"]
+    _presets = ["BA", "EBA", "TALA", "ALA", "SDVA", "CIVA"]
     _equations = ["momentum", "mass", "energy"]
 
-    _momentum_components = {"BA": ["compositional_buoyancy", "thermal_buoyancy"]}
-    _momentum_components["EBA"] = _momentum_components["BA"] + []
+    _momentum_components = {}
+    _momentum_components["BA"] = ["compositional_buoyancy", "thermal_buoyancy"]
+    _momentum_components["EBA"] = _momentum_components["BA"]
     _momentum_components["TALA"] = _momentum_components["EBA"] + ["compressible_stress"]
     _momentum_components["ALA"] = _momentum_components["TALA"] + [
         "compressible_buoyancy"
     ]
     _momentum_components["SDVA"] = ["viscoelastic_buoyancy"]
+    _momentum_components["CIVA"] = _momentum_components["SDVA"] + [
+        "compressible_stress"
+    ]
 
-    _mass_components = {"BA": ["volume_continuity"]}
-    _mass_components["EBA"] = _mass_components["BA"] + []
+    _mass_components = {}
+    _mass_components["BA"] = ["volume_continuity"]
+    _mass_components["EBA"] = _mass_components["BA"]
     _mass_components["TALA"] = ["mass_continuity"]
-    _mass_components["ALA"] = _mass_components["TALA"] + []
+    _mass_components["ALA"] = _mass_components["TALA"]
     _mass_components["SDVA"] = ["volume_continuity"]
 
-    _energy_components = {"BA": ["heat_source"]}
+    _energy_components = {}
+    _energy_components["BA"] = ["heat_source"]
     _energy_components["EBA"] = _energy_components["BA"] + [
         "adiabatic_compression",
         "viscous_dissipation",
     ]
-    _energy_components["TALA"] = _energy_components["EBA"] + []
-    _energy_components["ALA"] = _energy_components["TALA"] + []
+    _energy_components["TALA"] = _energy_components["EBA"]
+    _energy_components["ALA"] = _energy_components["TALA"]
 
     def __init__(
         self,
@@ -170,9 +177,11 @@ class Approximation:
             self.set_heat_source()
             self.set_viscous_dissipation()
 
+    ####################################################################################
+
     def check_reference_profiles(self) -> None:
         """Ensures reference profiles are defined for non-dimensional systems."""
-        for attribute in ["alpha", "chi", "cp", "G", "g", "k", "mu", "rho"]:
+        for attribute in ["alpha", "chi", "cp", "G", "g", "K", "k", "mu", "rho"]:
             if not hasattr(self, attribute):
                 setattr(self, attribute, fd.Constant(1.0))
 
@@ -195,6 +204,8 @@ class Approximation:
                 self.k = self.kappa * self.rho * self.cp
             else:
                 assert self.kappa == self.k / self.rho / self.cp
+
+    ####################################################################################
 
     def set_adiabatic_compression(self) -> None:
         """Defines the adiabatic compression factor in the energy conservation."""
@@ -239,7 +250,10 @@ class Approximation:
         """Defines the compressible stress factor in the momentum conservation."""
         self.compressible_stress = 0.0
         if "compressible_stress" in self.momentum_components:
-            self.compressible_stress = 2 / 3 * self.mu
+            if self.preset == "CIVA":
+                self.compressible_stress = -self.K
+            else:
+                self.compressible_stress = 2 / 3 * self.mu
 
     def set_heat_source(self) -> None:
         """Defines the heat source term in the energy conservation."""
@@ -266,6 +280,8 @@ class Approximation:
             self.viscous_dissipation_factor = 1.0
             if not self.dimensional:
                 self.viscous_dissipation_factor *= self.Di / self.Ra
+
+    ####################################################################################
 
     def buoyancy(
         self,
@@ -317,8 +333,21 @@ class Approximation:
         """Calculates the energy sink term in the energy conservation."""
         return self.adiabatic_compression * vertical_component(u)
 
+    def strain(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
+        """Calculates the strain term in the momentum conservation."""
+        identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
+
+        incompressible_part = fd.sym(fd.grad(u))
+        compressible_part = -1 / 3 * fd.tr(incompressible_part) * identity
+
+        return incompressible_part + compressible_part
+
     def stress(
-        self, u: fd.ufl.indexed.Indexed, stress_old: float | fd.Function = 0.0
+        self,
+        u: fd.ufl.indexed.Indexed,
+        *,
+        m: tuple[fd.ufl.indexed.Indexed] | None = None,
+        stress_old: float | fd.Function = 0.0,
     ) -> fd.ufl.algebra.Sum:
         """Calculates the stress term in momentum and energy conservations.
 
@@ -326,12 +355,19 @@ class Approximation:
         """
         identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
 
-        stokes_part = 2 * self.mu * fd.sym(fd.grad(u))
-        compressible_part = -self.compressible_stress * fd.div(u) * identity
-        if isinstance(stress_old, float):
-            stress_old *= identity
+        if self.preset == "CIVA":
+            compressive_part = -self.compressible_stress * fd.div(u) * identity
+            shear_part = 2 * len(m) * self.G * self.strain(u)
+            internal_variable_part = -2 * self.G * sum(m)
 
-        return stokes_part + compressible_part + stress_old
+            return compressive_part + shear_part + internal_variable_part
+        else:
+            stokes_part = 2 * self.mu * fd.sym(fd.grad(u))
+            compressible_part = -self.compressible_stress * fd.div(u) * identity
+            if isinstance(stress_old, float):
+                stress_old *= identity
+
+            return stokes_part + compressible_part + stress_old
 
     def viscous_dissipation(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Product:
         """Calculates the viscous dissipation term in the energy conservation."""

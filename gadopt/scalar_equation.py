@@ -23,7 +23,7 @@ and then return `-F`.
 from firedrake import *
 
 from .equations import Equation, interior_penalty_factor
-from .utility import is_continuous, normal_is_continuous
+from .utility import is_continuous
 
 
 def advection_term(
@@ -42,7 +42,7 @@ def advection_term(
         F = -trial * div(eq.test * u) * eq.dx
         F += trial * dot(eq.n, u) * eq.test * eq.ds  # Boundary term in the weak form
 
-        if not (is_continuous(eq.trial_space) and normal_is_continuous(eq.u)):
+        if not (is_continuous(eq.trial_space) and is_continuous(eq.u, normal=True)):
             # s = 0: u.n(-) < 0 => flow goes from '+' to '-' => '+' is upwind
             # s = 1: u.n(-) > 0 => flow goes from '-' to '+' => '-' is upwind
             s = 0.5 * (sign(dot(avg(u), eq.n("-"))) + 1.0)
@@ -126,7 +126,7 @@ def diffusion_term(
 
 def source_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
     r"""Scalar source term `s_T`."""
-    F = -dot(eq.test, eq.source) * eq.dx
+    F = -inner(eq.test, eq.source) * eq.dx
 
     return -F
 
@@ -134,7 +134,7 @@ def source_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) 
 def sink_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
     r"""Scalar sink term `\alpha_T T`."""
     # Implement sink term implicitly at current time step.
-    F = dot(eq.test, eq.sink_coeff * trial) * eq.dx
+    F = inner(eq.test, eq.sink_coeff * trial) * eq.dx
 
     return -F
 
@@ -152,7 +152,7 @@ def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
         The UFL form associated with the mass term of the equation.
 
     """
-    return dot(eq.test, trial) * eq.dx
+    return inner(eq.test, trial) * eq.dx
 
 
 advection_term.required_attrs = {"u"}
@@ -163,3 +163,5 @@ source_term.required_attrs = {"source"}
 source_term.optional_attrs = set()
 sink_term.required_attrs = {"sink_coeff"}
 sink_term.optional_attrs = set()
+
+residual_terms_internal_variable = [source_term, sink_term]

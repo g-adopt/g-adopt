@@ -30,10 +30,10 @@ def curve_interface(
     """Material interface defined by a curve.
 
     Implemented curve types and associated arguments:
-    | Curve  |               Arguments               |
-    | :----- | :-----------------------------------: |
-    | line   | slope, intercept                      |
-    | cosine | amplitude, wavelength, vertical_shift |
+    | Curve  |                     Arguments                      |
+    | :----- | :------------------------------------------------: |
+    | line   | slope, intercept                                   |
+    | cosine | amplitude, wavelength, vertical_shift, phase_shift |
 
     Args:
       interface_coords_x:
@@ -51,9 +51,11 @@ def curve_interface(
         """Straight line equation"""
         return slope * x + intercept
 
-    def cosine(x, amplitude, wavelength, vertical_shift):
+    def cosine(x, amplitude, wavelength, vertical_shift, phase_shift=0):
         """Cosine function with an amplitude and a vertical shift."""
-        return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
+        cosine = np.cos(2 * np.pi / wavelength * x + phase_shift)
+
+        return amplitude * cosine + vertical_shift
 
     curves = {"line": line, "cosine": cosine}
     if isinstance(curve, str):
@@ -306,7 +308,7 @@ class LevelSetSolver:
 
         Valid keys for `adv_kwargs`:
         |    Argument     | Required |                   Description                   |
-        | --------------- | :------: | :---------------------------------------------: |
+        | :-------------- | :------: | :---------------------------------------------: |
         | u               | True     | Velocity field (`Function`)                     |
         | timestep        | True     | Integration time step (`Constant`)              |
         | time_integrator | False    | Time integrator (class in `time_stepper.py`)    |
@@ -316,7 +318,7 @@ class LevelSetSolver:
 
         Valid keys for `reini_kwargs`:
         |    Argument     | Required |                   Description                   |
-        | --------------- | :------: | :---------------------------------------------: |
+        | :-------------- | :------: | :---------------------------------------------: |
         | epsilon         | True     | Interface thickness (`float` or `Function`)     |
         | timestep        | False    | Integration step in pseudo-time (`int`)         |
         | time_integrator | False    | Time integrator (class in `time_stepper.py`)    |
@@ -333,6 +335,7 @@ class LevelSetSolver:
             A dictionary with parameters used to set up reinitialisation
         """
         self.solution = level_set
+        self.solution_old = fd.Function(self.solution)
         self.solution_space = level_set.function_space()
         self.advection = False
         self.reinitialisation = False
@@ -454,8 +457,6 @@ class LevelSetSolver:
 
     def set_up_solvers(self) -> None:
         """Sets up time integrators for advection and reinitialisation as required."""
-        self.solution_old = fd.Function(self.solution_space)
-
         if self.advection:
             self.adv_solver = GenericTransportSolver(
                 "advection",

@@ -11,7 +11,7 @@ def callback(psi_control, psi_opt, optimisation_file):
     optimisation_file.write(psi_opt)
 
     psi_check = psi.block_variable.checkpoint
-    psi_grad_check = psi_grad_proj.block_variable.checkpoint
+    psi_grad_check = psi_grad.block_variable.checkpoint
 
     misfit = assemble((psi_check - psi_obs) ** 2 * dx)
     reinitialisation = assemble(
@@ -35,7 +35,7 @@ def simulation(iteration: int) -> None:
     time_now = 0
 
     output_file = VTKFile(f"inverse_output_{iteration}.pvd")
-    output_file.write(*z.subfunctions, psi, psi_grad_proj, time=time_now)
+    output_file.write(*z.subfunctions, psi, psi_grad, time=time_now)
     optimisation_file = VTKFile(f"optimisation_output_{iteration}.pvd")
 
     step = 0
@@ -43,20 +43,20 @@ def simulation(iteration: int) -> None:
         t_adapt.maximum_timestep = time_increment - time_now
         t_adapt.update_timestep()
 
-        level_set_solver.solve(step, equation="advection")
+        level_set_solver.solve(disable_reinitialisation=True)
         level_set_solver.update_level_set_gradient()
         stokes_solver.solve()
 
         time_now += float(delta_t)
         step += 1
 
-        output_file.write(*z.subfunctions, psi, psi_grad_proj, time=time_now)
+        output_file.write(*z.subfunctions, psi, psi_grad, time=time_now)
 
         if time_now >= time_increment:
             break
 
     psi_misfit = assemble((psi - psi_obs) ** 2 * dx)
-    psi_reini = assemble(reinitialisation_steady(psi, psi_grad_proj) ** 2 * dx)
+    psi_reini = assemble(reinitialisation_steady(psi, psi_grad) ** 2 * dx)
     objective = psi_misfit + psi_reini
     reduced_functional = ReducedFunctional(objective, Control(psi_control))
 
@@ -114,7 +114,7 @@ z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 psi = Function(psi_obs, name="Level-set")
 
-epsilon = psi.comm.allreduce(mesh.cell_sizes.dat.data.min() / 4, MPI.MIN)
+epsilon = interface_thickness(psi)
 
 Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="arithmetic")
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
@@ -139,8 +139,10 @@ stokes_solver = StokesSolver(
 )
 del stokes_solver.solver_parameters["snes_monitor"]
 
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, epsilon)
-psi_grad_proj = level_set_solver.ls_grad_proj
+adv_kwargs = {"u": u, "timestep": delta_t}
+reini_kwargs = {"epsilon": epsilon}
+level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
+psi_grad = level_set_solver.solution_grad
 
 target_time = 150
 time_increment = 30

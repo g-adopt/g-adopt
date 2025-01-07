@@ -43,7 +43,7 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
         # Free surface boundary conditions are applied automatically in
         # stokes_integrators and momentum_equation for implicit free surface coupling.
         self.stokes_bcs = {
-            self.top_id: {"free_surface": {"eta_index": 0, "Ra_fs": 1}},
+            self.top_id: {"free_surface": {"eta_index": 2, "Ra_fs": 1}},
             self.bottom_id: {"un": 0},
             self.left_id: {"un": 0},
             self.right_id: {"un": 0},
@@ -53,6 +53,8 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
         self.stokes_solver = StokesSolver(
             self.z,
             self.approximation,
+            coupled_tstep=self.dt,
+            theta=0.5,
             bcs=self.stokes_bcs,
             solver_parameters=self.solver_parameters,
             nullspace={
@@ -60,7 +62,6 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
                 "transpose_nullspace": self.Z_nullspace,
                 "near_nullspace": self.Z_near_nullspace,
             },
-            timestep_fs=self.dt,
         )
 
     def calculate_error(self):

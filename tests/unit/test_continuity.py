@@ -1,6 +1,8 @@
+from functools import partial
+
 import firedrake as fd
 
-from gadopt.utility import get_functionspace, is_continuous, normal_is_continuous
+from gadopt.utility import get_functionspace, is_continuous
 
 
 def assert_continuity_test(V, continuity_test, expected):
@@ -17,7 +19,7 @@ def assert_continuity(V, expected=True):
 
 
 def assert_normal_continuity(V, expected=True):
-    assert_continuity_test(V, normal_is_continuous, expected)
+    assert_continuity_test(V, partial(is_continuous, normal=True), expected)
 
 
 def test_continuity():

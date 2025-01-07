@@ -51,6 +51,8 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
             self.z,
             self.approximation,
             self.T,
+            coupled_tstep=self.dt,
+            theta=0.5,
             bcs=self.stokes_bcs,
             solver_parameters=self.solver_parameters,
             nullspace={
@@ -58,7 +60,6 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
                 "transpose_nullspace": self.Z_nullspace,
                 "near_nullspace": self.Z_near_nullspace,
             },
-            timestep_fs=self.dt,
         )
 
     def update_analytical_free_surfaces(self):

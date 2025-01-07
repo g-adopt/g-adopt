@@ -48,7 +48,7 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     def setup_bcs(self):
         super().setup_bcs()
         self.stokes_bcs[self.bottom_id] = {
-            "free_surface": {"eta_index": 1, "Ra_fs": -1}
+            "free_surface": {"eta_index": 3, "Ra_fs": -1}
         }
 
     def update_analytical_free_surfaces(self):

@@ -49,7 +49,7 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         # Free surface boundary conditions are applied automatically in
         # stokes_integrators and momentum_equation for implicit free surface coupling.
         self.stokes_bcs = {
-            self.top_id: {"free_surface": {"eta_index": 0, "Ra_fs": 1}},
+            self.top_id: {"free_surface": {"eta_index": 2, "Ra_fs": 1}},
             self.bottom_id: {"un": 0},
         }
 

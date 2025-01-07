@@ -120,13 +120,15 @@ t_adapt = TimestepAdaptor(
 # +
 stokes_bcs = {
     bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 0, "rho_ext": 0}},
+    top_id: {"free_surface": {"eta_index": 2, "rho_ext": 0}},
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
 # Instantiate a solver object for the Stokes system and perform a solve to obtain
 # initial pressure and velocity.
-stokes_solver = StokesSolver(z, approximation, bcs=stokes_bcs, timestep_fs=delta_t)
+stokes_solver = StokesSolver(
+    z, approximation, coupled_tstep=delta_t, theta=0.5, bcs=stokes_bcs
+)
 stokes_solver.solve()
 
 # Instantiate a solver object for level-set advection and reinitialisation. G-ADOPT

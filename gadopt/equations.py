@@ -45,7 +45,7 @@ class Equation:
         quad_degree:
           Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
           where p is the polynomial degree of the trial space.
-        rescale_factor:
+        scaling_factor:
           A constant factor used to rescale mass and residual terms.
 
     """
@@ -59,7 +59,7 @@ class Equation:
     approximation: Approximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[int | None] = None
-    rescale_factor: Number | fd.Constant = 1
+    scaling_factor: Number = 1
 
     def __post_init__(
         self,
@@ -116,15 +116,14 @@ class Equation:
         self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
     ) -> fd.Form:
         """Generates the UFL form corresponding to the mass term."""
-
-        return self.rescale_factor * self.mass_term(self, trial)
+        return self.scaling_factor * self.mass_term(self, trial)
 
     def residual(
         self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
     ) -> fd.Form:
         """Generates the UFL form corresponding to the residual terms."""
 
-        return self.rescale_factor * sum(
+        return self.scaling_factor * sum(
             term(self, trial) for term in self.residual_terms
         )
 
@@ -152,7 +151,7 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     elif cell_type == "tetrahedron":
         return (p + 1) * (p + 3) / 3
     else:
-        raise NotImplementedError("Unknown cell type in mesh: {}".format(cell_type))
+        raise ValueError("Unknown cell type in mesh: {}".format(cell_type))
 
 
 def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
