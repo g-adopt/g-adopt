@@ -9,7 +9,6 @@ from firedrake import sqrt, Function, FiniteElement, TensorProductElement, Funct
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
-import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import finat.ufl
@@ -23,8 +22,6 @@ from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
 import gc
-from typing import Optional
-from numbers import Number
 
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
@@ -518,13 +515,3 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
     averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
-
-
-def node_coordinates(function):
-    """Extract mesh coordinates and interpolate them onto the relevant function space"""
-    func_space = function.function_space()
-    mesh_coords = SpatialCoordinate(func_space.mesh())
-
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]
