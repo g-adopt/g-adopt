@@ -1,8 +1,6 @@
 from firedrake import *
 from firedrake.petsc import PETSc
 # from gadopt.inverse import *
-from gadopt import timer_decorator
-import numpy as np
 import libgplates
 from wrappers import collect_garbage
 
@@ -286,7 +284,7 @@ Z_near_nullspace = MixedVectorSpaceBasis(Z, [V_near_nullspace, Z.sub(1)])
 u_.rename("Velocity")
 p_.rename("Pressure")
 
-NonlinearVariationalSolver.solve = collect_garbage(NonlinearVariationalSolver.solve) 
+NonlinearVariationalSolver.solve = collect_garbage(NonlinearVariationalSolver.solve)
 
 # Setup problem and solver objects so we can reuse (cache) solver setup
 stokes_problem = NonlinearVariationalProblem(
@@ -346,7 +344,7 @@ objective = t_misfit
 
 # # All done with the forward run, stop annotating anything else to the tape
 # pause_annotation()
-# 
+#
 # # timer decorator for fwd and derivative calls.
 # ReducedFunctional.__call__ = collect_garbage(
 #     timer_decorator(ReducedFunctional.__call__)
@@ -354,15 +352,15 @@ objective = t_misfit
 # ReducedFunctional.derivative = collect_garbage(
 #     timer_decorator(ReducedFunctional.derivative)
 # )
-# 
+#
 # # Defining the object for pyadjoint
 # reduced_functional = ReducedFunctional(objective, control)
-# 
+#
 # delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
 # delta_temp.dat.data[:] = np.random.random(delta_temp.dat.data.shape)
 # minconv = taylor_test(reduced_functional, Tic, delta_temp)
-# 
-# 
+#
+#
 #
 # def callback():
 #     final_misfit = assemble((T.block_variable.checkpoint.restore() - Tobs) ** 2 * dx)

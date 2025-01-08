@@ -73,14 +73,12 @@ def conduct_inversion():
     vtk_file = VTKFile(str(visualisation_path))
     control_container = Function(Tic.function_space(), name="Initial Temperature")
 
-
     def callback():
         control_container.assign(Tic.block_variable.checkpoint.restore())
         vtk_file.write(control_container)
 
-
-    #     
-    optimiser.add_callback(callback) 
+    #
+    optimiser.add_callback(callback)
     # run the optimisation
     optimiser.run()
 
@@ -137,7 +135,7 @@ def forward_problem():
     # The axi-symmetric radial profile
     mu_radial = Function(W, name="Viscosity")
     assign_1d_profile(mu_radial, str(base_path.parent / "gplates_global/mu2_radial.rad"))
-    
+
     # Add temperature dependency
     mu = mu_constructor(mu_radial, Tave, T)
 
@@ -147,7 +145,7 @@ def forward_problem():
 
     # Initial time step
     delta_t = Function(R, name="delta_t").assign(2.0e-6)
-    
+
     if last_checkpoint_path is not None:
         with CheckpointFile(str(last_checkpoint_path), "r") as fi:
             Tic.assign(fi.load_function(mesh, name="dat_0"))
@@ -703,8 +701,8 @@ def find_last_checkpoint():
         solution_dir = sorted(list(checkpoint_dir.glob("[0-9]*")), key=lambda x: int(str(x).split("/")[-1]))[-1]
         solution_path = solution_dir / "solution_checkpoint.h5"
     except Exception:
-        solution_path = None 
-    return solution_path 
+        solution_path = None
+    return solution_path
 
 
 def mu_constructor(mu_radial, Tave, T):
@@ -728,18 +726,17 @@ def mu_constructor(mu_radial, Tave, T):
     delta_mu_T = Constant(100.)
     mu_lin = mu_radial * exp(-ln(delta_mu_T) * (T - Tave))
 
-    ## coordinates
+    # coordinates
     # X = SpatialCoordinate(T.ufl_domain())
     # r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 
-    ## Strain-Rate Dependence
+    # Strain-Rate Dependence
     # mu_star, sigma_y = Constant(1.0), 5.0e5 + 2.5e6*(rmax-r)
     # epsilon = sym(grad(u))  # strain-rate
     # epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
     # mu_plast = mu_star + (sigma_y / epsii)
     # mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
     return mu_lin
-
 
 
 if __name__ == "__main__":

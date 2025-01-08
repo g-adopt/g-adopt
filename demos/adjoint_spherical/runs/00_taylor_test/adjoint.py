@@ -3,7 +3,7 @@ from gadopt.inverse import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
 import numpy as np
 from firedrake.adjoint_utils import blocks
-from pyadjoint import stop_annotating 
+from pyadjoint import stop_annotating
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -67,7 +67,7 @@ def forward_problem():
     # Load mesh
     with CheckpointFile("../../linear_LLNLG3G_SLB_Q5_smooth_2.0_101.h5", "r") as fi:
         Tobs = fi.load_function(mesh, name="Tobs")  # reference tomography temperature
-        Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
+        # Tave = fi.load_function(mesh, name="AverageTemperature")  # 1-D geotherm
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
@@ -82,7 +82,7 @@ def forward_problem():
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Initial Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
-    R = FunctionSpace(mesh, "R", 0) # Function space for constants 
+    R = FunctionSpace(mesh, "R", 0)  # Function space for constants
 
     # Test functions and functions to hold solutions:
     v, w = TestFunctions(Z)
@@ -250,7 +250,7 @@ def forward_problem():
 
     # Assembling the objective
     objective = (
-        t_misfit 
+        t_misfit
     )
 
     log(f"Value of objective: {objective}")
@@ -346,7 +346,7 @@ def assign_1d_profile(q, one_d_filename):
     """
     from firedrake.ufl_expr import extract_unique_domain
     from scipy.interpolate import interp1d
-    
+
     with stop_annotating():
         # find the mesh
         mesh = extract_unique_domain(q)
@@ -368,7 +368,8 @@ def assign_1d_profile(q, one_d_filename):
         rad = Function(q.function_space()).interpolate(sqrt(X**2))
         averager = LayerAveraging(mesh, cartesian=False)
         averager.extrapolate_layer_average(q, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
-    q.create_block_variable() 
+    q.create_block_variable()
+
 
 def generate_mesh():
     from pathlib import Path
