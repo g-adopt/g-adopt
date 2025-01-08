@@ -1,8 +1,13 @@
-"""Utility functions for G-ADOPT"""
+r"""This module provides several classes and functions to perform a number of pre-, syn-,
+and post-processing tasks. Users incorporate utility as required in their code,
+depending on what they would like to achieve.
+
+"""
+
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement
+from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
 import firedrake as fd
 from firedrake.ufl_expr import extract_unique_domain
@@ -60,17 +65,19 @@ class ParameterLog:
 
 
 class TimestepAdaptor:
+    """Computes timestep based on CFL condition for provided velocity field
+
+    Arguments:
+      dt_const: Constant whose value will be updated by the timestep adaptor
+      u: Velocity to base CFL condition on
+      V: FunctionSpace for reference velocity, usually velocity space
+      target_cfl: CFL number to target with chosen timestep
+      increase_tolerance: Maximum tolerance timestep is allowed to change by
+      maximum_timestep: Maximum allowable timestep
+
     """
-    Computes timestep based on CFL condition for provided velocity field"""
 
     def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
-        """
-        :arg dt_const:      Constant whose value will be updated by the timestep adaptor
-        :arg u:             Velocity to base CFL condition on
-        :arg V:             FunctionSpace for reference velocity, usually velocity space
-        :kwarg target_cfl:  CFL number to target with chosen timestep
-        :kwarg increase_tolerance: Maximum tolerance timestep is allowed to change by
-        :kwarg maximum_timestep:   Maximum allowable timestep"""
         self.dt_const = dt_const
         self.u = u
         self.target_cfl = target_cfl
@@ -102,8 +109,8 @@ class TimestepAdaptor:
         return float(self.dt_const)
 
 
-def upward_normal(mesh, cartesian):
-    if cartesian:
+def upward_normal(mesh):
+    if mesh.cartesian:
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
@@ -112,11 +119,13 @@ def upward_normal(mesh, cartesian):
         return X/r
 
 
-def vertical_component(u, cartesian):
-    if cartesian:
+def vertical_component(u):
+    mesh = extract_unique_domain(u)
+
+    if mesh.cartesian:
         return u[u.ufl_shape[0]-1]
     else:
-        n = upward_normal(extract_unique_domain(u), cartesian)
+        n = upward_normal(mesh)
         return sum([n_i * u_i for n_i, u_i in zip(n, u)])
 
 
@@ -199,41 +208,14 @@ def cell_size(mesh):
         return CellDiameter(mesh)
 
 
-def cell_edge_integral_ratio(mesh, p):
-    r"""
-    Ratio C such that \int_f u^2 <= C Area(f)/Volume(e) \int_e u^2
-    for facets f, elements e and polynomials u of degree p.
-
-    See eqn. (3.7) ad table 3.1 from Hillewaert's thesis: https://www.researchgate.net/publication/260085826
-    and its appendix C for derivation."""
-    cell_type = mesh.ufl_cell().cellname()
-    if cell_type == "triangle":
-        return (p+1)*(p+2)/2.
-    elif cell_type == "quadrilateral" or cell_type == "interval * interval":
-        return (p+1)**2
-    elif cell_type == "triangle * interval":
-        return (p+1)**2
-    elif cell_type == "quadrilateral * interval":
-        # if e is a wedge and f is a triangle: (p+1)**2
-        # if e is a wedge and f is a quad: (p+1)*(p+2)/2
-        # here we just return the largest of the the two (for p>=0)
-        return (p+1)**2
-    elif cell_type == "tetrahedron":
-        return (p+1)*(p+3)/3
-    else:
-        raise NotImplementedError("Unknown cell type in mesh: {}".format(cell_type))
-
-
 def tensor_jump(v, n):
     r"""
     Jump term for vector functions based on the tensor product
 
-    .. math::
-        \text{jump}(\mathbf{u}, \mathbf{n}) = (\mathbf{u}^+ \mathbf{n}^+) +
-        (\mathbf{u}^- \mathbf{n}^-)
+    $$"jump"(bb u, bb n) = (bb u^+ bb n^+) + (bb u^- bb n^-)$$
 
     This is the discrete equivalent of grad(u) as opposed to the
-    vectorial UFL jump operator :meth:`ufl.jump` which represents div(u).
+    vectorial UFL jump operator `ufl.jump` which represents div(u).
     The equivalent of nabla_grad(u) is given by tensor_jump(n, u).
     """
     return outer(v('+'), n('+')) + outer(v('-'), n('-'))
@@ -241,7 +223,7 @@ def tensor_jump(v, n):
 
 def extend_function_to_3d(func, mesh_extruded):
     """
-    Returns a 3D view of a 2D :class:`Function` on the extruded domain.
+    Returns a 3D view of a 2D `Function` on the extruded domain.
     The 3D function resides in V x R function space, where V is the function
     space of the source function. The 3D function shares the data of the 2D
     function.
@@ -263,18 +245,19 @@ def extend_function_to_3d(func, mesh_extruded):
 
 
 class ExtrudedFunction(Function):
-    """
-    A 2D :class:`Function` that provides a 3D view on the extruded domain.
+    """A 2D `Function` that provides a 3D view on the extruded domain.
+
     The 3D function can be accessed as `ExtrudedFunction.view_3d`.
     The 3D function resides in V x R function space, where V is the function
     space of the source function. The 3D function shares the data of the 2D
-    function."""
+    function.
+
+    Arguments:
+      mesh_3d: Extruded 3D mesh where the function will be extended to.
+
+    """
 
     def __init__(self, *args, mesh_3d=None, **kwargs):
-        """
-        Create a 2D :class:`Function` with a 3D view on extruded mesh.
-        :arg mesh_3d: Extruded 3D mesh where the function will be extended to.
-        """
         # create the 2d function
         super().__init__(*args, **kwargs)
         print(*args)
@@ -321,157 +304,23 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
     return constructor(mesh, elt, **kwargs)
 
 
-class DiffusiveSmoothingSolver:
-    direct_solver_parameters = {
-        "snes_type": "ksponly",
-        "mat_type": "aij",
-        "ksp_type": "preonly",
-        "pc_type": "lu",
-        "pc_factor_mat_solver_type": "mumps",
-    }
-    # Projection solver parameters for nullspaces:
-    iterative_solver_parameters = {
-        "snes_type": "ksponly",
-        "ksp_type": "gmres",
-        "pc_type": "sor",
-        "mat_type": "aij",
-        "ksp_rtol": 1e-12,
-    }
-
-    def __init__(
-            self,
-            function_space: fd.FunctionSpace,
-            wavelength: Number,
-            bcs: Optional[dict[int, dict[str, int | float]]] = None,
-            K: fd.Function | Number = 1,
-            quad_degree: int = 6,
-            solver_parameters: Optional[dict[str, str | float]] = None,
-            **kwargs):
-        """A class to perform diffusive smoothing using a diffusion solver.
-
-        This class provides functionality to solve a diffusion equation for smoothing
-        a Scalar Function.
-
-        Args:
-            function_space (firedrake.FunctionSpace): The function space to solve the diffusion equation.
-            wavelength (Number): The wavelength or time duration for diffusion.
-            bcs (Optional[dict[int, dict[str, int | float]]]): Boundary conditions to impose on the solution.
-            K (Union[firedrake.Function, Number], optional): Diffusion tensor. Defaults to 1.
-            quad_degree (int, optional): Quadrature degree for integrations. Defaults to 6.
-            solver_parameters (Optional[dict[str, Union[str, float]]], optional): Solver parameters for the solver. Defaults to None.
-            **kwargs: Additional keyword arguments to pass to the solver.
-
-        Attributes:
-            function_space (firedrake.FunctionSpace): The function space to solve the diffusion equation.
-            rhs (firedrake.Function): The right-hand side for the diffusion equation.
-            u (firedrake.Function): The solution of the diffusion problem.
-            mesh (firedrake.Mesh): The mesh to solve the problem on.
-            delta_t (Number): The wavelength or time duration for diffusion.
-            bcs (Optional[dict[int, dict[str, int | float]]]): Boundary conditions to impose on the solution.
-            quad_degree (int): Quadrature degree for integrations.
-            solver_parameters (Optional[dict[str, Union[str, float]]]): Solver parameters for the solver.
-            K (Union[firedrake.Function, Number]): Diffusion tensor.
-            solver_kwargs (dict): Additional keyword arguments to pass to the solver.
-            _solver_is_setup (bool): Flag indicating if the solver is set up.
-
-        """
-        self.function_space = function_space  # function space to solve the diffusion equation
-        self.rhs = fd.Function(function_space, name="smoothing-rhs")  # RHS for diffusion euqation
-        self.u = fd.Function(function_space, name="smoothed")  # solution of the diffusion problem
-        self.mesh = function_space.mesh()  # mesh to solve the problem on
-        self.wavelength = wavelength  # wavelength or in this case how much time we should let it diffuse
-        self.bcs = bcs  # boundary conditions to impose on the solution
-        self.quad_degree = quad_degree  # quadrature degree for integrations
-        self.solver_parameters = solver_parameters  # solver parameters to pass on to solve
-        self.K = K  # diffusion tensor, default is 1
-        self.solver_kwargs = kwargs  # optional parameters to pass to solver
-        self._solver_is_setup = False
-
-    def action(self, T: fd.Function):
-        """Apply smoothing action.
-
-        Args:
-            T (firedrake.Function): The input field to be smoothed.
-
-        Returns:
-            firedrake.Function: The smoothed field.
-
-        """
-        if not self._solver_is_setup:
-            self._setup_smoothing_solver()
-
-        # TODO: make sure you change it to interpolate
-        self.rhs.interpolate(T)
-        self.solver.solve()
-
-        return self.u
-
-    def _setup_smoothing_solver(self):
-        """Set up the solver for diffusive smoothing."""
-        self._update_solver_parameters()
-        trial = fd.TrialFunction(self.function_space)
-        test = fd.TestFunction(self.function_space)
-        dx = fd.dx(degree=self.quad_degree)
-
-        # In case diffusion is anisotropic
-        K_avg = fd.assemble(fd.inner(self.K, self.K) * dx(self.mesh)) / fd.assemble(1 * dx(self.mesh))
-
-        self.delta_t = self.wavelength ** 2 / (4 * K_avg)
-
-        # building the bilinear form
-        a = test * trial * dx + self.delta_t * fd.inner(self.K * fd.grad(test), fd.grad(trial)) * dx
-
-        def ds(subdomain_id):
-            if self.mesh.extruded and isinstance(subdomain_id, str):
-                return {"top": fd.ds_t(degree=self.quad_degree), "bottom": fd.ds_b(degree=self.quad_degree)}[subdomain_id]
-            else:
-                return fd.ds(subdomain_id)
-        bcs = []
-        # for boundary conditions set, we have flux at the boundaries
-        for subdomain_id, bc in self.bcs.items():
-            for bc_type, value in bc.items():
-                if bc_type == 'T':
-                    bcs.append(fd.DirichletBC(self.function_space, value, subdomain_id))
-                    a -= self.delta_t * test * fd.inner(fd.grad(trial), fd.FacetNormal(self.mesh)) * ds(subdomain_id)
-                else:
-                    raise ValueError("Boundary conditions other that Dirichlet are not supported.")
-
-        L = test * self.rhs * dx
-
-        self.problem = fd.LinearVariationalProblem(a=a, L=L, u=self.u, bcs=bcs, constant_jacobian=True)
-        self.solver = fd.LinearVariationalSolver(self.problem, solver_parameters=self.solver_parameters, **self.solver_kwargs)
-
-        self._solver_is_setup = True
-
-    def _update_solver_parameters(self):
-        if self.solver_parameters is None:
-            self.solver_parameters = {"snes_type": "ksponly"}
-            if self.mesh.topological_dimension() == 2:
-                self.solver_parameters.update(DiffusiveSmoothingSolver.direct_solver_parameters)
-            else:
-                self.solver_parameters.update(DiffusiveSmoothingSolver.iterative_solver_parameters)
-
-
 class LayerAveraging:
-    """
-    A manager for computing a vertical profile of horizontal layer averages.
-    """
+    """A manager for computing a vertical profile of horizontal layer averages.
 
-    def __init__(self, mesh, r1d=None, cartesian=True, quad_degree=None):
-        """
-        Create the :class:`LayerAveraging` manager.
-        :arg mesh: The mesh over which to compute averages.
-        :kwarg r1d: An array of either depth coordinates or radii,
+    Arguments:
+      mesh: The mesh over which to compute averages
+      r1d: An array of either depth coordinates or radii,
              at which to compute layer averages. If not provided, and
              mesh is extruded, it uses the same layer heights. If mesh
              is not extruded, r1d is required.
-        :kwarg cartesian: Determines whether `r1d` represents depths or radii.
-        """
 
+    """
+
+    def __init__(self, mesh, r1d=None, quad_degree=None):
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if cartesian:
+        if mesh.cartesian:
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))
@@ -549,17 +398,17 @@ class LayerAveraging:
         self.rhs[-1] = assemble(phi * T * self.dx)
 
     def get_layer_average(self, T):
-        """
-        Compute the layer averages of :class:`Function` T at the predefined depths.
-        Returns a numpy array containing the averages.
+        """Compute the layer averages of `Function` T at the predefined depths.
+
+        Returns:
+          A numpy array containing the averages.
         """
 
         self._assemble_rhs(T)
         return solveh_banded(self.mass, self.rhs, lower=True)
 
     def extrapolate_layer_average(self, u, avg):
-        """
-        Given an array of layer averages avg, extrapolate to :class:`Function` u
+        """Given an array of layer averages avg, extrapolate to `Function` u
         """
 
         r = self.r
@@ -597,26 +446,38 @@ def timer_decorator(func):
     return wrapper
 
 
+class InteriorBC(DirichletBC):
+    """DirichletBC applied to anywhere that is *not* on the specified boundary"""
+    @utils.cached_property
+    def nodes(self):
+        return np.array(list(set(range(self._function_space.node_count)) - set(super().nodes)))
+
+
 def absv(u):
     """Component-wise absolute value of vector for SU stabilisation"""
     return as_vector([abs(ui) for ui in u])
 
 
-def su_nubar(u, J, Pe):
-    """SU stabilisation viscosity as a function of velocity, Jaciobian and grid Peclet number"""
-    # SU(PG) ala Donea & Huerta:
-    # Columns of Jacobian J are the vectors that span the quad/hex
-    # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
-    # thus u^T J is (dx * u , dy * v)
-    # and following (2.44c) Pe = u^T J / (2*nu)
-    # beta(Pe) is the xibar vector in (2.44a)
-    # then we get artifical viscosity nubar from (2.49)
-    beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
-
-    return dot(absv(dot(u, J)), beta_pe)/2
+def step_func(r, centre, mag, increasing=True, sharpness=50):
+    # A step function designed to design viscosity jumps
+    # Build a step centred at "centre" with given magnitude
+    # Increase with radius if "increasing" is True
+    return mag * (
+        0.5 * (1 + tanh((1 if increasing else -1) * (r - centre) * sharpness))
+    )
 
 
-def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: bool):
+def node_coordinates(function):
+    """Extract mesh coordinates and interpolate them onto the relevant function space"""
+    func_space = function.function_space()
+    mesh_coords = SpatialCoordinate(func_space.mesh())
+
+    return [
+        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
+    ]
+
+
+def interpolate_1d_profile(function: Function, one_d_filename: str):
     """
     Assign a one-dimensional profile to a Function `function` from a file.
 
@@ -627,10 +488,8 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
     Args:
         function: The function onto which the 1D profile will be assigned
         one_d_filename: The path to the file containing the 1D radial profile
-        cartesian: Whether the upward direction is along z/y (True) or radial (False)
 
     Note:
-        - Note the cartesian flag
         - This is designed to read a file with one process and distribute in parallel with MPI.
         - The input file should contain an array of radius/height and an array of values, separated by a comma.
     """
@@ -638,6 +497,11 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
 
     if mesh.comm.rank == 0:
         rshl, one_d_data = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+        if rshl[1] < rshl[0]:
+            rshl = rshl[::-1]
+            one_d_data = one_d_data[::-1]
+        if not np.all(np.diff(rshl) > 0):
+            raise ValueError("Data must be strictly monotonous.")
     else:
         one_d_data = None
         rshl = None
@@ -647,11 +511,11 @@ def interpolate_1d_profile(function: Function, one_d_filename: str, cartesian: b
 
     X = SpatialCoordinate(mesh)
 
-    upward_coord = vertical_component(X, cartesian=cartesian)
+    upward_coord = vertical_component(X)
 
     rad = Function(function.function_space()).interpolate(upward_coord)
 
-    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, cartesian=cartesian)
+    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
 

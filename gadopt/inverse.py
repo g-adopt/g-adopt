@@ -1,6 +1,12 @@
-from pathlib import Path
-import uuid
+r"""This module provides classes to perform an adjoint inverse optimisation and checkpoint
+intermediate results. Users instantiate the `LinMoreOptimiser` class by providing
+relevant parameters and call the `run` method to perform the optimisation.
 
+"""
+
+from pathlib import Path
+
+import firedrake.utils
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
 from firedrake import CheckpointFile, Function
@@ -240,6 +246,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
         """
         super().__init__(dat, inner_product)
 
+        self.comm = dat[0].comm
         self._optimiser = optimiser
 
     def clone(self):
@@ -291,7 +298,8 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
     def __getstate__(self):
         """Returns a state tuple suitable for pickling"""
 
-        checkpoint_filename = f"vector_checkpoint_{uuid.uuid4()}.h5"
+        checkpoint_id = firedrake.utils._new_uid(self.comm)
+        checkpoint_filename = f"vector_checkpoint_{checkpoint_id}.h5"
         checkpoint_path = self._optimiser.checkpoint_dir / checkpoint_filename
         self.save(checkpoint_path)
 

@@ -144,6 +144,9 @@ else:  # Initialise mesh and key functions
     time_now = 0
     dump_counter = 0
 
+# Whether we start from checkpoint or not, we annotate our mesh as cartesian
+mesh.cartesian = True
+
 # Extract velocity and pressure from the Stokes function
 velocity, pressure = fd.split(stokes_function)  # UFL expressions
 # Associated Firedrake functions
@@ -192,6 +195,7 @@ timestep = fd.Function(real_func_space).assign(Simulation.initial_timestep)
 # Set up energy and Stokes solvers
 approximation = ga.BoussinesqApproximation(
     Simulation.Ra,
+    mu=viscosity_ufl,
     rho=ref_dens,
     alpha=1,
     g=Simulation.g,
@@ -217,7 +221,6 @@ stokes_solver = ga.StokesSolver(
     temperature,
     approximation,
     bcs=Simulation.stokes_bcs,
-    mu=viscosity_ufl,
     quad_degree=None,
     solver_parameters=Simulation.stokes_solver_params,
     nullspace=stokes_nullspace,
@@ -283,6 +286,10 @@ if "Trim_2023" in Simulation.name:
 else:
     update_forcings = None
 
+# Add old velocity to simulation class for steady state criteria for Tosi benchmark
+if "Tosi_2015" in Simulation.name:
+    Simulation.velocity_old = fd.Function(stokes_solver.solution.subfunctions[0])
+
 # Perform the time loop
 step = 0
 while True:
@@ -310,6 +317,10 @@ while True:
     # Advect each level set
     for ls_solv in level_set_solver:
         ls_solv.solve(step)
+
+    if "Tosi_2015" in Simulation.name:
+        # Update old velocity prior to solving for Tosi steady state criteria
+        Simulation.velocity_old.assign(stokes_solver.solution.subfunctions[0])
 
     # Solve Stokes system
     stokes_solver.solve()

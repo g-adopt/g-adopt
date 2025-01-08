@@ -1,19 +1,24 @@
-cases := smooth/cylindrical/free_slip smooth/cylindrical/zero_slip delta/cylindrical/free_slip delta/cylindrical/zero_slip delta/cylindrical/free_slip_dpc delta/cylindrical/zero_slip_dpc
-spherical_cases := smooth/spherical/free_slip smooth/spherical/zero_slip
+cases := smooth_cylindrical_freeslip smooth_cylindrical_zeroslip delta_cylindrical_freeslip delta_cylindrical_zeroslip delta_cylindrical_freeslip_dpc delta_cylindrical_zeroslip_dpc
+long_cases := smooth_cylindrical_freesurface smooth_spherical_freeslip smooth_spherical_zeroslip
 
-.PHONY: all longtest longtest_output $(cases) $(spherical_cases) clean
+sentinels := $(addprefix .sentinel.,$(cases))
+
+.PHONY: all longtest longtest_output $(cases) $(long_cases) clean check longcheck
 
 all: $(cases)
 
-longtest: $(spherical_cases)
+longtest: $(long_cases)
 
-$(cases): analytical.py
-	echo "running analytical $@" >&2
-	/usr/bin/time --format="analytical $@ finished in %E" python3 analytical.py submit -t "tsp -N {cores} -f mpiexec -np {cores}" $@
+$(cases): %: .sentinel.%
+
+$(sentinels): analytical.py
+	echo "running analytical $(subst .sentinel.,,$@)" >&2
+	/usr/bin/time --format="analytical $(subst .sentinel.,,$@) finished in %E" python3 analytical.py submit -t "tsp -N {cores} -f mpiexec -np {cores}" $(subst .sentinel.,,$@)
+	echo "done" > $@
 
 .ONESHELL:
 SHELL = /bin/bash
-$(spherical_cases): analytical.py clean
+$(long_cases): analytical.py clean
 	exec {out}<> <(:) # create new named FD
 	qsub -W depend=on:$$(python3 analytical.py count $@) -N sentinel -W block=true -l ncpus=1,walltime=00:00:30,wd -q normal -P $(project) -- /bin/true >&"$$out" &
 	read -u "$$out" sjob
@@ -23,7 +28,13 @@ $(spherical_cases): analytical.py clean
 	wait
 
 clean:
-	rm -rf pbs_output *.dat sentinel.*
+	rm -rf pbs_output *.dat sentinel.* .sentinel.* __pycache__
 
 longtest_output:
 	[[ -d pbs_output ]] && tail -n +1 pbs_output/*
+
+check: $(sentinels)
+	python -m pytest -m 'not longtest'
+
+longcheck:
+	python -m pytest -m longtest
