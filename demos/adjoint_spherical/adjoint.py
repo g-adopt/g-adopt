@@ -706,11 +706,11 @@ def find_last_checkpoint():
 
 
 def mu_constructor(mu_radial, Tave, T):
-    """Constructing a temperature strain-rate dependent velocity
+    r"""Constructing a temperature strain-rate dependent velocity
 
         This uses Arrhenius law for temperature dependent viscosity
-        \eta = A exp(-E/R * T) = A * exp(-E/R * Tave) * exp(-E/R * (T - Tave))
-                               = 1d_field * exp(-ln(delta_mu_T) * (T - Tave))
+        $$\eta = A exp(-E/R * T) = A * exp(-E/R * Tave) * exp(-E/R * (T - Tave))\\
+                               = 1d_field * exp(-ln(delta_mu_T) * (T - Tave))$$
 
     Args:
         mu_radial (firedrake.Form): radial viscosity profile
