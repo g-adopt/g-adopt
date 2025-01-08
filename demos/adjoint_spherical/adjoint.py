@@ -132,7 +132,6 @@ def forward_problem():
     mu_radial = Function(W, name="Viscosity")
     assign_1d_profile(mu_radial, str(base_path.parent / "gplates_global/mu2_radial.rad"))
     mu = mu_constructor(mu_radial, Tave, T)  # Add temperature dependency
-    Di = Constant(0.5)  # Dissipation number.
 
     # Initial time step
     delta_t = Function(R, name="delta_t").assign(2.0e-6)
