@@ -6,6 +6,7 @@ from firedrake.adjoint_utils import blocks
 from pyadjoint import stop_annotating
 from pathlib import Path
 import gdrift
+from gdrift.profile import SplineProfile
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -26,8 +27,10 @@ LinearSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 LinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 NonlinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 
-blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
-blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
+blocks.solving.Block.evaluate_adj = collect_garbage(
+    blocks.solving.Block.evaluate_adj)
+blocks.solving.Block.recompute = collect_garbage(
+    blocks.solving.Block.recompute)
 
 # timer decorator for fwd and derivative calls.
 ReducedFunctional.__call__ = collect_garbage(
@@ -57,7 +60,8 @@ def conduct_inversion():
     minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
     minimisation_parameters["Status Test"] = 20
 
-    minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
+    minimisation_problem = MinimizationProblem(
+        reduced_functional, bounds=(T_lb, T_ub))
 
     # Start a LinMore Optimiser
     optimiser = LinMoreOptimiser(
@@ -66,10 +70,12 @@ def conduct_inversion():
         checkpoint_dir="optimisation_checkpoint",
     )
 
-    visualisation_path = find_last_checkpoint().resolve().parents[2] / "visual.pvd"
+    visualisation_path = find_last_checkpoint(
+    ).resolve().parents[2] / "visual.pvd"
 
     vtk_file = VTKFile(str(visualisation_path))
-    control_container = Function(Tic.function_space(), name="Initial Temperature")
+    control_container = Function(
+        Tic.function_space(), name="Initial Temperature")
 
     def callback():
         control_container.assign(Tic.block_variable.checkpoint.restore())
@@ -104,8 +110,10 @@ def forward_problem():
     # Load mesh
     with CheckpointFile(str(base_path / "input_data/REVEAL.h5"), "r") as fi:
         mesh = fi.load_mesh("firedrake_default_extruded")
-        Tobs = fi.load_function(mesh, name="Tobs")  # reference temperature field (seismic tomography)
-        Tave = fi.load_function(mesh, name="AverageTemperature")  # Average temperature field
+        # reference temperature field (seismic tomography)
+        Tobs = fi.load_function(mesh, name="Tobs")
+        # Average temperature field
+        Tave = fi.load_function(mesh, name="AverageTemperature")
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
@@ -114,7 +122,8 @@ def forward_problem():
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar)
-    Q1 = FunctionSpace(mesh, "CG", 1)  # Initial Temperature function space (scalar)
+    # Initial Temperature function space (scalar)
+    Q1 = FunctionSpace(mesh, "CG", 1)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
     R = FunctionSpace(mesh, "R", 0)  # Function space for constants
 
@@ -130,7 +139,8 @@ def forward_problem():
 
     # Viscosity is a function of temperature and radial position (i.e. axi-symmetric field)
     mu_radial = Function(W, name="Viscosity")
-    assign_1d_profile(mu_radial, str(base_path.parent / "gplates_global/mu2_radial.rad"))
+    assign_1d_profile(mu_radial, str(
+        base_path.parent / "gplates_global/mu2_radial.rad"))
     mu = mu_constructor(mu_radial, Tave, T)  # Add temperature dependency
 
     # Initial time step
@@ -170,7 +180,8 @@ def forward_problem():
         Di=Constant(0.9492824165791792),  # Dissipation number
         rho=tala_parameters_dict["rhobar"],  # reference density
         Tbar=tala_parameters_dict["Tbar"],  # reference temperature
-        alpha=tala_parameters_dict["alphabar"],  # reference thermal expansivity
+        # reference thermal expansivity
+        alpha=tala_parameters_dict["alphabar"],
         cp=tala_parameters_dict["cpbar"],  # reference specific heat capacity
         g=tala_parameters_dict["gbar"],  # reference gravity
         H=tala_parameters_dict["H_int"],  # reference thickness
@@ -192,7 +203,7 @@ def forward_problem():
     # Temperature boundary conditions (constant)
     # for the top and bottom boundaries
     temp_bcs = {
-        bottom_id: {'T': 1.0 - 930./3700.},
+        bottom_id: {'T': 1.0 - 930. / 3700.},
         top_id: {'T': 0.0},
     }
     # Velocity boundary conditions
@@ -280,7 +291,8 @@ def forward_problem():
 
     # We want to avoid a second call to objective functional with the same value
     first_call_decorator = first_call_value(predefined_value=objective)
-    ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
+    ReducedFunctional.__call__ = first_call_decorator(
+        ReducedFunctional.__call__)
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
@@ -288,79 +300,26 @@ def forward_problem():
     return Tic, ReducedFunctional(objective, control)
 
 
-def assign_1d_profile(q, one_d_filename):
-    """
-    Assign a one-dimensional profile to a Function `q` from a file.
-
-    The function reads a one-dimensional radial viscosity profile from a file, broadcasts
-    the read array to all processes, and then interpolates this
-    array onto the function space of `q`.
-
-    Args:
-        q (firedrake.Function): The function onto which the 1D profile will be assigned.
-        one_d_filename (str): The path to the file containing the 1D radial viscosity profile.
-
-    Returns:
-        None: This function does not return a value. It directly modifies the input function `q`.
-
-    Note:
-        - This function is designed to be run in parallel with MPI.
-        - The input file should contain an array of viscosity values.
-        - It assumes that the function space of `q` is defined on a radial mesh.
-        - `rmax` and `rmin` should be defined before this function is called, representing
-          the maximum and minimum radial bounds for the profile.
-    """
-    from firedrake.ufl_expr import extract_unique_domain
-    from scipy.interpolate import interp1d
-
-    with stop_annotating():
-        # find the mesh
-        mesh = extract_unique_domain(q)
-
-        visc = None
-        rshl = None
-        # read the input file
-        if mesh.comm.rank == 0:
-            # The root process reads the file
-            rshl, visc = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
-
-        # Broadcast the entire 'visc' array to all processes
-        visc = mesh.comm.bcast(visc, root=0)
-        # Similarly, broadcast 'rshl' if needed (assuming all processes need it)
-        rshl = mesh.comm.bcast(rshl, root=0)
-
-        element_family = q.function_space().ufl_element()
-        X = Function(VectorFunctionSpace(mesh=mesh, family=element_family)).interpolate(SpatialCoordinate(mesh))
-        rad = Function(q.function_space()).interpolate(sqrt(X**2))
-        averager = LayerAveraging(mesh, cartesian=False)
-        averager.extrapolate_layer_average(q, interp1d(rshl, visc, fill_value="extrapolate")(averager.get_layer_average(rad)))
-    q.create_block_variable()
-
-
-def get_plate_reconstruction_info():
-    plate_reconstruction_files = {}
-
-    base_path = Path(__file__).resolve()
-
-    # rotation filenames
-    plate_reconstruction_files["rotation_filenames"] = [
-        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/optimisation/1000_0_rotfile_MantleOptimised.rot")
-    ]
-
-    # topology filenames
-    plate_reconstruction_files["topology_filenames"] = [
-        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/250-0_plate_boundaries.gpml"),
-        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/410-250_plate_boundaries.gpml"),
-        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Convergence.gpml"),
-        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Divergence.gpml"),
-        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Topologies.gpml"),
-        str(base_path.parents[1] / "gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.2/1000-410-Transforms.gpml"),
-    ]
-
-    return plate_reconstruction_files
-
-
 def generate_reference_fields():
+    """
+    Generates reference fields for a seismic model by loading a tomography model and converting it to temperature.
+
+    This function performs the following steps:
+    1. Loads a mesh and initial temperature from a checkpoint file.
+    2. Sets up function spaces for coordinates and fields.
+    3. Computes the depth field.
+    4. Loads the REVEAL seismic model and fills the vsh and vsv fields with values from the model.
+    5. Computes the isotropic velocity field (vs) from vsh and vsv.
+    6. Averages the isotropic velocity field over the layers for visualization.
+    7. Computes the layer-averaged depth and temperature to be used in a thermodynamic model.
+    8. Builds a thermodynamic model and converts the shear wave speed to observed temperature (T_obs).
+    9. Computes the layer-averaged T_obs and subtracts the average from T_obs.
+    10. Adds the mean profile from the simulation temperature to T_obs.
+    11. Applies boundary conditions and smoothing to T_obs.
+    12. Outputs the results for visualization and saves the mesh and functions to a checkpoint file.
+
+    The function uses T_average to handle the mean profile of the temperature during the conversion process.
+    """
     # get the path to the base directory
     base_path = Path(__file__).resolve().parent
 
@@ -389,6 +348,9 @@ def generate_reference_fields():
     vsv = Function(Q, name="vsv")
     vs = Function(Q, name="vs")
 
+    # Dimensional parameters will be used to convert simulation results to dimension full form
+    nondim_parameters = get_dimensional_parameters()
+
     # Compute the depth field
     depth = Function(Q, name="depth").interpolate(
         Constant(gdrift.R_earth) - sqrt(r[0]**(2) + r[1]**(2) + r[2]**(2))
@@ -410,11 +372,16 @@ def generate_reference_fields():
     # Average the isotropic velocity field over the layers, this will be useful for visualising devaitons from the average
     averager = LayerAveraging(mesh, quad_degree=6)
 
+    # finding the depth and temperature average to be passed to the thermodynamic model for linearisation
+    depth_ave_array = averager.get_layer_average(depth)
+    T_simulation_ave_array = averager.get_layer_average(T_simulation) * (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]) + nondim_parameters["T_surface"]
+
     # Define a field on Q for T_obs
     T_obs = Function(Q, name="T_obs")
     T_ave = Function(Q, name="average_temperature")
 
-    anelastic_slb_pyrolite = buil_thermodynamic_model()
+    # Building the thermodynamic model, this is a regularised version of the SLB_16 pyrolite model using the temperature profile from simulation
+    anelastic_slb_pyrolite = build_thermodynamic_model(np.column_stack((depth_ave_array, T_simulation_ave_array)))
 
     # Convert the shear wave speed to T_obs
     T_obs.dat.data_with_halos[:] = anelastic_slb_pyrolite.vs_to_temperature(
@@ -422,77 +389,46 @@ def generate_reference_fields():
         depth.dat.data_with_halos)
 
     # Compute the layer-averaged T_obs (Note: T_ave is what comes from thermodynamic conversion, which is comletely off)
-    averager.extrapolate_layer_average(T_ave, averager.get_layer_average(T_obs))
+    averager.extrapolate_layer_average(
+        T_ave, averager.get_layer_average(T_obs))
 
     # Take the average out of the T_obs field
     T_obs.interpolate(T_obs - T_ave)
 
     # Compute the layer-averaged temperature from the "simulation temperature"
-    averager.extrapolate_layer_average(T_ave, averager.get_layer_average(T_simulation))
+    averager.extrapolate_layer_average(
+        T_ave, T_simulation_ave_array)
 
     # Add the mean profile to T_obs again (Note: T_ave is now from a simulation)
     T_obs.interpolate(T_obs + T_ave)
 
     # Boundary conditions for T_obs
+    # DOUBLECHECK
     temp_bcs = {
-        "bottom": {'T': 1.0 - 930./3700.},
+        "bottom": {'T': 1.0 - 930. / 3700.},
         "top": {'T': 0.0},
     }
 
     # Adding Smoothing to Tobs
     smoother = DiffusiveSmoothingSolver(
-        function_space=Tobs.function_space(),
+        function_space=T_obs.function_space(),
         wavelength=0.05,
         bcs=temp_bcs,
     )
 
     # acting smoothing on Tobs
-    Tobs.assign(smoother.action(Tobs))
+    T_obs.assign(smoother.action(T_obs))
 
     # Output for visualisation
     output = VTKFile(output_path.with_suffix(".pvd"))
-    output.write(Tobs, T_ave)
+    output.write(T_obs, T_ave, T_simulation)
 
     # Write out the file
     with CheckpointFile(output_path.with_suffix(".h5"), mode="w") as fi:
         fi.save_mesh(mesh)
-        fi.save_function(Tobs, name="Tobs")
-        fi.save_function(Taverage, name="AverageTemperature")
-
-
-def generate_spherical_mesh(mesh_filename):
-    # Set up geometry:
-
-    resolution_func = np.ones((nlayers))
-
-    # A gaussian shaped function
-    def gaussian(center, c, a):
-        return a * np.exp(
-            -((np.linspace(rmin, rmax, nlayers) - center) ** 2) / (2 * c**2)
-        )
-
-    # building the resolution function
-    for idx, r_0 in enumerate([rmin, rmax, rmax - 660 / 6370]):
-        # gaussian radius
-        c = 0.15
-        # how different is the high res area from low res
-        res_amplifier = 5.0
-        resolution_func *= 1 / (1 + gaussian(center=r_0, c=c, a=res_amplifier))
-
-    resolution_func *= 1.0 / np.sum(resolution_func)
-    mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
-
-    mesh = ExtrudedMesh(
-        mesh2d,
-        layers=nlayers,
-        layer_height=resolution_func,
-        extrusion_type="radial",
-    )
-
-    with CheckpointFile(mesh_filename, "w") as fi:
-        fi.save_mesh(mesh=mesh)
-
-    return mesh_filename
+        fi.save_function(T_obs, name="Tobs")
+        fi.save_function(T_ave, name="AverageTemperature")
+        fi.save_function(T_simulation, name="Temperature")
 
 
 def first_call_value(predefined_value):
@@ -513,7 +449,8 @@ def first_call_value(predefined_value):
 def find_last_checkpoint():
     try:
         checkpoint_dir = Path.cwd().resolve() / "copy_optimisation_checkpoint"
-        solution_dir = sorted(list(checkpoint_dir.glob("[0-9]*")), key=lambda x: int(str(x).split("/")[-1]))[-1]
+        solution_dir = sorted(list(checkpoint_dir.glob(
+            "[0-9]*")), key=lambda x: int(str(x).split("/")[-1]))[-1]
         solution_path = solution_dir / "solution_checkpoint.h5"
     except Exception:
         solution_path = None
@@ -555,36 +492,128 @@ def mu_constructor(mu_radial, Tave, T):
 
 
 def TALA_parameters(function_space):
+    nondim_parameters = get_dimensional_parameters()
 
     # radial density field
     rhobar = Function(Q, name="CompRefDensity")
-    interpolate_1d_profile(function=rhobar, one_d_filename="initial_condition_mat_prop/rhobar.txt")
-    rhobar.assign(rhobar / 3200.)
+    interpolate_1d_profile(
+        function=rhobar, one_d_filename="initial_condition_mat_prop/rhobar.txt")
+    rhobar.assign(rhobar / nondim_parameters["rho"])
 
     # radial reference temperature field
     Tbar = Function(Q, name="CompRefTemperature")
-    interpolate_1d_profile(function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt")
-    Tbar.assign((Tbar - 1600.) / 3700.)
+    interpolate_1d_profile(
+        function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt")
+    Tbar.assign((Tbar - nondim_parameters["T_surface"]) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
 
     # radial thermal expansivity field
     alphabar = Function(Q, name="IsobaricThermalExpansivity")
-    interpolate_1d_profile(function=alphabar, one_d_filename="initial_condition_mat_prop/alphabar.txt")
-    alphabar.assign(alphabar / 4.1773e-05)
+    interpolate_1d_profile(
+        function=alphabar, one_d_filename="initial_condition_mat_prop/alphabar.txt")
+    alphabar.assign(alphabar / nondim_parameters["alpha"])
 
     # radial specific heat capacity field
     cpbar = Function(Q, name="IsobaricSpecificHeatCapacity")
-    interpolate_1d_profile(function=cpbar, one_d_filename="initial_condition_mat_prop/CpSIbar.txt")
-    cpbar.assign(cpbar / 1249.7)
+    interpolate_1d_profile(
+        function=cpbar, one_d_filename="initial_condition_mat_prop/CpSIbar.txt")
+    cpbar.assign(cpbar / nondim_parameters["cp"])
 
     # radial gravity
     gbar = Function(Q, name="GravitationalAcceleration")
-    interpolate_1d_profile(function=gbar, one_d_filename="initial_condition_mat_prop/gbar.txt")
-    gbar.assign(gbar / 9.8267)
+    interpolate_1d_profile(
+        function=gbar, one_d_filename="initial_condition_mat_prop/gbar.txt")
+    gbar.assign(gbar / nondim_parameters["g"])
 
     # conductivtiy
-    kappa = Constant(3.0)  # Thermal conductivity = yields a diffusivity of 7.5e-7 at surface.
+    # Thermal conductivity = yields a diffusivity of 7.5e-7 at surface.
+    kappa = Constant(3.0)
 
     return {"rhobar": rhobar, "Tbar": Tbar, "alphabar": alphabar, "cpbar": cpbar, "gbar": gbar, "kappa": kappa}
+
+
+def build_thermodynamic_model(temperature_profile_array):
+    # Load the thermodynamic model
+    slb_pyrolite = gdrift.ThermodynamicModel("SLB_16", "pyrolite")
+
+    # Make a spline that can be passed onto regularisation
+    terra_temperature_spline = gdrift.SplineProfile(
+        depth=temperature_profile_array[:, 0] * 1e3,
+        value=temperature_profile_array[:, 1],
+        name="T_average",
+        extrapolate=True
+    )
+
+    # Regularise the thermodynamic model
+    regular_slb_pyrolite = gdrift.regularise_thermodynamic_table(
+        slb_pyrolite, terra_temperature_spline,
+        regular_range={"v_s": (-1.0, 0.0), "v_p": (-np.inf, 0.0), "rho": (-np.inf, 0.0)})
+
+    # building solidus model
+    solidus_ghelichkhan = build_solidus()
+    # Using the solidus model build the anelasticity model around the solidus profile
+    anelasticity = build_anelasticity_model(solidus_ghelichkhan)
+    # Apply the anelasticity correction to the regularised thermodynamic model
+    anelastic_slb_pyrolite = gdrift.apply_anelastic_correction(
+        regular_slb_pyrolite, anelasticity)
+
+    return anelastic_slb_pyrolite
+
+
+# Compute a solidus for building anelasticity correction
+def build_solidus():
+    # Defining the solidus curve for manlte
+    andrault_solidus = gdrift.RadialEarthModelFromFile(
+        model_name="1d_solidus_Andrault_et_al_2011_EPSL",
+        description="Andrault et al 2011 EPSL")
+
+    # Defining parameters for Cammarano style anelasticity model
+    hirsch_solidus = gdrift.HirschmannSolidus()
+
+    my_depths = []
+    my_solidus = []
+
+    for solidus_model in [hirsch_solidus, andrault_solidus]:
+        d_min, d_max = solidus_model.min_max_depth("solidus temperature")
+        dpths = np.arange(d_min, d_max, 10e3)
+        my_depths.extend(dpths)
+        my_solidus.extend(solidus_model.at_depth("solidus temperature", dpths))
+
+    ghelichkhan_et_al = SplineProfile(
+        depth=np.asarray(my_depths),
+        value=np.asarray(my_solidus),
+        name="Ghelichkhan et al 2021",
+        extrapolate=True)
+
+    return ghelichkhan_et_al
+
+
+def build_anelasticity_model(solidus):
+    def B(x):
+        return np.where(x < 660e3, 1.1, 20)
+
+    def g(x):
+        return np.where(x < 660e3, 20, 10)
+
+    def a(x):
+        return 0.2
+
+    def omega(x):
+        return 1.0
+
+    return gdrift.CammaranoAnelasticityModel(B, g, a, solidus, omega)
+
+
+def get_dimensional_parameters():
+    return {
+        "T_CMB": 4000.0,
+        "T_surface": 300.0,
+        "rho": 3200.0,
+        "g": 9.81,
+        "cp": 1249.7,
+        "alpha": 4.1773e-05,
+        # "kappa": 3.0,
+        # "H_int": 2900e3,
+    }
 
 
 if __name__ == "__main__":
