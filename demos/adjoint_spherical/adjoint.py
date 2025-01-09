@@ -3,7 +3,7 @@ from gadopt.inverse import *
 from gadopt.gplates import GplatesFunction, pyGplatesConnector
 import numpy as np
 from firedrake.adjoint_utils import blocks
-from pyadjoint import stop_annotating
+# from pyadjoint import stop_annotating
 from pathlib import Path
 import gdrift
 from gdrift.profile import SplineProfile
