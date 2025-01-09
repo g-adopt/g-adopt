@@ -129,7 +129,7 @@ slab_interface_coords = [
 slab_boundary_coords = [(domain_dims[0], 7e5)]
 slab_signed_distance_kwargs = {
     "interface_coordinates": slab_interface_coords,
-    "interface_geometry": "Polygon",
+    "interface_geometry": "polygon",
     "boundary_coordinates": slab_boundary_coords,
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary

@@ -38,7 +38,7 @@ import gmsh
 from mpi4py import MPI
 
 lx, ly = 2, 1  # Domain dimensions in x and y directions
-mesh_hor_res = lx / 50  # Uniform horizontal mesh resolution
+mesh_hor_res = lx / 80  # Uniform horizontal mesh resolution
 mesh_file = "mesh.msh"  # Output mesh file
 
 if MPI.COMM_WORLD.rank == 0:

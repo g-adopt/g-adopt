@@ -186,7 +186,7 @@ boundary_coords = [(domain_dims[0], domain_dims[1]), (0, domain_dims[1]), (0, 5.
 # Keyword arguments to define the signed-distance function
 signed_distance_kwargs = {
     "interface_coordinates": interface_coords,
-    "interface_geometry": "Polygon",
+    "interface_geometry": "polygon",
     "boundary_coordinates": boundary_coords,
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary

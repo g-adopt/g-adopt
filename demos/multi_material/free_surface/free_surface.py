@@ -65,7 +65,7 @@ boundary_coords = [(lx, ly)]
 signed_distance_array = signed_distance(
     psi,
     interface_coordinates=interface_coords,
-    interface_geometry="Polygon",
+    interface_geometry="polygon",
     boundary_coordinates=boundary_coords,
 )
 epsilon = interface_thickness(psi)

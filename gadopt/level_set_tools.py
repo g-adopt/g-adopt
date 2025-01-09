@@ -66,7 +66,7 @@ def curve_interface(
 
     signed_distance_kwargs = {
         "interface_coordinates": interface_coords,
-        "interface_geometry": "LineString",
+        "interface_geometry": "curve",
         "interface_callable": curve,
         "interface_args": curve_args,
     }
@@ -98,7 +98,7 @@ def rectangle_interface(ref_vertex_coords: tuple[float], edge_sizes: tuple[float
 
     signed_distance_kwargs = {
         "interface_coordinates": interface_coords,
-        "interface_geometry": "Polygon",
+        "interface_geometry": "polygon",
     }
 
     return signed_distance_kwargs
@@ -118,19 +118,20 @@ def signed_distance(
 
     Three scenarios are currently implemented:
     - The material interface is described by a mathematical function y = f(x). In this
-      case, `interface_geometry` should be "LineString" and `interface_callable` must be
+      case, `interface_geometry` should be "curve" and `interface_callable` must be
       provided along with any `interface_args` to implement the aforementioned
       mathematical function.
     - The material interface is a polygon, and `interface_geometry` takes the value
-      "Polygon". In this case, `interface_coordinates` must exclude the polygon sides
+      "polygon". In this case, `interface_coordinates` must exclude the polygon sides
       that do not act as a material interface and coincide with domain boundaries. The
       coordinates of these sides should be provided using the `boundary_coordinates`
       argument such that the concatenation of the two coordinate objects describes a
       closed polygonal chain.
     - The material interface is a circle, and `interface_geometry` takes the value
-      "Circle" (strictly speaking, Shapely will create a `Polygon`). In this case,
-      `interface_coordinates` is a list holding the coordinates of the circle's centre
-      and the circle radius. No other arguments are required.
+      "circle". In this case, `interface_coordinates` is a list holding the coordinates
+      of the circle's centre and the circle radius. No other arguments are required.
+
+    Geometrical objects underpinning material interfaces are generated using Shapely.
 
     Args:
       level_set:
@@ -139,7 +140,7 @@ def signed_distance(
         A sequence or an array-like with shape (N, 2) of numeric coordinate pairs or a
         list containing the centre coordinates and radius
       interface_geometry:
-        A string specifying the Shapely geometry to create
+        A string specifying the geometry to create
       interface_callable:
         A callable implementing the mathematical function depicting the interface
       interface_args:
@@ -148,10 +149,10 @@ def signed_distance(
         A sequence of numeric coordinate pairs or an array-like with shape (N, 2)
 
     Returns:
-        A float corresponding to the level set maximum or minimum height
+        A list of signed-distance function values at the level-set nodes
     """
     match interface_geometry:
-        case "LineString":
+        case "curve":
             interface = sl.LineString(interface_coordinates)
 
             signed_distance = [
@@ -159,7 +160,7 @@ def signed_distance(
                 * interface.distance(sl.Point(x, y))
                 for x, y in node_coordinates(level_set)
             ]
-        case "Polygon":
+        case "polygon":
             if boundary_coordinates is None:
                 interface = sl.Polygon(interface_coordinates)
                 sl.prepare(interface)
@@ -181,7 +182,7 @@ def signed_distance(
                     * interface.distance(sl.Point(x, y))
                     for x, y in node_coordinates(level_set)
                 ]
-        case "Circle":
+        case "circle":
             centre, radius = interface_coordinates
             interface = sl.Point(centre).buffer(radius)
             sl.prepare(interface)
@@ -192,7 +193,9 @@ def signed_distance(
                 for x, y in node_coordinates(level_set)
             ]
         case _:
-            raise ValueError("`interface_geometry` must be 'LineString' or 'Polygon'.")
+            raise ValueError(
+                "`interface_geometry` must be 'curve', 'polygon', or 'circle'."
+            )
 
     return signed_distance
 

@@ -1,7 +1,7 @@
 Multi-material benchmark simulations underpinned by the conservative level-set approach.
 
 Simulations can be run using
-`mpiexec -n NCORES python3 run_benchmark.py BENCHMARK`
+`mpiexec -n NCORES python3 run_benchmark.py benchmarks/BENCHMARK`
 
 **crameri_2012**
 
