@@ -26,6 +26,7 @@ demos = [
   "pyvista",
   "shapely",
 ]
+lint = ["ruff"]
 optimisation = ["pyroltrilinos"]
 
 [tool.ruff.lint]
