@@ -539,40 +539,30 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
                 if nvert == -1:
                     nvert = len(face_coords) // plex_dim
                 # Flattened version of axis_extremes_order
-                tmp_bdys = [None] * 2 * plex_dim
-                for idim in range(plex_dim):
+                tmp_bdys = [
+                    axis_extremes_order[idim][ibdy]
+                    for idim in range(plex_dim)
+                    for ibdy in range(2)
                     if all(
-                        [
-                            abs(face_coords[idim + plex_dim * i] - bounding_box[idim][0]) < boundary_tol[idim]
-                            for i in range(nvert)
-                        ]
-                    ):
-                        tmp_bdys[2 * idim] = axis_extremes_order[idim][0]
-                    if all(
-                        [
-                            abs(face_coords[idim + plex_dim * i] - bounding_box[idim][1]) < boundary_tol[idim]
-                            for i in range(nvert)
-                        ]
-                    ):
-                        tmp_bdys[2 * idim + 1] = axis_extremes_order[idim][1]
+                        abs(face_coords[idim + plex_dim * i] - bounding_box[idim][ibdy]) < boundary_tol[idim]
+                        for i in range(nvert)
+                    )
+                ]
                 # Found a cell unambiguously on one boundary
-                if tmp_bdys.count(None) == len(tmp_bdys) - 1:
-                    identified[face_id] = [bdy for bdy in tmp_bdys if bdy is not None][0]
+                if len(tmp_bdys) == 1:
+                    identified[face_id] = tmp_bdys[0]
         # Not every MPI rank has every boundary of the mesh, gather all boundaries
         # seen by all MPI ranks
         gathered_boundaries = mesh.comm.allgather(identified)
         mesh.topology_dm.removeLabel("TEMP_LABEL")
-        kwargs = {}
-        for face_id in [face_id for proc_bdy in gathered_boundaries for face_id in proc_bdy]:
-            # If there is any disagreement about which label belongs to which boundary,
-            # the value found on the lowest rank of the mesh communicator is selected here
-            kwargs[
-                [
-                    proc_bdy[face_id]
-                    for proc_bdy in gathered_boundaries
-                    if face_id in proc_bdy and proc_bdy[face_id] is not None
-                ][0]
-            ] = face_id
+        kwargs = dict(
+            [
+                (proc_bdy.get(face_id), face_id)  # invert boundary mapping
+                for proc_bdy in reversed(gathered_boundaries)  # keep value on lowest comm rank
+                for face_id in set().union(*gathered_boundaries)  # all gathered face_ids
+            ]
+        )
+        kwargs.pop(None, None)  # remove None entry
         # Get remaining dimensions (if any)
         for idim in range(plex_dim, dim):
             for axis_label in axis_extremes_order[idim]:
