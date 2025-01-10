@@ -12,11 +12,9 @@ from .diagnostics import GeodynamicalDiagnostics
 from .level_set_tools import (
     LevelSetSolver,
     conservative_level_set,
-    curve_interface,
     entrainment,
     interface_thickness,
     material_field,
-    rectangle_interface,
     signed_distance,
 )
 from .limiter import VertexBasedP1DGLimiter

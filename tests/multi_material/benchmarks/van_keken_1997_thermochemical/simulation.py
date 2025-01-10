@@ -159,11 +159,12 @@ mesh_gen = "gmsh"
 
 # Parameters to initialise level set
 interface_coords_x = np.array([0.0, domain_dims[0]])
-interface_args = (interface_slope := 0, interface_coord_y := 0.025)
-# Generate keyword arguments to define the signed-distance function
-signed_distance_kwargs = ga.curve_interface(
-    interface_coords_x, curve="line", curve_args=interface_args
-)
+callable_args = (interface_slope := 0, interface_coord_y := 0.025)
+signed_distance_kwargs = {
+    "interface_geometry": "curve",
+    "interface_callable": "line",
+    "interface_args": (interface_coords_x, *callable_args),
+}
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
 # corresponding to the interface between a given material and the remainder of the

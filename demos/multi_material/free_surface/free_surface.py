@@ -44,13 +44,16 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 
 # We now initialise the level-set field. All we have to provide to G-ADOPT is a
 # mathematical description of the interface location and use the available API. In this
-# case, the interface can be represented as a cosine. Under the hood, G-ADOPT uses the
-# `Shapely` library to determine the signed-distance function associated with the
-# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
-# from the signed-distance function.
+# case, the interface can be represented as a polygon, requiring vertex coordinates to
+# be provided. Under the hood, G-ADOPT uses the `Shapely` library to determine the
+# signed-distance function associated with the interface. We use G-ADOPT's default
+# strategy to obtain a smooth step function profile from the signed-distance function.
 
 # +
-# Mathematical description of the interface location
+# Initialise the level-set field. First, determine the signed-distance function at each
+# level-set node using a mathematical description of the material-interface location.
+# Then, define the thickness of the hyperbolic tangent profile used in the conservative
+# level-set approach. Finally, overwrite level-set data array.
 interface_coords = [
     (lx, ly),
     (1e6, ly),
@@ -60,18 +63,27 @@ interface_coords = [
     (lx, 6e5),
 ]
 boundary_coords = [(lx, ly)]
-
-# Initialise the level-set field. First, determine the signed-distance function at each
-# level-set node. Then, define the thickness of the hyperbolic tangent profile used in
-# the conservative level-set approach. Finally, overwrite level-set data array.
 signed_distance_array = signed_distance(
     psi,
-    interface_coordinates=interface_coords,
     interface_geometry="polygon",
+    interface_coordinates=interface_coords,
     boundary_coordinates=boundary_coords,
 )
 epsilon = interface_thickness(psi)
 psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
+# -
+
+# Let us visualise the location of the material interface that we have just initialised.
+# To this end, we use Firedrake's built-in plotting functionality.
+
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+
+# fig, axes = plt.subplots()
+# axes.set_aspect("equal")
+# contours = tricontourf(psi, levels=linspace(0, 1, 11), axes=axes, cmap="PiYG")
+# tricontour(psi, axes=axes, levels=[0.5])
+# fig.colorbar(contours, label="Conservative level-set")
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -92,6 +104,25 @@ rho_material = material_field(
 approximation = BoussinesqApproximation(
     Ra := 1, Ra_c=1, g=9.81, mu=mu, rho=rho_mantle, delta_rho=rho_material - rho_mantle
 )
+# -
+
+# Let us now verify that the material fields have been correctly initialised. We plot
+# the compositional Rayleigh number across the domain.
+
+# + tags=["active-ipynb"]
+# fig, axes = plt.subplots(ncols=2)
+# for ax in axes:
+#     ax.set_aspect("equal")
+# contours = tricontourf(
+#     Function(psi).interpolate(mu), levels=linspace(1e21, 1e23, 11), axes=axes[0]
+# )
+# fig.colorbar(contours, ax=axes[0], label="Viscosity (Pa s)")
+# contours = tricontourf(
+#     Function(psi).interpolate(rho_material),
+#     levels=linspace(3200, 3300, 11),
+#     axes=axes[1],
+# )
+# fig.colorbar(contours, ax=axes[1], label="Density (kg/m^3)")
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -204,12 +235,13 @@ while True:
         break
 # -
 
-# We can visualise the location of the material interface at the end of the simulation
-# using Firedrake's built-in plotting functionality.
+# Let us finally examine the location of the material interface at the end of the
+# simulation.
 
 # + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
+# contours = tricontourf(psi, levels=linspace(0, 1, 11), axes=axes, cmap="PiYG")
 # tricontour(psi, axes=axes, levels=[0.5])
+# fig.colorbar(contours, label="Conservative level-set")
 # -

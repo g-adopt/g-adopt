@@ -10,7 +10,7 @@ import numpy as np
 from mpi4py import MPI
 from pandas import read_excel
 
-from gadopt.level_set_tools import curve_interface, min_max_height
+from gadopt.level_set_tools import min_max_height
 
 from .materials import air, lithosphere, mantle
 
@@ -112,11 +112,12 @@ mesh_gen = "gmsh"
 
 # Parameters to initialise surface level set
 interface_coords_x = np.array([0.0, domain_dims[0]])
-interface_args = (surface_slope := 0, surface_coord_y := 7e5)
-# Generate keyword arguments to define the signed-distance function
-surface_signed_distance_kwargs = curve_interface(
-    interface_coords_x, curve="line", curve_args=interface_args
-)
+callable_args = (surface_slope := 0, surface_coord_y := 7e5)
+surface_signed_distance_kwargs = {
+    "interface_geometry": "curve",
+    "interface_callable": "line",
+    "interface_args": (interface_coords_x, *callable_args),
+}
 # Parameters to initialise slab level set
 slab_interface_coords = [
     (domain_dims[0], 7e5),
@@ -128,8 +129,8 @@ slab_interface_coords = [
 ]
 slab_boundary_coords = [(domain_dims[0], 7e5)]
 slab_signed_distance_kwargs = {
-    "interface_coordinates": slab_interface_coords,
     "interface_geometry": "polygon",
+    "interface_coordinates": slab_interface_coords,
     "boundary_coordinates": slab_boundary_coords,
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary

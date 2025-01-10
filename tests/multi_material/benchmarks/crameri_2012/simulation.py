@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 
-from gadopt.level_set_tools import curve_interface, min_max_height
+from gadopt.level_set_tools import min_max_height
 
 from .materials import air, lithosphere, mantle
 
@@ -71,22 +71,24 @@ mesh_gen = "gmsh"
 
 # Parameters to initialise surface level set
 interface_coords_x = np.linspace(0.0, domain_dims[0], int(domain_dims[0] / 1e3) + 1)
-interface_args = (
+callable_args = (
     surface_deflection := 7e3,
     surface_perturbation_wavelength := domain_dims[0],
     surface_coord_y := 7e5,
 )
-# Generate keyword arguments to define the signed-distance function
-surface_signed_distance_kwargs = curve_interface(
-    interface_coords_x, curve="cosine", curve_args=interface_args
-)
+surface_signed_distance_kwargs = {
+    "interface_geometry": "curve",
+    "interface_callable": "cosine",
+    "interface_args": (interface_coords_x, *callable_args),
+}
 # Parameters to initialise LAB level set
 interface_coords_x = np.array([0.0, domain_dims[0]])
-interface_args = (lab_slope := 0, lab_coord_y := 6e5)
-# Generate keyword arguments to define the signed-distance function
-lab_signed_distance_kwargs = curve_interface(
-    interface_coords_x, curve="line", curve_args=interface_args
-)
+callable_args = (lab_slope := 0, lab_coord_y := 6e5)
+lab_signed_distance_kwargs = {
+    "interface_geometry": "curve",
+    "interface_callable": "line",
+    "interface_args": (interface_coords_x, *callable_args),
+}
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
 # corresponding to the interface between a given material and the remainder of the
