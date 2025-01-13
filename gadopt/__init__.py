@@ -36,6 +36,8 @@ from .utility import (
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,
+    DiffusiveSmoothingSolver,
+    collect_garbage,
     interpolate_1d_profile,
     log,
     node_coordinates,
