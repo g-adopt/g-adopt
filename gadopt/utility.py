@@ -26,8 +26,6 @@ import gc
 from typing import Optional
 from numbers import Number
 
-
-
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
 
