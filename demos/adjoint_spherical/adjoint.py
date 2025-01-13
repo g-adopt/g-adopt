@@ -414,6 +414,7 @@ def generate_reference_fields():
         function_space=T_obs.function_space(),
         wavelength=0.05,
         bcs=temp_bcs,
+        solver_parameters=iterative_solver_parameters,
     )
 
     # acting smoothing on Tobs
