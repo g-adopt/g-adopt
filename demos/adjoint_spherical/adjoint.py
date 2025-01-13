@@ -121,7 +121,7 @@ def forward_problem():
         # Average temperature field
         Tave = fi.load_function(mesh, name="AverageTemperature")
 
-    mesh.cartesian = True
+    mesh.cartesian = False
 
     # Boundary markers to top and bottom
     bottom_id, top_id = "bottom", "top"
