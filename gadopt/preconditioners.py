@@ -42,8 +42,7 @@ class SPDAssembledPC(fd.AssembledPC):
         """Initialises the preconditioner.
 
         Args:
-          pc:
-            PETSc preconditioner.
+          pc: PETSc preconditioner.
         """
         super().initialize(pc)
         mat = self.P.petscmat

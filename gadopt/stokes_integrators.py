@@ -207,7 +207,8 @@ class StokesSolver:
                           or theta = 1: Backward Euler
 
     """
-    name = 'Stokes'
+
+    name = "Stokes"
 
     def __init__(
         self,
@@ -314,8 +315,9 @@ class StokesSolver:
                 self.solver_parameters = {"snes_type": "ksponly"}
             else:
                 self.solver_parameters = newton_stokes_solver_parameters.copy()
+
             if INFO >= log_level:
-                self.solver_parameters['snes_monitor'] = None
+                self.solver_parameters["snes_monitor"] = None
 
             if isinstance(solver_parameters, str):
                 match solver_parameters:
