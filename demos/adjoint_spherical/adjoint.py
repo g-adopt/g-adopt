@@ -330,7 +330,7 @@ def generate_reference_fields():
     output_path = base_path / "REVEAL.pvd"
 
     # Load mesh from checkpoint
-    with CheckpointFile(mesh_path, mode="r") as f:
+    with CheckpointFile(str(mesh_path), mode="r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
         T_simulation = f.load_function(mesh, name="Temperature")
 
@@ -425,7 +425,7 @@ def generate_reference_fields():
     output.write(T_obs, T_ave, T_simulation)
 
     # Write out the file
-    with CheckpointFile(output_path.with_suffix(".h5"), mode="w") as fi:
+    with CheckpointFile(str(output_path.with_suffix(".h5")), mode="w") as fi:
         fi.save_mesh(mesh)
         fi.save_function(T_obs, name="Tobs")
         fi.save_function(T_ave, name="AverageTemperature")
