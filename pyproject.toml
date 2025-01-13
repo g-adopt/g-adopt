@@ -26,8 +26,8 @@ demos = [
   "pyvista",
   "shapely",
 ]
-lint = ["ruff"]
 optimisation = ["pyroltrilinos"]
+style = ["pre-commit", "ruff"]
 
 [tool.ruff.lint]
 # ambiguous-variable-name (E741)
