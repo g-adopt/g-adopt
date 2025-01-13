@@ -10,6 +10,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
     # Construct a CubedSphere mesh and then extrude into a sphere:
     mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
     mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+    mesh.cartesian = False
     bottom_id, top_id = "bottom", "top"
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
@@ -52,8 +53,8 @@ def model(ref_level, nlayers, delta_t, steps=None):
                   (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
 
     Ra = Constant(7e3)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
     mu = exp(4.605170185988092 * (0.5 - T))
+    approximation = BoussinesqApproximation(Ra, mu=mu)
 
     delta_t = Constant(delta_t)  # Initial time-step
 
@@ -78,8 +79,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
     energy_solver.solver_parameters['ksp_view'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-7
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                                 cartesian=False,
+    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  near_nullspace=Z_near_nullspace)
 

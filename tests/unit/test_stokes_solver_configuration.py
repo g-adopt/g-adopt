@@ -21,8 +21,6 @@ def test_solver_parameters_argument():
     func_space_temp = fd.FunctionSpace(mesh, "CG", 2)
     temperature = fd.Function(func_space_temp, name="Temperature")
 
-    approximation = BoussinesqApproximation(1)
-
     base_linear_params_with_log = {"snes_type": "ksponly", "snes_monitor": None}
     example_solver_params = {"mat_type": "aij", "ksp_type": "cg", "pc_type": "sor"}
 
@@ -35,7 +33,7 @@ def test_solver_parameters_argument():
         "linear_false",
     ]:
         mu = 1
-        cartesian = True
+        mesh.cartesian = True
 
         match test_case:
             case "unspecified":
@@ -57,7 +55,7 @@ def test_solver_parameters_argument():
                 solver_parameters = example_solver_params
                 expected_value = example_solver_params
             case "cartesian_false":
-                cartesian = False
+                mesh.cartesian = False
                 solver_parameters = None
                 expected_value = (
                     base_linear_params_with_log | iterative_stokes_solver_parameters
@@ -72,12 +70,13 @@ def test_solver_parameters_argument():
                     | direct_stokes_solver_parameters
                 )
 
+        approximation = BoussinesqApproximation(1, mu=mu)
+
         stokes_solver = StokesSolver(
             stokes_function,
             temperature,
             approximation,
             mu=mu,
-            cartesian=cartesian,
             solver_parameters=solver_parameters,
         )
 

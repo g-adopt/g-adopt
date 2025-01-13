@@ -1,0 +1,91 @@
+name: Render demo notebooks
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      trigger:
+        type: boolean
+        default: false
+        description: 'Trigger a website rebuild if this run is successful'
+
+jobs:
+  render:
+    runs-on: self-hosted
+    container:
+      image: ghcr.io/g-adopt/firedrake:2024-11-05
+      options: --shm-size 2g --cap-add=SYS_ADMIN
+
+    env:
+      OMP_NUM_THREADS: 1
+      GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+
+    steps:
+      - name: Install Git LFS
+        run: |
+          sudo apt update
+          sudo apt install -y git-lfs
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        env:
+          S3CONFIG: ${{ secrets.S3CONFIG }}
+        run: |
+          sudo apt install -y xvfb gmsh gh s3cmd unzip
+
+          mkdir -p $HOME/.s3cfg
+          echo "${S3CONFIG}" > $HOME/.s3cfg/config
+          chmod 600 $HOME/.s3cfg/config
+          s3cmd --config=$HOME/.s3cfg/config get --skip-existing s3://gadopt/github-actions/pygplates_0.36.0_py312_amd64.deb
+          sudo apt install -y --fix-broken ./pygplates_0.36.0_py312_amd64.deb
+          ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.*/site-packages/
+
+          . /home/firedrake/firedrake/bin/activate
+          python3 -m pip install nbval nbconvert jupytext siphash24
+          python3 -m pip install .[demos,optimisation]
+          python3 -m ipykernel install --name firedrake --user
+
+      - name: Get Muller et al 2022 plate reconstructions
+        run: |
+          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
+          unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
+
+      - name: Set up for network namespacing
+        run: |
+          sudo sed -i 's/ubuntu/firedrake/' /etc/subuid
+          sudo sed -i 's/ubuntu/firedrake/' /etc/subgid
+          sudo apt install -y uidmap
+          . /home/firedrake/firedrake/bin/activate
+          jupytext_location="$(which jupytext)"
+          cp .testing/jupytext "$jupytext_location"
+          chmod +x "$jupytext_location"
+
+      - name: Convert notebooks
+        run: |
+          . /home/firedrake/firedrake/bin/activate
+          export DISPLAY=:99
+          export PYVISTA_OFF_SCREEN=true
+          export LIBGL_ALWAYS_SOFTWARE=true
+          export GADOPT_RENDER=true
+          Xvfb $DISPLAY -screen 0 1024x768x24 > /dev/null 2>&1 &
+          sleep 3
+          make -j convert_demos
+          rm -rf rendered && mkdir rendered
+          tar -xf demos/artifact.tar -C rendered
+        env:
+          GADOPT_LOGLEVEL: WARN
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: notebooks
+          path: rendered
+          include-hidden-files: true
+      - name: Trigger documentation build
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.trigger) }}
+        run: |
+          gh api --method POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          /repos/g-adopt/g-adopt.github.io/dispatches \
+          -f "event_type=doc-rebuild" -F "client_payload[run_id]=${{ github.run_id }}"
