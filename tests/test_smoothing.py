@@ -10,19 +10,21 @@ from gadopt import *
 # Fixture for loading cylindrical field data
 @pytest.fixture
 def load_field():
-    checkpoint_base = Path(__file__).parent / "../demos/adjoint_2d_cylindrical"
+    checkpoint_base = Path(__file__).parent / "../demos/mantle_convection/adjoint_2d_cylindrical"
     # Start with a previously-initialised temperature field
     with CheckpointFile(str(checkpoint_base.resolve() / "Checkpoint230.h5"), mode="r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
         T = f.load_function(mesh, "Temperature")
+    mesh.cartesian = False
 
     temp_bcs = {
         "bottom": {'T': 1.0},
         "top": {'T': 0.0},
     }
+
     # Compute layer average for initial stage:
     T_avg = Function(T.function_space(), name='Layer_Averaged_Temp')
-    averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
+    averager = LayerAveraging(mesh, quad_degree=6)
     averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
     return T, T_avg, temp_bcs
@@ -34,10 +36,18 @@ def test_isotropic_smoothing(load_field):
 
     smooth_solution = Function(T.function_space(), name="smooth temperature")
 
+    iterative_solver_parameters = {
+        "snes_type": "ksponly",
+        "ksp_type": "gmres",
+        "pc_type": "sor",
+        "mat_type": "aij",
+        "ksp_rtol": 1e-12,
+    }
     smoother = DiffusiveSmoothingSolver(
         function_space=T.function_space(),
         wavelength=.1,
-        bcs=temp_bcs)
+        bcs=temp_bcs,
+        solver_parameters=iterative_solver_parameters)
 
     smooth_solution.assign(smoother.action(T))
     expected_value = 0.06243541054145882

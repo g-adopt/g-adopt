@@ -166,7 +166,7 @@ def forward_problem():
     )
 
     # Top velocity boundary condition
-    gplates_velocities = GplatesFunction(
+    gplates_velocities = GplatesVelocityFuinction(
         V,
         gplates_connector=plate_reconstruction_model,
         top_boundary_marker=top_id,
