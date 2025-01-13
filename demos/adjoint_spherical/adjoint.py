@@ -1,6 +1,6 @@
 from gadopt import *
 from gadopt.inverse import *
-from gadopt.gplates import GplatesFunction, pyGplatesConnector
+from gadopt.gplates import *
 import numpy as np
 from firedrake.adjoint_utils import blocks
 # from pyadjoint import stop_annotating
@@ -45,6 +45,12 @@ rmax = 2.208
 rmin = 1.208
 ref_level = 7
 nlayers = 64
+
+
+def test_taping():
+    Tic, reduced_functional = forward_problem()
+    repeat_val = reduced_functional([Tic])
+    log("Reduced Functional Repeat: ", repeat_val)
 
 
 def conduct_inversion():
@@ -108,7 +114,7 @@ def forward_problem():
     last_checkpoint_path = find_last_checkpoint()
 
     # Load mesh
-    with CheckpointFile(str(base_path / "input_data/REVEAL.h5"), "r") as fi:
+    with CheckpointFile(str(base_path / "REVEAL.h5"), "r") as fi:
         mesh = fi.load_mesh("firedrake_default_extruded")
         # reference temperature field (seismic tomography)
         Tobs = fi.load_function(mesh, name="Tobs")
@@ -175,6 +181,7 @@ def forward_problem():
 
     # Get a dictionary of the reference fields to be used in TALA approximation
     tala_parameters_dict = TALA_parameters(function_space=Q)
+
     approximation = TruncatedAnelasticLiquidApproximation(
         Ra=Constant(5e8),  # Rayleigh number
         Di=Constant(0.9492824165791792),  # Dissipation number
@@ -279,6 +286,8 @@ def forward_problem():
         # Updating time
         time += float(delta_t)
         timestep_index += 1
+        if timestep_index >= 5:
+            break
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - Tobs) ** 2 * dx)
