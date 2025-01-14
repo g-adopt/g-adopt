@@ -161,7 +161,7 @@ def forward_problem():
         Tic.assign(Tobs)
 
     # Information pertaining to the plate reconstruction model
-    cao_2024_files = ensure_reconstruction("Cao 2024", "../gplates_files")
+    cao_2024_files = ensure_reconstruction("Cao 2024", "./gplates_files")
 
     plate_reconstruction_model = pyGplatesConnector(
         rotation_filenames=cao_2024_files["rotation_filenames"],
