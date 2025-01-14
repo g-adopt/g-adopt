@@ -193,9 +193,9 @@ def forward_problem():
         alpha=tala_parameters_dict["alphabar"],
         cp=tala_parameters_dict["cpbar"],  # reference specific heat capacity
         g=tala_parameters_dict["gbar"],  # reference gravity
-        H=tala_parameters_dict["H_int"],  # reference thickness
+        H=Constant(9.93),  # reference thickness
         mu=mu,  # Viscosity field (including thermal dependencies)
-        kappa=tala_parameters_dict["kappa"])
+        kappa=Constant(3.0))
 
     # Section: Setting up nullspaces
     # Nullspaces for stokes contains only a constant nullspace for pressure, as the top boundary is
