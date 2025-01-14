@@ -160,7 +160,7 @@ def forward_problem():
         with CheckpointFile(str(last_checkpoint_path), "r") as fi:
             Tic.assign(fi.load_function(mesh, name="dat_0"))
     else:
-        Tic.assign(T_simulation)
+        Tic.interpolate(T_simulation)
 
     # Information pertaining to the plate reconstruction model
     cao_2024_files = ensure_reconstruction("Cao 2024", "./gplates_files")
