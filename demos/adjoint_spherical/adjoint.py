@@ -1,6 +1,7 @@
 from gadopt import *
 from gadopt.inverse import *
 from gadopt.gplates import *
+from gadopt.transport_solver import iterative_energy_solver_parameters
 import numpy as np
 from firedrake.adjoint_utils import blocks
 # from pyadjoint import stop_annotating
@@ -194,7 +195,6 @@ def forward_problem():
         cp=tala_parameters_dict["cpbar"],  # reference specific heat capacity
         g=tala_parameters_dict["gbar"],  # reference gravity
         H=Constant(9.93),  # reference thickness
-        mu=mu,  # Viscosity field (including thermal dependencies)
         kappa=Constant(3.0))
 
     # Section: Setting up nullspaces
@@ -291,8 +291,10 @@ def forward_problem():
         if timestep_index >= 5:
             break
 
+    FullT = Function(Q, name="FullTemperature").assign(T + tala_parameters_dict["Tbar"])
+
     # Temperature misfit between solution and observation
-    t_misfit = assemble((T - Tobs) ** 2 * dx)
+    t_misfit = assemble((FullT - Tobs) ** 2 * dx)
 
     # Assembling the objective
     objective = t_misfit
@@ -359,8 +361,18 @@ def generate_reference_fields():
     vsv = Function(Q, name="vsv")
     vs = Function(Q, name="vs")
 
-    # Dimensional parameters will be used to convert simulation results to dimension full form
+    FullT = Function(Q, name="FullTemperature")
+
+    # Getting non-dimensional parameters
     nondim_parameters = get_dimensional_parameters()
+    # radial reference temperature field
+    Tbar = Function(Q, name="CompRefTemperature")
+    interpolate_1d_profile(
+        function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt")
+    # We trust the increase in the adiabatic temperature
+    Tbar.assign((Tbar - 1600.) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
+    # Full temperature field
+    FullT.assign(T_simulation + Tbar)
 
     # Compute the depth field
     depth = Function(Q, name="depth").interpolate(
@@ -385,14 +397,14 @@ def generate_reference_fields():
 
     # finding the depth and temperature average to be passed to the thermodynamic model for linearisation
     depth_ave_array = averager.get_layer_average(depth)
-    T_simulation_ave_array = averager.get_layer_average(T_simulation) * (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]) + nondim_parameters["T_surface"]
+    FullT_ave_array = averager.get_layer_average(FullT) * (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]) + nondim_parameters["T_surface"]
 
     # Define a field on Q for T_obs
     T_obs = Function(Q, name="T_obs")
     T_ave = Function(Q, name="average_temperature")
 
     # Building the thermodynamic model, this is a regularised version of the SLB_16 pyrolite model using the temperature profile from simulation
-    anelastic_slb_pyrolite = build_thermodynamic_model(np.column_stack((depth_ave_array, T_simulation_ave_array)))
+    anelastic_slb_pyrolite = build_thermodynamic_model(np.column_stack((depth_ave_array, FullT_ave_array)))
 
     # Convert the shear wave speed to T_obs
     T_obs.dat.data_with_halos[:] = anelastic_slb_pyrolite.vs_to_temperature(
@@ -408,7 +420,7 @@ def generate_reference_fields():
 
     # Compute the layer-averaged temperature from the "simulation temperature"
     averager.extrapolate_layer_average(
-        T_ave, T_simulation_ave_array)
+        T_ave, FullT_ave_array)
 
     # Add the mean profile to T_obs again (Note: T_ave is now from a simulation)
     T_obs.interpolate(T_obs + T_ave)
@@ -425,7 +437,7 @@ def generate_reference_fields():
         function_space=T_obs.function_space(),
         wavelength=0.05,
         bcs=temp_bcs,
-        solver_parameters=iterative_solver_parameters,
+        solver_parameters=iterative_energy_solver_parameters,
     )
 
     # acting smoothing on Tobs
@@ -516,7 +528,8 @@ def TALA_parameters(function_space):
     Tbar = Function(function_space, name="CompRefTemperature")
     interpolate_1d_profile(
         function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt")
-    Tbar.assign((Tbar - nondim_parameters["T_surface"]) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
+    # We trust the increase in the adiabatic temperature
+    Tbar.assign((Tbar - 1600.) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
 
     # radial thermal expansivity field
     alphabar = Function(function_space, name="IsobaricThermalExpansivity")
