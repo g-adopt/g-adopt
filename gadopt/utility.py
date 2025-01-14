@@ -308,7 +308,7 @@ class DiffusiveSmoothingSolver:
             self,
             function_space: FunctionSpace,
             wavelength: Number,
-            bcs: Optional[dict[int, dict[str, int | float]]] = None,
+            bcs: Optional[dict[int, dict[str, int | float]]] = {},
             K: Function | Number = 1,
             quad_degree: int = 6,
             solver_parameters: Optional[dict[str, str | float]] = None,
