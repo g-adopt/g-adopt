@@ -121,6 +121,7 @@ def forward_problem():
         Tobs = fi.load_function(mesh, name="Tobs")
         # Average temperature field
         Tave = fi.load_function(mesh, name="AverageTemperature")
+        T_simulation = fi.load_function(mesh, name="Temperature")
 
     mesh.cartesian = False
 
@@ -159,7 +160,7 @@ def forward_problem():
         with CheckpointFile(str(last_checkpoint_path), "r") as fi:
             Tic.assign(fi.load_function(mesh, name="dat_0"))
     else:
-        Tic.assign(Tobs)
+        Tic.assign(T_simulation)
 
     # Information pertaining to the plate reconstruction model
     cao_2024_files = ensure_reconstruction("Cao 2024", "./gplates_files")
@@ -195,6 +196,7 @@ def forward_problem():
         cp=tala_parameters_dict["cpbar"],  # reference specific heat capacity
         g=tala_parameters_dict["gbar"],  # reference gravity
         H=Constant(9.93),  # reference thickness
+        mu=mu,  # viscosity
         kappa=Constant(3.0))
 
     # Section: Setting up nullspaces
