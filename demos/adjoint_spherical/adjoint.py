@@ -374,7 +374,7 @@ def generate_reference_fields():
     # We trust the increase in the adiabatic temperature
     Tbar.assign((Tbar - 1600.) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
     # Full temperature field
-    FullT.assign(T_simulation + Tbar)
+    FullT.interpolate(T_simulation + Tbar)
 
     # Compute the depth field
     depth = Function(Q, name="depth").interpolate(
@@ -447,7 +447,7 @@ def generate_reference_fields():
 
     # Output for visualisation
     output = VTKFile(output_path.with_suffix(".pvd"))
-    output.write(T_obs, T_ave, T_simulation)
+    output.write(T_obs, T_ave)
 
     # Write out the file
     with CheckpointFile(str(output_path.with_suffix(".h5")), mode="w") as fi:
