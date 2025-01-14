@@ -74,7 +74,7 @@ left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Stokes function space (mixed)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+Q = FunctionSpace(mesh, "Q", 2)  # Temperature function space (scalar)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space (constants across the domain)
 

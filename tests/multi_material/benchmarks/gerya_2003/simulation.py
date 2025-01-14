@@ -10,8 +10,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 
-import gadopt as ga
-
 from .materials import buoyant_material, dense_material
 
 

@@ -38,7 +38,7 @@ import gmsh
 from mpi4py import MPI
 
 lx, ly = 2, 1  # Domain dimensions in x and y directions
-mesh_hor_res = lx / 80  # Uniform horizontal mesh resolution
+mesh_hor_res = lx / 50  # Uniform horizontal mesh resolution
 mesh_file = "mesh.msh"  # Output mesh file
 
 if MPI.COMM_WORLD.rank == 0:
@@ -51,12 +51,12 @@ if MPI.COMM_WORLD.rank == 0:
     line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
     gmsh.model.geo.extrude(
-        [(1, line_1)], 0, ly / 5, 0, numElements=[20], recombine=True
+        [(1, line_1)], 0, ly / 10, 0, numElements=[10], recombine=True
     )  # Vertical resolution: 1e-2
 
     gmsh.model.geo.extrude(
-        [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 10, 0, numElements=[20], recombine=True
-    )  # Vertical resolution: 3.5e-2
+        [(1, line_1 + 1)], 0, 4 * ly / 5, 0, numElements=[40], recombine=True
+    )  # Vertical resolution: 2e-2
 
     gmsh.model.geo.extrude(
         [(1, line_1 + 5)], 0, ly / 10, 0, numElements=[10], recombine=True
