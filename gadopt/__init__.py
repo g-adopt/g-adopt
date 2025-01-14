@@ -10,11 +10,9 @@ from .approximations import Approximation as Approximation
 from .diagnostics import GeodynamicalDiagnostics as GeodynamicalDiagnostics
 from .level_set_tools import LevelSetSolver as LevelSetSolver
 from .level_set_tools import conservative_level_set as conservative_level_set
-from .level_set_tools import curve_interface as curve_interface
 from .level_set_tools import entrainment as entrainment
 from .level_set_tools import interface_thickness as interface_thickness
 from .level_set_tools import material_field as material_field
-from .level_set_tools import rectangle_interface as rectangle_interface
 from .level_set_tools import signed_distance as signed_distance
 from .limiter import VertexBasedP1DGLimiter as VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC as FreeSurfaceMassInvPC

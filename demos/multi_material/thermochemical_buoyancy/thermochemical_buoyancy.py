@@ -38,7 +38,7 @@ import gmsh
 from mpi4py import MPI
 
 lx, ly = 2, 1  # Domain dimensions in x and y directions
-mesh_hor_res = lx / 80  # Uniform horizontal mesh resolution
+mesh_hor_res = lx / 50  # Uniform horizontal mesh resolution
 mesh_file = "mesh.msh"  # Output mesh file
 
 if MPI.COMM_WORLD.rank == 0:
@@ -51,12 +51,12 @@ if MPI.COMM_WORLD.rank == 0:
     line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
     gmsh.model.geo.extrude(
-        [(1, line_1)], 0, ly / 5, 0, numElements=[20], recombine=True
+        [(1, line_1)], 0, ly / 10, 0, numElements=[10], recombine=True
     )  # Vertical resolution: 1e-2
 
     gmsh.model.geo.extrude(
-        [(1, line_1 + 1)], 0, ly - ly / 5 - ly / 10, 0, numElements=[20], recombine=True
-    )  # Vertical resolution: 3.5e-2
+        [(1, line_1 + 1)], 0, 4 * ly / 5, 0, numElements=[40], recombine=True
+    )  # Vertical resolution: 2e-2
 
     gmsh.model.geo.extrude(
         [(1, line_1 + 5)], 0, ly / 10, 0, numElements=[10], recombine=True
@@ -102,28 +102,41 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 
 # We now initialise the level-set field. All we have to provide to G-ADOPT is a
 # mathematical description of the interface location and use the available API. In this
-# case, the interface can be represented as a cosine. Under the hood, G-ADOPT uses the
-# `Shapely` library to determine the signed-distance function associated with the
-# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
-# from the signed-distance function.
+# case, the interface can be represented as a straight line, requiring a callable to be
+# provided. Under the hood, G-ADOPT uses the `Shapely` library to determine the
+# signed-distance function associated with the interface. We use G-ADOPT's default
+# strategy to obtain a smooth step function profile from the signed-distance function.
 
 # +
 from numpy import array  # noqa: E402
 
-# Mathematical description of the interface location
-interface_coords_x = array([0.0, lx])
-interface_args = (interface_slope := 0, interface_y := 0.025)
-# Generate keyword arguments to define the signed-distance function
-signed_distance_kwargs = curve_interface(
-    interface_coords_x, curve="line", curve_args=interface_args
-)
-
 # Initialise the level-set field. First, determine the signed-distance function at each
-# level-set node. Then, define the thickness of the hyperbolic tangent profile used in
-# the conservative level-set approach. Finally, overwrite level-set data array.
-signed_distance_array = signed_distance(psi, **signed_distance_kwargs)
+# level-set node using a mathematical description of the material-interface location.
+# Then, define the thickness of the hyperbolic tangent profile used in the conservative
+# level-set approach. Finally, overwrite level-set data array.
+interface_coords_x = array([0.0, lx])
+callable_args = (interface_slope := 0, interface_y := 0.025)
+signed_distance_array = signed_distance(
+    psi,
+    interface_geometry="curve",
+    interface_callable="line",
+    interface_args=(interface_coords_x, *callable_args),
+)
 epsilon = interface_thickness(psi)
 psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
+# -
+
+# Let us visualise the location of the material interface that we have just initialised.
+# To this end, we use Firedrake's built-in plotting functionality.
+
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+
+# fig, axes = plt.subplots()
+# axes.set_aspect("equal")
+# contours = tricontourf(psi, levels=linspace(0, 1, 11), axes=axes, cmap="PiYG")
+# tricontour(psi, axes=axes, levels=[0.5])
+# fig.colorbar(contours, label="Conservative level-set")
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -143,6 +156,18 @@ Ra_c = material_field(
 approximation = Approximation(
     "BA", dimensional=False, parameters={"Ra": Ra, "Ra_c": Ra_c}
 )
+# -
+
+# Let us now verify that the material fields have been correctly initialised. We plot
+# the compositional Rayleigh number across the domain.
+
+# + tags=["active-ipynb"]
+# fig, axes = plt.subplots()
+# axes.set_aspect("equal")
+# contours = tricontourf(
+#     Function(psi).interpolate(Ra_c), levels=linspace(0, 4.5e5, 11), axes=axes
+# )
+# fig.colorbar(contours, label="Compositional Rayleigh number")
 # -
 
 # We move on to initialising the temperature field.
@@ -290,14 +315,13 @@ while True:
         break
 # -
 
-# We can visualise the final temperature and level-set fields using Firedrake's
-# built-in plotting functionality.
+# Let us finally examine the location of the material interface and the temperature
+# field at the end of the simulation.
 
 # + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
 # collection = tripcolor(T, axes=axes, cmap="coolwarm")
 # tricontour(psi, axes=axes, levels=[0.5])
-# fig.colorbar(collection, label="Temperature");
+# fig.colorbar(collection, label="Temperature")
 # -

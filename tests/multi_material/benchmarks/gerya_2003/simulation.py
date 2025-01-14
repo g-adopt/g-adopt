@@ -10,8 +10,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 
-import gadopt as ga
-
 from .materials import buoyant_material, dense_material
 
 
@@ -62,10 +60,12 @@ mesh_gen = "firedrake"
 mesh_elements = (64, 64)
 
 # Parameters to initialise level set
-ref_vertex_coords = (2e5, 3.5e5)
-edge_sizes = (1e5, 1e5)
-# Generate keyword arguments to define the signed-distance function
-signed_distance_kwargs = ga.rectangle_interface(ref_vertex_coords, edge_sizes)
+callable_args = (ref_vertex_coords := (2e5, 3.5e5), edge_sizes := (1e5, 1e5))
+signed_distance_kwargs = {
+    "interface_geometry": "polygon",
+    "interface_callable": "rectangle",
+    "interface_args": callable_args,
+}
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
 # corresponding to the interface between a given material and the remainder of the

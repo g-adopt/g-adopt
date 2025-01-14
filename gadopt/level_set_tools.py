@@ -10,7 +10,8 @@ entrainment.
 
 import operator
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import firedrake as fd
 import numpy as np
@@ -24,94 +25,14 @@ from .transport_solver import GenericTransportSolver
 from .utility import node_coordinates
 
 
-def curve_interface(
-    interface_coords_x: np.ndarray, *, curve: str | Callable, curve_args: tuple
-) -> dict:
-    """Material interface defined by a curve.
-
-    Implemented curve types and associated arguments:
-    | Curve  |                     Arguments                      |
-    | :----- | :------------------------------------------------: |
-    | line   | slope, intercept                                   |
-    | cosine | amplitude, wavelength, vertical_shift, phase_shift |
-
-    Args:
-      interface_coords_x:
-        A NumPy array holding the x-coordinates of the curve
-      curve:
-        A string matching an implemented curve or a callable implementing a new curve
-      curve_args:
-        A tuple of arguments defining the curve
-
-    Returns:
-      A dictionary with the keyword arguments to initialise a signed-distance function
-    """
-
-    def line(x, slope, intercept):
-        """Straight line equation"""
-        return slope * x + intercept
-
-    def cosine(x, amplitude, wavelength, vertical_shift, phase_shift=0):
-        """Cosine function with an amplitude and a vertical shift."""
-        cosine = np.cos(2 * np.pi / wavelength * x + phase_shift)
-
-        return amplitude * cosine + vertical_shift
-
-    curves = {"line": line, "cosine": cosine}
-    if isinstance(curve, str):
-        curve = curves[curve]
-
-    interface_coords_y = curve(interface_coords_x, *curve_args)
-    interface_coords = np.column_stack((interface_coords_x, interface_coords_y))
-
-    signed_distance_kwargs = {
-        "interface_coordinates": interface_coords,
-        "interface_geometry": "curve",
-        "interface_callable": curve,
-        "interface_args": curve_args,
-    }
-
-    return signed_distance_kwargs
-
-
-def rectangle_interface(ref_vertex_coords: tuple[float], edge_sizes: tuple[float]):
-    """Material interface defined by a rectangle.
-
-    Edges are aligned with Cartesian directions and do not overlap domain boundaries.
-
-    Args:
-      ref_vertex_coords:
-        A tuple holding the coordinates of the lower-left vertex
-      edge_sizes:
-        A tuple holding the edge sizes
-
-    Returns:
-      A dictionary with the keyword arguments to initialise a signed-distance function
-    """
-    interface_coords = [
-        (ref_vertex_coords[0], ref_vertex_coords[1]),
-        (ref_vertex_coords[0] + edge_sizes[0], ref_vertex_coords[1]),
-        (ref_vertex_coords[0] + edge_sizes[0], ref_vertex_coords[1] + edge_sizes[1]),
-        (ref_vertex_coords[0], ref_vertex_coords[1] + edge_sizes[1]),
-        (ref_vertex_coords[0], ref_vertex_coords[1]),
-    ]
-
-    signed_distance_kwargs = {
-        "interface_coordinates": interface_coords,
-        "interface_geometry": "polygon",
-    }
-
-    return signed_distance_kwargs
-
-
 def signed_distance(
     level_set: fd.Function,
     /,
-    interface_coordinates: list[list[float]] | np.ndarray | list[tuple[float], float],
-    *,
     interface_geometry: str,
-    interface_callable: Callable | None = None,
-    interface_args: tuple | None = None,
+    interface_coordinates: list[list[float]] | list[list[float], float] | None = None,
+    *,
+    interface_callable: Callable | str | None = None,
+    interface_args: tuple[Any] | None = None,
     boundary_coordinates: list[list[float]] | np.ndarray | None = None,
 ) -> list:
     """Generates signed-distance function values at level-set nodes.
@@ -133,16 +54,24 @@ def signed_distance(
 
     Geometrical objects underpinning material interfaces are generated using Shapely.
 
+    Implemented interface geometry presets and associated arguments:
+    | Curve     |                     Arguments                      |
+    | :-------- | :------------------------------------------------: |
+    | line      | slope, intercept                                   |
+    | cosine    | amplitude, wavelength, vertical_shift, phase_shift |
+    | rectangle | ref_vertex_coords, edge_sizes                      |
+
     Args:
       level_set:
         A Firedrake function for the targeted level-set field
-      interface_coordinates:
-        A sequence or an array-like with shape (N, 2) of numeric coordinate pairs or a
-        list containing the centre coordinates and radius
       interface_geometry:
         A string specifying the geometry to create
+      interface_coordinates:
+        A sequence or an array-like with shape (N, 2) of numeric coordinate pairs
+        defining the interface or a list containing centre coordinates and radius
       interface_callable:
-        A callable implementing the mathematical function depicting the interface
+        A callable implementing the mathematical function depicting the interface or a
+        string matching an implemented callable preset
       interface_args:
         A tuple of arguments provided to the interface callable
       boundary_coordinates:
@@ -151,12 +80,82 @@ def signed_distance(
     Returns:
         A list of signed-distance function values at the level-set nodes
     """
+
+    def stack_coordinates(func):
+        """Decorator to stack coordinates when the material interface is a curve.
+
+        Args:
+          func:
+            A callable implementing the mathematical function depicting the interface
+
+        Returns:
+          A callable that can stack interface coordinates
+        """
+
+        def wrapper(*args):
+            if isinstance(interface_coords_x := args[0], (int, float)):
+                return func(*args)
+            else:
+                return np.column_stack((interface_coords_x, func(*args)))
+
+        return wrapper
+
+    def line(x, slope, intercept) -> float | np.ndarray:
+        """Straight line equation"""
+        return slope * x + intercept
+
+    def cosine(
+        x, amplitude, wavelength, vertical_shift, phase_shift=0
+    ) -> float | np.ndarray:
+        """Cosine function with an amplitude and a vertical shift."""
+        cosine = np.cos(2 * np.pi / wavelength * x + phase_shift)
+
+        return amplitude * cosine + vertical_shift
+
+    def rectangle(
+        ref_vertex_coords: tuple[float], edge_sizes: tuple[float]
+    ) -> list[tuple[float]]:
+        """Material interface defined by a rectangle.
+
+        Edges are aligned with Cartesian directions and do not overlap domain boundaries.
+
+        Args:
+          ref_vertex_coords:
+            A tuple holding the coordinates of the lower-left vertex
+          edge_sizes:
+            A tuple holding the edge sizes
+
+        Returns:
+          A list of tuples representing the coordinates of the rectangle's vertices
+        """
+        interface_coords = [
+            (ref_vertex_coords[0], ref_vertex_coords[1]),
+            (ref_vertex_coords[0] + edge_sizes[0], ref_vertex_coords[1]),
+            (
+                ref_vertex_coords[0] + edge_sizes[0],
+                ref_vertex_coords[1] + edge_sizes[1],
+            ),
+            (ref_vertex_coords[0], ref_vertex_coords[1] + edge_sizes[1]),
+            (ref_vertex_coords[0], ref_vertex_coords[1]),
+        ]
+
+        return interface_coords
+
+    callable_presets = {"cosine": cosine, "line": line, "rectangle": rectangle}
+    if isinstance(interface_callable, str):
+        interface_callable = callable_presets[interface_callable]
+
+    if interface_callable is not None:
+        if interface_geometry == "curve":
+            interface_callable = stack_coordinates(interface_callable)
+        interface_coordinates = interface_callable(*interface_args)
+
     match interface_geometry:
         case "curve":
             interface = sl.LineString(interface_coordinates)
 
             signed_distance = [
-                (1 if y > interface_callable(x, *interface_args) else -1)
+                (1 if y > interface_callable(x, *interface_args[1:]) else -1)
                 * interface.distance(sl.Point(x, y))
                 for x, y in node_coordinates(level_set)
             ]

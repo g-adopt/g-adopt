@@ -11,7 +11,7 @@
 # multi-material. In such simulations, each material occupies part of the numerical
 # domain and has intrinsic physical properties, such as density and viscosity. Across a
 # material interface, physical properties transition from one value to another, either
-# sharply or progressively. In the former case, physical property fields exhibit
+# sharply or smoothly. In the former case, physical property fields exhibit
 # discontinuities, whilst in the latter case, an averaging scheme weights contributions
 # from each material.
 
@@ -86,32 +86,45 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 
 # We now initialise the level-set field. All we have to provide to G-ADOPT is a
 # mathematical description of the interface location and use the available API. In this
-# case, the interface can be represented as a cosine. Under the hood, G-ADOPT uses the
-# `Shapely` library to determine the signed-distance function associated with the
-# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
-# from the signed-distance function.
+# case, the interface can be represented as a cosine, requiring a callable to be
+# provided. Under the hood, G-ADOPT uses the `Shapely` library to determine the
+# signed-distance function associated with the interface. We use G-ADOPT's default
+# strategy to obtain a smooth step function profile from the signed-distance function.
 
 # +
 from numpy import linspace  # noqa: E402
 
-# Mathematical description of the interface location
+# Initialise the level-set field. First, determine the signed-distance function at each
+# level-set node using a mathematical description of the material-interface location.
+# Then, define the thickness of the hyperbolic tangent profile used in the conservative
+# level-set approach. Finally, overwrite level-set data array.
 interface_coords_x = linspace(0, lx, 1000)
-interface_args = (
+callable_args = (
     interface_deflection := 0.02,
     perturbation_wavelength := 2 * lx,
     initial_interface_y := 0.2,
 )
-# Generate keyword arguments to define the signed-distance function
-signed_distance_kwargs = curve_interface(
-    interface_coords_x, curve="cosine", curve_args=interface_args
+signed_distance_array = signed_distance(
+    psi,
+    interface_geometry="curve",
+    interface_callable="cosine",
+    interface_args=(interface_coords_x, *callable_args),
 )
-
-# Initialise the level-set field. First, determine the signed-distance function at each
-# level-set node. Then, define the thickness of the hyperbolic tangent profile used in
-# the conservative level-set approach. Finally, overwrite level-set data array.
-signed_distance_array = signed_distance(psi, **signed_distance_kwargs)
 epsilon = interface_thickness(psi)
 psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
+# -
+
+# Let us visualise the location of the material interface that we have just initialised.
+# To this end, we use Firedrake's built-in plotting functionality.
+
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+
+# fig, axes = plt.subplots()
+# axes.set_aspect("equal")
+# contours = tricontourf(psi, levels=linspace(0, 1, 11), axes=axes, cmap="PiYG")
+# tricontour(psi, axes=axes, levels=[0.5])
+# fig.colorbar(contours, label="Conservative level-set")
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -125,6 +138,18 @@ psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 # +
 Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="sharp")
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
+# -
+
+# Let us now verify that the material fields have been correctly initialised. We plot
+# the compositional Rayleigh number across the domain.
+
+# + tags=["active-ipynb"]
+# fig, axes = plt.subplots()
+# axes.set_aspect("equal")
+# contours = tricontourf(
+#     Function(psi).interpolate(Ra_c), levels=linspace(0, 1, 11), axes=axes
+# )
+# fig.colorbar(contours, label="Compositional Rayleigh number")
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -238,12 +263,13 @@ while True:
         break
 # -
 
-# We can visualise the location of the material interface at the end of the simulation
-# using Firedrake's built-in plotting functionality.
+# Let us finally examine the location of the material interface at the end of the
+# simulation.
 
 # + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
+# contours = tricontourf(psi, levels=linspace(0, 1, 11), axes=axes, cmap="PiYG")
 # tricontour(psi, axes=axes, levels=[0.5])
+# fig.colorbar(contours, label="Conservative level-set")
 # -

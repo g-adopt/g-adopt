@@ -90,16 +90,17 @@ mesh_elements = (512, 32)
 
 # Parameters to initialise level set
 interface_coords_x = np.linspace(0.0, domain_dims[0], int(domain_dims[0] / 1e3) + 1)
-interface_args = (
+callable_args = (
     perturbation_x := domain_dims[0] / 2,
     perturbation_support := 6e3,
     interface_deflection := 1,
     initial_interface_y := 2.5e3,
 )
-# Generate keyword arguments to define the signed-distance function
-signed_distance_kwargs = ga.curve_interface(
-    interface_coords_x, curve=symmetric_cubic, curve_args=interface_args
-)
+signed_distance_kwargs = {
+    "interface_geometry": "curve",
+    "interface_callable": symmetric_cubic,
+    "interface_args": (interface_coords_x, *callable_args),
+}
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
 # corresponding to the interface between a given material and the remainder of the
