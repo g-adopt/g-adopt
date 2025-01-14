@@ -15,24 +15,27 @@ def __main__():
         T_simulation = f.load_function(mesh, name="Temperature")
 
     temp_bcs = {
-        "bottom": {'T': 1.0 - 930. / 3700.},
+        "bottom": {'T': 1.0 - 930. / 3700},
         "top": {'T': 0.0},
     }
 
     # Projection solver parameters for nullspaces:
-    iterative_solver_parameters = {
+    iterative_energy_solver_parameters: dict[str, Any] = {
+        "mat_type": "aij",
         "snes_type": "ksponly",
         "ksp_type": "gmres",
+        "ksp_rtol": 1e-5,
         "pc_type": "sor",
-        "mat_type": "aij",
-        "ksp_rtol": 1e-12,
     }
+
+    import pdb
+    pdb.set_trace()
     # Adding Smoothing to Tobs
     smoother = DiffusiveSmoothingSolver(
         function_space=T_simulation.function_space(),
         wavelength=0.05,
         bcs=temp_bcs,
-        solver_parameters=iterative_solver_parameters,
+        solver_parameters=iterative_energy_solver_parameters,
     )
 
     # acting smoothing on Tobs
