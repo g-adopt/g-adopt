@@ -152,6 +152,13 @@ def viscoelastic_model(
         solver.solve()
 
         time += dt
+        load_height_analytical.interpolate(
+            (
+                (load_amplitude - h_elastic) * (1 - exp(-time / tau / norm_factor))
+                + h_elastic
+            )
+            * cos(load_wavenumber * x)
+        )
 
         output_file.write(*z.subfunctions, load_height_analytical, time=time)
 

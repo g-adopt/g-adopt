@@ -296,7 +296,6 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
             self.equations, self.solution_split, self.solution_old_split
         ):
             if equation.mass_term:
-                assert equation.scaling_factor == self.theta
                 self.F += equation.mass((solution - solution_old) / self.coupled_tstep)
             self.F -= equation.residual(solution)
 
@@ -462,11 +461,7 @@ class StokesSolver(MassMomentumBase):
             )
 
         for bc_id, eta_ind in self.free_surface_map.items():
-            eq_attrs = {
-                "boundary_id": bc_id,
-                "buoyancy": self.buoyancy_fs[eta_ind],
-                "u": u,
-            }
+            eq_attrs = {"boundary_id": bc_id, "u": u}
 
             self.equations.append(
                 Equation(
@@ -476,7 +471,7 @@ class StokesSolver(MassMomentumBase):
                     mass_term=mass_term_fs,
                     eq_attrs=eq_attrs,
                     quad_degree=self.quad_degree,
-                    scaling_factor=self.theta,
+                    scaling_factor=-self.theta * self.buoyancy_fs[eta_ind],
                 )
             )
 
@@ -601,11 +596,6 @@ class ViscoelasticSolver(MassMomentumBase):
 class InternalVariableSolver(MassMomentumBase):
     name = "InternalVariable"
 
-    def __init__(
-        self, solution: Function, approximation: Approximation, /, **kwargs
-    ) -> None:
-        super().__init__(solution, approximation, **kwargs)
-
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
     ) -> ufl.algebra.Product | ufl.algebra.Sum:
@@ -628,7 +618,7 @@ class InternalVariableSolver(MassMomentumBase):
             {"source": strain / maxwell_time, "sink_coeff": 1 / maxwell_time},
         ]
         mass_terms = [None, mass_term]
-        scaling_factors = [1, self.theta]
+        scaling_factors = [1, -self.theta]
 
         for i in range(len(self.tests)):
             self.equations.append(
