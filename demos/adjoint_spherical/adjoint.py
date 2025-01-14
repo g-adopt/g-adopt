@@ -507,31 +507,31 @@ def TALA_parameters(function_space):
     nondim_parameters = get_dimensional_parameters()
 
     # radial density field
-    rhobar = Function(Q, name="CompRefDensity")
+    rhobar = Function(function_space, name="CompRefDensity")
     interpolate_1d_profile(
         function=rhobar, one_d_filename="initial_condition_mat_prop/rhobar.txt")
     rhobar.assign(rhobar / nondim_parameters["rho"])
 
     # radial reference temperature field
-    Tbar = Function(Q, name="CompRefTemperature")
+    Tbar = Function(function_space, name="CompRefTemperature")
     interpolate_1d_profile(
         function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt")
     Tbar.assign((Tbar - nondim_parameters["T_surface"]) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
 
     # radial thermal expansivity field
-    alphabar = Function(Q, name="IsobaricThermalExpansivity")
+    alphabar = Function(function_space, name="IsobaricThermalExpansivity")
     interpolate_1d_profile(
         function=alphabar, one_d_filename="initial_condition_mat_prop/alphabar.txt")
     alphabar.assign(alphabar / nondim_parameters["alpha"])
 
     # radial specific heat capacity field
-    cpbar = Function(Q, name="IsobaricSpecificHeatCapacity")
+    cpbar = Function(function_space, name="IsobaricSpecificHeatCapacity")
     interpolate_1d_profile(
         function=cpbar, one_d_filename="initial_condition_mat_prop/CpSIbar.txt")
     cpbar.assign(cpbar / nondim_parameters["cp"])
 
     # radial gravity
-    gbar = Function(Q, name="GravitationalAcceleration")
+    gbar = Function(function_space, name="GravitationalAcceleration")
     interpolate_1d_profile(
         function=gbar, one_d_filename="initial_condition_mat_prop/gbar.txt")
     gbar.assign(gbar / nondim_parameters["g"])
