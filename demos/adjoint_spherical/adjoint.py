@@ -232,7 +232,7 @@ def forward_problem():
 
     # Stokes solver
     stokes_solver = StokesSolver(
-        z, T, approximation, bcs=stokes_bcs, mu=mu,
+        z, T, approximation, bcs=stokes_bcs,
         constant_jacobian=False,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
