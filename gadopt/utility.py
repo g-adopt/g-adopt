@@ -11,7 +11,6 @@ from firedrake import op2, VectorElement, DirichletBC, utils
 from firedrake.__future__ import Interpolator
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
-import finat.ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
