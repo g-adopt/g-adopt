@@ -147,14 +147,10 @@ def _get_element(ufl_or_element):
     if isinstance(ufl_or_element, ufl.indexed.Indexed):
         expr, multiindex = ufl_or_element.ufl_operands
         V = expr.ufl_function_space()
-        cur = 0
-        flat_index = {}
-        for comp, Vsub in enumerate(V):
-            flat_index.update((k, comp) for k in range(cur, cur+Vsub.value_size))
-            cur += Vsub.value_size
-
-        i, = multiindex
-        ufl_or_element = V[flat_index[int(i)]]
+        for i in multiindex:
+            comp_to_subspace = tuple(j for j, W in enumerate(V) for k in range(W.value_size))
+            V = V.sub(comp_to_subspace[int(i)])
+        ufl_or_element = V
 
     if isinstance(ufl_or_element, ufl.AbstractFiniteElement):
         return ufl_or_element
@@ -189,7 +185,7 @@ def normal_is_continuous(expr):
 
 def cell_size(mesh):
     if hasattr(mesh.ufl_cell(), 'sub_cells'):
-        return sqrt(CellVolume(mesh))
+        return CellVolume(mesh) ** (1/mesh.topological_dimension())
     else:
         return CellDiameter(mesh)
 
