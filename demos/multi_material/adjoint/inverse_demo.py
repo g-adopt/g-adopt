@@ -64,14 +64,14 @@ def simulation(iteration: int) -> None:
         log(f"Reduced functional: {reduced_functional(psi_control)}")
         log(f"Objective: {objective}")
 
-        perturbation = Function(psi_control, name="Level set perturbation")
+        perturbation = Function(psi_control, name="Level-set perturbation")
         perturbation.interpolate(
             0.5 - abs(min_value(max_value(psi_control, 0), 1) - 0.5)
         )
-        random_scale = np.random.default_rng().normal(
-            5e-2, 1e-3, size=perturbation.dat.data.shape
-        )
-        perturbation.dat.data[:] *= random_scale
+        # random_scale = np.random.default_rng().normal(
+        #     5e-2, 1e-3, size=perturbation.dat.data.shape
+        # )
+        # perturbation.dat.data[:] *= random_scale
 
         psi_lb = Function(psi_control, name="Lower bound").assign(0.0)
         psi_ub = Function(psi_control, name="Upper bound").assign(1.0)
@@ -83,7 +83,7 @@ def simulation(iteration: int) -> None:
             reduced_functional, bounds=(psi_lb, psi_ub)
         )
 
-        minimisation_parameters["Status Test"]["Gradient Tolerance"] = 3e-4
+        minimisation_parameters["Status Test"]["Gradient Tolerance"] = 1e-4
         minimisation_parameters["Status Test"]["Iteration Limit"] = 50
         optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
         optimiser.add_callback(callback, psi_control, psi_opt, optimisation_file)
@@ -119,6 +119,9 @@ epsilon = interface_thickness(psi)
 Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="arithmetic")
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
 
+delta_t = Function(R).assign(1.0)
+t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
+
 Z_nullspace = create_stokes_nullspace(Z)
 
 stokes_bcs = {
@@ -127,9 +130,6 @@ stokes_bcs = {
     left_id: {"ux": 0},
     right_id: {"ux": 0},
 }
-
-delta_t = Function(R).assign(1.0)
-t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
 stokes_solver = StokesSolver(
     z,

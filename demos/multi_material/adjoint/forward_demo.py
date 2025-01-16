@@ -2,11 +2,6 @@ from numpy import linspace
 
 from gadopt import *
 
-
-def cosine_curve(x, amplitude, wavelength, vertical_shift):
-    return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
-
-
 nx, ny = 64, 64
 lx, ly = 0.9142, 1
 
@@ -27,21 +22,26 @@ z.subfunctions[1].rename("Pressure")
 psi = Function(K, name="Level set")
 
 interface_coords_x = linspace(0, lx, 1000)
-interface_args = (
+callable_args = (
     interface_deflection := 0.1,
     perturbation_wavelength := 2 * lx,
     initial_interface_y := 0.2,
 )
-signed_distance_kwargs = curve_interface(
-    interface_coords_x, curve="cosine", curve_args=interface_args
+signed_distance_array = signed_distance(
+    psi,
+    interface_geometry="curve",
+    interface_callable="cosine",
+    interface_args=(interface_coords_x, *callable_args),
 )
-
-signed_distance_array = signed_distance(psi, **signed_distance_kwargs)
 epsilon = interface_thickness(psi)
 psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 
 Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="sharp")
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
+
+time_now, time_end = 0, 150
+delta_t = Function(R).assign(1.0)
+t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
 Z_nullspace = create_stokes_nullspace(Z)
 
@@ -60,14 +60,9 @@ stokes_solver = StokesSolver(
 )
 stokes_solver.solve()
 
-delta_t = Function(R).assign(1.0)
-t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
-
 adv_kwargs = {"u": u, "timestep": delta_t}
 reini_kwargs = {"epsilon": epsilon}
 level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
-
-time_now, time_end = 0, 150
 
 output_file = VTKFile("forward_output.pvd")
 output_file.write(*z.subfunctions, psi, time=time_now)

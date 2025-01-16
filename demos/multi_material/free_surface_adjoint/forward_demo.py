@@ -7,8 +7,8 @@ mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
 mesh.cartesian = True
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4
 
-V = VectorFunctionSpace(mesh, "CG", 2)
-W = FunctionSpace(mesh, "CG", 1)
+V = VectorFunctionSpace(mesh, "Q", 2)
+W = FunctionSpace(mesh, "Q", 1)
 Z = MixedFunctionSpace([V, W, W])
 K = FunctionSpace(mesh, "DQ", 2)
 R = FunctionSpace(mesh, "R", 0)
@@ -29,11 +29,10 @@ interface_coords = [
     (lx, 6e5),
 ]
 boundary_coords = [(lx, ly)]
-
 signed_distance_array = signed_distance(
     psi,
+    interface_geometry="polygon",
     interface_coordinates=interface_coords,
-    interface_geometry="Polygon",
     boundary_coordinates=boundary_coords,
 )
 epsilon = interface_thickness(psi)
@@ -50,6 +49,8 @@ approximation = Approximation(
     parameters={"g": 9.81, "mu": mu, "rho": rho_mantle, "rho_material": rho_material},
 )
 
+myr_to_seconds = 1e6 * 365.25 * 8.64e4
+time_now, time_end = 0, 30 * myr_to_seconds
 delta_t = Function(R).assign(1e11)
 t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
@@ -69,10 +70,8 @@ adv_kwargs = {"u": u, "timestep": delta_t}
 reini_kwargs = {"epsilon": epsilon}
 level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 
-time_now, time_end = 0, 25e6 * 365.25 * 8.64e4
-
 output_file = VTKFile("forward_output.pvd")
-output_file.write(*z.subfunctions, psi, time=time_now)
+output_file.write(*z.subfunctions, psi, time=time_now / myr_to_seconds)
 
 step = 0
 while True:
@@ -85,13 +84,11 @@ while True:
     time_now += float(delta_t)
     step += 1
 
-    output_file.write(*z.subfunctions, psi, time=time_now)
+    output_file.write(*z.subfunctions, psi, time=time_now / myr_to_seconds)
 
     if time_now >= time_end:
         break
 
 with CheckpointFile("forward_checkpoint.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
-
-    final_checkpoint.save_function(z, name="Stokes")
     final_checkpoint.save_function(psi, name="Level set")

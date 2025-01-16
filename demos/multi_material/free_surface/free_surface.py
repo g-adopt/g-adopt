@@ -99,8 +99,10 @@ rho_material = material_field(
     psi, [rho_mantle := 3200, rho_slab := 3300], interface="sharp"
 )
 
-approximation = BoussinesqApproximation(
-    Ra := 1, Ra_c=1, g=9.81, mu=mu, rho=rho_mantle, delta_rho=rho_material - rho_mantle
+approximation = Approximation(
+    "BA",
+    dimensional=True,
+    parameters={"g": 9.81, "mu": mu, "rho": rho_mantle, "rho_material": rho_material},
 )
 # -
 
@@ -133,9 +135,8 @@ time_now = 0  # Initial time
 delta_t = Function(R).assign(1e11)  # Initial time step
 # Frequency (based on simulation time) at which to output
 output_frequency = 0.8 * myr_to_seconds
-t_adapt = TimestepAdaptor(
-    delta_t, u, V, target_cfl=0.6, maximum_timestep=output_frequency
-)  # Current level-set advection requires a CFL condition that should not exceed 0.6.
+# Current level-set advection requires a CFL condition that should not exceed 0.6.
+t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
 # Here, we set up the variational problem for the Stokes and level-set systems. The
 # former depends on the approximation defined above, and the latter includes both
@@ -194,8 +195,7 @@ output_counter = 1  # A counter to keep track of outputting
 time_end = 60 * myr_to_seconds
 while True:
     # Update timestep
-    if time_end - time_now < output_frequency:
-        t_adapt.maximum_timestep = time_end - time_now
+    t_adapt.maximum_timestep = time_end - time_now
     t_adapt.update_timestep()
 
     # Advect level set
