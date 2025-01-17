@@ -73,22 +73,9 @@ def conduct_inversion():
     optimiser = LinMoreOptimiser(
         minimisation_problem,
         minimisation_parameters,
-        checkpoint_dir="optimisation_checkpoint",
+        checkpoint_dir="optimisation_checkpoint"
     )
 
-    visualisation_path = find_last_checkpoint(
-    ).resolve().parents[2] / "visual.pvd"
-
-    vtk_file = VTKFile(str(visualisation_path))
-    control_container = Function(
-        Tic.function_space(), name="Initial Temperature")
-
-    def callback():
-        control_container.assign(Tic.block_variable.checkpoint.restore())
-        vtk_file.write(control_container)
-
-    #
-    optimiser.add_callback(callback)
     # run the optimisation
     optimiser.run()
 
@@ -127,8 +114,8 @@ def forward_problem():
     with CheckpointFile("./initial_condition_mat_prop/reference_fields.h5", "r") as fi:
         for key in ["rhobar", "Tbar", "alphabar", "cpbar", "gbar", "mu_radial"]:
             tala_parameters_dict[key] = fi.load_function(mesh, name=key)
-    
-    # Mesh properties 
+
+    # Mesh properties
     mesh.cartesian = False
     bottom_id, top_id = "bottom", "top"
 
@@ -158,12 +145,14 @@ def forward_problem():
     # Initial time step
     delta_t = Function(R, name="delta_t").assign(5.0e-7)
 
-    # if last_checkpoint_path is not None:
-    #     with CheckpointFile(str(last_checkpoint_path), "r") as fi:
-    #         Tic.assign(fi.load_function(mesh, name="dat_0"))
-    # else:
-    #     Tic.interpolate(T_simulation)
-    Tic.interpolate(T_simulation)
+    # If we are running from a checkpoint, we want to use an appropriate initial condition
+    # this is normally not necessary, unless we are redefining the ReducedFunctional.__call__
+    # to skip the first recall in the optimisation.
+    if last_checkpoint_path is not None:
+        with CheckpointFile(str(last_checkpoint_path), "r") as fi:
+            Tic.assign(fi.load_function(mesh, name="dat_0"))
+    else:
+        Tic.interpolate(T_simulation)
 
     # Information pertaining to the plate reconstruction model
     cao_2024_files = ensure_reconstruction("Cao 2024", "./gplates_files")
@@ -186,8 +175,7 @@ def forward_problem():
         name="GPlates_Velocity"
     )
 
-    # Get a dictionary of the reference fields to be used in TALA approximation
-    # tala_parameters_dict = TALA_parameters(function_space=Q)
+    # Setting up the approximation
     approximation = TruncatedAnelasticLiquidApproximation(
         Ra=Constant(5e8),  # Rayleigh number
         Di=Constant(0.9492),  # Dissipation number
@@ -302,7 +290,6 @@ def forward_problem():
         time += float(delta_t)
         timestep_index += 1
 
-
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature").interpolate((T + tala_parameters_dict["Tbar"]) * Constant(3700.) + Constant(300.))
 
@@ -315,8 +302,10 @@ def forward_problem():
     norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
     log(f"Norms: reg={norm_smoothing}, t={norm_t_misfit}, Misfits: reg={smoothing}, t={t_misfit}")
 
+    # We want to weight the smoothing down not to affect the final solution
+    weight_smoothin = 1e-2
     # Assembling the objective
-    objective = t_misfit / norm_t_misfit + smoothing / norm_smoothing
+    objective = t_misfit / norm_t_misfit + weight_smoothin * smoothing / norm_smoothing
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
@@ -499,7 +488,7 @@ def first_call_value(predefined_value):
 
 def find_last_checkpoint():
     try:
-        checkpoint_dir = Path.cwd().resolve() / "copy_optimisation_checkpoint"
+        checkpoint_dir = Path.cwd().resolve() / "optimisation_checkpoint"
         solution_dir = sorted(list(checkpoint_dir.glob(
             "[0-9]*")), key=lambda x: int(str(x).split("/")[-1]))[-1]
         solution_path = solution_dir / "solution_checkpoint.h5"
@@ -582,7 +571,6 @@ def TALA_parameters(function_space):
 
     interpolate_1d_profile(mu_radial, str(
         base_path.parent / "gplates_global/mu2_radial.rad"))
-
 
     return {"rhobar": rhobar, "Tbar": Tbar, "alphabar": alphabar, "cpbar": cpbar, "gbar": gbar, "mu_radial": mu_radial}
 
