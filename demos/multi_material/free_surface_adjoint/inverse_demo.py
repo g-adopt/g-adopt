@@ -86,7 +86,7 @@ def simulation(iteration: int) -> None:
         )
 
         minimisation_parameters["Status Test"]["Gradient Tolerance"] = 1e-4
-        minimisation_parameters["Status Test"]["Iteration Limit"] = 50
+        minimisation_parameters["Status Test"]["Iteration Limit"] = 100
         optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
         optimiser.add_callback(callback, psi_control, psi_opt, optimisation_file)
         optimiser.run()
@@ -151,8 +151,8 @@ level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini
 psi_grad = level_set_solver.solution_grad
 
 myr_to_seconds = 1e6 * 365.25 * 8.64e4
-target_time = 30 * myr_to_seconds
-time_increment = 6 * myr_to_seconds
+target_time = 50 * myr_to_seconds
+time_increment = 10 * myr_to_seconds
 
 for iteration in range(int(target_time // time_increment)):
     simulation(iteration + 1)

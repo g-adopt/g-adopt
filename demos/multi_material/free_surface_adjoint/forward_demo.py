@@ -50,7 +50,7 @@ approximation = Approximation(
 )
 
 myr_to_seconds = 1e6 * 365.25 * 8.64e4
-time_now, time_end = 0, 30 * myr_to_seconds
+time_now, time_end = 0, 50 * myr_to_seconds
 delta_t = Function(R).assign(1e11)
 t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 

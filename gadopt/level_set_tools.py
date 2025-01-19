@@ -19,7 +19,7 @@ import shapely as sl
 from mpi4py import MPI
 
 from . import scalar_equation as scalar_eq
-from .equations import Equation
+from .equations import Equation, interior_penalty_factor
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
 from .utility import node_coordinates
@@ -249,18 +249,19 @@ def reinitialisation_term(
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
     sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
-    balance_term = (
-        eq.epsilon
-        * (1 - 2 * trial)
-        * fd.sqrt(fd.inner(eq.level_set_grad, eq.level_set_grad))
-        * eq.test
-        * eq.dx
-    )
 
-    return sharpen_term + balance_term
+    grad_norm = fd.sqrt(fd.inner(fd.grad(trial), fd.grad(trial)))
+    flux = eq.epsilon * (1 - 2 * trial) * grad_norm
+    balance_term = flux * eq.test * eq.dx
+
+    sigma = interior_penalty_factor(eq)
+    sigma *= fd.FacetArea(eq.mesh) / fd.avg(fd.CellVolume(eq.mesh))
+    boundary_term = 1 / sigma * fd.avg(flux) * fd.jump(eq.test) * fd.dS
+
+    return sharpen_term + balance_term + boundary_term
 
 
-reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
+reinitialisation_term.required_attrs = {"epsilon"}
 reinitialisation_term.optional_attrs = set()
 
 
@@ -426,7 +427,7 @@ class LevelSetSolver:
           A Firedrake solver capable of projecting a discontinuous gradient field on a
           continuous function space
         """
-        grad_name = "Level-set gradient"
+        grad_name = "Level-set gradient projection"
         if number_match := re.search(r"\s#\d+$", self.solution.name()):
             grad_name += number_match.group()
 
@@ -477,10 +478,7 @@ class LevelSetSolver:
                 self.solution_space,
                 reinitialisation_term,
                 mass_term=scalar_eq.mass_term,
-                eq_attrs={
-                    "level_set_grad": self.solution_grad,
-                    "epsilon": self.reini_kwargs["epsilon"],
-                },
+                eq_attrs={"epsilon": self.reini_kwargs["epsilon"]},
             )
 
             self.reini_integrator = self.reini_kwargs["time_integrator"](
@@ -504,9 +502,7 @@ class LevelSetSolver:
     def reinitialise(self) -> None:
         """Performs reinitialisation steps."""
         for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(
-                update_forcings=self.update_level_set_gradient
-            )
+            self.reini_integrator.advance()
 
     def solve(
         self,
