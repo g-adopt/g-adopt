@@ -197,17 +197,15 @@ real_func_space = fd.FunctionSpace(mesh, "R", 0)
 timestep = fd.Function(real_func_space).assign(simulation.initial_timestep)
 
 # Set up energy and Stokes solvers
-energy_solver = []
+energy_solver = None
 if hasattr(simulation, "initialise_temperature"):
-    energy_solver.append(
-        ga.EnergySolver(
-            temperature,
-            velocity,
-            approximation,
-            timestep,
-            ga.ImplicitMidpoint,
-            bcs=getattr(simulation, "temp_bcs", None),
-        )
+    energy_solver = ga.EnergySolver(
+        temperature,
+        velocity,
+        approximation,
+        timestep,
+        ga.ImplicitMidpoint,
+        bcs=getattr(simulation, "temp_bcs", None),
     )
 stokes_nullspace = ga.create_stokes_nullspace(stokes_function.function_space())
 stokes_solver = ga.StokesSolver(
@@ -215,14 +213,11 @@ stokes_solver = ga.StokesSolver(
     approximation,
     temperature,
     bcs=simulation.stokes_bcs,
-    quad_degree=None,
     nullspace={"nullspace": stokes_nullspace, "transpose_nullspace": stokes_nullspace},
 )
 
 # Solve initial Stokes system
 stokes_solver.solve()
-if hasattr(simulation, "steady_state_threshold"):
-    velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
 
 # Set up level-set solvers
 adv_kwargs = {"u": velocity, "timestep": timestep}
@@ -289,13 +284,13 @@ while True:
         dump_counter += 1
 
     # Update timestep
-    if has_end_time and simulation.time_end - time_now < simulation.dump_period:
+    if has_end_time:
         t_adapt.maximum_timestep = simulation.time_end - time_now
     t_adapt.update_timestep()
 
     # Solve energy system
-    if energy_solver:
-        energy_solver[0].solve(update_forcings, time_now)
+    if energy_solver is not None:
+        energy_solver.solve(update_forcings, time_now)
 
     # Advect each level set
     for ls_solv in level_set_solver:
@@ -311,8 +306,8 @@ while True:
     if has_end_time:
         exit_loop = time_now >= simulation.time_end
     else:
-        exit_loop = fd.norm(velocity - velocity_old) < simulation.steady_state_threshold
-        velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
+        velocity_change = fd.norm(velocity - stokes_solver.solution_old_split[0])
+        exit_loop = velocity_change < simulation.steady_state_threshold
 
     if exit_loop:
         # Calculate final simulation diagnostics

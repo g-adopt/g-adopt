@@ -212,7 +212,7 @@ def interface_thickness(level_set: fd.Function, scale: float = 0.25) -> fd.Funct
       A Firedrake function holding the interface thickness values
     """
     epsilon = fd.Function(level_set, name="Interface thickness")
-    epsilon.interpolate(scale * level_set.ufl_domain().cell_sizes)
+    epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set.ufl_domain()))
 
     return epsilon
 
