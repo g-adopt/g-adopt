@@ -13,7 +13,7 @@ diagnostics = {
                 np.subtract(data["max_topography"], data["max_topography_analytical"])
             ).max(),
             operator.le,
-            0.05,
+            0.035,
         )
     ],
     "gerya_2003": [
@@ -24,8 +24,8 @@ diagnostics = {
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 283.28), operator.le, 0.01),
-        (lambda data: abs(max(data["entrainment"]) - 0.9189), operator.le, 1e-4),
+        (lambda data: abs(max(data["rms_velocity"]) - 282.26), operator.le, 0.01),
+        (lambda data: abs(max(data["entrainment"]) - 0.9137), operator.le, 1e-4),
     ],
     "schmalholz_2011": [
         (
@@ -33,7 +33,7 @@ diagnostics = {
                 np.asarray(data["normalised_time"])[
                     np.asarray(data["slab_necking"]) <= 0.2
                 ].min()
-                - 0.841
+                - 0.822
             ),
             operator.le,
             1e-3,
@@ -45,7 +45,7 @@ diagnostics = {
                 np.asarray(data["output_time"])[
                     np.asarray(data["slab_tip_depth"]) >= 600
                 ].min()
-                - 44.2
+                - 46.2
             ),
             operator.le,
             0.1,

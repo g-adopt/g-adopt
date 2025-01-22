@@ -212,7 +212,7 @@ stokes_bcs = {1: {"u": 0}, 2: {"u": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
 # Timestepping objects
 initial_timestep = 1e11
-dump_period = 5e5 * 365.25 * 8.64e4
+dump_period = 2e5 * 365.25 * 8.64e4
 checkpoint_period = 5
 time_end = 25e6 * 365.25 * 8.64e4
 

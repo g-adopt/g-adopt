@@ -199,7 +199,7 @@ def signed_distance(
     return signed_distance
 
 
-def interface_thickness(level_set: fd.Function, scale: float = 0.25) -> fd.Function:
+def interface_thickness(level_set: fd.Function, scale: float = 0.3) -> fd.Function:
     """Default strategy for the thickness of the conservative level set profile.
 
     Args:

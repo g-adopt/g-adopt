@@ -13,6 +13,7 @@ import gadopt as ga
 def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
     """Write checkpointed fields to the checkpoint file."""
     checkpoint_file.save_mesh(mesh)
+
     for field_name, field in checkpoint_fields.items():
         if isinstance(field, list):
             for i, field_element in enumerate(field):
@@ -21,6 +22,7 @@ def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
                 )
         else:
             checkpoint_file.save_function(field, name=field_name, idx=dump_counter)
+
     checkpoint_file.set_attr("/", "time", time_now)
 
 
@@ -218,6 +220,8 @@ stokes_solver = ga.StokesSolver(
 
 # Solve initial Stokes system
 stokes_solver.solve()
+if hasattr(simulation, "steady_state_threshold"):
+    velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
 
 # Set up level-set solvers
 adv_kwargs = {"u": velocity, "timestep": timestep}
@@ -239,8 +243,7 @@ t_adapt = ga.TimestepAdaptor(
     maximum_timestep=simulation.dump_period,
 )
 output_file = fd.VTKFile(
-    output_path / f"output_{simulation.checkpoint_restart}_{simulation.tag}.pvd",
-    target_continuity=fd.ufl.sobolevspace.SobolevSpace("H1"),
+    output_path / f"output_{simulation.checkpoint_restart}_{simulation.tag}.pvd"
 )
 checkpoint_file = fd.CheckpointFile(
     f"{output_path}/checkpoint_{simulation.checkpoint_restart + 1}_{simulation.tag}.h5",
@@ -284,7 +287,7 @@ while True:
         dump_counter += 1
 
     # Update timestep
-    if has_end_time:
+    if has_end_time and simulation.time_end - time_now < simulation.dump_period:
         t_adapt.maximum_timestep = simulation.time_end - time_now
     t_adapt.update_timestep()
 
@@ -306,8 +309,8 @@ while True:
     if has_end_time:
         exit_loop = time_now >= simulation.time_end
     else:
-        velocity_change = fd.norm(velocity - stokes_solver.solution_old_split[0])
-        exit_loop = velocity_change < simulation.steady_state_threshold
+        exit_loop = fd.norm(velocity - velocity_old) < simulation.steady_state_threshold
+        velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
 
     if exit_loop:
         # Calculate final simulation diagnostics
