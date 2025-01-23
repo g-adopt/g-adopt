@@ -215,9 +215,6 @@ def forward_problem():
     energy_solver.solver_parameters['ksp_converged_reason'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 
-    import pdb
-    pdb.set_trace()
-
     # Stokes solver
     stokes_solver = StokesSolver(
         z, T, approximation, bcs=stokes_bcs,
