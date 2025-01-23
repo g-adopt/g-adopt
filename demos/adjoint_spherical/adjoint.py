@@ -41,10 +41,7 @@ ReducedFunctional.derivative = collect_garbage(
 )
 
 # Set up geometry:
-rmax = 2.208
-rmin = 1.208
-ref_level = 7
-nlayers = 64
+rmin, ncells, nlayers = 1.22, 32, 8
 
 
 def test_taping():
@@ -100,18 +97,16 @@ def forward_problem():
     # to load from to restart out simulation from.
     last_checkpoint_path = find_last_checkpoint()
 
-    # Load mesh
-    with CheckpointFile(str(base_path / "REVEAL.h5"), "r") as fi:
+    # Load mesh and associated fields
+    tala_parameters_dict = {}
+    with CheckpointFile(str(base_path / "reference_fields.h5"), "r") as fi:
         mesh = fi.load_mesh("firedrake_default_extruded")
         # reference temperature field (seismic tomography)
         T_obs = fi.load_function(mesh, name="Tobs")  # This is dimensional
         # Average temperature field
         T_ave = fi.load_function(mesh, name="T_ave_ref")  # Used for regularising T_ic
         T_simulation = fi.load_function(mesh, name="T_ic_0")
-
-    # Loading adiabatic reference fields
-    tala_parameters_dict = {}
-    with CheckpointFile("./initial_condition_mat_prop/reference_fields.h5", "r") as fi:
+        # Loading adiabatic reference fields
         for key in ["rhobar", "Tbar", "alphabar", "cpbar", "gbar", "mu_radial"]:
             tala_parameters_dict[key] = fi.load_function(mesh, name=key)
 
@@ -168,16 +163,14 @@ def forward_problem():
     )
 
     # Top velocity boundary condition
-    gplates_velocities = GplatesVelocityFunction(
+    gplates_velocities = Function(
         V,
-        gplates_connector=plate_reconstruction_model,
-        top_boundary_marker=top_id,
         name="GPlates_Velocity"
-    )
+    ).interpolate(as_vector((0.0, 0.0)))
 
     # Setting up the approximation
     approximation = TruncatedAnelasticLiquidApproximation(
-        Ra=Constant(5e8),  # Rayleigh number
+        Ra=Constant(1e2),  # Rayleigh number
         Di=Constant(0.9492),  # Dissipation number
         rho=tala_parameters_dict["rhobar"],  # reference density
         Tbar=tala_parameters_dict["Tbar"],  # reference temperature
@@ -198,7 +191,7 @@ def forward_problem():
         Z, closed=True, rotational=False)
     # The near nullspaces gor gamg always include rotational and translational modes
     Z_near_nullspace = create_stokes_nullspace(
-        Z, closed=False, rotational=True, translations=[0, 1, 2])
+        Z, closed=False, rotational=True, translations=[0, 1])
 
     # Section: Setting boundary conditions
     # Temperature boundary conditions (constant)
@@ -222,6 +215,9 @@ def forward_problem():
     energy_solver.solver_parameters['ksp_converged_reason'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-4
 
+    import pdb
+    pdb.set_trace()
+
     # Stokes solver
     stokes_solver = StokesSolver(
         z, T, approximation, bcs=stokes_bcs,
@@ -242,7 +238,7 @@ def forward_problem():
     presentday_ndtime = plate_reconstruction_model.age2ndtime(0.)
 
     # non-dimensionalised time for 35 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(15.)
+    time = plate_reconstruction_model.age2ndtime(5.)
 
     # Defining control
     control = Control(Tic)
@@ -271,13 +267,10 @@ def forward_problem():
     timestep_index = 0
 
     # Now perform the time loop:
-    while time < presentday_ndtime:
-        if timestep_index % 2 == 0:
-            # Update surface velocities
-            gplates_velocities.update_plate_reconstruction(time)
-
-            # Solve Stokes sytem
-            stokes_solver.solve()
+    # while time < presentday_ndtime:
+    for i in range(10):
+        # Solve Stokes sytem
+        stokes_solver.solve()
 
         # Make sure we are not going past present day
         if presentday_ndtime - time < float(delta_t):
@@ -300,17 +293,12 @@ def forward_problem():
     # Regularisation part of the objective
     smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
     norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
-    log(f"Norms: reg={norm_smoothing}, t={norm_t_misfit}, Misfits: reg={smoothing}, t={t_misfit}")
 
     # We want to weight the smoothing down not to affect the final solution
     weight_smoothin = 1e-2
     # Assembling the objective
     objective = t_misfit / norm_t_misfit + weight_smoothin * smoothing / norm_smoothing
 
-    # Loggin the first objective (Make sure ROL shows the same value)
-    log(f"Objective value after the first run: {objective}")
-
-    # DROP before run
     # We want to avoid a second call to objective functional with the same value
     first_call_decorator = first_call_value(predefined_value=objective)
     ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
@@ -341,132 +329,27 @@ def generate_reference_fields():
 
     The function uses T_average to handle the mean profile of the temperature during the conversion process.
     """
-    # get the path to the base directory
-    base_path = Path(__file__).resolve().parent
 
-    # mesh/initial guess file is comming from a long-term simulation
-    mesh_path = base_path / "initial_condition_mat_prop/Final_State.h5"
-
-    # Name of the final output
-    output_path = base_path / "REVEAL.pvd"
-
-    # Load mesh from checkpoint
-    with CheckpointFile(str(mesh_path), mode="r") as f:
-        mesh = f.load_mesh("firedrake_default_extruded")
-        T_simulation = f.load_function(mesh, name="Temperature")
-
+    mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
+    mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')  # extrude into a cylinder
     mesh.cartesian = False
-
-    # Set up function spaces for coordinates and fields
-    V = VectorFunctionSpace(mesh, "CG", 1)
-    X = SpatialCoordinate(mesh)
-    # Compute dimensionalised coordinates
-    r = Function(V, name="coordinates").interpolate(X / rmax * gdrift.R_earth)
 
     # Set up scalar function spaces for seismic model fields
     Q = FunctionSpace(mesh, "CG", 1)
-    vsh = Function(Q, name="vsh")
-    vsv = Function(Q, name="vsv")
-    vs = Function(Q, name="vs")
 
     # Define a field on q for t_obs: THESE ARE ALL WITH DIMENSION
     T_obs = Function(Q, name="T_obs")  # This will be the "tomography temperature field"
-    T_ave_obs = Function(Q, name="T_ave_obs")  # Average of the raw tomography temperature field
-    T_ave_FullT = Function(Q, name="T_ave_FullT")  # Average that we trust coming from forward simulation
-
-    # FullT is T_simulation + Tbar
-    FullT = Function(Q, name="FullTemperature")
-
-    # Non-dimensional parameters for non-dim
-    nondim_parameters = get_dimensional_parameters()
+    T_simulation = Function(Q, name="Temperature")
+    T_ave = Function(Q, name="Temperature")
 
     TALAdict = TALA_parameters(Q)
-
-    # radial reference temperature field
-    Tbar = TALAdict["Tbar"]
-
-    # We trust the increase in the adiabatic temperature, not the absolute values
-    Tbar.assign((Tbar - 1600.) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
-
-    # Full temperature field
-    FullT.interpolate(T_simulation + Tbar)
-
-    # Compute the depth field
-    depth = Function(Q, name="depth").interpolate(
-        Constant(gdrift.R_earth) - sqrt(r[0]**2 + r[1]**2 + r[2]**2)
-    )
-
-    # Load the REVEAL model
-    seismic_model = gdrift.SeismicModel("REVEAL")
-
-    # Filling the vsh and vsv fields with the values from the seismic model
-    reveal_vsh_vsv = seismic_model.at(
-        label=["vsh", "vsv"],
-        coordinates=r.dat.data_with_halos)
-    vsh.dat.data_with_halos[:] = reveal_vsh_vsv[:, 0] * 1e3  # DROP when updating data in g-drift
-    vsv.dat.data_with_halos[:] = reveal_vsh_vsv[:, 1] * 1e3  # DROP when updating data in g-drift
-
-    # Compute the isotropic velocity field
-    vs.interpolate(sqrt((2 * vsh ** 2 + vsv ** 2) / 3))
-
-    # Average the isotropic velocity field over the layers, this will be useful for visualising devaitons from the average
-    averager = LayerAveraging(mesh, quad_degree=6)
-
-    # finding the depth and temperature average to be passed to the thermodynamic model for linearisation
-    depth_ave_array = averager.get_layer_average(depth)
-    FullT_ave_array = averager.get_layer_average(FullT) * (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]) + nondim_parameters["T_surface"]
-
-    # Compute the layer-averaged temperature from the "simulation temperature"
-    averager.extrapolate_layer_average(
-        T_ave_FullT, FullT_ave_array)
-
-    # Building the thermodynamic model, this is a regularised version of the SLB_16 pyrolite model using the temperature profile from simulation
-    anelastic_slb_pyrolite = build_thermodynamic_model(np.column_stack((depth_ave_array, FullT_ave_array)))
-
-    # Convert the shear wave speed to T_obs
-    T_obs.dat.data_with_halos[:] = anelastic_slb_pyrolite.vs_to_temperature(
-        vs.dat.data_with_halos,
-        depth.dat.data_with_halos)
-
-    # Compute the layer-averaged T_obs (Note: T_ave is what comes from thermodynamic conversion, which is comletely off)
-    # Tobs is having a dimension
-    averager.extrapolate_layer_average(
-        T_ave_obs, averager.get_layer_average(T_obs))
-
-    # Take the average out of the T_obs field and add the average from the Full simulation temperature
-    T_obs.interpolate(T_obs - T_ave_obs + T_ave_FullT)
-
-    # Adding Smoothing to Tobs
-    smoother = DiffusiveSmoothingSolver(
-        function_space=vs.function_space(),
-        wavelength=0.05,
-        bcs={"bottom": {"T": T_ave_FullT}, "top": {"T": T_ave_FullT}},
-        solver_parameters=iterative_energy_solver_parameters,
-    )
-    T_obs.interpolate(conditional(T_obs < 300.0, 300.0, T_obs))
-
-    # acting smoothing on Tobs
-    T_obs.assign(smoother.action(T_obs))
-
-    # Compute average of T_simulation for regularisation
-    T_ave = Function(Q, name="T_ave_ref")
-    averager.extrapolate_layer_average(
-        T_ave, averager.get_layer_average(T_simulation))
-
-    # Output for visualisation
-    output = VTKFile(output_path.with_suffix(".pvd"))
-    output.write(T_obs, T_ave_FullT, vs, FullT)
-
     # Write out the file
-    with CheckpointFile(str(output_path.with_suffix(".h5")), mode="w") as fi:
+    with CheckpointFile("reference_fields.h5", mode="w") as fi:
         fi.save_mesh(mesh)
         fi.save_function(T_obs, name="Tobs")
         fi.save_function(T_ave, name="T_ave_ref")
         fi.save_function(T_simulation, name="T_ic_0")
-
-    # Storing all the reference fields for the TALA approximation
-    with CheckpointFile("initial_condition_mat_prop/reference_fields.h5", mode="w") as fi:
-        fi.save_mesh(mesh)
+        # Storing all reference fields
         for item in TALAdict.keys():
             fi.save_function(TALAdict[item], name=item)
 
@@ -537,40 +420,38 @@ def TALA_parameters(function_space):
     # radial density field
     rhobar = Function(function_space, name="CompRefDensity")
     interpolate_1d_profile(
-        function=rhobar, one_d_filename="initial_condition_mat_prop/rhobar.txt")
+        function=rhobar, one_d_filename="initial_condition_mat_prop/rhobar_cyl.txt")
     rhobar.assign(rhobar / nondim_parameters["rho"])
 
     # radial reference temperature field
     Tbar = Function(function_space, name="CompRefTemperature")
     interpolate_1d_profile(
-        function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt")
+        function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar_cyl.txt")
     # We trust the increase in the adiabatic temperature
     Tbar.assign((Tbar - 1600.) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
 
     # radial thermal expansivity field
     alphabar = Function(function_space, name="IsobaricThermalExpansivity")
     interpolate_1d_profile(
-        function=alphabar, one_d_filename="initial_condition_mat_prop/alphabar.txt")
+        function=alphabar, one_d_filename="initial_condition_mat_prop/alphabar_cyl.txt")
     alphabar.assign(alphabar / nondim_parameters["alpha"])
 
     # radial specific heat capacity field
     cpbar = Function(function_space, name="IsobaricSpecificHeatCapacity")
     interpolate_1d_profile(
-        function=cpbar, one_d_filename="initial_condition_mat_prop/CpSIbar.txt")
+        function=cpbar, one_d_filename="initial_condition_mat_prop/CpSIbar_cyl.txt")
     cpbar.assign(cpbar / nondim_parameters["cp"])
 
     # radial gravity
     gbar = Function(function_space, name="GravitationalAcceleration")
     interpolate_1d_profile(
-        function=gbar, one_d_filename="initial_condition_mat_prop/gbar.txt")
+        function=gbar, one_d_filename="initial_condition_mat_prop/gbar_cyl.txt")
     gbar.assign(gbar / nondim_parameters["g"])
 
     mu_radial = Function(function_space, name="mu_radial")
 
     base_path = Path(__file__).resolve().parent
-
-    interpolate_1d_profile(mu_radial, str(
-        base_path.parent / "gplates_global/mu2_radial.rad"))
+    interpolate_1d_profile(mu_radial, "initial_condition_mat_prop/mu2_radial_cyl.txt")
 
     return {"rhobar": rhobar, "Tbar": Tbar, "alphabar": alphabar, "cpbar": cpbar, "gbar": gbar, "mu_radial": mu_radial}
 
