@@ -294,7 +294,7 @@ def forward_problem():
     # We want to weight the smoothing down not to affect the final solution
     weight_smoothin = 1e-2
     # Assembling the objective
-    objective = t_misfit / norm_t_misfit + weight_smoothin * smoothing / norm_smoothing
+    objective = t_misfit  # / norm_t_misfit + weight_smoothin * smoothing / norm_smoothing
 
     # We want to avoid a second call to objective functional with the same value
     first_call_decorator = first_call_value(predefined_value=objective)
