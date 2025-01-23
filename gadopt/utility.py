@@ -165,14 +165,16 @@ def is_continuous(expr, normal: bool = False) -> bool:
     elif isinstance(expr, (functionspaceimpl.WithGeometry, Function)):
         return expr.ufl_element() in element_space
     elif isinstance(expr, ufl.indexed.Indexed):
-        elem = expr.ufl_operands[0].ufl_element()
+        expr, multiindex = expr.ufl_operands
+        V = expr.ufl_function_space()
 
-        if isinstance(elem, MixedElement):
-            multi_index = expr.ufl_operands[1]
-            assert len(multi_index) == 1
-            return True
-            sub_elem_index, _ = elem.extract_subelement_component(multi_index[0])
-            elem = elem.sub_elements[sub_elem_index]
+        for i in multiindex:
+            comp_to_subspace = tuple(
+                j for j, W in enumerate(V) for k in range(W.value_size)
+            )
+            V = V.sub(comp_to_subspace[int(i)])
+
+        elem = V
 
         return elem in element_space
     elif isinstance(expr, ufl.tensors.ListTensor):
