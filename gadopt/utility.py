@@ -160,11 +160,7 @@ def is_continuous(expr, normal: bool = False) -> bool:
     ufl_algebra = (ufl.algebra.Division, ufl.algebra.Product, ufl.algebra.Sum)
     compatible_types = (Function, ufl.indexed.Indexed, ufl.tensors.ListTensor)
 
-    if isinstance(expr, AbstractFiniteElement):
-        return expr in element_space
-    elif isinstance(expr, (functionspaceimpl.WithGeometry, Function)):
-        return expr.ufl_element() in element_space
-    elif isinstance(expr, ufl.indexed.Indexed):
+    if isinstance(expr, ufl.indexed.Indexed):
         expr, multiindex = expr.ufl_operands
         V = expr.ufl_function_space()
 
@@ -174,11 +170,14 @@ def is_continuous(expr, normal: bool = False) -> bool:
             )
             V = V.sub(comp_to_subspace[int(i)])
 
-        elem = V
+        expr = V
 
-        return elem in element_space
+    if isinstance(expr, AbstractFiniteElement):
+        return expr in element_space
+    elif isinstance(expr, (functionspaceimpl.WithGeometry, Function)):
+        return expr.ufl_element() in element_space
     elif isinstance(expr, ufl.tensors.ListTensor):
-        return all(is_continuous(operand) for operand in expr.ufl_operands)
+        return all(is_continuous(operand, normal) for operand in expr.ufl_operands)
     elif isinstance(expr, ufl_algebra):
         continuity = []
         expr_list = [expr]
@@ -186,7 +185,7 @@ def is_continuous(expr, normal: bool = False) -> bool:
         while expr_list:
             for operand in expr_list.pop().ufl_operands:
                 if isinstance(operand, compatible_types):
-                    continuity.append(is_continuous(operand))
+                    continuity.append(is_continuous(operand, normal))
                 elif isinstance(operand, ufl_algebra):
                     expr_list.append(operand)
                 else:

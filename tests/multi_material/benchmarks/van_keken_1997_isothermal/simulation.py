@@ -90,7 +90,7 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (0.9142, 1)
 mesh_gen = "firedrake"
-mesh_elements = (64, 64)
+mesh_elements = (128, 128)
 
 # Parameters to initialise level set
 interface_coords_x = np.linspace(0, domain_dims[0], 1000)

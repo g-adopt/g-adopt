@@ -272,11 +272,9 @@ class LevelSetSolver:
 
     Attributes:
       solution:
-        The Firedrake function holding current level-set values
-      solution_old:
-        The Firedrake function holding previous level-set values
+        The Firedrake function holding level-set values
       solution_grad:
-        The Firedrake function holding current level-set gradient values
+        The Firedrake function holding level-set gradient values
       solution_space:
         The Firedrake function space where the level set lives
       mesh:
@@ -291,8 +289,8 @@ class LevelSetSolver:
         A dictionary holding the parameters used to set up reinitialisation
       adv_solver:
         A G-ADOPT GenericTransportSolver tackling advection
-      proj_solver:
-        A Firedrake LinearVariationalSolver to project the level-set gradient
+      gradient_solver:
+        A Firedrake LinearVariationalSolver to calculate the level-set gradient
       reini_integrator:
         A G-ADOPT time integrator tackling reinitialisation
       step:
@@ -340,8 +338,11 @@ class LevelSetSolver:
         self.solution = level_set
         self.solution_old = fd.Function(self.solution)
         self.solution_space = level_set.function_space()
+        self.mesh = self.solution.ufl_domain()
         self.advection = False
         self.reinitialisation = False
+
+        self.set_gradient_solver()
 
         if isinstance(adv_kwargs, dict):
             self.advection = True
@@ -353,11 +354,7 @@ class LevelSetSolver:
             self.reinitialisation = True
             self.reini_kwargs = reini_kwargs
 
-            self.mesh = self.solution.ufl_domain()
-
             self.set_default_reinitialisation_args()
-
-            self.proj_solver = self.gradient_L2_proj()
 
         self._solvers_ready = False
 
@@ -369,8 +366,6 @@ class LevelSetSolver:
             self.adv_kwargs["bcs"] = {}
         if "solver_params" not in self.adv_kwargs:
             self.adv_kwargs["solver_params"] = {
-                "mat_type": "aij",
-                "ksp_type": "preonly",
                 "pc_type": "bjacobi",
                 "sub_pc_type": "ilu",
             }
@@ -385,8 +380,6 @@ class LevelSetSolver:
             self.reini_kwargs["time_integrator"] = eSSPRKs3p3
         if "solver_params" not in self.reini_kwargs:
             self.reini_kwargs["solver_params"] = {
-                "mat_type": "aij",
-                "ksp_type": "preonly",
                 "pc_type": "bjacobi",
                 "sub_pc_type": "ilu",
             }
@@ -417,46 +410,42 @@ class LevelSetSolver:
 
         return max(1, round(4.9e-3 * domain_size / epsilon - 0.25))
 
-    def gradient_L2_proj(self) -> fd.LinearVariationalSolver:
-        """Constructs a projection solver.
+    def set_gradient_solver(self) -> None:
+        """Constructs a solver to determine the level-set gradient.
 
-        Projects the level-set gradient from a discontinuous function space to the
-        equivalent continuous one.
-
-        Returns:
-          A Firedrake solver capable of projecting a discontinuous gradient field on a
-          continuous function space
+        The weak form is derived through integration by parts and includes a term
+        accounting for boundary flux.
         """
-        grad_name = "Level-set gradient projection"
+        grad_name = "Level-set gradient"
         if number_match := re.search(r"\s#\d+$", self.solution.name()):
             grad_name += number_match.group()
 
         gradient_space = fd.VectorFunctionSpace(
-            self.mesh, "CG", self.solution.ufl_element().degree()
+            mesh=self.mesh, family=self.solution_space.ufl_element()
         )
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
 
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
-        mass_term = fd.inner(test, trial) * fd.dx(domain=self.mesh)
-        residual_element = self.solution * fd.div(test) * fd.dx(domain=self.mesh)
-        residual_boundary = (
+        bilinear_form = fd.inner(test, trial) * fd.dx(domain=self.mesh)
+        ibp_element = -self.solution * fd.div(test) * fd.dx(domain=self.mesh)
+        ibp_boundary = (
             self.solution
             * fd.dot(test, fd.FacetNormal(self.mesh))
             * fd.ds(domain=self.mesh)
         )
-        residual = -residual_element + residual_boundary
+        boundary_flux = (
+            fd.avg(self.solution)
+            * fd.jump(test, fd.FacetNormal(self.mesh))
+            * fd.dS(domain=self.mesh)
+        )
+        linear_form = ibp_element + ibp_boundary + boundary_flux
 
-        problem = fd.LinearVariationalProblem(mass_term, residual, self.solution_grad)
-        solver_params = {
-            "mat_type": "aij",
-            "ksp_type": "preonly",
-            "pc_type": "lu",
-            "pc_factor_mat_solver_type": "mumps",
-        }
-
-        return fd.LinearVariationalSolver(problem, solver_parameters=solver_params)
+        problem = fd.LinearVariationalProblem(
+            bilinear_form, linear_form, self.solution_grad
+        )
+        self.gradient_solver = fd.LinearVariationalSolver(problem)
 
     def set_up_solvers(self) -> None:
         """Sets up time integrators for advection and reinitialisation as required."""
@@ -492,12 +481,12 @@ class LevelSetSolver:
         self.step = 0
         self._solvers_ready = True
 
-    def update_level_set_gradient(self) -> None:
-        """Calls the gradient projection solver.
+    def update_gradient(self) -> None:
+        """Calls the gradient solver.
 
-        Can be provided as a callback to time integrators.
+        Can be provided as a forcing to time integrators.
         """
-        self.proj_solver.solve()
+        self.gradient_solver.solve()
 
     def reinitialise(self) -> None:
         """Performs reinitialisation steps."""
@@ -700,6 +689,7 @@ def min_max_height(
 
     coords_space = fd.VectorFunctionSpace(mesh, level_set.ufl_element())
     coords = fd.Function(coords_space).interpolate(mesh.coordinates)
+
     coords_data = coords.dat.data_ro_with_halos
     ls_data = level_set.dat.data_ro_with_halos
     if isinstance(epsilon, float):

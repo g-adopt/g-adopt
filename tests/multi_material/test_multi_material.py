@@ -63,8 +63,8 @@ diagnostics = {
         (lambda data: abs(data["rms_velocity"][-1] - 157), operator.le, 3.5),
     ],
     "van_keken_1997_isothermal": [
-        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 1e-4),
-        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 3e-3),
+        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 5e-5),
+        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 6e-3),
     ],
     "van_keken_1997_thermochemical": [
         (
@@ -76,12 +76,12 @@ diagnostics = {
                 - 487
             ),
             operator.le,
-            30,
+            50,
         )
     ],
     "woidt_1978": [
-        (lambda data: abs(max(data["rms_velocity"]) - 1.81e-11), operator.le, 1e-13),
-        (lambda data: abs(max(data["entrainment"]) - 0.248), operator.le, 1e-3),
+        (lambda data: abs(max(data["rms_velocity"]) - 1.8e-11), operator.le, 1e-13),
+        (lambda data: abs(max(data["entrainment"]) - 0.247), operator.le, 1e-3),
     ],
 }
 

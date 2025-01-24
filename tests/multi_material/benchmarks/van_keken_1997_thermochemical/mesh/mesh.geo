@@ -3,9 +3,9 @@ horizontal_resolution = 0.02;
 domain_dimension_x = 2;
 domain_dimension_y = 1;
 
-bottom_thickness = 0.1;
-top_thickness = 0.1;
-layer_resolution = 0.005;
+bottom_thickness = 0.12;
+top_thickness = 0.12;
+layer_resolution = 0.004;
 
 Point(1) = {0, 0, 0, horizontal_resolution};
 Point(2) = {domain_dimension_x, 0, 0, horizontal_resolution};
@@ -16,7 +16,7 @@ Extrude {0, bottom_thickness, 0} {
   Curve{1}; Layers {bottom_thickness / layer_resolution}; Recombine;
 }
 Extrude {0, domain_dimension_y - bottom_thickness - top_thickness, 0} {
-  Curve{2}; Layers {40}; Recombine;  // Vertical resolution: 0.02
+  Curve{2}; Layers {19}; Recombine;  // Vertical resolution: 0.04
 }
 Extrude {0, top_thickness, 0} {
   Curve{6}; Layers {top_thickness / layer_resolution}; Recombine;
