@@ -33,7 +33,7 @@ class GPlatesFunctionalityMixin:
         # Check if we need to update plate velocities at all
         if self.gplates_connector.reconstruction_age is not None:
             if abs(self.gplates_connector.ndtime2age(ndtime) - self.gplates_connector.reconstruction_age) < self.gplates_connector.delta_t:
-                return
+                return False
 
         # Assuming `self` is a Firedrake Function instance,
         self.dat.data_with_halos[self.dbc.nodes, :] = (
@@ -45,6 +45,8 @@ class GPlatesFunctionalityMixin:
         # So we have to make sure it is shown correctly on tape if we are annotating
         if annotate_tape():
             self.create_block_variable()
+
+        return True
 
 
 class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):

@@ -25,6 +25,8 @@ from scipy.linalg import solveh_banded
 import gc
 from typing import Optional
 from numbers import Number
+import psutil
+
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -35,6 +37,14 @@ def log(*args):
     PETSc.Sys.Print(*args)
 
 
+def memory_usage():
+    process = psutil.Process()
+    mem_info = process.memory_info()
+    return (f"Rank {MPI.COMM_WORLD.Get_rank()}: "
+            f"RSS: {mem_info.rss / 1e6:.2f} MB, "
+            f"VMS: {mem_info.vms / 1e6:.2f} MB")
+
+
 # TBD: This should know about the communicator
 # Wrapper to run garbage collection
 def collect_garbage(func):
@@ -42,6 +52,7 @@ def collect_garbage(func):
         result = func(*args, **kwargs)
         gc.collect()
         PETSc.garbage_cleanup()
+        log(f"{memory_usage()}")
         return result
 
     return wrapper
