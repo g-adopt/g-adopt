@@ -1,12 +1,9 @@
 from gadopt import *
 from gadopt.inverse import *
-from gadopt.gplates import *
-from gadopt.transport_solver import iterative_energy_solver_parameters
 import numpy as np
 from firedrake.adjoint_utils import blocks
 from pathlib import Path
-import gdrift
-from gdrift.profile import SplineProfile
+import gc
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -20,28 +17,34 @@ iterative_solver_parameters = {
     "ksp_rtol": 1e-12,
 }
 
-LinearSolver.DEFAULT_SNES_PARAMETERS = {"snes_type": "ksponly"}
-NonlinearVariationalSolver.DEFAULT_SNES_PARAMETERS = {"snes_type": "ksponly"}
-LinearVariationalSolver.DEFAULT_SNES_PARAMETERS = {"snes_type": "ksponly"}
-LinearSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
-LinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
-NonlinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 
-blocks.solving.Block.evaluate_adj = collect_garbage(
-    blocks.solving.Block.evaluate_adj)
-blocks.solving.Block.recompute = collect_garbage(
-    blocks.solving.Block.recompute)
+def collect_garbage(func):
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        gc.collect(generation=2)
+        # log(f"Number of collected objects: {gc.collect(generation=2)}")
+        return result
+
+    return wrapper
+
+
+blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
+blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
 
 # timer decorator for fwd and derivative calls.
-ReducedFunctional.__call__ = collect_garbage(
-    timer_decorator(ReducedFunctional.__call__)
-)
-ReducedFunctional.derivative = collect_garbage(
-    timer_decorator(ReducedFunctional.derivative)
-)
+ReducedFunctional.__call__ = collect_garbage(ReducedFunctional.__call__)
+ReducedFunctional.derivative = collect_garbage(ReducedFunctional.derivative)
+
 
 # Set up geometry:
-rmin, ncells, nlayers = 1.22, 32, 8
+rmax, rmin, ncells, nlayers = 2.22, 1.22, 32, 8
+
+
+def just_forward_adjoint_calls(num):
+    tic, rf = forward_problem()
+    for i in range(num):
+        rf(tic)
+        rf.derivative()
 
 
 def test_taping():
@@ -60,7 +63,7 @@ def conduct_inversion():
     T_lb.assign(0.0)
     T_ub.assign(1.0)
 
-    minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
+    minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-6
     minimisation_parameters["Status Test"] = 20
 
     minimisation_problem = MinimizationProblem(
@@ -85,17 +88,15 @@ def conduct_taylor_test():
     _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-@collect_garbage
 def forward_problem():
+    continue_annotation()
+    tape = get_working_tape()
+    tape.clear_tape()
     # Enable disk checkpointing for the adjoint
     enable_disk_checkpointing()
 
     # Set up the base path
     base_path = Path(__file__).resolve().parent
-
-    # Here we are managing if there is a last checkpoint from previous runs
-    # to load from to restart out simulation from.
-    last_checkpoint_path = find_last_checkpoint()
 
     # Load mesh and associated fields
     tala_parameters_dict = {}
@@ -138,29 +139,12 @@ def forward_problem():
     mu = mu_constructor(mu_radial, T_ave, T)  # Add temperature dependency
 
     # Initial time step
-    delta_t = Function(R, name="delta_t").assign(5.0e-7)
+    delta_t = Function(R, name="delta_t").assign(5.0e-9)
 
     # If we are running from a checkpoint, we want to use an appropriate initial condition
     # this is normally not necessary, unless we are redefining the ReducedFunctional.__call__
     # to skip the first recall in the optimisation.
-    if last_checkpoint_path is not None:
-        with CheckpointFile(str(last_checkpoint_path), "r") as fi:
-            Tic.assign(fi.load_function(mesh, name="dat_0"))
-    else:
-        Tic.interpolate(T_simulation)
-
-    # Information pertaining to the plate reconstruction model
-    cao_2024_files = ensure_reconstruction("Cao 2024", "./gplates_files")
-
-    plate_reconstruction_model = pyGplatesConnector(
-        rotation_filenames=cao_2024_files["rotation_filenames"],
-        topology_filenames=cao_2024_files["topology_filenames"],
-        nneighbours=4,
-        nseeds=1e4,
-        scaling_factor=1.0,
-        oldest_age=1800,
-        delta_t=1.0
-    )
+    Tic.interpolate(T_simulation)
 
     # Top velocity boundary condition
     gplates_velocities = Function(
@@ -225,17 +209,14 @@ def forward_problem():
 
     # tweaking solver parameters
     stokes_solver.solver_parameters['snes_rtol'] = 1e-2
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+
+    # stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+    stokes_solver.solver_parameters.pop('snes_monitor')
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-3
     stokes_solver.solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+    # stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+    stokes_solver.solver_parameters['fieldsplit_1'].pop('ksp_converged_reason')
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
-
-    # non-dimensionalised time for present geologic day (0)
-    presentday_ndtime = plate_reconstruction_model.age2ndtime(0.)
-
-    # non-dimensionalised time for 35 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(5.)
 
     # Defining control
     control = Control(Tic)
@@ -260,45 +241,21 @@ def forward_problem():
         bcs=energy_solver.strong_bcs,
     )
 
-    # timestep counter
-    timestep_index = 0
-
-    # Now perform the time loop:
     # while time < presentday_ndtime:
-    for i in range(10):
+    for i in range(50):
+        # Emulating what we do with GplatesVelocityFunctions
+        gplates_velocities.create_block_variable()
         # Solve Stokes sytem
         stokes_solver.solve()
-
-        # Make sure we are not going past present day
-        if presentday_ndtime - time < float(delta_t):
-            delta_t.assign(presentday_ndtime - time)
 
         # Temperature system:
         energy_solver.solve()
 
-        # Updating time
-        time += float(delta_t)
-        timestep_index += 1
-
-    # Converting temperature to full temperature and dimensionalising it
-    FullT = Function(Q, name="FullTemperature").interpolate((T + tala_parameters_dict["Tbar"]) * Constant(3700.) + Constant(300.))
-
     # Temperature misfit between solution and observation
-    t_misfit = assemble((FullT - T_obs) ** 2 * dx)
-    norm_t_misfit = assemble(T_obs ** 2 * dx)
+    t_misfit = assemble((T - T_obs) ** 2 * dx)
 
-    # Regularisation part of the objective
-    smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
-    norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
-
-    # We want to weight the smoothing down not to affect the final solution
-    weight_smoothin = 1e-2
     # Assembling the objective
-    objective = t_misfit  # / norm_t_misfit + weight_smoothin * smoothing / norm_smoothing
-
-    # We want to avoid a second call to objective functional with the same value
-    first_call_decorator = first_call_value(predefined_value=objective)
-    ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
+    objective = t_misfit
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
@@ -331,13 +288,17 @@ def generate_reference_fields():
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')  # extrude into a cylinder
     mesh.cartesian = False
 
+    X = SpatialCoordinate(mesh)
+    r = sqrt(X[0]**2 + X[1]**2)
+    depth = rmax - r
+
     # Set up scalar function spaces for seismic model fields
     Q = FunctionSpace(mesh, "CG", 1)
 
     # Define a field on q for t_obs: THESE ARE ALL WITH DIMENSION
-    T_obs = Function(Q, name="T_obs")  # This will be the "tomography temperature field"
-    T_simulation = Function(Q, name="Temperature")
-    T_ave = Function(Q, name="Temperature")
+    T_obs = Function(Q, name="T_obs").interpolate(depth + 0.1 * exp(-(((X[0] - 1.5)**2 + (X[1] - 0.0) ** 2)) / 0.01))  # This will be the "tomography temperature field"
+    T_simulation = Function(Q, name="Temperature").interpolate(depth + 0.1 * exp(-(((X[0] - 0.0)**2 + (X[1] - 1.5) ** 2)) / 0.01))  # This will be the "tomography temperature field"
+    T_ave = Function(Q, name="T_ave").interpolate(depth)
 
     TALAdict = TALA_parameters(Q)
     # Write out the file
@@ -350,31 +311,8 @@ def generate_reference_fields():
         for item in TALAdict.keys():
             fi.save_function(TALAdict[item], name=item)
 
-
-def first_call_value(predefined_value):
-    def decorator(func):
-        has_been_called = False
-
-        def wrapper(self, *args, **kwargs):
-            nonlocal has_been_called
-            if not has_been_called:
-                has_been_called = True
-                return predefined_value
-            return func(self, *args, **kwargs)
-
-        return wrapper
-    return decorator
-
-
-def find_last_checkpoint():
-    try:
-        checkpoint_dir = Path.cwd().resolve() / "optimisation_checkpoint"
-        solution_dir = sorted(list(checkpoint_dir.glob(
-            "[0-9]*")), key=lambda x: int(str(x).split("/")[-1]))[-1]
-        solution_path = solution_dir / "solution_checkpoint.h5"
-    except Exception:
-        solution_path = None
-    return solution_path
+    ref_fi = VTKFile("reference_fields.pvd")
+    ref_fi.write(T_obs, T_ave, T_simulation, *TALAdict.values())
 
 
 def mu_constructor(mu_radial, Tave, T):
@@ -398,16 +336,6 @@ def mu_constructor(mu_radial, Tave, T):
     delta_mu_T = Constant(1000.)
     mu_lin = mu_radial * exp(-ln(delta_mu_T) * (T - Tave))
 
-    # coordinates
-    # X = SpatialCoordinate(T.ufl_domain())
-    # r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
-
-    # Strain-Rate Dependence
-    # mu_star, sigma_y = Constant(1.0), 5.0e5 + 2.5e6*(rmax-r)
-    # epsilon = sym(grad(u))  # strain-rate
-    # epsii = sqrt(inner(epsilon, epsilon) + 1e-10)  # 2nd invariant (with a tolerance to ensure stability)
-    # mu_plast = mu_star + (sigma_y / epsii)
-    # mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
     return mu_lin
 
 
@@ -453,79 +381,6 @@ def TALA_parameters(function_space):
     return {"rhobar": rhobar, "Tbar": Tbar, "alphabar": alphabar, "cpbar": cpbar, "gbar": gbar, "mu_radial": mu_radial}
 
 
-def build_thermodynamic_model(temperature_profile_array):
-    # Load the thermodynamic model
-    slb_pyrolite = gdrift.ThermodynamicModel("SLB_16", "pyrolite")
-
-    # Make a spline that can be passed onto regularisation
-    terra_temperature_spline = gdrift.SplineProfile(
-        depth=temperature_profile_array[:, 0],
-        value=temperature_profile_array[:, 1],
-        name="T_average",
-        extrapolate=True
-    )
-
-    # Regularise the thermodynamic model
-    regular_slb_pyrolite = gdrift.regularise_thermodynamic_table(
-        slb_pyrolite, terra_temperature_spline,
-        regular_range={"v_s": (-1.5, 0.0), "v_p": (-np.inf, 0.0), "rho": (-np.inf, 0.0)})
-
-    # building solidus model
-    solidus_ghelichkhan = build_solidus()
-    # Using the solidus model build the anelasticity model around the solidus profile
-    anelasticity = build_anelasticity_model(solidus_ghelichkhan)
-
-    # Apply the anelasticity correction to the regularised thermodynamic model
-    anelastic_slb_pyrolite = gdrift.apply_anelastic_correction(
-        regular_slb_pyrolite, anelasticity)
-
-    return anelastic_slb_pyrolite
-
-
-# Compute a solidus for building anelasticity correction
-def build_solidus():
-    # Defining the solidus curve for manlte
-    andrault_solidus = gdrift.RadialEarthModelFromFile(
-        model_name="1d_solidus_Andrault_et_al_2011_EPSL",
-        description="Andrault et al 2011 EPSL")
-
-    # Defining parameters for Cammarano style anelasticity model
-    hirsch_solidus = gdrift.HirschmannSolidus()
-
-    my_depths = []
-    my_solidus = []
-
-    for solidus_model in [hirsch_solidus, andrault_solidus]:
-        d_min, d_max = solidus_model.min_max_depth("solidus temperature")
-        dpths = np.arange(d_min, d_max, 10e3)
-        my_depths.extend(dpths)
-        my_solidus.extend(solidus_model.at_depth("solidus temperature", dpths))
-
-    ghelichkhan_et_al = SplineProfile(
-        depth=np.asarray(my_depths),
-        value=np.asarray(my_solidus),
-        name="Ghelichkhan et al 2021",
-        extrapolate=True)
-
-    return ghelichkhan_et_al
-
-
-def build_anelasticity_model(solidus):
-    def B(x):
-        return np.where(x < 660e3, 1.1, 20)
-
-    def g(x):
-        return np.where(x < 660e3, 20, 10)
-
-    def a(x):
-        return 0.2
-
-    def omega(x):
-        return 1.0
-
-    return gdrift.CammaranoAnelasticityModel(B, g, a, solidus, omega)
-
-
 def get_dimensional_parameters():
     return {
         "T_CMB": 4000.0,
@@ -537,3 +392,11 @@ def get_dimensional_parameters():
         # "kappa": 3.0,
         # "H_int": 2900e3,
     }
+
+
+if __name__ == "__main__":
+    # generate_reference_fields()
+    # test_taping()
+    # conduct_taylor_test()
+    # conduct_inversion()
+    just_forward_adjoint_calls(3)
