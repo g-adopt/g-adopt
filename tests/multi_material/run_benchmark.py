@@ -28,8 +28,9 @@ def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
 
 def write_output(output_file):
     """Write output fields to the output file."""
-    for ls_solv in level_set_solver:
-        ls_solv.update_gradient()
+    if not args.without_gradient:
+        for ls_solv in level_set_solver:
+            ls_solv.update_gradient()
 
     if simulation.dimensional:
         density.interpolate(rho_material)
@@ -51,7 +52,12 @@ def write_output(output_file):
 
 # Import simulation module
 parser = ArgumentParser()
-parser.add_argument("benchmark")
+parser.add_argument("benchmark", help="Path to the benchmark directory")
+parser.add_argument(
+    "--without-gradient",
+    action="store_true",
+    help="Speed up simulation by skipping level-set gradient calculation in output",
+)
 args = parser.parse_args()
 
 benchmark = args.benchmark.split("/")[1]

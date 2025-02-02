@@ -7,7 +7,7 @@ all: $(outputs)
 
 %/${archive}:
 	$(info running $(notdir $(realpath $(dir $@))) multi-material benchmark)
-	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 run_benchmark.py $(dir $@)
+	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 run_benchmark.py $(dir $@) --without-gradient
 
 clean:
 	rm -rf __pycache__
