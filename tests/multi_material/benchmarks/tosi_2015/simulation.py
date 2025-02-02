@@ -46,23 +46,12 @@ def plot_diagnostics(output_path):
     if MPI.COMM_WORLD.rank == 0:
         fig, ax = plt.subplots(2, 3, figsize=(18, 10), constrained_layout=True)
 
-        for axis in ax.flatten():
+        for axis, (diag_name, diag_label) in zip(ax.flatten(), diag_names.items()):
             axis.grid()
             axis.set_xlabel("Time (non-dimensional)")
+            axis.set_ylabel(diag_label)
 
-        ax[0, 0].set_ylabel("Average temperature (non-dimensional)")
-        ax[0, 1].set_ylabel("Top Nusselt number (non-dimensional)")
-        ax[0, 2].set_ylabel("Bottom Nusselt number (non-dimensional)")
-        ax[1, 0].set_ylabel("Root-mean-square velocity (non-dimensional)")
-        ax[1, 1].set_ylabel("Minimum viscosity (non-dimensional)")
-        ax[1, 2].set_ylabel("Maximum viscosity (non-dimensional)")
-
-        ax[0, 0].plot(diag_fields["output_time"], diag_fields["avg_temperature"])
-        ax[0, 1].plot(diag_fields["output_time"], diag_fields["nusselt_top"])
-        ax[0, 2].plot(diag_fields["output_time"], diag_fields["nusselt_bottom"])
-        ax[1, 0].plot(diag_fields["output_time"], diag_fields["rms_velocity"])
-        ax[1, 1].plot(diag_fields["output_time"], diag_fields["min_visc"])
-        ax[1, 2].plot(diag_fields["output_time"], diag_fields["max_visc"])
+            axis.plot(diag_fields["output_time"], diag_fields[diag_name])
 
         fig.savefig(
             f"{output_path}/diagnostics_{tag}.pdf", dpi=300, bbox_inches="tight"
@@ -122,12 +111,12 @@ checkpoint_period = 5
 steady_state_threshold = 1e-5
 
 # Diagnostic objects
-diag_fields = {
-    "output_time": [],
-    "avg_temperature": [],
-    "nusselt_top": [],
-    "nusselt_bottom": [],
-    "rms_velocity": [],
-    "min_visc": [],
-    "max_visc": [],
+diag_names = {
+    "avg_temperature": "Average temperature (non-dimensional)",
+    "nusselt_top": "Top Nusselt number (non-dimensional)",
+    "nusselt_bottom": "Bottom Nusselt number (non-dimensional)",
+    "rms_velocity": "Root-mean-square velocity (non-dimensional)",
+    "min_visc": "Minimum viscosity (non-dimensional)",
+    "max_visc": "Maximum viscosity (non-dimensional)",
 }
+diag_fields = {field: [] for field in ("output_time", *diag_names.keys())}
