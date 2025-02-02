@@ -8,7 +8,7 @@ import gmsh
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
-from scipy.constants import g as g
+from scipy.constants import g as g  # noqa: F401
 
 import gadopt as ga
 
