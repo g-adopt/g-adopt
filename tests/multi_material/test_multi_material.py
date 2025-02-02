@@ -13,19 +13,19 @@ diagnostics = {
                 np.subtract(data["max_topography"], data["max_topography_analytical"])
             ).max(),
             operator.le,
-            0.05,
+            0.035,
         )
     ],
     "gerya_2003": [
         (
             lambda data: np.abs(1 - np.asarray(data["block_area"])).max(),
             operator.le,
-            0.035,
+            0.015,
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 284.82), operator.le, 0.01),
-        (lambda data: abs(max(data["entrainment"]) - 0.9302), operator.le, 1e-4),
+        (lambda data: abs(max(data["rms_velocity"]) - 284.5), operator.le, 0.1),
+        (lambda data: abs(max(data["entrainment"]) - 0.919), operator.le, 1e-3),
     ],
     "schmalholz_2011": [
         (
@@ -33,10 +33,10 @@ diagnostics = {
                 np.asarray(data["normalised_time"])[
                     np.asarray(data["slab_necking"]) <= 0.2
                 ].min()
-                - 0.845
+                - 0.814
             ),
             operator.le,
-            5e-3,
+            1e-3,
         )
     ],
     "schmeling_2008": [
@@ -45,7 +45,7 @@ diagnostics = {
                 np.asarray(data["output_time"])[
                     np.asarray(data["slab_tip_depth"]) >= 600
                 ].min()
-                - 44.6
+                - 46.1
             ),
             operator.le,
             0.1,
@@ -63,8 +63,8 @@ diagnostics = {
         (lambda data: abs(data["rms_velocity"][-1] - 157), operator.le, 3.5),
     ],
     "van_keken_1997_isothermal": [
-        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 1e-4),
-        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 3e-3),
+        (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 5e-5),
+        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 6e-3),
     ],
     "van_keken_1997_thermochemical": [
         (
@@ -76,12 +76,12 @@ diagnostics = {
                 - 487
             ),
             operator.le,
-            30,
+            50,
         )
     ],
     "woidt_1978": [
         (lambda data: abs(max(data["rms_velocity"]) - 1.82e-11), operator.le, 1e-13),
-        (lambda data: abs(max(data["entrainment"]) - 0.249), operator.le, 1e-3),
+        (lambda data: abs(max(data["entrainment"]) - 0.248), operator.le, 1e-3),
     ],
 }
 

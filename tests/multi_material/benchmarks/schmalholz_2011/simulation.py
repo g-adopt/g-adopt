@@ -4,12 +4,13 @@ A simple analytical solution for slab detachment.
 Earth and Planetary Science Letters, 304(1-2), 45-54.
 """
 
-import firedrake as fd
 import gmsh
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 from scipy.io import loadmat
+
+from gadopt import node_coordinates
 
 from .materials import lithosphere, mantle
 
@@ -24,8 +25,8 @@ def generate_mesh(mesh_path):
     line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
     gmsh.model.geo.extrude(
-        [(1, line_1)], mesh_fine_layer_min_x, 0, 0, numElements=[21], recombine=True
-    )  # Horizontal resolution: 20 km
+        [(1, line_1)], mesh_fine_layer_min_x, 0, 0, numElements=[16], recombine=True
+    )  # Horizontal resolution: 25 km
 
     num_layers = int(mesh_fine_layer_width / mesh_fine_layer_hor_res)
     gmsh.model.geo.extrude(
@@ -42,9 +43,9 @@ def generate_mesh(mesh_path):
         domain_dims[0] - mesh_fine_layer_min_x - mesh_fine_layer_width,
         0,
         0,
-        numElements=[21],
+        numElements=[16],
         recombine=True,
-    )  # Horizontal resolution: 20 km
+    )  # Horizontal resolution: 25 km
 
     gmsh.model.geo.synchronize()
 
@@ -64,62 +65,63 @@ def generate_mesh(mesh_path):
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     level_set = diag_vars["level_set"][0]
     epsilon = diag_vars["epsilon"]
+    coords = node_coordinates(level_set)
 
-    mesh = level_set.ufl_domain()
-    coords_space = fd.VectorFunctionSpace(mesh, level_set.ufl_element())
-    coords = fd.Function(coords_space).interpolate(mesh.coordinates)
-
-    coords_data = coords.dat.data_ro_with_halos
     ls_data = level_set.dat.data_ro_with_halos
-    if isinstance(epsilon, float):
-        eps_data = epsilon * np.ones_like(ls_data)
-    else:
-        eps_data = epsilon.dat.data_ro_with_halos
+    eps_data = epsilon.dat.data_ro_with_halos
+    coords_data = coords.dat.data_ro_with_halos
 
-    mask_ls_out = (
+    mask_coords = (
         (coords_data[:, 0] <= domain_dims[0] / 2)
-        & (coords_data[:, 1] < domain_dims[1] - lithosphere_thickness - 2e4)
+        & (coords_data[:, 1] < domain_dims[1] - lithosphere_thickness - mesh_vert_res)
         & (coords_data[:, 1] > domain_dims[1] - lithosphere_thickness - slab_length)
-        & (ls_data < 0.5)
     )
-    mask_ls_in = (
-        (coords_data[:, 0] <= domain_dims[0] / 2)
-        & (coords_data[:, 1] < domain_dims[1] - lithosphere_thickness - 2e4)
-        & (coords_data[:, 1] > domain_dims[1] - lithosphere_thickness - slab_length)
-        & (ls_data >= 0.5)
-    )
+
+    mask_ls_out = mask_coords & (ls_data < 0.5)
+    mask_ls_in = mask_coords & (ls_data >= 0.5)
+
+    distance_buffer = mesh_fine_layer_hor_res / (level_set.ufl_element().degree() + 1)
+
     if mask_ls_out.any():
-        ind_out = coords_data[mask_ls_out, 0].argmax()
-        x_out = coords_data[mask_ls_out, 0][ind_out]
-        if not mask_ls_out.all():
-            y_out = coords_data[mask_ls_out, 1][ind_out]
-            mask_y = abs(coords_data[mask_ls_in, 1] - y_out) < 1e3
-            if mask_y.any():
-                ind_in = coords_data[mask_ls_in, 0][mask_y].argmin()
-                x_in = coords_data[mask_ls_in, 0][mask_y][ind_in]
+        coords_out_x = coords_data[mask_ls_out, 0]
+        ind_max_coords_out = np.flatnonzero(coords_out_x == coords_out_x.max())
 
-                ls_out = max(1e-6, min(1 - 1e-6, ls_data[mask_ls_out][ind_out]))
-                eps_out = eps_data[mask_ls_out][ind_out]
-                sdls_out = eps_out * np.log(ls_out / (1 - ls_out))
+        if ind_max_coords_out.size == 1:
+            ind_out = ind_max_coords_out.item()
+        else:
+            ind_min_ls_out = ls_data[mask_ls_out][ind_max_coords_out].argmin()
+            ind_out = ind_max_coords_out[ind_min_ls_out]
 
-                ls_in = max(1e-6, min(1 - 1e-6, ls_data[mask_ls_in][mask_y][ind_in]))
-                eps_in = eps_data[mask_ls_in][mask_y][ind_in]
-                sdls_in = eps_in * np.log(ls_in / (1 - ls_in))
+        x_out = coords_out_x[ind_out]
+        y_out = coords_data[mask_ls_out, 1][ind_out]
+        mask_y = abs(coords_data[mask_ls_in, 1] - y_out) < mesh_vert_res / 4
 
-                ls_dist = sdls_in / (sdls_in - sdls_out)
-                x_interface = ls_dist * x_out + (1 - ls_dist) * x_in
-                min_width = domain_dims[0] - 2 * x_interface
-            else:
-                min_width = domain_dims[0] - 2 * x_out
+        if mask_y.any():
+            ind_in = coords_data[mask_ls_in, 0][mask_y].argmin()
+            x_in = coords_data[mask_ls_in, 0][mask_y][ind_in]
+
+            ls_out = max(1e-2, ls_data[mask_ls_out][ind_out])
+            eps_out = eps_data[mask_ls_out][ind_out]
+            sdls_out = eps_out * np.log(ls_out / (1 - ls_out))
+
+            ls_in = min(1 - 1e-2, ls_data[mask_ls_in][mask_y][ind_in])
+            eps_in = eps_data[mask_ls_in][mask_y][ind_in]
+            sdls_in = eps_in * np.log(ls_in / (1 - ls_in))
+
+            ls_weight = sdls_in / (sdls_in - sdls_out)
+            x_interface = ls_weight * x_out + (1 - ls_weight) * x_in
+            min_width = domain_dims[0] - 2 * x_interface
+        elif domain_dims[0] / 2 - x_out < distance_buffer:
+            min_width = 0
         else:
             min_width = domain_dims[0] - 2 * x_out
     else:
-        min_width = np.inf
+        min_width = lithosphere_thickness
 
-    min_width_global = level_set.comm.allreduce(min_width, MPI.MIN)
+    min_width = MPI.COMM_WORLD.allreduce(min_width, MPI.MIN)
 
     diag_fields["normalised_time"].append(simu_time / characteristic_time)
-    diag_fields["slab_necking"].append(min_width_global / slab_width)
+    diag_fields["slab_necking"].append(min_width / slab_width)
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(
@@ -129,6 +131,8 @@ def diagnostics(simu_time, geo_diag, diag_vars, output_path):
 
 def plot_diagnostics(output_path):
     if MPI.COMM_WORLD.rank == 0:
+        # This dataset reproduces Figure 5 of Schmalholz (2011) but differs from Figure
+        # 8 of Hillebrand et al. (2014) and Figure 13 of Glerum et al. (2018).
         slab_necking_schmalholz = loadmat("data/DET_FREE_NEW_TOP_R100.mat")
 
         fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
@@ -155,6 +159,7 @@ def plot_diagnostics(output_path):
         fig.savefig(
             f"{output_path}/slab_necking_{tag}.pdf", dpi=300, bbox_inches="tight"
         )
+        plt.close(fig)
 
 
 # A simulation name tag
@@ -167,10 +172,10 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (1e6, 6.6e5)
 mesh_gen = "gmsh"
-mesh_vert_res = 1.5e4
-mesh_fine_layer_min_x = 4.2e5
-mesh_fine_layer_width = 1.6e5
-mesh_fine_layer_hor_res = 8e3
+mesh_vert_res = 6e3
+mesh_fine_layer_min_x = 4e5
+mesh_fine_layer_width = 2e5
+mesh_fine_layer_hor_res = 6.25e3
 
 # Parameters to initialise level set
 interface_coords = [
@@ -212,7 +217,7 @@ stokes_bcs = {1: {"u": 0}, 2: {"u": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
 # Timestepping objects
 initial_timestep = 1e11
-dump_period = 5e5 * 365.25 * 8.64e4
+dump_period = 2e5 * 365.25 * 8.64e4
 checkpoint_period = 5
 time_end = 25e6 * 365.25 * 8.64e4
 

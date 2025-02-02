@@ -90,6 +90,7 @@ def plot_diagnostics(output_path):
             dpi=300,
             bbox_inches="tight",
         )
+        plt.close(fig)
 
 
 # A simulation name tag
@@ -102,7 +103,7 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (3, 1)
 mesh_gen = "firedrake"
-mesh_elements = (96, 32)
+mesh_elements = (192, 64)
 
 # Parameters to initialise level set
 interface_coords_x = np.array([0.0, domain_dims[0]])

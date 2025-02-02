@@ -67,6 +67,7 @@ def plot_diagnostics(output_path):
         fig.savefig(
             f"{output_path}/diagnostics_{tag}.pdf", dpi=300, bbox_inches="tight"
         )
+        plt.close(fig)
 
 
 # A simulation name tag

@@ -4,14 +4,62 @@ Finite element calculations applied to salt dome analysis.
 Tectonophysics, 50(2-3), 369-386.
 """
 
+import gmsh
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
-from scipy.constants import g as g  # noqa: F401
+from scipy.constants import g as g
 
 import gadopt as ga
 
 from .materials import overburden, salt
+
+
+def generate_mesh(mesh_path):
+    gmsh.initialize()
+    gmsh.model.add("mesh")
+
+    point_1 = gmsh.model.geo.addPoint(0, 0, 0, mesh_vert_res)
+    point_2 = gmsh.model.geo.addPoint(0, domain_dims[1], 0, mesh_vert_res)
+
+    line_1 = gmsh.model.geo.addLine(point_1, point_2)
+
+    gmsh.model.geo.extrude(
+        [(1, line_1)], mesh_fine_layer_min_x, 0, 0, numElements=[20], recombine=True
+    )  # Horizontal resolution: 1 km
+
+    num_layers = int(mesh_fine_layer_width / mesh_fine_layer_hor_res)
+    gmsh.model.geo.extrude(
+        [(1, line_1 + 1)],
+        mesh_fine_layer_width,
+        0,
+        0,
+        numElements=[num_layers],
+        recombine=True,
+    )
+
+    gmsh.model.geo.extrude(
+        [(1, line_1 + 5)],
+        domain_dims[0] - mesh_fine_layer_min_x - mesh_fine_layer_width,
+        0,
+        0,
+        numElements=[20],
+        recombine=True,
+    )  # Horizontal resolution: 1 km
+
+    gmsh.model.geo.synchronize()
+
+    gmsh.model.addPhysicalGroup(1, [line_1], tag=1)
+    gmsh.model.addPhysicalGroup(1, [line_1 + 9], tag=2)
+    gmsh.model.addPhysicalGroup(1, [line_1 + i for i in [2, 6, 10]], tag=3)
+    gmsh.model.addPhysicalGroup(1, [line_1 + i for i in [3, 7, 11]], tag=4)
+
+    gmsh.model.addPhysicalGroup(2, [5, 9, 13], tag=1)
+
+    gmsh.model.mesh.generate(2)
+
+    gmsh.write(f"{mesh_path}/mesh.msh")
+    gmsh.finalize()
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
@@ -62,6 +110,7 @@ def plot_diagnostics(output_path):
             dpi=300,
             bbox_inches="tight",
         )
+        plt.close(fig)
 
 
 def symmetric_cubic(x, centre, support, amplitude, vertical_shift):
@@ -84,9 +133,12 @@ checkpoint_restart = 0
 # Mesh resolution should be sufficient to capture eventual small-scale dynamics
 # in the neighbourhood of material interfaces tracked by the level-set approach.
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-domain_dims = (64e3, 4.8e3)
-mesh_gen = "firedrake"
-mesh_elements = (512, 32)
+domain_dims = (6.4e4, 4.8e3)
+mesh_gen = "gmsh"
+mesh_vert_res = 1e2
+mesh_fine_layer_min_x = 2e4
+mesh_fine_layer_width = 2.4e4
+mesh_fine_layer_hor_res = 1e2
 
 # Parameters to initialise level set
 interface_coords_x = np.linspace(0.0, domain_dims[0], int(domain_dims[0] / 1e3) + 1)
