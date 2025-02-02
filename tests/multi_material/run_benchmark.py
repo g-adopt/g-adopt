@@ -49,6 +49,11 @@ def write_output(output_file):
 # Import simulation module
 parser = ArgumentParser()
 parser.add_argument("benchmark", help="Path to the benchmark directory")
+parser.add_argument(
+    "--without-plot",
+    action="store_true",
+    help="Speed up simulation by skipping time-loop updates of diagnostic plots",
+)
 args = parser.parse_args()
 
 benchmark = args.benchmark.split("/")[1]
@@ -281,7 +286,8 @@ has_end_time = hasattr(simulation, "time_end")
 while True:
     # Calculate simulation diagnostics
     simulation.diagnostics(time_now, geo_diag, diag_vars, benchmark_path)
-    simulation.plot_diagnostics(benchmark_path)
+    if not args.without_plot:
+        simulation.plot_diagnostics(benchmark_path)
 
     # Write to output file and increment dump counter
     if time_now >= dump_counter * simulation.dump_period:
