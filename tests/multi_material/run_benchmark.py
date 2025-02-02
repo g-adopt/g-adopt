@@ -28,6 +28,9 @@ def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
 
 def write_output(output_file):
     """Write output fields to the output file."""
+    for ls_solv in level_set_solver:
+        ls_solv.update_gradient()
+
     if simulation.dimensional:
         density.interpolate(rho_material)
     else:
@@ -60,9 +63,8 @@ mesh_path = benchmark_path / "mesh"
 output_path = benchmark_path / "outputs"
 
 if simulation.checkpoint_restart:  # Restore mesh and key functions
-    with fd.CheckpointFile(
-        str(output_path / f"checkpoint_{simulation.checkpoint_restart}.h5"), "r"
-    ) as h5_check:
+    old_check_file = f"checkpoint_{simulation.checkpoint_restart}_{simulation.tag}.h5"
+    with fd.CheckpointFile(str(output_path / old_check_file), "r") as h5_check:
         mesh = h5_check.load_mesh("firedrake_default")
         dump_counter = h5_check.get_timestepping_history(mesh, "Stokes")["index"][-1]
         stokes_function = h5_check.load_function(mesh, "Stokes", idx=dump_counter)
@@ -116,7 +118,9 @@ else:  # Initialise mesh and key functions
         simulation.initialise_temperature(temperature)
 
     # Set up function spaces and functions used in the level-set approach
-    func_space_ls = fd.FunctionSpace(mesh, "DQ", 2)
+    func_space_ls = fd.FunctionSpace(
+        mesh, "DQ", 1 if benchmark == "schmalholz_2011" else 2
+    )
     level_set = [
         fd.Function(func_space_ls, name=f"Level set #{i}")
         for i in range(len(simulation.materials) - 1)
@@ -144,9 +148,13 @@ velocity, pressure = fd.split(stokes_function)  # Indexed expressions
 # Rename associated Firedrake functions
 stokes_function.subfunctions[0].rename("Velocity")
 stokes_function.subfunctions[1].rename("Pressure")
+# Copy velocity function for steady-state convergence check
+if hasattr(simulation, "steady_state_threshold"):
+    velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
 
 # Continuous function space for material field output
-func_space_output = fd.FunctionSpace(mesh, "Q", 2)
+finite_elem_output = fd.FiniteElement("DQ", fd.quadrilateral, 1, variant="equispaced")
+func_space_output = fd.FunctionSpace(mesh, finite_elem_output)
 output_fields = []
 # Set up material fields and the equation system
 approximation_parameters = {}
@@ -198,7 +206,7 @@ approximation = ga.Approximation(
 real_func_space = fd.FunctionSpace(mesh, "R", 0)
 timestep = fd.Function(real_func_space).assign(simulation.initial_timestep)
 
-# Set up energy and Stokes solvers
+# Set up possible energy solver
 energy_solver = None
 if hasattr(simulation, "initialise_temperature"):
     energy_solver = ga.EnergySolver(
@@ -207,8 +215,9 @@ if hasattr(simulation, "initialise_temperature"):
         approximation,
         timestep,
         ga.ImplicitMidpoint,
-        bcs=getattr(simulation, "temp_bcs", None),
+        bcs=simulation.temp_bcs,
     )
+# Set up Stokes solver
 stokes_nullspace = ga.create_stokes_nullspace(stokes_function.function_space())
 stokes_solver = ga.StokesSolver(
     stokes_function,
@@ -217,16 +226,15 @@ stokes_solver = ga.StokesSolver(
     bcs=simulation.stokes_bcs,
     nullspace={"nullspace": stokes_nullspace, "transpose_nullspace": stokes_nullspace},
 )
-
-# Solve initial Stokes system
-stokes_solver.solve()
-if hasattr(simulation, "steady_state_threshold"):
-    velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
+if benchmark == "schmalholz_2011":
+    stokes_solver.solver_parameters["snes_linesearch_type"] = "cp"
+stokes_solver.solve()  # Determine initial velocity and pressure fields
 
 # Set up level-set solvers
 adv_kwargs = {"u": velocity, "timestep": timestep}
 reini_kwargs = {"epsilon": epsilon}
 if benchmark == "tosi_2015":
+    # Speed up simulation by avoiding frequent reinitialisation
     reini_kwargs["frequency"] = 10
 level_set_solver = [
     ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
@@ -277,6 +285,7 @@ has_end_time = hasattr(simulation, "time_end")
 while True:
     # Calculate simulation diagnostics
     simulation.diagnostics(time_now, geo_diag, diag_vars, benchmark_path)
+    simulation.plot_diagnostics(benchmark_path)
 
     # Write to output file and increment dump counter
     if time_now >= dump_counter * simulation.dump_period:

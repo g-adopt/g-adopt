@@ -90,6 +90,7 @@ def plot_diagnostics(output_path):
             dpi=300,
             bbox_inches="tight",
         )
+        plt.close(fig)
 
 
 # A simulation name tag
@@ -140,7 +141,7 @@ stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
 # Timestepping objects
 initial_timestep = 1e-6
-dump_period = 1e-4
+dump_period = 2e-4
 checkpoint_period = 5
 time_end = 0.0236
 

@@ -45,7 +45,7 @@ def initialise_temperature(temperature):
 def internal_heating_rate(int_heat_rate, simu_time):
     # flib can be obtained from https://github.com/seantrim/exact-thermochem-solution
     analytical_values = []
-    for x, y in ga.node_coordinates(int_heat_rate):
+    for x, y in ga.node_coordinates(int_heat_rate).dat.data:
         analytical_values.append(
             flib.h_python(
                 x, y, float(simu_time), domain_dims[0], k, interface_coord_y, Ra, Ra * B
@@ -103,6 +103,7 @@ def plot_diagnostics(output_path):
             dpi=300,
             bbox_inches="tight",
         )
+        plt.close(fig)
 
 
 # A simulation name tag

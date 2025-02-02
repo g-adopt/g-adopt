@@ -1,11 +1,11 @@
 """Provides a set of classes and functions enabling multi-material capabilities
 
-The `interface_thickness` and `conservative_level_set` functions provide default
-strategies to initialise a level-set field. The `material_field` function enables
-defining a UFL expression for a physical field depending on material properties. The
-`LevelSetSolver` class instantiates the advection and reinitialisation systems for a
-single level set. The `entrainment` function enables users to easily calculate material
-entrainment.
+The `signed_distance`, `interface_thickness`, and `conservative_level_set` functions
+provide default strategies to initialise a level-set field. The `material_field`
+function enables defining a UFL expression for a physical field depending on material
+properties. The `LevelSetSolver` class instantiates the advection and reinitialisation
+systems for a single level set. The `entrainment` function enables users to easily
+calculate material entrainment.
 """
 
 import operator
@@ -157,7 +157,7 @@ def signed_distance(
             signed_distance = [
                 (1 if y > interface_callable(x, *interface_args[1:]) else -1)
                 * interface.distance(sl.Point(x, y))
-                for x, y in node_coordinates(level_set)
+                for x, y in node_coordinates(level_set).dat.data
             ]
         case "polygon":
             if boundary_coordinates is None:
@@ -167,7 +167,7 @@ def signed_distance(
                 signed_distance = [
                     (1 if interface.contains(sl.Point(x, y)) else -1)
                     * interface.boundary.distance(sl.Point(x, y))
-                    for x, y in node_coordinates(level_set)
+                    for x, y in node_coordinates(level_set).dat.data
                 ]
             else:
                 interface = sl.LineString(interface_coordinates)
@@ -177,9 +177,9 @@ def signed_distance(
                 sl.prepare(interface_with_boundaries)
 
                 signed_distance = [
-                    (1 if interface_with_boundaries.contains(sl.Point(x, y)) else -1)
+                    (1 if interface_with_boundaries.intersects(sl.Point(x, y)) else -1)
                     * interface.distance(sl.Point(x, y))
-                    for x, y in node_coordinates(level_set)
+                    for x, y in node_coordinates(level_set).dat.data
                 ]
         case "circle":
             centre, radius = interface_coordinates
@@ -189,7 +189,7 @@ def signed_distance(
             signed_distance = [
                 (1 if interface.contains(sl.Point(x, y)) else -1)
                 * interface.boundary.distance(sl.Point(x, y))
-                for x, y in node_coordinates(level_set)
+                for x, y in node_coordinates(level_set).dat.data
             ]
         case _:
             raise ValueError(
@@ -199,7 +199,7 @@ def signed_distance(
     return signed_distance
 
 
-def interface_thickness(level_set: fd.Function, scale: float = 0.3) -> fd.Function:
+def interface_thickness(level_set: fd.Function, scale: float = 0.35) -> fd.Function:
     """Default strategy for the thickness of the conservative level set profile.
 
     Args:
@@ -627,21 +627,19 @@ def entrainment(
       level_set:
         A Firedrake function for the level-set field
       material_area:
-        A float representing the total area occupied by a material
+        A float representing the total area occupied by the target material
       entrainment_height:
         A float representing the height above which to calculate entrainment
 
     Returns:
-      A float corresponding to the calculated entrainment diagnostic
+      A float corresponding to the material fraction above the target height
     """
-    mesh_coords = fd.SpatialCoordinate(level_set.ufl_domain())
+    mesh_coords = node_coordinates(level_set)
     target_region = mesh_coords[1] >= entrainment_height
     material_entrained = fd.conditional(level_set < 0.5, 1, 0)
+    is_entrained = fd.conditional(target_region, material_entrained, 0)
 
-    return (
-        fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
-        / material_area
-    )
+    return fd.assemble(is_entrained * fd.dx) / material_area
 
 
 def min_max_height(
@@ -673,11 +671,13 @@ def min_max_height(
 
     match mode:
         case "min":
-            arg_finder = np.argmin
+            extremum = np.min
+            ls_arg_extremum = np.argmax
             irrelevant_data = np.inf
             mpi_comparison = MPI.MIN
         case "max":
-            arg_finder = np.argmax
+            extremum = np.max
+            ls_arg_extremum = np.argmin
             irrelevant_data = -np.inf
             mpi_comparison = MPI.MAX
         case _:
@@ -687,50 +687,49 @@ def min_max_height(
     if not mesh.cartesian:
         raise ValueError("Only Cartesian meshes are currently supported.")
 
-    coords_space = fd.VectorFunctionSpace(mesh, level_set.ufl_element())
-    coords = fd.Function(coords_space).interpolate(mesh.coordinates)
+    coords = node_coordinates(level_set)
 
     coords_data = coords.dat.data_ro_with_halos
     ls_data = level_set.dat.data_ro_with_halos
-    if isinstance(epsilon, float):
-        eps_data = epsilon * np.ones_like(ls_data)
-    else:
-        eps_data = epsilon.dat.data_ro_with_halos
+    eps_data = epsilon.dat.data_ro_with_halos
 
     mask_ls = comparison(ls_data, 0.5)
     if mask_ls.any():
-        ind_inside = arg_finder(coords_data[mask_ls, -1])
-        height_inside = coords_data[mask_ls, -1][ind_inside]
+        coords_inside = coords_data[mask_ls, -1]
+        ind_coords_inside = np.flatnonzero(coords_inside == extremum(coords_inside))
 
-        if not mask_ls.all():
-            hor_coords = coords_data[mask_ls, :-1][ind_inside]
-            hor_dist_vec = coords_data[~mask_ls, :-1] - hor_coords
-            hor_dist = np.sqrt(np.sum(hor_dist_vec**2, axis=1))
+        if ind_coords_inside.size == 1:
+            ind_inside = ind_coords_inside.item()
+        else:
+            ind_min_ls_inside = ls_arg_extremum(ls_data[mask_ls][ind_coords_inside])
+            ind_inside = ind_coords_inside[ind_min_ls_inside]
 
-            mask_hor_coords = hor_dist < eps_data[~mask_ls]
+        height_inside = coords_inside[ind_inside]
 
-            if mask_hor_coords.any():
-                ind_outside = abs(
-                    coords_data[~mask_ls, -1][mask_hor_coords] - height_inside
-                ).argmin()
-                height_outside = coords_data[~mask_ls, -1][mask_hor_coords][ind_outside]
+        hor_coords = coords_data[mask_ls, :-1][ind_inside]
+        hor_dist_vec = coords_data[~mask_ls, :-1] - hor_coords
+        hor_dist = np.sqrt(np.sum(hor_dist_vec**2, axis=1))
 
-                ls_inside = ls_data[mask_ls][ind_inside]
-                eps_inside = eps_data[mask_ls][ind_inside]
-                sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
+        mask_hor_coords = hor_dist < eps_data[~mask_ls]
 
-                ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
-                eps_outside = eps_data[~mask_ls][mask_hor_coords][ind_outside]
-                sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
+        if mask_hor_coords.any():
+            ind_outside = abs(
+                coords_data[~mask_ls, -1][mask_hor_coords] - height_inside
+            ).argmin()
+            height_outside = coords_data[~mask_ls, -1][mask_hor_coords][ind_outside]
 
-                sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
-                height = sdls_dist * height_inside + (1 - sdls_dist) * height_outside
-            else:
-                height = height_inside
+            ls_inside = ls_data[mask_ls][ind_inside]
+            eps_inside = eps_data[mask_ls][ind_inside]
+            sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
 
+            ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
+            eps_outside = eps_data[~mask_ls][mask_hor_coords][ind_outside]
+            sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
+
+            sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
+            height = sdls_dist * height_inside + (1 - sdls_dist) * height_outside
         else:
             height = height_inside
-
     else:
         height = irrelevant_data
 

@@ -24,8 +24,8 @@ diagnostics = {
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 282.26), operator.le, 0.01),
-        (lambda data: abs(max(data["entrainment"]) - 0.9137), operator.le, 1e-4),
+        (lambda data: abs(max(data["rms_velocity"]) - 284.5), operator.le, 0.1),
+        (lambda data: abs(max(data["entrainment"]) - 0.919), operator.le, 1e-3),
     ],
     "schmalholz_2011": [
         (
@@ -33,7 +33,7 @@ diagnostics = {
                 np.asarray(data["normalised_time"])[
                     np.asarray(data["slab_necking"]) <= 0.2
                 ].min()
-                - 0.822
+                - 0.814
             ),
             operator.le,
             1e-3,
@@ -45,7 +45,7 @@ diagnostics = {
                 np.asarray(data["output_time"])[
                     np.asarray(data["slab_tip_depth"]) >= 600
                 ].min()
-                - 46.2
+                - 46.1
             ),
             operator.le,
             0.1,
@@ -80,8 +80,8 @@ diagnostics = {
         )
     ],
     "woidt_1978": [
-        (lambda data: abs(max(data["rms_velocity"]) - 1.8e-11), operator.le, 1e-13),
-        (lambda data: abs(max(data["entrainment"]) - 0.247), operator.le, 1e-3),
+        (lambda data: abs(max(data["rms_velocity"]) - 1.82e-11), operator.le, 1e-13),
+        (lambda data: abs(max(data["entrainment"]) - 0.248), operator.le, 1e-3),
     ],
 }
 

@@ -78,6 +78,7 @@ def plot_diagnostics(output_path):
             dpi=300,
             bbox_inches="tight",
         )
+        plt.close(fig)
 
 
 # A simulation name tag

@@ -45,6 +45,7 @@ def plot_diagnostics(output_path):
         ax.legend(fontsize=12, fancybox=True, shadow=True)
 
         fig.savefig(f"{output_path}/block_area_{tag}.pdf", dpi=300, bbox_inches="tight")
+        plt.close(fig)
 
 
 # A simulation name tag
