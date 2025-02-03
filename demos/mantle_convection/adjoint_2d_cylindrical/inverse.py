@@ -308,4 +308,5 @@ def taylor_test(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
 
 
 if __name__ == "__main__":
-    main()
+    taylor_test()
+    inverse()
