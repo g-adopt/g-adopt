@@ -1,18 +1,32 @@
 """
-This runs the optimisation portion of the adjoint test case. A forward run first sets up
-the tape with the adjoint information, then a misfit functional is constructed to be
-used as the goal condition for nonlinear optimisation using ROL.
+This module solve an inverse problem for non-linear stokes in 2d annular plain using an adjoint method.
+
+Functions:
+    generate_inverse_problem(alpha_u, alpha_d, alpha_s):
+        Sets up the inverse problem for the initial condition of convection in an annulus domain.
+            alpha_u (float): The coefficient of the velocity misfit term.
+            alpha_d (float): The coefficient of the initial condition damping term.
+            alpha_s (float): The coefficient of the smoothing term.
+
+        returns [dict]: the control function, reduced functional, and callback function for the inverse problem.
+
+    inverse():
+        Sets up the inverse problem, and performs a bounded nonlinear optimization.
+
+    taylor_test(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
+        Performs a Taylor test to verify the correctness of the gradient for the inverse problem.
+            alpha_u (float): The coefficient of the velocity misfit term.
+            alpha_d (float): The coefficient of the initial condition damping term.
+            alpha_s (float): The coefficient of the smoothing term.
+            float: The minimum convergence rate from the Taylor test.
 """
 
 from gadopt import *
 from gadopt.inverse import *
+import numpy as np
 
 
-def main():
-    inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
-
-
-def inverse(alpha_u, alpha_d, alpha_s):
+def generate_inverse_problem(alpha_u, alpha_d, alpha_s):
     """
     Use adjoint-based optimisation to solve for the initial condition of the cylindrical
     problem.
@@ -22,11 +36,6 @@ def inverse(alpha_u, alpha_d, alpha_s):
         alpha_d: The coefficient of the initial condition damping term
         alpha_s: The coefficient of the smoothing term
     """
-
-    # Clear the tape of any previous operations to ensure
-    # the adjoint reflects the forward problem we solve here
-    tape = get_working_tape()
-    tape.clear_tape()
 
     # Set up geometry:
     rmax = 2.22
@@ -199,9 +208,15 @@ def inverse(alpha_u, alpha_d, alpha_s):
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
 
-    # Defining the object for pyadjoint
-    reduced_functional = ReducedFunctional(objective, control)
+    inverse_problem = {}
 
+    # Keep track of what the control function is
+    inverse_problem["control"] = Tic
+
+    # The ReducedFunctional that is to be minimised
+    inverse_problem["reduced_functional"] = ReducedFunctional(objective, control)
+
+    # Callback function to print out the misfit at the start and end of the optimisation
     def callback():
         initial_misfit = assemble(
             (Tic.block_variable.checkpoint.restore() - Tic_ref) ** 2 * dx
@@ -209,17 +224,31 @@ def inverse(alpha_u, alpha_d, alpha_s):
         final_misfit = assemble(
             (T.block_variable.checkpoint.restore() - Tobs) ** 2 * dx
         )
-
         log(f"Initial misfit; {initial_misfit}; final misfit: {final_misfit}")
+
+    inverse_problem["callback"] = callback
+
+    return inverse_problem
+
+
+def inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
+    # Clear the tape of any previous operations to ensure
+    # the adjoint reflects the forward problem we solve here
+    tape = get_working_tape()
+    tape.clear_tape()
+
+    # For solving the inverse problem we the reduced functional, any callback functions,
+    # and the initial guess for the control variable
+    inverse_problem = generate_inverse_problem(alpha_u=alpha_u, alpha_d=alpha_d, alpha_s=alpha_s)
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
-    T_lb = Function(Tic.function_space(), name="Lower bound temperature")
-    T_ub = Function(Tic.function_space(), name="Upper bound temperature")
+    T_lb = Function(inverse_problem["control"].function_space(), name="Lower bound temperature")
+    T_ub = Function(inverse_problem["control"].function_space(), name="Upper bound temperature")
     T_lb.assign(0.0)
     T_ub.assign(1.0)
 
-    minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
+    minimisation_problem = MinimizationProblem(inverse_problem["reduced_functional"], bounds=(T_lb, T_ub))
 
     # Here we limit the number of optimisation iterations to 10, for CI and demo tractability.
     minimisation_parameters["Status Test"]["Iteration Limit"] = 10
@@ -229,13 +258,53 @@ def inverse(alpha_u, alpha_d, alpha_s):
         minimisation_parameters,
         checkpoint_dir="optimisation_checkpoint",
     )
-    optimiser.add_callback(callback)
+    optimiser.add_callback(inverse_problem["callback"])
     optimiser.run()
 
     # If we're performing mulitple successive optimisations, we want
     # to ensure the annotations are switched back on for the next code
     # to use them
     continue_annotation()
+
+
+def taylor_test(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
+    """
+    Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
+
+    This function clears the current tape of any previous operations, sets up the inverse problem
+    with specified regularization parameters, generates a random perturbation for the control variable,
+    and performs a Taylor test to ensure the gradient is correct. Finally, it ensures that annotations
+    are switched back on for any subsequent tests.
+
+    Returns:
+        minconv (float): The minimum convergence rate from the Taylor test.
+    """
+
+    # Clear the tape of any previous operations to ensure
+    # the adjoint reflects the forward problem we solve here
+    tape = get_working_tape()
+    tape.clear_tape()
+
+    # For solving the inverse problem we the reduced functional, any callback functions,
+    # and the initial guess for the control variable
+    inverse_problem = generate_inverse_problem(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
+
+    # generate perturbation for the control variable
+    delta_temp = Function(inverse_problem["control"].function_space(), name="Delta_Temperature")
+    delta_temp.dat.data[:] = np.random.random(delta_temp.dat.data.shape)
+
+    # Perform a taylor test to ensure the gradient is correct
+    minconv = taylor_test(
+        inverse_problem["reduced_functional"],
+        inverse_problem["control"],
+        delta_temp
+    )
+
+    # If we're performing mulitple successive tests we want
+    # to ensure the annotations are switched back on for the next code to use them
+    continue_annotation()
+
+    return minconv
 
 
 if __name__ == "__main__":
