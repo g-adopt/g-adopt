@@ -411,13 +411,19 @@ ice_load = ramp * rho_ice * g * Hice * disc
 # Setup boundary conditions
 exterior_density = conditional(time < t2_load, rho_ice*disc, 0)
 stokes_bcs = {
-    bottom_id: {'uy': 0},
-    top_id: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - exterior_density}},
-    1: {'ux': 0},
-    2: {'ux': 0},
+    bottom_id: {"uy": 0},
+    top_id: {
+        "normal_stress": ice_load,
+        "free_surface": {
+            "rho_ext": exterior_density,
+            "include_buoyancy_effects": False,
+        },
+    },
+    1: {"ux": 0},
+    2: {"ux": 0},
 }
 
-gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
 # -
 
 
@@ -425,15 +431,20 @@ gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
 # needed for the viscoelastic loading problem.
 
 
-approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
+approximation = Approximation(
+    "SDVA",
+    dimensional=True,
+    parameters={"G": shear_modulus, "g": g, "mu": viscosity, "rho": density},
+)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `z` and various fields
 # needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
-stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
-                                         dt, bcs=stokes_bcs)
+stokes_solver = ViscoelasticSolver(
+    z, displacement, stress_old, approximation, dt, bcs=stokes_bcs
+)
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 

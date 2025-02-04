@@ -13,7 +13,7 @@ from typing import Any, Callable
 from firedrake import *
 
 from . import scalar_equation as scalar_eq
-from .approximations import BaseApproximation
+from .approximations import Approximation
 from .equations import Equation
 from .time_stepper import RungeKuttaTimeIntegrator
 from .utility import DEBUG, INFO, absv, is_continuous, log, log_level
@@ -350,7 +350,7 @@ class EnergySolver(GenericTransportBase):
         self,
         solution: Function,
         u: Function,
-        approximation: BaseApproximation,
+        approximation: Approximation,
         /,
         delta_t: Constant,
         timestepper: RungeKuttaTimeIntegrator,
@@ -364,21 +364,32 @@ class EnergySolver(GenericTransportBase):
         self.T_old = self.solution_old
 
     def set_equation(self) -> None:
-        rho_cp = self.approximation.rhocp()
+        rho_cp = self.approximation.rho * self.approximation.cp
 
+        terms = ["advection", "diffusion"]
         self.eq_attrs |= {
             "advective_velocity_scaling": rho_cp,
-            "diffusivity": self.approximation.kappa(),
-            "reference_for_diffusion": self.approximation.Tbar,
-            "sink_coeff": self.approximation.linearized_energy_sink(self.u),
-            "source": self.approximation.energy_source(self.u),
+            "diffusivity": self.approximation.k,
+            "reference_for_diffusion": self.approximation.T,
             "u": self.u,
         }
+
+        if self.approximation.adiabatic_compression != 0:
+            terms.append("sink")
+            self.eq_attrs["sink_coeff"] = self.approximation.linearized_energy_sink(
+                self.u
+            )
+        if (
+            self.approximation.heat_source != 0
+            or self.approximation.viscous_dissipation_factor != 0
+        ):
+            terms.append("source")
+            self.eq_attrs["source"] = self.approximation.energy_source(self.u)
 
         self.equation = Equation(
             self.test,
             self.solution_space,
-            residual_terms=self.terms_mapping.values(),
+            residual_terms=[self.terms_mapping[term] for term in terms],
             mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
             eq_attrs=self.eq_attrs,
             approximation=self.approximation,
