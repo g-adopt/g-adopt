@@ -44,7 +44,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
     # evaluate P_lm node-wise using scipy lpmv
     l, m, eps_c, eps_s = 3, 2, 0.01, 0.01
     Plm = Function(Q, name="P_lm")
-    cos_phi = interpolate(cos(phi), Q)
+    cos_phi = Function(Q).interpolate(cos(phi))
     Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
     Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
     if m == 0:

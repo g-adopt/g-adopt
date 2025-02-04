@@ -136,17 +136,17 @@ def model(level, k, nn, do_write=False):
     solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
 
     # compute u analytical and error
-    uxy = interpolate(as_vector((X[0], X[1])), V)
+    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
     u_anal = Function(V, name="AnalyticalVelocity")
     u_anal.dat.data[:] = [solution.velocity_cartesian(xyi) for xyi in uxy.dat.data]
 
     # compute p analytical and error
-    pxy = interpolate(as_vector((X[0], X[1])), Wvec)
+    pxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
     p_anal = Function(W, name="AnalyticalPressure")
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
 
     # compute eta analytical and error
-    etaxy = interpolate(as_vector((X[0], X[1])), Wvec)
+    etaxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
     eta_anal = Function(W, name="AnalyticalEta")
     eta_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in etaxy.dat.data]
 
