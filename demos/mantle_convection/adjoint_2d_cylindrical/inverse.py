@@ -26,7 +26,83 @@ from gadopt.inverse import *
 import numpy as np
 
 
-def generate_inverse_problem(alpha_u, alpha_d, alpha_s):
+def inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
+    # Clear the tape of any previous operations to ensure
+    # the adjoint reflects the forward problem we solve here
+    tape = get_working_tape()
+    tape.clear_tape()
+
+    # For solving the inverse problem we the reduced functional, any callback functions,
+    # and the initial guess for the control variable
+    inverse_problem = generate_inverse_problem(alpha_u=alpha_u, alpha_d=alpha_d, alpha_s=alpha_s)
+
+    # Perform a bounded nonlinear optimisation where temperature
+    # is only permitted to lie in the range [0, 1]
+    T_lb = Function(inverse_problem["control"].function_space(), name="Lower bound temperature")
+    T_ub = Function(inverse_problem["control"].function_space(), name="Upper bound temperature")
+    T_lb.assign(0.0)
+    T_ub.assign(1.0)
+
+    minimisation_problem = MinimizationProblem(inverse_problem["reduced_functional"], bounds=(T_lb, T_ub))
+
+    # Here we limit the number of optimisation iterations to 10, for CI and demo tractability.
+    minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+
+    optimiser = LinMoreOptimiser(
+        minimisation_problem,
+        minimisation_parameters,
+        checkpoint_dir="optimisation_checkpoint",
+    )
+    optimiser.add_callback(inverse_problem["callback"])
+    optimiser.run()
+
+    # If we're performing mulitple successive optimisations, we want
+    # to ensure the annotations are switched back on for the next code
+    # to use them
+    continue_annotation()
+
+
+def taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
+    """
+    Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
+
+    This function clears the current tape of any previous operations, sets up the inverse problem
+    with specified regularization parameters, generates a random perturbation for the control variable,
+    and performs a Taylor test to ensure the gradient is correct. Finally, it ensures that annotations
+    are switched back on for any subsequent tests.
+
+    Returns:
+        minconv (float): The minimum convergence rate from the Taylor test.
+    """
+
+    # Clear the tape of any previous operations to ensure
+    # the adjoint reflects the forward problem we solve here
+    tape = get_working_tape()
+    tape.clear_tape()
+
+    # For solving the inverse problem we the reduced functional, any callback functions,
+    # and the initial guess for the control variable
+    inverse_problem = generate_inverse_problem(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
+
+    # generate perturbation for the control variable
+    delta_temp = Function(inverse_problem["control"].function_space(), name="Delta_Temperature")
+    delta_temp.dat.data[:] = np.random.random(delta_temp.dat.data.shape)
+
+    # Perform a taylor test to ensure the gradient is correct
+    minconv = taylor_test(
+        inverse_problem["reduced_functional"],
+        inverse_problem["control"],
+        delta_temp
+    )
+
+    # If we're performing mulitple successive tests we want
+    # to ensure the annotations are switched back on for the next code to use them
+    continue_annotation()
+
+    return minconv
+
+
+def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     """
     Use adjoint-based optimisation to solve for the initial condition of the cylindrical
     problem.
@@ -74,6 +150,7 @@ def generate_inverse_problem(alpha_u, alpha_d, alpha_s):
     # Without a restart to continue from, our initial guess is the final state of the forward run
     # We need to project the state from Q2 into Q1
     Tic = Function(Q1, name="Initial Temperature")
+    T_0 = Function(Q, name="T_0")  # Temperature for zeroth time-step
     Taverage = Function(Q1, name="Average Temperature")
 
     checkpoint_file = CheckpointFile("Checkpoint_State.h5", "r")
@@ -158,20 +235,27 @@ def generate_inverse_problem(alpha_u, alpha_d, alpha_s):
     # Control variable for optimisation
     control = Control(Tic)
 
-    u_misfit = 0.0
+    # If we are using surface veolocit misfit in the functional
+    if alpha_u > 0:
+        u_misfit = 0.0
 
     # We need to project the initial condition from Q1 to Q2,
     # and impose the boundary conditions at the same time
-    T.project(Tic, bcs=energy_solver.strong_bcs)
+    T_0.project(Tic, bcs=energy_solver.strong_bcs)
+    T.assign(T_0)
+
+    # if the weighting for misfit terms non-positive, then no need to integrate in time
+    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # Populate the tape by running the forward simulation
-    for timestep in range(0, max_timesteps):
+    for timestep in range(min_timesteps, max_timesteps):
         stokes_solver.solve()
         energy_solver.solve()
 
-        # Update the accumulated surface velocity misfit using the observed value
-        uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=timestep)
-        u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
+        if alpha_u > 0.0:
+            # Update the accumulated surface velocity misfit using the observed value
+            uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=timestep)
+            u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
 
     # Load the observed final state
     Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
@@ -187,23 +271,35 @@ def generate_inverse_problem(alpha_u, alpha_d, alpha_s):
 
     checkpoint_file.close()
 
+    # Initiate the objective functional
+    objective = 0.0
+
+    # Calculate the norms of the observed temperature, it will be used in multiple spots later
+    if any([w > 0 for w in [alpha_u, alpha_d, alpha_s]]):
+        norm_obs = assemble(Tobs**2 * dx)
+
     # Define the component terms of the overall objective functional
-    damping = assemble((Tic - Taverage) ** 2 * dx)
-    norm_damping = assemble(Taverage**2 * dx)
-    smoothing = assemble(dot(grad(Tic - Taverage), grad(Tic - Taverage)) * dx)
-    norm_smoothing = assemble(dot(grad(Tobs), grad(Tobs)) * dx)
-    norm_obs = assemble(Tobs**2 * dx)
-    norm_u_surface = assemble(dot(uobs, uobs) * ds_t)
+    # Temperature term
+    if alpha_T > 0:
+        # Temperature misfit between solution and observation
+        objective += Constant(alpha_T) * assemble((T - Tobs) ** 2 * dx)
 
-    # Temperature misfit between solution and observation
-    t_misfit = assemble((T - Tobs) ** 2 * dx)
+    # Velocity misfit term
+    if alpha_u > 0:
+        norm_u_surface = assemble(dot(uobs, uobs) * ds_t)  # measure of u_obs from the last timestep
+        objective += Constant(alpha_u) * (norm_obs * u_misfit / (max_timesteps - min_timesteps) / norm_u_surface)
 
-    objective = (
-        t_misfit +
-        alpha_u * (norm_obs * u_misfit / max_timesteps / norm_u_surface) +
-        alpha_d * (norm_obs * damping / norm_damping) +
-        alpha_s * (norm_obs * smoothing / norm_smoothing)
-    )
+    # Damping term
+    if alpha_d > 0:
+        damping = assemble((T_0 - Taverage) ** 2 * dx)
+        norm_damping = assemble((T_obs - Taverage)**2 * dx)
+        objective += Constant(alpha_d) * (norm_obs * damping / norm_damping)
+
+    # Smoothing term
+    if alpha_s > 0:
+        smoothing = assemble(dot(grad(T_0 - Taverage), grad(Tic - Taverage)) * dx)
+        norm_smoothing = assemble(dot(grad(Tobs - Taverage), grad(Tobs - Taverage)) * dx)
+        objective += Constant(alpha_s) * (norm_obs * smoothing / norm_smoothing)
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
@@ -229,82 +325,6 @@ def generate_inverse_problem(alpha_u, alpha_d, alpha_s):
     inverse_problem["callback"] = callback
 
     return inverse_problem
-
-
-def inverse(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
-    # Clear the tape of any previous operations to ensure
-    # the adjoint reflects the forward problem we solve here
-    tape = get_working_tape()
-    tape.clear_tape()
-
-    # For solving the inverse problem we the reduced functional, any callback functions,
-    # and the initial guess for the control variable
-    inverse_problem = generate_inverse_problem(alpha_u=alpha_u, alpha_d=alpha_d, alpha_s=alpha_s)
-
-    # Perform a bounded nonlinear optimisation where temperature
-    # is only permitted to lie in the range [0, 1]
-    T_lb = Function(inverse_problem["control"].function_space(), name="Lower bound temperature")
-    T_ub = Function(inverse_problem["control"].function_space(), name="Upper bound temperature")
-    T_lb.assign(0.0)
-    T_ub.assign(1.0)
-
-    minimisation_problem = MinimizationProblem(inverse_problem["reduced_functional"], bounds=(T_lb, T_ub))
-
-    # Here we limit the number of optimisation iterations to 10, for CI and demo tractability.
-    minimisation_parameters["Status Test"]["Iteration Limit"] = 10
-
-    optimiser = LinMoreOptimiser(
-        minimisation_problem,
-        minimisation_parameters,
-        checkpoint_dir="optimisation_checkpoint",
-    )
-    optimiser.add_callback(inverse_problem["callback"])
-    optimiser.run()
-
-    # If we're performing mulitple successive optimisations, we want
-    # to ensure the annotations are switched back on for the next code
-    # to use them
-    continue_annotation()
-
-
-def taylor_test(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
-    """
-    Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
-
-    This function clears the current tape of any previous operations, sets up the inverse problem
-    with specified regularization parameters, generates a random perturbation for the control variable,
-    and performs a Taylor test to ensure the gradient is correct. Finally, it ensures that annotations
-    are switched back on for any subsequent tests.
-
-    Returns:
-        minconv (float): The minimum convergence rate from the Taylor test.
-    """
-
-    # Clear the tape of any previous operations to ensure
-    # the adjoint reflects the forward problem we solve here
-    tape = get_working_tape()
-    tape.clear_tape()
-
-    # For solving the inverse problem we the reduced functional, any callback functions,
-    # and the initial guess for the control variable
-    inverse_problem = generate_inverse_problem(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
-
-    # generate perturbation for the control variable
-    delta_temp = Function(inverse_problem["control"].function_space(), name="Delta_Temperature")
-    delta_temp.dat.data[:] = np.random.random(delta_temp.dat.data.shape)
-
-    # Perform a taylor test to ensure the gradient is correct
-    minconv = taylor_test(
-        inverse_problem["reduced_functional"],
-        inverse_problem["control"],
-        delta_temp
-    )
-
-    # If we're performing mulitple successive tests we want
-    # to ensure the annotations are switched back on for the next code to use them
-    continue_annotation()
-
-    return minconv
 
 
 if __name__ == "__main__":
