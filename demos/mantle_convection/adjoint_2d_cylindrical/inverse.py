@@ -82,7 +82,7 @@ def taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
 
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
-    inverse_problem = generate_inverse_problem(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1)
+    inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s)
 
     # generate perturbation for the control variable
     delta_temp = Function(inverse_problem["control"].function_space(), name="Delta_Temperature")
