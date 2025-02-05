@@ -292,7 +292,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     # Damping term
     if alpha_d > 0:
         damping = assemble((T_0 - Taverage) ** 2 * dx)
-        norm_damping = assemble((T_obs - Taverage)**2 * dx)
+        norm_damping = assemble((Tobs - Taverage)**2 * dx)
         objective += Constant(alpha_d) * (norm_obs * damping / norm_damping)
 
     # Smoothing term
