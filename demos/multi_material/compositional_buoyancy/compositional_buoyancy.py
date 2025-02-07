@@ -72,7 +72,6 @@ left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Stokes function space (mixed)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space for time step
 
@@ -80,7 +79,6 @@ z = Function(Z)  # A field over the mixed function space Z
 u, p = split(z)  # Symbolic UFL expressions for velocity and pressure
 z.subfunctions[0].rename("Velocity")  # Associated Firedrake velocity function
 z.subfunctions[1].rename("Pressure")  # Associated Firedrake pressure function
-T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
@@ -149,17 +147,8 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 
 
 # +
-buoyant_material = Material(RaB=-1)  # Vertical direction is flipped in the benchmark
-dense_material = Material(RaB=0)
-materials = [buoyant_material, dense_material]
-
-Ra = 0  # Thermal Rayleigh number
-
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
-
-approximation = BoussinesqApproximation(Ra, RaB=RaB)
+Ra_c = field_interface([psi], [Ra_c_buoyant := 0, Ra_c_dense := 1], method="sharp")
+approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -201,7 +190,7 @@ output_file = VTKFile("output.pvd")
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z)
 
 material_area = material_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
@@ -216,11 +205,9 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 # +
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
     bcs=stokes_bcs,
-    nullspace=Z_nullspace,
-    transpose_nullspace=Z_nullspace,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
 )
 
 subcycles = 1  # Number of advection solves to perform within one time step
@@ -239,7 +226,7 @@ time_end = 2000
 while True:
     # Write output
     if time_now >= output_counter * output_frequency:
-        output_file.write(*z.subfunctions, T, psi)
+        output_file.write(*z.subfunctions, psi)
         output_counter += 1
 
     # Update timestep
@@ -276,7 +263,6 @@ plog.close()
 
 with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
-    final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
     final_checkpoint.save_function(psi, name="Level set")
 # -

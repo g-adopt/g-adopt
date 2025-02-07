@@ -224,8 +224,7 @@ z.subfunctions[1].rename("Pressure")
 # allowing the simulation to exit when a steady-state has been achieved.
 
 # +
-Ra = Constant(1e4)  # Rayleigh number
-approximation = BoussinesqApproximation(Ra)
+approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1e4})
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
@@ -312,7 +311,7 @@ output_frequency = 50
 plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 # -
 
 # We finally come to solving the variational problem, with solver
@@ -330,9 +329,14 @@ gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             constant_jacobian=True)
+stokes_solver = StokesSolver(
+    z,
+    approximation,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+)
 # -
 
 # We can now initiate the time-loop, with the Stokes and energy

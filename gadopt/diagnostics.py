@@ -42,22 +42,23 @@ class GeodynamicalDiagnostics:
     def __init__(
         self,
         z: Function,
-        T: Function,
-        bottom_id: int,
-        top_id: int,
+        T: Function = 0,
+        /,
+        *,
+        bottom_id: int = None,
+        top_id: int = None,
         quad_degree: int = 4,
-    ):
+    ) -> None:
         mesh = extract_unique_domain(z)
 
         self.u, self.p, *_ = z.subfunctions
         self.T = T
 
         self.dx = dx(domain=mesh, degree=quad_degree)
-        self.ds = (
-            CombinedSurfaceMeasure(mesh, quad_degree)
-            if T.function_space().extruded
-            else ds(mesh)
-        )
+        if self.u.function_space().extruded:
+            self.ds = CombinedSurfaceMeasure(mesh, quad_degree)
+        else:
+            self.ds = ds(mesh)
         self.ds_t = self.ds(top_id)
         self.ds_b = self.ds(bottom_id)
 

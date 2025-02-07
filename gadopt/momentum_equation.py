@@ -23,7 +23,7 @@ and then return `-F`.
 from firedrake import *
 
 from .equations import Equation, interior_penalty_factor
-from .utility import is_continuous, normal_is_continuous, tensor_jump
+from .utility import is_continuous, normal_is_continuous, tensor_jump, upward_normal
 
 
 def viscosity_term(
@@ -48,13 +48,15 @@ def viscosity_term(
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
+    m = getattr(eq, "m", ())
+    stress_old = getattr(eq, "stress_old", 0.0)
+    stress = eq.approximation.stress(trial, m=m, stress_old=stress_old)
+    F = inner(nabla_grad(eq.test), stress) * eq.dx
+
     dim = eq.mesh.geometric_dimension()
     identity = Identity(dim)
-    compressible_stress = eq.approximation.compressible
-
     mu = eq.approximation.mu
-    stress = eq.stress
-    F = inner(nabla_grad(eq.test), stress) * eq.dx
+    compressible_stress = "compressible_stress" in eq.approximation.momentum_components
 
     sigma = interior_penalty_factor(eq)
     sigma *= FacetArea(eq.mesh) / avg(CellVolume(eq.mesh))
@@ -146,12 +148,26 @@ def pressure_gradient_term(
     return -F
 
 
+def momentum_source_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+    p = getattr(eq, "p", 0.0)
+    T = getattr(eq, "T", 0.0)
+    displ = getattr(eq, "displ", 0.0)
+
+    source = eq.approximation.buoyancy(p=p, T=T, displ=displ) * upward_normal(eq.mesh)
+
+    F = -dot(eq.test, source) * eq.dx
+
+    return -F
+
+
 def divergence_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     assert normal_is_continuous(eq.u)
 
-    rho = eq.rho_mass
+    rho = eq.approximation.rho_flux
     F = -dot(eq.test, div(rho * eq.u)) * eq.dx
 
     # Add boundary integral for bcs that specify the normal component of u.
@@ -164,23 +180,17 @@ def divergence_term(
     return -F
 
 
-def momentum_source_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
-    F = -dot(eq.test, eq.source) * eq.dx
-
-    return -F
-
-
-viscosity_term.required_attrs = {"stress"}
-viscosity_term.optional_attrs = {"interior_penalty"}
+viscosity_term.required_attrs = set()
+viscosity_term.optional_attrs = {"m", "stress_old", "interior_penalty"}
 pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
-divergence_term.required_attrs = {"u", "rho_mass"}
+momentum_source_term.required_attrs = set()
+momentum_source_term.optional_attrs = {"p", "T", "displ"}
+divergence_term.required_attrs = {"u"}
 divergence_term.optional_attrs = set()
-momentum_source_term.required_attrs = {"source"}
-momentum_source_term.optional_attrs = set()
 
-residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]
+residual_terms_momentum = [viscosity_term, pressure_gradient_term, momentum_source_term]
 residual_terms_mass = divergence_term
 residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]
+
+residual_terms_compressible_viscoelastic = [momentum_source_term, viscosity_term]

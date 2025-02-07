@@ -1,481 +1,374 @@
-r"""This module provides classes that emulate physical approximations of fluid dynamics
-systems by exposing methods to calculate specific terms in the corresponding
-mathematical equations. Users instantiate the appropriate class by providing relevant
-parameters and pass the instance to other objects, such as solvers. Under the hood,
-G-ADOPT queries variables and methods from the approximation.
+"""This module provides the Approximation class that emulates physical approximations
+of fluid dynamics systems by exposing methods to calculate specific term components in
+the corresponding mathematical equations. Users instantiate the class by providing
+appropriate parameters and pass the instance to other objects, usually solvers. Under
+the hood, G-ADOPT queries attributes and methods from the approximation.
 
 """
 
-import abc
 from numbers import Number
-from typing import Optional
+from typing import Any
 
-from firedrake import Function, Identity, div, grad, inner, sym, ufl
+import firedrake as fd
+from firedrake.ufl_expr import extract_unique_domain
 
 from .utility import ensure_constant, vertical_component
 
-__all__ = [
-    "BoussinesqApproximation",
-    "ExtendedBoussinesqApproximation",
-    "TruncatedAnelasticLiquidApproximation",
-    "AnelasticLiquidApproximation"
-]
 
+class Approximation:
+    """Constructs the equation approximation by defining relevant term components.
 
-class BaseApproximation(abc.ABC):
-    """Base class to provide expressions for the coupled Stokes and Energy system.
+    Implemented approximations include Boussinesq (BA), Extended Boussinesq (EBA),
+    Truncated Anelastic Liquid (TALA), and Anelastic Liquid (ALA). Additionally, an
+    approximation for the small displacement viscoelastic limit (SDVA) is included (see
+    below).
 
-    The basic assumption is that we are solving (to be extended when needed)
+    The system of conservation equations implemented is:
+        - mass -> div(rho * u) = 0;
+        - momentum -> -grad(p) + div(stress(u)) + buoyancy(p, T) * khat = 0;
+        - energy -> rho * cp * DT/Dt + linearized_energy_sink(u) * T
+          = div(k * grad(Tbar + T)) + energy_source(u);
 
-        div(dev_stress) + grad p + buoyancy(T, p) * khat = 0
-        div(rho_continuity * u) = 0
-        rhocp DT/Dt + linearized_energy_sink(u) * T
-          = div(kappa * grad(Tbar + T)) + energy_source(u)
+    where the following terms are provided as methods:
+        - buoyancy(p, T)
+            = thermal_buoyancy * T - compressible_buoyancy * p - compositional_buoyancy
+        - stress(u)
+            = mu * sym(grad(u)) (BA/EBA)
+            = mu * [sym(grad(u) - 2/3 div(u)] (TALA/ALA)
+        - linearized_energy_sink(u)
+            = 0 (BA)
+            = Di * rho * alpha * g * w (EBA/TALA/ALA)
+        - viscous_dissipation(u)
+            = 0 (BA)
+            = Di / Ra * inner(stress(u) * grad(u)) (EBA/TALA/ALA)
+        - energy_source(u)
+            = viscous_dissipation(u) + Q
 
-    where the following terms are provided by Approximation methods:
+    Small Displacement Viscoelastic Approximation
+    ---------------------------------------------
+    By assuming a small displacement, we can linearise the problem, assuming a
+    perturbation away from a reference state. We assume a Maxwell viscoelastic rheology,
+    i.e. stress is the same but viscous and elastic strains combine linearly. We follow
+    the approach by Zhong et al. (2003) redefining the problem in terms of incremental
+    displacement, i.e. velocity * dt, where dt is the timestep. This produces a mixed
+    Stokes system for incremental displacement and pressure which can be solved in the
+    same way as mantle convection (where unknowns are velocity and pressure), with a
+    modified viscosity and a stress term accounting for the deviatoric stress at the
+    previous timestep.
 
-    - linearized_energy_sink(u) = 0 (BA), Di * rhobar * alphabar * g * w (EBA),
-      or Di * rhobar * alphabar * w (TALA/ALA)
-    - kappa() is diffusivity or conductivity depending on rhocp()
-    - Tbar is 0 or reference temperature profile (ALA)
-    - dev_stress depends on the compressible property (False or True):
-        - if compressible then dev_stress = mu * [sym(grad(u) - 2/3 div(u)]
-        - if not compressible then dev_stress = mu * sym(grad(u)) and
-          rho_continuity is assumed to be 1
+    When using SDVA in a non-dimensional system, one must define a Weissenberg number
+    (Wei). In the current G-ADOPT implementation of viscoelasticity, this number is
+    expressed as:
+    Wei = rho * g * d * (1 / G + dt / 2 / mu),
+    where d is the characteristic length scale, dt is the simulation time step, and all
+    other parameters are listed below.
 
+    Zhong, S., Paulson, A., & Wahr, J. (2003).
+    Three-dimensional finite-element modelling of Earth's viscoelastic deformation:
+    effects of lateral variations in lithospheric thickness.
+    Geophysical Journal International, 155(2), 679-695.
+
+    *Parameters (name: physical meaning)*
+        1. Reference dimensional parameters
+            H: specific heat source
+            kappa: thermal diffusivity
+            rho_material: material (compositional) density
+        2. Non-dimensional parameters
+            Di: dissipation number
+            Gamma: Grüneisen parameter
+            Q: non-dimensional heat source
+            Ra: Rayleigh number
+            Ra_c: compositional Rayleigh number
+            Wei: Weissenberg number (only used in SDVA)
+        3. Reference profiles
+            alpha: coefficient of thermal expansion (considered constant under BA)
+            chi: isothermal compressibility
+            cp: isobaric specific heat capacity (considered constant under BA)
+            G: shear modulus (only used in SDVA)
+            g: acceleration of gravity
+            K: bulk modulus (only used in CIVA)
+            k: thermal conductivity
+            mu: dynamic viscosity
+            rho: density (considered constant under BA)
+            T: temperature (considered constant under BA)
+
+    Reference profiles represent parameters that admit depth-dependent variations along
+    the hydrostatic adiabat. These parameters arise both in the dimensional and
+    non-dimensional equation systems. Depending on the selected approximation, some
+    parameters should have constant reference profiles. For example, only the
+    acceleration of gravity, the dynamic viscosity, and the thermal conductivity should
+    have depth-dependent variations under the Boussinesq approximation.
     """
 
-    @property
-    @abc.abstractmethod
-    def compressible(self) -> bool:
-        """Defines compressibility.
+    _presets = ["BA", "EBA", "TALA", "ALA", "SDVA", "CIVA"]
+    _equations = ["momentum", "mass", "energy"]
 
-        Returns:
-          A boolean signalling if the governing equations are in compressible form.
+    _momentum_components = {}
+    _momentum_components["BA"] = ["compositional_buoyancy", "thermal_buoyancy"]
+    _momentum_components["EBA"] = _momentum_components["BA"]
+    _momentum_components["TALA"] = _momentum_components["EBA"] + ["compressible_stress"]
+    _momentum_components["ALA"] = _momentum_components["TALA"] + [
+        "compressible_buoyancy"
+    ]
+    _momentum_components["SDVA"] = ["viscoelastic_buoyancy"]
+    _momentum_components["CIVA"] = _momentum_components["SDVA"] + [
+        "compressible_stress"
+    ]
 
-        """
-        pass
+    _mass_components = {}
+    _mass_components["BA"] = ["volume_continuity"]
+    _mass_components["EBA"] = _mass_components["BA"]
+    _mass_components["TALA"] = ["mass_continuity"]
+    _mass_components["ALA"] = _mass_components["TALA"]
+    _mass_components["SDVA"] = ["volume_continuity"]
 
-    @abc.abstractmethod
-    def stress(self, u: Function) -> ufl.core.expr.Expr:
-        """Defines the deviatoric stress.
-
-        Returns:
-          A UFL expression for the deviatoric stress.
-
-        """
-        pass
-
-    @abc.abstractmethod
-    def buoyancy(self, p: Function, T: Function) -> ufl.core.expr.Expr:
-        """Defines the buoyancy force.
-
-        Returns:
-          A UFL expression for the buoyancy term (momentum source in gravity direction).
-
-        """
-        pass
-
-    @abc.abstractmethod
-    def rho_continuity(self) -> ufl.core.expr.Expr:
-        """Defines density.
-
-        Returns:
-          A UFL expression for density in the mass continuity equation.
-
-        """
-        pass
-
-    @abc.abstractmethod
-    def rhocp(self) -> ufl.core.expr.Expr:
-        """Defines the volumetric heat capacity.
-
-        Returns:
-          A UFL expression for the volumetric heat capacity in the energy equation.
-
-        """
-        pass
-
-    @abc.abstractmethod
-    def kappa(self) -> ufl.core.expr.Expr:
-        """Defines thermal diffusivity.
-
-        Returns:
-          A UFL expression for thermal diffusivity.
-
-        """
-        pass
-
-    @property
-    @abc.abstractmethod
-    def Tbar(self) -> Function:
-        """Defines the reference temperature profile.
-
-        Returns:
-          A Firedrake function for the reference temperature profile.
-
-        """
-        pass
-
-    @abc.abstractmethod
-    def linearized_energy_sink(self, u) -> ufl.core.expr.Expr:
-        """Defines temperature-related sink terms.
-
-        Returns:
-          A UFL expression for temperature-related sink terms in the energy equation.
-
-        """
-        pass
-
-    @abc.abstractmethod
-    def energy_source(self, u) -> ufl.core.expr.Expr:
-        """Defines additional terms.
-
-        Returns:
-          A UFL expression for additional independent terms in the energy equation.
-
-        """
-        pass
-
-    @abc.abstractmethod
-    def free_surface_terms(self, p, T, eta, theta_fs) -> tuple[ufl.core.expr.Expr]:
-        """Defines free surface normal stress in the momentum equation and prefactor
-        multiplying the free surface equation.
-
-        The normal stress depends on the density contrast across the free surface.
-        Depending on the `variable_rho_fs` argument, this contrast either involves the
-        interior reference density or the full interior density that accounts for
-        changes in temperature and composition within the domain. For dimensional
-        simulations, the user should specify `delta_rho_fs`, defined as the difference
-        between the reference interior density and the exterior density. For
-        non-dimensional simulations, the user should specify `RaFS`, the equivalent of
-        the Rayleigh number for the density contrast across the free surface.
-
-        The prefactor multiplies the free surface equation to ensure the top-right and
-        bottom-left corners of the block matrix remain symmetric. This is similar to
-        rescaling eta -> eta_tilde in Kramer et al. (2012, see block matrix shown in
-        Eq. 23).
-
-        Returns:
-          A UFL expression for the free surface normal stress and a UFL expression for
-          the free surface equation prefactor.
-
-        """
-        pass
-
-
-class BoussinesqApproximation(BaseApproximation):
-    """Expressions for the Boussinesq approximation.
-
-    Density variations are considered small and only affect the buoyancy term. Reference
-    parameters are typically constant. Viscous dissipation is neglected (Di << 1).
-
-    Arguments:
-      Ra:        Rayleigh number
-      mu:        dynamic viscosity
-      rho:       reference density
-      alpha:     coefficient of thermal expansion
-      T0:        reference temperature
-      g:         gravitational acceleration
-      RaB:       compositional Rayleigh number; product of the Rayleigh and buoyancy numbers
-      delta_rho: compositional density difference from the reference density
-      kappa:     thermal diffusivity
-      H:         internal heating rate
-
-    Note:
-      The thermal diffusivity, gravitational acceleration, reference
-      density, and coefficient of thermal expansion are normally kept
-      at 1 when non-dimensionalised.
-
-    """
-    compressible = False
-    Tbar = 0
+    _energy_components = {}
+    _energy_components["BA"] = ["heat_source"]
+    _energy_components["EBA"] = _energy_components["BA"] + [
+        "adiabatic_compression",
+        "viscous_dissipation",
+    ]
+    _energy_components["TALA"] = _energy_components["EBA"]
+    _energy_components["ALA"] = _energy_components["TALA"]
 
     def __init__(
         self,
-        Ra: Function | Number,
+        preset_or_components: str | dict[str, list[str]],
+        /,
         *,
-        mu: Function | Number = 1,
-        rho: Function | Number = 1,
-        alpha: Function | Number = 1,
-        T0: Function | Number = 0,
-        g: Function | Number = 1,
-        RaB: Function | Number = 0,
-        delta_rho: Function | Number = 1,
-        kappa: Function | Number = 1,
-        H: Function | Number = 0,
-    ):
-        self.Ra = ensure_constant(Ra)
-        self.mu = ensure_constant(mu)
-        self.rho = ensure_constant(rho)
-        self.alpha = ensure_constant(alpha)
-        self.T0 = T0
-        self.g = ensure_constant(g)
-        self.kappa_ref = ensure_constant(kappa)
-        self.RaB = RaB
-        self.delta_rho = ensure_constant(delta_rho)
-        self.H = ensure_constant(H)
+        dimensional: bool,
+        parameters: dict[str, Number | fd.Constant | fd.Function] = {},
+    ) -> None:
+        if isinstance(preset_or_components, str):
+            assert preset_or_components in self._presets, "Unknown preset provided."
+            self.preset = preset_or_components
 
-    def stress(self, u):
-        return 2 * self.mu * sym(grad(u))
+            for equation in self._equations:
+                setattr(
+                    self,
+                    f"{equation}_components",
+                    getattr(self, f"_{equation}_components").get(self.preset),
+                )
+        else:
+            self.preset = None
 
-    def buoyancy(self, p, T):
-        return (
-            self.Ra * self.rho * self.alpha * (T - self.T0) * self.g
-            - self.RaB * self.delta_rho * self.g
+            for equation, components in preset_or_components.items():
+                assert equation in self._equations, "Unknown equation provided."
+                setattr(self, f"{equation}_components", components)
+
+        self.dimensional = dimensional
+        for parameter, value in parameters.items():
+            setattr(self, parameter, ensure_constant(value))
+
+        if not self.dimensional:
+            self.check_reference_profiles()
+
+        if getattr(self, "momentum_components", None) is not None:
+            self.set_buoyancy()
+            self.set_compressible_stress()
+
+        if getattr(self, "mass_components", None) is not None:
+            self.set_flux_divergence()
+
+        if getattr(self, "energy_components", None) is not None:
+            self.check_thermal_diffusion()
+
+            self.set_adiabatic_compression()
+            self.set_heat_source()
+            self.set_viscous_dissipation()
+
+    ####################################################################################
+
+    def check_reference_profiles(self) -> None:
+        """Ensures reference profiles are defined for non-dimensional systems."""
+        for attribute in ["alpha", "chi", "cp", "G", "g", "K", "k", "mu", "rho"]:
+            if not hasattr(self, attribute):
+                setattr(self, attribute, fd.Constant(1.0))
+
+        for attribute in ["T"]:
+            if not hasattr(self, attribute):
+                setattr(self, attribute, fd.Constant(0.0))
+
+    def check_thermal_diffusion(self) -> None:
+        """Ensures compatibility between parameters defining thermal diffusivity."""
+        if hasattr(self, "kappa"):
+            if all(
+                component not in self.energy_components
+                for component in ["adiabatic_compression", "viscous_dissipation"]
+            ):
+                self.k = self.kappa
+                self.cp = 1 / self.rho
+            elif hasattr(self, "k") and not hasattr(self, "cp"):
+                self.cp = self.k / self.rho / self.kappa
+            elif not hasattr(self, "k") and hasattr(self, "cp"):
+                self.k = self.kappa * self.rho * self.cp
+            else:
+                assert self.kappa == self.k / self.rho / self.cp
+
+    ####################################################################################
+
+    def set_adiabatic_compression(self) -> None:
+        """Defines the adiabatic compression factor in the energy conservation."""
+        self.adiabatic_compression = 0.0
+        if "adiabatic_compression" in self.energy_components:
+            self.adiabatic_compression = self.rho * self.alpha * self.g
+            if not self.dimensional:
+                self.adiabatic_compression *= self.Di
+
+    def set_buoyancy(self) -> None:
+        """Defines buoyancy factors in the momentum conservation."""
+        self.compositional_buoyancy = 0.0
+        if "compositional_buoyancy" in self.momentum_components:
+            if self.dimensional and hasattr(self, "rho_material"):
+                self.compositional_buoyancy = (self.rho_material - self.rho) * self.g
+            elif not self.dimensional and hasattr(self, "Ra_c"):
+                self.compositional_buoyancy = self.Ra_c * self.g
+
+        self.compressible_buoyancy = 0.0
+        if "compressible_buoyancy" in self.momentum_components:
+            # How does one obtain this term using chapter 7.02 of Treatise on
+            # Geophysics? The article mentions that specific heats should be equal under
+            # the anelastic liquid approximation.
+            self.compressible_buoyancy = self.rho * self.chi * self.g
+            if not self.dimensional:
+                self.compressible_buoyancy *= self.Di / self.Gamma
+
+        self.thermal_buoyancy = 0.0
+        if "thermal_buoyancy" in self.momentum_components:
+            if self.dimensional and hasattr(self, "alpha"):
+                self.thermal_buoyancy = self.rho * self.alpha * self.g
+            elif not self.dimensional and hasattr(self, "Ra"):
+                self.thermal_buoyancy = self.Ra * self.rho * self.alpha * self.g
+
+        self.viscoelastic_buoyancy = 0.0
+        if "viscoelastic_buoyancy" in self.momentum_components:
+            self.viscoelastic_buoyancy = fd.grad(self.rho) * self.g
+            if not self.dimensional:
+                self.viscoelastic_buoyancy *= self.Wei
+
+    def set_compressible_stress(self) -> None:
+        """Defines the compressible stress factor in the momentum conservation."""
+        self.compressible_stress = 0.0
+        if "compressible_stress" in self.momentum_components:
+            if self.preset == "CIVA":
+                self.compressible_stress = -self.K
+            else:
+                self.compressible_stress = 2 / 3 * self.mu
+
+    def set_heat_source(self) -> None:
+        """Defines the heat source term in the energy conservation."""
+        self.heat_source = 0.0
+        if "heat_source" in self.energy_components:
+            if self.dimensional and hasattr(self, "H"):
+                self.heat_source = self.rho * self.H
+            elif not self.dimensional and hasattr(self, "Q"):
+                self.heat_source = self.Q
+
+    def set_flux_divergence(self) -> None:
+        """Defines the density contribution to the flux in the mass conservation."""
+        if "volume_continuity" in self.mass_components:
+            self.rho_flux = 1.0
+        elif "mass_continuity" in self.mass_components:
+            self.rho_flux = self.rho
+        else:
+            raise ValueError("Unknown continuity equation.")
+
+    def set_viscous_dissipation(self) -> None:
+        """Defines the viscous dissipation factor used in the energy conservation."""
+        self.viscous_dissipation_factor = 0.0
+        if "viscous_dissipation" in self.energy_components:
+            self.viscous_dissipation_factor = 1.0
+            if not self.dimensional:
+                self.viscous_dissipation_factor *= self.Di / self.Ra
+
+    ####################################################################################
+
+    def buoyancy(
+        self,
+        *,
+        p: fd.ufl.indexed.Indexed | float = 0.0,
+        T: fd.Function | float = 0.0,
+        displ: fd.Function | float = 0.0,
+        params_fs: dict[str, Any] | None = None,
+    ) -> fd.ufl.algebra.Sum:
+        """Calculates the buoyancy term in the momentum conservation.
+
+        Either returns the buoyancy term for the interior of the domain or that of the
+        free surface described by `params_fs`.
+
+        Note: In a dimensional system, T represents the difference between actual
+        temperature and reference temperature.
+        """
+        if self.dimensional and self.thermal_buoyancy != 0:
+            T -= self.T
+
+        buoyancy = (  # Calculates domain interior buoyancy
+            self.thermal_buoyancy * T
+            - self.compressible_buoyancy * p
+            - self.compositional_buoyancy
+            + fd.inner(self.viscoelastic_buoyancy, displ)
         )
 
-    def rho_continuity(self):
-        return 1
+        if params_fs is not None:  # Calculates free-surface buoyancy
+            buoyancy_free_surface = (self.rho - params_fs.get("rho_ext", 0)) * self.g
+            if not self.dimensional:
+                buoyancy_free_surface *= params_fs["Ra_fs"]
+            if params_fs.get("include_buoyancy_effects", True):
+                buoyancy_free_surface -= buoyancy
 
-    def rhocp(self):
-        return 1
+            return buoyancy_free_surface
 
-    def kappa(self):
-        return self.kappa_ref
+        return buoyancy
 
-    def linearized_energy_sink(self, u):
-        return 0
+    def energy_source(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
+        """Calculates the energy source term in the energy conservation.
 
-    def energy_source(self, u):
-        return self.rho * self.H
+        Note: The energy source term includes the viscous dissipation contribution.
+        """
+        return self.viscous_dissipation(u) + self.heat_source
 
-    def free_surface_terms(
-        self, p, T, eta, theta_fs, *, variable_rho_fs=True, RaFS=1, delta_rho_fs=1
-    ):
-        free_surface_normal_stress = RaFS * delta_rho_fs * self.g * eta
-        if variable_rho_fs:
-            free_surface_normal_stress -= self.buoyancy(p, T) * eta
+    def linearized_energy_sink(
+        self, u: fd.ufl.indexed.Indexed
+    ) -> fd.ufl.algebra.Product:
+        """Calculates the energy sink term in the energy conservation."""
+        return self.adiabatic_compression * vertical_component(u)
 
-        prefactor = -theta_fs * RaFS * delta_rho_fs * self.g
+    def strain(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
+        """Calculates the strain term in the momentum conservation."""
+        identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
 
-        return free_surface_normal_stress, prefactor
+        incompressible_part = fd.sym(fd.grad(u))
+        compressible_part = -1 / 3 * fd.tr(incompressible_part) * identity
 
+        return incompressible_part + compressible_part
 
-class ExtendedBoussinesqApproximation(BoussinesqApproximation):
-    """Expressions for the extended Boussinesq approximation.
-
-    Extends the Boussinesq approximation by including viscous dissipation and work
-    against gravity (both scaled with Di).
-
-    Arguments:
-      Ra: Rayleigh number
-      Di: Dissipation number
-      mu: dynamic viscosity
-      H:  volumetric heat production
-
-    Other Arguments:
-      rho (Number):           reference density
-      alpha (Number):         coefficient of thermal expansion
-      T0 (Function | Number): reference temperature
-      g (Number):             gravitational acceleration
-      RaB (Number):           compositional Rayleigh number; product
-                              of the Rayleigh and buoyancy numbers
-      delta_rho (Number):     compositional density difference from
-                              the reference density
-      kappa (Number):         thermal diffusivity
-
-    Note:
-      The thermal diffusivity, gravitational acceleration, reference
-      density, and coefficient of thermal expansion are normally kept
-      at 1 when non-dimensionalised.
-
-    """
-    compressible = False
-
-    def __init__(self, Ra: Number, Di: Number, *, H: Optional[Number] = None, **kwargs):
-        super().__init__(Ra, **kwargs)
-        self.Di = Di
-        self.H = H
-
-    def viscous_dissipation(self, u):
-        phi = inner(self.stress(u), grad(u))
-        return phi * self.Di / self.Ra
-
-    def linearized_energy_sink(self, u):
-        w = vertical_component(u)
-        return self.Di * self.alpha * self.rho * self.g * w
-
-    def work_against_gravity(self, u, T):
-        return self.linearized_energy_sink(u) * T
-
-    def energy_source(self, u):
-        source = self.viscous_dissipation(u)
-        if self.H:
-            source += self.H * self.rho
-        return source
-
-
-class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
-    """Truncated Anelastic Liquid Approximation
-
-    Compressible approximation. Excludes linear dependence of density on pressure.
-
-    Arguments:
-      Ra:     Rayleigh number
-      Di:     Dissipation number
-      Tbar:   reference temperature. In the diffusion term we use Tbar + T (i.e. T is the pertubartion)
-      cp:     reference specific heat at constant pressure
-
-    Other Arguments:
-      rho (Number):           reference density
-      alpha (Number):         reference thermal expansion coefficient
-      T0 (Function | Number): reference temperature
-      g (Number):             gravitational acceleration
-      RaB (Number):           compositional Rayleigh number; product
-                              of the Rayleigh and buoyancy numbers
-      delta_rho (Number):     compositional density difference from
-                              the reference density
-      kappa (Number):         diffusivity
-      mu (Number):            viscosity used in viscous dissipation
-      H (Number):             volumetric heat production
-
-    Note:
-      Other keyword arguments may be depth-dependent, but default to 1 if not supplied.
-
-    """
-    compressible = True
-
-    def __init__(self,
-                 Ra: Number,
-                 Di: Number,
-                 *,
-                 Tbar: Function | Number = 0,
-                 cp: Function | Number = 1,
-                 **kwargs):
-        super().__init__(Ra, Di, **kwargs)
-        self.Tbar = Tbar
-        self.cp = cp
-
-    def stress(self, u):
-        stress = super().stress(u)
-        dim = len(u)  # Geometric dimension, i.e. 2D or 3D
-        return stress - 2/3 * self.mu * Identity(dim) * div(u)
-
-    def rho_continuity(self):
-        return self.rho
-
-    def rhocp(self):
-        return self.rho * self.cp
-
-
-class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
-    """Anelastic Liquid Approximation
-
-    Compressible approximation. Includes linear dependence of density on pressure.
-
-    Arguments:
-      Ra:     Rayleigh number
-      Di:     Dissipation number
-      chi:    reference isothermal compressibility
-      gamma0: Gruneisen number (in pressure-dependent buoyancy term)
-      cp0:    specific heat at constant *pressure*, reference for entire Mantle (in pressure-dependent buoyancy term)
-      cv0:    specific heat at constant *volume*, reference for entire Mantle (in pressure-dependent buoyancy term)
-
-    Other Arguments:
-      rho (Number):           reference density
-      alpha (Number):         reference thermal expansion coefficient
-      T0 (Function | Number): reference temperature
-      g (Number):             gravitational acceleration
-      RaB (Number):           compositional Rayleigh number; product
-                              of the Rayleigh and buoyancy numbers
-      delta_rho (Number):     compositional density difference from
-                              the reference density
-      kappa (Number):         diffusivity
-      mu (Number):            viscosity used in viscous dissipation
-      H (Number):             volumetric heat production
-      Tbar (Number):          reference temperature. In the diffusion
-                              term we use Tbar + T (i.e. T is the pertubartion)
-      cp (Number):            reference specific heat at constant pressure
-
-    """
-
-    def __init__(self,
-                 Ra: Number,
-                 Di: Number,
-                 *,
-                 chi: Function | Number = 1,
-                 gamma0: Function | Number = 1,
-                 cp0: Function | Number = 1,
-                 cv0: Function | Number = 1,
-                 **kwargs):
-        super().__init__(Ra, Di, **kwargs)
-        # Dynamic pressure contribution towards buoyancy
-        self.chi = chi
-        self.gamma0, self.cp0, self.cv0 = gamma0, cp0, cv0
-
-    def dbuoyancydp(self, p, T: ufl.core.expr.Expr):
-        return -self.Di * self.cp0 / self.cv0 / self.gamma0 * self.g * self.rho * self.chi
-
-    def buoyancy(self, p, T):
-        pressure_part = self.dbuoyancydp(p, T) * p
-        temperature_part = super().buoyancy(p, T)
-        return pressure_part + temperature_part
-
-
-class SmallDisplacementViscoelasticApproximation():
-    """Expressions for the small displacement viscoelastic approximation.
-
-    By assuming a small displacement, we can linearise the problem, assuming a perturbation
-    away from a reference state. We assume a Maxwell viscoelastic rheology, i.e.
-    stress is the same but viscous and elastic strains combine linearly. We follow
-    the approach by Zhong et al. 2003 redefining the problem in terms of incremental
-    displacement, i.e. velocity * dt where dt is the timestep. This produces a mixed
-    stokes system for incremental displacement and pressure which can be solved in
-    the same way as mantle convection (where unknowns are velocity and pressure),
-    with a modfied viscosity and stress term accounting for the deviatoric stress
-    at the previous timestep.
-
-    Zhong, Shijie, Archie Paulson, and John Wahr.
-    "Three-dimensional finite-element modelling of Earth’s viscoelastic
-    deformation: effects of lateral variations lithospheric thickness."
-    Geophysical Journal International 155.2 (2003): 679-695.
-
-    N.b. that the implentation currently assumes all terms are dimensional.
-
-    Arguments:
-      density:       background density
-      shear_modulus: shear modulus
-      viscosity:     viscosity
-      g:             gravitational acceleration
-
-    """
-    compressible = False
-
-    def __init__(
+    def stress(
         self,
-        density: Function | Number,
-        shear_modulus: Function | Number,
-        viscosity: Function | Number,
+        u: fd.ufl.indexed.Indexed,
         *,
-        g: Function | Number = 1,
-    ):
+        m: tuple[fd.ufl.indexed.Indexed] | None = None,
+        stress_old: float | fd.Function = 0.0,
+    ) -> fd.ufl.algebra.Sum:
+        """Calculates the stress term in momentum and energy conservations.
 
-        self.density = ensure_constant(density)
-        self.shear_modulus = ensure_constant(shear_modulus)
-        self.viscosity = ensure_constant(viscosity)
-        self.g = ensure_constant(g)
+        Note: In the SDVA, the stress term includes its value at the previous time step.
+        """
+        identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
 
-        self.maxwell_time = viscosity / shear_modulus
+        if self.preset == "CIVA":
+            compressive_part = -self.compressible_stress * fd.div(u) * identity
+            shear_part = 2 * len(m) * self.G * self.strain(u)
+            internal_variable_part = -2 * self.G * sum(m)
 
-    def effective_viscosity(self, dt):
-        return self.viscosity / (self.maxwell_time + dt / 2)
+            return compressive_part + shear_part + internal_variable_part
+        else:
+            stokes_part = 2 * self.mu * fd.sym(fd.grad(u))
+            compressible_part = -self.compressible_stress * fd.div(u) * identity
+            if isinstance(stress_old, float):
+                stress_old *= identity
 
-    def prefactor_prestress(self, dt):
-        return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
+            return stokes_part + compressible_part + stress_old
 
-    def stress(self, u, stress_old, dt):
-        return 2 * self.effective_viscosity(dt) * sym(grad(u)) + stress_old
-
-    def buoyancy(self, displacement):
-        # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
-        # accounts for advection of density in the absence of an evolution equation for temperature
-        return -self.g * -inner(displacement, grad(self.density))
-
-    def free_surface_terms(self, p, T, eta, theta_fs, *, delta_rho_fs=1):
-        free_surface_normal_stress = delta_rho_fs * self.g * eta
-        # prefactor only needed when solving eta as part of mixed system
-        return free_surface_normal_stress, None
-
-    def rho_continuity(self):
-        return 1
+    def viscous_dissipation(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Product:
+        """Calculates the viscous dissipation term in the energy conservation."""
+        return self.viscous_dissipation_factor * fd.inner(self.stress(u), fd.grad(u))
