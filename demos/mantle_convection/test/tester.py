@@ -25,11 +25,13 @@ def rf_generator():
     mesh = RectangleMesh(100, 100, 1.0, 1.0)
     mesh = checkpointable_mesh(mesh)
 
+    V = VectorFunctionSpace(mesh, "CG", 2)
     Q = FunctionSpace(mesh, "CG", 1)
 
     # Define the rotation vector field
     X = SpatialCoordinate(mesh)
 
+    w = Function(V, name="rotation").interpolate(as_vector([-X[1] - 0.5, X[0] - 0.5]))
     T_c = Function(Q, name="control")
     T = Function(Q, name="Temperature")
     T_c.interpolate(0.1 * exp(-0.5 * ((X - as_vector((0.75, 0.5))) / Constant(0.1)) ** 2))
@@ -37,7 +39,7 @@ def rf_generator():
     T.assign(T_c)
 
     for i in range(20):
-        T.interpolate(T + 0.1)
+        T.interpolate(T + inner(grad(T), w) * Constant(0.0001))
 
     objective = assemble(T**2 * dx)
 
