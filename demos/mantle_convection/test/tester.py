@@ -34,7 +34,6 @@ def rf_generator():
 
     V = VectorFunctionSpace(mesh, "CG", 2)
     Q = FunctionSpace(mesh, "CG", 1)
-    R = FunctionSpace(mesh, "R", 0)
 
     # Define the rotation vector field
     X = SpatialCoordinate(mesh)
@@ -42,13 +41,12 @@ def rf_generator():
     w = Function(V, name="rotation").interpolate(as_vector([-X[1] - 0.5, X[0] - 0.5]))
     T_c = Function(Q, name="control")
     T = Function(Q, name="Temperature")
-    delta_t = Function(R, name="delta_t").assign(1e-4)
     T_c.interpolate(0.1 * exp(-0.5 * ((X - as_vector((0.75, 0.5))) / Constant(0.1)) ** 2))
     control = Control(T_c)
     T.assign(T_c)
 
     for i in range(20):
-        T.interpolate(T - inner(grad(T), w) * delta_t)
+        T.interpolate(T + 0.1)
 
     objective = assemble(T**2 * dx)
 
