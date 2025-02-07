@@ -4,6 +4,7 @@ import numpy as np
 from firedrake.adjoint_utils import blocks
 from pathlib import Path
 import gc
+# from memory_profiler import profile
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -34,6 +35,8 @@ blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
 # timer decorator for fwd and derivative calls.
 ReducedFunctional.__call__ = collect_garbage(ReducedFunctional.__call__)
 ReducedFunctional.derivative = collect_garbage(ReducedFunctional.derivative)
+ReducedFunctional.__call__ = profile(ReducedFunctional.__call__)
+ReducedFunctional.derivative = profile(ReducedFunctional.derivative)
 
 
 # Set up geometry:
@@ -92,6 +95,7 @@ def forward_problem():
     continue_annotation()
     tape = get_working_tape()
     tape.clear_tape()
+
     # Enable disk checkpointing for the adjoint
     enable_disk_checkpointing()
 
@@ -242,7 +246,7 @@ def forward_problem():
     )
 
     # while time < presentday_ndtime:
-    for i in range(50):
+    for i in range(20):
         # Emulating what we do with GplatesVelocityFunctions
         gplates_velocities.create_block_variable()
         # Solve Stokes sytem
@@ -399,4 +403,4 @@ if __name__ == "__main__":
     # test_taping()
     # conduct_taylor_test()
     # conduct_inversion()
-    just_forward_adjoint_calls(3)
+    just_forward_adjoint_calls(5)
