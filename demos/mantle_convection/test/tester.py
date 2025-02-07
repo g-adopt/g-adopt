@@ -39,7 +39,7 @@ def rf_generator():
     T.assign(T_c)
 
     for i in range(20):
-        T.interpolate(T + inner(grad(T), w) * Constant(0.0001))
+        T.project(T + inner(grad(T), w) * Constant(0.0001))
 
     objective = assemble(T**2 * dx)
 
