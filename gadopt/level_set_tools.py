@@ -251,14 +251,23 @@ def reinitialisation_term(
     sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
 
     grad_norm = fd.sqrt(fd.inner(fd.grad(trial), fd.grad(trial)))
-    flux = eq.epsilon * (1 - 2 * trial) * grad_norm
-    balance_term = flux * eq.test * eq.dx
+    balance_term = eq.epsilon * (1 - 2 * trial) * grad_norm * eq.test * eq.dx
 
+    h = fd.avg(fd.CellVolume(eq.mesh)) / fd.FacetArea(eq.mesh)
     sigma = interior_penalty_factor(eq)
-    sigma *= fd.FacetArea(eq.mesh) / fd.avg(fd.CellVolume(eq.mesh))
-    boundary_term = 1 / sigma * fd.avg(flux) * fd.jump(eq.test) * fd.dS
 
-    return sharpen_term + balance_term + boundary_term
+    alpha = h / sigma
+    beta = 1
+    gamma = h / sigma
+
+    grad_flux = beta * fd.jump(trial, eq.n) / h + fd.avg(fd.grad(trial))
+    grad_flux_norm = fd.sqrt(fd.inner(grad_flux, grad_flux))
+    balance_flux = fd.avg(eq.epsilon) * (1 - 2 * fd.avg(trial)) * grad_flux_norm
+    flux_term = alpha * balance_flux * fd.avg(eq.test) * eq.dS
+
+    penalty_term = gamma * fd.jump(trial) * fd.jump(eq.test) * eq.dS
+
+    return sharpen_term + balance_term + flux_term + penalty_term
 
 
 reinitialisation_term.required_attrs = {"epsilon"}
@@ -428,17 +437,11 @@ class LevelSetSolver:
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
-        bilinear_form = fd.inner(test, trial) * fd.dx(domain=self.mesh)
-        ibp_element = -self.solution * fd.div(test) * fd.dx(domain=self.mesh)
-        ibp_boundary = (
-            self.solution
-            * fd.dot(test, fd.FacetNormal(self.mesh))
-            * fd.ds(domain=self.mesh)
-        )
+        bilinear_form = fd.inner(test, trial) * fd.dx
+        ibp_element = -self.solution * fd.div(test) * fd.dx
+        ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * fd.ds
         boundary_flux = (
-            fd.avg(self.solution)
-            * fd.jump(test, fd.FacetNormal(self.mesh))
-            * fd.dS(domain=self.mesh)
+            fd.avg(self.solution) * fd.jump(test, fd.FacetNormal(self.mesh)) * fd.dS
         )
         linear_form = ibp_element + ibp_boundary + boundary_flux
 
