@@ -175,9 +175,7 @@ else:
     Ra_c = ga.material_field(
         level_set,
         [material.Ra_c for material in simulation.materials],
-        interface="arithmetic"
-        if benchmark in ["trim_2023", "van_keken_1997_thermochemical"]
-        else "sharp",
+        interface="arithmetic" if benchmark in "trim_2023" else "sharp",
     )
     compo_rayleigh = fd.Function(func_space_output, name="Ra_c")
     output_fields.append(compo_rayleigh)
