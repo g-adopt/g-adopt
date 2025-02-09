@@ -9,7 +9,7 @@ providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
 import operator
 from abc import ABC, abstractmethod
 from numbers import Number
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import firedrake
 import numpy as np
@@ -22,12 +22,14 @@ class TimeIntegratorBase(ABC):
     """Defines the API for all time integrators."""
 
     @abstractmethod
-    def advance(self, t: float, update_forcings: Optional[firedrake.Function] = None):
+    def advance(self, update_forcings: Callable | None = None, t: float | None = None):
         """Advances equations for one time step.
 
-        Arguments:
-          t: Current simulation time
-          update_forcings: Firedrake function used to update any time-dependent boundary conditions
+        Args:
+          update_forcings:
+            Callable updating any time-dependent equation forcings
+          t:
+            Current simulation time
 
         """
         pass
@@ -104,12 +106,15 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         """
         pass
 
-    def advance(self, t, update_forcings=None):
+    def advance(
+        self, update_forcings: Callable | None = None, t: float | None = None
+    ) -> None:
         """Advances equations for one time step."""
         if not self._initialized:
             self.initialize(self.solution)
         for i in range(self.n_stages):
-            self.solve_stage(i, t, update_forcings)
+            self.solve_stage(i, update_forcings, t)
+
         self.get_final_solution()
 
 
@@ -192,11 +197,14 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         if self._nontrivial and i_stage > 0:
             self.solution += self.sol_expressions[i_stage]
 
-    def solve_tendency(self, i_stage, t, update_forcings=None):
+    def solve_tendency(self, i_stage, update_forcings, t) -> None:
         """Evaluates the tendency of i-th stage"""
         if self._nontrivial:
-            if update_forcings is not None:
-                update_forcings(t + self.c[i_stage]*self.dt)
+            if update_forcings is not None and t is not None:
+                update_forcings(t + self.c[i_stage] * self.dt)
+            elif update_forcings is not None:
+                update_forcings()
+
             self.solver[i_stage].solve()
 
     def get_final_solution(self):
@@ -205,9 +213,9 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
             self.solution += self.final_sol_expr
         self.solution_old.assign(self.solution)
 
-    def solve_stage(self, i_stage, t, update_forcings=None):
+    def solve_stage(self, i_stage, update_forcings, t) -> None:
         self.update_solution(i_stage)
-        self.solve_tendency(i_stage, t, update_forcings)
+        self.solve_tendency(i_stage, update_forcings, t)
 
 
 class DIRKGeneric(RungeKuttaTimeIntegrator):
@@ -313,7 +321,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         """
         self.solution.assign(self.solution_old + self.sol_expressions[i_stage])
 
-    def solve_tendency(self, i_stage, t, update_forcings=None):
+    def solve_tendency(self, i_stage, update_forcings, t) -> None:
         """Evaluates the tendency of i-th stage"""
         if i_stage == 0:
             # NOTE solution may have changed in coupled system
@@ -322,15 +330,19 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
             self.solution_old.assign(self.solution)
         if not self._initialized:
             raise ValueError('Time integrator {:} is not initialized'.format(self.name))
-        if update_forcings is not None:
-            update_forcings(t + self.c[i_stage]*self.dt)
+
+        if update_forcings is not None and t is not None:
+            update_forcings(t + self.c[i_stage] * self.dt)
+        elif update_forcings is not None:
+            update_forcings()
+
         self.solver[i_stage].solve()
 
     def get_final_solution(self):
         self.solution.assign(self.final_sol_expr)
 
-    def solve_stage(self, i_stage, t, update_forcings=None):
-        self.solve_tendency(i_stage, t, update_forcings)
+    def solve_stage(self, i_stage, update_forcings, t) -> None:
+        self.solve_tendency(i_stage, update_forcings, t)
         self.update_solution(i_stage)
 
 
