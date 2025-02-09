@@ -8,7 +8,6 @@ providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
 
 import operator
 from abc import ABC, abstractmethod
-from numbers import Number
 from typing import Any, Optional
 
 import firedrake
