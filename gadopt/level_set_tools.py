@@ -478,7 +478,7 @@ class LevelSetSolver:
         self.step = 0
         self._solvers_ready = True
 
-    def update_gradient(self) -> None:
+    def update_gradient(self, *args, **kwargs) -> None:
         """Calls the gradient solver.
 
         Can be provided as a forcing to time integrators.
@@ -488,7 +488,7 @@ class LevelSetSolver:
     def reinitialise(self) -> None:
         """Performs reinitialisation steps."""
         for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(update_forcings=self.update_gradient)
+            self.reini_integrator.advance(t=0, update_forcings=self.update_gradient)
 
     def solve(
         self,

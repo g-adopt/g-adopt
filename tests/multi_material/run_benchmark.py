@@ -175,7 +175,9 @@ else:
     Ra_c = ga.material_field(
         level_set,
         [material.Ra_c for material in simulation.materials],
-        interface="arithmetic" if benchmark == "trim_2023" else "sharp",
+        interface="arithmetic"
+        if benchmark in ["trim_2023", "van_keken_1997_thermochemical"]
+        else "sharp",
     )
     compo_rayleigh = fd.Function(func_space_output, name="Ra_c")
     output_fields.append(compo_rayleigh)
@@ -304,7 +306,7 @@ while True:
 
     # Solve energy system
     if energy_solver is not None:
-        energy_solver.solve(update_forcings, time_now)
+        energy_solver.solve(time_now, update_forcings)
 
     # Advect each level set
     for ls_solv in level_set_solver:
