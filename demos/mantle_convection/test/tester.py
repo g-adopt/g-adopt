@@ -17,13 +17,16 @@ def test():
 
 
 @profile
-def rf_generator():
+def rf_generator(checkpoint_to_disk=True):
     tape = get_working_tape()
     tape.clear_tape()
     continue_annotation()
-    enable_disk_checkpointing()
+
     mesh = RectangleMesh(100, 100, 1.0, 1.0)
-    mesh = checkpointable_mesh(mesh)
+
+    if checkpoint_to_disk:
+        enable_disk_checkpointing()
+        mesh = checkpointable_mesh(mesh)
 
     V = VectorFunctionSpace(mesh, "CG", 2)
     Q = FunctionSpace(mesh, "CG", 1)
