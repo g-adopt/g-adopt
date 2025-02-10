@@ -257,7 +257,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
         # Update the accumulated surface velocity misfit using the observed value
         uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=timestep)
-        u_misfit += assemble(Constant(alpha_u) * dot(u - uobs, u - uobs) * ds_t)
+        u_misfit += assemble(alpha_u * dot(u - uobs, u - uobs) * ds_t)
 
     # Load the observed final state
     Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
@@ -282,19 +282,19 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     # Define the component terms of the overall objective functional
     # Temperature term
     # Temperature misfit between solution and observation
-    objective += assemble(Constant(alpha_T) * (T - Tobs) ** 2 * dx)
+    objective += assemble(alpha_T * (T - Tobs) ** 2 * dx)
 
     # Velocity misfit term
     norm_u_surface = assemble(dot(uobs, uobs) * ds_t)  # measure of u_obs from the last timestep
     objective += (norm_obs * u_misfit / (max_timesteps - min_timesteps) / norm_u_surface)
 
     # Damping term
-    damping = assemble(Constant(alpha_d) * (T_0 - Taverage) ** 2 * dx)
+    damping = assemble(alpha_d * (T_0 - Taverage) ** 2 * dx)
     norm_damping = assemble((Tobs - Taverage)**2 * dx)
     objective += (norm_obs * damping / norm_damping)
 
     # Smoothing term
-    smoothing = assemble(Constant(alpha_s) * dot(grad(T_0 - Taverage), grad(Tic - Taverage)) * dx)
+    smoothing = assemble(alpha_s * dot(grad(T_0 - Taverage), grad(Tic - Taverage)) * dx)
     norm_smoothing = assemble(dot(grad(Tobs - Taverage), grad(Tobs - Taverage)) * dx)
     objective += (norm_obs * smoothing / norm_smoothing)
 
