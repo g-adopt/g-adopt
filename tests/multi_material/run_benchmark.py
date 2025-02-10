@@ -312,7 +312,7 @@ while True:
     t_adapt.update_timestep()
 
     # Solve energy system
-    energy_solver.solve(t=time_now, update_forcings=update_forcings)
+    energy_solver.solve(update_forcings=update_forcings, t=time_now)
 
     # Advect each level set
     for ls_solv in level_set_solver:
