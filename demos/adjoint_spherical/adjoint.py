@@ -189,18 +189,12 @@ def forward_problem():
     )
 
     # Top velocity boundary condition
-    gplates_velocities = Function(
+    gplates_velocities = GplatesVelocityFunction(
         V,
-        name="GPlates_Velocity")
-    gplates_velocities.interpolate(as_vector((0.0, 0.0, 0.0)))
-
-    # # Top velocity boundary condition
-    # gplates_velocities = GplatesVelocityFunction(
-    #     V,
-    #     gplates_connector=plate_reconstruction_model,
-    #     top_boundary_marker=top_id,
-    #     name="GPlates_Velocity"
-    # )
+        gplates_connector=plate_reconstruction_model,
+        top_boundary_marker=top_id,
+        name="GPlates_Velocity"
+    )
 
     # Get a dictionary of the reference fields to be used in TALA approximation
     # tala_parameters_dict = TALA_parameters(function_space=Q)
@@ -303,8 +297,8 @@ def forward_problem():
 
     # Now perform the time loop:
     while time < presentday_ndtime:
-        # # Update surface velocities
-        # updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
+        # Update surface velocities
+        updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
 
         # We only solve stokes every 3 timesteps or during initial phase
         if timestep_index % stokes_solve_frequency == 0 or timestep_index < timestep_initial_phase or updated_plt_rec:
