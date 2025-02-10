@@ -4,8 +4,8 @@ from firedrake.adjoint import *
 import gc
 
 
-def test():
-    T_c, rf = rf_generator()
+def test(checkpoint_to_disk):
+    T_c, rf = rf_generator(checkpoint_to_disk)
     rf.fwd_call = profile(rf.__call__)
     rf.derivative = profile(rf.derivative)
 
@@ -17,7 +17,7 @@ def test():
 
 
 @profile
-def rf_generator(checkpoint_to_disk=True):
+def rf_generator(checkpoint_to_disk):
     tape = get_working_tape()
     tape.clear_tape()
     continue_annotation()
@@ -41,8 +41,8 @@ def rf_generator(checkpoint_to_disk=True):
     control = Control(T_c)
     T.assign(T_c)
 
-    for i in range(20):
-        T.project(T + inner(grad(T), w) * Constant(0.0001))
+    for i in range(500):
+        T.interpolate(T + inner(grad(T), w) * Constant(0.0001))
 
     objective = assemble(T**2 * dx)
 
@@ -51,4 +51,4 @@ def rf_generator(checkpoint_to_disk=True):
 
 
 if __name__ == "__main__":
-    test()
+    test(checkpoint_to_disk=False)
