@@ -1,0 +1,19 @@
+<?xml version="1.0" ?>
+<VTKFile type="PUnstructuredGrid" version="2.2" byte_order="LittleEndian">
+<PUnstructuredGrid>
+<PPoints>
+<PDataArray Name="firedrake_default_extruded_coordinates" type="Float64" NumberOfComponents="3" /></PPoints>
+<PCells>
+<PDataArray Name="connectivity" type="Int32" NumberOfComponents="" /><PDataArray Name="offsets" type="Int32" NumberOfComponents="" /><PDataArray Name="types" type="UInt8" NumberOfComponents="" /></PCells>
+<PPointData Scalars="T_obs">
+<PDataArray Name="T_obs" type="Float64" NumberOfComponents="" /><PDataArray Name="T_ave_FullT" type="Float64" NumberOfComponents="" /><PDataArray Name="vs" type="Float64" NumberOfComponents="" /><PDataArray Name="FullTemperature" type="Float64" NumberOfComponents="" /></PPointData>
+<Piece Source="REVEAL_0_0.vtu" />
+<Piece Source="REVEAL_0_1.vtu" />
+<Piece Source="REVEAL_0_2.vtu" />
+<Piece Source="REVEAL_0_3.vtu" />
+<Piece Source="REVEAL_0_4.vtu" />
+<Piece Source="REVEAL_0_5.vtu" />
+<Piece Source="REVEAL_0_6.vtu" />
+<Piece Source="REVEAL_0_7.vtu" />
+</PUnstructuredGrid>
+</VTKFile>

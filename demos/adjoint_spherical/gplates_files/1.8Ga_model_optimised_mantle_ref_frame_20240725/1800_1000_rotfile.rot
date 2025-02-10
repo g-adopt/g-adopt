@@ -1,0 +1,388 @@
+101 940.0   45.5566  176.2356 -196.8912  000 ! LAU-000, @REF Merdith et al. 2017, @DOI"10.1016/j.gr.2017.04.001"
+101 1050.0   49.1843  178.3948 -182.5947  000 ! LAU-000, Cao et al. (This study) modified from @REF Merdith et al., 2021 -> Mulder et al. 2018, @DOI"10.1130/G45225.1" 
+999 1066.0   49.7419  179.5839 -146.5091  000 ! NAM-000, @REF Mulder et al. 2018, @DOI"10.1130/G45225.1"
+101 1070.0   48.2588  179.868 -174.4098  000 ! LAU-000, Cao et al. (This study) 
+999 1076.0   46.7483 -167.5888 -154.1052  000 ! NAM-000, @REF Mulder et al. 2018, @DOI"10.1130/G45225.1"
+101 1100.0   61.2625 -166.4834 -166.4393  000 ! LAU-000, Cao et al. (This study) modified from @REF Merdith et al., 2021 -> 101 1091.0   58.9635 -169.908 -167.2371  000 ! 
+101 1110.0   68.0159 -145.9308 -170.9852  000 !
+101 1140.0   70.761 -133.2954 -166.5199  000 ! LAU-000, Cao et al. (This study) modified from @REF Merdith et al., 2021 -> Mulder et al. 2018, @DOI"10.1130/G45225.1"
+101 1163.0   65.2674 -135.4118 -166.8613  000 ! LAU-000, Cao et al. (This study)
+101 1184.0   61.0959 -138.9775 -166.1257  000 ! LAU-000, Cao et al. (This study)
+101 1237.0   43.0575 -151.9912 -159.5571  000 ! LAU-000, Cao et al. (This study)
+101 1265.0  -45.5788   31.3596  148.6116  000 ! LAU-000, Cao et al. (This study) modified from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+101 1310.0  -48.7999   36.7967  151.7252  000 ! LAU-000, Cao et al. (This study)
+101 1380.0  -45.1704   43.0875  161.2371  000 ! LAU-000, Cao et al. (This study)
+101 1400.0  -44.0962   44.7028  163.9905  000 ! LAU-000, Cao et al. (This study)
+101 1460.0  -48.68   48.6  166.26  000 ! LAU-000, Cao et al. (This study) modified from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+101 1480.0  -49.2761   51.5144  170.4732  000 ! LAU-000, Cao et al. (This study)
+101 1600.0  -52.4276   56.5852  176.8751  000 ! LAU-000, Cao et al. (This study)
+101 1700.0  -54.4045   61.9686  205.799  000 ! LAU-000, @REF Condie etal. 2021, @DOI"10.1016/j.gr.2021.05.002"
+101 1800.0  -47.4638   62.3315  225.0877  000 ! LAU-000, Cao et al. (This study) modified from @REF Condie et al. 2021 
+101 1900.0  -43.6002   67.294  221.244  000 ! LAU-000, Cao et al. (This study) modified from @REF Condie et al. 2021 
+10101  0.0   90.0    0.0    0.0  101 ! Wyoming-LAU 
+10101 1750.0   90.0    0.0    0.0  101 ! Wyoming-LAU 
+10101 1800.0    7.53  152.73   -5.06  101 ! Wyoming-LAU, Cao et al. (This study) modified from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+102 1010.0   61.76 -132.95  -10.98  101 ! Greenland-LAU Merdith et al., 2021
+102 1910.0   61.76 -132.95  -10.98  101 ! Greenland-LAU Merdith et al., 2021
+107 1010.0  -69.79  101.72    5.98  101 ! BIS-LAU  @REF Merdith et al., 2021 -> Domeier_Torsvik_2014 @DOI"10.1016/j.gsf.2014.01.002"
+107 1801.0  -69.79  101.72    5.98  101 ! BIS-LAU  Cao et al. (This study)
+201 1000.0   11.97  -47.01 -110.66  101 ! AMA-LAU, @REF Merdith et al., 2021 -> Li et al. 2008, @DOI"10.1016/j.precamres.2007.04.021" 
+201 1070.0   11.97  -47.01 -110.66  101 ! AMA-LAU, Cao et al. (This study), Ottawan orogen  
+201 1110.0    0.268  -55.9315 -184.3232  101 ! AMA-LAU, Cao et al. (This study), based on a pole from @REF Bispo-Santos et al. 2023
+201 1150.0    6.8902  -58.9894 -144.9245  101 ! AMA-LAU, Cao et al. (This study), based on a pole from @REF D'Agrella-Filho et al. 2018
+201 1200.0   33.0021   15.955   37.4895  101 ! AMA-LAU, Cao et al. (This study), based on a pole from @REF Tohver et al. 2002
+201 1237.0   20.4928  -22.2512   28.1521  101 ! AMA-LAU, Cao et al. (This study)
+201 1265.0   12.8647   -1.3738   24.993  101 ! AMA-LAU, Cao et al. (This study)
+201 1300.0   -9.1698   38.4935   20.273  101 ! AMA-LAU, Cao et al. (This study)
+201 1380.0  -54.6735   76.5353   26.9183  101 ! AMA-LAU, Cao et al. (This study)
+201 1419.0  -14.9983  116.5098   57.4364  101 ! AMA-LAU, Cao et al. (This study)
+201 1530.0  -50.6346  150.0173  -51.5091  101 ! AMA-LAU, Cao et al. (This study), based on a pole from @REF Bispo-Santos et al., 2020
+201 1600.0  -49.8432  178.9362  -67.2131  101 ! AMA-LAU, Cao et al. (This study), based on a pole from @REF Bispo-Santos et al. 2014a
+201 1800.0  -49.3299  179.2496  -66.5611  101 ! AMA-LAU, Cao et al. (This study), based on a pole from @REF Bispo-Santos et al. 2014a
+20101  0.0   90.0    0.0    0.0  201 ! Rio Negro Juruena-AMA, Cao et al. (This study)
+20101 1780.0   90.0    0.0    0.0  201 ! Rio Negro Juruena-AMA, Cao et al. (This study)
+20101 1800.0   48.4342 -148.0024   -5.0  201 !Rio Negro Juruena-AMA, Cao et al. (This study)
+714 1000.0   -1.5804  -33.9174   98.0865  201 ! Cao et al. (This study)
+714 1800.0   -1.5804  -33.9174   98.0865  201 ! Cao et al. (This study)
+302 1000.0   75.8  -95.82  -59.16  101 ! BAL-LAU, @REF Merdith et al. 2017, @DOI"10.1016/j.gr.2017.04.001", re-calculated relative rotation from Li et al. 2008 (10.1016/j.precamres.2007.04.021)
+302 1020.0   75.8  -95.82  -59.16  101 ! BAL-LAU, @REF Merdith et al. 2017, @DOI"10.1016/j.gr.2017.04.001", re-calculated relative rotation from Li et al. 2008 (10.1016/j.precamres.2007.04.021)
+302 1080.0   39.1697 -147.494  -26.806  101 ! Cao et al. (This study)
+302 1235.0   41.7481   10.4799   45.5893  101 ! Cao et al. (This study) modified (less tight) from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+302 1700.0   41.7481   10.4799   45.5893  101 ! Cao et al. (This study) modified (less tight) from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+302 1720.0  -56.864 -156.9703  -88.7165  101 ! Cao et al. (This study) modified (less tight) from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+302 1800.0  -56.864 -156.9703  -88.7165  101 ! Cao et al. (This study) modified (less tight) from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+302 1900.0  -56.864 -156.9703  -88.7165  101 ! Cao et al. (This study)
+30202  0.0   90.0    0.0    0.0  302 ! Fennoscandia-Eastern BAL
+30202 1700.0   90.0    0.0    0.0  302 ! Fennoscandia-Eastern BAL
+30202 1700.0  -41.7481 -169.5201  -45.5893  101 ! Fennoscandia-Eastern BAL, Cao et al. (This study) modified (less tight) from @REF Condie etal. 2021, @DOI"10.1016/j.gr.2021.05.002"
+30202 1800.0  -41.7481 -169.5201  -45.5893  101 ! Fennoscandia-Eastern BAL, Cao et al. (This study) modified (less tight) from @REF Condie etal. 2021, @DOI"10.1016/j.gr.2021.05.002"
+30202 1900.0  -41.7481 -169.5201  -45.5893  101 ! Fennoscandia-Eastern BAL
+30203  0.0   90.0    0.0    0.0  30202 ! Transscandinavian Igneous Belt-Fennoscandia, Cao et al. (This study)
+30203 1670.0   90.0    0.0    0.0  30202 ! Transscandinavian Igneous Belt-Fennoscandia, Cao et al. (This study)
+30203 1720.0   37.3181 -161.3682   -5.7975  30202 ! Transscandinavian Igneous Belt-Fennoscandia, Cao et al. (This study)
+30204  0.0   90.0    0.0    0.0  302 ! Sveconorwegian Belt-BAL, Cao et al. (This study)
+30204 1030.0   90.0    0.0    0.0  302 ! Sveconorwegian Belt-BAL, Cao et al. (This study)
+30204 1080.0   30.3708 -144.0214   -3.5  302 ! Sveconorwegian Belt-BAL, Cao et al. (This study)
+318 1010.0   70.4888  154.0522  -23.8463  101 ! RKL-LAU Rockall-LAU @REF Merdith et al., 2021
+318 1900.0   70.4888  154.0522  -23.8463  101 ! RKL-LAU Rockall-LAU @REF Merdith et al., 2021
+401 1000.0   63.0515  106.3388  152.4165  101 ! SIB-LAU Cao et al. (This study) modified from @REF Merdith et al., 2021
+401 1200.0   63.0515  106.3388  152.4165  101 ! SIB-LAU Cao et al. (This study)
+401 1230.0   66.9113  102.8471  155.5443  101 ! SIB-LAU Cao et al. (This study)
+401 1500.0   66.9113  102.8471  155.5443  101 ! SIB-LAU Cao et al. (This study)
+401 1600.0   66.9113  102.8471  155.5443  101 ! SIB-LAU Cao et al. (This study)
+401 1600.0  -39.536  -22.7224  -84.3778  8011 ! SIB-LAU Cao et al. (This study)
+401 1650.0  -42.9331  -34.4505  -84.0135  8011 ! SIB-LAU Cao et al. (This study)
+401 1719.0  -45.4545  -50.2242  -98.9282  8011 ! SIB-LAU Cao et al. (This study)
+401 1740.0  -42.141  -60.1914 -112.4675  8011 ! SIB-LAU Cao et al. (This study), based on two poles from @REF Didenko et al. 2015
+401 1800.0  -42.141  -60.1914 -112.4675  8011 ! SIB-LAU Cao et al. (This study)
+4010  0.0   90.0    0.0    0.0  401 ! E SIB (Aldan)-W SIB
+4010 340.0   90.0    0.0    0.0  401 ! E SIB (Aldan)-W SIB # Vilyui rift syn-rift at 400-370 Ma, and intrusion of dykes between 390-340 Ma. Polyansky et al., 2017; Ershova et al., 2020
+4010 400.0   62.0  117.0   23.0  401 ! E SIB (Aldan)-W SIB @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"; Pavlov et al., 2008
+4010 430.0   62.0  117.0   23.0  401 ! E SIB (Aldan)-W SIB @REF Pisarevsky et al. 2014 @DOI"10.1016/j.precamres.2013.05.014"
+4010 1800.0   62.0  117.0   23.0  401 ! E SIB (Aldan)-W SIB @REF Pisarevsky et al. 2014 @DOI"10.1016/j.precamres.2013.05.014"
+4010 1900.0   62.0  117.0   23.0  401 ! E SIB (Aldan)-W SIB @REF Pisarevsky et al. 2014  @DOI"10.1016/j.precamres.2013.05.014"
+501 930.0   45.32  174.48 -102.12  000 ! IND-000 @REF Merdith et al. (2017) 
+501 940.0   49.7175  173.293 -101.2817  000 !IND-000 Cao et al. (This study)
+999 980.0   49.7175  173.293 -101.2817  000 !IND-000 Cao et al. (This study)
+501 1070.0   63.5122 -124.8253 -133.0993  000 ! S IND-000 Cao et al. (This study)
+501 1110.0   50.4145  -84.585 -138.1198  000 ! S IND-000 Cao et al. (This study)
+501 1140.0   44.2485  -75.093 -144.8165  000 ! S IND-000 Cao et al. (This study)
+501 1150.0   41.3861  -74.404 -145.7436  000 ! S IND-000 Cao et al. (This study)
+501 1200.0   27.5968  -65.1609 -149.738  000 ! S IND-000 Cao et al. (This study)
+501 1270.0  -37.5669  138.8414  174.041  000 ! S IND-000 Cao et al. (This study) modified (less tight) from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+501 1270.0   29.5987   53.3149 -183.7541  30202 ! S IND-BAL Cao et al. (This study) modified (less tight) from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+501 1700.0   29.5987   53.3149 -183.7541  30202 ! S IND-BAL Cao et al. (This study) modified (less tight) from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+501 1765.0   24.7509   35.9788 -219.516  30202 ! S IND-BAL Cao et al. (This study), based on pole from Shankar et al., 2018
+501 1800.0   26.5904   30.1654 -221.6018  30202 ! S IND-BAL Cao et al. (This study)
+50101  0.0   90.0    0.0    0.0  501 ! N IND-S IND Cao et al. (This study)
+50101 980.0   90.0    0.0    0.0  501 ! N IND-S IND Cao et al. (This study)
+50101 1080.0   38.1601    5.1627    6.8426  501 ! N IND-S IND Cao et al. (This study)
+50101 1110.0   36.6887    9.1648   35.2267  501 ! N IND-S IND Cao et al. (This study)
+50101 1110.0  -86.9632  160.3885  122.2785  701 ! N IND-S CON Cao et al. (This study)
+50101 1200.0  -41.4416   63.3993  119.8496  701 ! N IND-S CON Cao et al. (This study)
+50101 1300.0  -41.4416   63.3993  119.8496  701 ! N IND-S CON Cao et al. (This study)
+999 1300.0  -31.662  -88.4611 -214.0824  601 ! N IND-NCC Cao et al. (This study)
+50101 1300.0   31.662   91.5389 -145.9177  601 ! N IND-NCC Cao et al. (This study)
+50101 1900.0   31.662   91.5389 -145.9177  601 ! N IND-NCC Cao et al. (This study)
+999 1900.0  -31.662  -88.4611 -214.0824  601 ! N IND-NCC Cao et al. (This study)
+50102  0.0   90.0    0.0    0.0  501 ! Central Indian Tectonic Zone-S IND Cao et al. (This study)
+50102 1810.0   90.0    0.0    0.0  501 ! Central Indian Tectonic Zone-S IND Cao et al. (This study)
+580 1000.0   41.4815   62.5037   85.9195  505 ! TRM-LUT Merdith et al. 2021
+580 1000.0   55.9036   58.509  126.9591  6024 ! TRM-Yangtze Cao et al. (This study)
+580 1030.0   55.7902   68.5488  131.2966  6024 ! TRM-Yangtze Cao et al. (This study)
+580 1110.0   55.7902   68.5488  131.2966  6024 ! TRM-Yangtze Cao et al. (This study)
+580 1110.0  -53.4252  150.3516  -55.4426  401 ! TRM-SIB Cao et al. (This study)
+580 1140.0  -53.4252  150.3516  -55.4426  401 ! TRM-SIB Cao et al. (This study)
+580 1170.0  -73.8385 -124.9524  -67.6184  401 ! RM-SIB Cao et al. (This study); Wang et al. (2020)
+580 1900.0  -73.8385 -124.9524  -67.6184  401 ! RM-SIB Cao et al. (This study); Wang et al. (2020)
+77030 1030.0   15.102  -25.2783 -157.5464  101 ! KAL-LAU @REF Mulder et al. (2019)
+77030 1070.0    1.5699  -28.2498 -122.9829  101 ! KAL-LAU Cao et al. (This study)
+77030 1080.0    5.2074  149.5749  106.0639  101 ! KAL-LAU Cao et al. (This study)
+77030 1080.0   28.5012 -144.7371  -73.1193  701 ! KAL-LAU Cao et al. (This study)
+77030 1105.0   -2.4339   15.0841  -37.8185  701 ! KAL-LAU Cao et al. (This study)
+77030 1110.0   -2.4339   15.0841  -37.8185  701 ! KAL-LAU Cao et al. (This study); Salminen et al., 2018
+77030 1900.0   -2.4339   15.0841  -37.8185  701 ! KAL-LAU Cao et al. (This study)
+999 1000.0    9.67  148.77  -56.28  77030 ! Dronning Maud Land  8024  @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+999 1800.0    9.67  148.77  -56.28  77030 ! Dronning Maud Land  8024  @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+701 1000.0   12.06  168.88  163.54  101 ! CON-LAU Merdith et al., 2021
+701 1000.0    2.3504 -119.24  -76.5984  000 ! CON-000 crossover
+701 1070.0   -3.1859 -144.8321  -53.592  000 ! CON-000 Cao et al. (This study)
+701 1110.0   -1.6633 -178.2027  -53.9129  000 ! CON-000 Cao et al. (This study)
+701 1236.0  -23.8794  177.6006   82.6024  000 ! CON-000 Cao et al. (This study)
+701 1299.0  -10.3313  147.7376  127.4245  000 ! CON-000 Cao et al. (This study)
+701 1300.0   10.1504  -32.5889 -128.2416  000 ! CON-000 Cao et al. (This study)
+701 1300.0  -24.8589  142.0691  229.347  401 ! CON-SIB Cao et al. (This study)
+701 1507.0  -24.8589  142.0691  229.347  401 ! CON-SIB Cao et al. (This study), based on 1507 Ma Sao Francisco pole from @REF Salminen et al. 2016 
+701 1650.0  -24.8589  142.0691  229.347  401 ! CON-SIB Cao et al. (This study)
+701 1800.0   19.7677  156.2411  280.0378  401 ! CON-SIB Cao et al. (This study)
+701 1855.0  -27.184   -3.3343  238.145  000 !
+702 1010.0  -18.982 -150.098  -61.6053  501 ! ANT-IND @REF Merdith et al., 2021 -> Merdith et al. (2017); Torsvik et al. (2001)
+702 1810.0  -18.982 -150.098  -61.6053  501 ! ANT-IND Cao et al. (This study) extend deeper in time
+712 1000.0   90.0    0.0    0.0  701 ! Tanzania-CON @REF Merdith et al., 2021 -> Domeier_Torsvik_2014 @DOI"10.1016/j.gsf.2014.01.002"
+712 1270.0   90.0    0.0    0.0  701 ! Tanzania-CON Cao et al. (This study)
+712 1375.0   90.0    0.0    0.0  701 ! Tanzania-CON Cao et al. (This study)
+712 1600.0   84.614  -14.3059    2.9968  701 ! Tanzania-CON Cao et al. (This study)
+712 1801.0   84.614  -14.3059    2.9968  701 ! Tanzania-CON Cao et al. (This study)
+713 1010.0   90.0    0.0    0.0  701 ! NMZ-AFR  @REF Merdith et al., 2021 -> Domeier_Torsvik_2014 @DOI"10.1016/j.gsf.2014.01.002"
+713 1810.0   90.0    0.0    0.0  701 ! NMZ-AFR  Cao et al. (This study) extend deeper in time
+715 1000.0   47.3455  -10.2296  -62.5067  206 ! Merdith et al., 2021 Cao changed 1010 to 1000
+715 1000.0   45.1263   83.8866  -15.0609  701 ! Sarhara-CON Cao et al. (This study) crossover
+715 1070.0   45.1263   83.8866  -15.0609  701 ! Sarhara-CON Cao et al. (This study)
+715 1085.0   26.2228  -29.108  -13.1904  701 ! Sarhara-CON Cao et al. (This study)
+715 1800.0   26.2228  -29.108  -13.1904  701 ! Sarhara-CON Cao et al. (This study)
+206 1000.0  -13.3298   25.2173  -66.0906  201 ! SF-AMA @Merdith et al. 2017 @DOI"10.1016/j.gr.2017.04.001"
+206 1000.0  -44.3626  150.101  -56.5673  701 ! SF-CON Cao et al. (This study) crossover
+206 1470.0  -44.3626  150.101  -56.5673  701 ! SF-CON Cao et al. (This study)
+206 1507.0  -44.9648  150.7444  -56.1455  701 ! SF-CON Cao et al. (This study)
+206 1900.0  -44.3626  150.101  -56.5673  701 ! SF-CON Cao et al. (This study)
+802 1100.0   -3.91   37.9   30.86  801 ! ANT-AUS Merdith et al., 2021
+802 2100.0   -3.91   37.9   30.86  801 ! ANT-AUS 
+801 930.0   37.6599  122.1116  124.0534  101 ! AUS-LAU SWEAT-AUSWUS configuration @REF Mulder et al., 2018
+801 1070.0   49.9701  143.9316  107.5808  101 !SAC-LAU @REF  Mulder et al., 2018 -> (adjusted) AUSMEX configuration @REF Wingate et al., 2002 @DOI 10.1046/j.1365-3121.2002.00401.x
+999 1070.0   53.6346  154.3838  106.0679  101 ! AUS-LAU Cao et al. (This study) modified from @REF Mulder et al., 2018 -> (adjusted) AUSMEX configuration @REF Wingate et al., 2002 @DOI 10.1046/j.1365-3121.2002.00401.x
+801 1200.0   13.9368  123.8226  101.4356  101 ! Gawler-LAU Cao et al. (This study) modified from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+801 1320.0   22.639  120.9436  117.9267  101 ! Gawler-LAU Cao et al. (This study), based on poles from NCC Yanliao mafic sills @ Chen et al. 2013 
+801 1380.0  -33.6838  -68.0885 -115.1536  101 ! Gawler-LAU Cao et al. (This study) modified from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+801 1460.0  -28.3074  -48.1327 -134.7418  101 ! Gawler-LAU Cao et al. (This study) modified from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+801 1600.0  -28.3074  -48.1327 -134.7418  101 ! Gawler-LAU Cao et al. (This study) modified from @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+801 1726.0  -21.2343  -46.0206 -126.5249  101 ! Gawler-LAU Cao et al. (This study)
+801 1760.0  -21.4167  -46.9822 -113.1136  101 ! Gawler-LAU Cao et al. (This study)
+801 1800.0  -35.0313  -34.3215 -106.5763  101 ! Gawler-LAU Cao et al. (This study) modified from @REF Condie et al. 2021.
+80101  0.0   90.0    0.0    0.0  801 ! W AUS-S AUS Cao et al. (This study)
+80101 1000.0   90.0    0.0    0.0  801 ! W AUS-S AUS Cao et al. (This study)
+80101 1000.0  -20.0  135.0   40.0  8011 ! W AUS-S AUS @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+80101 1380.0  -20.0  135.0   40.0  8011 ! W AUS-S AUS @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+80101 1380.0    9.2867   18.6558  152.4053  000 ! W AUS-000 Cao et al. (This study)
+80101 1600.0  -11.5223   27.3236  158.468  000 ! W AUS-000 Cao et al. (This study)
+80101 1800.0  -27.6906   32.5288  166.7407  000 ! W AUS-000 Cao et al. (This study). Close (but separate) to Kalahari
+80102  0.0   90.0    0.0    0.0  801 ! Curnamona 80102
+80102 1640.0   90.0    0.0    0.0  801 ! Curnamona 80102 Pisarevsky
+80102 1800.0   28.94  -31.15  -13.88  801 ! Curnamona 80102 Pisarevsky
+8011 1000.0  -20.0  135.0  -40.0  801 ! North Australia-LAU @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+8011 1380.0  -20.0  135.0  -40.0  801 ! North Australia-LAU @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+8011 1460.0  -23.4  134.76  -77.08  801 ! North Australia-LAU @REF Pisarevsky et al. 2014, @DOI"10.1016/j.precamres.2013.05.014"
+8011 1800.0  -23.4  134.76  -77.08  801 ! North Australia-LAU 
+8011 1810.0  -23.4  134.76  -77.08  801 ! North Australia-LAU 
+803 1110.0    3.64 -165.79  -88.28  501 ! IAN-IND  @REF Merdith et al., 2021
+803 1600.0    3.64 -165.79  -88.28  501 ! IAN-IND  Cao et al. (This study)
+803 1700.0   -5.3591 -156.4596  -74.2665  501 ! Cao et al. (This study)
+803 1800.0  -14.2146 -146.9988  -67.7808  501 ! Cao et al. (This study)
+8031 1010.0    0.0687  -25.3755   -4.666  803 ! RKR-IAN @REF Merdith et al., 2021
+8031 1810.0    0.0687  -25.3755   -4.666  803 ! RKR-IAN Cao et al. (This study) extend deeper in time
+601 1000.0   11.2231   94.4595  -77.4556  8011 ! Cao et al. (this study)
+601 1200.0   11.2231   94.4595  -77.4556  8011 ! Cao et al. (this study)
+601 1236.0   13.7426   81.1305  -73.9694  8011 ! Cao et al. (this study)
+601 1900.0   13.7426   81.1305  -73.9694  8011 ! Cao et al. (this study)
+602 1000.0    1.98   74.44   40.29  50101 ! Cathasia-NorthIND Merdith et al. (2017)
+602 1110.0    1.98   74.44   40.29  50101 ! Cao et al. (This study)
+602 1140.0   69.2203  127.2133  -33.6952  50101 ! Cao et al. (This study)
+602 1800.0   69.2203  127.2133  -33.6952  50101 ! Cao et al. (This study)
+77141 1010.0   90.0    0.0    0.0  715 !  SNWA-NEA Sahara on NW Africa Plate-North East Africa (Sahara Metacraton) @REF Merdith et al., 2021
+77141 1810.0   90.0    0.0    0.0  715 !  SNWA-NEA Sahara on NW Africa Plate-North East Africa (Sahara Metacraton) Cao et al. (This study) extend deeper in time
+22041 1000.0   -0.09  120.01  149.52  101 ! nRDLP-LAU Merdith et al., 2021. Cao et al. (This study) replaced 1100 with 1000 Ma
+22041 1000.0  -31.0899  -41.3238  -50.0245  201 ! nRDLP-Amazon Cao et al. (This study) crossover
+22041 1800.0  -31.0899  -41.3238  -50.0245  201 ! nRDLP-Amazon Cao et al. (This study) - not used
+77016 1010.0   90.0    0.0    0.0  701 !        Yaounde Domain @REF Merdith et al., 2021
+77016 1810.0   90.0    0.0    0.0  701 !        Yaounde Domain Cao et al. (This study) extend deeper in time 
+77017 1010.0   90.0    0.0    0.0  701 !        Adamawa-Yade Domain @REF Merdith et al., 2021
+77017 1810.0   90.0    0.0    0.0  701 !        Adamawa-Yade Domain Cao et al. (This study) extend deeper in time
+5014 1010.0   27.8418   43.331  -63.2251  5032 ! SGT-AZA @REF Merdith et al. 2021
+5014 1810.0   27.8418   43.331  -63.2251  5032 ! SGT-AZA Cao et al. (This study) extend deeper in time
+8023 1010.0   90.0    0.0    0.0  8025 ! LHM-SRD  @REF Merdith et al. 2021
+8023 1810.0   90.0    0.0    0.0  8025 ! LHM-SRD Cao et al. (This study) extend deeper in time
+8025 1010.0    6.8871  145.865  -56.2939  5032 ! TST-AZN  @REF Merdith et al. 2021
+8025 1810.0    6.8871  145.865  -56.2939  5032 ! TST-AZN Cao et al. (This study) extend deeper in time
+6024 1000.0   25.0965 -148.7649   -5.1606  602 ! Yangtze-CAT Merdith et al., 2021
+6024 1000.0   83.238 -100.6881 -124.6421  401 ! Yangtze-CAT Cao et al. (This study)
+6024 1070.0   70.8484  123.6169 -121.8647  401 ! Yangtze-SIB Cao et al. (This study)
+6024 1110.0   56.9395  120.3501 -102.4569  401 ! Yangtze-SIB Cao et al. (This study)
+6024 1200.0   56.9395  120.3501 -102.4569  401 ! Yangtze-SIB Cao et al. (This study)
+6024 1250.0   54.86  126.0313  -87.995  401 ! Yangtze-SIB Cao et al. (This study)
+6024 1320.0   48.5567  153.2936  -40.2462  401 ! Yangtze-SIB Cao et al. (This study)
+6024 1380.0  -22.4432   -1.5518   12.945  401 ! Yangtze-SIB Cao et al. (This study)
+6024 1380.0   61.0917   99.3878  149.9703  101 ! Yangtze-LAU Cao et al. (This study)
+6024 1600.0   61.0917   99.3878  149.9703  101 ! Yangtze-LAU Cao et al. (This study)
+6024 1900.0   61.0917   99.3878  149.9703  101 ! Yangtze-LAU Cao et al. (This study)
+999 1070.0   49.0331   26.068   46.7456  602 ! Yangtze-CAT Cao et al. (This study) 6024 corss-over at 1070 Ma
+5031 1000.0   68.6119   33.0208   24.2604  715 ! AFT-SMC Cao et al. (This study) modified (make it closer to Congo) after @REF Merdith et al. 2021
+5031 2000.0   68.6119   33.0208   24.2604  715 ! AFT-SMC Cao et al. (This study)
+5032 1000.0  -37.0213   62.639   13.7258  5031 ! AZN-AFT Merdith_++_2021 @DOI"10.1016/j.earscirev.2020.103477"  | Muller_etal_2022_v1.2.2
+5032 1000.0  -25.8301 -153.0444  -11.1208  701 ! Cao et al. (This study) crossover
+999 1000.0  -41.7423 -162.133  -13.7055  701 ! Cao et al. (This study) crossover 
+5032 1100.0   -5.9046   17.5975    9.4923  701 ! AZN-AFR Cao et al. (This study)
+5032 1550.0   -5.9046   17.5975    9.4923  701 ! AZN-AFR Cao et al. (This study)
+5032 1600.0  -22.8634   20.2658   10.1187  701 ! AZN-AFR  Cao et al. (This study)
+5032 1810.0  -22.8634   20.2658   10.1187  701 ! AZN-AFR  Cao et al. (This study)
+5033 1010.0   12.3619   40.4544   -8.0813  5032 ! Azania (Somalia Plate) @REF Merdith et al. 2021
+5033 1810.0   12.3619   40.4544   -8.0813  5032 ! Azania (Somalia Plate) Cao et al. (This study) extend
+5034 1010.0  -26.46 -158.34    7.83  5032 ! Azania (Arabia Plate) @REF Merdith et al. 2021
+5034 1810.0  -26.46 -158.34    7.83  5032 ! Azania (Arabia Plate) Cao et al. (This study) extend
+77021 1010.0   -6.8294  -57.0552   15.7569  5032 ! Central Madagascar @REF Merdith et al. 2021
+77021 1801.0   -6.8294  -57.0552   15.7569  5032 ! Central Madagascar Cao et al. (This study) extend
+77022 1010.0   -6.8294  -57.0552   15.7569  5032 ! Southern Madagascar @REF Merdith et al. 2021
+77022 1810.0   -6.8294  -57.0552   15.7569  5032 ! Southern Madagascar Cao et al. (This study) extend
+77023 1010.0   90.0    0.0    0.0  77021 ! Bemarivo Belt @REF Merdith et al. 2021
+77023 1810.0   90.0    0.0    0.0  77021 ! Bemarivo Belt Cao et al. (This study) extend
+502 1100.0    9.66   79.95  -43.96  5014 ! SLK-NGC @REF @REF Merdith et al. 2021
+502 1801.0    9.66   79.95  -43.96  5014 ! SLK-NGC @REF Cao et al. (This study) extend
+80103  0.0   90.0    0.0    0.0  8011 ! Arunta-NorthAustralia Cao et al. (This study) 
+80103 1740.0   90.0    0.0    0.0  8011 ! Arunta-NorthAustralia Cao et al. (This study) 
+80103 1800.0   29.2523   49.425  -13.0  8011 ! Arunta-NorthAustralia Cao et al. (This study) 
+80104  0.0   90.0    0.0    0.0  8011 ! Musgrave-NorthAustralia Cao et al. (This study) 
+80104 1600.0   90.0    0.0    0.0  8011 ! Musgrave-NorthAustralia Cao et al. (This study) 
+80104 1650.0   19.5992   47.2345   -5.5278  8011 ! Musgrave-NorthAustralia Cao et al. (This study) 
+80104 1660.0   19.5992   47.2345   -5.5278  8011 ! Musgrave-NorthAustralia Cao et al. (This study) 
+10102  0.0   90.0    0.0    0.0  101 ! Mojave-LAU Cao et al. (This study) 
+10102 1800.0   90.0    0.0    0.0  101 ! Mojave-LAU Cao et al. (This study) 
+10103  0.0   90.0    0.0    0.0  101 ! Yavapai-LAU Cao et al. (This study) 
+10103 1700.0   90.0    0.0    0.0  101 ! Yavapai-LAU Cao et al. (This study) 
+10103 1700.0   90.0    0.0    0.0  101 ! Yavapai-LAU Cao et al. (This study) 
+10103 1750.0   21.5219    1.4007   12.5327  101 ! Yavapai-LAU Cao et al. (This study) 
+10103 1760.0   21.5219    1.4007   12.5327  101 ! Yavapai-LAU Cao et al. (This study) 
+999 1700.0  -41.3796 -117.6469 -147.3171  501 !
+999 1750.0  -41.3796 -117.6469 -147.3171  501 !
+10104  0.0   90.0    0.0    0.0  101 ! Mazatzal-LAU Cao et al. (This study) 
+10104 1620.0   90.0    0.0    0.0  101 ! Mazatzal-LAU Cao et al. (This study) 
+10104 1670.0   21.5374    1.5786   12.5456  101 ! Cao et al. (This study) 
+10104 1680.0   21.5374    1.5786   12.5456  101 ! Cao et al. (This study) 
+10105  0.0   90.0    0.0    0.0  101 ! Granite Rhyolite-LAU Cao et al. (This study) 
+10105 1450.0   90.0    0.0    0.0  101 ! Granite Rhyolite-LAU Cao et al. (This study) 
+10105 1501.0   21.6674    1.5722    9.0  101 ! Granite Rhyolite-LAU Cao et al. (This study) 
+10105 1510.0   21.6674    1.5722    9.0  101 ! Granite Rhyolite-LAU Cao et al. (This study) 
+10106  0.0   90.0    0.0    0.0  101 ! Cao et al. (This study) 
+10106 1200.0   90.0    0.0    0.0  101 !  Cao et al. (This study) 
+10106 1250.0   21.7772    1.618    9.0  101 ! Cao et al. (This study) 
+10106 1260.0   21.7772    1.618   12.681  101 ! Cao et al. (This study) 
+98040 1000.0  -25.7201  154.6773    9.7177  000 ! Mirovoi Triple Junction @REF Merdith et al. 2021
+98040 1810.0  -25.7201  154.6773    9.7177  000 ! Mirovoi Triple Junction
+9804 1000.0  -47.3302  173.885  167.174  98040 ! Southern Mirovoi Ocean (subducting under Baltica-SF-Iskel) @REF Merdith et al. 2021
+9804 1050.0  -41.981  177.4633  181.5185  98040 !
+9804 1810.0  -47.3302  173.885  167.174  98040 ! Southern Mirovoi Ocean (subducting under Baltica-SF-Iskel)
+98041 1000.0    8.4793  139.8622  100.21  98040 !  Central Mirovoi Ocean (subducting under Siberia) @REF Merdith et al. 2021
+98041 1050.0   13.0826  151.0412  102.1317  98040 !
+98041 1810.0    8.4793  139.8622  100.21  98040 !  Central Mirovoi Ocean (subducting under Siberia)
+98055  0.0   90.0    0.0    0.0  000 !  
+98055 1900.0   90.0    0.0    0.0  000 !  
+911001  0.0   90.0    0.0    0.0  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1199.0   11.802 -152.8102   10.0  201 !
+911001 1237.0   11.802 -152.8102  -24.1156  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1300.0    9.2845 -147.952  -40.9452  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1320.0   -8.5398   33.1439   46.7814  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1380.0   -7.9058   38.9725   69.5884  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1419.0    9.7032   22.2822   87.5587  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1470.0   19.752 -142.1464 -115.2733  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1500.0   32.8807 -138.1698 -141.2754  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1530.0   41.3309 -143.7729 -163.4409  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1600.0   35.3919 -150.5976 -179.9071  201 ! conjugate plate of AMA Cao et al. (This study)
+911001 1630.0   32.8807 -138.1698 -141.2754  201 ! conjugate plate of AMA Cao et al. (This study)
+90100  0.0   90.0    0.0    0.0  000 ! superocean triple junction  Cao et al. (This study) 
+90100 1200.0   54.6035 -114.3362    7.4227  000 ! superocean triple junction  Cao et al. (This study) 
+90100 1400.0   50.0625  -59.7758  -10.2559  000 ! superocean triple junction  Cao et al. (This study) 
+90100 1500.0  -56.1994  116.25   12.0897  000 ! superocean triple junction  Cao et al. (This study) 
+90100 1550.0  -44.5266  119.795    9.1653  000 ! superocean triple junction  Cao et al. (This study) 
+90100 1605.0   46.4894  -62.0132  -10.0888  000 ! superocean triple junction  Cao et al. (This study) 
+90100 1800.0   90.0    0.0    0.1  000 ! superocean triple junction  Cao et al. (This study) 
+90104  0.0   90.0    0.0    0.0  000 ! 
+90104 1800.0   90.0    0.0    0.0  000 ! 
+90105  0.0   90.0    0.0    0.0  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1199.0   45.8277   93.8168 -152.2089  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1240.0   47.8292  101.1474 -169.9994  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1285.0   49.2516  109.3864 -190.534  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1330.0   50.0745  118.3004 -210.9639  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1375.0   52.401  125.7335 -230.4772  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1420.0   54.47  135.3841 -249.5632  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1465.0   57.2534  141.7241 -273.9775  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1510.0  -60.8873  -26.1648  297.8253  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1555.0  -62.2974   -2.483  323.377  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1600.0   43.9297 -128.7143 -342.6089  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1700.0   35.8473  111.5766  312.9943  90100 ! superocean plate 1 Cao et al. (This study) 
+90105 1800.0   39.3398  121.0775  264.4864  90100 !  superocean plate 1 Cao et al. (This study) 
+90106  0.0   90.0    0.0    0.0  90100 !  superocean plate 2 Cao et al. (This study) 
+90106 1199.0  -43.8335 -116.7797  -82.5206  90100 ! superocean plate 2 Cao et al. (This study) 
+90106 1240.0  -33.838 -113.3955  -92.1086  90100 ! superocean plate 2 Cao et al. (This study) 
+90106 1285.0  -24.6075 -111.9908 -103.6856  90100 ! superocean plate 2 Cao et al. (This study) 
+90106 1330.0  -16.7932 -110.9589 -116.5088  90100 ! superocean plate 2 Cao et al. (This study)
+90106 1375.0   -7.7808 -109.9666 -127.4927  90100 ! superocean plate 2 Cao et al. (This study)
+90106 1420.0    0.3839 -109.1055 -139.5075  90100 ! superocean plate 2 Cao et al. (This study)
+90106 1465.0   11.2925 -109.9495 -151.5722  90100 ! superocean plate 2 Cao et al. (This study)
+90106 1510.0  -21.6116   69.1911  164.5761  90100 ! superocean plate 2 Cao et al. (This study)
+90106 1555.0  -30.4684   68.4226  178.8474  90100 ! superocean plate 2 Cao et al. (This study)
+90106 1600.0   39.2976 -112.4983 -193.1462  90100 ! superocean plate 2 Cao et al. (This study)
+90106 1700.0   64.0026 -123.6983 -210.7941  90100 ! superocean plate 2 Cao et al. (This study)
+90106 1800.0   80.0524  152.8021 -218.3764  90100 ! superocean plate 2 Cao et al. (This study)
+90107  0.0   90.0    0.0    0.0  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1199.0   85.4413   -9.656  137.5886  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1240.0   85.9175  -40.7161  162.9195  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1285.0   83.0953  -63.6941  191.8215  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1330.0   79.6423  -73.0768  220.6767  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1375.0   77.4873  -69.0199  249.5843  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1420.0   74.3243  -65.1475  278.3679  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1465.0   73.0183  -56.3319  298.4849  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1510.0  -69.8254  136.43 -318.3804  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1555.0  -69.7767  136.43 -339.2371  90100 ! superocean plate 3 Cao et al. (This study)
+90107 1600.0   90.0    0.0 -359.9  90100 !  superocean plate 3 Cao et al. (This study)
+90107 1700.0   66.2346  153.5753 -323.5727  90100 !  superocean plate 3 Cao et al. (This study)
+90107 1800.0   65.4421  155.6526 -291.9321  90100 !  superocean plate 3 Cao et al. (This study)
+90108  0.0   90.0    0.0    0.0  000 ! ocean between AMA and CON Cao et al. (This study)
+90108 1150.0   28.353 -169.5595  -82.7941  000 ! ocean between AMA and CON Cao et al. (This study)
+90108 1160.0   26.6457 -169.6013  -70.3127  000 ! ocean between AMA and CON Cao et al. (This study)
+90108 1165.0   26.4863 -169.7568  -60.5452  000 ! ocean between AMA and CON Cao et al. (This study)
+90108 1180.0   24.2425  175.7059  -39.5558  000 ! ocean between AMA and CON Cao et al. (This study)
+90108 1200.0   90.0    0.0    0.0  000 !  ocean between AMA and CON Cao et al. (This study)
+90108 1220.0   24.2425  175.7059   39.5558  000 ! ocean between AMA and CON Cao et al. (This study)
+90109  0.0   90.0    0.0    0.0  101 !
+90109 10.0   64.2201 -160.4573  166.3586  101 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1030.0   56.3733 -174.5252  184.411  101 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1050.0   58.6558 -170.9202  178.829  101 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1070.0   60.4609 -168.3037  175.2197  101 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1090.0   62.8243 -164.704  171.7997  101 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1110.0   64.2201 -160.4573  166.3586  101 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1110.0   -0.4057 -117.1594  -14.6295  000 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1140.0   -1.5265  -96.5134  -16.3561  000 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1150.0    6.4047  -91.3561  -14.3853  000 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1184.0   53.2663  -51.5086  -13.3117  000 !
+90109 1200.0   64.4542    3.1964  -18.4472  000 ! ocean between AMA and LAU Cao et al. (This study)
+90109 1201.0   64.3407    6.054  -18.8777  000 !
+999  0.0    0.0    0.0    0.0  000 ! ocean between AMA and LAU Cao et al. (This study)
+999 1110.0   90.0    0.0    0.0  000 ! ocean between AMA and LAU Cao et al. (This study)
+999 1140.0   25.5696   66.378   35.4181  000 ! ocean between AMA and LAU Cao et al. (This study)
+999 1200.0   33.1114   59.3962   60.0279  000 ! ocean between AMA and LAU Cao et al. (This study)
+90110  0.0   90.0    0.0    0.0  90109 !
+90110 1030.0   58.6605 -172.6301  -51.3653  90109 !
+90110 1036.0   58.5846 -172.0607  -49.0643  90109 !
+90110 1050.0   58.6751 -170.9054  -39.8911  90109 !
+90110 1070.0   58.3436 -169.4707  -27.6112  90109 !
+90110 1090.0   58.5477 -167.5243  -16.1219  90109 !
+90110 1110.0   23.8526 -130.3979   -4.8842  90109 !
+90110 1140.0  -44.8442 -123.1958  -22.541  90109 !
+90110 1200.0   44.6894   56.3976   67.4724  90109 !
+90110 1201 44.68847308136305 56.39518321176307 68.22126236184289 90109 !
+811001  0.0   90.0    0.0    0.0  801 ! ocean between W AUS and S AUS Cao et al. (This study)
+811001 1600.0   90.0    0.0    0.0  801 ! ocean between W AUS and S AUS Cao et al. (This study)
+811001 1650.0   56.1929  164.8496  -10.1051  801 ! ocean between W AUS and S AUS Cao et al. (This study)
+811001 1700.0   64.2405  145.0843  -23.968  801 ! ocean between W AUS and S AUS Cao et al. (This study)
+811001 1751.0   65.4307  136.0295  -35.0472  801 ! ocean between W AUS and S AUS Cao et al. (This study)
+501001  0.0   90.0    0.0    0.0  101 ! 
+501001 1699.1   90.0    0.0    0.0  101 ! 
+501001 1760.0  -62.7319   85.1837   44.247  101 !
+501001 1800.0  -64.0744   78.086   75.1291  101 !

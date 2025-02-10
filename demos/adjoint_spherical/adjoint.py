@@ -33,10 +33,10 @@ blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluat
 blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
 
 # timer decorator for fwd and derivative calls.
-ReducedFunctional.__call__ = collect_garbage(ReducedFunctional.__call__)
-ReducedFunctional.derivative = collect_garbage(ReducedFunctional.derivative)
-ReducedFunctional.__call__ = profile(ReducedFunctional.__call__)
+ReducedFunctional.func_call = profile(ReducedFunctional.__call__)
 ReducedFunctional.derivative = profile(ReducedFunctional.derivative)
+ReducedFunctional.func_call = collect_garbage(ReducedFunctional.func_call)
+ReducedFunctional.derivative = collect_garbage(ReducedFunctional.derivative)
 
 
 # Set up geometry:
@@ -46,7 +46,7 @@ rmax, rmin, ncells, nlayers = 2.22, 1.22, 32, 8
 def just_forward_adjoint_calls(num):
     tic, rf = forward_problem()
     for i in range(num):
-        rf(tic)
+        rf.func_call(tic)
         rf.derivative()
 
 
