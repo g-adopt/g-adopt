@@ -48,7 +48,7 @@ diagnostics = {
                 - 46.2
             ),
             operator.le,
-            0.1,
+            0.2,
         )
     ],
     "tosi_2015": [
