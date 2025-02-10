@@ -134,6 +134,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
     Z = MixedFunctionSpace([V, W])
+    R = FunctionSpace(mesh, "R", 0)  # Real number function space
 
     # Test functions and functions to hold solutions:
     z = Function(Z)  # a field over the mixed function space Z.
@@ -141,11 +142,11 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
-    Ra = Constant(1e7)  # Rayleigh number
+    Ra = Function(R, name="Ra").assign(1e7)  # Rayleigh number
 
     # Define time stepping parameters:
     max_timesteps = 200
-    delta_t = Constant(5e-6)  # Constant time step
+    delta_t = Function(R, name="delta_t").assign(5e-6)  # Constant time step
 
     # Without a restart to continue from, our initial guess is the final state of the forward run
     # We need to project the state from Q2 into Q1
@@ -236,7 +237,8 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     control = Control(Tic)
 
     # If we are using surface veolocit misfit in the functional
-    u_misfit = 0.0
+    if alpha_u > 0:
+        u_misfit = Function(R, name="u_misfit").assign(0.0)
 
     # We need to project the initial condition from Q1 to Q2,
     # and impose the boundary conditions at the same time
@@ -245,7 +247,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     # if the weighting for misfit terms non-positive, then no need to integrate in time
     # min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
-    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps - 1
+    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # making sure velocity is deterministic
     z.subfunctions[0].assign(as_vector((0.0, 0.0)))
@@ -255,9 +257,10 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
         stokes_solver.solve()
         energy_solver.solve()
 
-        # Update the accumulated surface velocity misfit using the observed value
-        uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=timestep)
-        u_misfit += assemble(Constant(alpha_u) * dot(u - uobs, u - uobs) * ds_t)
+        if alpha_u > 0:
+            # Update the accumulated surface velocity misfit using the observed value
+            uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=timestep)
+            u_misfit += assemble(Function(R, name="alpha_u").assign(alpha_u) * dot(u - uobs, u - uobs) * ds_t)
 
     # Load the observed final state
     Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
@@ -274,29 +277,34 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     checkpoint_file.close()
 
     # Initiate the objective functional
-    objective = 0.0
+    objective = Function(R, name="objective").assign(0.0)
 
-    # Calculate the norms of the observed temperature, it will be used in multiple spots later
-    norm_obs = assemble(Tobs**2 * dx)
+    if any([w > 0 for w in [alpha_u, alpha_d, alpha_s]]):
+        # Calculate the norms of the observed temperature, it will be used in multiple spots later
+        norm_obs = assemble(Tobs**2 * dx)
 
     # Define the component terms of the overall objective functional
     # Temperature term
-    # Temperature misfit between solution and observation
-    objective += assemble(Constant(alpha_T) * (T - Tobs) ** 2 * dx)
+    if alpha_T > 0:
+        # Temperature misfit between solution and observation
+        objective += assemble(Function(R, name="alpha_T").assign(alpha_T) * (T - Tobs) ** 2 * dx)
 
     # Velocity misfit term
-    norm_u_surface = assemble(dot(uobs, uobs) * ds_t)  # measure of u_obs from the last timestep
-    objective += (norm_obs * u_misfit / (max_timesteps - min_timesteps) / norm_u_surface)
+    if alpha_u > 0:
+        norm_u_surface = assemble(dot(uobs, uobs) * ds_t)  # measure of u_obs from the last timestep
+        objective += (norm_obs * u_misfit / (max_timesteps - min_timesteps) / norm_u_surface)
 
     # Damping term
-    damping = assemble(Constant(alpha_d) * (T_0 - Taverage) ** 2 * dx)
-    norm_damping = assemble((Tobs - Taverage)**2 * dx)
-    objective += (norm_obs * damping / norm_damping)
+    if alpha_d > 0:
+        damping = assemble(Function(R, name="alpha_d").assign(alpha_d) * (T_0 - Taverage) ** 2 * dx)
+        norm_damping = assemble((Tobs - Taverage)**2 * dx)
+        objective += (norm_obs * damping / norm_damping)
 
     # Smoothing term
-    smoothing = assemble(Constant(alpha_s) * dot(grad(T_0 - Taverage), grad(Tic - Taverage)) * dx)
-    norm_smoothing = assemble(dot(grad(Tobs - Taverage), grad(Tobs - Taverage)) * dx)
-    objective += (norm_obs * smoothing / norm_smoothing)
+    if alpha_s > 0:
+        smoothing = assemble(Function(R, name="alpha_s").assign(alpha_s) * dot(grad(T_0 - Taverage), grad(Tic - Taverage)) * dx)
+        norm_smoothing = assemble(dot(grad(Tobs - Taverage), grad(Tobs - Taverage)) * dx)
+        objective += (norm_obs * smoothing / norm_smoothing)
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
