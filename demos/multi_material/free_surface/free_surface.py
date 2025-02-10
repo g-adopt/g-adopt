@@ -23,8 +23,8 @@ nx, ny = 256, 64  # Number of cells in x and y directions
 lx, ly = 3e6, 7e5  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
-mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
+mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects
+boundary = get_boundary_ids(mesh)  # Object holding references to mesh boundary IDs
 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
@@ -151,10 +151,10 @@ t_adapt = TimestepAdaptor(
 # +
 rho_ext = 0
 stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"delta_rho_fs": rho_mantle - rho_ext}},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"uy": 0},
+    boundary.top: {"free_surface": {"delta_rho_fs": rho_mantle - rho_ext}},
+    boundary.left: {"ux": 0},
+    boundary.right: {"ux": 0},
 }
 # Instantiate a solver object for the Stokes system and perform a solve to obtain
 # initial pressure and velocity.
@@ -183,7 +183,7 @@ output_file.write(*z.subfunctions, psi, time=time_now / myr_to_seconds)
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms slab_tip_depth")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is

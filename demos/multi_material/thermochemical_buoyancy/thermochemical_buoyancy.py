@@ -82,8 +82,8 @@ if MPI.COMM_WORLD.rank == 0:
 
 # +
 mesh = Mesh(mesh_file)  # Load the GMSH mesh using Firedrake
-mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
+mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects
+boundary = get_boundary_ids(mesh)  # Object holding references to mesh boundary IDs
 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
@@ -188,8 +188,8 @@ Ts = 1 / 2 - Q_ic / 2 / sqrt(pi) * sqrt(v0 / (2 - X[1])) * exp(
 
 # Interpolate temperature initial condition and ensure boundary condition values
 T.interpolate(max_value(min_value(Tu + Tl + Tr + Ts - 3 / 2, 1), 0))
-DirichletBC(Q, 1, bottom_id).apply(T)
-DirichletBC(Q, 0, top_id).apply(T)
+DirichletBC(Q, 1, boundary.bottom).apply(T)
+DirichletBC(Q, 0, boundary.top).apply(T)
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -217,12 +217,12 @@ Z_nullspace = create_stokes_nullspace(Z)
 # and cooling from above. No boundary conditions are required for level set, as the
 # numerical domain is closed.
 stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"uy": 0},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"uy": 0},
+    boundary.top: {"uy": 0},
+    boundary.left: {"ux": 0},
+    boundary.right: {"ux": 0},
 }
-temp_bcs = {bottom_id: {"T": 1}, top_id: {"T": 0}}
+temp_bcs = {boundary.bottom: {"T": 1}, boundary.top: {"T": 0}}
 # Instantiate a solver object for the energy conservation system.
 energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
@@ -259,7 +259,7 @@ output_file.write(*z.subfunctions, T, psi, time=time_now)
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
 material_area = interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated

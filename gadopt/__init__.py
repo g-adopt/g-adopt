@@ -41,6 +41,7 @@ from .utility import (
     log,
     node_coordinates,
     timer_decorator,
+    get_boundary_ids,
 )
 
 PETSc.Sys.popErrorHandler()
