@@ -209,7 +209,7 @@ tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_opt
 # dz = D / nz
 #
 # normal = [0, 0, 1]
-# polar = [radius_values[0]-dz/2, 0, 0]
+# polar = [radius_values[0]-0.1*dz, 0, 0]
 # center = [0, 0, 0]
 # angle = 360.0
 # arc = pv.CircularArcFromNormal(center, 10000, normal, polar, angle)
@@ -272,7 +272,6 @@ tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_opt
 #         }
 #     )
 #
-#
 # # Read the PVD file
 # updated_ice_file = VTKFile('ice.pvd').write(normalised_ice_thickness, target_normalised_ice_thickness)
 # reader = pv.get_reader("ice.pvd")
@@ -322,7 +321,7 @@ log(f"Simulation start time: {Tstart} years")
 # contrast across the free surface.
 
 # Setup boundary conditions
-exterior_density = rho_ice * (0.5 + 0.5*tanh(10*(normalised_ice_thickness-0.5)))
+exterior_density = rho_ice * (0.5 + 0.5*tanh(20*(normalised_ice_thickness-0.1)))
 stokes_bcs = {
     top_id: {
         'normal_stress': ice_load,
@@ -434,9 +433,47 @@ for timestep in range(max_timesteps+1):
         f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} "
         f"{vertical_displacement.dat.data.min()} {vertical_displacement.dat.data.max()}"
     )
+
+
 # -
 
+# Let's create a helper function to warp the mesh based on the displacement and 
+
 # As we can see from the plot below there is no displacement at the final time given there is no ice load!
+
+# +
+def add_displacement(p, m, disp="Displacement", vel="target velocity", scalar_bar_args=None, show_scalar_bar=True)
+    data = m.read()[0]  # MultiBlock mesh with only 1 block
+    
+    # Artificially warp the output data by the displacement field
+    # Note the mesh is not really moving!
+    warped = data.warp_by_vector(vectors=disp, factor=1500)
+    arrows = warped.glyph(orient=vel, scale=vel, factor=1e14, tolerance=0.01)
+    if scalar_bar_args is None:
+        scalar_bar_args={
+            "title": 'Displacement (m)',
+            "position_x": 0.2,
+            "position_y": 0.8,
+            "vertical": False,
+            "title_font_size": 20,
+            "label_font_size": 16,
+            "fmt": "%.0f",
+            "font_family": "arial",
+    }
+    
+    
+# Add the warped displacement field to the frame
+    plotter.add_mesh(
+        warped,
+        scalars=disp,
+        component=None,
+        lighting=False,
+        clim=[0, 600],
+        cmap=boring_cmap,
+        show_scalar_bar=show_scalar_bar
+        
+        
+)
 
 # + tags=["active-ipynb"]
 # # Read the PVD file
@@ -732,14 +769,39 @@ continue_annotation()
 # data = reader.read()[0]  # MultiBlock mesh with only 1 block
 #
 # # Create a plotter object
-# plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
+# plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
 #
 # # Make a colour map
 # boring_cmap = plt.get_cmap("inferno_r", 25)
-#
 # # Read last timestep
 # reader.set_active_time_point(15)
 # data = reader.read()[0]
+# plotter.subplot(0, 0)
+# # Artificially warp the output data by the displacement field
+# # Note the mesh is not really moving!
+# warped = data.warp_by_vector(vectors="Displacement", factor=1500)
+# arrows = warped.glyph(orient="target velocity", scale="target velocity", factor=1e14, tolerance=0.01)
+# # Add the warped displacement field to the frame
+# plotter.add_mesh(
+#     warped,
+#     scalars="Displacement",
+#     component=None,
+#     lighting=False,
+#     clim=[0, 600],
+#     cmap=boring_cmap,
+#     scalar_bar_args={
+#         "title": 'Displacement (m)',
+#         "position_x": 0.2,
+#         "position_y": 0.8,
+#         "vertical": False,
+#         "title_font_size": 20,
+#         "label_font_size": 16,
+#         "fmt": "%.0f",
+#         "font_family": "arial",
+#     }
+# )
+#
+# plotter.subplot(0, 1)
 # # Artificially warp the output data by the displacement field
 # # Note the mesh is not really moving!
 # warped = data.warp_by_vector(vectors="updated displacement", factor=1500)
@@ -752,22 +814,13 @@ continue_annotation()
 #     lighting=False,
 #     clim=[0, 600],
 #     cmap=boring_cmap,
-#     scalar_bar_args={
-#         "title": 'Displacement (m)',
-#         "position_x": 0.85,
-#         "position_y": 0.3,
-#         "vertical": True,
-#         "title_font_size": 20,
-#         "label_font_size": 16,
-#         "fmt": "%.0f",
-#         "font_family": "arial",
-#     }
+#     show_scalar_bar=False
 # )
 #
 # ice_scalar_bar_args = {"title": 'Normalised ice thickness',
-#                        "position_x": 0.1,
-#                        "position_y": 0.3,
-#                        "vertical": True,
+#                        "position_x": 0.2,
+#                        "position_y": 0.1,
+#                        "vertical": False,
 #                        "title_font_size": 22,
 #                        "label_font_size": 18,
 #                        "fmt": "%.1f",
@@ -777,12 +830,16 @@ continue_annotation()
 #
 # reader = pv.get_reader("updated_ice_thickness.pvd")
 # reader.set_active_time_point(15)
+# plotter.subplot(0, 0)
+# add_ice(plotter, reader, 'target normalised ice thickness', scalar_bar_args=ice_scalar_bar_args)
+# plotter.camera_position = 'xy'
+# plotter.subplot(0, 1)
 # add_ice(plotter, reader, 'updated ice thickness', scalar_bar_args=ice_scalar_bar_args)
 #
 # adj_scalar_bar_args = {
 #             "title": 'Adjoint sensitivity',
 #             "position_x": 0.2,
-#             "position_y": 0.05,
+#             "position_y": 0.1,
 #             "vertical": False,
 #             "title_font_size": 22,
 #             "label_font_size": 18,
@@ -796,7 +853,6 @@ continue_annotation()
 # add_sensitivity_ring(plotter, adj_reader, scalar_bar_args=adj_scalar_bar_args)
 # plotter.camera_position = 'xy'
 # plotter.show(jupyter_backend="static", interactive=False)
-# # Closes and finalizes movie
 # plotter.close()
 # -
 
