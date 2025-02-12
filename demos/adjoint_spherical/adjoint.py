@@ -3,10 +3,10 @@ from gadopt.inverse import *
 from gadopt.gplates import *
 from gadopt.transport_solver import iterative_energy_solver_parameters
 import numpy as np
-from firedrake.adjoint_utils import blocks
 from pathlib import Path
 import gdrift
 from gdrift.profile import SplineProfile
+from checkpoint_schedules import SingleDiskStorageSchedule
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -26,19 +26,6 @@ LinearVariationalSolver.DEFAULT_SNES_PARAMETERS = {"snes_type": "ksponly"}
 LinearSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 LinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
 NonlinearVariationalSolver.DEFAULT_KSP_PARAMETERS = iterative_solver_parameters
-
-blocks.solving.Block.evaluate_adj = collect_garbage(
-    blocks.solving.Block.evaluate_adj)
-blocks.solving.Block.recompute = collect_garbage(
-    blocks.solving.Block.recompute)
-
-# timer decorator for fwd and derivative calls.
-ReducedFunctional.__call__ = collect_garbage(
-    timer_decorator(ReducedFunctional.__call__)
-)
-ReducedFunctional.derivative = collect_garbage(
-    timer_decorator(ReducedFunctional.derivative)
-)
 
 # Set up geometry:
 rmax = 2.208
@@ -76,22 +63,46 @@ def conduct_inversion():
         checkpoint_dir="optimisation_checkpoint"
     )
 
+    # visualisation_path = find_last_checkpoint(
+    # ).resolve().parents[2] / "visual.pvd"
+
+    # vtk_file = VTKFile(str(visualisation_path))
+    # control_container = Function(
+    #     Tic.function_space(), name="Initial Temperature")
+
+    # def callback():
+    #     control_container.assign(Tic.block_variable.checkpoint.restore())
+    #     vtk_file.write(control_container)
+
+    # #
+    # optimiser.add_callback(callback)
+
+    # # Restore from previous data
+    # optimiser.restore()
+
     # run the optimisation
     optimiser.run()
 
 
 def conduct_taylor_test():
     Tic, reduced_functional = forward_problem()
-    log("Reduced Functional Repeat: ", reduced_functional([Tic]))
     Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
     Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
     _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-@collect_garbage
 def forward_problem():
     # Enable disk checkpointing for the adjoint
     enable_disk_checkpointing()
+
+    # Getting the working tape
+    tape = get_working_tape()
+
+    # clearing tape
+    tape.clear_tape()
+
+    # setting gc collection
+    tape.enable_checkpointing(SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2)
 
     # Set up the base path
     base_path = Path(__file__).resolve().parent
@@ -111,7 +122,7 @@ def forward_problem():
 
     # Loading adiabatic reference fields
     tala_parameters_dict = {}
-    with CheckpointFile("./initial_condition_mat_prop/reference_fields.h5", "r") as fi:
+    with CheckpointFile(str(base_path / "initial_condition_mat_prop/reference_fields.h5"), "r") as fi:
         for key in ["rhobar", "Tbar", "alphabar", "cpbar", "gbar", "mu_radial"]:
             tala_parameters_dict[key] = fi.load_function(mesh, name=key)
 
@@ -126,6 +137,10 @@ def forward_problem():
     Q1 = FunctionSpace(mesh, "CG", 1)  # Initial Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
     R = FunctionSpace(mesh, "R", 0)  # Function space for constants
+
+    # Symbolic representation of spatial coordinates and radius
+    X = SpatialCoordinate(mesh)
+    radius = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 
     # Function for holding stokes results
     z = Function(Z)
@@ -142,20 +157,20 @@ def forward_problem():
     mu_radial = tala_parameters_dict["mu_radial"]
     mu = mu_constructor(mu_radial, T_ave, T)  # Add temperature dependency
 
+    # Because we start from u := vec(0.0); we use very small timesteps
     # Initial time step
-    delta_t = Function(R, name="delta_t").assign(5.0e-7)
+    # delta_t = Function(R, name="delta_t").assign(5.0e-7)
+    delta_t = Function(R, name="delta_t").assign(1.0e-10)
 
-    # If we are running from a checkpoint, we want to use an appropriate initial condition
-    # this is normally not necessary, unless we are redefining the ReducedFunctional.__call__
-    # to skip the first recall in the optimisation.
     if last_checkpoint_path is not None:
         with CheckpointFile(str(last_checkpoint_path), "r") as fi:
             Tic.assign(fi.load_function(mesh, name="dat_0"))
     else:
         Tic.interpolate(T_simulation)
+    # Tic.interpolate(T_simulation)
 
     # Information pertaining to the plate reconstruction model
-    cao_2024_files = ensure_reconstruction("Cao 2024", "./gplates_files")
+    cao_2024_files = ensure_reconstruction("Cao 2024", str(base_path / "gplates_files"))
 
     plate_reconstruction_model = pyGplatesConnector(
         rotation_filenames=cao_2024_files["rotation_filenames"],
@@ -164,7 +179,7 @@ def forward_problem():
         nseeds=1e4,
         scaling_factor=1.0,
         oldest_age=1800,
-        delta_t=1.0
+        delta_t=2.0
     )
 
     # Top velocity boundary condition
@@ -242,7 +257,7 @@ def forward_problem():
     presentday_ndtime = plate_reconstruction_model.age2ndtime(0.)
 
     # non-dimensionalised time for 35 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(15.)
+    time = plate_reconstruction_model.age2ndtime(20.)
 
     # Defining control
     control = Control(Tic)
@@ -269,15 +284,25 @@ def forward_problem():
 
     # timestep counter
     timestep_index = 0
+    timestep_initial_phase = 3
+    stokes_solve_frequency = 3
+    z.subfunctions[0].interpolate(as_vector((0., 0., 0.)))
 
     # Now perform the time loop:
-    while time < presentday_ndtime:
-        if timestep_index % 2 == 0:
-            # Update surface velocities
-            gplates_velocities.update_plate_reconstruction(time)
+    for timestep_index in tape.timestepper(iter(range(500))):
+        # Update surface velocities
+        updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
 
-            # Solve Stokes sytem
+        # We only solve stokes every 3 timesteps or during initial phase
+        if timestep_index % stokes_solve_frequency == 0 or timestep_index < timestep_initial_phase or updated_plt_rec:
             stokes_solver.solve()
+
+        # If the surface velocity is updates, or it's initial time-steps, there is a high chance
+        # that our velocity is not still not good! So do not do big time-steps
+        if timestep_index < timestep_initial_phase or updated_plt_rec:
+            delta_t.assign(1e-10)
+        else:
+            delta_t.assign(4e-7)
 
         # Make sure we are not going past present day
         if presentday_ndtime - time < float(delta_t):
@@ -285,32 +310,36 @@ def forward_problem():
 
         # Temperature system:
         energy_solver.solve()
-
         # Updating time
         time += float(delta_t)
         timestep_index += 1
+
+        if time < presentday_ndtime:
+            break
 
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature").interpolate((T + tala_parameters_dict["Tbar"]) * Constant(3700.) + Constant(300.))
 
     # Temperature misfit between solution and observation
-    t_misfit = assemble((FullT - T_obs) ** 2 * dx)
-    norm_t_misfit = assemble(T_obs ** 2 * dx)
+    # The upper-most 200 km (2.1386 non-dimensional) are mainly continental structure that we have not removed for now
+    # So we leave them intact in the initial guess, and do not apply any information there
+    t_misfit = assemble((FullT - T_obs) ** 2 * conditional(radius > Constant(2.1386), 0.0, 1.0) * dx)
+    norm_t_misfit = assemble((T_obs - T_ave) ** 2 * dx)
 
     # Regularisation part of the objective
     smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
-    norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
-    log(f"Norms: reg={norm_smoothing}, t={norm_t_misfit}, Misfits: reg={smoothing}, t={t_misfit}")
+    norm_smoothing = assemble(inner(grad(T_obs - T_ave), grad(T_obs - T_ave)) * dx)
+    log(f"Magnitudes: R_norm={norm_smoothing}, T_norm={norm_t_misfit}, R={smoothing}, T={t_misfit}")
 
     # We want to weight the smoothing down not to affect the final solution
     weight_smoothin = 1e-2
     # Assembling the objective
-    objective = t_misfit / norm_t_misfit + weight_smoothin * smoothing / norm_smoothing
+    regularisation_weight = 1e5
+    objective = t_misfit / norm_t_misfit + regularisation_weight * smoothing / norm_smoothing
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
 
-    # DROP before run
     # We want to avoid a second call to objective functional with the same value
     first_call_decorator = first_call_value(predefined_value=objective)
     ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
@@ -659,3 +688,7 @@ def get_dimensional_parameters():
         # "kappa": 3.0,
         # "H_int": 2900e3,
     }
+
+
+def tanh_transition(x, x_0, k=1000):
+    return 0.5 * (1 - tanh(k * (x - x_0)))
