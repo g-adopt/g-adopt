@@ -209,7 +209,7 @@ tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_opt
 # dz = D / nz
 #
 # normal = [0, 0, 1]
-# polar = [radius_values[0]-0.1*dz, 0, 0]
+# polar = [radius_values[0]-0.01*dz, 0, 0]
 # center = [0, 0, 0]
 # angle = 360.0
 # arc = pv.CircularArcFromNormal(center, 10000, normal, polar, angle)
@@ -278,17 +278,20 @@ tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_opt
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
+#
 # plotter.subplot(0, 0)
 # add_ice(plotter, reader, 'target normalised ice thickness')
 # add_viscosity(plotter)
+# plotter.add_text("Target")
 # plotter.camera_position = 'xy'
+#
 # plotter.subplot(0, 1)
 # add_ice(plotter, reader, 'normalised ice thickness')
 # add_viscosity(plotter)
-#
+# plotter.add_text("Initial Guess")
 # plotter.camera_position = 'xy'
+#
 # plotter.show(jupyter_backend="static", interactive=False)
-# # Closes and finalizes movie
 # plotter.close()
 # -
 
@@ -437,20 +440,19 @@ for timestep in range(max_timesteps+1):
 
 # -
 
-# Let's create a helper function to warp the mesh based on the displacement and 
+# Let's create a helper function to warp the mesh based on the displacement and
 
-# As we can see from the plot below there is no displacement at the final time given there is no ice load!
-
-# +
-def add_displacement(p, m, disp="Displacement", vel="target velocity", scalar_bar_args=None, show_scalar_bar=True)
+def add_displacement(p, m, disp="Displacement", scalar_bar_args=None):
     data = m.read()[0]  # MultiBlock mesh with only 1 block
-    
+
+    # Make a colour map
+    boring_cmap = plt.get_cmap("inferno_r", 25)
+
     # Artificially warp the output data by the displacement field
     # Note the mesh is not really moving!
     warped = data.warp_by_vector(vectors=disp, factor=1500)
-    arrows = warped.glyph(orient=vel, scale=vel, factor=1e14, tolerance=0.01)
     if scalar_bar_args is None:
-        scalar_bar_args={
+        scalar_bar_args = {
             "title": 'Displacement (m)',
             "position_x": 0.2,
             "position_y": 0.8,
@@ -459,10 +461,9 @@ def add_displacement(p, m, disp="Displacement", vel="target velocity", scalar_ba
             "label_font_size": 16,
             "fmt": "%.0f",
             "font_family": "arial",
-    }
-    
-    
-# Add the warped displacement field to the frame
+        }
+
+    # Add the warped displacement field to the frame
     plotter.add_mesh(
         warped,
         scalars=disp,
@@ -470,10 +471,11 @@ def add_displacement(p, m, disp="Displacement", vel="target velocity", scalar_ba
         lighting=False,
         clim=[0, 600],
         cmap=boring_cmap,
-        show_scalar_bar=show_scalar_bar
-        
-        
-)
+        scalar_bar_args=scalar_bar_args,
+    )
+
+
+# As we can see from the plot below there is no displacement at the final time given there is no ice load!
 
 # + tags=["active-ipynb"]
 # # Read the PVD file
@@ -483,25 +485,10 @@ def add_displacement(p, m, disp="Displacement", vel="target velocity", scalar_ba
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
 #
-# # Make a colour map
-# boring_cmap = plt.get_cmap("inferno_r", 25)
+# # Plot displacement
 #
-# # Read last timestep
-# reader.set_active_time_point(10)
-# data = reader.read()[0]
-# # Artificially warp the output data in the vertical direction by the free surface height
-# # Note the mesh is not really moving!
-# warped = data.warp_by_vector(vectors="displacement", factor=1500)
-# arrows = warped.glyph(orient="velocity", scale="velocity", factor=1e14, tolerance=0.01)
-# # Add the warped displacement field to the frame
-# plotter.add_mesh(
-#     warped,
-#     scalars="displacement",
-#     component=None,
-#     lighting=False,
-#     clim=[0, 600],
-#     cmap=boring_cmap,
-#     scalar_bar_args={
+# reader.set_active_time_point(10)  # Read last timestep
+# disp_scalar_bar_args={
 #         "title": 'Displacement (m)',
 #         "position_x": 0.85,
 #         "position_y": 0.3,
@@ -511,8 +498,10 @@ def add_displacement(p, m, disp="Displacement", vel="target velocity", scalar_ba
 #         "fmt": "%.0f",
 #         "font_family": "arial",
 #     }
-# )
+# add_displacement(plotter, reader, 'displacement', scalar_bar_args=disp_scalar_bar_args)
 #
+# # Plot ice ring
+# reader = pv.get_reader("ice.pvd")
 # ice_scalar_bar_args = {"title": 'Normalised ice thickness',
 #                        "position_x": 0.1,
 #                        "position_y": 0.3,
@@ -523,15 +512,17 @@ def add_displacement(p, m, disp="Displacement", vel="target velocity", scalar_ba
 #                        "font_family": "arial",
 #                        "n_labels": 5,
 #                        }
-#
-# reader = pv.get_reader("ice.pvd")
 # add_ice(plotter, reader, 'normalised ice thickness', scalar_bar_args=ice_scalar_bar_args)
+#
 # plotter.camera_position = 'xy'
+# plotter.add_text("Time = 10 ka")
 # plotter.show(jupyter_backend="static", interactive=False)
-# # Closes and finalizes movie
 # plotter.close()
 # -
 
+# The inverse problem
+# ------------------------------
+#
 # Now we can define our overall objective function that we want to minimise.
 # This includes the time integrated displacement and velocity misfit at the
 # surface as we discussed above. It is also a good idea to add a smoothing
@@ -605,6 +596,9 @@ def eval_cb(J, m):
 
 reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 
+# ### Verifying the forward tape
+#
+#
 # A good check to see if the forward taping worked is to rerun the forward model based on
 # the operations stored on the tape. We can do this by providing the control to the
 # reducted functional and print out the answer - it is good to see they are the same!
@@ -612,6 +606,8 @@ reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 log("J", J)
 log("replay tape RF", reduced_functional(normalised_ice_thickness))
 
+# ### Visualising the derivative
+#
 # We can now calculate the derivative of our objective function with respect to the
 # ice thickness.  This is as simple as calling the `derivative()` method on  our
 # reduced functional.
@@ -670,6 +666,7 @@ def add_sensitivity_ring(p, m, scalar_bar_args=None):
 # plotter.subplot(0, 0)
 # add_ice(plotter, reader, 'target normalised ice thickness')
 # add_viscosity(plotter)
+# plotter.add_text("Target")
 # plotter.camera_position = 'xy'
 # plotter.subplot(0, 1)
 # add_ice(plotter, reader, 'normalised ice thickness')
@@ -677,11 +674,14 @@ def add_sensitivity_ring(p, m, scalar_bar_args=None):
 #
 # add_sensitivity_ring(plotter, adj_reader)
 # plotter.camera_position = 'xy'
+# plotter.add_text("Initial Guess")
 # plotter.show(jupyter_backend="static", interactive=False)
 # # Closes and finalizes movie
 # plotter.close()
 # -
 
+# ### Verification of Gradients via a Taylor Test
+#
 # A good way to verify this the gradient is correct is to carry out a Taylor test. For the control, $I_h$,
 # reduced functional, $J(I_h)$, and its derivative,
 # $\frac{\mathrm{d} J}{\mathrm{d} I_h}$, the Taylor remainder convergence test can be expressed as:
@@ -709,10 +709,17 @@ def add_sensitivity_ring(p, m, scalar_bar_args=None):
 #
 # Here is how you can perform a Taylor test in the code:
 
+# +
 h = Function(normalised_ice_thickness)
 h.dat.data[:] = np.random.random(h.dat.data_ro.shape)
-taylor_test(reduced_functional, normalised_ice_thickness, h)
+minconv = taylor_test(reduced_functional, normalised_ice_thickness, h)
 
+with open("taylor_test_mincov.txt", "w") as f:
+    f.write(str(minconv))
+# -
+
+# ### Setting up the inversion
+#
 # Now that we have verified our gradient is correct, let's start setting up an inversion.
 # First of all we will define some bounds that we enforce the control to lie within.
 # For this problem the lower bound of zero ice thickness is particularly important,
@@ -751,6 +758,8 @@ functional_values = []
 # -
 
 
+# ### Running the inversion
+#
 # Now let's run the inversion!
 
 optimiser.run()
@@ -765,57 +774,17 @@ continue_annotation()
 
 # + tags=["active-ipynb"]
 # # Read the PVD file
-# reader = pv.get_reader("updated_out.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
-#
-# # Make a colour map
-# boring_cmap = plt.get_cmap("inferno_r", 25)
-# # Read last timestep
+# reader = pv.get_reader("updated_out.pvd")
 # reader.set_active_time_point(15)
-# data = reader.read()[0]
 # plotter.subplot(0, 0)
-# # Artificially warp the output data by the displacement field
-# # Note the mesh is not really moving!
-# warped = data.warp_by_vector(vectors="Displacement", factor=1500)
-# arrows = warped.glyph(orient="target velocity", scale="target velocity", factor=1e14, tolerance=0.01)
-# # Add the warped displacement field to the frame
-# plotter.add_mesh(
-#     warped,
-#     scalars="Displacement",
-#     component=None,
-#     lighting=False,
-#     clim=[0, 600],
-#     cmap=boring_cmap,
-#     scalar_bar_args={
-#         "title": 'Displacement (m)',
-#         "position_x": 0.2,
-#         "position_y": 0.8,
-#         "vertical": False,
-#         "title_font_size": 20,
-#         "label_font_size": 16,
-#         "fmt": "%.0f",
-#         "font_family": "arial",
-#     }
-# )
+# add_displacement(plotter, reader, "Displacement")
+# plotter.add_text("Target")
 #
 # plotter.subplot(0, 1)
-# # Artificially warp the output data by the displacement field
-# # Note the mesh is not really moving!
-# warped = data.warp_by_vector(vectors="updated displacement", factor=1500)
-# arrows = warped.glyph(orient="updated velocity", scale="updated velocity", factor=1e14, tolerance=0.01)
-# # Add the warped displacement field to the frame
-# plotter.add_mesh(
-#     warped,
-#     scalars="updated displacement",
-#     component=None,
-#     lighting=False,
-#     clim=[0, 600],
-#     cmap=boring_cmap,
-#     show_scalar_bar=False
-# )
+# add_displacement(plotter, reader, disp="updated displacement")
 #
 # ice_scalar_bar_args = {"title": 'Normalised ice thickness',
 #                        "position_x": 0.2,
@@ -834,24 +803,13 @@ continue_annotation()
 # add_ice(plotter, reader, 'target normalised ice thickness', scalar_bar_args=ice_scalar_bar_args)
 # plotter.camera_position = 'xy'
 # plotter.subplot(0, 1)
-# add_ice(plotter, reader, 'updated ice thickness', scalar_bar_args=ice_scalar_bar_args)
-#
-# adj_scalar_bar_args = {
-#             "title": 'Adjoint sensitivity',
-#             "position_x": 0.2,
-#             "position_y": 0.1,
-#             "vertical": False,
-#             "title_font_size": 22,
-#             "label_font_size": 18,
-#             "fmt": "%.1e",
-#             "font_family": "arial",
-#             "n_labels": 3,
-#         }
+# add_ice(plotter, reader, 'updated ice thickness')
 #
 # adj_reader = pv.get_reader("adj_ice.pvd")
 # adj_reader.set_active_time_point(15)
-# add_sensitivity_ring(plotter, adj_reader, scalar_bar_args=adj_scalar_bar_args)
+# add_sensitivity_ring(plotter, adj_reader)
 # plotter.camera_position = 'xy'
+# plotter.add_text("Optimised")
 # plotter.show(jupyter_backend="static", interactive=False)
 # plotter.close()
 # -
@@ -861,7 +819,7 @@ continue_annotation()
 
 # And we'll write the functional values to a file so that we can test them.
 
-with open("functional_field.txt", "w") as f:
+with open("functional.txt", "w") as f:
     f.write("\n".join(str(x) for x in functional_values))
 
 # We can confirm that
@@ -872,3 +830,4 @@ with open("functional_field.txt", "w") as f:
 # plt.xlabel("Iteration #")
 # plt.ylabel("Functional value")
 # plt.title("Convergence")
+# -
