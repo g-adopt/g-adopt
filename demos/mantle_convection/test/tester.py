@@ -1,11 +1,13 @@
+import gc
 from firedrake import *
 from firedrake.adjoint import *
-# from memory_profiler import profile
-import gc
+from checkpoint_schedules import SingleDiskStorageSchedule
 
 
 def test(checkpoint_to_disk):
     T_c, rf = rf_generator(checkpoint_to_disk)
+
+    rf.fwd_call = rf.__call__
     rf.fwd_call = profile(rf.__call__)
     rf.derivative = profile(rf.derivative)
 
@@ -27,10 +29,11 @@ def rf_generator(checkpoint_to_disk):
     if checkpoint_to_disk:
         enable_disk_checkpointing()
         mesh = checkpointable_mesh(mesh)
+        # Enabling gc collect
+        tape.enable_checkpointing(SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2)
 
     V = VectorFunctionSpace(mesh, "CG", 2)
     Q = FunctionSpace(mesh, "CG", 1)
-
     # Define the rotation vector field
     X = SpatialCoordinate(mesh)
 
@@ -41,7 +44,7 @@ def rf_generator(checkpoint_to_disk):
     control = Control(T_c)
     T.assign(T_c)
 
-    for i in range(500):
+    for i in tape.timestepper(iter(range(20))):
         T.interpolate(T + inner(grad(T), w) * Constant(0.0001))
 
     objective = assemble(T**2 * dx)
