@@ -374,14 +374,14 @@ ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 # plotter.close()
 # -
 
-# Let's setup the timestepping parameters with a timestep of 250 years and an output frequency of 1000 years.
+# Let's setup the timestepping parameters with a timestep and output frequency of 1000 years and an output frequency.
 
 # +
 # Timestepping parameters
 Tstart = 0
 time = Function(R).assign(Tstart * year_in_seconds)
 
-dt_years = 250
+dt_years = 1e3
 dt = Constant(dt_years * year_in_seconds)
 Tend_years = 10e3
 Tend = Constant(Tend_years * year_in_seconds)
@@ -404,13 +404,9 @@ log(f"Simulation start time: {Tstart} years")
 #
 # For the top surface we need to specify a normal stress, i.e. the weight of the ice load, as well as
 # indicating this is a free surface.
-#
-# The `delta_rho_fs` option accounts for the density contrast across the free surface whether there
-# is ice or air above a particular region of the mantle.
 
 # Setup boundary conditions
-exterior_density = rho_ice * (disc1+disc2)
-stokes_bcs = {boundary.top: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - exterior_density}},
+stokes_bcs = {boundary.top: {'normal_stress': ice_load, 'free_surface': {}},
               boundary.bottom: {'un': 0}
               }
 
@@ -471,6 +467,14 @@ U = FunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (s
 vertical_displacement = Function(U, name="Vertical displacement")
 # -
 
+# Although not necessary for this demo let's checkpoint the displacement and incremental displacement fields
+# at each timestep so that we can use them in our adjoint ice demo.
+
+objective_checkpoint_file = "forward-2d-cylindrical-disp-incdisp.h5"
+obj_chk = CheckpointFile(objective_checkpoint_file, 'w')
+obj_chk.save_mesh(mesh)
+
+
 # Now let's run the simulation! At each step we call `solve` to calculate the incremental displacement and
 # pressure fields. This will update the displacement at the surface and stress values accounting for the time
 # dependent Maxwell consitutive equation.
@@ -478,6 +482,10 @@ vertical_displacement = Function(U, name="Vertical displacement")
 for timestep in range(max_timesteps+1):
 
     stokes_solver.solve()
+
+    # Checkpoint solution state for objective function in adjoint ice demo
+    obj_chk.save_function(z.subfunctions[0], name="Incremental Displacement", idx=timestep)
+    obj_chk.save_function(displacement, name="Displacement", idx=timestep)
 
     time.assign(time+dt)
 
@@ -503,6 +511,8 @@ for timestep in range(max_timesteps+1):
         f"{vertical_displacement.dat.data.min()} "
         f"{vertical_displacement.dat.data.max()} "
     )
+
+obj_chk.close()
 
 # Let's use the python package *PyVista* to plot the magnitude of the displacement field through time. We will use the
 # calculated displacement to artifically scale the mesh. We have exaggerated the stretching by a factor of 1500, **BUT...**

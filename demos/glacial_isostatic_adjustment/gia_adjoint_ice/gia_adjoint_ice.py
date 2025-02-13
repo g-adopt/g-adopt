@@ -34,15 +34,15 @@ tape.clear_tape()
 # previous tutorial. This makes it easier to load the synthetic data from the previous
 # tutorial for our 'twin' experiment.
 
-# Let's download a checkpoint file we made earlier. This is the same as the forward cylindrical demo except
-# with a longer timestep of 1000 years.
+# Let's download a checkpoint file we made earlier. This is the same as the forward cylindrical
+# we saw in a previous tutorial.
 
 # + tags=["active-ipynb"]
-# ![ ! -f forward-2d-cylindrical-disp-incdisp-dt1ka.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-incdisp-dt1ka.h5
+# ![ ! -f forward-2d-cylindrical-disp-incdisp.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-incdisp.h5
 # -
 
 # Set up geometry:
-checkpoint_file = "forward-2d-cylindrical-disp-incdisp-dt1ka.h5"
+checkpoint_file = "forward-2d-cylindrical-disp-incdisp.h5"
 with CheckpointFile(checkpoint_file, 'r') as afile:
     mesh = afile.load_mesh(name='surface_mesh_extruded')
 bottom_id, top_id = "bottom", "top"
@@ -324,11 +324,10 @@ log(f"Simulation start time: {Tstart} years")
 # contrast across the free surface.
 
 # Setup boundary conditions
-exterior_density = rho_ice * (0.5 + 0.5*tanh(20*(normalised_ice_thickness-0.1)))
 stokes_bcs = {
     top_id: {
         'normal_stress': ice_load,
-        'free_surface': {'delta_rho_fs': density - exterior_density}
+        'free_surface': {}
     },
     bottom_id: {'un': 0}
 }
@@ -736,9 +735,9 @@ bounds = [ice_thickness_lb, ice_thickness_ub]
 
 # Next we setup a pyadjoint minimization problem. We tweak GADOPT's default minimisation
 # parameters (found in `gadopt/inverse.py`) for our problem. We limit the number of
-# iterations to 15 just so that the demo is quick to run. We also increase the size of
-# the initial radius of the trust region so that the inversion gets going a bit quicker
-# than the default setting.
+# iterations to 15 just so that the demo is quick to run. (N.b. 35 iterations gives a
+# very accurate answer. We also increase the size of the initial radius of the trust
+# region so that the inversion gets going a bit quicker than the default setting.
 
 # +
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=bounds)

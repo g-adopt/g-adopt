@@ -404,16 +404,13 @@ ice_load = ramp * rho_ice * g * Hice * disc
 #
 # For the top surface we need to specify a normal stress, i.e. the weight of the ice load, as well as
 # indicating this is a free surface.
-#
-# The `delta_rho_fs` option accounts for the density contrast across the free surface whether there
-# is ice or air above a particular region of the mantle.
 
 # +
 # Setup boundary conditions
 exterior_density = conditional(time < t2_load, rho_ice*disc, 0)
 stokes_bcs = {
     boundary.bottom: {'uy': 0},
-    boundary.top: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density - exterior_density}},
+    boundary.top: {'normal_stress': ice_load, 'free_surface': {}},
     boundary.left: {'ux': 0},
     boundary.right: {'ux': 0},
 }
