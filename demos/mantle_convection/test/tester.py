@@ -24,6 +24,8 @@ def rf_generator(checkpoint_to_disk):
     tape.clear_tape()
     continue_annotation()
 
+    tape.enable_checkpointing(SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2)
+
     mesh = RectangleMesh(100, 100, 1.0, 1.0)
 
     if checkpoint_to_disk:
