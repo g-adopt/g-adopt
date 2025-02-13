@@ -737,8 +737,8 @@ bounds = [ice_thickness_lb, ice_thickness_ub]
 # Next we setup a pyadjoint minimization problem. We tweak GADOPT's default minimisation
 # parameters (found in `gadopt/inverse.py`) for our problem. We limit the number of
 # iterations to 15 just so that the demo is quick to run. (N.b. 35 iterations gives a
-# very accurate answer. We also increase the size of the initial radius of the trust
-# region so that the inversion gets going a bit quicker than the default setting.
+# very accurate answer. We also increase the size of the initial radius of the trust region
+# so that the inversion gets going a bit quicker than the default setting.
 
 # +
 minimisation_problem = MinimizationProblem(reduced_functional, bounds=bounds)
