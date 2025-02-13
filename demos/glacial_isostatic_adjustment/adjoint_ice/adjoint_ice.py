@@ -371,14 +371,13 @@ gd = GeodynamicalDiagnostics(z, density, bottom_id, top_id)
 # Initialise a (scalar!) function for logging vertical displacement
 U = FunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (scalar)
 vertical_displacement = Function(U, name="Vertical displacement")
-
-
 # -
 
 # Now is a good time to setup a helper function for defining the time integrated misfit that we need
 # later as part of our overall objective function. This is going to be called at each timestep of
 # the forward run to calculate the difference between the displacement and velocity at the surface
 # compared our reference forward simulation.
+
 
 # +
 def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
@@ -441,38 +440,40 @@ for timestep in range(max_timesteps+1):
 
 # Let's create a helper function to warp the mesh based on the displacement and
 
-def add_displacement(p, m, disp="Displacement", scalar_bar_args=None):
-    data = m.read()[0]  # MultiBlock mesh with only 1 block
 
-    # Make a colour map
-    boring_cmap = plt.get_cmap("inferno_r", 25)
-
-    # Artificially warp the output data by the displacement field
-    # Note the mesh is not really moving!
-    warped = data.warp_by_vector(vectors=disp, factor=1500)
-    if scalar_bar_args is None:
-        scalar_bar_args = {
-            "title": 'Displacement (m)',
-            "position_x": 0.2,
-            "position_y": 0.8,
-            "vertical": False,
-            "title_font_size": 20,
-            "label_font_size": 16,
-            "fmt": "%.0f",
-            "font_family": "arial",
-        }
-
-    # Add the warped displacement field to the frame
-    plotter.add_mesh(
-        warped,
-        scalars=disp,
-        component=None,
-        lighting=False,
-        clim=[0, 600],
-        cmap=boring_cmap,
-        scalar_bar_args=scalar_bar_args,
-    )
-
+# + tags=["active-ipynb"]
+# def add_displacement(p, m, disp="Displacement", scalar_bar_args=None):
+#     data = m.read()[0]  # MultiBlock mesh with only 1 block
+#
+#     # Make a colour map
+#     boring_cmap = plt.get_cmap("inferno_r", 25)
+#
+#     # Artificially warp the output data by the displacement field
+#     # Note the mesh is not really moving!
+#     warped = data.warp_by_vector(vectors=disp, factor=1500)
+#     if scalar_bar_args is None:
+#         scalar_bar_args = {
+#             "title": 'Displacement (m)',
+#             "position_x": 0.2,
+#             "position_y": 0.8,
+#             "vertical": False,
+#             "title_font_size": 20,
+#             "label_font_size": 16,
+#             "fmt": "%.0f",
+#             "font_family": "arial",
+#         }
+#
+#     # Add the warped displacement field to the frame
+#     plotter.add_mesh(
+#         warped,
+#         scalars=disp,
+#         component=None,
+#         lighting=False,
+#         clim=[0, 600],
+#         cmap=boring_cmap,
+#         scalar_bar_args=scalar_bar_args,
+#     )
+# -
 
 # As we can see from the plot below there is no displacement at the final time given there is no ice load!
 
