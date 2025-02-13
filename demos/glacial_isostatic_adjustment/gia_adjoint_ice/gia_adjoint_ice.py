@@ -713,7 +713,7 @@ h = Function(normalised_ice_thickness)
 h.dat.data[:] = np.random.random(h.dat.data_ro.shape)
 minconv = taylor_test(reduced_functional, normalised_ice_thickness, h)
 
-with open("taylor_test_mincov.txt", "w") as f:
+with open("taylor_test_minconv.txt", "w") as f:
     f.write(str(minconv))
 # -
 
