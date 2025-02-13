@@ -14,6 +14,7 @@ convert_demos: $(notebook_files) .pages .diagram.mermaid
 # explicit dependencies between notebooks
 # adjoint uses the checkpoint from the forward run
 $(mc_dir)/adjoint/adjoint.ipynb: $(mc_dir)/adjoint/adjoint_forward.ipynb
+$(gia_dir)/adjoint_ice/adjoint_ice.ipynb: $(gia_dir)/2d_cylindrical/2d_cylindrical.ipynb
 
 # free surface has a comparison plot against the base case
 $(mc_dir)/free_surface/free_surface.ipynb: $(mc_dir)/base_case/base_case.ipynb

@@ -10,8 +10,8 @@ mm_dir:= multi_material
 mm_demos := $(addprefix $(mm_dir)/,$(mm_demo_names))
 mm_cases := $(addprefix $(mm_dir)/,$(mm_test_names))
 
-gia_test_names := base_case 2d_cylindrical
-gia_demo_names := base_case 2d_cylindrical
+gia_test_names := base_case 2d_cylindrical adjoint_ice
+gia_demo_names := base_case 2d_cylindrical adjoint_ice
 gia_dir := glacial_isostatic_adjustment
 gia_demos := $(addprefix $(gia_dir)/,$(gia_demo_names))
 gia_cases := $(addprefix $(gia_dir)/,$(gia_test_names))
