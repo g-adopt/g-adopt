@@ -287,15 +287,11 @@ ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 # def make_ice_ring(reader):
 #     data = reader.read()[0]
 #
-#     normal = [0, 0, 1]
-#     polar = [rmax-dz/2, 0, 0]
-#     center = [0, 0, 0]
-#     angle = 360.0
-#     res = 10000
-#     arc = pv.CircularArcFromNormal(center, res, normal, polar, angle)
-#
-#     arc_data = arc.sample(data)
-#
+#     # Extract boundary surface, remove inner surface and expand ring width
+#     surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
+#                                       feature_edges=False,manifold_edges=False)
+#     sphere = pv.Sphere(radius=5e6)
+#     clipped_surf = surf.clip_surface(sphere, invert=False)
 #     # Stretch line by 20%
 #     transform_matrix = np.array(
 #         [
@@ -305,7 +301,8 @@ ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 #             [0, 0, 0, 1],
 #         ]
 #     )
-#     return arc_data.transform(transform_matrix)
+#     transformed_surf = clipped_surf.transform(transform_matrix)
+#     return transformed_surf
 #
 #
 # def plot_ice_ring(plotter, ice_ring, scalar="Ice thickness"):
