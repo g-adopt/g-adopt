@@ -2,9 +2,8 @@
 This runs the optimisation portion of the adjoint test case. A forward run first sets up
 the tape with the adjoint information, then a misfit functional is constructed to be
 used as the goal condition for nonlinear optimisation using ROL.
-This module solve an inverse problem for non-linear stokes in 2d annular plain using an adjoint method.
 
-my_taylor_test is also added to this script for testing the correctness of the gradient for the inverse problem.
+annulus_taylor_test is also added to this script for testing the correctness of the gradient for the inverse problem.
     taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
             alpha_T (float): The coefficient of the temperature misfit term.
             alpha_u (float): The coefficient of the velocity misfit term.
@@ -12,14 +11,17 @@ my_taylor_test is also added to this script for testing the correctness of the g
             alpha_s (float): The coefficient of the smoothing term.
             float: The minimum convergence rate from the Taylor test. (Should be close to 2)
 """
-
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
 from checkpoint_schedules import SingleDiskStorageSchedule
+import sys
+from mpi4py import MPI
+
+from cases import cases
 
 
-def inverse(alpha_T=1.0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
+def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
 
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
@@ -51,7 +53,7 @@ def inverse(alpha_T=1.0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
     continue_annotation()
 
 
-def my_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
+def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
     """
     Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
 
@@ -122,7 +124,9 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     enable_disk_checkpointing()
 
     # Using SingleDiskStorageSchedule
-    tape.enable_checkpointing(SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2)
+    # TODO: This should be added in the future when garbage collection is added
+    # tape.enable_checkpointing(SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2)
+    tape.enable_checkpointing(SingleDiskStorageSchedule())
 
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -329,8 +333,14 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
 
 if __name__ == "__main__":
-    my_taylor_test(+1, -1, -1, -1)
-    my_taylor_test(-1, +1, -1, -1)
-    my_taylor_test(-1, -1, +1, -1)
-    my_taylor_test(-1, -1, -1, +1)
-    # inverse()
+    if len(sys.argv) == 1:
+        for case_name, weightings in cases.items():
+            minconv = annulus_taylor_test(*weightings)
+            print(f"case: {case_name}, result: {minconv}")
+    else:
+        case_name = sys.argv[1]
+        minconv = annulus_taylor_test(case_name)
+
+        if MPI.COMM_WORLD.Get_rank() == 0:
+            with open(f"{case_name}.conv", "w") as f:
+                f.write(f"{minconv}")
