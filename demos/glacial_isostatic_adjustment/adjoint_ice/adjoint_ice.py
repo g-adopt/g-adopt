@@ -410,15 +410,13 @@ ds = CombinedSurfaceMeasure(mesh, degree=6)
 velocity_misfit = 0
 displacement_misfit = 0
 
-for timestep in range(max_timesteps+1):
+for timestep in range(max_timesteps):
 
     stokes_solver.solve()
     velocity_misfit, displacement_misfit = integrated_time_misfit(timestep, velocity_misfit, displacement_misfit)
     time.assign(time+dt)
 
     if timestep % dump_period == 0:
-        # First output step is after one solve i.e. roughly elastic displacement
-        # provided dt < maxwell time.
         log("timestep", timestep)
 
         output_file.write(*z.subfunctions, displacement, velocity)
@@ -558,8 +556,8 @@ updated_velocity = Function(z.subfunctions[0], name="updated velocity")
 updated_out_file = VTKFile("updated_out.pvd")
 
 with CheckpointFile(checkpoint_file, 'r') as afile:
-    final_target_incremental_displacement = afile.load_function(mesh, name="Incremental Displacement", idx=10)
-    final_target_displacement = afile.load_function(mesh, name="Displacement", idx=10)
+    final_target_incremental_displacement = afile.load_function(mesh, name="Incremental Displacement", idx=9)
+    final_target_displacement = afile.load_function(mesh, name="Displacement", idx=9)
 
 final_target_velocity = Function(V, name="target velocity").interpolate(final_target_incremental_displacement / dt_years)
 functional_values = []

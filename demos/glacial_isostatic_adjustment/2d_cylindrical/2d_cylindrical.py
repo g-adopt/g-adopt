@@ -479,7 +479,7 @@ obj_chk.save_mesh(mesh)
 # pressure fields. This will update the displacement at the surface and stress values accounting for the time
 # dependent Maxwell consitutive equation.
 
-for timestep in range(max_timesteps+1):
+for timestep in range(max_timesteps):
 
     stokes_solver.solve()
 
@@ -490,8 +490,6 @@ for timestep in range(max_timesteps+1):
     time.assign(time+dt)
 
     if timestep % output_frequency == 0:
-        # First output step is after one solve i.e. roughly elastic displacement
-        # provided dt < maxwell time.
         log("timestep", timestep)
 
         velocity.interpolate(z.subfunctions[0]/dt)
@@ -540,10 +538,7 @@ obj_chk.close()
 #
 # # Make a list of output times (non-uniform because also
 # # outputing first (quasi-elastic) solve
-# times = [0, dt_years]
-# for i in range(len(reader.time_values)):
-#     times.append((i+1)*1000 )
-#
+# times = [float(i*dt_years) for i in range(len(reader.time_values))]
 #
 # for i in range(len(reader.time_values)):
 #     print("Step: ", i)
