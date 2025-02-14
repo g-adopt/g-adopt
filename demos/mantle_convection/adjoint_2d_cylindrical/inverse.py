@@ -104,8 +104,6 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     if not annotate_tape():
         continue_annotation()
 
-
-
     # Set up geometry:
     rmax = 2.22
     rmax_earth = 6370  # Radius of Earth [km]
@@ -297,7 +295,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     if alpha_s > 0:
         smoothing = assemble(Function(R, name="alpha_s").assign(float(alpha_s)) * dot(grad(T_0 - Taverage), grad(Tic - Taverage)) * dx)
         norm_smoothing = assemble(dot(grad(Tobs - Taverage), grad(Tobs - Taverage)) * dx)
-        objective = (smoothing)
+        objective += (norm_obs * smoothing / norm_smoothing)
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
