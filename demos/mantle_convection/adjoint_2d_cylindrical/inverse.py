@@ -1,24 +1,16 @@
 """
+This runs the optimisation portion of the adjoint test case. A forward run first sets up
+the tape with the adjoint information, then a misfit functional is constructed to be
+used as the goal condition for nonlinear optimisation using ROL.
 This module solve an inverse problem for non-linear stokes in 2d annular plain using an adjoint method.
 
-Functions:
-    generate_inverse_problem(alpha_u, alpha_d, alpha_s):
-        Sets up the inverse problem for the initial condition of convection in an annulus domain.
+my_taylor_test is also added to this script for testing the correctness of the gradient for the inverse problem.
+    taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
+            alpha_T (float): The coefficient of the temperature misfit term.
             alpha_u (float): The coefficient of the velocity misfit term.
             alpha_d (float): The coefficient of the initial condition damping term.
             alpha_s (float): The coefficient of the smoothing term.
-
-        returns [dict]: the control function, reduced functional, and callback function for the inverse problem.
-
-    inverse():
-        Sets up the inverse problem, and performs a bounded nonlinear optimization.
-
-    taylor_test(alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
-        Performs a Taylor test to verify the correctness of the gradient for the inverse problem.
-            alpha_u (float): The coefficient of the velocity misfit term.
-            alpha_d (float): The coefficient of the initial condition damping term.
-            alpha_s (float): The coefficient of the smoothing term.
-            float: The minimum convergence rate from the Taylor test.
+            float: The minimum convergence rate from the Taylor test. (Should be close to 2)
 """
 
 from gadopt import *
@@ -27,10 +19,6 @@ import numpy as np
 
 
 def inverse(alpha_T=1.0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
-    # Clear the tape of any previous operations to ensure
-    # the adjoint reflects the forward problem we solve here
-    tape = get_working_tape()
-    tape.clear_tape()
 
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
@@ -75,11 +63,6 @@ def my_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
         minconv (float): The minimum convergence rate from the Taylor test.
     """
 
-    # Clear the tape of any previous operations to ensure
-    # the adjoint reflects the forward problem we solve here
-    tape = get_working_tape()
-    tape.clear_tape()
-
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
     inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s)
@@ -112,6 +95,16 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
         alpha_d: The coefficient of the initial condition damping term
         alpha_s: The coefficient of the smoothing term
     """
+
+    # Get working tape
+    tape = get_working_tape()
+    tape.clear_tape()
+
+    # If we are not annotating, let's switch on taping
+    if not annotate_tape():
+        continue_annotation()
+
+
 
     # Set up geometry:
     rmax = 2.22
@@ -238,7 +231,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     # If we are using surface veolocit misfit in the functional
     if alpha_u > 0:
-        u_misfit = Function(R, name="u_misfit").assign(0.0)
+        u_misfit = 0.0
 
     # We need to project the initial condition from Q1 to Q2,
     # and impose the boundary conditions at the same time
@@ -250,7 +243,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # making sure velocity is deterministic
-    z.subfunctions[0].assign(as_vector((0.0, 0.0)))
+    z.subfunctions[0].interpolate(as_vector((0.0, 0.0)))
 
     # Populate the tape by running the forward simulation
     for timestep in range(min_timesteps, max_timesteps):
@@ -260,7 +253,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
         if alpha_u > 0:
             # Update the accumulated surface velocity misfit using the observed value
             uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=timestep)
-            u_misfit += assemble(Function(R, name="alpha_u").assign(alpha_u) * dot(u - uobs, u - uobs) * ds_t)
+            u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)) * dot(u - uobs, u - uobs) * ds_t)
 
     # Load the observed final state
     Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
@@ -277,7 +270,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     checkpoint_file.close()
 
     # Initiate the objective functional
-    objective = Function(R, name="objective").assign(0.0)
+    objective = 0.0
 
     if any([w > 0 for w in [alpha_u, alpha_d, alpha_s]]):
         # Calculate the norms of the observed temperature, it will be used in multiple spots later
@@ -287,24 +280,24 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     # Temperature term
     if alpha_T > 0:
         # Temperature misfit between solution and observation
-        objective += assemble(Function(R, name="alpha_T").assign(alpha_T) * (T - Tobs) ** 2 * dx)
+        objective += assemble(Function(R, name="alpha_T").assign(float(alpha_T)) * (T - Tobs) ** 2 * dx)
 
     # Velocity misfit term
     if alpha_u > 0:
         norm_u_surface = assemble(dot(uobs, uobs) * ds_t)  # measure of u_obs from the last timestep
-        objective += (norm_obs * u_misfit / (max_timesteps - min_timesteps) / norm_u_surface)
+        objective += (norm_obs * u_misfit / Function(R, name="delta_N").assign(float(max_timesteps - min_timesteps)) / norm_u_surface)
 
     # Damping term
     if alpha_d > 0:
-        damping = assemble(Function(R, name="alpha_d").assign(alpha_d) * (T_0 - Taverage) ** 2 * dx)
+        damping = assemble(Function(R, name="alpha_d").assign(float(alpha_d)) * (T_0 - Taverage) ** 2 * dx)
         norm_damping = assemble((Tobs - Taverage)**2 * dx)
         objective += (norm_obs * damping / norm_damping)
 
     # Smoothing term
     if alpha_s > 0:
-        smoothing = assemble(Function(R, name="alpha_s").assign(alpha_s) * dot(grad(T_0 - Taverage), grad(Tic - Taverage)) * dx)
+        smoothing = assemble(Function(R, name="alpha_s").assign(float(alpha_s)) * dot(grad(T_0 - Taverage), grad(Tic - Taverage)) * dx)
         norm_smoothing = assemble(dot(grad(Tobs - Taverage), grad(Tobs - Taverage)) * dx)
-        objective += (norm_obs * smoothing / norm_smoothing)
+        objective = (smoothing)
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
@@ -332,6 +325,9 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     return inverse_problem
 
 
-# if __name__ == "__main__":
-#     my_taylor_test()
-#     # inverse()
+if __name__ == "__main__":
+    my_taylor_test(+1, -1, -1, -1)
+    my_taylor_test(-1, +1, -1, -1)
+    my_taylor_test(-1, -1, +1, -1)
+    my_taylor_test(-1, -1, -1, +1)
+   # inverse()
