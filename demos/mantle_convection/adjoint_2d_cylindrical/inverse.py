@@ -328,4 +328,4 @@ if __name__ == "__main__":
     my_taylor_test(-1, +1, -1, -1)
     my_taylor_test(-1, -1, +1, -1)
     my_taylor_test(-1, -1, -1, +1)
-   # inverse()
+    # inverse()
