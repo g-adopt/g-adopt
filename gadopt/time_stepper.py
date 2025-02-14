@@ -8,7 +8,6 @@ providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
 
 import operator
 from abc import ABC, abstractmethod
-from numbers import Number
 from typing import Any, Optional
 
 import firedrake
@@ -124,7 +123,6 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
-      bnd_conditions: Dictionary of boundary conditions passed to the equation
       solver_parameters: Dictionary of solver parameters provided to PETSc
       strong_bcs: List of Firedrake Dirichlet boundary conditions
 
@@ -135,7 +133,6 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         solution: firedrake.Function,
         dt: float,
         solution_old: Optional[firedrake.Function] = None,
-        bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
     ):
@@ -222,12 +219,8 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
-      bnd_conditions: Dictionary of boundary conditions passed to the equation
       solver_parameters: Dictionary of solver parameters provided to PETSc
       strong_bcs: List of Firedrake Dirichlet boundary conditions
-      terms_to_add: Defines which terms of the equation are to be
-                      added to this solver.
-                      Default 'all' implies ['implicit', 'explicit', 'source'].
 
     """
     def __init__(
@@ -236,10 +229,8 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         solution: firedrake.Function,
         dt: float,
         solution_old: Optional[firedrake.Function] = None,
-        bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-        terms_to_add: Optional[str | list[str]] = "all",
     ):
         super(DIRKGeneric, self).__init__(
             equation, solution, dt, solution_old, solver_parameters, strong_bcs

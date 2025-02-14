@@ -32,7 +32,7 @@ def model(level, nn, do_write=False):
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
     mesh.cartesian = False
-    bottom_id, top_id = "bottom", "top"
+    boundary = get_boundary_ids(mesh)
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
@@ -62,8 +62,8 @@ def model(level, nn, do_write=False):
 
     approximation = BoussinesqApproximation(1)
     stokes_bcs = {
-        bottom_id: {'un': 0},
-        top_id: {'un': 0},
+        boundary.bottom: {'un': 0},
+        boundary.top: {'un': 0},
     }
 
     # Nullspaces and near-nullspaces:
@@ -103,7 +103,7 @@ def model(level, nn, do_write=False):
     solution_lower = assess.CylindricalStokesSolutionDeltaFreeSlip(float(nn), -1, nu=float(mu))
 
     # compute u analytical and error
-    uxy = interpolate(as_vector((X[0], X[1])), V)
+    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
     u_anal_upper = Function(V, name="AnalyticalVelocityUpper")
     u_anal_lower = Function(V, name="AnalyticalVelocityLower")
     u_anal = Function(V, name="AnalyticalVelocity")
@@ -113,8 +113,8 @@ def model(level, nn, do_write=False):
     u_error = Function(V, name="VelocityError").assign(u_-u_anal)
 
     # compute p analytical and error
-    pxy = interpolate(as_vector((X[0], X[1])), Q1DGvec)
-    pdg = interpolate(p, Q1DG)
+    pxy = Function(Q1DGvec).interpolate(as_vector((X[0], X[1])))
+    pdg = Function(Q1DG).interpolate(p)
     p_anal_upper = Function(Q1DG, name="AnalyticalPressureUpper")
     p_anal_lower = Function(Q1DG, name="AnalyticalPressureLower")
     p_anal = Function(Q1DG, name="AnalyticalPressure")
