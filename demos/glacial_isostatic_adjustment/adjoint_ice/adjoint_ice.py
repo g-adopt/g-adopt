@@ -19,8 +19,6 @@
 
 from gadopt import *
 from gadopt.utility import step_func, vertical_component, CombinedSurfaceMeasure
-import matplotlib.pyplot as plt
-
 
 # To bring in G-ADOPT's adjoint functionality we need to start taping the forward problem,
 # which we do below. It's also good practice to clear the tape, so that we are starting
@@ -198,6 +196,7 @@ tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_opt
 
 # + tags=["active-ipynb"]
 # import pyvista as pv
+# import matplotlib.pyplot as plt
 # ice_cmap = plt.get_cmap("Blues", 25)
 #
 # # Make two points at the bounds of the mesh and one at the center to
@@ -240,10 +239,14 @@ tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_opt
 #         }
 #     data = m.read()[0]  # MultiBlock mesh with only 1 block
 #
-#     arc_data = arc.sample(data)
+#     # Extract boundary surface, remove inner surface and expand ring width
+#     surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
+#                                       feature_edges=False,manifold_edges=False)
+#     sphere = pv.Sphere(radius=5e6)
+#     clipped_surf = surf.clip_surface(sphere, invert=False)
+#     transformed_surf = clipped_surf.transform(transform_matrix)
 #
-#     transformed_arc_data = arc_data.transform(transform_matrix)
-#     p.add_mesh(transformed_arc_data, scalars=scalar, line_width=10, clim=[0, 2], cmap=ice_cmap, scalar_bar_args=scalar_bar_args)
+#     p.add_mesh(transformed_surf, scalars=scalar, line_width=10, clim=[0, 2], cmap=ice_cmap, scalar_bar_args=scalar_bar_args)
 #
 #
 # visc_file = VTKFile('viscosity.pvd').write(normalised_viscosity)
@@ -295,8 +298,7 @@ tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_opt
 # plotter.close()
 # -
 
-# To make this simulation practical for a demo we are going to take longer timesteps than
-# the previous 2d cylindrical demo. Let's choose a timestep (and output frequency) of 1000 years.
+# Let's choose a timestep (and output frequency) of 1000 years.
 
 # +
 # Timestepping parameters
@@ -618,36 +620,41 @@ dJdm = reduced_functional.derivative()
 # function to plot the sensitivity to the ice thickness as a ring outside the domain.
 
 
-def add_sensitivity_ring(p, m, scalar_bar_args=None):
-    # Make a colour map
-    adj_cmap = plt.get_cmap("coolwarm", 25)
-    if scalar_bar_args is None:
-        scalar_bar_args = {
-            "title": 'Adjoint sensitivity',
-            "position_x": 0.2,
-            "position_y": 0.8,
-            "vertical": False,
-            "title_font_size": 22,
-            "label_font_size": 18,
-            "fmt": "%.1e",
-            "font_family": "arial",
-            "n_labels": 3,
-        }
-    data = m.read()[0]  # MultiBlock mesh with only 1 block
-
-    arc_data = arc.sample(data)
-
-    transform_matrix = np.array(
-        [
-            [1.1, 0, 0, 0],
-            [0, 1.1, 0, 0],
-            [0, 0, 1.1, 0],
-            [0, 0, 0, 1],
-        ])
-
-    transformed_arc_data = arc_data.transform(transform_matrix)
-    p.add_mesh(transformed_arc_data, line_width=8, scalar_bar_args=scalar_bar_args, clim=[-5e-7, 5e-7], cmap=adj_cmap)
-
+# + tags=["active-ipynb"]
+# def add_sensitivity_ring(p, m, scalar_bar_args=None):
+#     # Make a colour map
+#     adj_cmap = plt.get_cmap("coolwarm", 25)
+#     if scalar_bar_args is None:
+#         scalar_bar_args = {
+#             "title": 'Adjoint sensitivity',
+#             "position_x": 0.2,
+#             "position_y": 0.8,
+#             "vertical": False,
+#             "title_font_size": 22,
+#             "label_font_size": 18,
+#             "fmt": "%.1e",
+#             "font_family": "arial",
+#             "n_labels": 3,
+#         }
+#     data = m.read()[0]  # MultiBlock mesh with only 1 block
+#
+#     # Extract boundary surface, remove inner surface and expand ring width
+#     surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
+#                                       feature_edges=False, manifold_edges=False)
+#     sphere = pv.Sphere(radius=5e6)
+#     clipped_surf = surf.clip_surface(sphere, invert=False)
+#
+#     transform_matrix = np.array(
+#         [
+#             [1.1, 0, 0, 0],
+#             [0, 1.1, 0, 0],
+#             [0, 0, 1.1, 0],
+#             [0, 0, 0, 1],
+#         ])
+#
+#     transformed_surf = clipped_surf.transform(transform_matrix)
+#     p.add_mesh(transformed_surf, line_width=8, scalar_bar_args=scalar_bar_args, clim=[-5e-7, 5e-7], cmap=adj_cmap)
+# -
 
 # Next we read in the file that was written out as part of the diagnostic callback
 # added to the tape earlier. We can see there is a clear hemispherical pattern in
@@ -737,7 +744,7 @@ bounds = [ice_thickness_lb, ice_thickness_ub]
 # Next we setup a pyadjoint minimization problem. We tweak GADOPT's default minimisation
 # parameters (found in `gadopt/inverse.py`) for our problem. We limit the number of
 # iterations to 15 just so that the demo is quick to run. (N.b. 35 iterations gives a
-# very accurate answer. We also increase the size of the initial radius of the trust region
+# very accurate answer.) We also increase the size of the initial radius of the trust region
 # so that the inversion gets going a bit quicker than the default setting.
 
 # +
@@ -815,7 +822,8 @@ continue_annotation()
 # -
 
 # We can see that we have been able to recover two ice sheets in the correct locations and
-# the final displacement pattern is very similar to the target run.
+# the final displacement pattern is very similar to the target run. Also the magnitude of the gradient
+# is much smaller than before implying we are close to a minimum value of the objective function.
 
 # And we'll write the functional values to a file so that we can test them.
 
