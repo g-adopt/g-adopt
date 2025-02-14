@@ -16,6 +16,7 @@ my_taylor_test is also added to this script for testing the correctness of the g
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
+from checkpoint_schedules import SingleDiskStorageSchedule
 
 
 def inverse(alpha_T=1.0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
@@ -117,7 +118,11 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
         mesh = f.load_mesh("firedrake_default_extruded")
         mesh.cartesian = False
 
+    # Writing to disk for block variables
     enable_disk_checkpointing()
+
+    # Using SingleDiskStorageSchedule
+    tape.enable_checkpointing(SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2)
 
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -244,7 +249,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     z.subfunctions[0].interpolate(as_vector((0.0, 0.0)))
 
     # Populate the tape by running the forward simulation
-    for timestep in range(min_timesteps, max_timesteps):
+    for timestep in tape.timestepper(iter(range(min_timesteps, max_timesteps))):
         stokes_solver.solve()
         energy_solver.solve()
 
