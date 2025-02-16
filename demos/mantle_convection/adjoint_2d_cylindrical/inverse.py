@@ -247,7 +247,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     # if the weighting for misfit terms non-positive, then no need to integrate in time
     # min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
-    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
+    min_timesteps = max_timesteps - 5 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # making sure velocity is deterministic
     z.subfunctions[0].interpolate(as_vector((0.0, 0.0)))
@@ -339,7 +339,8 @@ if __name__ == "__main__":
             print(f"case: {case_name}, result: {minconv}")
     else:
         case_name = sys.argv[1]
-        minconv = annulus_taylor_test(case_name)
+        weightings = cases[case_name]
+        minconv = annulus_taylor_test(*weightings)
 
         if MPI.COMM_WORLD.Get_rank() == 0:
             with open(f"{case_name}.conv", "w") as f:
