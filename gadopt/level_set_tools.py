@@ -274,7 +274,7 @@ class LevelSetSolver:
 
         return fd.LinearVariationalSolver(problem, solver_parameters=solver_params)
 
-    def update_level_set_gradient(self, *args, **kwargs):
+    def update_level_set_gradient(self):
         """Calls the gradient projection solver.
 
         Can be used as a callback.
@@ -332,7 +332,7 @@ class LevelSetSolver:
             if step % self.reini_params["frequency"] == 0:
                 for reini_step in range(self.reini_params["iterations"]):
                     self.reini_ts.advance(
-                        0, update_forcings=self.update_level_set_gradient
+                        update_forcings=self.update_level_set_gradient
                     )
 
                 self.ls_solver.solution_old.assign(self.level_set)
