@@ -60,12 +60,6 @@ jobs:
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
 
-      - name: Switch Firedrake branch
-        run: |
-          cd /home/firedrake/firedrake/src/firedrake
-          git fetch
-          git checkout connorjward/more-more-cache-fixes
-
       - uses: actions/checkout@v4
         with:
           lfs: true
