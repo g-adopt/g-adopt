@@ -145,7 +145,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     Ra = Function(R, name="Ra").assign(1e7)  # Rayleigh number
 
     # Define time stepping parameters:
-    max_timesteps = 200
+    max_timesteps = 180
     delta_t = Function(R, name="delta_t").assign(5e-6)  # Constant time step
 
     # Without a restart to continue from, our initial guess is the final state of the forward run
