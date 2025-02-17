@@ -171,7 +171,7 @@ energy_solver = EnergySolver(
 )
 
 stokes_solver = StokesSolver(
-    z, T, approximation, bcs=stokes_bcs, constant_jacobian=False, free_surface_dt=delta_t
+    z, T, approximation, bcs=stokes_bcs, constant_jacobian=False, coupled_dt=delta_t
 )
 
 # -
