@@ -251,7 +251,11 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     min_timesteps = max_timesteps - 5 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # making sure velocity is deterministic
-    z.subfunctions[0].interpolate(as_vector((0.0, 0.0)))
+    u_, p_ = z.subfunctions
+    u_.interpolate(as_vector((0.0, 0.0)))
+    
+    # Generate a surface velocity reference
+    uobs = Function(V, name="uobs")
 
     # Populate the tape by running the forward simulation
     for timestep in tape.timestepper(iter(range(min_timesteps, max_timesteps))):
@@ -260,8 +264,8 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
         if alpha_u > 0:
             # Update the accumulated surface velocity misfit using the observed value
-            uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=timestep)
-            u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)/(max_timesteps - min_timesteps)) * dot(u - uobs, u - uobs) * ds_t)
+            uobs.assign(checkpoint_file.load_function(mesh, name="Velocity", idx=timestep))
+            u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)/(max_timesteps - min_timesteps)) * dot(u_ - uobs, u_ - uobs) * ds_t)
 
     # Load the observed final state
     Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
