@@ -1,4 +1,4 @@
-cases := damping smoothing Tobs uobs
+cases := damping smoothing Tobs
 
 all: $(addsuffix .conv,$(cases))
 
