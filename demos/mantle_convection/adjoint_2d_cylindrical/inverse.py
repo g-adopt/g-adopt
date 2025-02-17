@@ -126,7 +126,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     # Using SingleDiskStorageSchedule
     # TODO: This should be added in the future when garbage collection is added
     if any([alpha_T > 0, alpha_u > 0]):
-        tape.enable_checkpointing(SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2)
+        tape.enable_checkpointing(SingleDiskStorageSchedule())
 
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
