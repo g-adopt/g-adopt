@@ -95,8 +95,6 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
         left_id: {'ux': 0},
         right_id: {'ux': 0},
     }
-    int_var_bcs = {}
-    coupled_bcs = [stokes_bcs, int_var_bcs]
 
     # Setup analytical solution for the free surface from Cathles et al. 2024
     eta_analytical = Function(Q, name="eta analytical")
@@ -127,7 +125,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
         "pc_factor_mat_solver_type": "mumps",
     }
 
-    # really should provide list of coupled bcs? but stokes integrators only expects 1 set of bcs...
+    # FIXME really should provide list of coupled bcs? but stokes integrators only expects 1 set of bcs...
     coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=stokes_bcs, solver_parameters=direct_stokes_solver_parameters)
 
     if OUTPUT:
