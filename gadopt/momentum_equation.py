@@ -184,3 +184,5 @@ momentum_source_term.optional_attrs = set()
 residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]
 residual_terms_mass = divergence_term
 residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]
+
+residual_terms_compressible_viscoelastic = [momentum_source_term, viscosity_term]

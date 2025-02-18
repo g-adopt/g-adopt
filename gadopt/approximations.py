@@ -10,7 +10,7 @@ import abc
 from numbers import Number
 from typing import Optional
 
-from firedrake import Function, Identity, div, grad, inner, sym, ufl
+from firedrake import Function, Identity, div, grad, inner, sym, ufl, tr
 
 from .utility import ensure_constant, vertical_component
 
@@ -417,20 +417,7 @@ class SmallDisplacementViscoelasticApproximation():
     """Expressions for the small displacement viscoelastic approximation.
 
     By assuming a small displacement, we can linearise the problem, assuming a perturbation
-    away from a reference state. We assume a Maxwell viscoelastic rheology, i.e.
-    stress is the same but viscous and elastic strains combine linearly. We follow
-    the approach by Zhong et al. 2003 redefining the problem in terms of incremental
-    displacement, i.e. velocity * dt where dt is the timestep. This produces a mixed
-    stokes system for incremental displacement and pressure which can be solved in
-    the same way as mantle convection (where unknowns are velocity and pressure),
-    with a modfied viscosity and stress term accounting for the deviatoric stress
-    at the previous timestep.
-
-    Zhong, Shijie, Archie Paulson, and John Wahr.
-    "Three-dimensional finite-element modelling of Earth’s viscoelastic
-    deformation: effects of lateral variations lithospheric thickness."
-    Geophysical Journal International 155.2 (2003): 679-695.
-
+    away from a reference state.
     N.b. that the implentation currently assumes all terms are dimensional.
 
     Arguments:
@@ -440,8 +427,6 @@ class SmallDisplacementViscoelasticApproximation():
       g:             gravitational acceleration
 
     """
-    compressible = False
-
     def __init__(
         self,
         density: Function | Number,
@@ -458,24 +443,104 @@ class SmallDisplacementViscoelasticApproximation():
 
         self.maxwell_time = viscosity / shear_modulus
 
-    def effective_viscosity(self, dt):
-        return self.viscosity / (self.maxwell_time + dt / 2)
-
-    def prefactor_prestress(self, dt):
-        return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
-
-    def stress(self, u, stress_old, dt):
-        return 2 * self.effective_viscosity(dt) * sym(grad(u)) + stress_old
-
     def buoyancy(self, displacement):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
         return -self.g * -inner(displacement, grad(self.density))
+
+    def rho_continuity(self):
+        return 1
 
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
         free_surface_normal_stress = delta_rho_fs * self.g * eta
         # prefactor only needed when solving eta as part of mixed system
         return free_surface_normal_stress, None
 
-    def rho_continuity(self):
-        return 1
+
+class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximation):
+
+    """We follow the approach by Zhong et al. 2003 redefining the problem in terms
+    of incremental     displacement, i.e. velocity * dt where dt is the timestep.
+    This produces a mixed stokes system for incremental displacement and pressure
+    which can be solved in the same way as mantle convection (where unknowns are
+    velocity and pressure), with a modfied viscosity and stress term accounting
+    for the deviatoric stress at the previous timestep.
+
+    Zhong, Shijie, Archie Paulson, and John Wahr.
+    "Three-dimensional finite-element modelling of Earth’s viscoelastic
+    deformation: effects of lateral variations lithospheric thickness."
+    Geophysical Journal International 155.2 (2003): 679-695.
+
+    N.b. that the implentation currently assumes all terms are dimensional.
+
+    Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state
+
+    Arguments:
+      density:       background density
+      shear_modulus: shear modulus
+      viscosity:     viscosity
+      g:             gravitational acceleration
+
+    """
+    compressible = False
+
+    def __init__(self, density, shear_modulus, viscosity, **kwargs):
+        super().__init__(density, shear_modulus, viscosity, **kwargs)
+
+    def effective_viscosity(self, dt):
+        return self.viscosity / (self.maxwell_time + dt / 2)
+
+    def prefactor_prestress(self, dt):
+        return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
+
+    def stress(self, u, dt):
+        return 2 * self.effective_viscosity(dt) * sym(grad(u))
+
+
+class CompressibleInternalVariableApproximation(SmallDisplacementViscoelasticApproximation):
+    """We follow the approach by Al attar .... redefining the stress formulation
+    in terms on a time dependent internal variable.
+    N.b. that the implentation currently assumes all terms are dimensional.
+
+
+    Arguments:
+      bulk_modulus:  bulk modulus
+      density:       background density
+      shear_modulus: shear modulus
+      viscosity:     viscosity
+      g:             gravitational acceleration
+
+    """
+
+    """Small Displacement Viscoelastic approximation:
+
+    Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
+    compressible = True
+
+    def __init__(self, bulk_modulus, density, shear_modulus, viscosity, **kwargs):
+        self.bulk_modulus = ensure_constant(bulk_modulus)
+        super().__init__(density, shear_modulus, viscosity, **kwargs)
+
+    def div_u(self, u):
+        dim = len(u)
+        return div(u) * Identity(dim)
+
+    def deviatoric_strain(self, u):
+        dim = len(u)
+        e = sym(grad(u))
+        return e - 1/3 * tr(e) * Identity(dim)
+
+    def stress(self, u, m_list):
+        div_u = self.div_u(u)
+        d = self.deviatoric_strain(u)
+        stress = self.bulk_modulus * div_u + 2 * len(m_list) * self.shear_modulus * d
+        for m in m_list:
+            stress -= 2 * self.shear_modulus * m
+        return stress
+
+    # analytical solution for compressibility only converges without this term...
+    # def buoyancy(self, displacement, background_density):
+        # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
+        # accounts for advection of density in the absence of an evolution equation for temperature
+    #    buoyancy = super().buoyancy(displacement, background_density)
+    #    return buoyancy - self.g * -background_density * div(displacement)

@@ -163,3 +163,7 @@ source_term.required_attrs = {"source"}
 source_term.optional_attrs = set()
 sink_term.required_attrs = {"sink_coeff"}
 sink_term.optional_attrs = set()
+
+# Where should this live... not really a scalar equation because
+# m is a tensor...
+residual_terms_internal_variable = [source_term, sink_term]

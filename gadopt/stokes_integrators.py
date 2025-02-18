@@ -16,7 +16,8 @@ from .approximations import BaseApproximation, AnelasticLiquidApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
-from .momentum_equation import residual_terms_stokes
+from .momentum_equation import residual_terms_stokes, residual_terms_compressible_viscoelastic
+from .scalar_equation import mass_term, residual_terms_internal_variable
 from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, upward_normal
 
 iterative_stokes_solver_parameters = {
@@ -712,7 +713,7 @@ class ViscoelasticStokesSolver(MassMomentumBase):
         self.displacement = displacement
 
         # Effective viscosity
-        approximation.mu = approximation.effective_viscosity(self.coupled_dt)
+        self.approximation.mu = approximation.effective_viscosity(self.coupled_dt)
 
     def setup_free_surface(self):
         # Overload method
@@ -767,3 +768,94 @@ class ViscoelasticStokesSolver(MassMomentumBase):
             self.approximation.prefactor_prestress(self.coupled_dt) * self.approximation.stress(u_sub, self.stress_old, self.coupled_dt)
         )
         self.displacement.interpolate(self.displacement+u_sub)
+
+
+class InternalVariableSolver(MassMomentumBase):
+    """ Solver for internal variable viscoelastic formulation.
+
+    Args:
+      solution:
+        Firedrake function representing the field over the mixed dipslacement, internal variable space
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations
+      coupled_dt:
+        Float quantifying the time step used in a coupled time integration
+      theta:
+        Float quantifying the implicit contribution in a coupled time integration
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      quad_degree:
+        Integer denoting the quadrature degree
+      solver_parameters:
+        Dictionary of PETSc solver options or string matching a default set thereof
+      J:
+        Firedrake function representing the Jacobian of the mixed Stokes system
+      constant_jacobian:
+        Boolean specifying whether the Jacobian of the system is constant
+    """
+
+    name = "InternalVariable"
+
+    def __init__(
+        self,
+        solution: fd.Function,
+        approximation: BaseApproximation,
+        coupled_dt,
+        **kwargs,
+    ) -> None:
+        super().__init__(solution, approximation, coupled_dt=coupled_dt, **kwargs)
+
+        self.u, *self.m = self.solution_split
+
+        # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
+        self.approximation.mu = approximation.effective_viscosity(self.coupled_dt)
+
+    def set_equations(self) -> None:
+        stress = self.approximatioin.stress(self.u, self.m)
+        source = self.approximation.buoyancy(self.u) * self.k
+        strain = self.approximation.deviatoric_strain(self.u)
+        maxwell_time = self.approximation.maxwell_time
+
+        residual_terms = [
+            residual_terms_compressible_viscoelastic,
+            residual_terms_internal_variable,
+        ]
+        eqs_attrs = [
+            {"stress": stress, "source": source},
+            {"source": strain / maxwell_time, "sink_coeff": 1 / maxwell_time},
+        ]
+        mass_terms = [None, mass_term]
+        scaling_factors = [1, -self.theta]
+
+        for i in range(len(self.tests)):
+            self.equations.append(
+                Equation(
+                    self.tests[i],
+                    self.solution_space[i],
+                    residual_terms[i],
+                    mass_term=mass_terms[i],
+                    eq_attrs=eqs_attrs[i],
+                    approximation=self.approximation,
+                    bcs=self.weak_bcs,
+                    quad_degree=self.quad_degree,
+                    scaling_factor=scaling_factors[i],
+                )
+            )
+
+    def setup_free_surface(self):
+        # Overload method
+        for free_surface_id, free_surface_params in self.free_surface_dict.items():
+            # First, make the displacement term implicit by incorporating
+            # the unknown `incremental displacement' (u) that
+            # we are solving for
+            implicit_displacement_up = fd.dot(self.u, self.k)
+            # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
+            normal_stress, _ = self.approximation.free_surface_terms(
+                implicit_displacement_up, **free_surface_params
+            )
+            if 'normal_stress' in self.weak_bcs[free_surface_id]:
+                # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
+                existing_value = self.weak_bcs[free_surface_id]['normal_stress']
+                self.weak_bcs[free_surface_id]['normal_stress'] = existing_value + normal_stress
+            else:
+                self.weak_bcs[free_surface_id] = {'normal_stress': normal_stress}
