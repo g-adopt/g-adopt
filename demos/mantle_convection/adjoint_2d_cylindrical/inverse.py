@@ -47,7 +47,7 @@ def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
     optimiser.add_callback(inverse_problem["callback"])
     optimiser.run()
 
-    # If we're performing mulitple successive optimisations, we want
+    # If we're performing multiple successive optimisations, we want
     # to ensure the annotations are switched back on for the next code
     # to use them
     continue_annotation()
@@ -57,7 +57,7 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
     """
     Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
 
-    This function clears the current tape of any previous operations, sets up the inverse problem
+    This function calls a main function to populate the tape for the inverse problem
     with specified regularization parameters, generates a random perturbation for the control variable,
     and performs a Taylor test to ensure the gradient is correct. Finally, it ensures that annotations
     are switched back on for any subsequent tests.
@@ -142,7 +142,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
-    Ra = Function(R, name="Ra").assign(1e7)  # Rayleigh number
+    Ra = Constant(1e7)  # Rayleigh number
 
     # Define time stepping parameters:
     max_timesteps = 180
