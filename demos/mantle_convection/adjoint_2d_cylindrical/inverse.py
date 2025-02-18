@@ -248,11 +248,12 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     # if the weighting for misfit terms non-positive, then no need to integrate in time
     # min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
-    min_timesteps = max_timesteps - 5 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
+    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # making sure velocity is deterministic
     u_, p_ = z.subfunctions
     u_.interpolate(as_vector((0.0, 0.0)))
+    p_.interpolate(0.0)
     
     # Generate a surface velocity reference
     uobs = Function(V, name="uobs")
