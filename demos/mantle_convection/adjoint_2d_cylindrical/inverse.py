@@ -17,6 +17,7 @@ import numpy as np
 from checkpoint_schedules import SingleDiskStorageSchedule
 import sys
 from mpi4py import MPI
+from pathlib import Path
 
 from cases import cases
 
@@ -86,6 +87,19 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
     continue_annotation()
 
     return minconv
+
+
+def plot_gradients():
+    # All gradients all writen in a directory for "gradients"
+    vtu_path = Path.cwd() / "gradients"
+    vtu_path.mkdir(exist_ok=True)
+
+    for case_name, weightings in cases.items():
+        inverse_problem = generate_inverse_problem(*weightings)
+        derivative = inverse_problem["reduced_functional"].derivative()
+        derivative.rename(f"derivative_{case_name}")
+        fi = VTKFile(vtu_path / f"derivative_{case_name}.pvd")
+        fi.write(derivative)
 
 
 def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
