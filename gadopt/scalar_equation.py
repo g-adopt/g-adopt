@@ -126,7 +126,7 @@ def diffusion_term(
 
 def source_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
     r"""Scalar source term `s_T`."""
-    F = -dot(eq.test, eq.source) * eq.dx
+    F = -inner(eq.test, eq.source) * eq.dx
 
     return -F
 
@@ -134,7 +134,7 @@ def source_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) 
 def sink_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
     r"""Scalar sink term `\alpha_T T`."""
     # Implement sink term implicitly at current time step.
-    F = dot(eq.test, eq.sink_coeff * trial) * eq.dx
+    F = inner(eq.test, eq.sink_coeff * trial) * eq.dx
 
     return -F
 
@@ -152,7 +152,7 @@ def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
         The UFL form associated with the mass term of the equation.
 
     """
-    return dot(eq.test, trial) * eq.dx
+    return inner(eq.test, trial) * eq.dx
 
 
 advection_term.required_attrs = {"u"}
