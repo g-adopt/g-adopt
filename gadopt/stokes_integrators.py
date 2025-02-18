@@ -735,7 +735,6 @@ class ViscoelasticStokesSolver(MassMomentumBase):
 
     def set_equations(self) -> None:
         """Sets up UFL forms for the viscoelastic Stokes equations residual."""
-        u, p = self.solution_split
         stress = self.approximation.stress(self.u, self.stress_old, self.coupled_dt)
         source = self.approximation.buoyancy(self.displacement) * self.k
         rho_mass = self.approximation.rho_continuity()
