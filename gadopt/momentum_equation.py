@@ -21,9 +21,9 @@ and then return `-F`.
 """
 
 from firedrake import *
-
+from firedrake.mesh import ExtrudedMeshTopology
 from .equations import Equation, interior_penalty_factor
-from .utility import is_continuous, normal_is_continuous, tensor_jump
+from .utility import is_continuous, normal_is_continuous, tensor_jump, vertical_component
 
 
 def viscosity_term(
@@ -172,6 +172,25 @@ def momentum_source_term(
     return -F
 
 
+def advection_hydrostatic_prestress_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+    # Advection of background hydrostatic pressure used in linearised
+    # GIA simulations where
+    rho0 = eq.approximation.density
+    g = eq.approximation.g
+    u_r = vertical_component(trial)
+    # Only include jump term for discontinuous density spaces?
+    if is_continuous(rho0.function_space()):
+        return
+    else:
+        # change ds for extruded mesh? maybe not a good idea?
+        if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
+            dS = dS_h
+        F = jump(rho0) * u_r('+') * g('+') * dot(eq.test('+'), eq.n('+')) * dS
+        return -F
+
+
 viscosity_term.required_attrs = {"stress"}
 viscosity_term.optional_attrs = {"interior_penalty"}
 pressure_gradient_term.required_attrs = {"p"}
@@ -180,9 +199,11 @@ divergence_term.required_attrs = {"u", "rho_mass"}
 divergence_term.optional_attrs = set()
 momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
+advection_hydrostatic_prestress_term.required_attrs = {"source"}
+advection_hydrostatic_prestress_term.optional_attrs = set()
 
 residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosity_term]
 residual_terms_mass = divergence_term
 residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]
 
-residual_terms_compressible_viscoelastic = [momentum_source_term, viscosity_term]
+residual_terms_compressible_viscoelastic = [advection_hydrostatic_prestress_term, momentum_source_term, viscosity_term]
