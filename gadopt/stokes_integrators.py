@@ -238,8 +238,6 @@ class StokesSolver:
 
         self.solver_kwargs = kwargs
 
-        self.k = upward_normal(self.mesh)
-
         # Setup boundary conditions
         self.weak_bcs = {}
         self.strong_bcs = []
@@ -249,6 +247,18 @@ class StokesSolver:
         self.free_surface_dt = free_surface_dt
         self.free_surface_theta = free_surface_theta  # theta = 0.5 gives a second order accurate integration scheme in time
         self.free_surface = False
+
+        # Detect if solver should be direct, iterative or whatever the user has chosen
+        solver_auto_is_direct = None
+        if solver_parameters is not None:
+            if isinstance(self.mesh, fd.MeshSequence):
+                solver_auto_is_direct = self.mesh.topological_dimension() and all(
+                    hasattr(m, "cartesian") and m.cartesian for m in self.mesh
+                )
+        else:
+            solver_auto_is_direct = (
+                self.mesh.topological_dimension() == 2 and hasattr(self.mesh, "cartesian") and self.mesh.cartesian
+            )
 
         for id, bc in bcs.items():
             weak_bc = {}
@@ -331,7 +341,7 @@ class StokesSolver:
                         raise ValueError(
                             f"Solver type '{solver_parameters}' not implemented."
                         )
-            elif self.mesh.topological_dimension() == 2 and self.mesh.cartesian:
+            elif solver_auto_is_direct:
                 self.solver_parameters.update(direct_stokes_solver_parameters)
             else:
                 self.solver_parameters.update(iterative_stokes_solver_parameters)
@@ -357,7 +367,7 @@ class StokesSolver:
 
     def setup_equation_attributes(self):
         stress = self.approximation.stress(self.u)
-        source = self.approximation.buoyancy(self.p, self.T) * self.k
+        source = self.approximation.buoyancy(self.p, self.T) * upward_normal(fd.ufl_expr.extract_unique_domain(self.p))
         self.eqs_attrs = [{"p": self.p, "stress": stress, "source": source}, {"u": self.u, "rho_mass": self.rho_mass}]
 
     def setup_free_surface(self):
@@ -610,7 +620,9 @@ class ViscoelasticStokesSolver(StokesSolver):
 
     def setup_equation_attributes(self):
         stress = self.approximation.stress(self.u, self.stress_old, self.dt)
-        source = self.approximation.buoyancy(self.displacement) * self.k
+        source = self.approximation.buoyancy(self.displacement) * upward_normal(
+            fd.ufl_expr.extract_unique_domain(self.displacement)
+        )
         self.eqs_attrs = [{"p": self.p, "stress": stress, "source": source}, {"u": self.u, "rho_mass": self.rho_mass}]
 
     def setup_free_surface(self):
@@ -620,7 +632,9 @@ class ViscoelasticStokesSolver(StokesSolver):
             # the unknown `incremental displacement' (u) that
             # we are solving for
             implicit_displacement = self.u + self.displacement
-            implicit_displacement_up = fd.dot(implicit_displacement, self.k)
+            implicit_displacement_up = fd.dot(
+                implicit_displacement, upward_normal(fd.ufl_expr.extract_unique_domain(implicit_displacement))
+            )
             # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
             normal_stress, _ = self.approximation.free_surface_terms(
                 self.p, self.T, implicit_displacement_up, self.free_surface_theta, **free_surface_params
