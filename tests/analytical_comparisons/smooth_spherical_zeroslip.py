@@ -36,7 +36,7 @@ def model(level, l, mm, k, do_write=False):
     mesh2d = CubedSphereMesh(radius=rmin, refinement_level=level, degree=2)
     mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
     mesh.cartesian = False
-    bottom_id, top_id = "bottom", "top"
+    boundary = get_boundary_ids(mesh)
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
@@ -59,7 +59,7 @@ def model(level, l, mm, k, do_write=False):
 
     # RHS provided by assess solution: rho'=r**k Y_lm
     solution = assess.SphericalStokesSolutionSmoothZeroSlip(float(l), float(m), float(k), nu=float(mu), Rp=rmax, Rm=rmin, g=1.0)
-    u_xyz = interpolate(X, V)
+    u_xyz = Function(V).interpolate(X)
     rhop = Function(Vscl)
     rhop.dat.data[:] = [solution.delta_rho_cartesian(xyzi) for xyzi in u_xyz.dat.data]
 
@@ -67,8 +67,8 @@ def model(level, l, mm, k, do_write=False):
 
     approximation = BoussinesqApproximation(1)
     stokes_bcs = {
-        bottom_id: {'u': 0},
-        top_id: {'u': 0},
+        boundary.bottom: {'u': 0},
+        boundary.top: {'u': 0},
     }
 
     # Nullspaces and near-nullspaces:
@@ -103,13 +103,13 @@ def model(level, l, mm, k, do_write=False):
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
     # compute u analytical and error
-    uxzy = interpolate(as_vector((X[0], X[1], X[2])), V)
+    uxzy = Function(V).interpolate(as_vector((X[0], X[1], X[2])))
     u_anal = Function(V, name="AnalyticalVelocity")
     u_anal.dat.data[:] = [solution.velocity_cartesian(xyzi) for xyzi in uxzy.dat.data]
     u_error = Function(V, name="VelocityError").assign(u_-u_anal)
 
     # compute p analytical and error
-    pxyz = interpolate(as_vector((X[0], X[1], X[2])), Wvec)
+    pxyz = Function(Wvec).interpolate(as_vector((X[0], X[1], X[2])))
     p_anal = Function(W, name="AnalyticalPressure")
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyzi) for xyzi in pxyz.dat.data]
     p_error = Function(W, name="PressureError").assign(p_-p_anal)
