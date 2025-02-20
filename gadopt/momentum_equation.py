@@ -182,13 +182,13 @@ def advection_hydrostatic_prestress_term(
     u_r = vertical_component(trial)
     # Only include jump term for discontinuous density spaces?
     if is_continuous(rho0.function_space()):
-        return
+        F = 0
     else:
         # change ds for extruded mesh? maybe not a good idea?
         if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
             dS = dS_h
         F = jump(rho0) * u_r('+') * g('+') * dot(eq.test('+'), eq.n('+')) * dS
-        return -F
+    return -F
 
 
 viscosity_term.required_attrs = {"stress"}
