@@ -9,6 +9,8 @@ import warnings
 # the tests to xfail
 b = Path(__file__).parent.resolve()
 expected_md5 = "41b8157a5e18f467dbd1e7538d1236d6"
+
+
 def hash_check():
     with open(b / "square.msh", "r") as f:
         mesh_md5 = hashlib.md5(f.read().encode()).hexdigest()
