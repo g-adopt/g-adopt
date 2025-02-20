@@ -54,7 +54,7 @@ jobs:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           sudo apt update
-          sudo apt install -y task-spooler time s3cmd unzip git-lfs libglu1-mesa
+          sudo apt install -y task-spooler time s3cmd unzip git-lfs gmsh
           tsp -S 48
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
