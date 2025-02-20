@@ -101,11 +101,12 @@ jobs:
       - name: Run test
         id: run_tests
         run: |
-          . .venv/bin/activate
+          source .venv/bin/activate
           make -j test
         env:
           GADOPT_LOGLEVEL: INFO
           TS_MAXFINISHED: 100
+        shell: bash
 
       - name: Pytest
         id: run_pytest
