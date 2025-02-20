@@ -6,6 +6,7 @@ import pytest
 # Different variations of gmsh come up with different meshes from the geo file.
 # If we see a mesh different to what we're expecting, warn the user and xfail
 
+
 def test_base_case():
     b = Path(__file__).parent.resolve()
     expected_md5 = "41b8157a5e18f467dbd1e7538d1236d6"
