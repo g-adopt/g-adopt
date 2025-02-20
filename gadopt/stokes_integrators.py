@@ -254,7 +254,7 @@ class StokesSolver:
             solver_auto_is_direct = self.mesh.topological_dimension() == 2 and self.mesh.cartesian
         else:
             # A MeshSequence is a tuple of MeshGeometry's
-            solver_auto_is_direct = self.mesh.topological_dimension() and all(m.cartesian for m in self.mesh)
+            solver_auto_is_direct = self.mesh.topological_dimension() == 2 and all(m.cartesian for m in self.mesh)
 
         for id, bc in bcs.items():
             weak_bc = {}
