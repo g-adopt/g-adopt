@@ -90,6 +90,7 @@ jobs:
       - name: Compile flib (Trim et al., 2023)
         run: |
           source .venv/bin/activate
+          uv pip install meson
           cd flib/Python
           rm *.so
           sed -i 's/f2py3/f2py/' create_library.sh
