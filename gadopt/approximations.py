@@ -472,7 +472,7 @@ class SmallDisplacementViscoelasticApproximation():
         # accounts for advection of density in the absence of an evolution equation for temperature
         return -self.g * -inner(displacement, grad(self.density))
 
-    def free_surface_terms(self, p, T, eta, theta_fs, *, delta_rho_fs=1):
+    def free_surface_terms(self, eta, *, delta_rho_fs=1):
         free_surface_normal_stress = delta_rho_fs * self.g * eta
         # prefactor only needed when solving eta as part of mixed system
         return free_surface_normal_stress, None
