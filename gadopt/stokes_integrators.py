@@ -255,7 +255,7 @@ class StokesSolver:
                 self.mesh.topological_dimension() == 2 and hasattr(self.mesh, "cartesian") and self.mesh.cartesian
             )
         else:
-            ### A MeshSequence is a tuple of MeshGeometry's
+            # A MeshSequence is a tuple of MeshGeometry's
             solver_auto_is_direct = self.mesh.topological_dimension() and all(
                 hasattr(m, "cartesian") and m.cartesian for m in self.mesh
             )

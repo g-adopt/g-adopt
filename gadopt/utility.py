@@ -93,7 +93,7 @@ class TimestepAdaptor:
 
 
 def upward_normal(mesh):
-    if hasattr(mesh,"cartesian") and mesh.cartesian:
+    if hasattr(mesh, "cartesian") and mesh.cartesian:
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
@@ -105,7 +105,7 @@ def upward_normal(mesh):
 def vertical_component(u):
     mesh = extract_unique_domain(u)
 
-    if hasattr(mesh,"cartesian") and mesh.cartesian:
+    if hasattr(mesh, "cartesian") and mesh.cartesian:
         return u[u.ufl_shape[0]-1]
     else:
         n = upward_normal(mesh)
@@ -303,7 +303,7 @@ class LayerAveraging:
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if hasattr(mesh,"cartesian") and mesh.cartesian:
+        if hasattr(mesh, "cartesian") and mesh.cartesian:
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))
