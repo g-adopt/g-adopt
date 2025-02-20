@@ -26,8 +26,8 @@ def test_base_case():
     expected = pd.read_pickle(b / "expected.pkl")
     kwargs = {"check_names": False}
     different_mesh = hash_check()
-    if not different_mesh:
+    if different_mesh:
         kwargs |= {"rtol": 1e-4}
     pd.testing.assert_series_equal(df[["u_rms", "nu_top"]], expected, **kwargs)
-    if different_mesh:
+    if not different_mesh:
         assert abs(df.name - expected.name) <= 2
