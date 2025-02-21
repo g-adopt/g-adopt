@@ -15,8 +15,8 @@ jobs:
   render:
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake:latest
-      options: --shm-size 2g --cap-add=SYS_ADMIN
+      image: firedrakeproject/firedrake-vanilla-default:pip
+      options: --cap-add=SYS_ADMIN
 
     env:
       OMP_NUM_THREADS: 1
@@ -28,6 +28,8 @@ jobs:
           sudo apt update
           sudo apt install -y git-lfs
       - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         env:
           S3CONFIG: ${{ secrets.S3CONFIG }}
@@ -38,9 +40,9 @@ jobs:
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
 
-          . /home/firedrake/firedrake/bin/activate
-          python3 -m pip install nbval nbconvert jupytext siphash24 pygplates
-          python3 -m pip install .[demos,optimisation]
+          uv venv --system-site-packages
+          uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
+          . .venv/bin/activate
           python3 -m ipykernel install --name firedrake --user
 
       - name: Get Muller et al 2022 plate reconstructions
@@ -48,19 +50,22 @@ jobs:
           s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
+      - name: Fix HOME environment variable
+        run: echo "HOME=/home/firedrake" >> "$GITHUB_ENV"
+
       - name: Set up for network namespacing
         run: |
           sudo sed -i 's/ubuntu/firedrake/' /etc/subuid
           sudo sed -i 's/ubuntu/firedrake/' /etc/subgid
           sudo apt install -y uidmap
-          . /home/firedrake/firedrake/bin/activate
+          . .venv/bin/activate
           jupytext_location="$(which jupytext)"
           cp .testing/jupytext "$jupytext_location"
           chmod +x "$jupytext_location"
 
       - name: Convert notebooks
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          . .venv/bin/activate
           export DISPLAY=:99
           export PYVISTA_OFF_SCREEN=true
           export LIBGL_ALWAYS_SOFTWARE=true
