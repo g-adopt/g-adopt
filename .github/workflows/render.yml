@@ -57,7 +57,7 @@ jobs:
         run: |
           sudo sed -i 's/ubuntu/firedrake/' /etc/subuid
           sudo sed -i 's/ubuntu/firedrake/' /etc/subgid
-          sudo apt install -y uidmap
+          sudo apt install -y uidmap iproute2
           . .venv/bin/activate
           jupytext_location="$(which jupytext)"
           cp .testing/jupytext "$jupytext_location"
