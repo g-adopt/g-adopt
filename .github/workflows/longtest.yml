@@ -34,12 +34,12 @@ jobs:
       - name: Run test cases
         id: run_tests
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && make -j longtest gadopt_checkout=${{secrets.GADI_REPO_PATH}} gadopt_prefix_image=${{secrets.GADI_PREFIX_IMAGE}} project=${{secrets.GADI_PROJECT}}"
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && source ${{secrets.GADI_GADOPT_SETUP}} && make -j longtest gadopt_checkout=${{secrets.GADI_REPO_PATH}} gadopt_setup=${{secrets.GADI_GADOPT_SETUP}} project=${{secrets.GADI_PROJECT}}"
 
       - name: Test results
         if: ${{ success() }}
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && python3 -m pytest -m longtest --junit-xml=test_results.xml --ignore=tests/unit tests"
+          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && source ${{secrets.GADI_GADOPT_SETUP}} && python3 -m pytest -m longtest --junit-xml=test_results.xml --ignore=tests/unit tests"
 
       - name: Retrieve test results
         if: ${{ !cancelled() }}

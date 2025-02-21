@@ -190,9 +190,9 @@ def model(level, k, nn, do_write=False):
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*_dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*_dx))
-    l2anal_eta = numpy.sqrt(assemble(dot(eta_anal, eta_anal)*ds(top_id)))
+    l2anal_eta = numpy.sqrt(assemble(dot(eta_anal, eta_anal)*ds(boundary.top)))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*_dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*_dx))
-    l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error)*ds(top_id)))
+    l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error)*ds(boundary.top)))
 
     return l2error_u, l2error_p, l2error_eta, l2anal_u, l2anal_p, l2anal_eta
