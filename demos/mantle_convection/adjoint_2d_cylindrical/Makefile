@@ -4,7 +4,7 @@ all: $(addsuffix .conv,$(cases))
 
 ncpus := 4
 
-%.conv: taylor_test.py Checkpoint_State.h5
+%.conv: inverse.py Checkpoint_State.h5
 	echo "running $< on case $*" >&2
 	tsp -L mantle_convection -N $(ncpus) -f mpiexec -np $(ncpus) python3 $< $*
 
