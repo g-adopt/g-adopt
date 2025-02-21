@@ -20,7 +20,7 @@ def hash_check():
     return mesh_md5 != expected_md5
 
 
-@pytest.mark.xfail(hash_check(), reason="Mesh file has changed since known good output was created")
+@pytest.mark.xfail("hash_check()", reason="Mesh file has changed since known good output was created")
 def test_base_case():
     df = pd.read_csv(b / "params.log", sep="\\s+", header=0).iloc[-1]
     expected = pd.read_pickle(b / "expected.pkl")
