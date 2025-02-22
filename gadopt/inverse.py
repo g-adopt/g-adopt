@@ -9,10 +9,11 @@ from pathlib import Path
 import firedrake.utils
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 import ROL
-from firedrake import CheckpointFile, Function
+from firedrake import CheckpointFile, Function, TestFunction, TrialFunction, assemble, dot, solve
 from firedrake.adjoint import *  # noqa: F401
 from mpi4py import MPI
-from pyadjoint import MinimizationProblem
+from pyadjoint import Block, MinimizationProblem
+from gadopt.utility import InteriorBC, CombinedSurfaceMeasure
 
 # emulate the previous behaviour of firedrake_adjoint by automatically
 # starting the tape
@@ -361,3 +362,64 @@ minimisation_parameters = {
         "Iteration Limit": 100,
     },
 }
+
+
+class DiagnosticBlock(Block):
+    """
+    Writes sensitivity with respect to a function for diagnostic purposes.
+
+    Useful for outputting gradients in time dependent simulations
+    or inversions
+    """
+
+    def __init__(self, f, function, riesz_options={'riesz_representation': 'L2'}):
+        """Initialises the Diagnostic block.
+
+        Args:
+          f:
+            Filename of VTK pvd file to write to.
+          function:
+            Calculate gradient of reduced functional wrt to this function.
+          riesz_options:
+            Dictionary specifying riesz represenation (defaults to L2).
+        """
+        super().__init__()
+        self.add_dependency(function)
+        self.add_output(function.block_variable)
+        self.f = f
+        self.f_name = function.name()
+        self.riesz_options = riesz_options
+
+    def recompute_component(self, inputs, block_variable, idx, prepared):
+        return block_variable.checkpoint
+
+    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
+        out = inputs[0]._ad_convert_type(adj_inputs[0], options=self.riesz_options)
+        out.rename('adjoint_'+self.f_name)
+        self.f.write(out)
+        return 0
+
+
+class RieszL2BoundaryRepresentation:
+    """Callable that Converts l2-representatives to L2-boundary representatives
+
+    Necessary when visualing sensitivity wrt a function that is only
+    defined on a surface. Using the usual L2 gradient (with a continuous
+    function space) projects spurious oscillating noise into cells that
+    are not connected to the boundary, which should have zero
+    gradient. This changes the volume integral in the mass term to a
+    surface integral so that the L2 gradient correction only accounts
+    for the surface area of the element not the volume.
+    """
+    def __init__(self, Q, bids):
+        self.Q = Q
+        v = TestFunction(Q)
+        g = TrialFunction(Q)
+        bc = InteriorBC(Q, 0, bids)
+        ds = CombinedSurfaceMeasure(v.function_space().mesh(), degree=6)
+        self.M = assemble(dot(v, g)*ds(bids), bcs=bc)
+
+    def __call__(self, value):
+        ret = Function(self.Q)
+        solve(self.M, ret, value)
+        return ret
