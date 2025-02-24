@@ -89,17 +89,31 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
     return minconv
 
 
-def plot_gradients(given_min_timestep):
+def plot_gradients():
     # All gradients all writen in a directory for "gradients"
     vtu_path = Path.cwd() / "gradients"
     vtu_path.mkdir(exist_ok=True)
 
     for case_name, weightings in cases.items():
-        inverse_problem = generate_inverse_problem(*weightings, given_min_timestep=given_min_timestep)
+        inverse_problem = generate_inverse_problem(*weightings, given_min_timestep=0)
         derivative = inverse_problem["reduced_functional"].derivative()
         derivative.rename(f"derivative_{case_name}")
         fi = VTKFile(vtu_path / f"derivative_{case_name}_{given_min_timestep:03d}.pvd")
         fi.write(derivative)
+
+
+def plot_gradients_timesteps():
+    # All gradients all writen in a directory for "gradients"
+    vtu_path = Path.cwd() / "gradients"
+    vtu_path.mkdir(exist_ok=True)
+
+    for case_name, weightings in {"Tobs": [1, -1, -1, -1], "uobs": [-1, 1, -1, -1]}:
+        for given_min_timestep in [160, 100]:
+            inverse_problem = generate_inverse_problem(*weightings, given_min_timestep=given_min_timestep)
+            derivative = inverse_problem["reduced_functional"].derivative()
+            derivative.rename(f"derivative_{case_name}_{given_min_timestep:03d}")
+            fi = VTKFile(vtu_path / f"derivative_{case_name}_{given_min_timestep:03d}.pvd")
+            fi.write(derivative)
 
 
 def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, given_min_timestep=0):
