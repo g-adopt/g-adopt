@@ -256,7 +256,7 @@ def forward_problem():
     # non-dimensionalised time for present geologic day (0)
     presentday_ndtime = plate_reconstruction_model.age2ndtime(0.)
 
-    # non-dimensionalised time for 35 Myrs ago
+    # non-dimensionalised time for 40 Myrs ago
     time = plate_reconstruction_model.age2ndtime(40.)
 
     # Defining control
@@ -325,7 +325,7 @@ def forward_problem():
     # Temperature misfit between solution and observation
     # The upper-most 200 km (2.1386 non-dimensional) are mainly continental structure that we have not removed for now
     # So we leave them intact in the initial guess, and do not apply any information there
-    t_misfit = assemble((FullT - T_obs) ** 2 * conditional(radius > Constant(2.1386), 0.0, 1.0) * dx)
+    t_misfit = assemble((FullT - T_obs) ** 2 * dx)
     norm_t_misfit = assemble((T_obs) ** 2 * dx)
 
     # # Regularisation part of the objective
