@@ -319,7 +319,6 @@ def forward_problem():
         if should_end_timestepping:
             break
 
-
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature").interpolate((T + tala_parameters_dict["Tbar"]) * Constant(3700.) + Constant(300.))
 
