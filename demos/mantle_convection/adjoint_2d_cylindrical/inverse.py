@@ -89,20 +89,20 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
     return minconv
 
 
-def plot_gradients():
+def plot_gradients(given_min_timestep):
     # All gradients all writen in a directory for "gradients"
     vtu_path = Path.cwd() / "gradients"
     vtu_path.mkdir(exist_ok=True)
 
     for case_name, weightings in cases.items():
-        inverse_problem = generate_inverse_problem(*weightings)
+        inverse_problem = generate_inverse_problem(*weightings, given_min_timestep=given_min_timestep)
         derivative = inverse_problem["reduced_functional"].derivative()
         derivative.rename(f"derivative_{case_name}")
-        fi = VTKFile(vtu_path / f"derivative_{case_name}.pvd")
+        fi = VTKFile(vtu_path / f"derivative_{case_name}_{given_min_timestep:03d}.pvd")
         fi.write(derivative)
 
 
-def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
+def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, given_min_timestep=0):
     """
     Use adjoint-based optimisation to solve for the initial condition of the cylindrical
     problem.
@@ -260,7 +260,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     # if the weighting for misfit terms non-positive, then no need to integrate in time
     # min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
-    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
+    min_timesteps = given_min_timestep if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # making sure velocity is deterministic
     u_, p_ = z.subfunctions
