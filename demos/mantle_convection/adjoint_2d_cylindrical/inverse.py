@@ -14,7 +14,7 @@ annulus_taylor_test is also added to this script for testing the correctness of 
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
-from checkpoint_schedules import SingleDiskStorageSchedule
+# from checkpoint_schedules import SingleDiskStorageSchedule
 import sys
 from mpi4py import MPI
 from pathlib import Path
@@ -117,6 +117,13 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     tape = get_working_tape()
     tape.clear_tape()
 
+    # # Writing to disk for block variables
+    # enable_disk_checkpointing()
+
+    # # Using SingleDiskStorageSchedule
+    # if any([alpha_T > 0, alpha_u > 0]):
+    #     tape.enable_checkpointing(SingleDiskStorageSchedule())
+
     # If we are not annotating, let's switch on taping
     if not annotate_tape():
         continue_annotation()
@@ -133,14 +140,6 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     with CheckpointFile("Checkpoint_State.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
         mesh.cartesian = False
-
-    # Writing to disk for block variables
-    enable_disk_checkpointing()
-
-    # Using SingleDiskStorageSchedule
-    # TODO: This should be added in the future when garbage collection is added
-    if any([alpha_T > 0, alpha_u > 0]):
-        tape.enable_checkpointing(SingleDiskStorageSchedule())
 
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -261,10 +260,15 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     # if the weighting for misfit terms non-positive, then no need to integrate in time
     # min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
-    min_timesteps = max_timesteps - 5 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
+    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # making sure velocity is deterministic
-    z.subfunctions[0].interpolate(as_vector((0.0, 0.0)))
+    u_, p_ = z.subfunctions
+    u_.interpolate(as_vector((0.0, 0.0)))
+    p_.interpolate(0.0)
+
+    # Generate a surface velocity reference
+    uobs = Function(V, name="uobs")
 
     # Populate the tape by running the forward simulation
     for timestep in tape.timestepper(iter(range(min_timesteps, max_timesteps))):
@@ -273,8 +277,8 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
         if alpha_u > 0:
             # Update the accumulated surface velocity misfit using the observed value
-            uobs = checkpoint_file.load_function(mesh, name="Velocity", idx=timestep)
-            u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)/(max_timesteps - min_timesteps)) * dot(u - uobs, u - uobs) * ds_t)
+            uobs.assign(checkpoint_file.load_function(mesh, name="Velocity", idx=timestep))
+            u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)/(max_timesteps - min_timesteps)) * dot(u_ - uobs, u_ - uobs) * ds_t)
 
     # Load the observed final state
     Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)

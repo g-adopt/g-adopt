@@ -132,9 +132,9 @@ def run_forward():
 
     # Split and rename the velocity and pressure functions
     # so that they can be used for visualisation
-    u, p = z.subfunctions
-    u.rename("Velocity")
-    p.rename("Pressure")
+    u_, p_ = z.subfunctions
+    u_.rename("Velocity")
+    p_.rename("Pressure")
 
     # Now perform the time loop:
     for timestep in range(0, max_timesteps):
@@ -142,11 +142,11 @@ def run_forward():
         energy_solver.solve()
 
         # Storing velocity to be used in the objective F
-        checkpoint_file.save_function(u, name="Velocity", idx=timestep)
+        checkpoint_file.save_function(u_, name="Velocity", idx=timestep)
 
         if timestep % dump_period == 0 or timestep == max_timesteps - 1:
             mu_function.interpolate(mu)
-            output_file.write(u, p, T, mu_function)
+            output_file.write(u_, p_, T, mu_function)
 
     # Save the reference final temperature
     checkpoint_file.save_function(T, name="Temperature", idx=max_timesteps - 1)
