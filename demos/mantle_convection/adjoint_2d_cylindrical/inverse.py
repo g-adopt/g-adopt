@@ -14,7 +14,7 @@ annulus_taylor_test is also added to this script for testing the correctness of 
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
-from checkpoint_schedules import SingleDiskStorageSchedule
+# from checkpoint_schedules import SingleDiskStorageSchedule
 import sys
 from mpi4py import MPI
 
@@ -109,7 +109,6 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     # # Using SingleDiskStorageSchedule
     # if any([alpha_T > 0, alpha_u > 0]):
     #     tape.enable_checkpointing(SingleDiskStorageSchedule())
-
 
     # If we are not annotating, let's switch on taping
     if not annotate_tape():
@@ -253,7 +252,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     u_, p_ = z.subfunctions
     u_.interpolate(as_vector((0.0, 0.0)))
     p_.interpolate(0.0)
-    
+
     # Generate a surface velocity reference
     uobs = Function(V, name="uobs")
 
