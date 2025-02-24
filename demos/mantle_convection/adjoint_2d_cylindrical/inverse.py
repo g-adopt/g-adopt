@@ -103,8 +103,13 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     tape = get_working_tape()
     tape.clear_tape()
 
-    # Writing to disk for block variables
-    enable_disk_checkpointing()
+    # # Writing to disk for block variables
+    # enable_disk_checkpointing()
+
+    # # Using SingleDiskStorageSchedule
+    # if any([alpha_T > 0, alpha_u > 0]):
+    #     tape.enable_checkpointing(SingleDiskStorageSchedule())
+
 
     # If we are not annotating, let's switch on taping
     if not annotate_tape():
@@ -122,12 +127,6 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     with CheckpointFile("Checkpoint_State.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
         mesh.cartesian = False
-
-    # # Using SingleDiskStorageSchedule
-    # # TODO: This should be added in the future when garbage collection is added
-    # # Currently this is not working.
-    # if any([alpha_T > 0, alpha_u > 0]):
-    #     tape.enable_checkpointing(SingleDiskStorageSchedule())
 
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
