@@ -202,7 +202,7 @@ params = {
         "bulk_modulus": 1e16},
     "viscous-incompressible": {
         "dtf_start": 0.1,
-        "nx": 160,
+        "nx": 320,
         "sim_time": "long",
         "shear_modulus": 1e14,
         "bulk_modulus": 1e14}
