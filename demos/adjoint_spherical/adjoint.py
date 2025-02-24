@@ -51,7 +51,7 @@ def conduct_inversion():
     T_ub.assign(1.0)
 
     minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
-    minimisation_parameters["Status Test"] = 20
+    minimisation_parameters["Status Test"]["Iteration Limit"] = 10
 
     minimisation_problem = MinimizationProblem(
         reduced_functional, bounds=(T_lb, T_ub))
@@ -133,7 +133,7 @@ def forward_problem():
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-    Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar)
+    Q = FunctionSpace(mesh, "DQ", 1)  # Temperature function space (scalar)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Initial Temperature function space (scalar)
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
     R = FunctionSpace(mesh, "R", 0)  # Function space for constants
@@ -192,7 +192,7 @@ def forward_problem():
 
     # Setting up the approximation
     approximation = TruncatedAnelasticLiquidApproximation(
-        Ra=Constant(5e8),  # Rayleigh number
+        Ra=Constant(2e8),  # Rayleigh number
         Di=Constant(0.9492),  # Dissipation number
         rho=tala_parameters_dict["rhobar"],  # reference density
         Tbar=tala_parameters_dict["Tbar"],  # reference temperature
@@ -257,7 +257,7 @@ def forward_problem():
     presentday_ndtime = plate_reconstruction_model.age2ndtime(0.)
 
     # non-dimensionalised time for 35 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(20.)
+    time = plate_reconstruction_model.age2ndtime(40.)
 
     # Defining control
     control = Control(Tic)
@@ -283,10 +283,12 @@ def forward_problem():
     )
 
     # timestep counter
-    timestep_index = 0
     timestep_initial_phase = 3
     stokes_solve_frequency = 3
     z.subfunctions[0].interpolate(as_vector((0., 0., 0.)))
+    z.subfunctions[1].interpolate(0.)
+
+    should_end_timestepping = False
 
     # Now perform the time loop:
     for timestep_index in tape.timestepper(iter(range(500))):
@@ -302,20 +304,21 @@ def forward_problem():
         if timestep_index < timestep_initial_phase or updated_plt_rec:
             delta_t.assign(1e-10)
         else:
-            delta_t.assign(4e-7)
+            delta_t.assign(2e-7)
 
         # Make sure we are not going past present day
         if presentday_ndtime - time < float(delta_t):
+            should_end_timestepping = True
             delta_t.assign(presentday_ndtime - time)
 
         # Temperature system:
         energy_solver.solve()
         # Updating time
         time += float(delta_t)
-        timestep_index += 1
 
-        if time < presentday_ndtime:
+        if should_end_timestepping:
             break
+
 
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature").interpolate((T + tala_parameters_dict["Tbar"]) * Constant(3700.) + Constant(300.))
@@ -324,18 +327,19 @@ def forward_problem():
     # The upper-most 200 km (2.1386 non-dimensional) are mainly continental structure that we have not removed for now
     # So we leave them intact in the initial guess, and do not apply any information there
     t_misfit = assemble((FullT - T_obs) ** 2 * conditional(radius > Constant(2.1386), 0.0, 1.0) * dx)
-    norm_t_misfit = assemble((T_obs - T_ave) ** 2 * dx)
+    norm_t_misfit = assemble((T_obs) ** 2 * dx)
 
-    # Regularisation part of the objective
-    smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
-    norm_smoothing = assemble(inner(grad(T_obs - T_ave), grad(T_obs - T_ave)) * dx)
-    log(f"Magnitudes: R_norm={norm_smoothing}, T_norm={norm_t_misfit}, R={smoothing}, T={t_misfit}")
+    # # Regularisation part of the objective
+    # smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
+    # norm_smoothing = assemble(inner(grad(T_obs - T_ave), grad(T_obs - T_ave)) * dx)
+    # log(f"Magnitudes: R_norm={norm_smoothing}, T_norm={norm_t_misfit}, R={smoothing}, T={t_misfit}")
 
-    # We want to weight the smoothing down not to affect the final solution
-    weight_smoothin = 1e-2
-    # Assembling the objective
-    regularisation_weight = 1e5
-    objective = t_misfit / norm_t_misfit + regularisation_weight * smoothing / norm_smoothing
+    # # We want to weight the smoothing down not to affect the final solution
+    # weight_smoothin = 1e-2
+    # # Assembling the objective
+    # regularisation_weight = 1e5
+    # objective = t_misfit / norm_t_misfit  + regularisation_weight * smoothing / norm_smoothing
+    objective = t_misfit / norm_t_misfit
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
@@ -374,7 +378,7 @@ def generate_reference_fields():
     base_path = Path(__file__).resolve().parent
 
     # mesh/initial guess file is comming from a long-term simulation
-    mesh_path = base_path / "initial_condition_mat_prop/Final_State.h5"
+    mesh_path = base_path / "initial_condition_mat_prop/DG_GPlates_Late_2024_GPlates_2e8_Cao_C50_Final_State.h5"
 
     # Name of the final output
     output_path = base_path / "REVEAL.pvd"
