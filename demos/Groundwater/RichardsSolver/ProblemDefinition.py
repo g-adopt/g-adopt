@@ -1,28 +1,28 @@
+import firedrake as fd
+import numpy as np
+from modelTypes import relativePermeability, waterRetention, moistureContent
+
 def ProblemDefinitionNonlinear( h, hOld, smoothingParameter, timeConstant, timeStep, v, V, timeIntegrator, modelFormulation, modelParameters, setBoundaryConditions, mesh, dx, ds ):
     
     # Returns the variational problem for solving Richards equation
-    import firedrake as fd
-    import numpy as np
-    from modelTypes import relativePermeability, waterRetention, moistureContent
 
     dimen = mesh.topological_dimension()
     x     = fd.SpatialCoordinate(mesh)
 
-    #timeIntegrator   = timeParameters['timeIntegration']
-    #modelFormulation = timeParameters['modelFormulation']
-
     boundaryCondition = setBoundaryConditions(timeConstant, x)
 
-
     if timeIntegrator == 'backwardEuler':
-        hBar = h; hDiff = h
+        hBar = h
+        hDiff = h
     elif timeIntegrator == 'crankNicolson':
-        hBar = 0.5*(h + hOld); hDiff = hBar
+        hBar = 0.5*(h + hOld)
+        hDiff = hBar
     elif timeIntegrator == 'modifiedEuler':
-        hBar = hOld; hDiff = h
+        hBar = hOld
+        hDiff = h
     else:
-        hBar = hOld; hDiff = h
-
+        hBar = hOld
+        hDiff = h
 
     C = waterRetention( modelParameters, hBar, x, timeConstant )
     K = relativePermeability( modelParameters, hBar, x, timeConstant )
@@ -57,8 +57,8 @@ def ProblemDefinitionNonlinear( h, hOld, smoothingParameter, timeConstant, timeS
     for index in range(len(boundaryCondition)):
 
         boundaryInfo  = boundaryCondition[index+1]
-        boundaryType  = next(iter(boundaryInfo));
-        boundaryValue = boundaryInfo[boundaryType]; 
+        boundaryType  = next(iter(boundaryInfo))
+        boundaryValue = boundaryInfo[boundaryType]
 
         if boundaryType == "h":
             strongBCS.append(fd.DirichletBC(V, boundaryValue, index+1))
@@ -66,7 +66,7 @@ def ProblemDefinitionNonlinear( h, hOld, smoothingParameter, timeConstant, timeS
             F = F - ( -( fd.dot( normalVector , gravity ) - boundaryValue) ) * v * ds(index+1)
 
     problem = fd.NonlinearVariationalProblem(F, h, bcs = strongBCS)
-   
+
     # Use direct solvers
     if dimen <= 2:
 
@@ -89,11 +89,5 @@ def ProblemDefinitionNonlinear( h, hOld, smoothingParameter, timeConstant, timeS
                                     "ksp_rtol": 1e-5,
                                     'pc_type': 'sor',
                                     })
-
-    
+ 
     return solverRichardsNonlinear
-    
-
-
-
-
