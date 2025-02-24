@@ -138,10 +138,6 @@ def forward_problem():
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
     R = FunctionSpace(mesh, "R", 0)  # Function space for constants
 
-    # Symbolic representation of spatial coordinates and radius
-    X = SpatialCoordinate(mesh)
-    radius = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
-
     # Function for holding stokes results
     z = Function(Z)
     u, p = split(z)
