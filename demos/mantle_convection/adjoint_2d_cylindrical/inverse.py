@@ -128,6 +128,9 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, gi
     if not annotate_tape():
         continue_annotation()
 
+    # The master script's path
+    file_path = Path(__file__).parent.resolve()
+
     # Set up geometry:
     rmax = 2.22
     rmax_earth = 6370  # Radius of Earth [km]
@@ -137,7 +140,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, gi
     r_410 = rmax - (rmax_earth - r_410_earth) / (rmax_earth - rmin_earth)
     r_660 = rmax - (rmax_earth - r_660_earth) / (rmax_earth - rmin_earth)
 
-    with CheckpointFile("Checkpoint_State.h5", "r") as f:
+    with CheckpointFile(str(file_path / "Checkpoint_State.h5"), "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
         mesh.cartesian = False
 
@@ -167,7 +170,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, gi
     T_0 = Function(Q, name="T_0")  # Temperature for zeroth time-step
     Taverage = Function(Q1, name="Average Temperature")
 
-    checkpoint_file = CheckpointFile("Checkpoint_State.h5", "r")
+    checkpoint_file = CheckpointFile(str(file_path / "Checkpoint_State.h5"), "r")
     # Initialise the control
     Tic.project(
         checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
@@ -277,7 +280,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, gi
 
         if alpha_u > 0:
             # Update the accumulated surface velocity misfit using the observed value
-            uobs.assign(checkpoint_file.load_function(mesh, name="Velocity", idx=timestep))
+            uobs.interpolate(checkpoint_file.load_function(mesh, name="Velocity", idx=timestep))
             u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)/(max_timesteps - min_timesteps)) * dot(u_ - uobs, u_ - uobs) * ds_t)
 
     # Load the observed final state
