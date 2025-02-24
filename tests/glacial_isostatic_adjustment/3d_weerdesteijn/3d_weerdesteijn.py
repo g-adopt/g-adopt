@@ -7,20 +7,26 @@
 #
 
 from gadopt import *
+from gadopt.utility import CombinedSurfaceMeasure
 from gadopt.utility import vertical_component as vc
 import argparse
+import numpy as np
+from mpi4py import MPI
 parser = argparse.ArgumentParser()
 parser.add_argument("--dx", default=50, type=float, help="Horizontal resolution in km", required=False)
 parser.add_argument("--refined_surface", action='store_true', help="Use refined surface mesh")
 parser.add_argument("--DG0_layers", default=5, type=int, help="Number of cells per layer for DG0 discretisation of background profiles", required=False)
-parser.add_argument("--dt", default=50, type=float, help="Timestep in years", required=False)
+parser.add_argument("--dt_years", default=1e3, type=float, help="Timestep in years", required=False)
 parser.add_argument("--Tend", default=110e3, type=float, help="Simulation end time in years", required=False)
+parser.add_argument("--bulk_modulus", default=1e13, type=float, help="Bulk modulus in Pa", required=False)
 parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
 parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
+parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
 args = parser.parse_args()
 
+name = f"weerdesteijn-3d-internalvariable-{args.optional_name}"
 # Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and
 # 2891 km deep. To speed up things for this first demo, we consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
 #
@@ -37,7 +43,7 @@ args = parser.parse_args()
 #
 # Boundaries are automatically tagged by the built-in meshes supported by Firedrake. For the `RectangleMesh` being used here, tag 1
 # corresponds to the plane $x=0$; 2 to the $x=L$ plane; 3 to the $y=0$ plane; and 4 to the $y=D$ plane. For convenience, we can
-# rename these to `left_id`, `right_id`, `bottom_id` and `top_id`.
+# rename these to `left_id`, `right_id`, `bottom_id` and `boundary.top`.
 
 # +
 # Set up geometry:
@@ -71,11 +77,14 @@ mesh = ExtrudedMesh(
     layer_height=layer_height_list,
 )
 
-mesh.coordinates.dat.data[:, 2] -= D
+vertical_component = 2
+mesh.coordinates.dat.data[:, vertical_component] -= D
 
 mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
 nz = f"{DG0_layers}perlayer"
+        
+ds = CombinedSurfaceMeasure(mesh, degree=6)
 
 # -
 # We now need to choose finite element function spaces. `V` , `W`, `S` and `R` are symbolic
@@ -149,7 +158,7 @@ def initialise_background_field(field, background_values):
 
 
 # Pseudo incompressible...
-bulk_modulus = Constant(1e19)
+bulk_modulus = Constant(args.bulk_modulus)
 
 density = Function(DG0, name="density")
 initialise_background_field(density, density_values)
@@ -183,9 +192,9 @@ for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
 Tstart = 0
 time = Function(R).assign(Tstart * year_in_seconds)
 
-dt_years = 10e3
+dt_years = args.dt_years
 dt = Constant(dt_years * year_in_seconds)
-Tend_years = 110e3
+Tend_years = args.Tend
 Tend = Constant(Tend_years * year_in_seconds)
 dt_out_years = 10e3
 dt_out = Constant(dt_out_years * year_in_seconds)
@@ -270,11 +279,61 @@ direct_stokes_solver_parameters = {
     "pc_factor_mat_solver_type": "mumps",
 }
 
+iterative_parameters = {"mat_type": "matfree",
+#              "snes_monitor": None,
+              "snes_type": "ksponly",
+              "ksp_type": "gmres",
+              "ksp_rtol": 1e-7,
+              "ksp_converged_reason": None,
+              "ksp_monitor": None,
+              "pc_type": "fieldsplit",
+              "pc_fieldsplit_type": "symmetric_multiplicative",
+              #"pc_fieldsplit_type": "schur",
+              #"pc_fieldsplit_schur_type": "full",
+#              "ksp_type": "preonly",
+
+# We want to split the Navier-Stokes part off from the temperature
+# variable. ::
+
+#              "pc_fieldsplit_0_fields": "0",
+#              "pc_fieldsplit_1_fields": "1",
+
+# We'll invert the Navier-Stokes block with MUMPS::
+
+              "fieldsplit_0_ksp_converged_reason": None,
+              "fieldsplit_0_ksp_monitor": None,
+              "fieldsplit_0_ksp_type": "cg",
+#              "fieldsplit_0_ksp_type": "preonly",
+              "fieldsplit_0_pc_type": "python",
+#              "fieldsplit_0_pc_python_type": "firedrake.AssembledPC",
+              "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
+#              "fieldsplit_0_assembled_pc_type": "hypre",
+              "fieldsplit_0_assembled_pc_type": "gamg",
+              "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
+              "fieldsplit_0_ksp_rtol": 1e-5,
+              "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
+              "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
+              "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
+              "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+
+#              "fieldsplit_0_assembled_pc_type": "lu",
+#              "fieldsplit_0_assembled_pc_factor_mat_solver_type": "mumps",
+
+# the temperature block will also be inverted directly, but with plain
+# LU.::
+
+              "fieldsplit_1_ksp_converged_reason": None,
+              "fieldsplit_1_ksp_monitor": None,
+              "fieldsplit_1_ksp_type": "cg",
+              "fieldsplit_1_pc_type": "python",
+              "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
+              "fieldsplit_1_assembled_pc_type": "sor",
+              "fieldsplit_1_ksp_rtol": 1e-5,}
 Z_nullspace = None  # Default: don't add nullspace for now
 Z_near_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True, translations=[0, 1, 2])
 
 coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=stokes_bcs,
-                                        solver_parameters=direct_stokes_solver_parameters,
+                                        solver_parameters=iterative_parameters,
                                         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                         near_nullspace=Z_near_nullspace)
 
@@ -283,15 +342,24 @@ coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=sto
 
 # +
 # Create output file
-output_file = VTKFile("output.pvd")
-output_file.write(*z.subfunctions)
+OUTPUT = args.write_output
+if OUTPUT:
+    output_file = VTKFile("output.pvd")
+    output_file.write(*z.subfunctions)
 
-plog = ParameterLog("params.log", mesh)
+plog = ParameterLog("/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/params.log", mesh)
 plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
 )
 
-checkpoint_filename = "viscoelastic_loading-chk.h5"
+checkpoint_filename = f"/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_modulus}-chk.h5"
+
+displacement_filename = f"/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_modulus}.dat"
+
+# Initial displacement at time zero is zero
+displacement_min_array = [[0.0, 0.0]]
+
+vertical_displacement = Function(V.sub(2), name="vertical displacement")  # Function to store vertical displacement for output
 # -
 
 # Now let's run the simulation! We are going to control the ice thickness using the `ramp` parameter.
@@ -304,19 +372,44 @@ for timestep in range(1, max_timesteps+1):
     time.assign(time+dt)
     coupled_solver.solve()
 
+    # Log diagnostics:
+    # Compute diagnostics:
+    vertical_displacement.interpolate(vc(z.subfunctions[0]))
+    bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
+    displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
+    displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
+    log("Greatest (-ve) displacement", displacement_min)
+    displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
+    displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
+    log("Greatest (+ve) displacement", displacement_max)
+    displacement_min_array.append([float(time/year_in_seconds), displacement_min])
+    
+    disp_norm_L2surf = assemble(z.subfunctions[0][vertical_component]**2 * ds(boundary.top))
+    log("L2 surface norm displacement", disp_norm_L2surf)
+    
+    disp_norm_L1surf = assemble(abs(z.subfunctions[0][vertical_component]) * ds(boundary.top))
+    log("L1 surface norm displacement", disp_norm_L1surf)
+    
+    integrated_disp = assemble(z.subfunctions[0][vertical_component]  * ds(boundary.top))
+    log("Integrated displacement", integrated_disp)
+
     if timestep % output_frequency == 0:
         log("timestep", timestep)
-
-        output_file.write(*z.subfunctions)
+        
+        if OUTPUT:
+            output_file.write(*z.subfunctions)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(z, name="Stokes")
+        
+        if MPI.COMM_WORLD.rank == 0:
+            np.savetxt(displacement_filename, displacement_min_array)
 
-    # Log diagnostics:
-    plog.log_str(
-        f"{timestep} {float(time)} {float(dt)} "
-        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-    )
+
+        plog.log_str(
+           f"{timestep} {float(time)} {float(dt)} "
+            f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+        )
 
 # Let's use the python package *PyVista* to plot the magnitude of the displacement field through time.
 # We will use the calculated displacement to artifically scale the mesh. We have exaggerated the stretching
