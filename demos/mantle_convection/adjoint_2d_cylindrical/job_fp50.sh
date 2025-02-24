@@ -13,7 +13,8 @@
 module use /g/data/fp50/modules
 module use /g/data/fp50/branch_modules
 export MY_GADOPT=/scratch/xd2/sg8812/g-adopt/
-module load firedrake-64bit/gadi_fix_mem_leak
+
+# module load firedrake-64bit/gadi_fix_mem_leak
 # module load firedrake-64bit/20241030
 
 # To bypass NCI's compiler wrappers
@@ -38,7 +39,7 @@ export OMPI_MCA_io="ompio"
 # Making sure all nodes have matplotlib
 mpiexec --map-by ppr:1:node -np $PBS_NNODES  python3 -c "import matplotlib.pyplot as plt"
 
-mpiexec -np $PBS_NCPUS python3 -c "from inverse import *; plot_gradients()" &> taylor_test_d_$(date +"%Y%m%d%H%M").log
+mpiexec -np $PBS_NCPUS python3 -c "from inverse import *; plot_gradients()" > visualisation.log 2> error.log
 # mpiexec -np $PBS_NCPUS python3 -c "from forward import *; run_forward()" &> generate_${PBS_JOBID}.log
 # mpiexec -np $PBS_NCPUS python3 -c "from inverse import *; my_taylor_test(0, 0, 1., 0); my_taylor_test(0, 0, 0, 1.);" &> taylor_test_d_$(date +"%Y%m%d%H%M").log
 # mpiexec -np $PBS_NCPUS python3 -c "from inverse import *; my_taylor_test(-1, -1, -1, +1)" &> taylor_test_d_$(date +"%Y%m%d%H%M").log
