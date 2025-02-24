@@ -1,6 +1,6 @@
-#PBS -N 20Myrs
+#PBS -N 40Myrs
 #PBS -P xd2
-#PBS -q normalsr 
+#PBS -q normalsr
 #PBS -l walltime=24:00:00
 #PBS -l mem=10000GB
 #PBS -l ncpus=2080
@@ -22,6 +22,7 @@ module remove-path PATH /opt/nci/bin
 
 # To prepend local paths for g-adopt and g-drift
 export PYTHONPATH=/scratch/xd2/sg8812/g-drift/:/scratch/xd2/sg8812/local_gadopt/:${PYTHONPATH}
+
 # Add the main adjoint script path
 export PYTHONPATH=/scratch/xd2/sg8812/g-adopt/demos/adjoint_spherical/:${PYTHONPATH}
 
@@ -37,10 +38,7 @@ export MPLCONFIGDIR=$PBS_JOBFS/firedrake-prefix
 # export PYOP2_NODE_LOCAL_COMPILATION=0
 export OMPI_MCA_io="ompio"
 
-# Making sure all nodes have matplotlib 
+# Making sure all nodes have matplotlib
 mpiexec --map-by ppr:1:node -np $PBS_NNODES  python3 -c "import matplotlib.pyplot as plt"
-
-# mpiexec -np $PBS_NCPUS python3 -c "from adjoint import *; generate_reference_fields()" &> generate_${PBS_JOBID}.log
-# mpiexec -np $PBS_NCPUS python3 -c "from adjoint import *; test_taping()" &> output_run_$(date +"%Y%m%d%H%M").log
-# mpiexec -np $PBS_NCPUS python3 -c "from adjoint import *; conduct_taylor_test()" > taylor_test.log 2> warnings.log
+# Run the main simulation
 mpiexec -np $PBS_NCPUS python3 -c "from adjoint import *; conduct_inversion()" > inversion.log 2> warning.log
