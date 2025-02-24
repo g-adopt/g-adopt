@@ -83,7 +83,7 @@ mesh.coordinates.dat.data[:, vertical_component] -= D
 mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
 nz = f"{DG0_layers}perlayer"
-        
+
 ds = CombinedSurfaceMeasure(mesh, degree=6)
 
 # -
@@ -280,55 +280,35 @@ direct_stokes_solver_parameters = {
 }
 
 iterative_parameters = {"mat_type": "matfree",
-#              "snes_monitor": None,
-              "snes_type": "ksponly",
-              "ksp_type": "gmres",
-              "ksp_rtol": 1e-7,
-              "ksp_converged_reason": None,
-              "ksp_monitor": None,
-              "pc_type": "fieldsplit",
-              "pc_fieldsplit_type": "symmetric_multiplicative",
-              #"pc_fieldsplit_type": "schur",
-              #"pc_fieldsplit_schur_type": "full",
-#              "ksp_type": "preonly",
+                        "snes_type": "ksponly",
+                        "ksp_type": "gmres",
+                        "ksp_rtol": 1e-7,
+                        "ksp_converged_reason": None,
+                        "ksp_monitor": None,
+                        "pc_type": "fieldsplit",
+                        "pc_fieldsplit_type": "symmetric_multiplicative",
 
-# We want to split the Navier-Stokes part off from the temperature
-# variable. ::
+                        "fieldsplit_0_ksp_converged_reason": None,
+                        "fieldsplit_0_ksp_monitor": None,
+                        "fieldsplit_0_ksp_type": "cg",
+                        "fieldsplit_0_pc_type": "python",
+                        "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
+                        "fieldsplit_0_assembled_pc_type": "gamg",
+                        "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
+                        "fieldsplit_0_ksp_rtol": 1e-5,
+                        "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
+                        "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
+                        "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
+                        "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
 
-#              "pc_fieldsplit_0_fields": "0",
-#              "pc_fieldsplit_1_fields": "1",
-
-# We'll invert the Navier-Stokes block with MUMPS::
-
-              "fieldsplit_0_ksp_converged_reason": None,
-              "fieldsplit_0_ksp_monitor": None,
-              "fieldsplit_0_ksp_type": "cg",
-#              "fieldsplit_0_ksp_type": "preonly",
-              "fieldsplit_0_pc_type": "python",
-#              "fieldsplit_0_pc_python_type": "firedrake.AssembledPC",
-              "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
-#              "fieldsplit_0_assembled_pc_type": "hypre",
-              "fieldsplit_0_assembled_pc_type": "gamg",
-              "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
-              "fieldsplit_0_ksp_rtol": 1e-5,
-              "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
-              "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
-              "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
-              "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-
-#              "fieldsplit_0_assembled_pc_type": "lu",
-#              "fieldsplit_0_assembled_pc_factor_mat_solver_type": "mumps",
-
-# the temperature block will also be inverted directly, but with plain
-# LU.::
-
-              "fieldsplit_1_ksp_converged_reason": None,
-              "fieldsplit_1_ksp_monitor": None,
-              "fieldsplit_1_ksp_type": "cg",
-              "fieldsplit_1_pc_type": "python",
-              "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
-              "fieldsplit_1_assembled_pc_type": "sor",
-              "fieldsplit_1_ksp_rtol": 1e-5,}
+                        "fieldsplit_1_ksp_converged_reason": None,
+                        "fieldsplit_1_ksp_monitor": None,
+                        "fieldsplit_1_ksp_type": "cg",
+                        "fieldsplit_1_pc_type": "python",
+                        "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
+                        "fieldsplit_1_assembled_pc_type": "sor",
+                        "fieldsplit_1_ksp_rtol": 1e-5,
+                        }
 Z_nullspace = None  # Default: don't add nullspace for now
 Z_near_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True, translations=[0, 1, 2])
 
@@ -383,33 +363,31 @@ for timestep in range(1, max_timesteps+1):
     displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
     log("Greatest (+ve) displacement", displacement_max)
     displacement_min_array.append([float(time/year_in_seconds), displacement_min])
-    
+
     disp_norm_L2surf = assemble(z.subfunctions[0][vertical_component]**2 * ds(boundary.top))
     log("L2 surface norm displacement", disp_norm_L2surf)
-    
+
     disp_norm_L1surf = assemble(abs(z.subfunctions[0][vertical_component]) * ds(boundary.top))
     log("L1 surface norm displacement", disp_norm_L1surf)
-    
-    integrated_disp = assemble(z.subfunctions[0][vertical_component]  * ds(boundary.top))
+
+    integrated_disp = assemble(z.subfunctions[0][vertical_component] * ds(boundary.top))
     log("Integrated displacement", integrated_disp)
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)
-        
+
         if OUTPUT:
             output_file.write(*z.subfunctions)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(z, name="Stokes")
-        
+
         if MPI.COMM_WORLD.rank == 0:
             np.savetxt(displacement_filename, displacement_min_array)
 
-
-        plog.log_str(
-           f"{timestep} {float(time)} {float(dt)} "
-            f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-        )
+        plog.log_str(f"{timestep} {float(time)} {float(dt)} "
+                     f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+                     )
 
 # Let's use the python package *PyVista* to plot the magnitude of the displacement field through time.
 # We will use the calculated displacement to artifically scale the mesh. We have exaggerated the stretching
