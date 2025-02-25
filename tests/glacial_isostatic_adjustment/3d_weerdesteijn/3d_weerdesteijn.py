@@ -315,7 +315,7 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True, tran
 coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=stokes_bcs,
                                         solver_parameters=iterative_parameters,
                                         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                        near_nullspace=Z_near_nullspace)
+                                        near_nullspace=Z_near_nullspace, scaling_factor=1e-10)
 
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.

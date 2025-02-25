@@ -177,6 +177,7 @@ def advection_hydrostatic_prestress_term(
 ) -> Form:
     # Advection of background hydrostatic pressure used in linearised
     # GIA simulations where
+    Vi = eq.approximation.Vi
     rho0 = eq.approximation.density
     g = eq.approximation.g
     u_r = vertical_component(trial)
@@ -187,7 +188,7 @@ def advection_hydrostatic_prestress_term(
         # change ds for extruded mesh? maybe not a good idea?
         if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
             dS = dS_h
-        F = jump(rho0) * u_r('+') * g('+') * dot(eq.test('+'), eq.n('+')) * dS
+        F = Vi('+') * jump(rho0) * u_r('+') * g('+') * dot(eq.test('+'), eq.n('+')) * dS
     return -F
 
 
