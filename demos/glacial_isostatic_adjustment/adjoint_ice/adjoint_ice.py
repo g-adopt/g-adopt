@@ -403,7 +403,7 @@ def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
 ds = CombinedSurfaceMeasure(mesh, degree=6)
 # -
 
-# Now let's run the simulation! This should be the same as the previous tutorial except we are calculating the surface
+# Now let's run the simulation! This is the same as the previous tutorial except we are calculating the surface
 # misfit between our current simulation and the reference run at each timestep.
 
 # +
@@ -438,7 +438,7 @@ for timestep in range(max_timesteps):
 
 # -
 
-# Let's create a helper function to warp the mesh based on the displacement and
+# Let's create a helper function to warp the mesh based on the displacement.
 
 
 # + tags=["active-ipynb"]
