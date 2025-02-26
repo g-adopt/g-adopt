@@ -6,7 +6,7 @@
 # recover the ice load that we used as part of the earlier 2d cylindrical tutorial,
 # starting from a different initial guess of the ice load.
 #
-# This example focusses on setting up an adjoint problem. These can be summarised as follows:
+# This example focusses on setting up an adjoint problem. The key steps are summarised as follows:
 # 1. Defining an objective function.
 # 2. Verifying the accuracy of the gradients using a Taylor test.
 # 3. Setting up and solving a gradient-based minimisation problem for a synthetic ice load.
@@ -16,6 +16,7 @@
 # Let's get started!
 # The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
+# We also import some G-ADOPT utilities for later use.
 
 from gadopt import *
 from gadopt.utility import step_func, vertical_component, CombinedSurfaceMeasure
@@ -32,8 +33,7 @@ tape.clear_tape()
 # previous tutorial. This makes it easier to load the synthetic data from the previous
 # tutorial for our 'twin' experiment.
 
-# Let's download a checkpoint file we made earlier. This is the same as the forward cylindrical
-# we saw in a previous tutorial.
+# Let's download the relevant checkpoint file.
 
 # + tags=["active-ipynb"]
 # ![ ! -f forward-2d-cylindrical-disp-incdisp.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-incdisp.h5
@@ -72,13 +72,13 @@ stress_old = Function(S, name="stress_old").assign(0)
 # +
 X = SpatialCoordinate(mesh)
 
-# layer properties from spada et al 2011
+# Layer properties from Spada et al. (2011)
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [2, -2, -2, -1.698970004]  # viscosity = 1e23 * 10**viscosity_values
-# N.b. that we have modified the viscosity of the Lithosphere viscosity from
-# Spada et al 2011 because we are using coarse grid resolution
+# N.b. that we have modified the viscosity of the lithosphere from
+# Spada et al. (2011) because we are using coarse grid resolution
 
 
 def initialise_background_field(field, background_values, vertical_tanh_width=40e3):
@@ -146,8 +146,8 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 
 # Now let's setup the ice load. For this tutorial we will start with an ice thickness of zero
 # everywhere, but our target ice load will be the same two synthetic ice sheets in the
-# previous demo. An import step is to define our control, i.e. the thing that we are inverting
-# for. In our case, this is the normalised ice thickness.
+# previous demo. A key step is to define our control, i.e. the field or parameter that we are
+# inverting for. In our case, this is the normalised ice thickness.
 
 # +
 rho_ice = 931
@@ -163,8 +163,8 @@ surface_dx = 200*1e3
 ncells = 2*pi*radius_values[0] / surface_dx
 surface_resolution_radians = 2*pi / ncells
 colatitude = atan2(X[0], X[1])
-disc1_centre = (2*pi/360) * 25  # centre of disc1
-disc2_centre = pi  # centre of disc2
+disc1_centre = (2*pi/360) * 25  # Centre of disc1
+disc2_centre = pi  # Centre of disc2
 disc1 = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surface_resolution_radians)))
 disc2 = 0.5*(1-tanh((abs(abs(colatitude)-disc2_centre) - disc_halfwidth2) / (2*surface_resolution_radians)))
 
@@ -178,13 +178,13 @@ ice_load = rho_ice * g * Hice1 * normalised_ice_thickness
 
 adj_ice_file = VTKFile("adj_ice.pvd")
 # Since we are calculating the sensitivity to a field that is only defined
-# on the top boundary if we do the usual L2 projection (using the
+# on the top boundary, if we do the usual L2 projection (using the
 # mass matrix) to account for the size of the mesh element then we
 # will get spurious oscillating values in the output gradient in
 # cells not connected to the boundary. Instead we do the projection using
 # a surface integral, so that our output gradient accounts for the surface
 # area of each cell.
-converter = RieszL2BoundaryRepresentation(W, top_id)  # convert to surface L2 representation
+converter = RieszL2BoundaryRepresentation(W, top_id)  # Convert to surface L2 representation
 
 # We add a diagnostic block to the tape which will output the gradient
 # field every time the tape is replayed.
@@ -321,7 +321,7 @@ log(f"dt: {float(dt / year_in_seconds)} years")
 log(f"Simulation start time: {Tstart} years")
 # -
 
-# Similar to before, we setup the boundary conditions, this time using the normalised
+# Similar to our previous example, we setup the boundary conditions, this time using the normalised
 # ice thickness to account for ice covered regions when calculating the density
 # contrast across the free surface.
 
@@ -336,7 +336,7 @@ stokes_bcs = {
 
 
 # We also need to specify a G-ADOPT approximation, nullspaces and finally the
-# stokes solver as before.  For this tutorial we will use a direct solver for
+# Stokes solver.  For this tutorial we will use a direct solver for
 # the matrix system, so we don't need to provide the near nullspace like before.
 
 
@@ -403,7 +403,7 @@ def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
 ds = CombinedSurfaceMeasure(mesh, degree=6)
 # -
 
-# Now let's run the simulation! This should be the same as before except we are calculating the surface
+# Now let's run the simulation! This should be the same as the previous tutorial except we are calculating the surface
 # misfit between our current simulation and the reference run at each timestep.
 
 # +
@@ -541,8 +541,7 @@ log("J = ", J)
 # -
 
 
-# Let's also pause
-# annotation as we are now done with the forward terms.
+# Let's also pause annotation as we are now done with the forward terms.
 
 pause_annotation()
 
@@ -604,7 +603,7 @@ reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 # reducted functional and print out the answer - it is good to see they are the same!
 
 log("J", J)
-log("replay tape RF", reduced_functional(normalised_ice_thickness))
+log("Replay tape RF", reduced_functional(normalised_ice_thickness))
 
 # ### Visualising the derivative
 #
@@ -828,8 +827,8 @@ continue_annotation()
 with open("functional.txt", "w") as f:
     f.write("\n".join(str(x) for x in functional_values))
 
-# We can confirm that
-# the surface misfit has reduced by plotting the objective function at each iteration.
+# We can confirm that the surface misfit has reduced by plotting
+# the objective function at each iteration.
 
 # + tags=["active-ipynb"]
 # plt.semilogy(functional_values)
