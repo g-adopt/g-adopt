@@ -35,8 +35,7 @@ jobs:
     name: Benchmark regression test
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake-vanilla-default:pip
-      # options: --shm-size 2g
+      image: firedrakeproject/firedrake-vanilla-default:latest
 
     concurrency:
       group: testing-${{ github.head_ref || github.run_id }}
