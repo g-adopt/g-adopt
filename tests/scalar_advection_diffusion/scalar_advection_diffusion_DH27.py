@@ -77,7 +77,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
         DIRK33,
         eq_attrs=eq_attrs,
         bcs=bcs,
-        su_diffusivity=kappa if su_advection else None,
+        su_advection=su_advection,
     )
 
     steady_state_tolerance = 1e-7  # this may need tweaking for different length runs/Pe values

@@ -85,9 +85,9 @@ class GenericTransportBase(abc.ABC):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
-      su_diffusivity:
-        Float activating the streamline-upwind stabilisation scheme and specifying the
-        corresponding diffusivity
+      su_advection:
+        Boolean activating the streamline-upwind stabilisation scheme when using
+        continuous finite elements
 
     """
 
@@ -109,7 +109,7 @@ class GenericTransportBase(abc.ABC):
         eq_attrs: dict[str, float] = {},
         bcs: dict[int, dict[str, Number]] = {},
         solver_parameters: dict[str, str | Number] | str | None = None,
-        su_diffusivity: float | None = None,
+        su_advection: bool = False,
     ) -> None:
         self.solution = solution
         self.delta_t = delta_t
@@ -118,7 +118,7 @@ class GenericTransportBase(abc.ABC):
         self.eq_attrs = eq_attrs
         self.bcs = bcs
         self.solver_parameters = solver_parameters
-        self.su_diffusivity = su_diffusivity
+        self.su_advection = su_advection
 
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
@@ -168,12 +168,12 @@ class GenericTransportBase(abc.ABC):
         Finite element methods for flow problems.
         John Wiley & Sons.
         """
-        if self.su_diffusivity is None:
+        if not self.su_advection:
             return
 
         if (u := getattr(self, "u", self.eq_attrs.get("u"))) is None:
             raise ValueError(
-                "'u' must be included into `eq_attrs` if `su_diffusivity` is given."
+                "'u' must be included into `eq_attrs` if `su_advection` is given."
             )
 
         if not self.continuous_solution:
@@ -185,7 +185,8 @@ class GenericTransportBase(abc.ABC):
         J.interpolate(Jacobian(self.mesh))
         # Calculate grid Peclet number. Note the use of a lower bound for diffusivity if
         # a pure advection scenario is considered.
-        Pe = absv(dot(u, J)) / 2 / (self.su_diffusivity + 1e-12)
+        kappa = self.eq_attrs.get("diffusivity", 0.0)
+        Pe = absv(dot(u, J)) / 2 / (kappa + 1e-12)
         beta_Pe = as_vector([1 / tanh(Pe_i + 1e-6) - 1 / (Pe_i + 1e-6) for Pe_i in Pe])
         nubar = dot(absv(dot(u, J)), beta_Pe) / 2  # Calculate SU artificial diffusion
 
@@ -285,9 +286,9 @@ class GenericTransportSolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
-      su_diffusivity:
-        Float activating the streamline-upwind stabilisation scheme and specifying the
-        corresponding diffusivity
+      su_advection:
+        Boolean activating the streamline-upwind stabilisation scheme when using
+        continuous finite elements
 
     """
 
@@ -340,9 +341,9 @@ class EnergySolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
-      su_diffusivity:
-        Float activating the streamline-upwind stabilisation scheme and specifying the
-        corresponding diffusivity
+      su_advection:
+        Boolean activating the streamline-upwind stabilisation scheme when using
+        continuous finite elements
 
     """
 
