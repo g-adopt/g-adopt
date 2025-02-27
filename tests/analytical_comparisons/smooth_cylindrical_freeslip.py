@@ -80,11 +80,6 @@ def model(level, k, nn, do_write=False):
     # and the RHS == 0.
     stokes_solver.solve()
 
-    # calculating surface normal stress given by the solution of the stokes problem
-    ns_solver = BoundaryNormalStressSolver(stokes_solver, top_id, solver_parameters=_project_solver_parameters)
-    ns_ = ns_solver.solve()
-    in_bc = InteriorBC(W, 0.0, top_id)  # interior BC for normal stress as we are only checking at the surface
-
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
     rot = as_vector((-X[1], X[0]))
@@ -94,6 +89,9 @@ def model(level, k, nn, do_write=False):
     # removing constant nullspace from pressure
     coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
+
+    # calculating surface normal stress given by the solution of the stokes problem
+    ns_ = stokes_solver.force_on_boundary(boundary.top)
 
     solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
 
@@ -125,7 +123,9 @@ def model(level, k, nn, do_write=False):
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*dx))
+    l2anal_ns = numpy.sqrt(assemble(dot(ns_anal, ns_anal) * ds_t))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*dx))
+    l2error_ns = numpy.sqrt(assemble(dot(ns_error, ns_error) * ds_t))
 
     return l2error_u, l2error_p, l2error_ns, l2anal_u, l2anal_p, l2anal_ns

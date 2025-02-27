@@ -5,15 +5,15 @@ import pandas as pd
 from pathlib import Path
 
 enabled_cases = {
-    "smooth_cylindrical_freeslip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
-    "smooth_cylindrical_zeroslip": {"convergence": (4.0, 2.0)},
+    "smooth_cylindrical_freeslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1, "rtol_ns": 1e-1},
+    "smooth_cylindrical_zeroslip": {"convergence": (4.0, 2.0, 2.0), "rtol_ns": 1e-1},
     "smooth_cylindrical_freesurface": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
-    "delta_cylindrical_freeslip": {"convergence": (1.5, 0.5)},
-    "delta_cylindrical_zeroslip": {"convergence": (1.5, 0.5)},
-    "delta_cylindrical_freeslip_dpc": {"convergence": (3.5, 2.0), "rtol": 1e-1},
-    "delta_cylindrical_zeroslip_dpc": {"convergence": (3.5, 2.0), "rtol": 2e-1},
-    "smooth_spherical_freeslip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
-    "smooth_spherical_zeroslip": {"convergence": (4.0, 2.0), "rtol": 1e-1},
+    "delta_cylindrical_freeslip": {"convergence": (1.5, 0.5, 2.0)},
+    "delta_cylindrical_zeroslip": {"convergence": (1.5, 0.5, 2.0)},
+    "delta_cylindrical_freeslip_dpc": {"convergence": (3.5, 2.0, 2.0), "rtol": 1e-1},
+    "delta_cylindrical_zeroslip_dpc": {"convergence": (3.5, 2.0, 2.0), "rtol": 2e-1},
+    "smooth_spherical_freeslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
+    "smooth_spherical_zeroslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
 }
 
 longtest_cases = [
@@ -36,7 +36,6 @@ for name, conf in params.items():
     conf.pop("cores")
     conf.pop("levels")
     permutate = conf.pop("permutate", True)
-
     for combination in analytical.param_sets(conf, permutate):
         conf_tuple = (name, enabled_cases[name], dict(zip(conf.keys(), combination)))
         if name in longtest_cases:
@@ -65,13 +64,13 @@ def test_analytical(name, expected, config):
         for level in levels
     ]
 
+    # Number of variables
+    variables = 3
+    # free surface deals with a eta, else with normal stress
     if name.split("_")[-1] == "freesurface":
         columns = ["l2error_u", "l2error_p", "l2error_eta", "l2anal_u", "l2anal_p", "l2anal_eta"]
-        variables = 3  # u, p and eta
-
     else:
-        columns = ["l2error_u", "l2error_p", "l2anal_u", "l2anal_p"]
-        variables = 2  # u and p
+        columns = ["l2error_u", "l2error_p", "l2error_ns", "l2anal_u", "l2anal_p", "l2anal_ns"]
 
     cols_anal = columns[variables:]
     cols_err = columns[:variables]
@@ -89,4 +88,7 @@ def test_analytical(name, expected, config):
     convergence = np.log2(errs.shift() / errs).drop(index=0)
     expected_convergence = pd.Series(expected["convergence"], index=cols_err)
 
-    assert np.allclose(convergence, expected_convergence, rtol=expected.get("rtol", 1e-2))
+    # Make sure velocity and pressure have the theoretical rates
+    assert np.allclose(convergence[columns[:2]], expected_convergence[columns[:2]], rtol=expected.get("rtol", 1e-2))
+    # For normal stress we only make sure the convergence does not go bellow a minimum
+    assert np.all(convergence[columns[2]] > expected_convergence[columns[2]] - expected.get("rtol_ns", 1e-2))

@@ -7,6 +7,7 @@ instantiate the `StokesSolver` class by providing relevant parameters and call t
 
 from numbers import Number
 from typing import Optional
+from warnings import warn
 
 import firedrake as fd
 
@@ -15,7 +16,7 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import residual_terms_stokes
-from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, upward_normal
+from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, upward_normal, is_continuous
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -697,11 +698,12 @@ class BoundaryNormalStressSolver:
     }
     # Iterative solve parameters
     iterative_solver_parameters = {
-        "mat_type": "aij",
-        "snes_type": "ksponly",
-        "ksp_type": "gmres",
-        "ksp_rtol": 1e-5,
-        "pc_type": "sor",
+        "ksp_type": "cg",
+        "pc_type": "hypre",
+        "ksp_rtol": 1e-9,
+        "ksp_atol": 1e-12,
+        "ksp_max_it": 1000,
+        "ksp_converged_reason": None,
     }
 
     name = "BoundaryNormalStressSolver"
@@ -723,15 +725,16 @@ class BoundaryNormalStressSolver:
         # Domain id that we want to use for boundary force
         self.subdomain_id = subdomain_id
 
-        # Set solver parameters based on the dimension of the problem
+        # Set solver parameters based on what has been used for stokes
         if solver_parameters is None:
-            if self.dim == 3:
-                self.solver_parameters = BoundaryNormalStressSolver.iterative_solver_parameters
-            else:
-                self.solver_parameters = BoundaryNormalStressSolver.direct_solve_parameters
+            self.solver_parameters = (
+                BoundaryNormalStressSolver.direct_solve_parameters if
+                stokes_solver.solver_parameters == direct_stokes_solver_parameters else
+                BoundaryNormalStressSolver.iterative_solver_parameters
+            )
         else:
             self.solver_parameters = solver_parameters
-
+        self.solver_parameters = BoundaryNormalStressSolver.iterative_solver_parameters
         # when to know the solver
         self._solver_is_set_up = False
 
@@ -745,12 +748,11 @@ class BoundaryNormalStressSolver:
         # Solve a linear system
         if not self._solver_is_set_up:
             self.setup_solver()
-
         # Solve for the force
         self.solver.solve()
 
         # Take the average out
-        vave = fd.assemble(self.force * self.ds)
+        vave = fd.assemble(self.force * self.ds) / fd.assemble(1 * self.ds(self.mesh))
         self.force.assign(self.force - vave)
 
         # Re-apply the zero condition everywhere except for the
@@ -759,9 +761,15 @@ class BoundaryNormalStressSolver:
         return self.force
 
     def setup_solver(self):
-        # Define the solution in the pressure function space (Q)
-        # Because the pressure field (p) needs to have a lower dimension than the velocity field (u)
-        Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
+        # Define the solution in the pressure function space
+        # Pressure is chosen as it has a lower rank compared to velocity
+        # If pressure is discontinuous, we need to use a continuous equivalent
+        if not is_continuous(self.p):
+            warn("BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element.")
+            Q = fd.FunctionSpace(self.mesh, "Lagrange", self.p.function_space().ufl_element().degree())
+        else:
+            Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
+
         self.force = fd.Function(Q, name=f"force_{self.subdomain_id}")
 
         # Normal vector
@@ -797,5 +805,9 @@ class BoundaryNormalStressSolver:
         self.problem = fd.LinearVariationalProblem(a, L, self.force,
                                                    bcs=self.interior_null_bc,
                                                    constant_jacobian=True)
-        self.solver = fd.LinearVariationalSolver(self.problem, solver_parameters=self.solver_parameters)
+        self.solver = fd.LinearVariationalSolver(
+            self.problem,
+            solver_parameters=self.solver_parameters,
+            options_prefix=f"{BoundaryNormalStressSolver.name}_{self.subdomain_id}"
+        )
         self._solver_is_set_up = True
