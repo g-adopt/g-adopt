@@ -43,7 +43,7 @@ def get_data(level, base_path=None):
     data = {}
 
     iteration_component_map = {
-        "ImplicitMidpoint-EnergyEquation_stage0_": "energy",
+        "ImplicitMidpoint-Equation_stage0_": "energy",
         "Stokes_fieldsplit_0_": "velocity",
         "Stokes_fieldsplit_1_": "pressure",
     }

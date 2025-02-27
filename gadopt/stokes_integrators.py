@@ -144,7 +144,7 @@ def create_stokes_nullspace(
 
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
-    stokes_subspaces = Z.subfunctions
+    stokes_subspaces = Z.subspaces
 
     if rotational:
         if dim == 2:

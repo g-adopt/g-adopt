@@ -8,7 +8,7 @@ from scaling import get_data
 levels = [5, 6, 7]
 
 iteration_components = {
-    "energy": "ImplicitMidpoint-EnergyEquation_stage0_",
+    "energy": "ImplicitMidpoint-Equation_stage0_",
     "velocity": "Stokes_fieldsplit_0_",
     "pressure": "Stokes_fieldsplit_1_",
 }
