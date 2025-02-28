@@ -1,9 +1,13 @@
+include ../../../rules.mk
+
 all: params.log
 
-params.log: thermochemical_buoyancy.py
-	echo "running $<" >&2
-	/usr/bin/time --format="$@ finished in %E" tsp -L multi_material -f python3 $<
+params.log : category := multi_material
+params.log: run-thermochemical_buoyancy
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
 	rm -rf output
+
+check: params.log
+	python3 -m pytest $(CURDIR)/../../test_all.py -k $(test_class)/$(current_dir)
