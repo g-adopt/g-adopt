@@ -193,7 +193,7 @@ converter = RieszL2BoundaryRepresentation(W, top_id)  # Convert to surface L2 re
 
 # We add a diagnostic block to the tape which will output the gradient
 # field every time the tape is replayed.
-tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_options={'riesz_representation': converter}))
+tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_options={'riesz_representation': "L2"}))
 # -
 
 
