@@ -70,8 +70,8 @@ def test_analytical(name, expected, config):
         variables = 3  # u, p and eta
 
     else:
-        columns = ["l2error_u", "l2error_p", "l2anal_u", "l2anal_p"]
-        variables = 2  # u and p
+        columns = ["l2error_u", "l2error_p", "l2error_ns", "l2anal_u", "l2anal_p", "l2anal_ns"]
+        variables = 3  # u, p and ns
 
     cols_anal = columns[variables:]
     cols_err = columns[:variables]
