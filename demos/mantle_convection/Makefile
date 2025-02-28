@@ -13,5 +13,5 @@ clean:
 		$(MAKE) -C $(case) $(MAKECMDGOALS); \
 	)
 
-check:
-	python -m pytest ../test_all.py -k $(mc_dir)
+check: $(cases)
+	python -m pytest $(CURDIR)/../test_all.py -k $(mc_dir)
