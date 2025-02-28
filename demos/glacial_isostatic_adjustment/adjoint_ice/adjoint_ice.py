@@ -171,9 +171,14 @@ disc2 = 0.5*(1-tanh((abs(abs(colatitude)-disc2_centre) - disc_halfwidth2) / (2*s
 target_normalised_ice_thickness = Function(W, name="target normalised ice thickness")
 target_normalised_ice_thickness.interpolate(disc1 + (Hice2/Hice1)*disc2)
 
-normalised_ice_thickness = Function(W, name="normalised ice thickness")
+# defining the control
+control_ice_thickness = Function(W, name="control normalised ice thickness")
+control = Control(control_ice_thickness)
 
-control = Control(normalised_ice_thickness)
+# the ice thickness that will be actually used in simulation
+normalised_ice_thickness = Function(W, name="normalised ice thickness")
+normalised_ice_thickness.project(control_ice_thickness, bcs=[InteriorBC(W, 0, top_id)])
+
 ice_load = rho_ice * g * Hice1 * normalised_ice_thickness
 
 adj_ice_file = VTKFile("adj_ice.pvd")
@@ -611,7 +616,8 @@ log("Replay tape RF", reduced_functional(normalised_ice_thickness))
 # ice thickness.  This is as simple as calling the `derivative()` method on  our
 # reduced functional.
 
-dJdm = reduced_functional.derivative()
+dJdm = reduced_functional.derivative(options={"riesz_representation": "L2"})
+
 
 # We can also plot the derivative using pyvista. First of all let's define another helper
 # function to plot the sensitivity to the ice thickness as a ring outside the domain.
