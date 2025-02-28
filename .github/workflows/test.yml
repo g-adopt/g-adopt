@@ -108,6 +108,7 @@ jobs:
         env:
           GADOPT_LOGLEVEL: INFO
           TS_MAXFINISHED: 100
+          BATCH_MODE: 1
 
       - name: Pytest
         id: run_pytest
