@@ -371,7 +371,10 @@ ice_load = rho_ice * g * (Hice1 * disc1 + Hice2 * disc2)
 # plotter.close()
 # -
 
-# Let's setup the timestepping parameters with a timestep and output frequency of 1000 years and an output frequency.
+# Let's set up timestepping parameters with:
+# - Timestep: 1000 years
+# - Output frequency: Every 1000 years
+# - Total simulation duration: 10,000 years
 
 # +
 # Timestepping parameters
