@@ -1,16 +1,15 @@
 include ../../rules.mk
 
-all: params.log
+.PHONY: all clean check
 
-.PHONY: all clean
+all: params.log
 
 %.msh: %.geo
 	gmsh -2 $<
 
-params.log: category := tests/gmsh
-params.log: run-base_case square.msh
-
-run-base_case: square.msh
+params.log : category := tests/gmsh
+params.log: base_case.py square.msh
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.msh

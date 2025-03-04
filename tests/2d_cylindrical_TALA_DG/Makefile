@@ -1,11 +1,13 @@
 include ../../rules.mk
 
+.PHONY: all clean check
+
 all: params.log
 
-params.log: category := tests
-params.log: ncpus := 16
-
-params.log: run-2d_cylindrical_TALA_DG
+params.log : category := tests
+params.log : ncpus := 16
+params.log: 2d_cylindrical_TALA_DG.py
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log

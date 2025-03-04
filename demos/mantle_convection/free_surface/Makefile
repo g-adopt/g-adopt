@@ -1,9 +1,12 @@
 include ../../../rules.mk
 
+.PHONY: all clean check
+
 all: params.log
 
 params.log : category := mantle_convection
-params.log: run-free_surface
+params.log: free_surface.py
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log

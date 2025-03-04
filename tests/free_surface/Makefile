@@ -13,8 +13,8 @@ all: $(serial_cases) $(parallel_cases)
 #Allow 'make <easy name>' to effectively alias to 'make <long ugly file name>'
 $(serial_cases) $(parallel_cases): %: .sentinel.%
 
-$(serial_sentinels) $(parallel_sentinels): category := tests/free_surface
-$(parallel_sentinels): ncpus := 8
+$(serial_sentinels) $(parallel_sentinels) : category := tests/free_surface
+$(parallel_sentinels) : ncpus := 8
 
 $(serial_sentinels) $(parallel_sentinels): .sentinel.%: %_free_surface.py
 	$(run-python)

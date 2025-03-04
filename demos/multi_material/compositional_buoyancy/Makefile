@@ -1,9 +1,12 @@
 include ../../../rules.mk
 
+.PHONY: all clean check
+
 all: params.log
 
 params.log : category := multi_material
-params.log: run-compositional_buoyancy
+params.log: compositional_buoyancy.py
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
