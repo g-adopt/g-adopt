@@ -2,10 +2,12 @@ include ../../rules.mk
 
 cases := full_optimisation_np1.dat full_optimisation_np2.dat
 
+.PHONY: all clean check
+
 all: $(cases)
 
-full_optimisation_np%.dat: category := optimisation_checkpointing
-full_optimisation_np%.dat: ncpus = $*
+full_optimisation_np%.dat : category := optimisation_checkpointing
+full_optimisation_np%.dat : ncpus = $*
 
 $(cases): full_optimisation_np%.dat: helmholtz.py
 	$(run-python)

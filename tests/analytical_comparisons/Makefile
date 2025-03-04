@@ -13,6 +13,8 @@ longtest: $(long_cases)
 
 $(cases): %: .sentinel.%
 
+# This is the one place that it's just a bit too complex to handle batch vs. non-batch
+# modes, so we will always assume tsp is available.
 $(sentinels): analytical.py
 	@$(call run_regular,python3 analytical.py submit -t "tsp -N {cores} -f mpiexec -np {cores}" $(subst .sentinel.,,$@),analytical $(subst .sentinel.,,$@))
 	@echo "done" > $@

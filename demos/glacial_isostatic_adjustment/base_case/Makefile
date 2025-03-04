@@ -1,9 +1,12 @@
 include ../../../rules.mk
 
+.PHONY: all clean check
+
 all: params.log
 
 params.log : category := gia
-params.log: run-base_case
+params.log: base_case.py
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.gif
