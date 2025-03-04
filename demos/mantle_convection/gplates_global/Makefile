@@ -1,9 +1,12 @@
 include ../../../rules.mk
 
+.PHONY: all clean check
+
 all: params.log
 
 params.log : category := mantle_convection
-params.log: run-gplates_global
+params.log: gplates_global.py
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.h5 params.log

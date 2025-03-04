@@ -3,12 +3,13 @@ include ../../rules.mk
 cases := elastic viscoelastic viscous
 output_files := $(foreach case,$(cases),errors-$(case)-zhong-free-surface.dat)
 
+.PHONY: all clean check
+
 all: $(output_files)
 
-errors-%-zhong-free-surface.dat: category := tests/viscoelastic
-errors-%-zhong-free-surface.dat: exec_args = --case $*
-errors-%-zhong-free-surface.dat: desc = $*
-
+errors-%-zhong-free-surface.dat : category := tests/viscoelastic
+errors-%-zhong-free-surface.dat : exec_args = --case $*
+errors-%-zhong-free-surface.dat : desc = $*
 errors-%-zhong-free-surface.dat: zhong_viscoelastic_free_surface.py
 	$(run-python)
 	

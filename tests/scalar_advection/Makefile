@@ -1,12 +1,12 @@
 include ../../rules.mk
 
+.PHONY: all clean check
+
 all: final_error.log
 
-.PHONY: all clean
-
-final_error.log: category := tests
-
-final_error.log: run-scalar_advection
+final_error.log : category := tests
+final_error.log: scalar_advection.py
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 final_error.log

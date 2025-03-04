@@ -1,7 +1,8 @@
 include ../makefile.cases.inc
+
 cases := $(notdir $(mm_cases))
 
-.PHONY: all $(cases)
+.PHONY: all $(cases) clean check
 
 all: $(cases)
 

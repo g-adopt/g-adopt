@@ -2,12 +2,14 @@ include ../../rules.mk
 
 cases := $(shell python3 test_spiegelman.py)
 
-all: $(cases)
+.PHONY: all clean check
 
-$(cases): category := Drucker-Prager_rheology
-$(cases): exec_args = $@
-$(cases): desc = $(exec_args)
-$(cases): spiegelman.py
+all: $(addprefix spiegelman_,$(cases))
+
+spiegelman_% : category := Drucker-Prager_rheology
+spiegelman_% : exec_args = $*
+spiegelman_% : desc = $(exec_args)
+spiegelman_%: spiegelman.py
 	$(run-python)
 
 clean:
