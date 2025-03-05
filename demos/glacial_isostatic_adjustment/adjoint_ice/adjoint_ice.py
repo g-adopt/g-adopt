@@ -1,15 +1,19 @@
 # Synthetic ice inversion using adjoints
 # =======================================================
+# In the previous tutorials we have seen how to run Glacial Isostatic Adjustment (GIA) models forward in time. Two of the key
+# ingredients are an ice loading history and a viscosity structure of the mantle. However, like many problems in Earth Sciences,
+# these inputs are not known. We need to infer these unknown inputs based on any geological and geophysical observations that
+# we can get our hands on! In the GIA problem this is often in the form of paleo relative sea level markers and present day geodetic observations.
 #
 # In this tutorial, we will demonstrate how to perform an inversion to recover the ice thickness distribution of an
-# idealised GIA simulation using G-ADOPT. In this tutorial we make the important assumption that we know the viscosity
+# idealised GIA simulation using G-ADOPT. We make the important assumption that we know the viscosity
 # structure of the mantle. In reality, this is not the case, but it will simplify things for this first example!
 #
 # The tutorial involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the
 # ice thickness distribution to match a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we
-# run a forward GIA simulation and record all relevant fields (surface displacement and velocity) at each time step.
+# run a forward GIA simulation and record all relevant fields at each time step. In our case, this will be the displacement and velocity recorded at the surface of the Earth. We will use these outputs of the reference twin as the "observations" for our inversion.
 #
-# We have pre-run this simulation by running the forward 2d cylindrical case, and stored model output as a
+# We have pre-run this simulation by running the forward 2D cylindrical case, and stored model output as a
 # checkpoint file on our servers.  These fields serve as benchmarks for evaluating our inverse problem's performance. To
 # download the reference benchmark checkpoint file if it doesn't already exist, execute the following command:
 
@@ -17,11 +21,17 @@
 # ![ ! -f forward-2d-cylindrical-disp-incdisp.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-incdisp.h5
 # -
 
+# Gradient-based optimisation and the Adjoint method
+# --------------------------------------------------
+# So the next obvious question is, how do we actually find the initial ice thickness distribution? A first approach could be just to guess a lot of different ice histories...! We could input these to our GIA code and then compare the misfit between the outputs of our model with the observations.
 #
-# something about adjoints...
+# As you can imagine, this can quickly become expensive depending on the cost of the forward model! Also, for the simplest grid based discretisations of ice thickness every time we refine the grid there will be more combinations of parameters to choose! Generally, with 3D finite element models these kind of direct search methods are not practical.
 #
+# The trick up our sleeve is that *G-ADOPT* (thanks to *Firedrake* and *Pyadjoint*), is able to calculate the gradient of an output functional from the forward model, for example a misfit between model predictions and observations, with respect to input parameters via an automatically generated *Adjoint* model. Using this technique, it is possible to compute the gradient of a functional in a cost independent of the number of parameters! In practice, the cost associated with generating the adjoint model is usually a fraction of the (nonlinear) forward model. If you are interested to learn more about Adjoint models, please see this nice introduction from the Dolfin-Adjoint website [https://www.dolfin-adjoint.org/en/latest/documentation/maths/index.html#dolfin-adjoint-mathematical-background].
 #
-# This example focusses on setting up an adjoint problem. The key steps are summarised as follows:
+# Once we have the adjoint model, we can use the gradient information to speed up our inversion by finding efficient search directions to adjust the unknown input parameters. This forms the basis of an iterative procedure, where we find the gradient of the misfit w.r.t the model inputs, update the model inputs to (hopefully!) decrease the misfit and then find the new gradient and so on...  (N.b. the optimisation algorithm we use later on actually also approximates the Hessian, i.e. second order derivatives, to make the inversion process more efficient.)
+#
+# The rest of this tutorial will focus on how to set up an adjoint problem. The key steps are summarised as follows:
 # 1. Defining an objective function.
 # 2. Verifying the accuracy of the gradients using a Taylor test.
 # 3. Setting up and solving a gradient-based minimisation problem for a synthetic ice load.
@@ -34,21 +44,29 @@
 # We also import some G-ADOPT utilities for later use.
 
 from gadopt import *
-from gadopt.utility import step_func, vertical_component, CombinedSurfaceMeasure
+from gadopt.utility import vertical_component, CombinedSurfaceMeasure
 
-# To bring in G-ADOPT's adjoint functionality we need to start taping the forward problem,
-# which we do below. It's also good practice to clear the tape, so that we are starting
-# fresh each time.
+# The novelty of using the overloading approach provided by pyadjoint is that it requires
+# minimal changes to our script to enable the inverse capabalities of G-ADOPT.
+# To turn on the adjoint, one simply imports the inverse module to
+# enable all taping functionality from pyadjoint.
+#
+# Doing so will turn Firedrake's objects to overloaded types, in a way
+# that any UFL operation will be annotated and added to the tape, unless
+# otherwise specified.
+#
+# We first ensure that the tape is cleared of any previous operations, using the following code:
 
 from gadopt.inverse import *
 tape = get_working_tape()
 tape.clear_tape()
 
+# To verify the tape is empty, we can print all blocks:
+print(tape.get_blocks())
+
 # In this tutorial we are going load the mesh created by the forward cylindrical demo in the
 # previous tutorial. This makes it easier to load the synthetic data from the previous
 # tutorial for our 'twin' experiment.
-
-# Let's download the relevant checkpoint file.
 
 # Set up geometry:
 checkpoint_file = "forward-2d-cylindrical-disp-incdisp.h5"
@@ -91,65 +109,19 @@ viscosity_values = [2, -2, -2, -1.698970004]  # viscosity = 1e23 * 10**viscosity
 # N.b. that we have modified the viscosity of the lithosphere from
 # Spada et al. (2011) because we are using coarse grid resolution
 
-
-def initialise_background_field(field, background_values, vertical_tanh_width=40e3):
-    profile = background_values[0]
-    sharpness = 1 / vertical_tanh_width
-    depth = sqrt(X[0]**2 + X[1]**2)-radius_values[0]
-    for i in range(1, len(background_values)):
-        centre = radius_values[i] - radius_values[0]
-        mag = background_values[i] - background_values[i-1]
-        profile += step_func(depth, centre, mag, increasing=False, sharpness=sharpness)
-
-    field.interpolate(profile)
-
+# import utility functions for this demo
+sys.path.append("../")
+from gia_demo_utils import initialise_background_field, setup_heterogenous_viscosity  # noqa: E402
 
 density = Function(W, name="density")
-initialise_background_field(density, density_values)
+initialise_background_field(X, density, density_values, radius_values)
 
 shear_modulus = Function(W, name="shear modulus")
-initialise_background_field(shear_modulus, shear_modulus_values)
-
-
-def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
-    arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
-    numerator = exp(-1/(2*(1-rho**2))*arg)
-    if normalised_area:
-        denominator = 2*pi*sigma_x*sigma_y*(1-rho**2)**0.5
-    else:
-        denominator = 1
-    return numerator / denominator
-
-
-def setup_heterogenous_viscosity(viscosity):
-    heterogenous_viscosity_field = Function(viscosity.function_space(), name='viscosity')
-    antarctica_x, antarctica_y = -2e6, -5.5e6
-
-    low_viscosity_antarctica = bivariate_gaussian(X[0], X[1], antarctica_x, antarctica_y, 1.5e6, 0.5e6, -0.4)
-    heterogenous_viscosity_field.interpolate(-3*low_viscosity_antarctica + viscosity * (1-low_viscosity_antarctica))
-
-    llsvp1_x, llsvp1_y = 3.5e6, 0
-    llsvp1 = bivariate_gaussian(X[0], X[1], llsvp1_x, llsvp1_y, 0.75e6, 1e6, 0)
-    heterogenous_viscosity_field.interpolate(-3*llsvp1 + heterogenous_viscosity_field * (1-llsvp1))
-
-    llsvp2_x, llsvp2_y = -3.5e6, 0
-    llsvp2 = bivariate_gaussian(X[0], X[1], llsvp2_x, llsvp2_y, 0.75e6, 1e6, 0)
-    heterogenous_viscosity_field.interpolate(-3*llsvp2 + heterogenous_viscosity_field * (1-llsvp2))
-
-    slab_x, slab_y = 3e6, 4.5e6
-    slab = bivariate_gaussian(X[0], X[1], slab_x, slab_y, 0.7e6, 0.35e6, 0.7)
-    heterogenous_viscosity_field.interpolate(-1*slab + heterogenous_viscosity_field * (1-slab))
-
-    high_viscosity_craton_x, high_viscosity_craton_y = 0, 6.2e6
-    high_viscosity_craton = bivariate_gaussian(X[0], X[1], high_viscosity_craton_x, high_viscosity_craton_y, 1.5e6, 0.5e6, 0.2)
-    heterogenous_viscosity_field.interpolate(-1*high_viscosity_craton + heterogenous_viscosity_field * (1-high_viscosity_craton))
-
-    return heterogenous_viscosity_field
-
+initialise_background_field(X, shear_modulus, shear_modulus_values, radius_values)
 
 normalised_viscosity = Function(W, name="Normalised viscosity")
-initialise_background_field(normalised_viscosity, viscosity_values)
-normalised_viscosity = setup_heterogenous_viscosity(normalised_viscosity)
+initialise_background_field(X, normalised_viscosity, viscosity_values, radius_values)
+normalised_viscosity = setup_heterogenous_viscosity(X, normalised_viscosity)
 
 viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10**normalised_viscosity)
 
@@ -163,24 +135,12 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 # +
 rho_ice = 931
 g = 9.8125
-
-Hice1 = 1000
-Hice2 = 2000
+Hice = 1000
 year_in_seconds = Constant(3600 * 24 * 365.25)
-# Disc ice load but with a smooth transition given by a tanh profile
-disc_halfwidth1 = (2*pi/360) * 10  # Disk half width in radians
-disc_halfwidth2 = (2*pi/360) * 20  # Disk half width in radians
-surface_dx = 200*1e3
-ncells = 2*pi*radius_values[0] / surface_dx
-surface_resolution_radians = 2*pi / ncells
-colatitude = atan2(X[0], X[1])
-disc1_centre = (2*pi/360) * 25  # Centre of disc1
-disc2_centre = pi  # Centre of disc2
-disc1 = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surface_resolution_radians)))
-disc2 = 0.5*(1-tanh((abs(abs(colatitude)-disc2_centre) - disc_halfwidth2) / (2*surface_resolution_radians)))
 
+from gia_demo_utils import setup_normalised_ice_discs  # noqa: E402
 target_normalised_ice_thickness = Function(W, name="target normalised ice thickness")
-target_normalised_ice_thickness.interpolate(disc1 + (Hice2/Hice1)*disc2)
+target_normalised_ice_thickness.interpolate(setup_normalised_ice_discs(X, radius_values, Hice))
 
 # defining the control
 control_ice_thickness = Function(W, name="control normalised ice thickness")
@@ -190,7 +150,7 @@ control = Control(control_ice_thickness)
 normalised_ice_thickness = Function(W, name="normalised ice thickness")
 normalised_ice_thickness.project(control_ice_thickness, bcs=[InteriorBC(W, 0, top_id)])
 
-ice_load = rho_ice * g * Hice1 * normalised_ice_thickness
+ice_load = rho_ice * g * Hice * normalised_ice_thickness
 
 adj_ice_file = VTKFile("adj_ice.pvd")
 # Since we are calculating the sensitivity to a field that is only defined
