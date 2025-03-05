@@ -24,7 +24,7 @@ $(long_cases): analytical.py clean
 	read -u "$$out" sjob
 	echo "running spherical $@, waiting on $$sjob" >&2
 	mkdir -p pbs_output
-	python3 analytical.py submit -t "qsub -v GADOPT_CHECKOUT=$(gadopt_checkout),GADOPT_SETUP=$(gadopt_setup) -W depend=beforeany:$$sjob -N analytical_{params} -l storage=gdata/xd2+scratch/xd2,ncpus={cores},walltime=01:00:00,mem={mem}GB,wd,jobfs=10GB -q normal -P $(project) -o pbs_output/$(subst /,-,$@)_l{level}_{params}.out -e pbs_output/$(subst /,-,$@)_l{level}_{params}.err -- ./run_gadi.sh" $@
+	python3 analytical.py submit -t "qsub -v GADOPT_CHECKOUT=$(gadopt_checkout),GADOPT_SETUP=$(gadopt_setup) -W depend=beforeany:$$sjob -N analytical_{params} -l storage=gdata/xd2+scratch/xd2+gdata/fp50,ncpus={cores},walltime=01:00:00,mem={mem}GB,wd,jobfs=10GB -q normal -P $(project) -o pbs_output/$(subst /,-,$@)_l{level}_{params}.out -e pbs_output/$(subst /,-,$@)_l{level}_{params}.err -- ./run_gadi.sh" $@
 	wait
 
 clean:
