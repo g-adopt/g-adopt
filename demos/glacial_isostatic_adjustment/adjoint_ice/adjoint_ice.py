@@ -1,10 +1,25 @@
 # Synthetic ice inversion using adjoints
 # =======================================================
 #
-# In this tutorial, we will use G-ADOPT's adjoint capability to invert for a synthetic ice
-# load in an annulus domain. We will be running a 'twin' experiment where we will try to
-# recover the ice load that we used as part of the earlier 2d cylindrical tutorial,
-# starting from a different initial guess of the ice load.
+# In this tutorial, we will demonstrate how to perform an inversion to recover the ice thickness distribution of an
+# idealised GIA simulation using G-ADOPT. In this tutorial we make the important assumption that we know the viscosity
+# structure of the mantle. In reality, this is not the case, but it will simplify things for this first example!
+#
+# The tutorial involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the
+# ice thickness distribution to match a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we
+# run a forward GIA simulation and record all relevant fields (surface displacement and velocity) at each time step.
+#
+# We have pre-run this simulation by running the forward 2d cylindrical case, and stored model output as a
+# checkpoint file on our servers.  These fields serve as benchmarks for evaluating our inverse problem's performance. To
+# download the reference benchmark checkpoint file if it doesn't already exist, execute the following command:
+
+# + tags=["active-ipynb"]
+# ![ ! -f forward-2d-cylindrical-disp-incdisp.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-incdisp.h5
+# -
+
+#
+# something about adjoints...
+#
 #
 # This example focusses on setting up an adjoint problem. The key steps are summarised as follows:
 # 1. Defining an objective function.
@@ -34,10 +49,6 @@ tape.clear_tape()
 # tutorial for our 'twin' experiment.
 
 # Let's download the relevant checkpoint file.
-
-# + tags=["active-ipynb"]
-# ![ ! -f forward-2d-cylindrical-disp-incdisp.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-incdisp.h5
-# -
 
 # Set up geometry:
 checkpoint_file = "forward-2d-cylindrical-disp-incdisp.h5"
@@ -841,4 +852,3 @@ with open("functional.txt", "w") as f:
 # plt.xlabel("Iteration #")
 # plt.ylabel("Functional value")
 # plt.title("Convergence")
-# -
