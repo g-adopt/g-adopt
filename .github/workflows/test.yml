@@ -139,8 +139,8 @@ jobs:
           # extract info
           for id in $(awk 'NR>1 { print $1 }' <<< "$digest"); do
             st="$(tsp -i $id)"
-            label=$(awk "/^$id[[:space:]]/ { if (match(\$0, /\[[^]]*\]/)) { print substr(\$0, RSTART+1, RLENGTH-2) } }" <<< "$digest")
-            command=$(sed -En 's/^Command.*python3? //p' <<< "$st")
+            label=$(awk "/^$id[[:space:]]/ { if (match(\$0, /\[[^]]*\]/)) { gsub(\"/\", \"-\"); print substr(\$0, RSTART+1, RLENGTH-2) } }" <<< "$digest")
+            command=$(sed -En 's/^Command.*python3? (.*\/)?//p' <<< "$st")
             if [ -z "$label" ]; then
               outfile=$command
             else
