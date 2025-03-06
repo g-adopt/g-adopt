@@ -80,15 +80,11 @@ jobs:
         with:
           source-dir: ./tsp
           build-dir: ./tsp_build
+          options: CGROUPV2=ON
 
       - name: Put task spooler on PATH
         run: |
           mv tsp_build/tsp-hpc /home/firedrake/.local/bin/tsp
-
-      - name: What exactly is going on with cgroups?
-        run: |
-          cat /proc/self/cgroup
-          tree /sys/fs/cgroup
 
       - name: Install Python dependencies
         run: |
