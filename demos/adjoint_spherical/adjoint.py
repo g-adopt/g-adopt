@@ -77,8 +77,8 @@ def conduct_inversion():
     # #
     # optimiser.add_callback(callback)
 
-    # # Restore from previous data
-    # optimiser.restore()
+    # Restore from previous data
+    optimiser.restore()
 
     # run the optimisation
     optimiser.run()
@@ -517,9 +517,9 @@ def first_call_value(predefined_value):
 def find_last_checkpoint():
     try:
         checkpoint_dir = Path.cwd().resolve() / "optimisation_checkpoint"
-        solution_dir = sorted(list(checkpoint_dir.glob(
-            "[0-9]*")), key=lambda x: int(str(x).split("/")[-1]))[-1]
-        solution_path = solution_dir / "solution_checkpoint.h5"
+        solution_dir = sorted(checkpoint_dir.glob(
+            "[0-9]*/solution_checkpoint.h5"), key=lambda x: int(x.parent.name))[-1]
+        solution_path = solution_dir
     except Exception:
         solution_path = None
     return solution_path
