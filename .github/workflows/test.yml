@@ -53,7 +53,7 @@ jobs:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           sudo apt update
-          sudo apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev tree
+          sudo apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
