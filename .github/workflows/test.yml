@@ -53,7 +53,7 @@ jobs:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           sudo apt update
-          sudo apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev
+          sudo apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev tree
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
@@ -84,6 +84,11 @@ jobs:
       - name: Put task spooler on PATH
         run: |
           mv tsp_build/tsp-hpc /home/firedrake/.local/bin/tsp
+
+      - name: What exactly is going on with cgroups?
+        run: |
+          cat /proc/self/cgroup
+          tree /sys/fs/cgroup
 
       - name: Install Python dependencies
         run: |
