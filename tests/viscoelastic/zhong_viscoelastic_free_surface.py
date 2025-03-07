@@ -106,7 +106,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     # Setup boundary conditions
     stokes_bcs = {
         boundary.bottom: {'uy': 0},
-        boundary.top: {'normal_stress': rho0*g*eta, 'free_surface': {"delta_rho_fs": rho0}},
+        boundary.top: {'normal_stress': rho0*g*eta, 'free_surface': {}},
         boundary.left: {'ux': 0},
         boundary.right: {'ux': 0},
     }
