@@ -1,13 +1,15 @@
-all: params.log
+include ../../rules.mk
 
-.PHONY: all clean
+.PHONY: all clean check
+
+all: params.log
 
 %.msh: %.geo
 	gmsh -2 $<
 
+params.log : category := tests/gmsh
 params.log: base_case.py square.msh
-	echo "running $<" >&2
-	/usr/bin/time --format="$@ finished in %E" tsp -f python3 $<
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.msh
