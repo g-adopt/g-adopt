@@ -3,7 +3,6 @@ from typing import ClassVar, Tuple
 
 import firedrake as fd
 import gmsh
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
@@ -64,13 +63,33 @@ class Simulation:
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2
 
-    # The following two lists must be ordered such that, unpacking from the end, each
-    # pair of arguments enables initialising a level set whose 0-contour corresponds to
-    # the entire interface between a given material and the remainder of the numerical
-    # domain. By convention, the material thereby isolated occupies the positive side
-    # of the signed-distance level set.
-    isd_params = [None]
-    initialise_signed_distance = [isd.isd_schmalholz]
+    # Parameters to initialise level set
+    interface_coords = [
+        (0, 5.8e5),
+        (4.6e5, 5.8e5),
+        (4.6e5, 3.3e5),
+        (5.4e5, 3.3e5),
+        (5.4e5, 5.8e5),
+        (domain_dims[0], 5.8e5),
+    ]
+
+    boundary_coords = [
+        (domain_dims[0], domain_dims[1]),
+        (0, domain_dims[1]),
+        (0, 5.8e5),
+    ]
+    # Keyword arguments to define the signed-distance function
+    signed_distance_kwargs = {
+        "interface_geometry": "polygon",
+        "interface_coordinates": interface_coords,
+        "boundary_coordinates": boundary_coords,
+    }
+    # The following list must be ordered such that, unpacking from the end, each dictionary
+    # contains the keyword arguments required to initialise the signed-distance array
+    # corresponding to the interface between a given material and the remainder of the
+    # numerical domain (all previous materials excluded). By convention, the material thus
+    # isolated occupies the positive side of the signed-distance array.
+    signed_distance_kwargs_list = [signed_distance_kwargs]
 
     # Material ordering must follow the logic implemented in the above two lists. In
     # other words, the last material in the below list corresponds to the portion of

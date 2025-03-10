@@ -84,56 +84,47 @@ T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
-# We now provide initial conditions for the level-set field. To this end, we use the
-# `shapely` library to represent the initial location of the material interface and
-# derive the signed-distance function. Finally, we apply the transformation to obtain a
-# smooth step function profile.
+# We now initialise the level-set field. All we have to provide to G-ADOPT is a
+# mathematical description of the interface location and use the available API. In this
+# case, the interface can be represented as a cosine, requiring a callable to be
+# provided. Under the hood, G-ADOPT uses the `Shapely` library to determine the
+# signed-distance function associated with the interface. We use G-ADOPT's default
+# strategy to obtain a smooth step function profile from the signed-distance function.
 
 # +
-import numpy as np  # noqa: E402
-import shapely as sl  # noqa: E402
+from numpy import linspace  # noqa: E402
 
+# Initialise the level-set field. First, determine the signed-distance function at each
+# level-set node using a mathematical description of the material-interface location.
+# Then, define the thickness of the hyperbolic tangent profile used in the conservative
+# level-set approach. Finally, overwrite level-set data array.
+interface_coords_x = linspace(0, lx, 1000)
+callable_args = (
+    interface_deflection := 0.02,
+    perturbation_wavelength := 2 * lx,
+    initial_interface_y := 0.2,
+)
+signed_distance_array = signed_distance(
+    psi,
+    interface_geometry="curve",
+    interface_callable="cosine",
+    interface_args=(interface_coords_x, *callable_args),
+)
+epsilon = interface_thickness(psi)
+psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
+# -
 
-def cosine_curve(x, amplitude, wavelength, vertical_shift):
-    """Cosine curve equation with an amplitude and a vertical shift"""
-    return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
+# Let us visualise the location of the material interface that we have just initialised.
+# To this end, we use Firedrake's built-in plotting functionality.
 
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
 
-interface_deflection = 0.02  # Amplitude of the cosine function marking the interface
-interface_wavelength = 2 * lx  # Wavelength of the cosine function
-material_interface_y = 0.2  # Vertical shift of the interface along the y axis
-# Group parameters defining the cosine profile
-isd_params = (interface_deflection, interface_wavelength, material_interface_y)
-
-# Shapely LineString representation of the material interface
-interface_x = np.linspace(0, lx, 1000)  # Enough points to capture the interface shape
-interface_y = cosine_curve(interface_x, *isd_params)
-line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
-sl.prepare(line_string)
-
-# Extract node coordinates
-node_coords_x, node_coords_y = node_coordinates(psi)
-# Determine to which material nodes belong and calculate distance to interface
-node_relation_to_curve = [
-    (
-        node_coord_y > cosine_curve(node_coord_x, *isd_params),
-        line_string.distance(sl.Point(node_coord_x, node_coord_y)),
-    )
-    for node_coord_x, node_coord_y in zip(node_coords_x, node_coords_y)
-]
-
-# Define the signed-distance function and overwrite its value array
-signed_dist_to_interface = Function(K)
-signed_dist_to_interface.dat.data[:] = [
-    dist if is_above else -dist for is_above, dist in node_relation_to_curve
-]
-
-# Define thickness of the hyperbolic tangent profile
-min_mesh_edge_length = min(lx / nx, ly / ny)
-epsilon = Constant(min_mesh_edge_length / 4)
-
-# Initialise level set as a smooth step function
-psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
+# fig, axes = plt.subplots()
+# axes.set_aspect("equal")
+# contours = tricontourf(psi, levels=linspace(0, 1, 11), axes=axes, cmap="PiYG")
+# tricontour(psi, axes=axes, levels=[0.5])
+# fig.colorbar(contours, label="Conservative level-set")
 # -
 
 # We next define materials present in the simulation using the `Material` class. Here,
@@ -203,7 +194,7 @@ plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
-material_area = material_interface_y * lx  # Area of tracked material in the domain
+material_area = initial_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
