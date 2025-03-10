@@ -86,7 +86,7 @@ optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
     checkpoint_dir=checkpoint_dir,
-    auto_checkpoint=False,
+    auto_checkpoint=True,
 )
 optimiser.restore()
 run(

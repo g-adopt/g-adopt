@@ -62,7 +62,7 @@ with CheckpointFile("initial_condition_mat_prop/Final_State.h5", mode="r") as f:
 # We set the mesh `cartesian` attribute to False, which ensures that
 # the unit vector points radially, in the direction opposite to gravity.
 mesh.cartesian = False
-bottom_id, top_id = "bottom", "top"
+boundary = get_boundary_ids(mesh)
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 V_scalar = FunctionSpace(mesh, "CG", 2)  # CG2 Scalar function space
@@ -197,10 +197,10 @@ Z_near_nullspace = create_stokes_nullspace(
 # hood.
 
 # +
-stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
+stokes_bcs = {boundary.bottom: {"un": 0}, boundary.top: {"un": 0}}
 
 # Take out adiabat at bottom boundary
-temp_bcs = {bottom_id: {"T": 1.0 - 930 / 3700.0}, top_id: {"T": 0.0}}
+temp_bcs = {boundary.bottom: {"T": 1.0 - 930 / 3700.0}, boundary.top: {"T": 0.0}}
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes
@@ -238,7 +238,7 @@ plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time dt u_rms nu_base nu_top energy avg_t FullT_min FullT_max")
 
 gd = GeodynamicalDiagnostics(
-    z, FullT, bottom_id=bottom_id, top_id=top_id, quad_degree=6
+    z, FullT, bottom_id=boundary.bottom, top_id=boundary.top, quad_degree=6
 )
 
 # f_ratio = rmin / rmax

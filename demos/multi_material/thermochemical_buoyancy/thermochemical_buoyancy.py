@@ -83,7 +83,7 @@ if MPI.COMM_WORLD.rank == 0:
 # +
 mesh = Mesh(mesh_file)  # Load the GMSH mesh using Firedrake
 mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
+boundary = get_boundary_ids(mesh)
 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
@@ -190,8 +190,8 @@ Ts = 1 / 2 - Q_ic / 2 / sqrt(pi) * sqrt(v0 / (2 - X[1])) * exp(
 
 # Interpolate temperature initial condition and ensure boundary condition values
 T.interpolate(max_value(min_value(Tu + Tl + Tr + Ts - 3 / 2, 1), 0))
-DirichletBC(Q, 1, bottom_id).apply(T)
-DirichletBC(Q, 0, top_id).apply(T)
+DirichletBC(Q, 1, boundary.bottom).apply(T)
+DirichletBC(Q, 0, boundary.top).apply(T)
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class

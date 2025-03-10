@@ -33,7 +33,7 @@ def model(level, nn, do_write=False):
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
     mesh.cartesian = False
-    bottom_id, top_id = "bottom", "top"
+    boundary = get_boundary_ids(mesh)
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
@@ -62,7 +62,7 @@ def model(level, nn, do_write=False):
     g = Constant(1.0)  # Overall scaling of delta forcing
 
     approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1})
-    stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
+    stokes_bcs = {boundary.bottom: {"un": 0}, boundary.top: {"un": 0}}
 
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
@@ -115,6 +115,7 @@ def model(level, nn, do_write=False):
 
     # compute u analytical and error
     uxy = Function(V).interpolate(as_vector((X[0], X[1])))
+    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
     u_anal_upper = Function(V, name="AnalyticalVelocityUpper")
     u_anal_lower = Function(V, name="AnalyticalVelocityLower")
     u_anal = Function(V, name="AnalyticalVelocity")
@@ -128,6 +129,8 @@ def model(level, nn, do_write=False):
     u_error = Function(V, name="VelocityError").assign(u_ - u_anal)
 
     # compute p analytical and error
+    pxy = Function(Q1DGvec).interpolate(as_vector((X[0], X[1])))
+    pdg = Function(Q1DG).interpolate(p)
     pxy = Function(Q1DGvec).interpolate(as_vector((X[0], X[1])))
     pdg = Function(Q1DG).interpolate(p)
     p_anal_upper = Function(Q1DG, name="AnalyticalPressureUpper")

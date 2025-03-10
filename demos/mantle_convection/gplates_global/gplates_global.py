@@ -53,7 +53,7 @@ rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
 mesh.cartesian = False
-bottom_id, top_id = "bottom", "top"
+boundary = get_boundary_ids(mesh)
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
@@ -243,7 +243,7 @@ plate_reconstruction_model = pyGplatesConnector(
 gplates_velocities = GplatesVelocityFunction(
     V,
     gplates_connector=plate_reconstruction_model,
-    top_boundary_marker=top_id,
+    top_boundary_marker=boundary.top,
     name="GPlates_Velocity",
 )
 
@@ -289,9 +289,9 @@ gplates_velocities = GplatesVelocityFunction(
 # within the time loop.
 
 # +
-stokes_bcs = {bottom_id: {"un": 0}, top_id: {"u": gplates_velocities}}
+stokes_bcs = {boundary.bottom: {"un": 0}, boundary.top: {"u": gplates_velocities}}
 
-temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
+temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
 
 output_file = VTKFile("output.pvd")
 output_frequency = 1
@@ -301,13 +301,10 @@ plog.log_str(
     "timestep time age dt maxchange u_rms u_rms_top nu_top nu_base energy avg_t"
 )
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id, quad_degree=6)
-# -
+gd = GeodynamicalDiagnostics(
+    z, T, bottom_id=boundary.bottom, top_id=boundary.top, quad_degree=6
+)
 
-# We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation, nullspace and near-nullspace information configured above.
-
-# +
 energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )

@@ -43,10 +43,10 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
         # Free surface boundary conditions are applied automatically in
         # stokes_integrators and momentum_equation for implicit free surface coupling.
         self.stokes_bcs = {
-            self.top_id: {"free_surface": {"eta_index": 2, "Ra_fs": 1}},
-            self.bottom_id: {"un": 0},
-            self.left_id: {"un": 0},
-            self.right_id: {"un": 0},
+            self.boundary.top: {"free_surface": {"eta_index": 2, "Ra_fs": 1}},
+            self.boundary.bottom: {"un": 0},
+            self.boundary.left: {"un": 0},
+            self.boundary.right: {"un": 0},
         }
 
     def setup_solver(self):
@@ -66,7 +66,8 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
 
     def calculate_error(self):
         local_error = assemble(
-            pow(self.stokes_vars[2] - self.eta_analytical, 2) * self.ds(self.top_id)
+            pow(self.stokes_vars[2] - self.eta_analytical, 2)
+            * self.ds(self.boundary.top)
         )
         self.error += local_error * self.dt
 

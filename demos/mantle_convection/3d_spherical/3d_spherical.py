@@ -34,7 +34,7 @@ rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
 mesh.cartesian = False
-bottom_id, top_id = "bottom", "top"
+boundary = get_boundary_ids(mesh)
 domain_volume = assemble(1 * dx(domain=mesh))  # Required for a diagnostic calculation.
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -117,9 +117,9 @@ Z_near_nullspace = create_stokes_nullspace(
 # Followed by boundary conditions for velocity and temperature.
 
 # +
-stokes_bcs = {bottom_id: {"un": 0}, top_id: {"un": 0}}
+stokes_bcs = {boundary.bottom: {"un": 0}, boundary.top: {"un": 0}}
 
-temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
+temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
 # -
 
 # We next setup our output, in VTK format.
@@ -132,7 +132,9 @@ output_frequency = 1
 plog = ParameterLog("params.log", mesh)
 plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg")
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id, quad_degree=6)
+gd = GeodynamicalDiagnostics(
+    z, T, bottom_id=boundary.bottom, top_id=boundary.top, quad_degree=6
+)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,

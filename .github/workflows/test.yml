@@ -35,8 +35,7 @@ jobs:
     name: Benchmark regression test
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake:latest
-      options: --shm-size 2g
+      image: firedrakeproject/firedrake-vanilla-default:latest
 
     concurrency:
       group: testing-${{ github.head_ref || github.run_id }}
@@ -54,14 +53,14 @@ jobs:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           sudo apt update
-          sudo apt install -y task-spooler time s3cmd unzip git-lfs
+          sudo apt install -y task-spooler time s3cmd unzip git-lfs gmsh
           tsp -S 48
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
-          s3cmd --config=$HOME/.s3cfg/config get --skip-existing s3://gadopt/github-actions/pygplates_0.36.0_py312_amd64.deb
-          sudo apt install -y --fix-broken ./pygplates_0.36.0_py312_amd64.deb
-          ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.*/site-packages/
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
 
       - uses: actions/checkout@v4
         with:
@@ -73,8 +72,8 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          . /home/firedrake/firedrake/bin/activate
-          python3 -m pip install .[demos,optimisation]
+          uv venv --system-site-packages
+          uv pip install .[demos,optimisation] pygplates
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
@@ -89,7 +88,8 @@ jobs:
 
       - name: Compile flib (Trim et al., 2023)
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          source .venv/bin/activate
+          uv pip install meson
           cd flib/Python
           rm *.so
           sed -i 's/f2py3/f2py/' create_library.sh
@@ -97,10 +97,13 @@ jobs:
           cp *.so ../../tests/multi_material
         shell: bash
 
+      - name: Fix HOME environment variable
+        run: echo "HOME=/home/firedrake" >> "$GITHUB_ENV"
+
       - name: Run test
         id: run_tests
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          . .venv/bin/activate
           make -j test
         env:
           GADOPT_LOGLEVEL: INFO
@@ -109,7 +112,7 @@ jobs:
       - name: Pytest
         id: run_pytest
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          . .venv/bin/activate
           python -m pytest -m 'not longtest' --junit-xml=test_results.xml
 
       - name: Pytest report

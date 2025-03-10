@@ -69,7 +69,7 @@ lx, ly = 0.9142, 1  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
 mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
+boundary = get_boundary_ids(mesh)
 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
@@ -176,10 +176,10 @@ Z_nullspace = create_stokes_nullspace(Z)
 # Boundary conditions for the Stokes system: no slip at the top and bottom and free slip
 # on the left and right sides.
 stokes_bcs = {
-    bottom_id: {"u": 0},
-    top_id: {"u": 0},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"u": 0},
+    boundary.top: {"u": 0},
+    boundary.left: {"ux": 0},
+    boundary.right: {"ux": 0},
 }
 # Instantiate a solver object for the Stokes system and perform a solve to obtain
 # initial pressure and velocity.

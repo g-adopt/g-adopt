@@ -84,7 +84,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
         DIRK33,
         eq_attrs=eq_attrs,
         bcs=bcs,
-        su_diffusivity=kappa if su_advection else None,
+        su_advection=su_advection,
     )
 
     # this may need tweaking for different length runs/Pe values

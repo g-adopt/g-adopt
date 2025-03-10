@@ -47,7 +47,7 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
 
     def setup_bcs(self):
         super().setup_bcs()
-        self.stokes_bcs[self.bottom_id] = {
+        self.stokes_bcs[self.boundary.bottom] = {
             "free_surface": {"eta_index": 3, "Ra_fs": -1}
         }
 
@@ -63,7 +63,8 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     def calculate_error(self):
         super().calculate_error()
         zeta_local_error = assemble(
-            pow(self.stokes_vars[3] - self.zeta_analytical, 2) * self.ds(self.bottom_id)
+            pow(self.stokes_vars[3] - self.zeta_analytical, 2)
+            * self.ds(self.boundary.bottom)
         )
         self.zeta_error += zeta_local_error * self.dt
 

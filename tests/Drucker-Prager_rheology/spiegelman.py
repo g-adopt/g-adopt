@@ -27,14 +27,14 @@ log = PETSc.Sys.Print
 
 
 def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
-    output_dir = f"spiegelman_{float(U0*year)}_{float(mu1*mu0)}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
+    output_dir = f"spiegelman_{float(U0 * year)}_{float(mu1 * mu0)}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
     log("\n")
     log("\n")
     log("WRITING TO:", output_dir)
     # Square mesh generated via firedrake
     mesh = RectangleMesh(nx, ny, 4, 1, quadrilateral=True)
     mesh.cartesian = True
-    left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # noqa: F841 Boundary IDs
+    boundary = get_boundary_ids(mesh)
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -198,7 +198,11 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
 
     # SCK:
     approximation = Approximation("BA", dimensional=False, parameters={"mu": mu_nl})
-    bcs = {left_id: {"ux": 1}, right_id: {"ux": -1}, bottom_id: {"uy": 0}}
+    bcs = {
+        boundary.left: {"ux": 1},
+        boundary.right: {"ux": -1},
+        boundary.bottom: {"uy": 0},
+    }
     picard_solver = StokesSolver(
         z, approximation, bcs=bcs, solver_parameters=initial_picard_solver_parameters
     )

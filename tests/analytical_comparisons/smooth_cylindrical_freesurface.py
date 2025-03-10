@@ -52,7 +52,7 @@ def model(level, k, nn, do_write=False):
     mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)
     mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")
     mesh.cartesian = False
-    bottom_id, top_id = "bottom", "top"
+    boundary = get_boundary_ids(mesh)
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
@@ -93,8 +93,8 @@ def model(level, k, nn, do_write=False):
     # solution.
     approximation = Approximation("BA", dimensional=False, parameters={"Ra": 1})
     stokes_bcs = {
-        bottom_id: {"un": 0},
-        top_id: {  # Apply the free surface boundary condition
+        boundary.bottom: {"un": 0},
+        boundary.top: {  # Apply the free surface boundary condition
             "free_surface": {"eta_index": 0, "Ra_fs": 1, "variable_rho_fs": False}
         },
     }
@@ -147,15 +147,18 @@ def model(level, k, nn, do_write=False):
 
     # compute u analytical and error
     uxy = Function(V).interpolate(as_vector((X[0], X[1])))
+    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
     u_anal = Function(V, name="AnalyticalVelocity")
     u_anal.dat.data[:] = [solution.velocity_cartesian(xyi) for xyi in uxy.dat.data]
 
     # compute p analytical and error
     pxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
+    pxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
     p_anal = Function(W, name="AnalyticalPressure")
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
 
     # compute eta analytical and error
+    etaxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
     etaxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
     eta_anal = Function(W, name="AnalyticalEta")
     eta_anal.dat.data[:] = [
@@ -201,9 +204,9 @@ def model(level, k, nn, do_write=False):
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal) * _dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal) * _dx))
-    l2anal_eta = numpy.sqrt(assemble(dot(eta_anal, eta_anal) * ds(top_id)))
+    l2anal_eta = numpy.sqrt(assemble(dot(eta_anal, eta_anal) * ds(boundary.top)))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error) * _dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error) * _dx))
-    l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error) * ds(top_id)))
+    l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error) * ds(boundary.top)))
 
     return l2error_u, l2error_p, l2error_eta, l2anal_u, l2anal_p, l2anal_eta

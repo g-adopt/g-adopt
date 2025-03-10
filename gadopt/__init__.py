@@ -29,6 +29,7 @@ from .utility import InteriorBC as InteriorBC
 from .utility import LayerAveraging as LayerAveraging
 from .utility import ParameterLog as ParameterLog
 from .utility import TimestepAdaptor as TimestepAdaptor
+from .utility import get_boundary_ids as get_boundary_ids
 from .utility import interpolate_1d_profile as interpolate_1d_profile
 from .utility import log as log
 from .utility import node_coordinates as node_coordinates

@@ -44,7 +44,7 @@ dz = D / nz
 surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name="surface_mesh")
 mesh = ExtrudedMesh(surface_mesh, layers=nz, layer_height=dz, extrusion_type="radial")
 
-bottom_id, top_id = "bottom", "top"
+boundary = get_boundary_ids(mesh)
 mesh.cartesian = False
 # -
 
@@ -444,8 +444,8 @@ log(f"Simulation start time: {time_start_years} years")
 # Setup boundary conditions
 rho_ext = rho_ice * (disc_1 + disc_2)
 stokes_bcs = {
-    top_id: {"normal_stress": ice_load, "free_surface": {"rho_ext": rho_ext}},
-    bottom_id: {"un": 0},
+    boundary.top: {"normal_stress": ice_load, "free_surface": {"rho_ext": rho_ext}},
+    boundary.bottom: {"un": 0},
 }
 
 # We also need to specify a G-ADOPT approximation which sets up the various parameters
@@ -512,7 +512,7 @@ plog.log_str("timestep time dt u_rms u_rms_surf ux_max disp_min disp_max")
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
-gd = GeodynamicalDiagnostics(z, bottom_id=bottom_id, top_id=top_id)
+gd = GeodynamicalDiagnostics(z, bottom_id=boundary.bottom, top_id=boundary.top)
 
 # Initialise a (scalar!) function for logging vertical displacement
 U = FunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (scalar)
@@ -547,7 +547,7 @@ for timestep in range(max_timesteps + 1):
     # Log diagnostics:
     plog.log_str(
         f"{timestep} {float(time)} {float(dt)} "
-        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} "
+        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} "
         f"{displ_vert.dat.data.min()} {displ_vert.dat.data.max()}"
     )
 

@@ -63,7 +63,7 @@ g_top = 1.0
 g_bottom = 0.0
 bcs = {3: {"g": g_bottom}, 4: {"g": g_top}}
 adv_diff_solver = GenericTransportSolver(
-    terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_diffusivity=kappa
+    terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_advection=True
 )
 
 # Get nubar (additional SU diffusion) for plotting

@@ -95,7 +95,7 @@ from gadopt import *
 nx, ny = 40, 40  # Number of cells in x and y directions.
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
 mesh.cartesian = True
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
+boundary = get_boundary_ids(mesh)  # Boundary IDs
 # -
 
 # Now we set up the function spaces. As before we use Q2 and Q1 for the velocity and
@@ -174,13 +174,13 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 
 # +
 stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 2, "Ra_fs": 1e5}},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"uy": 0},
+    boundary.top: {"free_surface": {"eta_index": 2, "Ra_fs": 1e5}},
+    boundary.left: {"ux": 0},
+    boundary.right: {"ux": 0},
 }
 
-temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
+temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
 # -
 
 # Let's set up some output files.
@@ -194,7 +194,7 @@ plog.log_str(
     "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t eta_min eta_max"
 )
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
 # Now let's set up the solver objects.
@@ -245,7 +245,7 @@ for timestep in range(timesteps):
     # Log diagnostics:
     plog.log_str(
         f"{timestep} {time} {float(delta_t)} {maxchange} "
-        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
+        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} {gd.Nu_top()} "
         f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
         f"{z.subfunctions[2].dat.data.min()} {z.subfunctions[2].dat.data.max()}"
     )
@@ -381,8 +381,8 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # # project out the constant associated with the pressure nullspace for the base case as
 # # all boundaries are closed
-# coef = assemble(eta_base_steady * ds(top_id)) / assemble(
-#     Constant(1.0) * ds(top_id, domain=mesh_base)
+# coef = assemble(eta_base_steady * ds(boundary.top)) / assemble(
+#     Constant(1.0) * ds(boundary.top, domain=mesh_base)
 # )
 # eta_base_steady.project(eta_base_steady - coef)
 

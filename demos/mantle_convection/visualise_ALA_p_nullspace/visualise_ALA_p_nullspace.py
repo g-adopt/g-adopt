@@ -89,7 +89,8 @@ from gadopt.stokes_integrators import ala_right_nullspace
 # Set up geometry:
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)  # Square mesh generated via firedrake
 mesh.cartesian = True
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
+
+boundary = get_boundary_ids(mesh)
 
 # Function spaces
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -113,7 +114,7 @@ approximation = Approximation(
     dimensional=False,
     parameters={"Ra": Ra, "Di": Di, "Gamma": Gamma, "rho": rhobar, "T": Tbar},
 )
-p = ala_right_nullspace(W, approximation, top_id)
+p = ala_right_nullspace(W, approximation, boundary.top)
 # -
 
 # Note that the right-nullspace solution is calculated last using `ala_right_nullspace`,
@@ -137,7 +138,7 @@ Z_nullspace = create_stokes_nullspace(
     closed=True,
     rotational=False,
     approximation=approximation,
-    top_subdomain_id=top_id,
+    top_subdomain_id=boundary.top,
 )
 
 # where the anelastic-liquid approximation, and a domain for the top boundary is

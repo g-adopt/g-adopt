@@ -28,7 +28,7 @@ nx, ny = 60, 60  # Number of cells in x and y directions.
 
 mesh = Mesh("square.msh", quadrilateral=True)  # Square mesh generated via Gmsh
 mesh.cartesian = True
-left_id, right_id, bottom_id, top_id = 14, 12, 11, 13  # Boundary IDs
+boundary = get_boundary_ids(mesh)
 
 # We also need function spaces, which is achieved by associating the
 # mesh with the relevant finite element: V , W and Q are symbolic
@@ -139,13 +139,13 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # +
 stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"uy": 0},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"uy": 0},
+    boundary.top: {"uy": 0},
+    boundary.left: {"ux": 0},
+    boundary.right: {"ux": 0},
 }
 
-temp_bcs = {bottom_id: {"T": 1.0}, top_id: {"T": 0.0}}
+temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
 # -
 
 # We next set up our output, in VTK format. To do so, we create the output file
@@ -168,7 +168,7 @@ plog.log_str(
     "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t"
 )
 
-gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
 # We finally come to solving the variational problem, with solver
@@ -230,7 +230,7 @@ for timestep in range(timesteps):
     # Log diagnostics:
     plog.log_str(
         f"{timestep} {time} {float(delta_t)} {maxchange} "
-        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(top_id)} {gd.Nu_top()} "
+        f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} {gd.Nu_top()} "
         f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
     )
 
