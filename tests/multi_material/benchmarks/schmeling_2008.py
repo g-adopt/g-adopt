@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from functools import partial
 
-import firedrake as fd
 import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
