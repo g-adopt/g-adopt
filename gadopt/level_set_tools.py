@@ -329,7 +329,7 @@ class LevelSetSolver:
 
             if step % self.reini_params["frequency"] == 0:
                 for reini_step in range(self.reini_params["iterations"]):
-                    self.reini_ts.advance(0)
+                    self.reini_ts.advance()
 
                 self.ls_solver.solution_old.assign(self.solution)
 
