@@ -26,7 +26,7 @@ cases = {
     f"{tests_path}/2d_cylindrical_TALA_DG": {
         "extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]
     },
-    f"{tests_path}/viscoplastic_case_dg": {"extra_checks": ["nu_top", "avg_t"]},
+    f"{tests_path}/viscoplastic_case_DG": {"extra_checks": ["nu_top", "avg_t"]},
 }
 
 

@@ -304,7 +304,7 @@ while True:
 
     # Solve energy system
     if energy_solver is not None:
-        energy_solver.solve(time_now, update_forcings)
+        energy_solver.solve(update_forcings=update_forcings, t=time_now)
 
     # Advect each level set
     for ls_solv in level_set_solver:
