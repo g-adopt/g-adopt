@@ -372,7 +372,7 @@ class StokesSolver:
 
             if self.free_surface:
                 # Gather pressure and free surface fields for Schur complement solve
-                fields_ind = ",".join(map(str, range(1, len(self.solution_split))))
+                fields_ind = ",".join(map(str, range(1, len(self.solution_space))))
                 self.solver_parameters.update(
                     {
                         "pc_fieldsplit_0_fields": "0",
