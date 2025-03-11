@@ -202,7 +202,8 @@ class Simulation:
 
     @classmethod
     def diagnostics(cls, simu_time, geo_diag, diag_vars):
-        epsilon = float(diag_vars["epsilon"])
+        epsilon = diag_vars["epsilon"]
+        eps_data = epsilon.dat.data_ro_with_halos
         level_set = diag_vars["level_set"][0]
         level_set_data = level_set.dat.data_ro_with_halos
         coords_data = (
@@ -245,20 +246,16 @@ class Simulation:
                         ind_inside
                     ]
 
-                    ls_outside = max(
-                        1e-6,
-                        min(1 - 1e-6, level_set_data[mask_ls_outside][ind_outside]),
-                    )
-                    sdls_outside = epsilon * np.log(ls_outside / (1 - ls_outside))
+                    ls_outside = max(1e-2, level_set_data[mask_ls_outside][ind_outside])
+                    eps_outside = eps_data[mask_ls_outside][ind_outside]
+                    sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
 
-                    ls_inside = max(
-                        1e-6,
-                        min(
-                            1 - 1e-6,
-                            level_set_data[mask_ls_inside][mask_ver_coord][ind_inside],
-                        ),
+                    ls_inside = min(
+                        1 - 1e-2,
+                        level_set_data[mask_ls_inside][mask_ver_coord][ind_inside],
                     )
-                    sdls_inside = epsilon * np.log(ls_inside / (1 - ls_inside))
+                    eps_inside = eps_data[mask_ls_inside][mask_ver_coord][ind_inside]
+                    sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
 
                     ls_dist = sdls_inside / (sdls_inside - sdls_outside)
                     hor_coord_interface = (

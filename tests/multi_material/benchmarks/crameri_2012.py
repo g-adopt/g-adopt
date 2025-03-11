@@ -128,10 +128,11 @@ class Simulation:
     @classmethod
     def diagnostics(cls, simu_time, geo_diag, diag_vars):
         max_topography_analytical = (
-            cls.top_interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
+            cls.surface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
         )
 
-        epsilon = float(diag_vars["epsilon"])
+        epsilon = diag_vars["epsilon"]
+        eps_data = epsilon.dat.data_ro_with_halos
         level_set = diag_vars["level_set"][1]
         level_set_data = level_set.dat.data_ro_with_halos
         coords_data = (
@@ -158,14 +159,18 @@ class Simulation:
                     ]
 
                     ls_lower_bound = level_set_data[mask_ls][ind_lower_bound]
-                    sdls_lower_bound = epsilon * np.log(
+                    eps_lower_bound = eps_data[mask_ls][ind_lower_bound]
+                    sdls_lower_bound = eps_lower_bound * np.log(
                         ls_lower_bound / (1 - ls_lower_bound)
                     )
 
                     ls_upper_bound = level_set_data[~mask_ls][mask_hor_coord][
                         ind_upper_bound
                     ]
-                    sdls_upper_bound = epsilon * np.log(
+                    eps_upper_bound = eps_data[~mask_ls][mask_hor_coord][
+                        ind_upper_bound
+                    ]
+                    sdls_upper_bound = eps_upper_bound * np.log(
                         ls_upper_bound / (1 - ls_upper_bound)
                     )
 
@@ -185,7 +190,7 @@ class Simulation:
 
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
         cls.diag_fields["max_topography"].append(
-            (max_topo_global - cls.top_material_interface_y) / 1e3
+            (max_topo_global - cls.surface_coord_y) / 1e3
         )
         cls.diag_fields["max_topography_analytical"].append(max_topography_analytical)
 
