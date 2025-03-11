@@ -126,8 +126,6 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         for i in range(self.n_stages):
             self.solve_stage(i, update_forcings, t)
 
-            self.solve_stage(i, update_forcings, t)
-
         self.get_final_solution()
 
 
@@ -227,11 +225,6 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
             elif update_forcings is not None:
                 update_forcings()
 
-            if update_forcings is not None and t is not None:
-                update_forcings(t + self.c[i_stage] * self.dt)
-            elif update_forcings is not None:
-                update_forcings()
-
             self.solver[i_stage].solve()
 
     def get_final_solution(self) -> None:
@@ -243,7 +236,6 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
 
     def solve_stage(self, i_stage, update_forcings, t) -> None:
         self.update_solution(i_stage)
-        self.solve_tendency(i_stage, update_forcings, t)
         self.solve_tendency(i_stage, update_forcings, t)
 
 

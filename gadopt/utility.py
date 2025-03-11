@@ -7,6 +7,7 @@ depending on what they would like to achieve.
 import os
 from functools import cached_property
 from logging import getLevelName
+from types import SimpleNamespace
 
 import numpy as np
 from firedrake import *
@@ -14,7 +15,6 @@ from firedrake.__future__ import Interpolator
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
 from scipy.linalg import solveh_banded
-from types import SimpleNamespace
 from ufl.corealg.traversal import traverse_unique_terminals
 
 # TBD: do we want our own set_log_level and use logging module with handlers?

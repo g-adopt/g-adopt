@@ -206,7 +206,7 @@ z.subfunctions[1].rename("Pressure")
 # + tags=["active-ipynb"]
 # log("Number of Velocity DOF:", V.dim())
 # log("Number of Pressure DOF:", W.dim())
-# log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
+# log("Number of Velocity and Pressure DOF:", V.dim() + W.dim())
 # log("Number of Temperature DOF:", Q.dim())
 # -
 
@@ -258,9 +258,10 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
+
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
+# collection = tripcolor(T, axes=axes, cmap="coolwarm")
+# fig.colorbar(collection)
 # -
 
 # With closed boundaries, and no constraint on pressure anywhere in
@@ -402,5 +403,5 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
-# collection = tripcolor(T, axes=axes, cmap='coolwarm')
-# fig.colorbar(collection);
+# collection = tripcolor(T, axes=axes, cmap="coolwarm")
+# fig.colorbar(collection)
