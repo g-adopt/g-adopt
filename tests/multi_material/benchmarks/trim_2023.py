@@ -57,7 +57,8 @@ class Simulation:
     materials = [bottom_material, top_material]
     reference_material = None
 
-    # Physical parameters
+    # Approximation parameters
+    dimensional = False
     Ra, g = 1e5, 1
     RaB = Ra * bottom_material.B
 

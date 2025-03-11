@@ -60,7 +60,8 @@ class Simulation:
     materials = [dense_material, reference_material]
     reference_material = None
 
-    # Physical parameters
+    # Approximation parameters
+    dimensional = False
     Ra, g = 3e5, 1
 
     # Boundary conditions

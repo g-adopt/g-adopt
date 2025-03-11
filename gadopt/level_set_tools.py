@@ -20,13 +20,7 @@ from .equations import Equation
 from .time_stepper import eSSPRKs3p3
 from .transport_solver import GenericTransportSolver
 
-__all__ = [
-    "LevelSetSolver",
-    "Material",
-    "density_RaB",
-    "entrainment",
-    "field_interface",
-]
+__all__ = ["LevelSetSolver", "Material", "entrainment", "material_field"]
 
 
 # Default solver options for level-set advection and reinitialisation
@@ -338,172 +332,97 @@ class LevelSetSolver:
                 self.ls_solver.solution_old.assign(self.level_set)
 
 
-def field_interface_recursive(
-    level_set: list, material_value: list, method: str
-) -> fd.ufl.core.expr.Expr:
-    """Sets physical property expressions for each material.
+def material_field_from_copy(
+    level_set: fd.Function | list[fd.Function],
+    field_values: list,
+    interface: str,
+) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
+    """Generates UFL algebra describing a physical property across the domain.
 
     Ensures that the correct expression is assigned to each material based on the
-    level-set functions.
-    Property transition across material interfaces are expressed according to the
-    provided method.
+    level-set functions. Property transitions across material interfaces are expressed
+    according to the provided strategy.
 
     Args:
-        level_set:
-          A list of level-set UFL functions.
-        material_value:
-          A list of physical property values applicable to each material.
-        method:
-          A string specifying the nature of property transitions between materials.
+      level_set:
+        A Firedrake function for the level set (or a list of these)
+      field_values:
+        A list of physical property values specific to each material
+      interface:
+        A string specifying how property transitions between materials are calculated
 
     Returns:
-        A UFL expression to calculate physical property values throughout the domain.
-
-    Raises:
-      ValueError: Incorrect method name supplied.
+      UFL algebra representing the physical property throughout the domain
 
     """
     ls = fd.max_value(fd.min_value(level_set.pop(), 1), 0)
 
     if level_set:  # Directly specify material value on only one side of the interface
-        match method:
+        match interface:
             case "sharp":
-                return fd.conditional(
-                    ls > 0.5,
-                    material_value.pop(),
-                    field_interface_recursive(level_set, material_value, method),
-                )
+                heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
+                return field_values.pop() * heaviside + material_field_from_copy(
+                    level_set, field_values, interface
+                ) * (1 - heaviside)
             case "arithmetic":
-                return material_value.pop() * ls + field_interface_recursive(
-                    level_set, material_value, method
+                return field_values.pop() * ls + material_field_from_copy(
+                    level_set, field_values, interface
                 ) * (1 - ls)
             case "geometric":
-                return material_value.pop() ** ls * field_interface_recursive(
-                    level_set, material_value, method
+                return field_values.pop() ** ls * material_field_from_copy(
+                    level_set, field_values, interface
                 ) ** (1 - ls)
             case "harmonic":
                 return 1 / (
-                    ls / material_value.pop()
+                    ls / field_values.pop()
                     + (1 - ls)
-                    / field_interface_recursive(level_set, material_value, method)
-                )
-            case _:
-                raise ValueError(
-                    "Method must be sharp, arithmetic, geometric, or harmonic."
+                    / material_field_from_copy(level_set, field_values, interface)
                 )
     else:  # Final level set; specify values for both sides of the interface
-        match method:
+        match interface:
             case "sharp":
-                return fd.conditional(ls < 0.5, *material_value)
+                heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
+                return field_values[0] * (1 - heaviside) + field_values[1] * heaviside
             case "arithmetic":
-                return material_value[0] * (1 - ls) + material_value[1] * ls
+                return field_values[0] * (1 - ls) + field_values[1] * ls
             case "geometric":
-                return material_value[0] ** (1 - ls) * material_value[1] ** ls
+                return field_values[0] ** (1 - ls) * field_values[1] ** ls
             case "harmonic":
-                return 1 / ((1 - ls) / material_value[0] + ls / material_value[1])
-            case _:
-                raise ValueError(
-                    "Method must be sharp, arithmetic, geometric, or harmonic."
-                )
+                return 1 / ((1 - ls) / field_values[0] + ls / field_values[1])
 
 
-def field_interface(
-    level_set: list, material_value: list, method: str
-) -> fd.ufl.core.expr.Expr:
-    """Executes field_interface_recursive with a modified argument.
+def material_field(
+    level_set: fd.Function | list[fd.Function],
+    field_values: list,
+    interface: str,
+) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
+    """Generates UFL algebra describing a physical property across the domain.
 
-    Calls field_interface_recursive using a copy of the level-set list to ensure the
-    original one is not consumed by the function call.
+    Calls `material_field_from_copy` using a copy of the level-set list, preventing the
+    original one from being consumed by the function call.
 
     Args:
-        level_set:
-          A list of level-set UFL functions.
-        material_value:
-          A list of physical property values applicable to each material.
-        method:
-          A string specifying the nature of property transitions between materials.
+      level_set:
+        A Firedrake function for the level set (or a list of these)
+      field_values:
+        A list of physical property values specific to each material
+      interface:
+        A string specifying how property transitions between materials are calculated
 
     Returns:
-        A UFL expression to calculate physical property values throughout the domain.
-    """
-    return field_interface_recursive(level_set.copy(), material_value, method)
-
-
-def density_RaB(
-    Simulation,
-    level_set: list,
-    func_space_interp: fd.functionspaceimpl.WithGeometry,
-    method: Optional[str] = "sharp",
-) -> tuple[
-    fd.Constant,
-    fd.Constant | fd.ufl.core.expr.Expr,
-    fd.Function,
-    fd.Constant | fd.ufl.core.expr.Expr,
-    fd.Function,
-    bool,
-]:
-    """Sets up buoyancy-related fields.
-
-    Assigns UFL expressions to buoyancy-related fields based on the way the Material
-    class was initialised.
-
-    Args:
-        Simulation:
-          A class representing the current simulation.
-        level_set:
-          A list of level-set UFL functions.
-        func_space_interp:
-          A continuous UFL function space where material fields are calculated.
-        method:
-          An optional string specifying the nature of property transitions between
-          materials.
-
-    Returns:
-        A tuple containing the reference density field, the density difference field,
-        the density field, the UFL expression for the compositional Rayleigh number,
-        the compositional Rayleigh number field, and a boolean indicating if the
-        simulation is expressed in dimensionless form.
+      UFL algebra representing the physical property throughout the domain
 
     Raises:
-        ValueError: Inconsistent buoyancy-related field across materials.
+      ValueError: Incorrect interface strategy supplied
     """
-    density = fd.Function(func_space_interp, name="Density")
-    RaB = fd.Function(func_space_interp, name="RaB")
-    # Identify if the governing equations are written in dimensional form or not and
-    # define accordingly relevant variables for the buoyancy term
-    if all(material.density_B_RaB == "density" for material in Simulation.materials):
-        dimensionless = False
-        RaB_ufl = fd.Constant(1)
-        ref_dens = fd.Constant(Simulation.reference_material.density)
-        dens_diff = field_interface(
-            level_set,
-            [material.density - ref_dens for material in Simulation.materials],
-            method=method,
-        )
-        density.interpolate(dens_diff + ref_dens)
-    else:
-        dimensionless = True
-        ref_dens = fd.Constant(1)
-        dens_diff = fd.Constant(1)
-        if all(material.density_B_RaB == "B" for material in Simulation.materials):
-            RaB_ufl = field_interface(
-                level_set,
-                [Simulation.Ra * material.B for material in Simulation.materials],
-                method=method,
-            )
-        elif all(material.density_B_RaB == "RaB" for material in Simulation.materials):
-            RaB_ufl = field_interface(
-                level_set,
-                [material.RaB for material in Simulation.materials],
-                method=method,
-            )
-        else:
-            raise ValueError(
-                "All materials must share a common buoyancy-defining parameter."
-            )
-        RaB.interpolate(RaB_ufl)
+    if not isinstance(level_set, list):
+        level_set = [level_set]
 
-    return ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless
+    _impl_interface = ["sharp", "arithmetic", "geometric", "harmonic"]
+    if interface not in _impl_interface:
+        raise ValueError(f"Interface must be one of {_impl_interface}.")
+
+    return material_field_from_copy(level_set.copy(), field_values, interface)
 
 
 def entrainment(
