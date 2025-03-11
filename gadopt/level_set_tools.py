@@ -8,17 +8,21 @@ function to calculate material entrainment in the simulation.
 """
 
 import abc
+import operator
 from dataclasses import dataclass, fields
 from numbers import Number
 from typing import Optional
 
 import firedrake as fd
+import numpy as np
+from mpi4py import MPI
 from firedrake.ufl_expr import extract_unique_domain
 
 from . import scalar_equation as scalar_eq
 from .equations import Equation
 from .time_stepper import eSSPRKs3p3
 from .transport_solver import GenericTransportSolver
+from .utility import node_coordinates
 
 __all__ = [
     "LevelSetSolver",
@@ -507,32 +511,128 @@ def density_RaB(
 
 
 def entrainment(
-    level_set: fd.Function, material_area: Number, entrainment_height: Number
-):
-    """Calculates entrainment diagnostic.
+    level_set: fd.Function, material_area: float, entrainment_height: float
+) -> float:
+    """Calculates the entrainment diagnostic.
 
-    Determines the proportion of a material that is located above a given height.
+    Determines the proportion of a material located above a given height.
 
     Args:
-        level_set:
-          A level-set Firedrake function.
-        material_area:
-          An integer or a float representing the total area occupied by a material.
-        entrainment_height:
-          An integer or a float representing the height above which the entrainment
-          diagnostic is determined.
+      level_set:
+        A Firedrake function for the level-set field
+      material_area:
+        A float representing the total area occupied by the target material
+      entrainment_height:
+        A float representing the height above which to calculate entrainment
 
     Returns:
-        A float corresponding to the calculated entrainment diagnostic.
+      A float corresponding to the material fraction above the target height
     """
-    mesh_coords = fd.SpatialCoordinate(level_set.function_space().mesh())
+    mesh_coords = node_coordinates(level_set)
     target_region = mesh_coords[1] >= entrainment_height
     material_entrained = fd.conditional(level_set < 0.5, 1, 0)
+    is_entrained = fd.conditional(target_region, material_entrained, 0)
 
-    return (
-        fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
-        / material_area
-    )
+    return fd.assemble(is_entrained * fd.dx) / material_area
+
+
+def min_max_height(
+    level_set: fd.Function, epsilon: float | fd.Function, *, side: int, mode: str
+) -> float:
+    """Calculates the maximum or minimum height of a material interface.
+
+    Args:
+      level_set:
+        A Firedrake function for the level set field
+      epsilon:
+        A float or Firedrake function denoting the thickness of the material interface
+      side:
+        An integer (0 or 1) indicating the level-set side of the target material
+      mode:
+        A string ("min" or "max") specifying which extremum height is sought
+
+    Returns:
+      A float corresponding to the material interface extremum height
+    """
+
+    match side:
+        case 0:
+            comparison = operator.le
+        case 1:
+            comparison = operator.ge
+        case _:
+            raise ValueError("'side' must be 0 or 1.")
+
+    match mode:
+        case "min":
+            extremum = np.min
+            ls_arg_extremum = np.argmax
+            irrelevant_data = np.inf
+            mpi_comparison = MPI.MIN
+        case "max":
+            extremum = np.max
+            ls_arg_extremum = np.argmin
+            irrelevant_data = -np.inf
+            mpi_comparison = MPI.MAX
+        case _:
+            raise ValueError("'mode' must be 'min' or 'max'.")
+
+    mesh = level_set.ufl_domain()
+    if not mesh.cartesian:
+        raise ValueError("Only Cartesian meshes are currently supported.")
+
+    coords = node_coordinates(level_set)
+
+    coords_data = coords.dat.data_ro_with_halos
+    ls_data = level_set.dat.data_ro_with_halos
+    if isinstance(epsilon, float):
+        eps_data = epsilon * np.ones_like(ls_data)
+    else:
+        eps_data = epsilon.dat.data_ro_with_halos
+
+    mask_ls = comparison(ls_data, 0.5)
+    if mask_ls.any():
+        coords_inside = coords_data[mask_ls, -1]
+        ind_coords_inside = np.flatnonzero(coords_inside == extremum(coords_inside))
+
+        if ind_coords_inside.size == 1:
+            ind_inside = ind_coords_inside.item()
+        else:
+            ind_min_ls_inside = ls_arg_extremum(ls_data[mask_ls][ind_coords_inside])
+            ind_inside = ind_coords_inside[ind_min_ls_inside]
+
+        height_inside = coords_inside[ind_inside]
+
+        hor_coords = coords_data[mask_ls, :-1][ind_inside]
+        hor_dist_vec = coords_data[~mask_ls, :-1] - hor_coords
+        hor_dist = np.sqrt(np.sum(hor_dist_vec**2, axis=1))
+
+        mask_hor_coords = hor_dist < eps_data[~mask_ls]
+
+        if mask_hor_coords.any():
+            ind_outside = abs(
+                coords_data[~mask_ls, -1][mask_hor_coords] - height_inside
+            ).argmin()
+            height_outside = coords_data[~mask_ls, -1][mask_hor_coords][ind_outside]
+
+            ls_inside = ls_data[mask_ls][ind_inside]
+            eps_inside = eps_data[mask_ls][ind_inside]
+            sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
+
+            ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
+            eps_outside = eps_data[~mask_ls][mask_hor_coords][ind_outside]
+            sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
+
+            sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
+            height = sdls_dist * height_inside + (1 - sdls_dist) * height_outside
+        else:
+            height = height_inside
+    else:
+        height = irrelevant_data
+
+    height_global = level_set.comm.allreduce(height, mpi_comparison)
+
+    return height_global
 
 
 reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
