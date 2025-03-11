@@ -336,6 +336,7 @@ def material_field_from_copy(
     level_set: fd.Function | list[fd.Function],
     field_values: list,
     interface: str,
+    adjoint: bool = False,
 ) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
     """Generates UFL algebra describing a physical property across the domain.
 
@@ -350,6 +351,13 @@ def material_field_from_copy(
         A list of physical property values specific to each material
       interface:
         A string specifying how property transitions between materials are calculated
+      adjoint:
+        A boolean indicating an adjoint-compatible implementation of the sharp interface
+
+    Note:
+      When requesting the sharp interface with the adjoint flag, Stokes solver may raise
+      DIVERGED_FNORM_NAN if the nodal level-set value is exactly 0.5 (i.e. denoting the
+      location of the material interface).
 
     Returns:
       UFL algebra representing the physical property throughout the domain
@@ -360,10 +368,17 @@ def material_field_from_copy(
     if level_set:  # Directly specify material value on only one side of the interface
         match interface:
             case "sharp":
-                heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
-                return field_values.pop() * heaviside + material_field_from_copy(
-                    level_set, field_values, interface
-                ) * (1 - heaviside)
+                if adjoint:
+                    heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
+                    return field_values.pop() * heaviside + material_field_from_copy(
+                        level_set, field_values, interface
+                    ) * (1 - heaviside)
+                else:
+                    return fd.conditional(
+                        ls > 0.5,
+                        field_values.pop(),
+                        material_field_from_copy(level_set, field_values, interface),
+                    )
             case "arithmetic":
                 return field_values.pop() * ls + material_field_from_copy(
                     level_set, field_values, interface
@@ -381,8 +396,13 @@ def material_field_from_copy(
     else:  # Final level set; specify values for both sides of the interface
         match interface:
             case "sharp":
-                heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
-                return field_values[0] * (1 - heaviside) + field_values[1] * heaviside
+                if adjoint:
+                    heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
+                    return (
+                        field_values[0] * (1 - heaviside) + field_values[1] * heaviside
+                    )
+                else:
+                    return fd.conditional(ls < 0.5, *field_values)
             case "arithmetic":
                 return field_values[0] * (1 - ls) + field_values[1] * ls
             case "geometric":
