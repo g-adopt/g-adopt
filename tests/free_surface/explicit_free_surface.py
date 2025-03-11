@@ -202,7 +202,6 @@ class ExplicitFreeSurfaceModel:
         # Solve Stokes sytem:
         self.stokes_solver.solve()
         self.eta_timestepper.advance()
-        self.eta_timestepper.advance()
 
     def run_simulation(self):
         # Now perform the time loop:

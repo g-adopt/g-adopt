@@ -219,12 +219,12 @@ Z_nullspace = create_stokes_nullspace(Z)
 # and cooling from above. No boundary conditions are required for level set, as the
 # numerical domain is closed.
 stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"uy": 0},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"uy": 0},
+    boundary.top: {"uy": 0},
+    boundary.left: {"ux": 0},
+    boundary.right: {"ux": 0},
 }
-temp_bcs = {bottom_id: {"T": 1}, top_id: {"T": 0}}
+temp_bcs = {boundary.bottom: {"T": 1}, boundary.top: {"T": 0}}
 # Instantiate a solver object for the energy conservation system.
 energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
