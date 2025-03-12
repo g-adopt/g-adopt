@@ -41,4 +41,4 @@ export OMPI_MCA_io="ompio"
 # Making sure all nodes have matplotlib
 mpiexec --map-by ppr:1:node -np $PBS_NNODES  python3 -c "import matplotlib.pyplot as plt"
 # Run the main simulation
-mpiexec -np $PBS_NCPUS python3 -c "from adjoint import *; conduct_inversion()" > inversion.log 2> warning.log
+mpiexec -np $PBS_NCPUS python3 -c "from adjoint import *; conduct_inversion()" > inversion_2.log 2> warning.log
