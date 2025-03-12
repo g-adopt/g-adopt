@@ -35,13 +35,13 @@ nlayers = 64
 
 
 def test_taping():
-    Tic, reduced_functional = forward_problem()
+    Tic, reduced_functional, _ = forward_problem()
     repeat_val = reduced_functional([Tic])
     log("Reduced Functional Repeat: ", repeat_val)
 
 
 def conduct_inversion():
-    Tic, reduced_functional = forward_problem()
+    Tic, reduced_functional, callback = forward_problem()
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
@@ -63,24 +63,13 @@ def conduct_inversion():
         checkpoint_dir="optimisation_checkpoint"
     )
 
-    # visualisation_path = find_last_checkpoint(
-    # ).resolve().parents[2] / "visual.pvd"
+    # Adding the callback function
+    optimiser.add_callback(callback)
 
-    # vtk_file = VTKFile(str(visualisation_path))
-    # control_container = Function(
-    #     Tic.function_space(), name="Initial Temperature")
+    # Restore from previous checkpoint 
+    optimiser.restore(7)
 
-    # def callback():
-    #     control_container.assign(Tic.block_variable.checkpoint.restore())
-    #     vtk_file.write(control_container)
-
-    # #
-    # optimiser.add_callback(callback)
-
-    # Restore from previous data
-    optimiser.restore()
-
-    # run the optimisation
+    # Run the optimisation
     optimiser.run()
 
 
@@ -288,6 +277,7 @@ def forward_problem():
 
     # Now perform the time loop:
     for timestep_index in tape.timestepper(iter(range(500))):
+        break
         # Update surface velocities
         updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
 
@@ -314,6 +304,7 @@ def forward_problem():
 
         if should_end_timestepping:
             break
+
 
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature").interpolate((T + tala_parameters_dict["Tbar"]) * Constant(3700.) + Constant(300.))
@@ -346,7 +337,23 @@ def forward_problem():
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
 
-    return Tic, ReducedFunctional(objective, control)
+    # Callback function to print out the misfit at the start and end of the optimisation
+    class MyCallbackClass(object):
+        def __init__(self):
+            cb_vis = VTKFile("./callback-vis") 
+            cb_control = Function(Tic.function_space(), name="control")
+            cb_state = Function(T.function_space(), name="state")
+
+        def __call__(self):
+            cb_control.interpolate(Tic.block_variable.checkpoint.restore()) 
+            cb_state.interpolate(T.block_variable.checkpoint.restore())
+            final_misfit = assemble((cb_state - T_obs) ** 2 * dx)
+
+            log(f"Final misfit: {final_misfit}")
+
+    
+
+    return Tic, ReducedFunctional(objective, control), MyCallbackClass()
 
 
 def generate_reference_fields():
