@@ -53,20 +53,19 @@ def conduct_inversion():
     minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
     minimisation_parameters["Status Test"]["Iteration Limit"] = 10
 
-    minimisation_problem = MinimizationProblem(
-        reduced_functional, bounds=(T_lb, T_ub))
+    minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
 
     # Start a LinMore Optimiser
     optimiser = LinMoreOptimiser(
         minimisation_problem,
         minimisation_parameters,
-        checkpoint_dir="optimisation_checkpoint"
+        checkpoint_dir="optimisation_checkpoint",
     )
 
     # Adding the callback function
     optimiser.add_callback(callback)
 
-    # Restore from previous checkpoint 
+    # Restore from previous checkpoint
     optimiser.restore(7)
 
     # Run the optimisation
@@ -91,7 +90,9 @@ def forward_problem():
     tape.clear_tape()
 
     # setting gc collection
-    tape.enable_checkpointing(SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2)
+    tape.enable_checkpointing(
+        SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2
+    )
 
     # Set up the base path
     base_path = Path(__file__).resolve().parent
@@ -111,7 +112,9 @@ def forward_problem():
 
     # Loading adiabatic reference fields
     tala_parameters_dict = {}
-    with CheckpointFile(str(base_path / "initial_condition_mat_prop/reference_fields.h5"), "r") as fi:
+    with CheckpointFile(
+        str(base_path / "initial_condition_mat_prop/reference_fields.h5"), "r"
+    ) as fi:
         for key in ["rhobar", "Tbar", "alphabar", "cpbar", "gbar", "mu_radial"]:
             tala_parameters_dict[key] = fi.load_function(mesh, name=key)
 
@@ -164,7 +167,7 @@ def forward_problem():
         nseeds=1e4,
         scaling_factor=1.0,
         oldest_age=1800,
-        delta_t=2.0
+        delta_t=2.0,
     )
 
     # Top velocity boundary condition
@@ -172,7 +175,7 @@ def forward_problem():
         V,
         gplates_connector=plate_reconstruction_model,
         top_boundary_marker=top_id,
-        name="GPlates_Velocity"
+        name="GPlates_Velocity",
     )
 
     # Setting up the approximation
@@ -187,62 +190,67 @@ def forward_problem():
         g=tala_parameters_dict["gbar"],  # reference gravity
         H=Constant(9.93),  # reference thickness
         mu=mu,  # viscosity
-        kappa=Constant(3.0))
+        kappa=Constant(3.0),
+    )
 
     # Section: Setting up nullspaces
     # Nullspaces for stokes contains only a constant nullspace for pressure, as the top boundary is
     # imposed. The nullspace is generate with closed=True(for pressure) and rotational=False
     # as there are no rotational nullspace for velocity.
     # .. note: For compressible formulations we only provide `transpose_nullspace`
-    Z_nullspace = create_stokes_nullspace(
-        Z, closed=True, rotational=False)
+    Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
     # The near nullspaces gor gamg always include rotational and translational modes
     Z_near_nullspace = create_stokes_nullspace(
-        Z, closed=False, rotational=True, translations=[0, 1, 2])
+        Z, closed=False, rotational=True, translations=[0, 1, 2]
+    )
 
     # Section: Setting boundary conditions
     # Temperature boundary conditions (constant)
     # for the top and bottom boundaries
     temp_bcs = {
-        bottom_id: {'T': 1.0 - 930. / 3700.},
-        top_id: {'T': 0.0},
+        bottom_id: {"T": 1.0 - 930.0 / 3700.0},
+        top_id: {"T": 0.0},
     }
     # Velocity boundary conditions
     stokes_bcs = {
-        top_id: {'u': gplates_velocities},
-        bottom_id: {'un': 0},
+        top_id: {"u": gplates_velocities},
+        bottom_id: {"un": 0},
     }
 
     # Constructing Energy and Stokes solver
     energy_solver = EnergySolver(
-        T, u, approximation, delta_t,
-        ImplicitMidpoint, bcs=temp_bcs)
+        T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
+    )
 
     # adjusting solver parameters
-    energy_solver.solver_parameters['ksp_converged_reason'] = None
-    energy_solver.solver_parameters['ksp_rtol'] = 1e-4
+    energy_solver.solver_parameters["ksp_converged_reason"] = None
+    energy_solver.solver_parameters["ksp_rtol"] = 1e-4
 
     # Stokes solver
     stokes_solver = StokesSolver(
-        z, T, approximation, bcs=stokes_bcs,
+        z,
+        T,
+        approximation,
+        bcs=stokes_bcs,
         constant_jacobian=False,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace)
+        near_nullspace=Z_near_nullspace,
+    )
 
     # tweaking solver parameters
-    stokes_solver.solver_parameters['snes_rtol'] = 1e-2
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-3
-    stokes_solver.solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-2
+    stokes_solver.solver_parameters["snes_rtol"] = 1e-2
+    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
+    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-3
+    stokes_solver.solver_parameters["fieldsplit_0"]["assembled_pc_gamg_threshold"] = -1
+    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
+    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-2
 
     # non-dimensionalised time for present geologic day (0)
-    presentday_ndtime = plate_reconstruction_model.age2ndtime(0.)
+    presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
 
     # non-dimensionalised time for 40 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(40.)
+    time = plate_reconstruction_model.age2ndtime(40.0)
 
     # Defining control
     control = Control(Tic)
@@ -270,8 +278,8 @@ def forward_problem():
     # timestep counter
     timestep_initial_phase = 3
     stokes_solve_frequency = 3
-    z.subfunctions[0].interpolate(as_vector((0., 0., 0.)))
-    z.subfunctions[1].interpolate(0.)
+    z.subfunctions[0].interpolate(as_vector((0.0, 0.0, 0.0)))
+    z.subfunctions[1].interpolate(0.0)
 
     should_end_timestepping = False
 
@@ -282,7 +290,11 @@ def forward_problem():
         updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
 
         # We only solve stokes every 3 timesteps or during initial phase
-        if timestep_index % stokes_solve_frequency == 0 or timestep_index < timestep_initial_phase or updated_plt_rec:
+        if (
+            timestep_index % stokes_solve_frequency == 0
+            or timestep_index < timestep_initial_phase
+            or updated_plt_rec
+        ):
             stokes_solver.solve()
 
         # If the surface velocity is updates, or it's initial time-steps, there is a high chance
@@ -305,9 +317,10 @@ def forward_problem():
         if should_end_timestepping:
             break
 
-
     # Converting temperature to full temperature and dimensionalising it
-    FullT = Function(Q, name="FullTemperature").interpolate((T + tala_parameters_dict["Tbar"]) * Constant(3700.) + Constant(300.))
+    FullT = Function(Q, name="FullTemperature").interpolate(
+        (T + tala_parameters_dict["Tbar"]) * Constant(3700.0) + Constant(300.0)
+    )
 
     # Temperature misfit between solution and observation
     # The upper-most 200 km (2.1386 non-dimensional) are mainly continental structure that we have not removed for now
@@ -340,18 +353,18 @@ def forward_problem():
     # Callback function to print out the misfit at the start and end of the optimisation
     class MyCallbackClass(object):
         def __init__(self):
-            cb_vis = VTKFile("./callback-vis") 
-            cb_control = Function(Tic.function_space(), name="control")
-            cb_state = Function(T.function_space(), name="state")
+            self.cb_vis = VTKFile("./callback-vis")
+            self.cb_control = Function(Tic.function_space(), name="control")
+            self.cb_state = Function(T.function_space(), name="state")
 
         def __call__(self):
-            cb_control.interpolate(Tic.block_variable.checkpoint.restore()) 
-            cb_state.interpolate(T.block_variable.checkpoint.restore())
-            final_misfit = assemble((cb_state - T_obs) ** 2 * dx)
+            self.cb_control.interpolate(Tic.block_variable.checkpoint.restore())
+            self.cb_state.interpolate(T.block_variable.checkpoint.restore())
+            final_misfit = assemble((self.cb_state - T_obs) ** 2 * dx)
+            # Writing out the vtk files
+            self.cb_vis.write(self.cb_state, self.cb_control)
 
             log(f"Final misfit: {final_misfit}")
-
-    
 
     return Tic, ReducedFunctional(objective, control), MyCallbackClass()
 
@@ -380,7 +393,10 @@ def generate_reference_fields():
     base_path = Path(__file__).resolve().parent
 
     # mesh/initial guess file is comming from a long-term simulation
-    mesh_path = base_path / "initial_condition_mat_prop/DG_GPlates_Late_2024_GPlates_2e8_Cao_C50_Final_State.h5"
+    mesh_path = (
+        base_path
+        / "initial_condition_mat_prop/DG_GPlates_Late_2024_GPlates_2e8_Cao_C50_Final_State.h5"
+    )
 
     # Name of the final output
     output_path = base_path / "REVEAL.pvd"
@@ -406,8 +422,12 @@ def generate_reference_fields():
 
     # Define a field on q for t_obs: THESE ARE ALL WITH DIMENSION
     T_obs = Function(Q, name="T_obs")  # This will be the "tomography temperature field"
-    T_ave_obs = Function(Q, name="T_ave_obs")  # Average of the raw tomography temperature field
-    T_ave_FullT = Function(Q, name="T_ave_FullT")  # Average that we trust coming from forward simulation
+    T_ave_obs = Function(
+        Q, name="T_ave_obs"
+    )  # Average of the raw tomography temperature field
+    T_ave_FullT = Function(
+        Q, name="T_ave_FullT"
+    )  # Average that we trust coming from forward simulation
 
     # FullT is T_simulation + Tbar
     FullT = Function(Q, name="FullTemperature")
@@ -421,14 +441,16 @@ def generate_reference_fields():
     Tbar = TALAdict["Tbar"]
 
     # We trust the increase in the adiabatic temperature, not the absolute values
-    Tbar.assign((Tbar - 1600.) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
+    Tbar.assign(
+        (Tbar - 1600.0) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"])
+    )
 
     # Full temperature field
     FullT.interpolate(T_simulation + Tbar)
 
     # Compute the depth field
     depth = Function(Q, name="depth").interpolate(
-        Constant(gdrift.R_earth) - sqrt(r[0]**2 + r[1]**2 + r[2]**2)
+        Constant(gdrift.R_earth) - sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
     )
 
     # Load the REVEAL model
@@ -436,37 +458,43 @@ def generate_reference_fields():
 
     # Filling the vsh and vsv fields with the values from the seismic model
     reveal_vsh_vsv = seismic_model.at(
-        label=["vsh", "vsv"],
-        coordinates=r.dat.data_with_halos)
-    vsh.dat.data_with_halos[:] = reveal_vsh_vsv[:, 0] * 1e3  # DROP when updating data in g-drift
-    vsv.dat.data_with_halos[:] = reveal_vsh_vsv[:, 1] * 1e3  # DROP when updating data in g-drift
+        label=["vsh", "vsv"], coordinates=r.dat.data_with_halos
+    )
+    vsh.dat.data_with_halos[:] = (
+        reveal_vsh_vsv[:, 0] * 1e3
+    )  # DROP when updating data in g-drift
+    vsv.dat.data_with_halos[:] = (
+        reveal_vsh_vsv[:, 1] * 1e3
+    )  # DROP when updating data in g-drift
 
     # Compute the isotropic velocity field
-    vs.interpolate(sqrt((2 * vsh ** 2 + vsv ** 2) / 3))
+    vs.interpolate(sqrt((2 * vsh**2 + vsv**2) / 3))
 
     # Average the isotropic velocity field over the layers, this will be useful for visualising devaitons from the average
     averager = LayerAveraging(mesh, quad_degree=6)
 
     # finding the depth and temperature average to be passed to the thermodynamic model for linearisation
     depth_ave_array = averager.get_layer_average(depth)
-    FullT_ave_array = averager.get_layer_average(FullT) * (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]) + nondim_parameters["T_surface"]
+    FullT_ave_array = (
+        averager.get_layer_average(FullT) * (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]) + nondim_parameters["T_surface"]
+    )
 
     # Compute the layer-averaged temperature from the "simulation temperature"
-    averager.extrapolate_layer_average(
-        T_ave_FullT, FullT_ave_array)
+    averager.extrapolate_layer_average(T_ave_FullT, FullT_ave_array)
 
     # Building the thermodynamic model, this is a regularised version of the SLB_16 pyrolite model using the temperature profile from simulation
-    anelastic_slb_pyrolite = build_thermodynamic_model(np.column_stack((depth_ave_array, FullT_ave_array)))
+    anelastic_slb_pyrolite = build_thermodynamic_model(
+        np.column_stack((depth_ave_array, FullT_ave_array))
+    )
 
     # Convert the shear wave speed to T_obs
     T_obs.dat.data_with_halos[:] = anelastic_slb_pyrolite.vs_to_temperature(
-        vs.dat.data_with_halos,
-        depth.dat.data_with_halos)
+        vs.dat.data_with_halos, depth.dat.data_with_halos
+    )
 
     # Compute the layer-averaged T_obs (Note: T_ave is what comes from thermodynamic conversion, which is comletely off)
     # Tobs is having a dimension
-    averager.extrapolate_layer_average(
-        T_ave_obs, averager.get_layer_average(T_obs))
+    averager.extrapolate_layer_average(T_ave_obs, averager.get_layer_average(T_obs))
 
     # Take the average out of the T_obs field and add the average from the Full simulation temperature
     T_obs.interpolate(T_obs - T_ave_obs + T_ave_FullT)
@@ -485,8 +513,7 @@ def generate_reference_fields():
 
     # Compute average of T_simulation for regularisation
     T_ave = Function(Q, name="T_ave_ref")
-    averager.extrapolate_layer_average(
-        T_ave, averager.get_layer_average(T_simulation))
+    averager.extrapolate_layer_average(T_ave, averager.get_layer_average(T_simulation))
 
     # Output for visualisation
     output = VTKFile(output_path.with_suffix(".pvd"))
@@ -500,7 +527,9 @@ def generate_reference_fields():
         fi.save_function(T_simulation, name="T_ic_0")
 
     # Storing all the reference fields for the TALA approximation
-    with CheckpointFile("initial_condition_mat_prop/reference_fields.h5", mode="w") as fi:
+    with CheckpointFile(
+        "initial_condition_mat_prop/reference_fields.h5", mode="w"
+    ) as fi:
         fi.save_mesh(mesh)
         for item in TALAdict.keys():
             fi.save_function(TALAdict[item], name=item)
@@ -518,14 +547,17 @@ def first_call_value(predefined_value):
             return func(self, *args, **kwargs)
 
         return wrapper
+
     return decorator
 
 
 def find_last_checkpoint():
     try:
         checkpoint_dir = Path.cwd().resolve() / "optimisation_checkpoint"
-        solution_dir = sorted(checkpoint_dir.glob(
-            "[0-9]*/solution_checkpoint.h5"), key=lambda x: int(x.parent.name))[-1]
+        solution_dir = sorted(
+            checkpoint_dir.glob("[0-9]*/solution_checkpoint.h5"),
+            key=lambda x: int(x.parent.name),
+        )[-1]
         solution_path = solution_dir
     except Exception:
         solution_path = None
@@ -550,7 +582,7 @@ def mu_constructor(mu_radial, Tave, T):
     """
 
     # Adding temperature dependence:
-    delta_mu_T = Constant(1000.)
+    delta_mu_T = Constant(1000.0)
     mu_lin = mu_radial * exp(-ln(delta_mu_T) * (T - Tave))
 
     # coordinates
@@ -572,42 +604,57 @@ def TALA_parameters(function_space):
     # radial density field
     rhobar = Function(function_space, name="CompRefDensity")
     interpolate_1d_profile(
-        function=rhobar, one_d_filename="initial_condition_mat_prop/rhobar.txt")
+        function=rhobar, one_d_filename="initial_condition_mat_prop/rhobar.txt"
+    )
     rhobar.assign(rhobar / nondim_parameters["rho"])
 
     # radial reference temperature field
     Tbar = Function(function_space, name="CompRefTemperature")
     interpolate_1d_profile(
-        function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt")
+        function=Tbar, one_d_filename="initial_condition_mat_prop/Tbar.txt"
+    )
     # We trust the increase in the adiabatic temperature
-    Tbar.assign((Tbar - 1600.) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"]))
+    Tbar.assign(
+        (Tbar - 1600.0) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"])
+    )
 
     # radial thermal expansivity field
     alphabar = Function(function_space, name="IsobaricThermalExpansivity")
     interpolate_1d_profile(
-        function=alphabar, one_d_filename="initial_condition_mat_prop/alphabar.txt")
+        function=alphabar, one_d_filename="initial_condition_mat_prop/alphabar.txt"
+    )
     alphabar.assign(alphabar / nondim_parameters["alpha"])
 
     # radial specific heat capacity field
     cpbar = Function(function_space, name="IsobaricSpecificHeatCapacity")
     interpolate_1d_profile(
-        function=cpbar, one_d_filename="initial_condition_mat_prop/CpSIbar.txt")
+        function=cpbar, one_d_filename="initial_condition_mat_prop/CpSIbar.txt"
+    )
     cpbar.assign(cpbar / nondim_parameters["cp"])
 
     # radial gravity
     gbar = Function(function_space, name="GravitationalAcceleration")
     interpolate_1d_profile(
-        function=gbar, one_d_filename="initial_condition_mat_prop/gbar.txt")
+        function=gbar, one_d_filename="initial_condition_mat_prop/gbar.txt"
+    )
     gbar.assign(gbar / nondim_parameters["g"])
 
     mu_radial = Function(function_space, name="mu_radial")
 
     base_path = Path(__file__).resolve().parent
 
-    interpolate_1d_profile(mu_radial, str(
-        base_path.parent / "gplates_global/mu2_radial.rad"))
+    interpolate_1d_profile(
+        mu_radial, str(base_path.parent / "gplates_global/mu2_radial.rad")
+    )
 
-    return {"rhobar": rhobar, "Tbar": Tbar, "alphabar": alphabar, "cpbar": cpbar, "gbar": gbar, "mu_radial": mu_radial}
+    return {
+        "rhobar": rhobar,
+        "Tbar": Tbar,
+        "alphabar": alphabar,
+        "cpbar": cpbar,
+        "gbar": gbar,
+        "mu_radial": mu_radial,
+    }
 
 
 def build_thermodynamic_model(temperature_profile_array):
@@ -619,13 +666,19 @@ def build_thermodynamic_model(temperature_profile_array):
         depth=temperature_profile_array[:, 0],
         value=temperature_profile_array[:, 1],
         name="T_average",
-        extrapolate=True
+        extrapolate=True,
     )
 
     # Regularise the thermodynamic model
     regular_slb_pyrolite = gdrift.regularise_thermodynamic_table(
-        slb_pyrolite, terra_temperature_spline,
-        regular_range={"v_s": (-1.5, 0.0), "v_p": (-np.inf, 0.0), "rho": (-np.inf, 0.0)})
+        slb_pyrolite,
+        terra_temperature_spline,
+        regular_range={
+            "v_s": (-1.5, 0.0),
+            "v_p": (-np.inf, 0.0),
+            "rho": (-np.inf, 0.0),
+        },
+    )
 
     # building solidus model
     solidus_ghelichkhan = build_solidus()
@@ -634,7 +687,8 @@ def build_thermodynamic_model(temperature_profile_array):
 
     # Apply the anelasticity correction to the regularised thermodynamic model
     anelastic_slb_pyrolite = gdrift.apply_anelastic_correction(
-        regular_slb_pyrolite, anelasticity)
+        regular_slb_pyrolite, anelasticity
+    )
 
     return anelastic_slb_pyrolite
 
@@ -644,7 +698,8 @@ def build_solidus():
     # Defining the solidus curve for manlte
     andrault_solidus = gdrift.RadialEarthModelFromFile(
         model_name="1d_solidus_Andrault_et_al_2011_EPSL",
-        description="Andrault et al 2011 EPSL")
+        description="Andrault et al 2011 EPSL",
+    )
 
     # Defining parameters for Cammarano style anelasticity model
     hirsch_solidus = gdrift.HirschmannSolidus()
@@ -662,7 +717,8 @@ def build_solidus():
         depth=np.asarray(my_depths),
         value=np.asarray(my_solidus),
         name="Ghelichkhan et al 2021",
-        extrapolate=True)
+        extrapolate=True,
+    )
 
     return ghelichkhan_et_al
 
