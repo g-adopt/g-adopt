@@ -353,18 +353,21 @@ def forward_problem():
     # Callback function to print out the misfit at the start and end of the optimisation
     class MyCallbackClass(object):
         def __init__(self):
-            self.cb_vis = VTKFile("./callback-vis")
+            self.cb_vis = VTKFile("./callback-vis.pvd")
             self.cb_control = Function(Tic.function_space(), name="control")
             self.cb_state = Function(T.function_space(), name="state")
+            self.idx = 1
 
         def __call__(self):
+            log("Tic: ", self.idx, dir(Tic.block_variable.checkpoint))
+            log("T: ", self.idx, dir(T.block_variable.checkpoint))
+            self.idx += 1
             self.cb_control.interpolate(Tic.block_variable.checkpoint.restore())
-            self.cb_state.interpolate(T.block_variable.checkpoint.restore())
+            self.cb_state.interpolate(T.block_variable.checkpoint)
             final_misfit = assemble((self.cb_state - T_obs) ** 2 * dx)
             # Writing out the vtk files
-            self.cb_vis.write(self.cb_state, self.cb_control)
+            self.cb_vis.write(self.cb_state, self.cb_control, T_obs)
 
-            log(f"Final misfit: {final_misfit}")
 
     return Tic, ReducedFunctional(objective, control), MyCallbackClass()
 
