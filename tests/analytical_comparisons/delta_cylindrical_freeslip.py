@@ -164,7 +164,6 @@ def model(level, nn, do_write=False):
         -solution_lower.radial_stress_cartesian(xyi) for xyi in pxy.dat.data
     ]
     sigma_anal.interpolate(marker * sigma_anal_lower + (1 - marker) * sigma_anal_upper)
-    InteriorBC(Q1DG, 0.0, boundary.top).apply(sigma_anal)
     sigma_error = Function(Q1DG, name="NormalStressError").assign(sigma_dg - sigma_anal)
 
     if do_write:
