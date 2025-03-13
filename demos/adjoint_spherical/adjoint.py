@@ -409,18 +409,15 @@ def generate_reference_fields():
     base_path = Path(__file__).resolve().parent
 
     # mesh/initial guess file is comming from a long-term simulation
-    mesh_path = (
-        base_path
-        / "initial_condition_mat_prop/DG_GPlates_Late_2024_GPlates_2e8_Cao_C50_Final_State.h5"
-    )
+    mesh_path = base_path / "runs/01_inverse/optimisation_checkpoint/8/solution_checkpoint.h5"
 
     # Name of the final output
-    output_path = base_path / "REVEAL.pvd"
+    output_path = base_path / "REVEAL_restart.pvd"
 
     # Load mesh from checkpoint
     with CheckpointFile(str(mesh_path), mode="r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
-        T_simulation = f.load_function(mesh, name="Temperature")
+        T_simulation = f.load_function(mesh, name="dat_0")
 
     mesh.cartesian = False
 
@@ -460,6 +457,15 @@ def generate_reference_fields():
     Tbar.assign(
         (Tbar - 1600.0) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"])
     )
+
+    # Smoothen the initial_condition a little bit
+    smoother = DiffusiveSmoothingSolver(
+        function_space=Q,
+        wavelength=0.05,
+        bcs={"bottom": {"T": T_simulation}, "top": {"T": T_simulation}},
+        solver_parameters=iterative_energy_solver_parameters,
+    )
+    T_simulation.assign(smoother.action(T_simulation))
 
     # Full temperature field
     FullT.interpolate(T_simulation + Tbar)
