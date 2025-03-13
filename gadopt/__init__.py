@@ -17,6 +17,7 @@ from .level_set_tools import signed_distance as signed_distance
 from .limiter import VertexBasedP1DGLimiter as VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC as FreeSurfaceMassInvPC
 from .preconditioners import SPDAssembledPC as SPDAssembledPC
+from .stokes_integrators import BoundaryNormalStressSolver as BoundaryNormalStressSolver
 from .stokes_integrators import InternalVariableSolver as InternalVariableSolver
 from .stokes_integrators import StokesSolver as StokesSolver
 from .stokes_integrators import ViscoelasticSolver as ViscoelasticSolver

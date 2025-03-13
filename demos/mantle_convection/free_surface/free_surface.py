@@ -119,6 +119,8 @@ z.subfunctions[0].rename("Velocity")
 z.subfunctions[1].rename("Pressure")
 z.subfunctions[2].rename("eta")
 
+sigma_top = Function(W, name="Surface normal stress")
+
 # As with the base case we specify the Boussinesq approximation and the Rayleigh
 # number for the simulation.
 
@@ -218,6 +220,10 @@ energy_solver = EnergySolver(
 stokes_solver = StokesSolver(
     z, approximation, T, coupled_tstep=delta_t, theta=0.5, bcs=stokes_bcs
 )
+
+normal_stress_solver = BoundaryNormalStressSolver(
+    sigma_top, approximation, z, boundary.top, Ra_bdy=1e5
+)
 # -
 
 # Now let's run the simulation!
@@ -225,13 +231,14 @@ stokes_solver = StokesSolver(
 for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
-        output_file.write(*z.subfunctions, T)
+        output_file.write(*z.subfunctions, T, sigma_top)
 
     dt = t_adapt.update_timestep()
     time += dt
 
     # Solve Stokes sytem:
     stokes_solver.solve()
+    normal_stress_solver.solve()
 
     # Temperature system:
     energy_solver.solve()

@@ -100,13 +100,11 @@ def model(level, k, nn, do_write=False):
 
     # compute u analytical and error
     uxy = Function(V).interpolate(as_vector((X[0], X[1])))
-    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
     u_anal = Function(V, name="AnalyticalVelocity")
     u_anal.dat.data[:] = [solution.velocity_cartesian(xyi) for xyi in uxy.dat.data]
     u_error = Function(V, name="VelocityError").assign(u_ - u_anal)
 
     # compute p analytical and error
-    pxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
     pxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
     p_anal = Function(W, name="AnalyticalPressure")
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]

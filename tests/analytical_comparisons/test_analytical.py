@@ -70,8 +70,8 @@ def test_analytical(name, expected, config):
         for level in levels
     ]
 
-    cols_anal = ["l2anal_u", "l2anal_p"]
-    cols_err = ["l2error_u", "l2error_p"]
+    cols_anal = ["l2anal_u", "l2anal_p", "l2anal_sigma"]
+    cols_err = ["l2error_u", "l2error_p", "l2error_sigma"]
     if name.split("/")[-1] == "free_surface":
         cols_anal.append("l2anal_eta")
         cols_err.append("l2error_eta")

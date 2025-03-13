@@ -115,7 +115,6 @@ def model(level, nn, do_write=False):
 
     # compute u analytical and error
     uxy = Function(V).interpolate(as_vector((X[0], X[1])))
-    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
     u_anal_upper = Function(V, name="AnalyticalVelocityUpper")
     u_anal_lower = Function(V, name="AnalyticalVelocityLower")
     u_anal = Function(V, name="AnalyticalVelocity")
@@ -129,8 +128,6 @@ def model(level, nn, do_write=False):
     u_error = Function(V, name="VelocityError").assign(u_ - u_anal)
 
     # compute p analytical and error
-    pxy = Function(Q1DGvec).interpolate(as_vector((X[0], X[1])))
-    pdg = Function(Q1DG).interpolate(p)
     pxy = Function(Q1DGvec).interpolate(as_vector((X[0], X[1])))
     pdg = Function(Q1DG).interpolate(p)
     p_anal_upper = Function(Q1DG, name="AnalyticalPressureUpper")

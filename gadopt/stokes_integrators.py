@@ -641,6 +641,82 @@ class InternalVariableSolver(MassMomentumBase):
             )
 
 
+class BoundaryNormalStressSolver:
+    r"""Calculates the normal stress experienced at a boundary.
+
+    This solver computes topography on boundaries using the equation
+
+    $$ h = \frac{\sigma_{rr}}{g \delta \rho} $$
+
+    where $\sigma_{rr}$ is defined as
+
+    $$ \sigma_{rr} = [-p I + 2 * \mu (\nabla u + \nabla u^T)] \cdot \hat{n} \cdot \hat{n} $$
+
+    Instead of assuming a unit normal vector $\hat{n}$, this solver uses Firedrake's
+    `FacetNormal` to accurately determine the normal vectors, which is particularly
+    useful, for example, for icosahedron meshes in spherical simulations.
+
+    Args:
+      solution:
+        Firedrake function representing the normal stress
+      stokes_solution:
+        Firedrake function holding velocity and pressure fields
+      boundary_id:
+        An integer or a string denoting the ID of a physical boundary
+      Ra_bdy:
+        A float denoting the Rayleigh number at the boundary
+      solver_parameters:
+        Dictionary of PETSc solver options
+    """
+
+    def __init__(
+        self,
+        solution: Function,
+        approximation: Approximation,
+        stokes_solution: Function,
+        boundary_id: int | str,
+        *,
+        Ra_bdy: float = 1.0,
+        solver_parameters: dict[str, str | Number] | str | None = None,
+    ) -> None:
+        self.solution = solution
+        solution_space = solution.function_space()
+        mesh = solution_space.mesh()
+
+        test = TestFunction(solution_space)
+        trial = TrialFunction(solution_space)
+        n = FacetNormal(mesh)
+
+        u, p = split(stokes_solution)[:2]
+        stress = approximation.stress(u)
+        pressure = p * Identity(mesh.geometric_dimension())
+
+        if mesh.extruded and boundary_id in ["top", "bottom"]:
+            self.ds = ds_t if boundary_id == "top" else ds_b
+        else:
+            self.ds = ds(boundary_id)
+
+        # Setting up the variational problem
+        a = test * trial * self.ds
+        L = -test * dot(dot(n, stress - pressure), n) / Ra_bdy * self.ds
+        # The calculated stress lives on the specified boundary only
+        self.interior_null_bc = InteriorBC(solution_space, 0, boundary_id)
+
+        problem = LinearVariationalProblem(
+            a, L, self.solution, bcs=self.interior_null_bc, constant_jacobian=True
+        )
+        self.solver = LinearVariationalSolver(
+            problem, solver_parameters=solver_parameters
+        )
+
+    def solve(self) -> None:
+        self.solver.solve()
+
+        # Remove the average stress and set the interior to zero
+        self.solution.assign(self.solution - assemble(self.solution * self.ds))
+        self.interior_null_bc.apply(self.solution)
+
+
 def create_stokes_nullspace(
     Z: functionspaceimpl.WithGeometry,
     closed: bool = True,
