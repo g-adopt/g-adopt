@@ -155,10 +155,9 @@ def forward_problem():
 
     if last_checkpoint_path is not None:
         with CheckpointFile(str(last_checkpoint_path), "r") as fi:
-            Tic.assign(fi.load_function(mesh, name="dat_0"))
+            Tic.interpolate(fi.load_function(mesh, name="dat_0"))
     else:
         Tic.interpolate(T_simulation)
-    # Tic.interpolate(T_simulation)
 
     # Information pertaining to the plate reconstruction model
     cao_2024_files = ensure_reconstruction("Cao 2024", str(base_path / "gplates_files"))
@@ -355,28 +354,33 @@ def forward_problem():
             # Placeholder for control and FullT
             self.cb_control = Function(Tic.function_space(), name="control")
             self.cb_state = Function(T.function_space(), name="state")
-            self.idx = 1
+
+            # Initial index
+            self.idx = 0
 
         def __call__(self):
-            self.idx += 1
             # Interpolating control
-            self.cb_control.interpolate(Tic.block_variable.checkpoint.restore())
-            # Interpolating final state
-            # we have to make sure T has "restore" method
-            self.cb_state.interpolate(
-                FullT.block_variable.checkpoint.restore()
-                if isinstance(FullT.block_variable.checkpoint, CheckpointBase)
-                else FullT.block_variable.checkpoint
+            self.cb_control.interpolate(
+                return_block_variable_checkpoint(Tic.block_variable)
             )
+
+            # Interpolating final state
+            self.cb_state.interpolate(
+                return_block_variable_checkpoint(FullT.block_variable)
+            )
+
             final_misfit = assemble((self.cb_state - T_obs) ** 2 * dx)
             log(f"Final Misfit part: {final_misfit}")
 
             # Writing out functions and mesh
-            checkpoint_fi = CheckpointFile(f"callback_{self.idx}.h5", mode="w")
-            checkpoint_fi.save_mesh(self.cb_control.mesh)
-            checkpoint_fi.save_functione(self.cb_state)
-            checkpoint_fi.save_functione(self.cb_control)
-            checkpoint_fi.save_functione(T_obs)
+            with CheckpointFile(f"callback_{self.idx}.h5", mode="w") as checkpoint_fi:
+                checkpoint_fi.save_mesh(mesh)
+                checkpoint_fi.save_function(self.cb_state)
+                checkpoint_fi.save_function(self.cb_control)
+                checkpoint_fi.save_function(T_obs)
+
+            # Increasing index
+            self.idx += 1
 
     return Tic, ReducedFunctional(objective, control), MyCallbackClass()
 
@@ -766,3 +770,11 @@ def get_dimensional_parameters():
 
 def tanh_transition(x, x_0, k=1000):
     return 0.5 * (1 - tanh(k * (x - x_0)))
+
+
+def return_block_variable_checkpoint(a_block_variable):
+    return (
+        a_block_variable.checkpoint.restore()
+        if isinstance(a_block_variable.checkpoint, CheckpointBase)
+        else a_block_variable.checkpoint
+    )
