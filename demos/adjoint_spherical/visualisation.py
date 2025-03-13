@@ -5,7 +5,7 @@ from pathlib import Path
 allfiles = Path("./").glob("callback_*.h5")
 # Sort them
 all_callback_files = sorted(
-    [i for i in Path("./").glob("callback*")],
+    [i for i in Path("./").glob("callback*.h5")],
     key=lambda x: x.stem.split("_"[-1])
 )
 # Get the mesh for now
@@ -30,7 +30,7 @@ for filename in all_callback_files:
     with CheckpointFile(filename.as_posix(), mode="r") as fi:
         control.interpolate(fi.load_function(mesh, name="control"))
         state.interpolate(fi.load_function(mesh, name="state"))
-        Tobs.interpolate(fi.load_function(mesh, name="observation"))
+        Tobs.interpolate(fi.load_function(mesh, name="Tobs"))
         averager.extrapolate_layer_average(Tave, averager.get_layer_average(Tobs))
 
     vtk_fi.write(control, state, Tobs)
