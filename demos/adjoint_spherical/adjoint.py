@@ -7,6 +7,7 @@ from pathlib import Path
 import gdrift
 from gdrift.profile import SplineProfile
 from checkpoint_schedules import SingleDiskStorageSchedule
+from firedrake.adjoint_utils import CheckpointBase
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -61,6 +62,8 @@ def conduct_inversion():
         minimisation_parameters,
         checkpoint_dir="optimisation_checkpoint",
     )
+
+    callback()
 
     # Adding the callback function
     optimiser.add_callback(callback)
@@ -290,11 +293,7 @@ def forward_problem():
         updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
 
         # We only solve stokes every 3 timesteps or during initial phase
-        if (
-            timestep_index % stokes_solve_frequency == 0
-            or timestep_index < timestep_initial_phase
-            or updated_plt_rec
-        ):
+        if (timestep_index % stokes_solve_frequency == 0 or timestep_index < timestep_initial_phase or updated_plt_rec):
             stokes_solver.solve()
 
         # If the surface velocity is updates, or it's initial time-steps, there is a high chance
@@ -353,21 +352,31 @@ def forward_problem():
     # Callback function to print out the misfit at the start and end of the optimisation
     class MyCallbackClass(object):
         def __init__(self):
-            self.cb_vis = VTKFile("./callback-vis.pvd")
+            # Placeholder for control and FullT
             self.cb_control = Function(Tic.function_space(), name="control")
             self.cb_state = Function(T.function_space(), name="state")
             self.idx = 1
 
         def __call__(self):
-            log("Tic: ", self.idx, dir(Tic.block_variable.checkpoint))
-            log("T: ", self.idx, dir(T.block_variable.checkpoint))
             self.idx += 1
+            # Interpolating control
             self.cb_control.interpolate(Tic.block_variable.checkpoint.restore())
-            self.cb_state.interpolate(T.block_variable.checkpoint)
+            # Interpolating final state
+            # we have to make sure T has "restore" method
+            self.cb_state.interpolate(
+                FullT.block_variable.checkpoint.restore()
+                if isinstance(FullT.block_variable.checkpoint, CheckpointBase)
+                else FullT.block_variable.checkpoint
+            )
             final_misfit = assemble((self.cb_state - T_obs) ** 2 * dx)
-            # Writing out the vtk files
-            self.cb_vis.write(self.cb_state, self.cb_control, T_obs)
+            log(f"Final Misfit part: {final_misfit}")
 
+            # Writing out functions and mesh
+            checkpoint_fi = CheckpointFile(f"callback_{self.idx}.h5", mode="w")
+            checkpoint_fi.save_mesh(self.cb_control.mesh)
+            checkpoint_fi.save_functione(self.cb_state)
+            checkpoint_fi.save_functione(self.cb_control)
+            checkpoint_fi.save_functione(T_obs)
 
     return Tic, ReducedFunctional(objective, control), MyCallbackClass()
 
