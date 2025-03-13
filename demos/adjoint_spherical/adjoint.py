@@ -409,7 +409,7 @@ def generate_reference_fields():
     base_path = Path(__file__).resolve().parent
 
     # mesh/initial guess file is comming from a long-term simulation
-    mesh_path = base_path / "runs/01_inverse/optimisation_checkpoint/8/solution_checkpoint.h5"
+    mesh_path = base_path / "runs/01_inverse/optimisation_checkpoint/7/solution_checkpoint.h5"
 
     # Name of the final output
     output_path = base_path / "REVEAL_restart.pvd"
