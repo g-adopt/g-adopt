@@ -4,7 +4,9 @@ import numpy as np
 from firedrake.adjoint_utils import blocks
 from pathlib import Path
 import gc
+from firedrake.adjoint_utils import CheckpointBase
 # from memory_profiler import profile
+from checkpoint_schedules import SingleDiskStorageSchedule
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -29,16 +31,6 @@ def collect_garbage(func):
     return wrapper
 
 
-blocks.solving.Block.evaluate_adj = collect_garbage(blocks.solving.Block.evaluate_adj)
-blocks.solving.Block.recompute = collect_garbage(blocks.solving.Block.recompute)
-
-# timer decorator for fwd and derivative calls.
-ReducedFunctional.func_call = profile(ReducedFunctional.__call__)
-ReducedFunctional.derivative = profile(ReducedFunctional.derivative)
-ReducedFunctional.func_call = collect_garbage(ReducedFunctional.func_call)
-ReducedFunctional.derivative = collect_garbage(ReducedFunctional.derivative)
-
-
 # Set up geometry:
 rmax, rmin, ncells, nlayers = 2.22, 1.22, 32, 8
 
@@ -57,7 +49,7 @@ def test_taping():
 
 
 def conduct_inversion():
-    Tic, reduced_functional = forward_problem()
+    Tic, reduced_functional, callback = forward_problem()
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
@@ -78,6 +70,8 @@ def conduct_inversion():
         minimisation_parameters,
         checkpoint_dir="optimisation_checkpoint"
     )
+    callback()
+    optimiser.add_callback(callback)
 
     # run the optimisation
     optimiser.run()
@@ -98,6 +92,11 @@ def forward_problem():
 
     # Enable disk checkpointing for the adjoint
     enable_disk_checkpointing()
+
+    # setting gc collection
+    tape.enable_checkpointing(
+        SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2
+    )
 
     # Set up the base path
     base_path = Path(__file__).resolve().parent
@@ -254,6 +253,7 @@ def forward_problem():
 
         # Temperature system:
         energy_solver.solve()
+        break
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - T_obs) ** 2 * dx)
@@ -263,6 +263,26 @@ def forward_problem():
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
+
+    # Callback function to print out the misfit at the start and end of the optimisation
+    class MyCallbackClass(object):
+        def __init__(self):
+            # Placeholder for control and FullT
+            self.cb_control = Function(Tic.function_space(), name="control")
+            self.cb_state = Function(T.function_space(), name="state")
+
+            # Initial index
+            self.idx = 0
+            self.block_variable = T.block_variable
+
+        def __call__(self):
+            log(type(T.block_variable.checkpoint))
+            # Increasing index
+            self.idx += 1
+    callback = MyCallbackClass()
+    return Tic, ReducedFunctional(objective, control), callback
+
+
 
     return Tic, ReducedFunctional(objective, control)
 
@@ -398,9 +418,14 @@ def get_dimensional_parameters():
     }
 
 
+def return_block_variable_checkpoint(a_block_variable):
+    print(type(a_block_variable))
+    return (
+        a_block_variable.checkpoint.restore()
+        if isinstance(a_block_variable.checkpoint, CheckpointBase)
+        else a_block_variable.checkpoint
+    )
+
+
 if __name__ == "__main__":
-    # generate_reference_fields()
-    # test_taping()
-    # conduct_taylor_test()
-    # conduct_inversion()
-    just_forward_adjoint_calls(5)
+    conduct_inversion()
