@@ -74,6 +74,7 @@ jobs:
         with:
           repository: dsroberts/tsp_for_hpc
           path: ./tsp
+          ref: v1.0.0
 
       - name: Build task spooler
         uses: threeal/cmake-action@v2
