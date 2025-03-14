@@ -1,7 +1,7 @@
 #PBS -N 40Myrs
 #PBS -P xd2
 #PBS -q normalsr
-#PBS -l walltime=24:00:00
+#PBS -l walltime=01:00:00
 #PBS -l mem=10000GB
 #PBS -l ncpus=2080
 #PBS -l jobfs=7200GB
@@ -42,4 +42,5 @@ export OMPI_MCA_io="ompio"
 mpiexec --map-by ppr:1:node -np $PBS_NNODES  python3 -c "import matplotlib.pyplot as plt"
 
 # Run the main simulation
-mpiexec -np $PBS_NCPUS bash -c "export PYTHONPYCACHEPREFIX=$PBS_JOBFS/PYCACHE/rank_\$OMPI_COMM_WORLD_RANK; python3 -c 'from adjoint import *; conduct_inversion()'" > inversion_2.log 2> warning.log
+# mpiexec -np $PBS_NCPUS bash -c "export PYTHONPYCACHEPREFIX=$PBS_JOBFS/PYCACHE/rank_\$OMPI_COMM_WORLD_RANK; python3 -c 'from adjoint import *; visualise_derivative()'" > inversion_2.log 2> warning.log
+mpiexec -np $PBS_NCPUS bash -c "export PYTHONPYCACHEPREFIX=$PBS_JOBFS/PYCACHE/rank_\$OMPI_COMM_WORLD_RANK; python3 -c 'from adjoint import *; conduct_inversion()'" > inversion.log 2> warning.log

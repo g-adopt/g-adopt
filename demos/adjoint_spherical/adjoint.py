@@ -35,6 +35,14 @@ ref_level = 7
 nlayers = 64
 
 
+def visualise_derivative():
+    Tic, reduced_functional, _ = forward_problem()
+    my_der = reduced_functional.derivative()
+    my_der.rename("derivative_d")
+    my_fi = VTKFile("derivative_d.pvd")
+    my_fi.write(my_der)
+
+
 def test_taping():
     Tic, reduced_functional, _ = forward_problem()
     repeat_val = reduced_functional([Tic])
@@ -49,7 +57,7 @@ def conduct_inversion():
     T_lb = Function(Tic.function_space(), name="Lower bound temperature")
     T_ub = Function(Tic.function_space(), name="Upper bound temperature")
     T_lb.assign(0.0)
-    T_ub.assign(1.0)
+    T_ub.assign(0.76)
 
     minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
     minimisation_parameters["Status Test"]["Iteration Limit"] = 10
@@ -69,14 +77,14 @@ def conduct_inversion():
     optimiser.add_callback(callback)
 
     # Restore from previous checkpoint
-    optimiser.restore(7)
+    # optimiser.restore(7)
 
     # Run the optimisation
     optimiser.run()
 
 
 def conduct_taylor_test():
-    Tic, reduced_functional = forward_problem()
+    Tic, reduced_functional, _ = forward_problem()
     Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
     Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
     _ = taylor_test(reduced_functional, Tic, Delta_temp)
@@ -141,7 +149,7 @@ def forward_problem():
 
     # Set up temperature field and initialise:
     Tic = Function(Q1, name="Tic")
-    T_0 = Function(Q, name="T_0")  # initial timestep
+    T_0 = Function(Q1, name="T_0")  # initial timestep
     T = Function(Q, name="Temperature")
 
     # Viscosity is a function of temperature and radial position (i.e. axi-symmetric field)
@@ -265,7 +273,7 @@ def forward_problem():
         solver_parameters=iterative_solver_parameters,
         forward_kwargs={"solver_parameters": iterative_solver_parameters},
         adj_kwargs={"solver_parameters": iterative_solver_parameters},
-        bcs=energy_solver.strong_bcs,
+        bcs=[DirichletBC(Q1, 0., top_id), DirichletBC(Q1, 1.0 - 930.0 / 3700.0, bottom_id)],
     )
 
     project(
@@ -274,7 +282,7 @@ def forward_problem():
         solver_parameters=iterative_solver_parameters,
         forward_kwargs={"solver_parameters": iterative_solver_parameters},
         adj_kwargs={"solver_parameters": iterative_solver_parameters},
-        bcs=energy_solver.strong_bcs,
+        bcs=[DirichletBC(Q1, 0., top_id), DirichletBC(Q1, 1.0 - 930.0 / 3700.0, bottom_id)],
     )
 
     # timestep counter
@@ -287,7 +295,6 @@ def forward_problem():
 
     # Now perform the time loop:
     for timestep_index in tape.timestepper(iter(range(500))):
-        break
         # Update surface velocities
         updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
 
@@ -321,22 +328,24 @@ def forward_problem():
     )
 
     # Temperature misfit between solution and observation
-    # The upper-most 200 km (2.1386 non-dimensional) are mainly continental structure that we have not removed for now
-    # So we leave them intact in the initial guess, and do not apply any information there
     t_misfit = assemble((FullT - T_obs) ** 2 * dx)
     norm_t_misfit = assemble((T_obs) ** 2 * dx)
 
-    # # Regularisation part of the objective
-    # smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
-    # norm_smoothing = assemble(inner(grad(T_obs - T_ave), grad(T_obs - T_ave)) * dx)
-    # log(f"Magnitudes: R_norm={norm_smoothing}, T_norm={norm_t_misfit}, R={smoothing}, T={t_misfit}")
+    # Smoothing term
+    smoothing_weight = 3e-3
+    smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
+    norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
 
-    # # We want to weight the smoothing down not to affect the final solution
-    # weight_smoothin = 1e-2
-    # # Assembling the objective
-    # regularisation_weight = 1e5
-    # objective = t_misfit / norm_t_misfit  + regularisation_weight * smoothing / norm_smoothing
-    objective = t_misfit / norm_t_misfit
+    # Damping term
+    damping_weight = 5e-2
+    damping = assemble((T_0 - T_ave) ** 2 * dx)
+    norm_damping = assemble(T_ave ** 2 * dx)
+
+    # Assembling the objective
+    # objective = t_misfit / norm_t_misfit  # In case of temperature only term
+    # objective = damping_weight * damping / norm_damping
+    # objective = smoothing_weight * smoothing / norm_smoothing  # In case of smoothing only
+    objective = t_misfit / norm_t_misfit  + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
@@ -409,7 +418,7 @@ def generate_reference_fields():
     base_path = Path(__file__).resolve().parent
 
     # mesh/initial guess file is comming from a long-term simulation
-    mesh_path = base_path / "runs/01_inverse/optimisation_checkpoint/7/solution_checkpoint.h5"
+    mesh_path = base_path / "initial_condition_mat_prop/DG_GPlates_Late_2024_GPlates_2e8_Cao_C50_Final_State.h5"
 
     # Name of the final output
     output_path = base_path / "REVEAL_restart.pvd"
@@ -417,7 +426,7 @@ def generate_reference_fields():
     # Load mesh from checkpoint
     with CheckpointFile(str(mesh_path), mode="r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
-        T_simulation = f.load_function(mesh, name="dat_0")
+        T_simulation_DQ = f.load_function(mesh, name="Temperature")
 
     mesh.cartesian = False
 
@@ -435,13 +444,9 @@ def generate_reference_fields():
 
     # Define a field on q for t_obs: THESE ARE ALL WITH DIMENSION
     T_obs = Function(Q, name="T_obs")  # This will be the "tomography temperature field"
-    T_ave_obs = Function(
-        Q, name="T_ave_obs"
-    )  # Average of the raw tomography temperature field
-    T_ave_FullT = Function(
-        Q, name="T_ave_FullT"
-    )  # Average that we trust coming from forward simulation
-
+    T_simulation = Function(Q, name="T_simulation")
+    T_ave_obs = Function(Q, name="T_ave_obs")  # Average of the raw tomography temperature field
+    T_ave_FullT = Function(Q, name="T_ave_FullT")  # Average that we trust coming from forward simulation
     # FullT is T_simulation + Tbar
     FullT = Function(Q, name="FullTemperature")
 
@@ -452,19 +457,17 @@ def generate_reference_fields():
 
     # radial reference temperature field
     Tbar = TALAdict["Tbar"]
-
-    # We trust the increase in the adiabatic temperature, not the absolute values
-    Tbar.assign(
-        (Tbar - 1600.0) / (nondim_parameters["T_CMB"] - nondim_parameters["T_surface"])
-    )
+    T_simulation.interpolate(T_simulation_DQ)
 
     # Smoothen the initial_condition a little bit
     smoother = DiffusiveSmoothingSolver(
-        function_space=Q,
+        function_space=T_simulation.function_space(),
         wavelength=0.05,
         bcs={"bottom": {"T": T_simulation}, "top": {"T": T_simulation}},
         solver_parameters=iterative_energy_solver_parameters,
     )
+
+    # The action of smoothing
     T_simulation.assign(smoother.action(T_simulation))
 
     # Full temperature field
@@ -539,7 +542,7 @@ def generate_reference_fields():
 
     # Output for visualisation
     output = VTKFile(output_path.with_suffix(".pvd"))
-    output.write(T_obs, T_ave_FullT, vs, FullT)
+    output.write(T_obs, T_ave, T_simulation)
 
     # Write out the file
     with CheckpointFile(str(output_path.with_suffix(".h5")), mode="w") as fi:
