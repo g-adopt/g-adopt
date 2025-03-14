@@ -49,7 +49,7 @@ def test_taping():
 
 
 def conduct_inversion():
-    Tic, reduced_functional, callback = forward_problem()
+    Tic, reduced_functional = forward_problem()
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
@@ -70,8 +70,6 @@ def conduct_inversion():
         minimisation_parameters,
         checkpoint_dir="optimisation_checkpoint"
     )
-    callback()
-    optimiser.add_callback(callback)
 
     # run the optimisation
     optimiser.run()
@@ -275,12 +273,13 @@ def forward_problem():
             self.idx = 0
             self.block_variable = T.block_variable
 
-        def __call__(self):
-            log(type(T.block_variable.checkpoint))
+        def __call__(self, f, c):
+            self.cb_control.interpolate(c)
             # Increasing index
             self.idx += 1
+
     callback = MyCallbackClass()
-    return Tic, ReducedFunctional(objective, control), callback
+    return Tic, ReducedFunctional(objective, control, eval_cb_post=MyCallbackClass())
 
 
 
