@@ -36,7 +36,7 @@ nlayers = 64
 
 
 def visualise_derivative():
-    Tic, reduced_functional, _ = forward_problem()
+    Tic, reduced_functional = forward_problem()
     my_der = reduced_functional.derivative()
     my_der.rename("derivative_d")
     my_fi = VTKFile("derivative_d.pvd")
@@ -44,13 +44,13 @@ def visualise_derivative():
 
 
 def test_taping():
-    Tic, reduced_functional, _ = forward_problem()
+    Tic, reduced_functional = forward_problem()
     repeat_val = reduced_functional([Tic])
     log("Reduced Functional Repeat: ", repeat_val)
 
 
 def conduct_inversion():
-    Tic, reduced_functional, callback = forward_problem()
+    Tic, reduced_functional = forward_problem()
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
@@ -71,10 +71,8 @@ def conduct_inversion():
         checkpoint_dir="optimisation_checkpoint",
     )
 
-    callback()
-
     # Adding the callback function
-    optimiser.add_callback(callback)
+    # optimiser.add_callback(callback)
 
     # Restore from previous checkpoint
     # optimiser.restore(7)
@@ -362,36 +360,26 @@ def forward_problem():
         def __init__(self):
             # Placeholder for control and FullT
             self.cb_control = Function(Tic.function_space(), name="control")
-            self.cb_state = Function(T.function_space(), name="state")
 
             # Initial index
             self.idx = 0
 
-        def __call__(self):
+        def __call__(self, functional, control):
             # Interpolating control
-            self.cb_control.interpolate(
-                return_block_variable_checkpoint(Tic.block_variable)
-            )
-
-            # Interpolating final state
-            self.cb_state.interpolate(
-                return_block_variable_checkpoint(FullT.block_variable)
-            )
-
-            final_misfit = assemble((self.cb_state - T_obs) ** 2 * dx)
-            log(f"Final Misfit part: {final_misfit}")
+            self.cb_control.interpolate(control)
+            log(f"Final Misfit part: {functional}")
 
             # Writing out functions and mesh
             with CheckpointFile(f"callback_{self.idx}.h5", mode="w") as checkpoint_fi:
                 checkpoint_fi.save_mesh(mesh)
-                checkpoint_fi.save_function(self.cb_state)
                 checkpoint_fi.save_function(self.cb_control)
                 checkpoint_fi.save_function(T_obs)
 
             # Increasing index
             self.idx += 1
+    eval_cb = MyCallbackClass()
 
-    return Tic, ReducedFunctional(objective, control), MyCallbackClass()
+    return Tic, ReducedFunctional(objective, control, eval_cb_post=eval_cb)
 
 
 def generate_reference_fields():
@@ -779,11 +767,3 @@ def get_dimensional_parameters():
 
 def tanh_transition(x, x_0, k=1000):
     return 0.5 * (1 - tanh(k * (x - x_0)))
-
-
-def return_block_variable_checkpoint(a_block_variable):
-    return (
-        a_block_variable.checkpoint.restore()
-        if isinstance(a_block_variable.checkpoint, CheckpointBase)
-        else a_block_variable.checkpoint
-    )
