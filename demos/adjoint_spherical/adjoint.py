@@ -7,6 +7,7 @@ import gc
 from firedrake.adjoint_utils import CheckpointBase
 # from memory_profiler import profile
 from checkpoint_schedules import SingleDiskStorageSchedule
+from pyadjoint import Block
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -253,6 +254,8 @@ def forward_problem():
         energy_solver.solve()
         break
 
+    tape.add_block(DiagnosticBlock(T))
+
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - T_obs) ** 2 * dx)
 
@@ -262,7 +265,6 @@ def forward_problem():
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
 
-    # Callback function to print out the misfit at the start and end of the optimisation
     class MyCallbackClass(object):
         def __init__(self):
             # Placeholder for control and FullT
@@ -280,8 +282,6 @@ def forward_problem():
 
     callback = MyCallbackClass()
     return Tic, ReducedFunctional(objective, control, eval_cb_post=MyCallbackClass())
-
-
 
     return Tic, ReducedFunctional(objective, control)
 
@@ -426,5 +426,36 @@ def return_block_variable_checkpoint(a_block_variable):
     )
 
 
+class DiagnosticBlock(Block):
+    """
+    Useful for outputting gradients in time dependent simulations or inversions
+    """
+
+    def __init__(self, function):
+        """Initialises the Diagnostic block.
+
+        Args:
+          function:
+            Calculate gradient of reduced functional wrt to this function.
+            Dictionary specifying riesz represenation (defaults to L2).
+        """
+        super().__init__()
+        self.add_dependency(function)
+        self.add_output(function.block_variable)
+        self.f_name = function.name()
+        self.idx = 0
+
+    def recompute_component(self, inputs, block_variable, idx, prepared):
+        fi = CheckpointFile(f"FinalState{self.idx}.h5", mode="w")
+        fi.save_mesh(block_variable.checkpoint.ufl_domain())
+        fi.save_function(block_variable.checkpoint, name="Temperature")
+        self.idx += 1
+        return
+
+    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
+        return
+
+
 if __name__ == "__main__":
-    conduct_inversion()
+    # conduct_inversion()
+    forward_problem()
