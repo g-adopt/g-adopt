@@ -280,7 +280,7 @@ def forward_problem():
         solver_parameters=iterative_solver_parameters,
         forward_kwargs={"solver_parameters": iterative_solver_parameters},
         adj_kwargs={"solver_parameters": iterative_solver_parameters},
-        bcs=[DirichletBC(Q1, 0., top_id), DirichletBC(Q1, 1.0 - 930.0 / 3700.0, bottom_id)],
+        bcs=[DirichletBC(Q, 0., top_id), DirichletBC(Q, 1.0 - 930.0 / 3700.0, bottom_id)],
     )
 
     # timestep counter
@@ -343,7 +343,7 @@ def forward_problem():
     # objective = t_misfit / norm_t_misfit  # In case of temperature only term
     # objective = damping_weight * damping / norm_damping
     # objective = smoothing_weight * smoothing / norm_smoothing  # In case of smoothing only
-    objective = t_misfit / norm_t_misfit + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping
+    objective = 1e3 * (t_misfit / norm_t_misfit + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping)
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
@@ -367,7 +367,7 @@ def forward_problem():
         def __call__(self, functional, control):
             # Interpolating control
             self.cb_control.interpolate(control)
-            log(f"Final Misfit part: {functional}")
+            log(f"Functional coming from callback: {functional}")
 
             # Writing out functions and mesh
             with CheckpointFile(f"callback_{self.idx}.h5", mode="w") as checkpoint_fi:
@@ -377,6 +377,7 @@ def forward_problem():
 
             # Increasing index
             self.idx += 1
+
     eval_cb = MyCallbackClass()
 
     return Tic, ReducedFunctional(objective, control, eval_cb_post=eval_cb)
