@@ -307,7 +307,7 @@ def forward_problem():
         if timestep_index < timestep_initial_phase or updated_plt_rec:
             delta_t.assign(1e-10)
         else:
-            delta_t.assign(2e-7)
+            delta_t.assign(3e-7)
 
         # Make sure we are not going past present day
         if presentday_ndtime - time < float(delta_t):
@@ -332,7 +332,7 @@ def forward_problem():
     norm_t_misfit = assemble((T_obs) ** 2 * dx)
 
     # Smoothing term
-    smoothing_weight = 3e-3
+    smoothing_weight = 4e-3
     smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
     norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
 
@@ -345,7 +345,7 @@ def forward_problem():
     # objective = t_misfit / norm_t_misfit  # In case of temperature only term
     # objective = damping_weight * damping / norm_damping
     # objective = smoothing_weight * smoothing / norm_smoothing  # In case of smoothing only
-    objective = t_misfit / norm_t_misfit  + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping
+    objective = t_misfit / norm_t_misfit + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
