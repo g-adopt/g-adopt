@@ -7,7 +7,7 @@ from pathlib import Path
 import gdrift
 from gdrift.profile import SplineProfile
 from checkpoint_schedules import SingleDiskStorageSchedule
-from firedrake.adjoint_utils import CheckpointBase
+from pyadjoint import Block
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -320,10 +320,13 @@ def forward_problem():
         if should_end_timestepping:
             break
 
+
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature").interpolate(
         (T + tala_parameters_dict["Tbar"]) * Constant(3700.0) + Constant(300.0)
     )
+
+    tape.add_block(DiagnosticBlock(FullT))
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((FullT - T_obs) ** 2 * dx)
@@ -768,3 +771,33 @@ def get_dimensional_parameters():
 
 def tanh_transition(x, x_0, k=1000):
     return 0.5 * (1 - tanh(k * (x - x_0)))
+
+
+class DiagnosticBlock(Block):
+    """
+    Useful for outputting gradients in time dependent simulations or inversions
+    """
+
+    def __init__(self, function):
+        """Initialises the Diagnostic block.
+
+        Args:
+          function:
+            Calculate gradient of reduced functional wrt to this function.
+            Dictionary specifying riesz represenation (defaults to L2).
+        """
+        super().__init__()
+        self.add_dependency(function)
+        self.add_output(function.block_variable)
+        self.f_name = function.name()
+        self.idx = 0
+
+    def recompute_component(self, inputs, block_variable, idx, prepared):
+        fi = CheckpointFile(f"FinalState_{self.idx}.h5", mode="w")
+        fi.save_mesh(block_variable.checkpoint.ufl_domain())
+        fi.save_function(block_variable.checkpoint, name="Temperature")
+        self.idx += 1
+        return
+
+    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
+        return
