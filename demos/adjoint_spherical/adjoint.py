@@ -367,10 +367,9 @@ def forward_problem():
             # Initial index
             self.idx = 0
 
-        def __call__(self, functional, control):
+        def __call__(self, control):
             # Interpolating control
             self.cb_control.interpolate(control)
-            log(f"Functional coming from callback: {functional}")
 
             # Writing out functions and mesh
             with CheckpointFile(f"callback_{self.idx}.h5", mode="w") as checkpoint_fi:
@@ -383,7 +382,7 @@ def forward_problem():
 
     eval_cb = MyCallbackClass()
 
-    return Tic, ReducedFunctional(objective, control, eval_cb_post=eval_cb)
+    return Tic, ReducedFunctional(objective, control, eval_cb_pre=eval_cb)
 
 
 def generate_reference_fields():
