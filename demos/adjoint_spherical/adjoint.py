@@ -778,25 +778,29 @@ class DiagnosticBlock(Block):
     Useful for outputting gradients in time dependent simulations or inversions
     """
 
-    def __init__(self, function):
+    def __init__(self, function, function_ref):
         """Initialises the Diagnostic block.
-
-        Args:
-          function:
-            Calculate gradient of reduced functional wrt to this function.
-            Dictionary specifying riesz represenation (defaults to L2).
         """
         super().__init__()
         self.add_dependency(function)
+        self.add_dependency(function_ref)
         self.add_output(function.block_variable)
+        self.func_ref = function_ref
         self.f_name = function.name()
-        self.idx = 0
+        self.my_idx = 0
 
     def recompute_component(self, inputs, block_variable, idx, prepared):
-        fi = CheckpointFile(f"FinalState_{self.idx}.h5", mode="w")
-        fi.save_mesh(block_variable.checkpoint.ufl_domain())
-        fi.save_function(block_variable.checkpoint, name="Temperature")
-        self.idx += 1
+        is_on_disk = hasattr(block_variable.checkpoint, "restore")
+        function_to_write = block_variable.checkpoint.restore() if is_on_disk else block_variable.checkpoint
+
+        functional_value = assemble((function_to_write - self.func_ref)**2 * dx)
+
+        log(f"Temperature difference: {functional_value}")
+
+        fi = CheckpointFile(f"FinalState{self.my_idx}.h5", mode="w")
+        fi.save_mesh(function_to_write.ufl_domain())
+        fi.save_function(function_to_write, name="Temperature")
+        self.my_idx += 1
         return
 
     def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
