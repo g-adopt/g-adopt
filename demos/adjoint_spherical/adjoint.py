@@ -326,19 +326,19 @@ def forward_problem():
         (T + tala_parameters_dict["Tbar"]) * Constant(3700.0) + Constant(300.0)
     )
 
-    tape.add_block(DiagnosticBlock(FullT))
+    tape.add_block(DiagnosticBlock(FullT, T_obs))
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((FullT - T_obs) ** 2 * dx)
     norm_t_misfit = assemble((T_obs) ** 2 * dx)
 
     # Smoothing term
-    smoothing_weight = 4e-3
+    smoothing_weight = 2e-3
     smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
     norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
 
     # Damping term
-    damping_weight = 5e-2
+    damping_weight = 1e-2
     damping = assemble((T_0 - T_ave) ** 2 * dx)
     norm_damping = assemble(T_ave ** 2 * dx)
 
