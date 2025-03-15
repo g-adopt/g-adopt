@@ -8,6 +8,7 @@ from firedrake.adjoint_utils import CheckpointBase
 # from memory_profiler import profile
 from checkpoint_schedules import SingleDiskStorageSchedule
 from pyadjoint import Block
+from pdb import set_trace
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -254,7 +255,7 @@ def forward_problem():
         energy_solver.solve()
         break
 
-    tape.add_block(DiagnosticBlock(T))
+    tape.add_block(DiagnosticBlock(T, T_obs))
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((T - T_obs) ** 2 * dx)
@@ -431,7 +432,7 @@ class DiagnosticBlock(Block):
     Useful for outputting gradients in time dependent simulations or inversions
     """
 
-    def __init__(self, function):
+    def __init__(self, function, function_ref):
         """Initialises the Diagnostic block.
 
         Args:
@@ -441,15 +442,26 @@ class DiagnosticBlock(Block):
         """
         super().__init__()
         self.add_dependency(function)
+        self.add_dependency(function_ref)
         self.add_output(function.block_variable)
+        self.func_ref = function_ref
         self.f_name = function.name()
-        self.idx = 0
+        self.my_idx = 0
+        set_trace()
 
     def recompute_component(self, inputs, block_variable, idx, prepared):
-        fi = CheckpointFile(f"FinalState{self.idx}.h5", mode="w")
-        fi.save_mesh(block_variable.checkpoint.ufl_domain())
-        fi.save_function(block_variable.checkpoint, name="Temperature")
-        self.idx += 1
+        is_on_disk = hasattr(block_variable.checkpoint, "restore")
+        function_to_write = block_variable.checkpoint.restore() if is_on_disk else block_variable.checkpoint
+        set_trace()
+
+        functional_value = assemble((function_to_write - self.func_ref)**2 * dx)
+
+        log(f"Temperature difference: {functional_value}")
+
+        fi = CheckpointFile(f"FinalState{self.my_idx}.h5", mode="w")
+        fi.save_mesh(function_to_write.ufl_domain())
+        fi.save_function(function_to_write, name="Temperature")
+        self.my_idx += 1
         return
 
     def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
