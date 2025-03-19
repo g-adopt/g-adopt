@@ -54,6 +54,8 @@ def model(level, l, mm, k, do_write=False):
     z = Function(Z)  # a field over the mixed function space Z.
     u_, p_ = z.subfunctions
 
+    sigma = Function(W, name="Surface normal stress")
+
     # RHS provided by assess solution: rho'=r**k Y_lm
     solution = assess.SphericalStokesSolutionSmoothZeroSlip(
         float(l), float(m), float(k), nu=1.0, Rp=rmax, Rm=rmin, g=1.0
@@ -88,6 +90,10 @@ def model(level, l, mm, k, do_write=False):
     stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-10
     stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-9
 
+    normal_stress_solver = BoundaryNormalStressSolver(
+        sigma, approximation, z, boundary.top
+    )
+
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
     # and the RHS == 0.
     stokes_solver.solve()
@@ -108,6 +114,9 @@ def model(level, l, mm, k, do_write=False):
     coef = assemble(p_ * dx) / assemble(Constant(1.0) * dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
+    # Calculate surface normal stress given the solution of the Stokes problem
+    normal_stress_solver.solve()
+
     # compute u analytical and error
     uxzy = Function(V).interpolate(as_vector((X[0], X[1], X[2])))
     u_anal = Function(V, name="AnalyticalVelocity")
@@ -120,20 +129,32 @@ def model(level, l, mm, k, do_write=False):
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyzi) for xyzi in pxyz.dat.data]
     p_error = Function(W, name="PressureError").assign(p_ - p_anal)
 
+    # Compute analytical and error functions for the surface normal stress (note we are
+    # using the same space as pressure)
+    sigma_anal = Function(W, name="AnalyticalNormalStress")
+    sigma_anal.dat.data[:] = [
+        -solution.radial_stress_cartesian(xyzi) for xyzi in pxyz.dat.data
+    ]
+    sigma_error = Function(W, name="NormalStressError").assign(sigma - sigma_anal)
+
     if do_write:
         # Write output files in VTK format:
         u_.rename("Velocity")
         p_.rename("Pressure")
         u_file = VTKFile("zs_velocity_{}.pvd".format(level))
         p_file = VTKFile("zs_pressure_{}.pvd".format(level))
+        sigma_file = VTKFile("zs_normalstress_{}.pvd".format(level))
 
         # Write output:
         u_file.write(u_, u_anal, u_error)
         p_file.write(p_, p_anal, p_error)
+        sigma_file.write(sigma, sigma_anal, sigma_error)
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal) * dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal) * dx))
+    l2anal_sigma = numpy.sqrt(assemble(dot(sigma_anal, sigma_anal) * ds_t))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error) * dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error) * dx))
+    l2error_sigma = numpy.sqrt(assemble(dot(sigma_error, sigma_error) * ds_t))
 
-    return l2error_u, l2error_p, l2anal_u, l2anal_p
+    return l2error_u, l2error_p, l2error_sigma, l2anal_u, l2anal_p, l2anal_sigma

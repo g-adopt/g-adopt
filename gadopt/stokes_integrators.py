@@ -692,7 +692,7 @@ class BoundaryNormalStressSolver:
         pressure = p * Identity(mesh.geometric_dimension())
 
         if mesh.extruded and boundary_id in ["top", "bottom"]:
-            self.ds = ds_t if boundary_id == "top" else ds_b
+            self.ds = ds_t(domain=mesh) if boundary_id == "top" else ds_b(domain=mesh)
         else:
             self.ds = ds(boundary_id)
 
@@ -713,7 +713,8 @@ class BoundaryNormalStressSolver:
         self.solver.solve()
 
         # Remove the average stress and set the interior to zero
-        self.solution.assign(self.solution - assemble(self.solution * self.ds))
+        solution_average = assemble(self.solution * self.ds) / assemble(1 * self.ds)
+        self.solution.assign(self.solution - solution_average)
         self.interior_null_bc.apply(self.solution)
 
 

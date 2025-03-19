@@ -102,9 +102,6 @@ def model(level, nn, do_write=False):
     # and the RHS == 0.
     stokes_solver.solve()
 
-    # Calculate surface normal stress given the solution of the Stokes problem
-    normal_stress_solver.solve()
-
     # take out null modes through L2 projection from velocity and pressure
     # removing rotation from velocity:
     rot = as_vector((-X[1], X[0]))
@@ -114,6 +111,9 @@ def model(level, nn, do_write=False):
     # removing constant nullspace from pressure
     coef = assemble(p_ * dx) / assemble(Constant(1.0) * dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
+
+    # Calculate surface normal stress given the solution of the Stokes problem
+    normal_stress_solver.solve()
 
     solution_upper = assess.CylindricalStokesSolutionDeltaFreeSlip(
         float(nn), +1, nu=float(mu)
@@ -153,10 +153,9 @@ def model(level, nn, do_write=False):
 
     # Compute analytical and error functions for the surface normal stress (note we are
     # using the same space as pressure)
-    sigma_dg = Function(Q1DG).interpolate(sigma)
     sigma_anal_upper = Function(Q1DG, name="AnalyticalNormalStressUpper")
     sigma_anal_lower = Function(Q1DG, name="AnalyticalNormalStressLower")
-    sigma_anal = Function(Q1DG, name="AnalyticalNormalStress")
+    sigma_anal = Function(W, name="AnalyticalNormalStress")
     sigma_anal_upper.dat.data[:] = [
         -solution_upper.radial_stress_cartesian(xyi) for xyi in pxy.dat.data
     ]
@@ -164,7 +163,7 @@ def model(level, nn, do_write=False):
         -solution_lower.radial_stress_cartesian(xyi) for xyi in pxy.dat.data
     ]
     sigma_anal.interpolate(marker * sigma_anal_lower + (1 - marker) * sigma_anal_upper)
-    sigma_error = Function(Q1DG, name="NormalStressError").assign(sigma_dg - sigma_anal)
+    sigma_error = Function(W, name="NormalStressError").assign(sigma - sigma_anal)
 
     if do_write:
         # Write output files in VTK format:
