@@ -24,6 +24,7 @@ parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoin
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
+parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/", type=str, help="Optional output path", required=False)
 args = parser.parse_args()
 
 name = f"weerdesteijn-3d-internalvariable-{args.optional_name}"
@@ -356,17 +357,17 @@ coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=sto
 # Create output file
 OUTPUT = args.write_output
 if OUTPUT:
-    output_file = VTKFile("output.pvd")
+    output_file = VTKFile(args.output_path+"output.pvd")
     output_file.write(*z.subfunctions)
 
-plog = ParameterLog("/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/params.log", mesh)
+plog = ParameterLog(args.output_path+"params.log", mesh)
 plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
 )
 
-checkpoint_filename = f"/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
+checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
 
-displacement_filename = f"/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.dat"
+displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.dat"
 
 # Initial displacement at time zero is zero
 displacement_min_array = [[0.0, 0.0]]
