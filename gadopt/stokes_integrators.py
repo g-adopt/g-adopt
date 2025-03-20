@@ -694,7 +694,7 @@ class BoundaryNormalStressSolver:
         if mesh.extruded and boundary_id in ["top", "bottom"]:
             self.ds = ds_t(domain=mesh) if boundary_id == "top" else ds_b(domain=mesh)
         else:
-            self.ds = ds(boundary_id)
+            self.ds = ds(boundary_id, domain=mesh)
 
         # Setting up the variational problem
         a = test * trial * self.ds

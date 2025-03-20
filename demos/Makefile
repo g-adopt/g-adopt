@@ -29,7 +29,7 @@ clean:
 	rm -rf __pycache__
 	@$(foreach demo,$(all_demo_paths),$(MAKE) -C $(demo) $(MAKECMDGOALS);)
 
-check:
+check: $(all_demo_paths)
 	python3 -m pytest -m demo
 
 # pattern rule for executing demo scripts as a notebook
