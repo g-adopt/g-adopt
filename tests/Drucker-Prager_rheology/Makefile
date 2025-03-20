@@ -1,10 +1,16 @@
+include ../../rules.mk
+
 cases := $(shell python3 test_spiegelman.py)
 
-all: $(cases)
+.PHONY: all clean check
 
-$(cases): spiegelman.py
-	echo "running spiegelman $@" >&2
-	/usr/bin/time --format="spiegelman $@ finished in %E" tsp -f python3 $< $@
+all: $(addprefix spiegelman_,$(cases))
+
+spiegelman_% : category := Drucker-Prager_rheology
+spiegelman_% : exec_args = $*
+spiegelman_% : desc = $(exec_args)
+spiegelman_%: spiegelman.py
+	$(run-python)
 
 clean:
 	rm -rf __pycache__

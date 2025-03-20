@@ -1,12 +1,13 @@
+include ../../../rules.mk
+
+.PHONY: all clean check
+
 all: params.log
 
-demo_type := $(notdir $(realpath $(dir $(CURDIR))))
-demo_name := $(notdir $(CURDIR))
-ncpus := 4
-
+params.log : category := $(demo_type)
+params.log : ncpus := 4
 params.log: $(demo_name).py
-	$(info running $<)
-	/usr/bin/time --format="$< finished in %E" tsp -L mantle_convection -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log

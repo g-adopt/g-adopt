@@ -1,14 +1,14 @@
 include ../makefile.demos.inc
 
-.PHONY: all $(gia_demos)
+.PHONY: all $(gia_demos) clean check
 
 all: $(gia_demos)
 
 $(gia_demos):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
+	$(MAKE) -C $@
 
 clean:
 	@$(foreach demo,$(gia_demos),$(MAKE) -C $(demo) $(MAKECMDGOALS);)
 
-check:
+check: $(gia_demos)
 	python -m pytest ../test_all.py -k $(gia_dir)

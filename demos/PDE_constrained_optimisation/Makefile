@@ -1,10 +1,14 @@
+include ../../rules.mk
+
 cases := functional_boundary.txt functional_field.txt
+
+.PHONY: all clean check
 
 all: $(cases)
 
-functional_%.txt: PDE_constrained_%.py
-	$(info running $<)
-	/usr/bin/time --format="$@ finished in %E" tsp -f python3 $<
+functional_%.txt : category := pde_constrained
+$(cases): functional_%.txt: PDE_constrained_%.py
+	$(run-python)
 
 clean:
 	rm $(cases) *.h5

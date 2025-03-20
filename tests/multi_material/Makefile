@@ -1,13 +1,19 @@
+include ../../rules.mk
+
 cases := $(wildcard benchmarks/*)
 archive := output_0_reference.npz
 outputs := $(foreach case,$(cases),$(case)/${archive})
-ncpus := 4
+
+.PHONY: all clean check
 
 all: $(outputs)
 
-%/${archive}:
-	$(info running $(notdir $(realpath $(dir $@))) multi-material benchmark)
-	tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 run_benchmark.py $(dir $@) --without-plot
+%/${archive} : category := multi_material
+%/${archive} : ncpus := 4
+%/${archive} : exec_cmd = mpiexec -np $(ncpus) python3 run_benchmark.py $(dir $@) --without-plot
+%/${archive} : desc = $*
+%/${archive}: run_benchmark.py
+	$(run-python)
 
 clean:
 	rm -rf __pycache__

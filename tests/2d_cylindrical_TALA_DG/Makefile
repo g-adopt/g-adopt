@@ -1,11 +1,13 @@
-demo_name := $(notdir $(CURDIR))
-ncpus := 16
+include ../../rules.mk
+
+.PHONY: all clean check
 
 all: params.log
 
+params.log : category := tests
+params.log : ncpus := 16
 params.log: $(demo_name).py
-	$(info running $<)
-	/usr/bin/time --format="$< finished in %E" tsp -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
