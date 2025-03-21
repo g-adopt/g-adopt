@@ -86,7 +86,7 @@ jobs:
 
       - name: Put task spooler on PATH
         run: |
-          mv tsp_build/tsp-hpc /home/firedrake/.local/bin/tsp
+          mv tsp_build/tsp-hpc /usr/local/bin/tsp
 
       - name: Install Python dependencies
         run: |
@@ -114,9 +114,6 @@ jobs:
           source create_library.sh
           cp *.so ../../tests/multi_material
         shell: bash
-
-      - name: Fix HOME environment variable
-        run: echo "HOME=/home/firedrake" >> "$GITHUB_ENV"
 
       - name: Run test
         id: run_tests
