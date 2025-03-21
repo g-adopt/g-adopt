@@ -54,12 +54,12 @@ def assert_function_space(
             degree
         )
     else:  # assume 2D mesh
-        assert (
-            ufl_elem.family() in fam_list
-        ), "function space must be one of {:s}".format(fam_list)
-        assert (
-            ufl_elem.degree() == degree
-        ), "degree of function space must be {:d}".format(degree)
+        assert ufl_elem.family() in fam_list, (
+            "function space must be one of {:s}".format(fam_list)
+        )
+        assert ufl_elem.degree() == degree, (
+            "degree of function space must be {:d}".format(degree)
+        )
 
 
 def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
@@ -104,9 +104,9 @@ def get_facet_mask(
 
     # get base element
     elem = get_extruded_base_element(function_space.ufl_element())
-    assert isinstance(
-        elem, TensorProductElement
-    ), f"function space must be defined on an extruded 3D mesh: {elem}"
+    assert isinstance(elem, TensorProductElement), (
+        f"function space must be defined on an extruded 3D mesh: {elem}"
+    )
     # figure out number of nodes in sub elements
     h_elt, v_elt = function_space.finat_element.factors
     nb_nodes_h = h_elt.space_dimension()
@@ -155,9 +155,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         self.mesh = self.P0.mesh()
         self.dim = self.mesh.geometric_dimension()
         self.extruded = hasattr(self.mesh.ufl_cell(), "sub_cells")
-        assert (
-            not self.extruded or len(p1dg_space.ufl_element().sub_elements) > 0
-        ), "Extruded mesh requires extruded function space"
+        assert not self.extruded or len(p1dg_space.ufl_element().sub_elements) > 0, (
+            "Extruded mesh requires extruded function space"
+        )
         assert not self.extruded or all(
             e.variant() == "equispaced" for e in p1dg_space.ufl_element().sub_elements
         ), "Extruded function space must be equivariant"

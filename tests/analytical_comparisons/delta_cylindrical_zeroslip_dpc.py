@@ -43,6 +43,7 @@ def model(level, nn, do_write=False):
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
     W = FunctionSpace(mesh, "DPC", 1)  # pressure function space (scalar)
+    N = FunctionSpace(mesh, "CG", 1)  # normal stress function space (scalar)
     P0 = FunctionSpace(mesh, "DQ", 0)  # used for marker field
     Q1DG = FunctionSpace(mesh, "DQ", 1)  # used for analytical (disc.) pressure solution
     # for coordinates used in analytical pressure solution
@@ -57,7 +58,7 @@ def model(level, nn, do_write=False):
     u, p = split(z)
     u_, p_ = z.subfunctions
 
-    sigma = Function(W, name="Surface normal stress")
+    sigma = Function(N, name="Surface normal stress")
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
@@ -155,7 +156,7 @@ def model(level, nn, do_write=False):
     # using the same space as pressure)
     sigma_anal_upper = Function(Q1DG, name="AnalyticalNormalStressUpper")
     sigma_anal_lower = Function(Q1DG, name="AnalyticalNormalStressLower")
-    sigma_anal = Function(W, name="AnalyticalNormalStress")
+    sigma_anal = Function(N, name="AnalyticalNormalStress")
     sigma_anal_upper.dat.data[:] = [
         -solution_upper.radial_stress_cartesian(xyi) for xyi in pxy.dat.data
     ]
@@ -163,7 +164,7 @@ def model(level, nn, do_write=False):
         -solution_lower.radial_stress_cartesian(xyi) for xyi in pxy.dat.data
     ]
     sigma_anal.interpolate(marker * sigma_anal_lower + (1 - marker) * sigma_anal_upper)
-    sigma_error = Function(W, name="NormalStressError").assign(sigma - sigma_anal)
+    sigma_error = Function(N, name="NormalStressError").assign(sigma - sigma_anal)
 
     if do_write:
         # Write output files in VTK format:

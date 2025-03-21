@@ -21,7 +21,15 @@ from .momentum_equation import (
     residual_terms_stokes,
 )
 from .scalar_equation import mass_term, residual_terms_internal_variable
-from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, vertical_component
+from .utility import (
+    DEBUG,
+    INFO,
+    InteriorBC,
+    depends_on,
+    is_continuous,
+    log_level,
+    vertical_component,
+)
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -679,6 +687,9 @@ class BoundaryNormalStressSolver:
         Ra_bdy: float = 1.0,
         solver_parameters: dict[str, str | Number] | str | None = None,
     ) -> None:
+        if not is_continuous(solution):
+            raise TypeError("Normal stress must live on a continuous function space.")
+
         self.solution = solution
         solution_space = solution.function_space()
         mesh = solution_space.mesh()

@@ -96,7 +96,9 @@ def test_recover_from_checkpoint(mesh_name, ndim, args):
 # Only handle cases currently seen in tests and demos
 def test_extruded_mesh_interval_to_rectangle():
     mesh1d = fd.IntervalMesh(20, length_or_left=0.0, right=1.0)
-    mesh = fd.ExtrudedMesh(mesh1d, layers=20, layer_height=0.05, extrusion_type="uniform")
+    mesh = fd.ExtrudedMesh(
+        mesh1d, layers=20, layer_height=0.05, extrusion_type="uniform"
+    )
     boundary = get_boundary_ids(mesh)
     assert boundary.left == 1
     assert boundary.right == 2
@@ -122,8 +124,12 @@ def test_extruded_mesh_square_to_cube():
 
 def test_extruded_mesh_circle_to_cylinder():
     rmin, ncells, nlayers = 1.22, 32, 8
-    mesh1d = fd.CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
-    mesh = fd.ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")  # extrude into a cylinder
+    mesh1d = fd.CircleManifoldMesh(
+        ncells, radius=rmin, degree=2
+    )  # construct a circle mesh
+    mesh = fd.ExtrudedMesh(
+        mesh1d, layers=nlayers, extrusion_type="radial"
+    )  # extrude into a cylinder
     boundary = get_boundary_ids(mesh)
     assert boundary.bottom == "bottom"
     assert boundary.top == "top"

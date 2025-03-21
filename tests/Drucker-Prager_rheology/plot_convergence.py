@@ -13,7 +13,7 @@ mu0 = 1e22
 
 
 def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
-    output_dir = f"spiegelman_{float(U0)}_{float(mu1*mu0)}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
+    output_dir = f"spiegelman_{float(U0)}_{float(mu1 * mu0)}_{nx}_{ny}_{picard_iterations}_{stabilisation}"
     residuals = [
         float(line[4:]) for line in open(os.path.join(output_dir, "picard.txt"))
     ]
@@ -52,7 +52,7 @@ for ui, mui, mu_latex in zip(
     plt.axis([0, 50, 1e-14, 1])
     plt.legend()
     ax = plt.gca()
-    ax.set_title(rf"$U_0={ui*1000}$ mm/yr, $\eta_1={mu_latex}$ Pa$\,$s")
+    ax.set_title(rf"$U_0={ui * 1000}$ mm/yr, $\eta_1={mu_latex}$ Pa$\,$s")
     plt.xlabel("Picard/Newton Iterations")
     plt.ylabel(r"Residual $\alpha$")
     plt.savefig(f"spiegelman_{nx}_{ny}_{ui}_{mui}.pdf")
