@@ -51,7 +51,7 @@ jobs:
 
     steps:
       - name: Fix HOME
-        run: echo "HOME=/root" >> "$GITHUB_ENV"
+        run: echo "HOME=/home/ubuntu" >> "$GITHUB_ENV"
       - name: Install prerequisites
         env:
           S3CONFIG: ${{ secrets.S3CONFIG }}
