@@ -48,10 +48,9 @@ jobs:
       OMP_NUM_THREADS: 1
       OMPI_ALLOW_RUN_AS_ROOT: 1
       OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+      HOME: /home/ubuntu
 
     steps:
-      - name: Fix HOME
-        run: echo "HOME=/home/ubuntu" >> "$GITHUB_ENV"
       - name: Install prerequisites
         env:
           S3CONFIG: ${{ secrets.S3CONFIG }}
