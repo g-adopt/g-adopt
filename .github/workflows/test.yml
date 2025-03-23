@@ -51,6 +51,11 @@ jobs:
       HOME: /home/ubuntu
 
     steps:
+      - name: Whats going on here?
+        run: |
+          whoami
+          ls -ld /__w/
+          ls -ld /__w/temp
       - name: Install prerequisites
         env:
           S3CONFIG: ${{ secrets.S3CONFIG }}
