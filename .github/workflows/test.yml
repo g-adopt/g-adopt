@@ -52,11 +52,12 @@ jobs:
         env:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
-          sudo apt update
-          sudo apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev
+          apt update
+          apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
+          git config --global safe.directory '*'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -85,7 +86,7 @@ jobs:
 
       - name: Put task spooler on PATH
         run: |
-          mv tsp_build/tsp-hpc /home/firedrake/.local/bin/tsp
+          mv tsp_build/tsp-hpc /usr/local/bin/tsp
 
       - name: Install Python dependencies
         run: |
@@ -113,9 +114,6 @@ jobs:
           source create_library.sh
           cp *.so ../../tests/multi_material
         shell: bash
-
-      - name: Fix HOME environment variable
-        run: echo "HOME=/home/firedrake" >> "$GITHUB_ENV"
 
       - name: Run test
         id: run_tests
