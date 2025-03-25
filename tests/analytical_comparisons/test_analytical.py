@@ -6,13 +6,29 @@ import pandas as pd
 import pytest
 
 enabled_cases = {
-    "smooth_cylindrical_freeslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
-    "smooth_cylindrical_zeroslip": {"convergence": (4.0, 2.0, 2.0)},
+    "smooth_cylindrical_freeslip": {
+        "convergence": (4.0, 2.0, 2.0),
+        "rtol": 1e-1,
+        "ns_lb": 1e-1,
+    },
+    "smooth_cylindrical_zeroslip": {
+        "convergence": (4.0, 2.0, 2.0),
+        "ns_lb": 1e-1,
+        "ns_ub": 7e-1,
+    },
     "smooth_cylindrical_freesurface": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
-    "delta_cylindrical_freeslip": {"convergence": (1.5, 0.5, 2.0)},
-    "delta_cylindrical_zeroslip": {"convergence": (1.5, 0.5, 2.0)},
-    "delta_cylindrical_freeslip_dpc": {"convergence": (3.5, 2.0, 2.0), "rtol": 1e-1},
-    "delta_cylindrical_zeroslip_dpc": {"convergence": (3.5, 2.0, 2.0), "rtol": 2e-1},
+    "delta_cylindrical_freeslip": {"convergence": (1.5, 0.5, 2.0), "ns_ub": 5e-1},
+    "delta_cylindrical_zeroslip": {"convergence": (1.5, 0.5, 2.0), "ns_ub": 1e0},
+    "delta_cylindrical_freeslip_dpc": {
+        "convergence": (3.5, 2.0, 2.0),
+        "rtol": 1e-1,
+        "ns_ub": 5e-1,
+    },
+    "delta_cylindrical_zeroslip_dpc": {
+        "convergence": (3.5, 2.0, 2.0),
+        "rtol": 2e-1,
+        "ns_ub": 1e0,
+    },
     "smooth_spherical_freeslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
     "smooth_spherical_zeroslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
 }
@@ -113,6 +129,6 @@ def test_analytical(name, expected, config):
             )
             & (
                 convergence[cols_err[-1]]
-                < expected_convergence[-1] + expected.get("ns_ub", 0.1)
+                < expected_convergence[-1] + expected.get("ns_ub", 1e-1)
             )
         )

@@ -8,7 +8,7 @@ all: params.log
 	gmsh -2 $<
 
 params.log : category := tests/gmsh
-params.log: base_case.py square.msh
+params.log: $(demo_name).py square.msh
 	$(run-python)
 
 clean:

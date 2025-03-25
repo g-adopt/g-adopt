@@ -12,7 +12,7 @@ $(cases): %: .sentinel.%
 $(sentinels) : category := scalar_advection_diffusion_DH27
 $(sentinels) : exec_args = $(subst .sentinel.,,$@)
 $(sentinels) : desc = $(exec_args)
-$(sentinels) : scalar_advection_diffusion_DH27.py
+$(sentinels): scalar_advection_diffusion_DH27.py
 	$(run-python)
 
 integrated_q.log : category := tests
@@ -25,7 +25,7 @@ integrated_q_DH219.log: scalar_advection_diffusion_DH219_skew.py
 
 clean:
 	rm -f *.dat .sentinel.* *.log
-	rm -rf CG* __pycache__
+	rm -rf CG* adv* __pycache__
 
 check: $(sentinels) integrated_q.log integrated_q_DH219.log
 	python3 -m pytest

@@ -1,8 +1,9 @@
 # Helper python script to generate CITATION.cff file from latest Zenodo release
 # see https://citation-file-format.github.io/ for more information
 
-import urllib.request
 import json
+import urllib.request
+
 import yaml
 
 # Find record id of latest zenodo upload
@@ -34,9 +35,8 @@ data = {
 # Ideally this would also contain orcid information, but not sure how yet...
 creators = response_json["metadata"]["creators"]
 for i in range(len(creators)):
-    given, family = creators[i][
-        "name"
-    ].split()  # Split full name into given and family name
+    # Split full name into given and family name
+    given, family = creators[i]["name"].split()
     data["authors"].append({"family-names": family, "given-names": given})
 
 # Write CITATION.cff file to disk using yaml formatting as per guidelines
