@@ -188,9 +188,11 @@ initialise_background_field(shear_modulus, shear_modulus_values_tilde)
 
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
+    compressible_buoyancy = False
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
+    compressible_buoyancy = True
 
 viscosity = Function(DG0, name="viscosity")
 initialise_background_field(viscosity, viscosity_values_tilde)
@@ -297,7 +299,7 @@ gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_modulus, viscosity=viscosity, Vi=Vi, bulk_shear_ratio=args.bulk_shear_ratio)
+approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_modulus, viscosity=viscosity, Vi=Vi, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `z` and various fields
@@ -365,9 +367,9 @@ plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
 )
 
-checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
+checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim-chk.h5"
 
-displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.dat"
+displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim.dat"
 
 # Initial displacement at time zero is zero
 displacement_min_array = [[0.0, 0.0]]

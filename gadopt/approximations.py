@@ -522,9 +522,10 @@ class CompressibleInternalVariableApproximation(SmallDisplacementViscoelasticApp
     Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
     compressible = True
 
-    def __init__(self, bulk_modulus, density, shear_modulus, viscosity, bulk_shear_ratio=1, **kwargs):
+    def __init__(self, bulk_modulus, density, shear_modulus, viscosity, bulk_shear_ratio=1, compressible_buoyancy=True, **kwargs):
         self.bulk_modulus = ensure_constant(bulk_modulus)
         self.bulk_shear_ratio = ensure_constant(bulk_shear_ratio)
+        self.compressible_buoyancy = compressible_buoyancy
         super().__init__(density, shear_modulus, viscosity, **kwargs)
 
     def div_u(self, u):
@@ -545,8 +546,10 @@ class CompressibleInternalVariableApproximation(SmallDisplacementViscoelasticApp
         return stress
 
     # analytical solution for compressibility only converges without this term...
-    # def buoyancy(self, displacement, background_density):
+    def buoyancy(self, displacement):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
-    #    buoyancy = super().buoyancy(displacement, background_density)
-    #    return buoyancy - self.g * -background_density * div(displacement)
+        buoyancy = super().buoyancy(displacement)
+        if self.compressible_buoyancy:
+            buoyancy += -self.g * -self.density * div(displacement)
+        return buoyancy
