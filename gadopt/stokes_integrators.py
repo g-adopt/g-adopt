@@ -677,6 +677,8 @@ class BoundaryNormalStressSolver:
         Dictionary of PETSc solver options
     """
 
+    name = "BoundaryNormalStressSolver"
+
     def __init__(
         self,
         solution: Function,
@@ -717,7 +719,9 @@ class BoundaryNormalStressSolver:
             a, L, self.solution, bcs=self.interior_null_bc, constant_jacobian=True
         )
         self.solver = LinearVariationalSolver(
-            problem, solver_parameters=solver_parameters
+            problem,
+            solver_parameters=solver_parameters,
+            options_prefix=f"{self.name}_{boundary_id}",
         )
 
     def solve(self) -> None:

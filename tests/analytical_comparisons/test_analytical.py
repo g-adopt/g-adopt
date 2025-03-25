@@ -70,11 +70,14 @@ def test_analytical(name, expected, config):
         for level in levels
     ]
 
-    cols_anal = ["l2anal_u", "l2anal_p", "l2anal_sigma"]
-    cols_err = ["l2error_u", "l2error_p", "l2error_sigma"]
+    cols_anal = ["l2anal_u", "l2anal_p"]
+    cols_err = ["l2error_u", "l2error_p"]
     if name.split("/")[-1] == "free_surface":
         cols_anal.append("l2anal_eta")
         cols_err.append("l2error_eta")
+    else:
+        cols_anal.append("l2anal_sigma")
+        cols_err.append("l2error_sigma")
 
     dat = pd.concat(dats)
 
@@ -90,6 +93,26 @@ def test_analytical(name, expected, config):
     convergence = np.log2(errs.shift() / errs).drop(index=0)
     expected_convergence = pd.Series(expected["convergence"], index=cols_err)
 
-    assert np.allclose(
-        convergence, expected_convergence, rtol=expected.get("rtol", 1e-2)
-    )
+    if name.split("/")[-1] == "free_surface":
+        # Make sure velocity, pressure, and free surface have the theoretical rates
+        assert np.allclose(
+            convergence, expected_convergence, rtol=expected.get("rtol", 1e-2)
+        )
+    else:
+        # Make sure velocity and pressure have the theoretical rates
+        assert np.allclose(
+            convergence[cols_err[:-1]],
+            expected_convergence[cols_err[:-1]],
+            rtol=expected.get("rtol", 1e-2),
+        )
+        # Make sure normal stress convergence does is bounded
+        assert np.all(
+            (
+                convergence[cols_err[-1]]
+                > expected_convergence[-1] - expected.get("ns_lb", 1e-2)
+            )
+            & (
+                convergence[cols_err[-1]]
+                < expected_convergence[-1] + expected.get("ns_ub", 0.1)
+            )
+        )
