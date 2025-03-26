@@ -551,5 +551,5 @@ class CompressibleInternalVariableApproximation(SmallDisplacementViscoelasticApp
         # accounts for advection of density in the absence of an evolution equation for temperature
         buoyancy = super().buoyancy(displacement)
         if self.compressible_buoyancy:
-            buoyancy += -self.g * -self.density * div(displacement)
+            buoyancy += - self.Vi * self.g * -self.density * div(displacement)
         return buoyancy
