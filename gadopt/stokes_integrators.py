@@ -809,7 +809,7 @@ class InternalVariableSolver(MassMomentumBase):
         self.u, *self.m = self.solution_split
 
         # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
-        self.approximation.mu = approximation.shear_modulus
+        self.approximation.mu = approximation.mu0
 
     def set_equations(self) -> None:
         stress = self.approximation.stress(self.u, self.m)
@@ -820,14 +820,19 @@ class InternalVariableSolver(MassMomentumBase):
 
         residual_terms = [
             residual_terms_compressible_viscoelastic,
-            residual_terms_internal_variable,
         ]
         eqs_attrs = [
             {"stress": stress, "source": source},
-            {"source": strain / maxwell_time, "sink_coeff": 1 / maxwell_time},
         ]
-        mass_terms = [None, mass_term]
-        scaling_factors = [self.scaling_factor, -self.theta*self.scaling_factor]
+        mass_terms = [None]
+        scaling_factors = [self.scaling_factor]
+        
+        # Loop over number of internal variables
+        for m in range(len(maxwell_time)):
+            residual_terms.append(residual_terms_internal_variable)
+            eqs_attrs.append({"source": strain / maxwell_time[m], "sink_coeff": 1 / maxwell_time[m]})
+            mass_terms.append(mass_term)
+            scaling_factors.append(-self.theta*self.scaling_factor)
 
         for i in range(len(self.test)):
             self.equations.append(

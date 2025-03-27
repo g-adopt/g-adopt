@@ -442,8 +442,8 @@ class SmallDisplacementViscoelasticApproximation():
         self.viscosity = ensure_constant(viscosity)
         self.g = ensure_constant(g)
         self.Vi = ensure_constant(Vi)
+        
 
-        self.maxwell_time = viscosity / shear_modulus
 
     def buoyancy(self, displacement):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
@@ -491,6 +491,7 @@ class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximatio
 
     def __init__(self, density, shear_modulus, viscosity, **kwargs):
         super().__init__(density, shear_modulus, viscosity, **kwargs)
+        self.maxwell_time = self.viscosity / self.shear_modulus
 
     def effective_viscosity(self, dt):
         return self.viscosity / (self.maxwell_time + dt / 2)
@@ -527,6 +528,12 @@ class CompressibleInternalVariableApproximation(SmallDisplacementViscoelasticApp
         self.bulk_shear_ratio = ensure_constant(bulk_shear_ratio)
         self.compressible_buoyancy = compressible_buoyancy
         super().__init__(density, shear_modulus, viscosity, **kwargs)
+        if len(self.shear_modulus):
+            self.maxwell_time = [visc / mu for visc, mu in zip(self.viscosity, self.shear_modulus)]
+            self.mu0 = sum(self.shear_modulus)
+        else:
+            self.maxwell_time = [self.viscosity / self.shear_modulus]
+            self.mu0 = self.shear_modulus
 
     def div_u(self, u):
         dim = len(u)
@@ -540,9 +547,10 @@ class CompressibleInternalVariableApproximation(SmallDisplacementViscoelasticApp
     def stress(self, u, m_list):
         div_u = self.div_u(u)
         d = self.deviatoric_strain(u)
-        stress = self.bulk_shear_ratio * self.bulk_modulus * div_u + 2 * len(m_list) * self.shear_modulus * d
-        for m in m_list:
-            stress -= 2 * self.shear_modulus * m
+        
+        stress = self.bulk_shear_ratio * self.bulk_modulus * div_u + 2 * self.mu0 * d
+        for mu, m in zip(self.shear_modulus, m_list):
+            stress -= 2 * mu * m
         return stress
 
     # analytical solution for compressibility only converges without this term...
