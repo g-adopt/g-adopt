@@ -153,7 +153,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
             # making error smaller when in reality
             # displacement formulation shouldnt depend on
             # time)
-            error_nondim += local_error_nondim * float(dt)
+            error_nondim += local_error_nondim
 
         # Write output:
         if timestep % dump_period == 0:
@@ -186,9 +186,9 @@ params = {
         "sim_time": "long",
         "shear_modulus": 1e11,
         "bulk_modulus": 1e15},
-    "elastic-incompressible": {
+    "elastic-incompressible-1e16": {
         "dtf_start": 0.001,
-        "nx": 160,
+        "nx": 320,
         "sim_time": "short",
         "shear_modulus": 1e11,
         "bulk_modulus": 1e16},
@@ -206,7 +206,7 @@ def run_benchmark(case_name):
     # Run default case run for four dt factors
     dtf_start = params[case_name]["dtf_start"]
     params[case_name].pop("dtf_start")  # Don't pass this to viscoelastic_model
-    dt_factors = dtf_start / (2 ** np.arange(2))
+    dt_factors = dtf_start / (2 ** np.arange(4))
     nx = params[case_name]["nx"]
     prefix = f"errors-{case_name}-internalvariable-coupled-{nx}cells_nondimensional"
     errors = np.array([viscoelastic_model(dt_factor=dtf, **params[case_name]) for dtf in dt_factors])
