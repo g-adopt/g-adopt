@@ -19,6 +19,7 @@ parser.add_argument("--DG0_layers", default=5, type=int, help="Number of cells p
 parser.add_argument("--dt_years", default=1e3, type=float, help="Timestep in years", required=False)
 parser.add_argument("--Tend", default=110e3, type=float, help="Simulation end time in years", required=False)
 parser.add_argument("--bulk_shear_ratio", default=100, type=float, help="Ratio of Bulk modulus / Shear modulus", required=False)
+parser.add_argument("--viscosity_ratio", default=1, type=float, help="Ratio of viscosity 2 / viscosity 1", required=False)
 parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
 parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
@@ -172,7 +173,7 @@ density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_1_tilde = 0.5*np.array(shear_modulus_values)/shear_modulus_scale
 shear_modulus_values_2_tilde = 0.5*np.array(shear_modulus_values)/shear_modulus_scale
 viscosity_values_1_tilde = 0.5*np.array(viscosity_values)/viscosity_scale
-viscosity_values_2_tilde = 0.5*np.array(viscosity_values)/viscosity_scale
+viscosity_values_2_tilde = args.viscosity_ratio*0.5*np.array(viscosity_values)/viscosity_scale
 
 
 def initialise_background_field(field, background_values):
@@ -392,9 +393,9 @@ plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
 )
 
-checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim-chk.h5"
+checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-viscratio{args.viscosity_ratio}-nondim-chk.h5"
 
-displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim.dat"
+displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-viscratio{args.viscosity_ratio}-nondim.dat"
 
 # Initial displacement at time zero is zero
 displacement_min_array = [[0.0, 0.0]]
