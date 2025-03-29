@@ -17,6 +17,7 @@ parser.add_argument("--dx", default=50, type=float, help="Horizontal resolution 
 parser.add_argument("--refined_surface", action='store_true', help="Use refined surface mesh")
 parser.add_argument("--DG0_layers", default=5, type=int, help="Number of cells per layer for DG0 discretisation of background profiles", required=False)
 parser.add_argument("--dt_years", default=1e3, type=float, help="Timestep in years", required=False)
+parser.add_argument("--dt_out_years", default=10e3, type=float, help="Output timestep in years", required=False)
 parser.add_argument("--Tend", default=110e3, type=float, help="Simulation end time in years", required=False)
 parser.add_argument("--bulk_shear_ratio", default=100, type=float, help="Ratio of Bulk modulus / Shear modulus", required=False)
 parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
@@ -228,7 +229,7 @@ dt_years = args.dt_years
 dt = Constant(dt_years * year_in_seconds/characteristic_maxwell_time)
 Tend_years = args.Tend
 Tend = Constant(Tend_years * year_in_seconds/characteristic_maxwell_time)
-dt_out_years = 10e3
+dt_out_years = args.dt_out_years
 dt_out = Constant(dt_out_years * year_in_seconds/characteristic_maxwell_time)
 
 max_timesteps = round((Tend - Tstart * year_in_seconds/characteristic_maxwell_time) / dt)
