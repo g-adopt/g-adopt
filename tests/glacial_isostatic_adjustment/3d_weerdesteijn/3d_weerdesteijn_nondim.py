@@ -22,6 +22,8 @@ parser.add_argument("--bulk_shear_ratio", default=100, type=float, help="Ratio o
 parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
 parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
+parser.add_argument("--short_simulation", action='store_true', help="Run simulation with short ice history from Weerdesteijn et a. 2023 testcase")
+parser.add_argument("--lateral_viscosity", action='store_true', help="Include low viscosity cylinder from Weerdesteijn et a. 2023 testcase")
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
 parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/", type=str, help="Optional output path", required=False)
@@ -110,7 +112,7 @@ log("Area of back side: ", assemble(Constant(1) * ds(boundary.back, domain=mesh)
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (vector)
 S = TensorFunctionSpace(mesh, "DQ", 1)  # (Discontinuous) Stress tensor function space (tensor)
-DG0 = FunctionSpace(mesh, "DG", 0)  # (Discontinuous) Stress tensor function space (tensor)
+DG0 = FunctionSpace(mesh, "DG", 0)  # DG0 for 1d radial profiles
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 # Function spaces can be combined in the natural way to create mixed
@@ -256,13 +258,20 @@ rho_ice = 931 / density_scale
 g = 9.815
 Vi = Constant(density_scale * D * g / shear_modulus_scale)
 log("Ratio of buoyancy/shear = rho g D / mu = ", float(Vi))
-Hice = 1000 / D
-t1_load = 90e3 * year_in_seconds / characteristic_maxwell_time
-t2_load = 100e3 * year_in_seconds / characteristic_maxwell_time
-ramp_after_t1 = conditional(
-    time < t2_load, 1 - (time - t1_load) / (t2_load - t1_load), 0
-)
-ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
+
+if args.short_simulation:
+    Hice = 100 / D
+    t1_load = 100 * year_in_seconds / characteristic_maxwell_time
+    ramp = conditional(time < t1_load, time / t1_load, 1)
+else:
+    Hice = 1000 / D
+    t1_load = 90e3 * year_in_seconds / characteristic_maxwell_time
+    t2_load = 100e3 * year_in_seconds / characteristic_maxwell_time
+    ramp_after_t1 = conditional(
+        time < t2_load, 1 - (time - t1_load) / (t2_load - t1_load), 0
+    )
+    ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
+
 # Disc ice load but with a smooth transition given by a tanh profile
 disc_radius = 100e3 / D
 disc_dx = 1e3 / D
@@ -270,6 +279,18 @@ k_disc = 1/disc_dx  # wavenumber for disk 2pi / lambda
 r = pow(pow(X[0], 2) + pow(X[1], 2), 0.5)
 disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
 ice_load = ramp * Vi * rho_ice * Hice * disc
+
+if args.lateral_viscosity:
+    upper_depth = -70e3 / D
+    lower_depth = -170e3 / D
+    cylinder_thickness = conditional(
+        X[2] < upper_depth, conditional(X[2] > lower_depth, 1, 0),
+        0
+    )
+    low_visc = 1e19 / viscosity_scale 
+    cylinder_mask = Function(DG0).interpolate(cylinder_thickness * disc)
+    viscosity.interpolate(cylinder_mask * low_visc + (1-cylinder_mask) * viscosity)
+
 
 # We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and
 # side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing
@@ -285,7 +306,7 @@ ice_load = ramp * Vi * rho_ice * Hice * disc
 # Setup boundary conditions
 stokes_bcs = {
     boundary.bottom: {'uz': 0},
-    boundary.top: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density}},
+    boundary.top: {'normal_stress': ice_load, 'free_surface': {}},
     boundary.left: {'ux': 0},
     boundary.right: {'ux': 0},
     boundary.front: {'uy': 0},
