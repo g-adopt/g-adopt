@@ -14,7 +14,7 @@ annulus_taylor_test is also added to this script for testing the correctness of 
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
-# from checkpoint_schedules import SingleDiskStorageSchedule
+from checkpoint_schedules import SingleDiskStorageSchedule
 import sys
 from mpi4py import MPI
 
@@ -103,12 +103,12 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     tape = get_working_tape()
     tape.clear_tape()
 
-    # # Writing to disk for block variables
-    # enable_disk_checkpointing()
+    # Writing to disk for block variables
+    enable_disk_checkpointing()
 
-    # # Using SingleDiskStorageSchedule
-    # if any([alpha_T > 0, alpha_u > 0]):
-    #     tape.enable_checkpointing(SingleDiskStorageSchedule())
+    # Using SingleDiskStorageSchedule
+    if any([alpha_T > 0, alpha_u > 0]):
+        tape.enable_checkpointing(SingleDiskStorageSchedule())
 
     # If we are not annotating, let's switch on taping
     if not annotate_tape():
