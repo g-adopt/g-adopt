@@ -52,12 +52,12 @@ jobs:
         env:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
-          sudo apt update
-          sudo apt install -y task-spooler time s3cmd unzip git-lfs gmsh
-          tsp -S 48
+          apt update
+          apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
+          git config --global safe.directory '*'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -69,6 +69,24 @@ jobs:
       - name: Fetch LFS artifacts
         run: |
           git lfs checkout
+
+      - name: Fetch task spooler
+        uses: actions/checkout@v4
+        with:
+          repository: dsroberts/tsp_for_hpc
+          path: ./tsp
+          ref: v1.0.0
+
+      - name: Build task spooler
+        uses: threeal/cmake-action@v2
+        with:
+          source-dir: ./tsp
+          build-dir: ./tsp_build
+          options: CGROUPV2=ON
+
+      - name: Put task spooler on PATH
+        run: |
+          mv tsp_build/tsp-hpc /usr/local/bin/tsp
 
       - name: Install Python dependencies
         run: |
@@ -97,9 +115,6 @@ jobs:
           cp *.so ../../tests/multi_material
         shell: bash
 
-      - name: Fix HOME environment variable
-        run: echo "HOME=/home/firedrake" >> "$GITHUB_ENV"
-
       - name: Run test
         id: run_tests
         run: |
@@ -107,7 +122,7 @@ jobs:
           make -j test
         env:
           GADOPT_LOGLEVEL: INFO
-          TS_MAXFINISHED: 100
+          BATCH_MODE: 1
 
       - name: Pytest
         id: run_pytest
@@ -128,53 +143,11 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          declare -A timings
-          declare -A success
-
-          digest="$(tsp)"
-
-          mkdir test_outputs
-
-          # extract info
-          for id in $(awk 'NR>1 { print $1 }' <<< "$digest"); do
-            st="$(tsp -i $id)"
-            label=$(awk "/^$id[[:space:]]/ { if (match(\$0, /\[[^]]*\]/)) { print substr(\$0, RSTART+1, RLENGTH-2) } }" <<< "$digest")
-            command=$(sed -En 's/^Command.*python3? //p' <<< "$st")
-            if [ -z "$label" ]; then
-              outfile=$command
-            else
-              outfile="[$label]$command"
-            fi
-            command="$label${label:+: }$command"
-            timings["$command"]=$(sed -n 's/^Time run: //p' <<< "$st")
-
-            tsp -c $id >> "test_outputs/$outfile" || true
-
-            if grep -q "exit code 0" <<< "$st"; then
-              success["$command"]=Yes
-            else
-              success["$command"]=No
-              echo "$command failed:"
-              tsp -c $id | tail -n 10 || true
-              echo $command >> test_outputs/test_output.log
-              tsp -c $id >> test_outputs/test_output.log || true
-            fi
-          done
-
-          # sort by case name
-          declare -a cases
-          while IFS= read -r -d '' entry; do
-            cases+=("$entry")
-          done < <(printf "%s\0" "${!timings[@]}" | sort -z)
-
-          printf "## Case timings\nCase | Time | Success?\n---- | ---- | ----\n" >> "$GITHUB_STEP_SUMMARY"
-          for case in "${cases[@]}"; do
-            printf "%s | %s | %s\n" "$case" ${timings["$case"]} ${success["$case"]} >> "$GITHUB_STEP_SUMMARY"
-          done
+          tsp --gh-summary >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload run log
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: run-log
-          path: test_outputs
+          path: /tmp/tsp_db.sqlite3
