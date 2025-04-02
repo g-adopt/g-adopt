@@ -124,12 +124,10 @@ class Simulation:
 
     @classmethod
     def internal_heating_rate(cls, int_heat_rate, simu_time):
-        node_coords_x, node_coords_y = ga.node_coordinates(int_heat_rate)
-
         # flib can be obtained from
         # https://github.com/seantrim/exact-thermochem-solution
         analytical_values = []
-        for coord_x, coord_y in zip(node_coords_x, node_coords_y):
+        for coord_x, coord_y in ga.node_coordinates(int_heat_rate).dat.data:
             analytical_values.append(
                 flib.h_python(
                     coord_x,
