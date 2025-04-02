@@ -118,7 +118,7 @@ jobs:
       - name: Run test
         id: run_tests
         run: |
-          tsp --timeout
+          tsp --timeout -T 7200
           . .venv/bin/activate
           make -j test
         env:
