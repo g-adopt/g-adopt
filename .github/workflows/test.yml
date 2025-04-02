@@ -75,7 +75,7 @@ jobs:
         with:
           repository: dsroberts/tsp_for_hpc
           path: ./tsp
-          ref: v1.0.0
+          ref: v1.1.0
 
       - name: Build task spooler
         uses: threeal/cmake-action@v2
@@ -118,6 +118,7 @@ jobs:
       - name: Run test
         id: run_tests
         run: |
+          tsp --timeout
           . .venv/bin/activate
           make -j test
         env:
