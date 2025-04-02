@@ -86,7 +86,8 @@ class Simulation:
     materials = [bottom_material, top_material]
     reference_material = None
 
-    # Physical parameters
+    # Approximation parameters
+    dimensional = False
     Ra, g = 1e2, 1
 
     # Parameters to initialise temperature
