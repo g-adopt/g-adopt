@@ -34,8 +34,6 @@ def residual(ui, mui, nx, ny, picard_iterations, stabilisation):
 
 
 def test_spiegelman_1e23():
-    global conf
-
     test_conf = conf.copy()
     ui, mui = test_conf.pop("ui-mui")[0]
     del test_conf["picard"][0]  # drop picard-only
@@ -55,8 +53,6 @@ def test_spiegelman_1e23():
 
 
 def test_spiegelman_1e24():
-    global conf
-
     test_conf = conf.copy()
     ui, mui = test_conf.pop("ui-mui")[1]
     del test_conf["picard"][0]  # drop picard-only
