@@ -65,17 +65,7 @@ run_cmd = $(if $(BATCH_MODE),$(run_batch),$(run_regular))
 
 exec_cmd = $(if $(filter-out 1,$(ncpus)),mpiexec -np $(ncpus)) python3 $< $(PETSC_FLAGS) $(exec_args)
 
-# Execution wrapper
-# -----------------
 #
-# When running in batch mode, we want an additional wrap inside the
-# `timeout` utility to enforce a 2 hour time limit on any given task.
-# This ensures that CI jobs don't exceed the 6 hour time limit on
-# GitHub Actions so they can be torn down gracefully and provide
-# output information.
-
-exec_wrapper = $(if $(BATCH_MODE),timeout 2h $(exec_cmd),$(exec_cmd))
-
 # Canned recipe
 # -------------
 #
@@ -87,7 +77,7 @@ exec_wrapper = $(if $(BATCH_MODE),timeout 2h $(exec_cmd),$(exec_cmd))
 #   	$(run-python)
 
 define run-python =
-@$(call run_cmd,$(exec_wrapper),$(or $(desc),$<))
+@$(call run_cmd,$(exec_cmd),$(or $(desc),$<))
 endef
 
 # Test-related variables
