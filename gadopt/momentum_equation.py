@@ -181,6 +181,8 @@ def advection_hydrostatic_prestress_term(
     rho0 = eq.approximation.density
     g = eq.approximation.g
     u_r = vertical_component(trial)
+
+
     # Only include jump term for discontinuous density spaces?
     if is_continuous(rho0.function_space()):
         F = 0
@@ -189,6 +191,9 @@ def advection_hydrostatic_prestress_term(
         if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
             dS = dS_h
         F = Vi('+') * jump(rho0) * u_r('+') * g('+') * dot(eq.test('+'), eq.n('+')) * dS
+
+    F -= div(eq.test) * Vi * rho0 * g * u_r * eq.dx
+
     return -F
 
 
