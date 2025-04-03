@@ -241,13 +241,13 @@ class BoussinesqApproximation(BaseApproximation):
         return self.rho * self.H
 
     def free_surface_terms(
-        self, p, T, eta, theta_fs, *, variable_rho_fs=True, RaFS=1, delta_rho_fs=1
+        self, p, T, eta, *, variable_rho_fs=True, RaFS=1, delta_rho_fs=1
     ):
         free_surface_normal_stress = RaFS * delta_rho_fs * self.g * eta
         if variable_rho_fs:
             free_surface_normal_stress -= self.buoyancy(p, T) * eta
 
-        prefactor = -theta_fs * RaFS * delta_rho_fs * self.g
+        prefactor = RaFS * delta_rho_fs * self.g
 
         return free_surface_normal_stress, prefactor
 
@@ -472,7 +472,7 @@ class SmallDisplacementViscoelasticApproximation():
         # accounts for advection of density in the absence of an evolution equation for temperature
         return -self.g * -inner(displacement, grad(self.density))
 
-    def free_surface_terms(self, p, T, eta, theta_fs, *, delta_rho_fs=1):
+    def free_surface_terms(self, p, T, eta, *, delta_rho_fs=1):
         free_surface_normal_stress = delta_rho_fs * self.g * eta
         # prefactor only needed when solving eta as part of mixed system
         return free_surface_normal_stress, None

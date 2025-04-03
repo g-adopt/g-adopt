@@ -373,7 +373,6 @@ class StokesSolver:
                 self.solution_split[1],
                 self.T,
                 self.solution_theta_split[eta_ind],
-                self.theta,
                 **params_fs,
             )
         )
@@ -626,7 +625,6 @@ class ViscoelasticStokesSolver(StokesSolver):
             p,
             self.T,
             vertical_component(u + self.displacement),
-            self.theta,
             **params_fs,
         )
 
