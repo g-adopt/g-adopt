@@ -88,9 +88,14 @@ def rectangle_taylor_test(case):
 
     # Setup Energy and Stokes solver
     energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 constant_jacobian=True)
+    stokes_solver = StokesSolver(
+        z,
+        T,
+        approximation,
+        bcs=stokes_bcs,
+        constant_jacobian=True,
+        nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+    )
 
     initial_timestep = 0
 
