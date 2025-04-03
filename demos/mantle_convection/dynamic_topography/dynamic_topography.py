@@ -129,7 +129,7 @@ output_file.write(delta_h)
 
 # Summary
 # -------
-# This tutorial showed how to:
+# This tutorial demonstrated how to:
 # - Load fields and mesh from checkpoint files,
 # - Solve the Stokes system using G-ADOPT,
 # - Compute normal stresses on boundaries,
