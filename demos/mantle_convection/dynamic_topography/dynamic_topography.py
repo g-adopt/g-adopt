@@ -4,7 +4,7 @@
 # --------
 # One of the most commonly studied geodynamic observables is **dynamic topography** —
 # the surface deformation caused by internal stresses within Earth's mantle.
-# This tutorial shows how to compute **normal stresses acting on a boundary**
+# This tutorial demonstrates how to compute **normal stresses acting on a boundary**
 # using **G-ADOPT**.
 # Specifically, we will compute the radial stress $\sigma_{rr}$ on a boundary and
 # use it to estimate dynamic topography.
