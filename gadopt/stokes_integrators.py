@@ -295,9 +295,6 @@ class StokesSolver:
 
     def set_boundary_conditions(self) -> None:
         """Sets strong and weak boundary conditions."""
-        self.strong_bcs = []
-        self.weak_bcs = {}
-
         bc_map = {"u": self.solution_space.sub(0)}
         if self.mesh.cartesian:
             bc_map["ux"] = bc_map["u"].sub(0)
