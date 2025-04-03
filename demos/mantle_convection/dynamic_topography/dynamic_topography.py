@@ -7,7 +7,6 @@
 # This is not isostatic topography (like mountain-building from crustal thickening),
 # but instead time-varying, fluid-dynamically driven topography.
 #
-#
 # This tutorial demonstrates how to compute **normal stresses acting on a boundary**
 # using **G-ADOPT**.
 #
@@ -15,7 +14,7 @@
 # 2-D annular domain, and use them to calculate dynamic topography. We examine a time-independent
 # simulation with free-slip boundary conditions, where the internal structure is loaded
 # from a checkpoint file from a previous 2-D annulus case. Note that given the lack of time-dependence,
-# we do not solve an energy equation, and deal with the Stokes system only. 
+# we do not solve an energy equation, and deal with the Stokes system only.
 
 # Theory Refresher
 # ----------------
@@ -47,7 +46,7 @@ from gadopt import *
 # -
 
 # We next load the mesh from a checkpoint file and initialise the temperature field
-# from the same checkpoint, noting that the temperature field is used only through the fixed buoyancy term. 
+# from the same checkpoint, noting that the temperature field is used only through the fixed buoyancy term.
 # Cartesian flags and boundary IDs are collected in a way that is consistent with out previous tutorials.
 
 # +
