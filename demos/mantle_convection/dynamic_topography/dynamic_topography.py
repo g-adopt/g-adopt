@@ -133,7 +133,7 @@ output_file.write(delta_h)
 # - Load fields and mesh from checkpoint files,
 # - Solve the Stokes system using G-ADOPT,
 # - Compute normal stresses on boundaries,
-# - Estimate dynamic topography from stress,
+# - Estimate dynamic topography from those normal stresses,
 # - Save and visualize the results.
 
 # Dynamic topography is a critical observable in geodynamics
