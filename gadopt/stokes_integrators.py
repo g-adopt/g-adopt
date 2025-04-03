@@ -122,23 +122,7 @@ L2-norm of the function.
 """
 
 
-class MetaPostInit(abc.ABCMeta):
-    """Calls the implemented __post_init__ method after __init__ returns.
-
-    The implemented behaviour allows any subclass __init__ method to first call its
-    parent class's __init__ through super(), then execute its own code, and finally call
-    __post_init__. The latter call is automatic and does not require any attention from
-    the developer or user.
-    """
-
-    def __call__(cls, *args, **kwargs):
-        class_instance = super().__call__(*args, **kwargs)
-        class_instance.__post_init__()
-
-        return class_instance
-
-
-class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
+class CoupledMomentumBase(abc.ABC):
     """Solver for a system involving mass and momentum conservation.
 
     ### Valid keys for boundary conditions
@@ -156,10 +140,10 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
     ### Valid keys describing the free surface boundary:
     |     Argument     | Required |                  Description                   |
     | :--------------- | :------: | :--------------------------------------------: |
-    | eta_index        | True     | Function index in mixed space                  |
-    | rho_ext          | False    | Exterior density along the free surface        |
-    | Ra_fs            | False    | Rayleigh number at the free surface            |
-    | include_buoyancy | False    | Whether the interior density includes buoyancy |
+    | eta_index        | Yes/No   | Function index in mixed space formulation      |
+    | rho_ext          | No       | Exterior density along the free surface        |
+    | Ra_fs            | No       | Rayleigh number at the free surface            |
+    | include_buoyancy | No       | Whether the interior density includes buoyancy |
 
     ### Classic theta values for coupled implicit time integration
     | Theta |        Scheme         |
@@ -190,7 +174,7 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
         Dictionary of nullspace options, including transpose and near nullspaces
     """
 
-    name = "MassMomentum"
+    name = "CoupledMomentum"
 
     def __init__(
         self,
@@ -236,8 +220,8 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
         # Solver object is set up later to permit editing default solver options.
         self._solver_ready = False
 
-    def __post_init__(self) -> None:
-        """Executes selected methods after the class is instantiated."""
+    def prepare_solver(self) -> None:
+        """Runs methods that set up arguments for the variational problem and solver."""
         self.set_boundary_conditions()
         self.set_equations()
         self.set_form()
@@ -347,6 +331,8 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     def setup_solver(self) -> None:
         """Sets up the solver."""
+        self.prepare_solver()
+
         if self.constant_jacobian:
             trial = TrialFunction(self.solution_space)
             F = replace(self.F, {self.solution: trial})
@@ -376,20 +362,16 @@ class MassMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
         self._solver_ready = True
 
-    def solver_callback(self) -> None:
-        """Instructions to execute right after a solve."""
-        self.solution_old.assign(self.solution)
-
     def solve(self) -> None:
         """Solves the system."""
         if not self._solver_ready:
             self.setup_solver()
 
         self.solver.solve()
-        self.solver_callback()
+        self.solution_old.assign(self.solution)
 
 
-class StokesSolver(MassMomentumBase):
+class StokesSolver(CoupledMomentumBase):
     """Solver for the Stokes system.
 
     Args:
@@ -510,7 +492,7 @@ class StokesSolver(MassMomentumBase):
             )
 
 
-class ViscoelasticSolver(MassMomentumBase):
+class ViscoelasticSolver(CoupledMomentumBase):
     """Solves the Stokes system assuming a Maxwell viscoelastic rheology.
 
     Args:
@@ -598,7 +580,9 @@ class ViscoelasticSolver(MassMomentumBase):
                 )
             )
 
-    def solver_callback(self) -> None:
+    def solve(self) -> None:
+        super().solve()
+
         u = self.solution_split[0]
         self.displ.interpolate(self.displ + u)
         self.tau_old.interpolate(
@@ -606,7 +590,7 @@ class ViscoelasticSolver(MassMomentumBase):
         )
 
 
-class InternalVariableSolver(MassMomentumBase):
+class InternalVariableSolver(CoupledMomentumBase):
     name = "InternalVariable"
 
     def set_free_surface_boundary(

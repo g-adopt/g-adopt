@@ -66,11 +66,6 @@ adv_diff_solver = GenericTransportSolver(
     terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_advection=True
 )
 
-# Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(adv_diff_solver.equation.su_nubar)
-nubar_outfile = VTKFile("CG_SUadvdiff_nubar.pvd")
-nubar_outfile.write(nubar)
-
 # Here is the time stepping loop, with an output every 20 steps.
 t = 0.0
 step = 0
@@ -83,6 +78,11 @@ while t < T - 0.5 * dt:
     if step % 10 == 0:
         outfile.write(q)
         log("t=", t)
+
+# Get nubar (additional SU diffusion) for plotting
+nubar = Function(Q).interpolate(adv_diff_solver.eq_attrs["su_nubar"])
+nubar_outfile = VTKFile("CG_SUadvdiff_nubar.pvd")
+nubar_outfile.write(nubar)
 
 # Write out integrated scalar for testing
 L2 = sqrt(assemble(q**2 * dx))

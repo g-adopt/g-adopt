@@ -62,23 +62,7 @@ Note:
 """
 
 
-class MetaPostInit(abc.ABCMeta):
-    """Calls the implemented __post_init__ method after __init__ returns.
-
-    The implemented behaviour allows any subclass __init__ method to first call its
-    parent class's __init__ through super(), then execute its own code, and finally call
-    __post_init__. The latter call is automatic and does not require any attention from
-    the developer or user.
-    """
-
-    def __call__(cls, *args, **kwargs):
-        class_instance = super().__call__(*args, **kwargs)
-        class_instance.__post_init__()
-
-        return class_instance
-
-
-class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
+class GenericTransportBase(abc.ABC):
     """Base class for advancing a generic transport equation in time.
 
     All combinations of advection, diffusion, sink, and source terms are handled.
@@ -145,7 +129,8 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
         # Solver object is set up later to permit editing default solver options.
         self._solver_ready = False
 
-    def __post_init__(self) -> None:
+    def prepare_solver(self) -> None:
+        """Runs methods that set up arguments for the time integrator."""
         self.set_boundary_conditions()
         self.set_su_nubar()
         self.set_equation()
@@ -240,6 +225,8 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 
     def setup_solver(self) -> None:
         """Sets up the timestepper using specified parameters."""
+        self.prepare_solver()
+
         self.ts = self.timestepper(
             self.equation,
             self.solution,
@@ -251,10 +238,6 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
 
         self._solver_ready = True
 
-    def solver_callback(self) -> None:
-        """Optional instructions to execute right after a solve."""
-        pass
-
     def solve(
         self, update_forcings: Callable | None = None, t: float | None = None
     ) -> None:
@@ -263,8 +246,6 @@ class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
             self.setup_solver()
 
         self.ts.advance(update_forcings, t)
-
-        self.solver_callback()
 
 
 class GenericTransportSolver(GenericTransportBase):

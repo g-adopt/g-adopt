@@ -53,11 +53,6 @@ adv_diff_solver = GenericTransportSolver(
     terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_advection=True
 )
 
-# Get nubar (additional SU diffusion) for plotting
-nubar = Function(Q).interpolate(adv_diff_solver.equation.su_nubar)
-nubar_outfile = VTKFile("advdof_DH219_skew_CG1_Pe" + str(Pe) + "_SU_nubar.pvd")
-nubar_outfile.write(nubar)
-
 t = 0.0
 step = 0
 while t < T - 0.5 * dt:
@@ -70,6 +65,11 @@ while t < T - 0.5 * dt:
     if step % 10 == 0:
         outfile.write(q)
         print("t=", t)
+
+# Get nubar (additional SU diffusion) for plotting
+nubar = Function(Q).interpolate(adv_diff_solver.eq_attrs["su_nubar"])
+nubar_outfile = VTKFile("advdof_DH219_skew_CG1_Pe" + str(Pe) + "_SU_nubar.pvd")
+nubar_outfile.write(nubar)
 
 # Write out integrated scalar for testing
 L2 = sqrt(assemble(q**2 * dx))

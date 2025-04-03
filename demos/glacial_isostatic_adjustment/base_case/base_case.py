@@ -484,7 +484,10 @@ ice_load = ramp * rho_ice * g * Hice * disc
 rho_ext = conditional(time < t2_load, rho_ice * disc, 0)
 stokes_bcs = {
     boundary.bottom: {"uy": 0},
-    boundary.top: {"normal_stress": ice_load, "free_surface": {"rho_ext": rho_ext}},
+    boundary.top: {
+        "normal_stress": ice_load,
+        "free_surface": {"rho_ext": rho_ext, "include_buoyancy": False},
+    },
     boundary.left: {"ux": 0},
     boundary.right: {"ux": 0},
 }

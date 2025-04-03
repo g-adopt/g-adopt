@@ -313,7 +313,7 @@ class Approximation:
             buoyancy_free_surface = (self.rho - params_fs.get("rho_ext", 0)) * self.g
             if not self.dimensional:
                 buoyancy_free_surface *= params_fs["Ra_fs"]
-            if params_fs.get("include_buoyancy_effects", True):
+            if params_fs.get("include_buoyancy", True):
                 buoyancy_free_surface -= buoyancy
 
             return buoyancy_free_surface

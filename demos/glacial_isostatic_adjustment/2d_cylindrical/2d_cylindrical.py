@@ -444,7 +444,10 @@ log(f"Simulation start time: {time_start_years} years")
 # Setup boundary conditions
 rho_ext = rho_ice * (disc_1 + disc_2)
 stokes_bcs = {
-    boundary.top: {"normal_stress": ice_load, "free_surface": {"rho_ext": rho_ext}},
+    boundary.top: {
+        "normal_stress": ice_load,
+        "free_surface": {"rho_ext": rho_ext, "include_buoyancy": False},
+    },
     boundary.bottom: {"un": 0},
 }
 
