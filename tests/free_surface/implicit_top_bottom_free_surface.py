@@ -22,7 +22,12 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
             # Adding a small absorption term bringing the vertical velocity to zero removes this nullspace
             # and does not affect convergence provided that this term is small compared with the overall numerical error.
             self.absorption_penalty(dt_factor)
-            self.stokes_solver.F += self.penalty * self.stokes_solver.test[0][1] * (self.stokes_solver.solution[1] - 0)*dx
+            self.stokes_solver.F += (
+                self.penalty
+                * self.stokes_solver.tests[0][1]
+                * (self.stokes_solver.solution[1] - 0)
+                * dx
+            )
 
     def setup_function_space(self):
         self.Z = MixedFunctionSpace([self.V, self.W, self.W, self.W])  # Mixed function space with bottom free surface.
@@ -44,7 +49,9 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         # This is not ideal - python dictionaries are ordered by insertion only since recently (since 3.7) - so relying on
         # their order is fraught and not considered pythonic. At the moment let's consider having more than one free surface
         # a bit of a niche case for now, and leave it as is...
-        self.stokes_bcs[self.boundary.bottom] = {"free_surface": {"RaFS": -1}}
+        self.stokes_bcs[self.boundary.bottom] = {
+            "free_surface": {"eta_index": 3, "RaFS": -1}
+        }
 
     def update_analytical_free_surfaces(self):
         super().update_analytical_free_surfaces()
