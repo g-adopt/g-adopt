@@ -2,7 +2,7 @@ cases := damping smoothing Tobs uobs
 
 all: $(addsuffix .conv,$(cases))
 
-ncpus := 8
+ncpus := 16
 
 %.conv: inverse.py Checkpoint_State.h5
 	echo "running $< on case $*" >&2

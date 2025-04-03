@@ -30,20 +30,23 @@ def run_forward():
 
     # Test functions and functions to hold solutions:
     z = Function(Z)  # a field over the mixed function space Z.
+    z.assign(0)
     u, p = split(z)  # Returns symbolic UFL expression for u and p
+    z.subfunctions[0].rename("Velocity")
+    z.subfunctions[1].rename("Pressure")
 
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
     Ra = Constant(1e7)  # Rayleigh number
 
     # Define time stepping parameters:
-    max_timesteps = 250
+    max_timesteps = 200
     delta_t = Constant(3e-6)  # Constant time step
 
     with CheckpointFile("Checkpoint230.h5", mode="r") as f:
         T = f.load_function(mesh, "Temperature")
 
-    Taverage = Function(Q1, name="Average Temperature")
+    Taverage = Function(Q1, name="Average_Temperature")
 
     # A step function designed to design viscosity jumps
     # Build a step centred at "centre" with given magnitude
@@ -93,7 +96,7 @@ def run_forward():
 
     checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
     checkpoint_file.save_mesh(mesh)
-    checkpoint_file.save_function(Taverage, name="Average Temperature", idx=0)
+    checkpoint_file.save_function(Taverage, name="Average_Temperature", idx=0)
     checkpoint_file.save_function(T, name="Temperature", idx=0)
 
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
@@ -130,23 +133,17 @@ def run_forward():
     output_file = VTKFile("vtu-files/output.pvd")
     dump_period = 10
 
-    # Split and rename the velocity and pressure functions
-    # so that they can be used for visualisation
-    u_, p_ = z.subfunctions
-    u_.rename("Velocity")
-    p_.rename("Pressure")
-
     # Now perform the time loop:
     for timestep in range(0, max_timesteps):
         stokes_solver.solve()
         energy_solver.solve()
 
         # Storing velocity to be used in the objective F
-        checkpoint_file.save_function(u_, name="Velocity", idx=timestep)
+        checkpoint_file.save_function(z.subfunctions[0], name="Velocity", idx=timestep)
 
         if timestep % dump_period == 0 or timestep == max_timesteps - 1:
             mu_function.interpolate(mu)
-            output_file.write(u_, p_, T, mu_function)
+            output_file.write(*z.subfunctions, T, mu_function)
 
     # Save the reference final temperature
     checkpoint_file.save_function(T, name="Temperature", idx=max_timesteps - 1)

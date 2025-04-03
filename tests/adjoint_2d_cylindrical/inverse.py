@@ -14,7 +14,7 @@ annulus_taylor_test is also added to this script for testing the correctness of 
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
-from checkpoint_schedules import SingleDiskStorageSchedule
+from checkpoint_schedules import SingleMemoryStorageSchedule
 import sys
 from mpi4py import MPI
 
@@ -29,15 +29,17 @@ def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
-    T_lb = Function(inverse_problem["control"].function_space(), name="Lower bound temperature")
-    T_ub = Function(inverse_problem["control"].function_space(), name="Upper bound temperature")
+    T_lb = Function(inverse_problem["control"].function_space(), name="Lower_bound_temperature")
+    T_ub = Function(inverse_problem["control"].function_space(), name="Upper_bound_temperature")
     T_lb.assign(0.0)
     T_ub.assign(1.0)
 
     minimisation_problem = MinimizationProblem(inverse_problem["reduced_functional"], bounds=(T_lb, T_ub))
 
-    # Here we limit the number of optimisation iterations to 10, for CI and demo tractability.
-    minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+    # Here we limit the number of optimisation iterations to ensure demo tractability and set other
+    # parameters to help the optimisation procedure.
+    minimisation_parameters["Status Test"]["Iteration Limit"] = 5
+    minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1e-3
 
     optimiser = LinMoreOptimiser(
         minimisation_problem,
@@ -49,7 +51,7 @@ def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
 
     # If we're performing multiple successive optimisations, we want
     # to ensure the annotations are switched back on for the next code
-    # to use them
+    # to use them.
     continue_annotation()
 
 
@@ -103,16 +105,13 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     tape = get_working_tape()
     tape.clear_tape()
 
-    # Writing to disk for block variables
-    enable_disk_checkpointing()
-
-    # Using SingleDiskStorageSchedule
-    if any([alpha_T > 0, alpha_u > 0]):
-        tape.enable_checkpointing(SingleDiskStorageSchedule())
-
     # If we are not annotating, let's switch on taping
     if not annotate_tape():
         continue_annotation()
+
+    # Using SingleMemoryStorageSchedule
+    if any([alpha_T > 0, alpha_u > 0]):
+        tape.enable_checkpointing(SingleMemoryStorageSchedule())
 
     # Set up geometry:
     rmax = 2.22
@@ -137,28 +136,31 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     # Test functions and functions to hold solutions:
     z = Function(Z)  # a field over the mixed function space Z.
+    z.assign(0)
     u, p = split(z)  # Returns symbolic UFL expression for u and p
+    z.subfunctions[0].rename("Velocity")
+    z.subfunctions[1].rename("Pressure")
 
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
     Ra = Constant(1e7)  # Rayleigh number
 
     # Define time stepping parameters:
-    max_timesteps = 250
+    max_timesteps = 200
     delta_t = Function(R, name="delta_t").assign(3e-6)  # Constant time step
 
     # Without a restart to continue from, our initial guess is the final state of the forward run
     # We need to project the state from Q2 into Q1
-    Tic = Function(Q1, name="Initial Temperature")
+    Tic = Function(Q1, name="Initial_Temperature")
     T_0 = Function(Q, name="T_0")  # Temperature for zeroth time-step
-    Taverage = Function(Q1, name="Average Temperature")
+    Taverage = Function(Q1, name="Average_Temperature")
 
+    # Initialise the control to final state temperature from forward model.
     checkpoint_file = CheckpointFile("Checkpoint_State.h5", "r")
-    # Initialise the control
     Tic.project(
         checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
     )
-    Taverage.project(checkpoint_file.load_function(mesh, "Average Temperature", idx=0))
+    Taverage.project(checkpoint_file.load_function(mesh, "Average_Temperature", idx=0))
 
     # Temperature function in Q2, where we solve the equations
     T = Function(Q, name="Temperature")
@@ -245,13 +247,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
     T.assign(T_0)
 
     # if the weighting for misfit terms non-positive, then no need to integrate in time
-    # min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
     min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
-
-    # making sure velocity is deterministic
-    u_, p_ = z.subfunctions
-    u_.interpolate(as_vector((0.0, 0.0)))
-    p_.interpolate(0.0)
 
     # Generate a surface velocity reference
     uobs = Function(V, name="uobs")
@@ -264,27 +260,27 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
         if alpha_u > 0:
             # Update the accumulated surface velocity misfit using the observed value
             uobs.assign(checkpoint_file.load_function(mesh, name="Velocity", idx=timestep))
-            u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)/(max_timesteps - min_timesteps)) * dot(u_ - uobs, u_ - uobs) * ds_t)
+            u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)/(max_timesteps - min_timesteps)) * dot(u - uobs, u - uobs) * ds_t)
 
-    # Load the observed final state
+    # Load observed final state.
     Tobs = checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
     Tobs.rename("Observed Temperature")
 
-    # Load the reference initial state
-    # Needed to measure performance of weightings
+    # Load reference initial state (needed to measure performance of weightings).
     Tic_ref = checkpoint_file.load_function(mesh, "Temperature", idx=0)
     Tic_ref.rename("Reference Initial Temperature")
 
-    # Load the average temperature profile
-    Taverage = checkpoint_file.load_function(mesh, "Average Temperature", idx=0)
+    # Load average temperature profile.
+    Taverage = checkpoint_file.load_function(mesh, "Average_Temperature", idx=0)
 
     checkpoint_file.close()
 
-    # Initiate the objective functional
+    # Initiate objective functional.
     objective = 0.0
 
     if any([w > 0 for w in [alpha_u, alpha_d, alpha_s]]):
-        # Calculate the norms of the observed temperature, it will be used in multiple spots later
+        # Calculate norm of the observed temperature, it will be used in multiple spots later to
+        # weight other terms.
         norm_obs = assemble(Tobs**2 * dx)
 
     # Define the component terms of the overall objective functional
@@ -310,26 +306,71 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
         norm_smoothing = assemble(dot(grad(Tobs - Taverage), grad(Tobs - Taverage)) * dx)
         objective += (norm_obs * smoothing / norm_smoothing)
 
-    # All done with the forward run, stop annotating anything else to the tape
+    # All done with the forward run, stop annotating anything else to the tape.
     pause_annotation()
 
     inverse_problem = {}
 
-    # Keep track of what the control function is
+    # Specify control.
     inverse_problem["control"] = Tic
 
-    # The ReducedFunctional that is to be minimised
+    # ReducedFunctional that is to be minimised.
     inverse_problem["reduced_functional"] = ReducedFunctional(objective, control)
 
-    # Callback function to print out the misfit at the start and end of the optimisation
+    # Callback function to print misfit at start and end of each optimisation iteration.
+    # For sake of book-keeping the simulation, we have also implemented a user-defined way of
+    # recording information that might be used to check the optimisation performance. This
+    # callback function will be executed at the end of each iteration. Here, we write out
+    # the control field, i.e., the reconstructed intial temperature field, at the end of
+    # each iteration and final stage T. To access the last value of *an overloaded object* we
+    # should access the `.block_variable.checkpoint` method as below. We also record the values
+    # of the reduced functional and misfits directly in order to produce a plot of the convergence.
+
+    solutions_vtk = VTKFile("solutions.pvd")
+    solution_IC = Function(Tic.function_space(), name="Initial_Temperature")
+    solution_final = Function(T.function_space(), name="Final_Temperature")
+    functional_values = []
+    initial_misfit_values = []
+    final_misfit_values = []
+
+    # Log value of reduced functional:
+    def record_functional_values(func_value, *args):
+        functional_values.append(func_value)
+
+    # Log values of initial and final misfit:
+    def record_misfit_values(init_misfit, final_misfit):
+        initial_misfit_values.append(init_misfit)
+        final_misfit_values.append(final_misfit)
+
     def callback():
         initial_misfit = assemble(
-            (Tic.block_variable.checkpoint.restore() - Tic_ref) ** 2 * dx
+            (Tic.block_variable.checkpoint - Tic_ref) ** 2 * dx
         )
         final_misfit = assemble(
-            (T.block_variable.checkpoint.restore() - Tobs) ** 2 * dx
+            (T.block_variable.checkpoint - Tobs) ** 2 * dx
         )
-        log(f"Initial misfit; {initial_misfit}; final misfit: {final_misfit}")
+
+        inverse_problem["reduced_functional"].eval_cb_post = record_functional_values
+        record_misfit_values(initial_misfit, final_misfit)
+
+        # Print output for ease of tracking simulation progress:
+        if functional_values:
+            log(f"Functional: {functional_values[-1]};  Misfit (IC): {initial_misfit};  Misfit (Final): {final_misfit}")
+        else:
+            log(f"Functional value not recorded; Misfit (IC): {initial_misfit}; Misfit (Final): {final_misfit}")
+
+        # Write functional and misfit values to a file (appending to avoid overwriting)
+        if MPI.COMM_WORLD.Get_rank() == 0:
+            with open("optimisation_values.txt", "a") as f:
+                if functional_values:
+                    f.write(f"{functional_values[-1]}, {initial_misfit}, {final_misfit}\n")
+                else:
+                    f.write(f"0.0, {initial_misfit}, {final_misfit}\n")
+
+        # Write VTK output:
+        solution_IC.assign(Tic.block_variable.checkpoint)
+        solution_final.assign(T.block_variable.checkpoint)
+        solutions_vtk.write(solution_IC, solution_final)
 
     inverse_problem["callback"] = callback
 
