@@ -2,35 +2,36 @@
 # ====================================================================
 #
 # One of the most commonly studied geodynamic observables is **dynamic topography** —
-# the surface deformation induced by internal stresses within Earth's mantle.
+# surface or lithospheric deflection caused by vertical stresses from mantle flow.
+# That is, regions being pushed up or pulled down by mantle convection beneath them.
+# This is not isostatic topography (like mountain-building from crustal thickening),
+# but instead time-varying, fluid-dynamically driven topography.
+#
 #
 # This tutorial demonstrates how to compute **normal stresses acting on a boundary**
 # using **G-ADOPT**.
 #
-# Specifically, we will compute the radial stress $\sigma_{rr}$ on a boundary and
-# use it to calculate dynamic topography.
+# Specifically, we will compute the radial stress $\sigma_{rr}$ on the boundaries of a
+# 2-D annular domain, and use them to calculate dynamic topography. We examine a time-independent
+# simulation with free-slip boundary conditions, where the internal structure is loaded
+# from a checkpoint file from a previous 2-D annulus case. Note that given the lack of time-dependence,
+# we do not solve an energy equation, and deal with the Stokes system only. 
 
 # Theory Refresher
 # ----------------
 # Dynamic topography arises from the internal stress field deforming a surface.
 # Consider the top boundary of an annular domain located at radius $r_{max}$.
-# Under equilibrium, the vertical (radial) stress acting on this boundary is $\sigma_{rr}(r_max)$.
-# Due to internal forces, the surface deforms by an amount $\delta h$, leading to:
-#
-# $$\sigma_{rr}(r_max) = \sigma_{rr}(r_max + \delta h) - \delta \rho g\, \delta h$$
-#
-# Solving for $\sigma h$:
+# Under equilibrium, the vertical (radial) stress acting on this boundary is $\sigma_{rr}$.
+# Due to internal forces, the surface deforms by an amount $\delta h$, which can be calculated as follows:
 #
 # $$\delta h = \sigma_{rr} / (\delta \rho g)$$
 #
 # Where:
 # - $\sigma_{rr}$ is the normal stress at the boundary,
-# - $\delta \rho$ is the density difference between the mantle and overlying medium (air or water),
+# - $\delta \rho$ is the density difference between mantle and the overlying medium (air or water),
 # - $g \approx 9.8 m/s^2$ is gravitational acceleration.
 #
-# Here, we illustrate how to calculate dynamic topography G-ADOPT using a time-independent
-# simulation with free-slip boundary conditions, where the internal structure is loaded
-# from a checkpoint file from a previous 2-D annulus case.
+
 #
 # Implementation in G-ADOPT
 # -------------------------
@@ -46,8 +47,8 @@ from gadopt import *
 # -
 
 # We next load the mesh from a checkpoint file and initialise the temperature field
-# from the same checkpoint. Cartesian flags and boundary IDs are collected in a way that is
-# consistent with out previous tutorials.
+# from the same checkpoint, noting that the temperature field is used only through the fixed buoyancy term. 
+# Cartesian flags and boundary IDs are collected in a way that is consistent with out previous tutorials.
 
 # +
 with CheckpointFile("../adjoint_2d_cylindrical/Checkpoint230.h5", mode="r") as f:
@@ -119,8 +120,8 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
 # Boundary conditions are next specified. Given we do not solve an energy equation for this time independent case, no boundary conditions are required
-# required for temperature (the temperature field loaded above is only used to contol RHS forcing).  For velocity, we specify free‐slip conditions on
-# both boundaries. As noted in our 2-D cylindrical tutorial, we incorporate these <b>weakly</b> through the <i>Nitsche</i> approximation.
+# required for temperature.  For velocity, we specify free‐slip conditions on both boundaries.
+# As noted in our 2-D cylindrical tutorial, we incorporate these <b>weakly</b> through the <i>Nitsche</i> approximation.
 
 stokes_bcs = {
     "bottom": {"un": 0},
@@ -145,17 +146,17 @@ stokes_solver.solve()
 # -
 
 # At this point, we have a global solution for velocity and pressure. This is next used to
-# compute normal stresses at both top and bottom boundaries, via the following <i>force_on_boundary</i>
-# function called below.
+# compute normal stresses at both top and bottom boundaries, via the <i>force_on_boundary</i> function.
 
 ns_top = stokes_solver.force_on_boundary(boundaries.top)
 ns_bottom = stokes_solver.force_on_boundary(boundaries.bottom)
 
 # We next setup our output for visualisation of results
 
-# Save to File for Visualization
 output_file = VTKFile("output.pvd")
 output_file.write(u, p, T, ns_top, ns_bottom)
+
+# And plot up those results.
 
 # + tags=["active-ipynb"]
 # tripcolor(ns_top)
@@ -164,47 +165,9 @@ output_file.write(u, p, T, ns_top, ns_bottom)
 # plt.show()
 # -
 
-# Exercise 1: Compute Dynamic Topography
-# -------------------------------------
-# Assume:
-# - $\delta \rho = 3300 kg/m^3$
-# - $g = 9.8 m/s^2$
-# Compute $\delta h = \sigma_{rr} / (\rho g)$ at the top boundary
-
-rho = 3300
-g = 9.8
-
-# Compute $delta h$
-delta_h = Function(W, name="Dynamic Topography")
-delta_h.interpolate(ns_top / (rho * g))
-
-# Save for visualization
-output_file.write(delta_h)
-
-# Exercise 2: Modify Boundary Conditions
-# -------------------------------------
-# Change the free-slip condition to no-slip on the bottom boundary:
-# stokes_bcs = {
-#     "bottom": {"u": as_vector([0, 0])},
-#     "top": {"un": 0},
-# }
-# Re-run the solver and observe how σ_rr changes.
-
-# Exercise 3: Vary Rayleigh Number
-# --------------------------------
-# Try different values of Rayleigh number:
-# Ra = 1e5, 1e6, 1e8
-# Observe how the stress field and dynamic topography vary with Ra.
-
-# Summary
-# -------
-# This tutorial demonstrated how to:
-# - Load fields and mesh from checkpoint files,
+# This tutorial has demonstrated how to:
+# - Load fields and meshes from checkpoint files,
 # - Solve the Stokes system using G-ADOPT,
-# - Compute normal stresses on boundaries,
+# - Compute normal stresses on top and bottom boundaries,
 # - Estimate dynamic topography from those normal stresses,
 # - Save and visualize the results.
-
-# Dynamic topography is a critical observable in geodynamics
-# and computing it accurately requires careful stress analysis —
-# G-ADOPT provides all the tools necessary to perform such analyses efficiently.
