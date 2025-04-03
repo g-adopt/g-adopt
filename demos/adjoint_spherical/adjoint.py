@@ -8,6 +8,10 @@ import gdrift
 from gdrift.profile import SplineProfile
 from checkpoint_schedules import SingleDiskStorageSchedule
 from pyadjoint import Block
+import faulthandler, signal
+
+# Angus's Trick
+faulthandler.register(signal.SIGUSR2)
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -59,8 +63,13 @@ def conduct_inversion():
     T_lb.assign(0.0)
     T_ub.assign(0.76)
 
-    minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 1.0e-1
     minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+    minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 0.1
+    minimisation_parameters["Step"]["Trust Region"]["Radius Growing Rate"] = 5
+    minimisation_parameters["Step"]["Trust Region"]["Radius Shrinking Rate (Negative rho)"] = 0.03125
+    minimisation_parameters["Step"]["Trust Region"]["Radius Shrinking Rate (Positive rho)"] = 0.125
+    minimisation_parameters["Step"]["Trust Region"]["Radius Shrinking Threshold"] = 0.15
+    minimisation_parameters["Step"]["Trust Region"]["Radius Growing Threshold"] = 0.75
 
     minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_ub))
 
@@ -82,7 +91,7 @@ def conduct_inversion():
 
 
 def conduct_taylor_test():
-    Tic, reduced_functional, _ = forward_problem()
+    Tic, reduced_functional = forward_problem()
     Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
     Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
     _ = taylor_test(reduced_functional, Tic, Delta_temp)
@@ -98,10 +107,10 @@ def forward_problem():
     # clearing tape
     tape.clear_tape()
 
-    # setting gc collection
-    tape.enable_checkpointing(
-        SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2
-    )
+    # # setting gc collection
+    # tape.enable_checkpointing(
+    #     SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2
+    # )
 
     # Set up the base path
     base_path = Path(__file__).resolve().parent
@@ -258,7 +267,7 @@ def forward_problem():
     presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
 
     # non-dimensionalised time for 40 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(40.0)
+    time = plate_reconstruction_model.age2ndtime(5.0)
 
     # Defining control
     control = Control(Tic)
@@ -321,6 +330,7 @@ def forward_problem():
             break
 
 
+
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature").interpolate(
         (T + tala_parameters_dict["Tbar"]) * Constant(3700.0) + Constant(300.0)
@@ -343,10 +353,10 @@ def forward_problem():
     norm_damping = assemble(T_ave ** 2 * dx)
 
     # Assembling the objective
-    # objective = t_misfit / norm_t_misfit  # In case of temperature only term
+    objective = t_misfit / norm_t_misfit  # In case of temperature only term
     # objective = damping_weight * damping / norm_damping
     # objective = smoothing_weight * smoothing / norm_smoothing  # In case of smoothing only
-    objective = 1e3 * (t_misfit / norm_t_misfit + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping)
+    # objective = 1e3 * (t_misfit / norm_t_misfit + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping)
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
