@@ -26,7 +26,7 @@
 # - $\sigma_{rr}$ is the normal stress at the boundary,
 # - $\rho$ is the density difference between the mantle and the overlying medium (air or water),
 # - $g \approx 9.8 m/s^2$ is gravitational acceleration.
-
+We illustrate implementation in G-ADOPT using a time-independent simulation with free-slip boundary conditions, where the internal structure is loaded via a checkpoint file from a previous 2-D annulus case. 
 # Implementation in G-ADOPT
 # -------------------------
 
