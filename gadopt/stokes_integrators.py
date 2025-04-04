@@ -205,6 +205,8 @@ class StokesSolver:
       free_surface_theta: Timestepping prefactor for free surface equation, where
                           theta = 0: Forward Euler, theta = 0.5: Crank-Nicolson (default),
                           or theta = 1: Backward Euler
+      nullspace:
+        Dictionary of nullspace options, including transpose and near nullspaces
 
     """
 
@@ -222,21 +224,20 @@ class StokesSolver:
         constant_jacobian: bool = False,
         free_surface_dt: Optional[float] = None,
         free_surface_theta: float = 0.5,
-        **kwargs,
+        nullspace: dict[str, fd.MixedVectorSpaceBasis] = {},
     ):
-        self.Z = z.function_space()
-        self.mesh = self.Z.mesh()
-        self.test = fd.TestFunctions(self.Z)
+        self.solution_space = z.function_space()
+        self.mesh = self.solution_space.mesh()
+        self.test = fd.TestFunctions(self.solution_space)
         self.solution = z
         self.T = T
         self.approximation = approximation
         self.quad_degree = quad_degree
+        self.nullspace = nullspace
 
         self.J = J
         self.constant_jacobian = constant_jacobian
         self.linear = not depends_on(self.approximation.mu, self.solution)
-
-        self.solver_kwargs = kwargs
 
         self.k = upward_normal(self.mesh)
 
@@ -254,13 +255,21 @@ class StokesSolver:
             weak_bc = {}
             for bc_type, value in bc.items():
                 if bc_type == 'u':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0), value, id))
+                    self.strong_bcs.append(
+                        fd.DirichletBC(self.solution_space.sub(0), value, id)
+                    )
                 elif bc_type == 'ux':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(0), value, id))
+                    self.strong_bcs.append(
+                        fd.DirichletBC(self.solution_space.sub(0).sub(0), value, id)
+                    )
                 elif bc_type == 'uy':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(1), value, id))
+                    self.strong_bcs.append(
+                        fd.DirichletBC(self.solution_space.sub(0).sub(1), value, id)
+                    )
                 elif bc_type == 'uz':
-                    self.strong_bcs.append(fd.DirichletBC(self.Z.sub(0).sub(2), value, id))
+                    self.strong_bcs.append(
+                        fd.DirichletBC(self.solution_space.sub(0).sub(2), value, id)
+                    )
                 elif bc_type == 'free_surface':
                     # N.b. stokes_integrators assumes that the order of the bcs matches the order of the
                     # free surfaces defined in the mixed space. This is not ideal - python dictionaries
@@ -286,7 +295,7 @@ class StokesSolver:
             self.equations.append(
                 Equation(
                     self.test[i],
-                    self.Z[i],
+                    self.solution_space[i],
                     terms_eq,
                     eq_attrs=eq_attrs,
                     approximation=self.approximation,
@@ -307,6 +316,12 @@ class StokesSolver:
                 # Add free surface time derivative term
                 # (N.b. we already have two equations from StokesEquations)
                 self.F += self.equations[2+i].mass((self.eta[i]-self.eta_old[i])/self.free_surface_dt)
+
+        # Application context for the inverse mass matrix preconditioner
+        self.appctx = {"mu": self.approximation.mu / self.rho_mass}
+        if self.free_surface:
+            self.appctx["free_surface_id_list"] = self.free_surface_id_list
+            self.appctx["ds"] = self.equations[2].ds
 
         if isinstance(solver_parameters, dict):
             self.solver_parameters = solver_parameters
@@ -352,8 +367,8 @@ class StokesSolver:
                     # update keys for GADOPT's free surface mass inverse preconditioner
                     self.solver_parameters["fieldsplit_1"].update({"pc_python_type": "gadopt.FreeSurfaceMassInvPC"})
 
-        # solver object is set up later to permit editing default solver parameters specified above
-        self._solver_setup = False
+        # Solver object is set up later to permit editing default solver options.
+        self._solver_ready = False
 
     def setup_equation_attributes(self):
         stress = self.approximation.stress(self.u)
@@ -413,7 +428,7 @@ class StokesSolver:
             self.equations.append(
                 Equation(
                     self.test[2 + c],
-                    self.Z[2 + c],
+                    self.solution_space[2 + c],
                     free_surface_term,
                     mass_term=mass_term_fs,
                     eq_attrs=eq_attrs,
@@ -423,35 +438,29 @@ class StokesSolver:
 
             # Set internal dofs to zero to prevent singular matrix for free surface equation
             self.strong_bcs.append(
-                InteriorBC(self.Z.sub(2 + c), 0, free_surface_id)
+                InteriorBC(self.solution_space.sub(2 + c), 0, free_surface_id)
             )
 
             self.free_surface_id_list.append(free_surface_id)
 
             c += 1
 
-    def setup_solver(self):
+    def setup_solver(self) -> None:
         """Sets up the solver."""
-        # mu used in MassInvPC:
-        appctx = {"mu": self.approximation.mu / self.approximation.rho_continuity()}
-
-        if self.free_surface:
-            appctx["free_surface_id_list"] = self.free_surface_id_list
-            appctx["ds"] = self.equations[2].ds
-
         if self.constant_jacobian:
-            z_tri = fd.TrialFunction(self.Z)
-            F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
-            a, L = fd.lhs(F_stokes_lin), fd.rhs(F_stokes_lin)
+            trial = fd.TrialFunction(self.solution_space)
+            F = fd.replace(self.F, {self.solution: trial})
+            a, L = fd.lhs(F), fd.rhs(F)
+
             self.problem = fd.LinearVariationalProblem(
                 a, L, self.solution, bcs=self.strong_bcs, constant_jacobian=True
             )
             self.solver = fd.LinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
+                **self.nullspace,
                 options_prefix=self.name,
-                appctx=appctx,
-                **self.solver_kwargs,
+                appctx=self.appctx,
             )
         else:
             self.problem = fd.NonlinearVariationalProblem(
@@ -460,16 +469,16 @@ class StokesSolver:
             self.solver = fd.NonlinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
+                **self.nullspace,
                 options_prefix=self.name,
-                appctx=appctx,
-                **self.solver_kwargs,
+                appctx=self.appctx,
             )
 
-        self._solver_setup = True
+        self._solver_ready = True
 
     def solve(self):
         """Solves the system."""
-        if not self._solver_setup:
+        if not self._solver_ready:
             self.setup_solver()
 
         # Need to update old free surface height for implicit free surface

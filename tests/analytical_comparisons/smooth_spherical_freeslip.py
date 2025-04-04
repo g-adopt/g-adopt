@@ -75,9 +75,17 @@ def model(level, l, mm, k, do_write=False):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
+    stokes_solver = StokesSolver(
+        z,
+        T,
+        approximation,
+        bcs=stokes_bcs,
+        nullspace={
+            "nullspace": Z_nullspace,
+            "transpose_nullspace": Z_nullspace,
+            "near_nullspace": Z_near_nullspace,
+        },
+    )
     # use tighter tolerances than default to ensure convergence:
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-10
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-9

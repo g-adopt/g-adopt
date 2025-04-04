@@ -202,9 +202,17 @@ gd = GeodynamicalDiagnostics(z, FullT, boundary.bottom, boundary.top, quad_degre
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             near_nullspace=Z_near_nullspace)
+stokes_solver = StokesSolver(
+    z,
+    T,
+    approximation,
+    bcs=stokes_bcs,
+    nullspace={
+        "nullspace": Z_nullspace,
+        "transpose_nullspace": Z_nullspace,
+        "near_nullspace": Z_near_nullspace,
+    },
+)
 stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
 stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
 

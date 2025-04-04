@@ -223,8 +223,7 @@ stokes_solver = ga.StokesSolver(
     bcs=Simulation.stokes_bcs,
     quad_degree=None,
     solver_parameters=Simulation.stokes_solver_params,
-    nullspace=stokes_nullspace,
-    transpose_nullspace=stokes_nullspace,
+    nullspace={"nullspace": stokes_nullspace, "transpose_nullspace": stokes_nullspace},
 )
 
 # Solve initial Stokes system
