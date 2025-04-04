@@ -35,16 +35,19 @@ def updateTimeStep( h, hOld, timeStep, timeParameters, V ):
         relativeErrorFunc = fd.Function(V).interpolate(abs((h - hOld)/ (h)))
         with relativeErrorFunc.dat.vec_ro as v:
             relativeError = v.max()[1]
-        #PETSc.Sys.Print(relativeError)
+        PETSc.Sys.Print(relativeError)
 
         if float(timeStep) <= 100:
-            base  = 5
+            base  = 1
         else:
             base = round(timeStep / 100) * 10
         timeStepNew = float( timeStep ) * timeParameters['timeStepTolerance'] / (relativeError + 1e-06)
-        timeStepNew = round( int(base * round(float(timeStepNew/base)) ))
+       # timeStepNew = round( int(base * round(float(timeStepNew/base)) ))
+        timeStepNew = round( timeStepNew )
 
-        timeStepNew = np.maximum(timeStepNew, 1e-0)
+        timeStepNew = np.maximum(timeStepNew, 1e-1)
+        timeStepNew = np.minimum(timeStepNew, timeParameters["maximumTimeStep"])
+        timeStepNew = np.maximum(timeStepNew, timeParameters["minimumTimeStep"])
         PETSc.Sys.Print("dt ", float(timeStep))
 
         timeStep.assign( timeStepNew ); 

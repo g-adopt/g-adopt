@@ -2,12 +2,13 @@ import firedrake as fd
 import numpy as np
 from modelTypes import relativePermeability, waterRetention, moistureContent
 
-def ProblemDefinitionNonlinear( h, hOld, smoothingParameter, timeConstant, timeStep, v, V, timeIntegrator, modelFormulation, modelParameters, setBoundaryConditions, mesh, dx, ds ):
-    
+def ProblemDefinitionNonlinear( h, hOld, hStar, timeConstant, timeStep, V, timeIntegrator, modelParameters, setBoundaryConditions, mesh, dx, ds ):
+
     # Returns the variational problem for solving Richards equation
 
     dimen = mesh.topological_dimension()
     x     = fd.SpatialCoordinate(mesh)
+    v = fd.TestFunction(V)
 
     boundaryCondition = setBoundaryConditions(timeConstant, x)
 
@@ -16,54 +17,64 @@ def ProblemDefinitionNonlinear( h, hOld, smoothingParameter, timeConstant, timeS
         hDiff = h
     elif timeIntegrator == 'crankNicolson':
         hBar = 0.5*(h + hOld)
-        hDiff = hBar
-    elif timeIntegrator == 'modifiedEuler':
-        hBar = hOld
-        hDiff = h
+        hDiff = 0.5*(h + hOld)
+    elif timeIntegrator == 'picardIteration':
+        hBar = 0.5*(hOld + hStar)
+        hDiff = 0.5*(h + hOld)
     else:
         hBar = hOld
         hDiff = h
 
-    C = waterRetention( modelParameters, hBar, x, timeConstant )
-    K = relativePermeability( modelParameters, hBar, x, timeConstant )
+    C = waterRetention(modelParameters, hBar, x, timeConstant)
+    K = relativePermeability(modelParameters, hBar, x, timeConstant)
 
-    if dimen == 1:
-        gravity = fd.as_vector([ K ])
-    elif dimen == 2:
-        gravity = fd.as_vector([0,  K ]);
-    else:
-        gravity = fd.as_vector([0, 0, K ])
-
+    gravity = K*fd.as_vector(fd.grad(x[dimen-1]))
     normalVector = fd.FacetNormal(mesh)
 
     # Define problem
-    if modelFormulation == 'mixedForm':
 
-        thetaOld = moistureContent( modelParameters, hOld, x, timeConstant)
-        thetaNew = moistureContent( modelParameters, h, x, timeConstant)
+    Ss     = modelParameters["Ss"]
+    thetaR = modelParameters["thetaR"]
+    thetaS = modelParameters["thetaS"]
+    theta = moistureContent( modelParameters, hBar, x, timeConstant)
+    S = (theta - thetaR) / (thetaS - thetaR)
 
-        F = ( fd.inner( (thetaNew - thetaOld )/timeStep, v) +
-            fd.inner( K*fd.grad( hDiff ), fd.grad(v) )  -
-        fd.inner( K.dx(dimen-1), v )
-        + fd.inner( smoothingParameter*fd.grad( h), fd.grad(v) ) )*dx
+    F = (fd.inner((Ss*S + C)*(h - hOld)/timeStep, v) + fd.inner(K*fd.grad(hDiff + x[dimen-1]), fd.grad(v)) )*dx
 
-    else:
+    strongBCS = []
 
-        F = ( fd.inner( C*(h - hOld)/timeStep, v) + fd.inner( K*fd.grad( hDiff ), fd.grad(v) )  -
-        fd.inner( K.dx(dimen-1), v ) + fd.inner( smoothingParameter*fd.grad( h), fd.grad(v) ) )*dx
-
-    strongBCS = [];
-
-    for index in range(len(boundaryCondition)):
-
-        boundaryInfo  = boundaryCondition[index+1]
+    if "top" in boundaryCondition:
+        boundaryInfo = boundaryCondition.get('top')
         boundaryType  = next(iter(boundaryInfo))
         boundaryValue = boundaryInfo[boundaryType]
 
         if boundaryType == "h":
-            strongBCS.append(fd.DirichletBC(V, boundaryValue, index+1))
+            strongBCS.append(fd.DirichletBC(V, boundaryValue, "top"))
         else:
-            F = F - ( -( fd.dot( normalVector , gravity ) - boundaryValue) ) * v * ds(index+1)
+            F = F - (-(fd.dot(normalVector , gravity) - boundaryValue)) * v * fd.ds_t
+
+    if "bottom" in boundaryCondition:
+        boundaryInfo = boundaryCondition.get('bottom')
+        boundaryType  = next(iter(boundaryInfo))
+        boundaryValue = boundaryInfo[boundaryType]
+
+        if boundaryType == "h":
+            strongBCS.append(fd.DirichletBC(V, boundaryValue, "bottom"))
+        else:
+            F = F - (-(fd.dot(normalVector , gravity) - boundaryValue)) * v * fd.ds_b
+
+    for index in range(10):
+
+        if index in boundaryCondition:
+
+            boundaryInfo  = boundaryCondition.get(index)
+            boundaryType  = next(iter(boundaryInfo));  
+            boundaryValue = boundaryInfo[boundaryType];
+
+            if boundaryType == "h":
+               strongBCS.append(fd.DirichletBC(V, boundaryValue, index))
+            else:
+                F = F - boundaryValue * v * ds(index)
 
     problem = fd.NonlinearVariationalProblem(F, h, bcs = strongBCS)
 
@@ -84,7 +95,7 @@ def ProblemDefinitionNonlinear( h, hOld, smoothingParameter, timeConstant, timeS
         solverRichardsNonlinear  = fd.NonlinearVariationalSolver(problem,
                                     solver_parameters={
                                     'mat_type': 'aij',
-                                    'snes_type': 'ksponly',
+                                    'snes_type': 'newtonls',
                                     'ksp_type': 'gmres',
                                     "ksp_rtol": 1e-5,
                                     'pc_type': 'sor',
