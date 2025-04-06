@@ -40,7 +40,7 @@ def run_forward():
     Ra = Constant(1e7)  # Rayleigh number
 
     # Define time stepping parameters:
-    max_timesteps = 200
+    max_timesteps = 250
     delta_t = Constant(3e-6)  # Constant time step
 
     with CheckpointFile("Checkpoint230.h5", mode="r") as f:
