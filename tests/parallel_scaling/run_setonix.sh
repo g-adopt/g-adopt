@@ -7,6 +7,12 @@ shift
 export MY_GADOPT="$GADOPT_CHECKOUT"
 source "$GADOPT_SETUP"
 
-srun $@ -n 1 2> level_${level}_warmup.err > level_${level}_warmup.out
-export PETSC_OPTIONS="-log_view :profile_${level}.txt"
-srun $@ 2> level_${level}_full.err > level_${level}_full.out
+#if [[ "${level}" -gt 5 ]]; then
+#    export BINDING="-m block:block:block"
+#else
+#    export BINDING=""
+#fi
+
+srun ${BINDING} $@ -n 1 2> level_${level}_warmup.err > level_${level}_warmup.out
+export PETSC_OPTIONS="-log_view"
+srun ${BINDING} $@ 2> level_${level}_full.err > level_${level}_full.out
