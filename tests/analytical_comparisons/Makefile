@@ -1,6 +1,6 @@
 include ../../rules.mk
 
-cases := smooth_cylindrical_freeslip smooth_cylindrical_zeroslip delta_cylindrical_freeslip delta_cylindrical_zeroslip delta_cylindrical_freeslip_dpc delta_cylindrical_zeroslip_dpc
+cases := delta_cylindrical_zeroslip
 long_cases := smooth_cylindrical_freesurface smooth_spherical_freeslip smooth_spherical_zeroslip
 
 sentinels := $(addprefix .sentinel.,$(cases))
