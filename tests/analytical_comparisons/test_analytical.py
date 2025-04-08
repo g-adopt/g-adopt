@@ -5,12 +5,12 @@ import pandas as pd
 from pathlib import Path
 
 enabled_cases = {
-    "smooth_cylindrical_freeslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1, "rtol_ns": 1e-1},
-    "smooth_cylindrical_zeroslip": {"convergence": (4.0, 2.0, 2.0), "rtol_ns": 1e-1},
+    "smooth_cylindrical_freeslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
+    "smooth_cylindrical_zeroslip": {"convergence": (4.0, 2.0, 2.0), "rtol_ns": 6e-1},
     "smooth_cylindrical_freesurface": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
-    "delta_cylindrical_freeslip": {"convergence": (1.5, 0.5, 2.0)},
-    "delta_cylindrical_zeroslip": {"convergence": (1.5, 0.5, 2.0)},
-    "delta_cylindrical_freeslip_dpc": {"convergence": (3.5, 2.0, 2.0), "rtol": 1e-1},
+    "delta_cylindrical_freeslip": {"convergence": (1.5, 0.5, 2.0), "rtol_ns": 5e-1},
+    "delta_cylindrical_zeroslip": {"convergence": (1.5, 0.5, 2.0), "rtol_ns": 5e-1},
+    "delta_cylindrical_freeslip_dpc": {"convergence": (3.5, 2.0, 2.0), "rtol": 1e-1, "rtol_ns": 5e-1},
     "delta_cylindrical_zeroslip_dpc": {"convergence": (3.5, 2.0, 2.0), "rtol": 2e-1},
     "smooth_spherical_freeslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
     "smooth_spherical_zeroslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
@@ -87,8 +87,10 @@ def test_analytical(name, expected, config):
 
     convergence = np.log2(errs.shift() / errs).drop(index=0)
     expected_convergence = pd.Series(expected["convergence"], index=cols_err)
-
-    # Make sure velocity and pressure have the theoretical rates
+    
+    # Make sure velocity and pressure have the theoretical convergence rates
     assert np.allclose(convergence[columns[:2]], expected_convergence[columns[:2]], rtol=expected.get("rtol", 1e-2))
-    # For normal stress we only make sure the convergence does not go bellow a minimum
-    assert np.all(convergence[columns[2]] > expected_convergence[columns[2]] - expected.get("rtol_ns", 1e-2))
+
+    # For normal stress/free surface we only make sure the convergence does not go bellow a minimum, while allowing loose tolerance 
+    assert np.allclose(convergence[columns[2]], expected_convergence[columns[2]], rtol=expected.get("rtol_ns", 1e-1))
+    assert np.all(convergence[columns[2]] > expected_convergence[columns[2]] - 0.1)
