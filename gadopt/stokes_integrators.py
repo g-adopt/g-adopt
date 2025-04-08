@@ -488,64 +488,64 @@ class StokesSolver:
 
 
 def ala_right_nullspace(
-    W: fd.functionspaceimpl.WithGeometry,
-    approximation: AnelasticLiquidApproximation,
+        W: fd.functionspaceimpl.WithGeometry,
+        approximation: AnelasticLiquidApproximation,
         top_subdomain_id: str | int):
     r"""Compute pressure nullspace for Anelastic Liquid Approximation.
 
-    Arguments:
-      W: pressure function space
-      approximation: AnelasticLiquidApproximation with equation parameters
-      top_subdomain_id: boundary id of top surface
+        Arguments:
+          W: pressure function space
+          approximation: AnelasticLiquidApproximation with equation parameters
+          top_subdomain_id: boundary id of top surface
 
-    Returns:
-      pressure nullspace solution
+        Returns:
+          pressure nullspace solution
 
-    To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
-    which includes a pressure-dependent buoyancy term, we try to solve the equation:
+        To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
+        which includes a pressure-dependent buoyancy term, we try to solve the equation:
 
-    $$
-      -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
-    $$
+        $$
+          -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
+        $$
 
-    Taking the divergence:
+        Taking the divergence:
 
-    $$
-      -nabla * nabla p + nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) = 0,
-    $$
+        $$
+          -nabla * nabla p + nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) = 0,
+        $$
 
-    then testing it with q:
+        then testing it with q:
 
-    $$
-        int_Omega -q nabla * nabla p dx + int_Omega q nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) dx = 0
-    $$
+        $$
+            int_Omega -q nabla * nabla p dx + int_Omega q nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) dx = 0
+        $$
 
-    followed by integration by parts:
+        followed by integration by parts:
 
-    $$
-        int_Gamma -bb n * q nabla p ds + int_Omega nabla q cdot nabla p dx +
-        int_Gamma bb n * hatk q g "Di" rho chi c_p/(c_v gamma) p dx -
-        int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
-    $$
+        $$
+            int_Gamma -bb n * q nabla p ds + int_Omega nabla q cdot nabla p dx +
+            int_Gamma bb n * hatk q g "Di" rho chi c_p/(c_v gamma) p dx -
+            int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
+        $$
 
-    This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
-    all boundary terms:
+        This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
+        all boundary terms:
 
-    $$
-      int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
-    $$
+        $$
+          int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
+        $$
 
-    However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
-    we ended up merely testing the original equation with $nabla q$). Instead we use the fact that the gradient of the null mode
-    is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
-    any nonzero constant for this surface fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
-    and apply it as a Dirichlet boundary condition.
+        However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
+        we ended up merely testing the original equation with $nabla q$). Instead we use the fact that the gradient of the null mode
+        is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
+        any nonzero constant for this surface fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
+        and apply it as a Dirichlet boundary condition.
 
-    Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
-    since not every test function $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
-    pressure test space, the two terms do not necessarily exactly cancel when tested with $v$ instead of $nabla q$ as in our
-    final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
-    an improved convergence of the iterative Stokes solver.
+        Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
+        since not every test function $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
+        pressure test space, the two terms do not necessarily exactly cancel when tested with $v$ instead of $nabla q$ as in our
+        final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
+        an improved convergence of the iterative Stokes solver.
     """
     W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
     q = fd.TestFunction(W)
