@@ -239,7 +239,9 @@ class StokesSolver:
         self.solution = solution
         self.T = T
         self.approximation = approximation
+        self.bcs = bcs
         self.quad_degree = quad_degree
+        self.solver_parameters = solver_parameters
         self.coupled_tstep = coupled_tstep
         self.theta = theta
 
@@ -267,32 +269,7 @@ class StokesSolver:
         self.free_surface_map = {}
         self.buoyancy_fs = [None] * len(self.solution_split)
 
-        for bc_id, bc in bcs.items():
-            weak_bc = defaultdict(float)
-            for bc_type, value in bc.items():
-                if bc_type == 'u':
-                    self.strong_bcs.append(
-                        fd.DirichletBC(self.solution_space.sub(0), value, bc_id)
-                    )
-                elif bc_type == 'ux':
-                    self.strong_bcs.append(
-                        fd.DirichletBC(self.solution_space.sub(0).sub(0), value, bc_id)
-                    )
-                elif bc_type == 'uy':
-                    self.strong_bcs.append(
-                        fd.DirichletBC(self.solution_space.sub(0).sub(1), value, bc_id)
-                    )
-                elif bc_type == 'uz':
-                    self.strong_bcs.append(
-                        fd.DirichletBC(self.solution_space.sub(0).sub(2), value, bc_id)
-                    )
-                elif bc_type == 'free_surface':
-                    weak_bc["normal_stress"] += self.set_free_surface_boundary(
-                        value, bc_id
-                    )
-                else:
-                    weak_bc[bc_type] += value
-            self.weak_bcs[bc_id] = weak_bc
+        self.set_boundary_conditions()
 
         # eta is a list of 0, 1 or multiple free surface fields
         self.u, self.p, *self.eta = fd.split(self.solution)
@@ -305,41 +282,76 @@ class StokesSolver:
         self.set_equations()
         self.set_form()
 
-        if isinstance(solver_parameters, dict):
-            self.solver_parameters = solver_parameters
-        else:
-            if self.linear:
-                self.solver_parameters = {"snes_type": "ksponly"}
-            else:
-                self.solver_parameters = newton_stokes_solver_parameters.copy()
+        self.set_solver_options()
 
-            if INFO >= log_level:
-                self.solver_parameters["snes_monitor"] = None
+        # solver object is set up later to permit editing default solver parameters specified above
+        self._solver_setup = False
 
-            if isinstance(solver_parameters, str):
-                match solver_parameters:
-                    case "direct":
-                        self.solver_parameters.update(direct_stokes_solver_parameters)
-                    case "iterative":
-                        self.solver_parameters.update(
-                            iterative_stokes_solver_parameters
+    def set_boundary_conditions(self) -> None:
+        """Sets strong and weak boundary conditions."""
+        bc_map = {"u": self.solution_space.sub(0)}
+        if self.mesh.cartesian:
+            bc_map["ux"] = bc_map["u"].sub(0)
+            bc_map["uy"] = bc_map["u"].sub(1)
+            if self.mesh.geometric_dimension == 3:
+                bc_map["uz"] = bc_map["u"].sub(2)
+
+        for bc_id, bc in self.bcs.items():
+            weak_bc = defaultdict(float)
+
+            for bc_type, val in bc.items():
+                match bc_type:
+                    case "u" | "ux" | "uy" | "uz":
+                        self.strong_bcs.append(
+                            fd.DirichletBC(bc_map[bc_type], val, bc_id)
+                        )
+                    case "free_surface":
+                        weak_bc["normal_stress"] += self.set_free_surface_boundary(
+                            val, bc_id
                         )
                     case _:
-                        raise ValueError(
-                            f"Solver type '{solver_parameters}' not implemented."
-                        )
-            elif self.mesh.topological_dimension() == 2 and self.mesh.cartesian:
-                self.solver_parameters.update(direct_stokes_solver_parameters)
-            else:
-                self.solver_parameters.update(iterative_stokes_solver_parameters)
+                        weak_bc[bc_type] += val
 
-            if self.solver_parameters.get("pc_type") == "fieldsplit":
-                # extra options for iterative solvers
-                if DEBUG >= log_level:
-                    self.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-                    self.solver_parameters['fieldsplit_1']['ksp_monitor'] = None
-                elif INFO >= log_level:
-                    self.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+            self.weak_bcs[bc_id] = weak_bc
+
+    def set_solver_options(self) -> None:
+        """Sets PETSc solver parameters."""
+        # Application context for the inverse mass matrix preconditioner
+        self.appctx = {
+            "mu": self.approximation.mu / self.approximation.rho_continuity()
+        }
+
+        if isinstance(solver_preset := self.solver_parameters, dict):
+            return
+
+        if not depends_on(self.approximation.mu, self.solution):
+            self.solver_parameters = {"snes_type": "ksponly"}
+        else:
+            self.solver_parameters = newton_stokes_solver_parameters.copy()
+
+        if INFO >= log_level:
+            self.solver_parameters["snes_monitor"] = None
+
+        if solver_preset is not None:
+            match solver_preset:
+                case "direct":
+                    self.solver_parameters.update(direct_stokes_solver_parameters)
+                case "iterative":
+                    self.solver_parameters.update(iterative_stokes_solver_parameters)
+                case _:
+                    raise ValueError("Solver type must be 'direct' or 'iterative'.")
+        elif self.mesh.topological_dimension() == 2 and self.mesh.cartesian:
+            self.solver_parameters.update(direct_stokes_solver_parameters)
+        else:
+            self.solver_parameters.update(iterative_stokes_solver_parameters)
+
+        # Extra options for iterative solvers
+        if self.solver_parameters.get("pc_type") == "fieldsplit":
+            if DEBUG >= log_level:
+                self.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
+                self.solver_parameters["fieldsplit_1"]["ksp_monitor"] = None
+            elif INFO >= log_level:
+                self.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
 
                 if self.free_surface_map:
                     # Gather pressure and free surface fields for Schur complement solve
@@ -432,17 +444,15 @@ class StokesSolver:
 
     def setup_solver(self):
         """Sets up the solver."""
-        # mu used in MassInvPC:
-        appctx = {"mu": self.approximation.mu / self.approximation.rho_continuity()}
-
         if self.free_surface_map:
-            appctx["free_surface"] = self.free_surface_map
-            appctx["ds"] = self.equations[-1].ds
+            self.appctx["free_surface"] = self.free_surface_map
+            self.appctx["ds"] = self.equations[-1].ds
 
         if self.constant_jacobian:
-            z_tri = fd.TrialFunction(self.solution_space)
-            F_stokes_lin = fd.replace(self.F, {self.solution: z_tri})
-            a, L = fd.lhs(F_stokes_lin), fd.rhs(F_stokes_lin)
+            trial = fd.TrialFunction(self.solution_space)
+            F = fd.replace(self.F, {self.solution: trial})
+            a, L = fd.lhs(F), fd.rhs(F)
+
             self.problem = fd.LinearVariationalProblem(
                 a, L, self.solution, bcs=self.strong_bcs, constant_jacobian=True
             )
@@ -450,7 +460,7 @@ class StokesSolver:
                 self.problem,
                 solver_parameters=self.solver_parameters,
                 options_prefix=self.name,
-                appctx=appctx,
+                appctx=self.appctx,
                 **self.solver_kwargs,
             )
         else:
@@ -461,7 +471,7 @@ class StokesSolver:
                 self.problem,
                 solver_parameters=self.solver_parameters,
                 options_prefix=self.name,
-                appctx=appctx,
+                appctx=self.appctx,
                 **self.solver_kwargs,
             )
 
@@ -478,64 +488,64 @@ class StokesSolver:
 
 
 def ala_right_nullspace(
-        W: fd.functionspaceimpl.WithGeometry,
-        approximation: AnelasticLiquidApproximation,
+    W: fd.functionspaceimpl.WithGeometry,
+    approximation: AnelasticLiquidApproximation,
         top_subdomain_id: str | int):
     r"""Compute pressure nullspace for Anelastic Liquid Approximation.
 
-        Arguments:
-          W: pressure function space
-          approximation: AnelasticLiquidApproximation with equation parameters
-          top_subdomain_id: boundary id of top surface
+    Arguments:
+      W: pressure function space
+      approximation: AnelasticLiquidApproximation with equation parameters
+      top_subdomain_id: boundary id of top surface
 
-        Returns:
-          pressure nullspace solution
+    Returns:
+      pressure nullspace solution
 
-        To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
-        which includes a pressure-dependent buoyancy term, we try to solve the equation:
+    To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
+    which includes a pressure-dependent buoyancy term, we try to solve the equation:
 
-        $$
-          -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
-        $$
+    $$
+      -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
+    $$
 
-        Taking the divergence:
+    Taking the divergence:
 
-        $$
-          -nabla * nabla p + nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) = 0,
-        $$
+    $$
+      -nabla * nabla p + nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) = 0,
+    $$
 
-        then testing it with q:
+    then testing it with q:
 
-        $$
-            int_Omega -q nabla * nabla p dx + int_Omega q nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) dx = 0
-        $$
+    $$
+        int_Omega -q nabla * nabla p dx + int_Omega q nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) dx = 0
+    $$
 
-        followed by integration by parts:
+    followed by integration by parts:
 
-        $$
-            int_Gamma -bb n * q nabla p ds + int_Omega nabla q cdot nabla p dx +
-            int_Gamma bb n * hatk q g "Di" rho chi c_p/(c_v gamma) p dx -
-            int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
-        $$
+    $$
+        int_Gamma -bb n * q nabla p ds + int_Omega nabla q cdot nabla p dx +
+        int_Gamma bb n * hatk q g "Di" rho chi c_p/(c_v gamma) p dx -
+        int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
+    $$
 
-        This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
-        all boundary terms:
+    This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
+    all boundary terms:
 
-        $$
-          int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
-        $$
+    $$
+      int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
+    $$
 
-        However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
-        we ended up merely testing the original equation with $nabla q$). Instead we use the fact that the gradient of the null mode
-        is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
-        any nonzero constant for this surface fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
-        and apply it as a Dirichlet boundary condition.
+    However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
+    we ended up merely testing the original equation with $nabla q$). Instead we use the fact that the gradient of the null mode
+    is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
+    any nonzero constant for this surface fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
+    and apply it as a Dirichlet boundary condition.
 
-        Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
-        since not every test function $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
-        pressure test space, the two terms do not necessarily exactly cancel when tested with $v$ instead of $nabla q$ as in our
-        final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
-        an improved convergence of the iterative Stokes solver.
+    Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
+    since not every test function $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
+    pressure test space, the two terms do not necessarily exactly cancel when tested with $v$ instead of $nabla q$ as in our
+    final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
+    an improved convergence of the iterative Stokes solver.
     """
     W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
     q = fd.TestFunction(W)
