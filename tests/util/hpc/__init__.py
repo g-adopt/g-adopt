@@ -35,9 +35,9 @@ def get_hpc_properties() -> Tuple[str, str, Dict[str, str]]:
     format_params = {var: os.environ[var] for var in required_environment[system]}
     wd = Path().resolve()
     if (wd / f"run_{system}.sh").exists():
-        script_dir=wd
+        script_dir = wd
     else:
-        script_dir=this_dir
+        script_dir = this_dir
     format_params["script_path"] = str(script_dir / f"run_{system}.sh")
     if "gadopt_setup" not in format_params:
         format_params["gadopt_setup"] = str(this_dir / f"{system}_gadopt_setup.sh")
