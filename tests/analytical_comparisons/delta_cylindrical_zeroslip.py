@@ -43,6 +43,8 @@ def model(level, nn, do_write=False):
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # pressure function space (scalar)
+    # for coordinates used in analytical normal stress solution
+    Wvec = VectorFunctionSpace(mesh, "CG", 1)  # pressure function space (scalar)
     P0 = FunctionSpace(mesh, "DQ", 0)  # used for marker field
     Q1DG = FunctionSpace(mesh, "DQ", 1)  # used for analytical (disc.) pressure solution
     # for coordinates used in analytical pressure solution
@@ -72,19 +74,21 @@ def model(level, nn, do_write=False):
         Z, closed=False, rotational=True, translations=[0, 1]
     )
 
+    solver_params = iterative_stokes_solver_parameters
+    # use tighter tolerances than default to ensure convergence:
+    solver_params["fieldsplit_0"]["ksp_rtol"] = 1e-13
+    solver_params["fieldsplit_1"]["ksp_rtol"] = 1e-11
     stokes_solver = StokesSolver(
         z,
         approximation,
         bcs=stokes_bcs,
+        solver_parameters=solver_params,
         nullspace={
             "nullspace": Z_nullspace,
             "transpose_nullspace": Z_nullspace,
             "near_nullspace": Z_near_nullspace,
         },
     )
-    # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-13
-    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-11
 
     normal_stress_solver = BoundaryNormalStressSolver(
         sigma, approximation, z, boundary.top
@@ -123,7 +127,7 @@ def model(level, nn, do_write=False):
     )
 
     # compute u analytical and error
-    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
+    uxy = Function(V).interpolate(X)
     u_anal_upper = Function(V, name="AnalyticalVelocityUpper")
     u_anal_lower = Function(V, name="AnalyticalVelocityLower")
     u_anal = Function(V, name="AnalyticalVelocity")
@@ -137,7 +141,7 @@ def model(level, nn, do_write=False):
     u_error = Function(V, name="VelocityError").assign(u_ - u_anal)
 
     # compute p analytical and error
-    pxy = Function(Q1DGvec).interpolate(as_vector((X[0], X[1])))
+    pxy = Function(Q1DGvec).interpolate(X)
     pdg = Function(Q1DG).interpolate(p)
     p_anal_upper = Function(Q1DG, name="AnalyticalPressureUpper")
     p_anal_lower = Function(Q1DG, name="AnalyticalPressureLower")
@@ -153,14 +157,15 @@ def model(level, nn, do_write=False):
 
     # Compute analytical and error functions for the surface normal stress (note we are
     # using the same space as pressure)
-    sigma_anal_upper = Function(Q1DG, name="AnalyticalNormalStressUpper")
-    sigma_anal_lower = Function(Q1DG, name="AnalyticalNormalStressLower")
+    sigmaxy = Function(Wvec).interpolate(X)
+    sigma_anal_upper = Function(W, name="AnalyticalNormalStressUpper")
+    sigma_anal_lower = Function(W, name="AnalyticalNormalStressLower")
     sigma_anal = Function(W, name="AnalyticalNormalStress")
     sigma_anal_upper.dat.data[:] = [
-        -solution_upper.radial_stress_cartesian(xyi) for xyi in pxy.dat.data
+        -solution_upper.radial_stress_cartesian(xyi) for xyi in sigmaxy.dat.data
     ]
     sigma_anal_lower.dat.data[:] = [
-        -solution_lower.radial_stress_cartesian(xyi) for xyi in pxy.dat.data
+        -solution_lower.radial_stress_cartesian(xyi) for xyi in sigmaxy.dat.data
     ]
     sigma_anal.interpolate(marker * sigma_anal_lower + (1 - marker) * sigma_anal_upper)
     sigma_error = Function(W, name="NormalStressError").assign(sigma - sigma_anal)

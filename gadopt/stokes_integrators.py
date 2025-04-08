@@ -638,13 +638,13 @@ class BoundaryNormalStressSolver:
 
     This solver computes topography on boundaries using the equation
 
-    $$ h = \frac{\sigma_{rr}}{g \delta \rho} $$
+    $$ h = sigma_(rr) / (g delta rho) $$
 
-    where $\sigma_{rr}$ is defined as
+    where $sigma_(rr)$ is defined as:
 
-    $$ \sigma_{rr} = [-p I + 2 * \mu (\nabla u + \nabla u^T)] \cdot \hat{n} \cdot \hat{n} $$
+    $$ sigma_(rr) = [-p I + 2 mu (nabla u + nabla u^T)] . hat n . hat n $$
 
-    Instead of assuming a unit normal vector $\hat{n}$, this solver uses Firedrake's
+    Instead of assuming a unit normal vector $hat n$, this solver uses Firedrake's
     `FacetNormal` to accurately determine the normal vectors, which is particularly
     useful, for example, for icosahedron meshes in spherical simulations.
 

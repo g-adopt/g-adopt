@@ -67,20 +67,22 @@ def model(level, k, nn, do_write=False):
         Z, closed=False, rotational=True, translations=[0, 1]
     )
 
+    solver_params = iterative_stokes_solver_parameters
+    # use tighter tolerances than default to ensure convergence:
+    solver_params["fieldsplit_0"]["ksp_rtol"] = 1e-13
+    solver_params["fieldsplit_1"]["ksp_rtol"] = 1e-11
     stokes_solver = StokesSolver(
         z,
         approximation,
         T,
         bcs=stokes_bcs,
+        solver_parameters=solver_params,
         nullspace={
             "nullspace": Z_nullspace,
             "transpose_nullspace": Z_nullspace,
             "near_nullspace": Z_near_nullspace,
         },
     )
-    # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-13
-    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-11
 
     normal_stress_solver = BoundaryNormalStressSolver(
         sigma, approximation, z, boundary.top
@@ -108,13 +110,13 @@ def model(level, k, nn, do_write=False):
     )
 
     # compute u analytical and error
-    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
+    uxy = Function(V).interpolate(X)
     u_anal = Function(V, name="AnalyticalVelocity")
     u_anal.dat.data[:] = [solution.velocity_cartesian(xyi) for xyi in uxy.dat.data]
     u_error = Function(V, name="VelocityError").assign(u_ - u_anal)
 
     # compute p analytical and error
-    pxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
+    pxy = Function(Wvec).interpolate(X)
     p_anal = Function(W, name="AnalyticalPressure")
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
     p_error = Function(W, name="PressureError").assign(p_ - p_anal)
