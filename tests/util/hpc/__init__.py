@@ -33,12 +33,14 @@ def get_hpc_properties() -> Tuple[str, str, Dict[str, str]]:
         if var not in os.environ:
             raise KeyError(f"{var} is required in environment when running on {system}")
     format_params = {var: os.environ[var] for var in required_environment[system]}
+    if "gadopt_setup" in os.environ:
+        format_params["gadopt_setup"] = os.environ["gadopt_setup"]
+    else:
+        format_params["gadopt_setup"] = str(this_dir / f"{system}_gadopt_setup.sh")
     wd = Path().resolve()
     if (wd / f"run_{system}.sh").exists():
         script_dir = wd
     else:
         script_dir = this_dir
     format_params["script_path"] = str(script_dir / f"run_{system}.sh")
-    if "gadopt_setup" not in format_params:
-        format_params["gadopt_setup"] = str(this_dir / f"{system}_gadopt_setup.sh")
     return system, batch_templates[system], format_params
