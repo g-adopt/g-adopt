@@ -734,7 +734,7 @@ class BoundaryNormalStressSolver:
             )
         else:
             self.solver_parameters = solver_parameters
-        self.solver_parameters = BoundaryNormalStressSolver.iterative_solver_parameters
+
         # when to know the solver
         self._solver_is_set_up = False
 
