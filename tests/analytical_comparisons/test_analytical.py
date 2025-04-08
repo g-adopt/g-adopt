@@ -87,10 +87,10 @@ def test_analytical(name, expected, config):
 
     convergence = np.log2(errs.shift() / errs).drop(index=0)
     expected_convergence = pd.Series(expected["convergence"], index=cols_err)
-    
+
     # Make sure velocity and pressure have the theoretical convergence rates
     assert np.allclose(convergence[columns[:2]], expected_convergence[columns[:2]], rtol=expected.get("rtol", 1e-2))
 
-    # For normal stress/free surface we only make sure the convergence does not go bellow a minimum, while allowing loose tolerance 
+    # For normal stress/free surface we only make sure the convergence does not go bellow a minimum, while allowing loose tolerance
     assert np.allclose(convergence[columns[2]], expected_convergence[columns[2]], rtol=expected.get("rtol_ns", 1e-1))
     assert np.all(convergence[columns[2]] > expected_convergence[columns[2]] - 0.1)
