@@ -1,8 +1,9 @@
 #!/bin/bash -i
 #SBATCH --exclude=nid00[2024-2055],nid00[2792-2823]
 
-level=$1
-shift
+### Need to grab 'level' from scaling.py input args to name our
+### output files appropriately
+level="$4"
 
 export MY_GADOPT="$GADOPT_CHECKOUT"
 source "$GADOPT_SETUP"

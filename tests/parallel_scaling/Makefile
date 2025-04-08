@@ -10,7 +10,7 @@ SHELL = /bin/bash
 profile_%.txt: scaling.py stokes_cubed_sphere.py
 	echo "running parallel scaling on level $*"
 	mkdir -p batch_output
-	python3 scaling.py submit -H $*
+	python3 scaling.py submit -H -e "batch_output/l{level}.err" -o "batch_output/l{level}.out" $*
 
 clean:
 	rm -rf batch_output profile_*.txt level_*.out level_*.err

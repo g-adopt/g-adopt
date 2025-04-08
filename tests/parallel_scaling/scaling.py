@@ -6,8 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.util.hpc import get_hpc_properties
-
 cases = {
     5: {
         "cores": 26,
@@ -96,8 +94,18 @@ def run_subcommand(args):
 def submit_subcommand(args):
     config = cases[args.level]
     cores = config.pop("cores")
+    outname = args.outname.format(level=args.level)
+    errname = args.errname.format(level=args.level)
+    jobname = f"scaling_{args.level}"
     command = args.template.format(
-        cores=cores, mem=4 * cores, level=args.level, nodes=max(1, cores // 104), **args.extra_format
+        cores=cores,
+        mem=4 * cores,
+        level=args.level,
+        nodes=max(1, cores // 104),
+        errname=errname,
+        outname=outname,
+        jobname=jobname,
+        **args.extra_format,
     )
     proc = subprocess.Popen(
         [
@@ -139,13 +147,24 @@ if __name__ == "__main__":
         help="Detect HPC system and run using known template for batch job submission for that system",
         action="store_true",
     )
+    parser_submit.add_argument(
+        "-e", "--errname", type=str, help="stderr file for batch job", default="batch_output/l{level}.err"
+    )
+    parser_submit.add_argument(
+        "-o", "--outname", type=str, help="stdout file for batch job", default="batch_output/l{level}.out"
+    )
     parser_submit.add_argument("level", type=int)
     parser_submit.set_defaults(func=submit_subcommand)
 
     args = parser.parse_args()
     if hasattr(args, "HPC") and args.HPC:
+        ### Find HPC utilities - only if needed.
+        test_util_path = str((Path().resolve().parent / "util"))
+        sys.path.insert(0, test_util_path)
+        from hpc import get_hpc_properties
+
         system, args.template, args.extra_format = get_hpc_properties()
         if "gadopt_setup" not in args.extra_format:
-            args.extra_format["gadopt_setup"] = str((Path().resolve().parent / f"util/{system}_gadopt_setup.sh"))
+            args.extra_format["gadopt_setup"] = f"{test_util_path}/hpc/{system}_gadopt_setup.sh"
 
     args.func(args)

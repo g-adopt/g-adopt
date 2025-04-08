@@ -1,7 +1,8 @@
 #!/bin/bash -i
 
-level=$1
-shift
+### Need to grab 'level' from scaling.py input args to name our
+### output files appropriately
+level="$4"
 
 export MY_GADOPT="$GADOPT_CHECKOUT"
 source "$GADOPT_SETUP"

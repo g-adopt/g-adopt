@@ -3,6 +3,7 @@ import itertools
 import subprocess
 import sys
 import importlib
+from pathlib import Path
 
 cases = {
     "smooth": {
@@ -28,7 +29,7 @@ cases = {
         },
         "spherical": {
             "freeslip": {
-                "cores": [24, 48, 96, 192],  # cascade lake
+                "cores": [24, 48, 104, 208],  # sapphire rapids
                 "levels": [3, 4, 5, 6],
                 "l": [2, 8],
                 "m": [2, 1],  # divide l by this value to get actual m
@@ -36,7 +37,7 @@ cases = {
                 "permutate": False,
             },
             "zeroslip": {
-                "cores": [24, 48, 96, 192],
+                "cores": [24, 48, 104, 208],
                 "levels": [3, 4, 5, 6],
                 "l": [2, 8],
                 "m": [2, 1],
@@ -117,8 +118,19 @@ def submit_subcommand(args):
     for level, cores in zip(config.pop("levels"), config.pop("cores")):
         for params in param_sets(config, permutate):
             paramstr = "-".join([str(v) for v in params])
+            errname = args.errname.format(level=level, params=paramstr)
+            outname = args.outname.format(level=level, params=paramstr)
+            jobname = f"analytical_{paramstr}"
             command = args.template.format(
-                cores=cores, mem=4 * cores, params=paramstr, level=level
+                cores=cores,
+                mem=4 * cores,
+                params=paramstr,
+                level=level,
+                nodes=max(1, cores // 104),
+                errname=errname,
+                outname=outname,
+                jobname=jobname,
+                **args.extra_format,
             )
 
             procs[paramstr] = subprocess.Popen(
@@ -144,15 +156,6 @@ def submit_subcommand(args):
         sys.exit(1)
 
 
-def count_subcommand(args):
-    config = get_case(cases, args.case)
-    permutate = config.pop("permutate", True)
-    levels = zip(config.pop("levels"), config.pop("cores"))
-    params = param_sets(config, permutate)
-
-    print(len(list(levels)) * len(list(params)))
-
-
 # two modes, submit and run
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -168,22 +171,38 @@ if __name__ == "__main__":
     parser_run.add_argument("case")
     parser_run.add_argument("params", type=int, nargs="*")
     parser_run.set_defaults(func=run_subcommand)
-    parser_submit = subparsers.add_parser(
-        "submit", help="submit a PBS job to run a specific case"
-    )
-    parser_submit.add_argument(
+    parser_submit = subparsers.add_parser("submit", help="submit a PBS job to run a specific case")
+    group = parser_submit.add_mutually_exclusive_group()
+    group.add_argument(
         "-t",
         "--template",
         default="mpiexec -np {cores}",
         help="template command for running commands under MPI",
     )
+    group.add_argument(
+        "-H",
+        "--HPC",
+        help="Detect HPC system and run using known template for batch job submission for that system",
+        action="store_true",
+    )
+    parser_submit.add_argument(
+        "-e", "--errname", type=str, help="stderr file for batch job", default="batch_output/l{level}.err"
+    )
+    parser_submit.add_argument(
+        "-o", "--outname", type=str, help="stdout file for batch job", default="batch_output/l{level}.out"
+    )
     parser_submit.add_argument("case")
     parser_submit.set_defaults(func=submit_subcommand)
-    parser_count = subparsers.add_parser(
-        "count", help="return the number of jobs to run for a specific case"
-    )
-    parser_count.add_argument("case")
-    parser_count.set_defaults(func=count_subcommand)
 
     args = parser.parse_args()
+    if hasattr(args, "HPC") and args.HPC:
+        ### Find HPC utilities - only if needed.
+        test_util_path = str((Path().resolve().parent / "util"))
+        sys.path.insert(0, test_util_path)
+        from hpc import get_hpc_properties
+
+        system, args.template, args.extra_format = get_hpc_properties()
+    else:
+        args.extra_format = {}
+
     args.func(args)
