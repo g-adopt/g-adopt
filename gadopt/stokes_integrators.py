@@ -670,16 +670,16 @@ class BoundaryNormalStressSolver:
     This solver computes topography on boundaries using the equation:
 
     $$
-    h = \frac{\sigma_{rr}}{g \delta \rho}
+    h = sigma_(rr) / (g delta rho)
     $$
 
-    where $\sigma_{rr}$ is defined as:
+    where $sigma_(rr)$ is defined as:
 
     $$
-    \sigma_{rr} = [-p I + 2 * \mu (\nabla u + \nabla u^T)] \cdot \hat{n} \cdot \hat{n}
+    sigma_(rr) = [-p I + 2 mu (nabla u + nabla u^T)] . hat n . hat n
     $$
 
-    Instead of assuming a unit normal vector $\hat{n}$, this solver uses `FacetNormal`
+    Instead of assuming a unit normal vector $hat n$, this solver uses `FacetNormal`
     from Firedrake to accurately determine the normal vectors, which is particularly
     useful for complex meshes like icosahedron meshes in spherical simulations.
 
@@ -689,14 +689,12 @@ class BoundaryNormalStressSolver:
         solver_parameters (Optional[dict[str, str | Number]]): Optional dictionary of parameters for the variational problem.
     """
 
-    # Direct solve parameters for dynamic topography
     direct_solve_parameters = {
         "mat_type": "aij",
         "ksp_type": "preonly",
         "pc_type": "lu",
         "pc_factor_mat_solver_type": "mumps",
     }
-    # Iterative solve parameters
     iterative_solver_parameters = {
         "ksp_type": "cg",
         "pc_type": "hypre",
@@ -735,7 +733,6 @@ class BoundaryNormalStressSolver:
         else:
             self.solver_parameters = solver_parameters
 
-        # when to know the solver
         self._solver_is_set_up = False
 
     def solve(self):
@@ -755,7 +752,7 @@ class BoundaryNormalStressSolver:
         vave = fd.assemble(self.force * self.ds) / fd.assemble(1 * self.ds(self.mesh))
         self.force.assign(self.force - vave)
 
-        # Re-apply the zero condition everywhere except for the
+        # Re-apply the zero condition everywhere except for the boundary
         self.interior_null_bc.apply(self.force)
 
         return self.force
@@ -775,20 +772,15 @@ class BoundaryNormalStressSolver:
         # Normal vector
         n = fd.FacetNormal(self.mesh)
 
-        # Test and trial functions
         phi = fd.TestFunction(Q)
         v = fd.TrialFunction(Q)
 
-        # Stress with pressure
         stress_with_pressure = (
             self.approximation.stress(self.u)
             - self.p * fd.Identity(self.dim)
         )
 
-        # Surface integral for extruded mesh is different
-        extruded_mesh = self.mesh.extruded
-        # Choosing surfce integral
-        if extruded_mesh and self.subdomain_id in ["top", "bottom"]:
+        if self.mesh.extruded and self.subdomain_id in ["top", "bottom"]:
             self.ds = {"top": fd.ds_t, "bottom": fd.ds_b}.get(self.subdomain_id)
         else:
             self.ds = fd.ds(self.subdomain_id)
@@ -801,7 +793,6 @@ class BoundaryNormalStressSolver:
         # The field is only meaningful on the boundary, so set zero everywhere else
         self.interior_null_bc = InteriorBC(Q, 0., [self.subdomain_id])
 
-        # problem and solver
         self.problem = fd.LinearVariationalProblem(a, L, self.force,
                                                    bcs=self.interior_null_bc,
                                                    constant_jacobian=True)
