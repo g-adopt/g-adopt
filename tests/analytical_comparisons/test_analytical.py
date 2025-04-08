@@ -117,7 +117,7 @@ def test_analytical(name, expected, config):
             expected_convergence[cols_err[:-1]],
             rtol=expected.get("rtol", 1e-2),
         )
-        # Make sure normal stress convergence does is bounded
+        # Make sure normal stress convergence is bounded
         assert np.all(
             (
                 convergence[cols_err[-1]]
