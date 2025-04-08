@@ -3,7 +3,6 @@ from typing import ClassVar, Tuple
 
 import firedrake as fd
 import gmsh
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
@@ -64,13 +63,33 @@ class Simulation:
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2
 
-    # The following two lists must be ordered such that, unpacking from the end, each
-    # pair of arguments enables initialising a level set whose 0-contour corresponds to
-    # the entire interface between a given material and the remainder of the numerical
-    # domain. By convention, the material thereby isolated occupies the positive side
-    # of the signed-distance level set.
-    isd_params = [None]
-    initialise_signed_distance = [isd.isd_schmalholz]
+    # Parameters to initialise level set
+    interface_coords = [
+        (0, 5.8e5),
+        (4.6e5, 5.8e5),
+        (4.6e5, 3.3e5),
+        (5.4e5, 3.3e5),
+        (5.4e5, 5.8e5),
+        (domain_dims[0], 5.8e5),
+    ]
+
+    boundary_coords = [
+        (domain_dims[0], domain_dims[1]),
+        (0, domain_dims[1]),
+        (0, 5.8e5),
+    ]
+    # Keyword arguments to define the signed-distance function
+    signed_distance_kwargs = {
+        "interface_geometry": "polygon",
+        "interface_coordinates": interface_coords,
+        "boundary_coordinates": boundary_coords,
+    }
+    # The following list must be ordered such that, unpacking from the end, each dictionary
+    # contains the keyword arguments required to initialise the signed-distance array
+    # corresponding to the interface between a given material and the remainder of the
+    # numerical domain (all previous materials excluded). By convention, the material thus
+    # isolated occupies the positive side of the signed-distance array.
+    signed_distance_kwargs_list = [signed_distance_kwargs]
 
     # Material ordering must follow the logic implemented in the above two lists. In
     # other words, the last material in the below list corresponds to the portion of
@@ -183,7 +202,8 @@ class Simulation:
 
     @classmethod
     def diagnostics(cls, simu_time, geo_diag, diag_vars):
-        epsilon = float(diag_vars["epsilon"])
+        epsilon = diag_vars["epsilon"]
+        eps_data = epsilon.dat.data_ro_with_halos
         level_set = diag_vars["level_set"][0]
         level_set_data = level_set.dat.data_ro_with_halos
         coords_data = (
@@ -226,20 +246,16 @@ class Simulation:
                         ind_inside
                     ]
 
-                    ls_outside = max(
-                        1e-6,
-                        min(1 - 1e-6, level_set_data[mask_ls_outside][ind_outside]),
-                    )
-                    sdls_outside = epsilon * np.log(ls_outside / (1 - ls_outside))
+                    ls_outside = max(1e-2, level_set_data[mask_ls_outside][ind_outside])
+                    eps_outside = eps_data[mask_ls_outside][ind_outside]
+                    sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
 
-                    ls_inside = max(
-                        1e-6,
-                        min(
-                            1 - 1e-6,
-                            level_set_data[mask_ls_inside][mask_ver_coord][ind_inside],
-                        ),
+                    ls_inside = min(
+                        1 - 1e-2,
+                        level_set_data[mask_ls_inside][mask_ver_coord][ind_inside],
                     )
-                    sdls_inside = epsilon * np.log(ls_inside / (1 - ls_inside))
+                    eps_inside = eps_data[mask_ls_inside][mask_ver_coord][ind_inside]
+                    sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
 
                     ls_dist = sdls_inside / (sdls_inside - sdls_outside)
                     hor_coord_interface = (
