@@ -60,7 +60,7 @@ cases = {
             "zeroslip": {
                 "cores": [4, 16, 24],
                 "levels": [2**i for i in [2, 3, 4]],
-                "n": [2],
+                "n": [2, 8],
             },
             "zeroslip_dpc": {
                 "cores": [4, 16, 24],

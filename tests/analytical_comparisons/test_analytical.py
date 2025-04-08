@@ -51,7 +51,6 @@ def idfn(val):
 
 @pytest.mark.parametrize("name,expected,config", configs, ids=idfn)
 def test_analytical(name, expected, config):
-    print(name, expected, config)
     levels = analytical.get_case(analytical.cases, name)["levels"]
 
     b = Path(__file__).parent.resolve()
@@ -88,9 +87,7 @@ def test_analytical(name, expected, config):
 
     convergence = np.log2(errs.shift() / errs).drop(index=0)
     expected_convergence = pd.Series(expected["convergence"], index=cols_err)
-    
-    print(convergence)
-    return
+
     # Make sure velocity and pressure have the theoretical rates
     assert np.allclose(convergence[columns[:2]], expected_convergence[columns[:2]], rtol=expected.get("rtol", 1e-2))
     # For normal stress we only make sure the convergence does not go bellow a minimum
