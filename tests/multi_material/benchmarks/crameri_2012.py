@@ -86,7 +86,8 @@ class Simulation:
     materials = [mantle, lithosphere, air]
     reference_material = mantle
 
-    # Physical parameters
+    # Approximation parameters
+    dimensional = True
     Ra, g = 1, 10
 
     # Boundary conditions
