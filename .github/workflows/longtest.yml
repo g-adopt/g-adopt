@@ -8,6 +8,7 @@ on:
         required: true
         type: choice
         options:
+          - all
           - gadi
           - setonix
 
@@ -21,12 +22,12 @@ jobs:
     steps:
     - id: build_matrix
       run: |
-        if [[ -z "${{ inputs.system }}" ]]; then
+        if [[ "${{ inputs.system }}" == "all" ]]; then
           export SYSTEMS='[ "gadi", "setonix" ]'
         else
           export SYSTEMS='[ "${{ inputs.system }}" ]'
         fi
-        system_matrix=$( jq -cn --argjson sys "$SYSTEMS" '{system: $sys}' ) >> $GITHUB_OUTPUT
+        echo system_matrix=$( jq -cn --argjson sys "$SYSTEMS" '{system: $sys}' ) >> $GITHUB_OUTPUT
 
   build:
     needs: setup
