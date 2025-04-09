@@ -14,18 +14,22 @@ annulus_taylor_test is also added to this script for testing the correctness of 
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
-from checkpoint_schedules import SingleMemoryStorageSchedule
 import sys
+import itertools
 from mpi4py import MPI
+from cases import cases, schedulers
 
-from cases import cases
 
-
-def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
+def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing_schedule=None):
 
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
-    inverse_problem = generate_inverse_problem(alpha_u=alpha_u, alpha_d=alpha_d, alpha_s=alpha_s)
+    inverse_problem = generate_inverse_problem(
+        alpha_u=alpha_u,
+        alpha_d=alpha_d,
+        alpha_s=alpha_s,
+        checkpointing_schedule=checkpointing_schedule
+    )
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
@@ -55,7 +59,7 @@ def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1):
     continue_annotation()
 
 
-def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
+def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule):
     """
     Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
 
@@ -70,7 +74,7 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
 
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
-    inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s)
+    inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule)
 
     # generate perturbation for the control variable
     delta_temp = Function(inverse_problem["control"].function_space(), name="Delta_Temperature")
@@ -90,7 +94,7 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
     return minconv
 
 
-def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
+def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, checkpointing_schedule=None):
     """
     Use adjoint-based optimisation to solve for the initial condition of the cylindrical
     problem.
@@ -111,7 +115,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
     # Using SingleMemoryStorageSchedule
     if any([alpha_T > 0, alpha_u > 0]):
-        tape.enable_checkpointing(SingleMemoryStorageSchedule())
+        tape.enable_checkpointing(memory_or_disk_scheduler)
 
     # Set up geometry:
     rmax = 2.22
@@ -379,14 +383,19 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1):
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        for case_name, weightings in cases.items():
-            minconv = annulus_taylor_test(*weightings)
-            print(f"case: {case_name}, result: {minconv}")
+        product_of_cases_schedulers = itertools.product(cases.keys(), schedulers.keys())
+        for case_name, scheduler_name in product_of_cases_schedulers:
+            minconv = annulus_taylor_test(*cases.get(case_name), schedulers.get(scheduler_name))
+            print(f"case {case_name} & scheduler {scheduler_name}: result: {minconv}.")
     else:
-        case_name = sys.argv[1]
+        case_scheduler_name, scheduler_name = sys.argv[1].split("_")
         weightings = cases[case_name]
-        minconv = annulus_taylor_test(*weightings)
+        scheduler = schedulers[scheduler_name]
+        minconv = annulus_taylor_test(*weightings, scheduler)
 
-        if MPI.COMM_WORLD.Get_rank() == 0:
-            with open(f"{case_name}.conv", "w") as f:
-                f.write(f"{minconv}")
+        log_file = ParameterLog(
+            f"{case_name}_{scheduler_name}.conv",
+            UnitSquareMesh(1, 1),   # Just passing a dummy mesh here
+        )
+        log_file.log_str(f"{minconv}")
+        log_file.close()
