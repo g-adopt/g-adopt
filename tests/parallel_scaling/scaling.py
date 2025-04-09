@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+import os
 import re
 import subprocess
 import sys
@@ -93,12 +94,27 @@ def run_subcommand(args):
 def submit_subcommand(args):
     config = cases[args.level]
     cores = config.pop("cores")
-    command = args.template.format(cores=cores, mem=4*cores, level=args.level)
-
+    outname = args.outname.format(level=args.level)
+    errname = args.errname.format(level=args.level)
+    jobname = f"scaling_{args.level}"
+    command = args.template.format(
+        cores=cores,
+        mem=4 * cores,
+        level=args.level,
+        nodes=max(1, cores // 104),
+        errname=errname,
+        outname=outname,
+        jobname=jobname,
+        **args.extra_format,
+    )
     proc = subprocess.Popen(
         [
-            *command.split(), sys.executable, sys.argv[0],
-            "run", str(args.level), *[str(v) for v in config.values()],
+            *command.split(),
+            os.path.basename(sys.executable),
+            sys.argv[0],
+            "run",
+            str(args.level),
+            *[str(v) for v in config.values()],
         ],
     )
     if proc.wait() != 0:
@@ -109,20 +125,47 @@ def submit_subcommand(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="scaling",
-        description="Run/submit parallel scaling test casse",
+        description="Run/submit parallel scaling test case",
     )
     subparsers = parser.add_subparsers(title="subcommands")
-
-    parser_run = subparsers.add_parser("run", help="run a specific configuration of a case (usually not manually invoked)")
+    parser_run = subparsers.add_parser(
+        "run", help="run a specific configuration of a case (usually not manually invoked)"
+    )
     parser_run.add_argument("level", type=int)
     parser_run.add_argument("layers", type=int)
     parser_run.add_argument("timestep", type=float)
     parser_run.add_argument("-n", "--steps", type=int, help="number of timesteps to run")
     parser_run.set_defaults(func=run_subcommand)
     parser_submit = subparsers.add_parser("submit", help="submit a PBS job to run a specific case")
-    parser_submit.add_argument("-t", "--template", default="mpiexec -np {cores}", help="template command for running commands under MPI")
+    group = parser_submit.add_mutually_exclusive_group()
+    group.add_argument(
+        "-t", "--template", default="mpiexec -np {cores}", help="template command for running commands under MPI"
+    )
+    group.add_argument(
+        "-H",
+        "--HPC",
+        help="Detect HPC system and run using known template for batch job submission for that system",
+        action="store_true",
+    )
+    parser_submit.add_argument(
+        "-e", "--errname", type=str, help="stderr file for batch job", default="batch_output/l{level}.err"
+    )
+    parser_submit.add_argument(
+        "-o", "--outname", type=str, help="stdout file for batch job", default="batch_output/l{level}.out"
+    )
     parser_submit.add_argument("level", type=int)
     parser_submit.set_defaults(func=submit_subcommand)
 
     args = parser.parse_args()
+    if hasattr(args, "HPC") and args.HPC:
+        # Find HPC utilities - only if needed.
+        test_util_path = str((Path(__file__).resolve().parent.parent / "util"))
+        sys.path.insert(0, test_util_path)
+        from hpc import get_hpc_properties
+
+        sys.path.pop(0)
+        system, args.template, args.extra_format = get_hpc_properties()
+        if "gadopt_setup" not in args.extra_format:
+            args.extra_format["gadopt_setup"] = f"{test_util_path}/hpc/{system}_gadopt_setup.sh"
+
     args.func(args)
