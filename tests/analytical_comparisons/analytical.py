@@ -197,10 +197,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if hasattr(args, "HPC") and args.HPC:
         # Find HPC utilities - only if needed.
-        test_util_path = str((Path().resolve().parent / "util"))
+        test_util_path = str((Path(__file__).resolve().parent.parent / "util"))
         sys.path.insert(0, test_util_path)
         from hpc import get_hpc_properties
 
+        sys.path.pop(0)
         system, args.template, args.extra_format = get_hpc_properties()
     else:
         args.extra_format = {}
