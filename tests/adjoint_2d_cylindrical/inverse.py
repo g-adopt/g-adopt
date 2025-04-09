@@ -16,7 +16,6 @@ from gadopt.inverse import *
 import numpy as np
 import sys
 import itertools
-from mpi4py import MPI
 from cases import cases, schedulers
 
 
@@ -57,6 +56,13 @@ def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing
     # to ensure the annotations are switched back on for the next code
     # to use them.
     continue_annotation()
+
+
+def run_forward_and_back(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule):
+    inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule)
+    inverse_problem["reduced_functional"](inverse_problem["control"])
+    inverse_problem["reduced_functional"].derivative()
+    return inverse_problem["objective"], inverse_problem["callback_function"]
 
 
 def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule):
@@ -315,68 +321,37 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
 
     inverse_problem = {}
 
+    # objective for zeroth iteration
+    inverse_problem["objective"] = float(objective)
+
     # Specify control.
     inverse_problem["control"] = Tic
 
+    # Call back function to store functional/gradient/control values
+    class CallBack(object):
+        def __init__(self):
+            self.iteration = 0
+            self.values = []
+            self.derivatives = []
+            self.controls = []
+
+        def __call__(self, *args, **kwargs):
+            # args[0, 1, 2] are functional, gradient, control
+            self.iteration += 1
+            self.values.append(args[0])
+            self.derivatives.append(Function(args[1][0].function_space(), name="dJdm").assign(args[1][0]))
+            self.controls.append(Function(args[2][0].function_space(), name="m").assign(args[2][0]))
+            return args[1]
+
+    # Recording the callback function for later access
+    inverse_problem["callback_function"] = CallBack()
+
     # ReducedFunctional that is to be minimised.
-    inverse_problem["reduced_functional"] = ReducedFunctional(objective, control)
-
-    # Callback function to print misfit at start and end of each optimisation iteration.
-    # For sake of book-keeping the simulation, we have also implemented a user-defined way of
-    # recording information that might be used to check the optimisation performance. This
-    # callback function will be executed at the end of each iteration. Here, we write out
-    # the control field, i.e., the reconstructed intial temperature field, at the end of
-    # each iteration and final stage T. To access the last value of *an overloaded object* we
-    # should access the `.block_variable.checkpoint` method as below. We also record the values
-    # of the reduced functional and misfits directly in order to produce a plot of the convergence.
-
-    solutions_vtk = VTKFile("solutions.pvd")
-    solution_IC = Function(Tic.function_space(), name="Initial_Temperature")
-    solution_final = Function(T.function_space(), name="Final_Temperature")
-    functional_values = []
-    initial_misfit_values = []
-    final_misfit_values = []
-
-    # Log value of reduced functional:
-    def record_functional_values(func_value, *args):
-        functional_values.append(func_value)
-
-    # Log values of initial and final misfit:
-    def record_misfit_values(init_misfit, final_misfit):
-        initial_misfit_values.append(init_misfit)
-        final_misfit_values.append(final_misfit)
-
-    def callback():
-        initial_misfit = assemble(
-            (Tic.block_variable.checkpoint - Tic_ref) ** 2 * dx
-        )
-        final_misfit = assemble(
-            (T.block_variable.checkpoint - Tobs) ** 2 * dx
-        )
-
-        inverse_problem["reduced_functional"].eval_cb_post = record_functional_values
-        record_misfit_values(initial_misfit, final_misfit)
-
-        # Print output for ease of tracking simulation progress:
-        if functional_values:
-            log(f"Functional: {functional_values[-1]};  Misfit (IC): {initial_misfit};  Misfit (Final): {final_misfit}")
-        else:
-            log(f"Functional value not recorded; Misfit (IC): {initial_misfit}; Misfit (Final): {final_misfit}")
-
-        # Write functional and misfit values to a file (appending to avoid overwriting)
-        if MPI.COMM_WORLD.Get_rank() == 0:
-            with open("optimisation_values.txt", "a") as f:
-                if functional_values:
-                    f.write(f"{functional_values[-1]}, {initial_misfit}, {final_misfit}\n")
-                else:
-                    f.write(f"0.0, {initial_misfit}, {final_misfit}\n")
-
-        # Write VTK output:
-        solution_IC.assign(Tic.block_variable.checkpoint)
-        solution_final.assign(T.block_variable.checkpoint)
-        solutions_vtk.write(solution_IC, solution_final)
-
-    inverse_problem["callback"] = callback
+    inverse_problem["reduced_functional"] = ReducedFunctional(
+        objective,
+        control,
+        derivative_cb_post=inverse_problem["callback_function"],
+    )
 
     return inverse_problem
 
@@ -388,14 +363,37 @@ if __name__ == "__main__":
             minconv = annulus_taylor_test(*cases.get(case_name), schedulers.get(scheduler_name))
             print(f"case {case_name} & scheduler {scheduler_name}: result: {minconv}.")
     else:
-        case_scheduler_name, scheduler_name = sys.argv[1].split("_")
+        case_name, scheduler_name = sys.argv[1].split("_")
         weightings = cases[case_name]
         scheduler = schedulers[scheduler_name]
-        minconv = annulus_taylor_test(*weightings, scheduler)
 
+        # Taylor tests:
+        # For taylor tests we use full memory checkpointing for fastest results
+        if scheduler_name == "FullMemory":
+            minconv = annulus_taylor_test(*weightings, scheduler)
+
+            log_file = ParameterLog(
+                f"{case_name}_{scheduler_name}.conv",
+                UnitSquareMesh(1, 1),   # Just passing a dummy mesh here
+            )
+            log_file.log_str(f"{minconv}")
+            log_file.close()
+
+        # Forward and Reverse tap
+        # cb is a class containing values/derivatives/controls
+        # val is the first objective calculation while populating the tape
+        val, cb = run_forward_and_back(*weightings, scheduler)
+
+        # store one control and one derivative for test
+        with CheckpointFile(f"{case_name}_{scheduler_name}_cb_res.h5") as fi:
+            fi.save_mesh(cb.controls[0].ufl_domain())
+            fi.save_function(cb.controls[0], "Control")
+            fi.save_function(cb.derivatives[0], "Derivative")
+
+        # Write out the functional at tape population and functional recorded by the callback
         log_file = ParameterLog(
-            f"{case_name}_{scheduler_name}.conv",
-            UnitSquareMesh(1, 1),   # Just passing a dummy mesh here
+            f"{case_name}_{scheduler_name}_functional.dat",
+            UnitSquareMesh(1, 1),
         )
-        log_file.log_str(f"{minconv}")
+        log_file.log_str(f"{val}, {cb.values[0]}")
         log_file.close()
