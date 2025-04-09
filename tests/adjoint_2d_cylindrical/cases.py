@@ -9,5 +9,5 @@ cases = {
 
 schedulers = {
     "fullmemory": SingleMemoryStorageSchedule(),
-    "fulldisk": SingleDiskStorageSchedule(),
+    # "fulldisk": SingleDiskStorageSchedule(),
 }
