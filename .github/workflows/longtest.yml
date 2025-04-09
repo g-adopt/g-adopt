@@ -51,7 +51,7 @@ jobs:
         id: get_fqdn
         shell: bash
         run: |
-          fqdn=$( grep ${{matrix.system}}: .github/systems.txt )
+          fqdn=$( grep ${{matrix.system}}: .github/workflows/systems.txt )
           echo "fqdn=${fqdn//${{matrix.system}}:/}" >> $GITHUB_OUTPUT
 
       - name: Configure SSH
