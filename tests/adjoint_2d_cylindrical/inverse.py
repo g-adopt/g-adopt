@@ -121,7 +121,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
 
     # Using SingleMemoryStorageSchedule
     if any([alpha_T > 0, alpha_u > 0]):
-        tape.enable_checkpointing(memory_or_disk_scheduler)
+        tape.enable_checkpointing(checkpointing_schedule)
 
     # Set up geometry:
     rmax = 2.22
@@ -385,10 +385,10 @@ if __name__ == "__main__":
         val, cb = run_forward_and_back(*weightings, scheduler)
 
         # store one control and one derivative for test
-        with CheckpointFile(f"{case_name}_{scheduler_name}_cb_res.h5") as fi:
+        with CheckpointFile(f"{case_name}_{scheduler_name}_cb_res.h5", mode="w") as fi:
             fi.save_mesh(cb.controls[0].ufl_domain())
-            fi.save_function(cb.controls[0], "Control")
-            fi.save_function(cb.derivatives[0], "Derivative")
+            fi.save_function(cb.controls[0], name="Control")
+            fi.save_function(cb.derivatives[0], name="Derivative")
 
         # Write out the functional at tape population and functional recorded by the callback
         log_file = ParameterLog(
