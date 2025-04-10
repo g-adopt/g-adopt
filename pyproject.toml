@@ -17,7 +17,6 @@ classifiers = [
 ]
 dependencies = [
   "vtk>=9.0.1",
-  "pyadjoint-ad @ git+https://github.com/angus-g/pyadjoint@angus-g/tape-checkpoint",
 ]
 
 [project.optional-dependencies]
