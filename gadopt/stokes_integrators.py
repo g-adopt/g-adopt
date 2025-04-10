@@ -505,7 +505,7 @@ class StokesSolver:
 
         self.solver.solve()
 
-    def force_on_boundary(self, subdomain_id: int | str) -> fd.Function:
+    def force_on_boundary(self, subdomain_id: int | str, **kwargs) -> fd.Function:
         """Computes the force acting on a boundary.
 
         Arguments:
@@ -519,7 +519,9 @@ class StokesSolver:
             self.BoundaryNormalStressSolvers = {}
 
         if subdomain_id not in self.BoundaryNormalStressSolvers:
-            self.BoundaryNormalStressSolvers[subdomain_id] = BoundaryNormalStressSolver(self, subdomain_id, self.solver_parameters)
+            self.BoundaryNormalStressSolvers[subdomain_id] = BoundaryNormalStressSolver(
+                self, subdomain_id, **kwargs
+            )
 
         return self.BoundaryNormalStressSolvers[subdomain_id].solve()
 
@@ -711,7 +713,9 @@ class BoundaryNormalStressSolver:
     Arguments:
         stokes_solver (StokesSolver): The Stokes solver providing the necessary fields for calculating stress.
         subdomain_id (str | int): The subdomain ID of a physical boundary.
-        solver_parameters (Optional[dict[str, str | Number]]): Optional dictionary of parameters for the variational problem.
+        **kwargs: Optional keyword arguments. You can provide:
+            - solver_parameters (dict[str, str | Number]): Parameters to control the variational solver.
+            If not provided, defaults are chosen based on whether the Stokes solver is direct or iterative.
     """
 
     direct_solve_parameters = {
@@ -734,7 +738,8 @@ class BoundaryNormalStressSolver:
     def __init__(self,
                  stokes_solver: StokesSolver,
                  subdomain_id: int | str,
-                 solver_parameters: Optional[dict[str, str | Number]] = None):
+                 **kwargs
+                 ):
         # pressure and velocity together with viscosity are needed
         self.u, self.p, *self.eta = stokes_solver.solution.subfunctions
 
@@ -748,15 +753,14 @@ class BoundaryNormalStressSolver:
         # Domain id that we want to use for boundary force
         self.subdomain_id = subdomain_id
 
-        # Set solver parameters based on what has been used for stokes
-        if solver_parameters is None:
-            self.solver_parameters = (
-                BoundaryNormalStressSolver.direct_solve_parameters if
-                stokes_solver.solver_parameters == direct_stokes_solver_parameters else
-                BoundaryNormalStressSolver.iterative_solver_parameters
-            )
-        else:
-            self.solver_parameters = solver_parameters
+        self._kwargs = kwargs
+
+        self.solver_parameters = self._kwargs.get(
+            "solver_parameters",
+            BoundaryNormalStressSolver.direct_solve_parameters
+            if stokes_solver.solver_parameters == direct_stokes_solver_parameters
+            else BoundaryNormalStressSolver.iterative_solver_parameters
+        )
 
         self._solver_is_set_up = False
 
