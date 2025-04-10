@@ -42,6 +42,8 @@ def model(level, nn, do_write=False):
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
     W = FunctionSpace(mesh, "DPC", 1)  # pressure function space (scalar)
+    NSW = FunctionSpace(mesh, "CG", 1)  # normal stress function space (scalar)
+    NSWvec = VectorFunctionSpace(mesh, "CG", 1)  # normal stress function space (scalar)
     P0 = FunctionSpace(mesh, "DQ", 0)  # used for marker field
     Q1DG = FunctionSpace(mesh, "DQ", 1)  # used for analytical (disc.) pressure solution
     Q1DGvec = VectorFunctionSpace(mesh, "DQ", 1)  # for coordinates used in analytical pressure solution
@@ -106,7 +108,7 @@ def model(level, nn, do_write=False):
     solution_lower = assess.CylindricalStokesSolutionDeltaFreeSlip(float(nn), -1, nu=float(mu))
 
     # compute u analytical and error
-    uxy = interpolate(as_vector((X[0], X[1])), V)
+    uxy = Function(V).interpolate(as_vector((X[0], X[1])))
     u_anal_upper = Function(V, name="AnalyticalVelocityUpper")
     u_anal_lower = Function(V, name="AnalyticalVelocityLower")
     u_anal = Function(V, name="AnalyticalVelocity")
@@ -116,8 +118,8 @@ def model(level, nn, do_write=False):
     u_error = Function(V, name="VelocityError").assign(u_-u_anal)
 
     # compute p analytical and error
-    pxy = interpolate(as_vector((X[0], X[1])), Q1DGvec)
-    pdg = interpolate(p, Q1DG)
+    pxy = Function(Q1DGvec).interpolate(as_vector((X[0], X[1])))
+    pdg = Function(Q1DG).interpolate(p)
     p_anal_upper = Function(Q1DG, name="AnalyticalPressureUpper")
     p_anal_lower = Function(Q1DG, name="AnalyticalPressureLower")
     p_anal = Function(Q1DG, name="AnalyticalPressure")
@@ -127,13 +129,13 @@ def model(level, nn, do_write=False):
     p_error = Function(Q1DG, name="PressureError").assign(pdg-p_anal)
 
     # compute ns_ analytical and error (note we are using the same space as pressure)
-    ns_anal_upper = Function(Q1DG, name="AnalyticalNormalStressUpper")
-    ns_anal_lower = Function(Q1DG, name="AnalyticalNormalStressLower")
-    ns_anal_upper.dat.data[:] = [-solution_upper.radial_stress_cartesian(xyi) for xyi in pxy.dat.data]
-    ns_anal_lower.dat.data[:] = [-solution_lower.radial_stress_cartesian(xyi) for xyi in pxy.dat.data]
-    ns_anal = Function(ns_.function_space(), name="AnalyticalNormalStress")
-    ns_anal.interpolate(marker * ns_anal_lower + (1 - marker) * ns_anal_upper)
-    ns_error = Function(ns_.function_space(), name="NormalStressError").assign(ns_ - ns_anal)
+    nsxy = Function(NSWvec).interpolate(as_vector((X[0], X[1])))
+    ns_anal_upper = Function(NSW, name="AnalyticalNormalStressUpper")
+    ns_anal_lower = Function(NSW, name="AnalyticalNormalStressLower")
+    ns_anal_upper.dat.data[:] = [-solution_upper.radial_stress_cartesian(xyi) for xyi in nsxy.dat.data]
+    ns_anal_lower.dat.data[:] = [-solution_lower.radial_stress_cartesian(xyi) for xyi in nsxy.dat.data]
+    ns_anal = Function(NSW, name="AnalyticalNormalStress").interpolate(marker * ns_anal_lower + (1 - marker) * ns_anal_upper)
+    ns_error = Function(NSW, name="NormalStressError").assign(ns_ - ns_anal)
 
     if do_write:
         # Write output files in VTK format:

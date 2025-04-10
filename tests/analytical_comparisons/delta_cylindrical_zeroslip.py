@@ -133,8 +133,7 @@ def model(level, nn, do_write=False):
     ns_anal_lower = Function(W, name="AnalyticalNormalStressLower")
     ns_anal_upper.dat.data[:] = [-solution_upper.radial_stress_cartesian(xyi) for xyi in nsxy.dat.data]
     ns_anal_lower.dat.data[:] = [-solution_lower.radial_stress_cartesian(xyi) for xyi in nsxy.dat.data]
-    ns_anal = Function(W, name="AnalyticalNormalStress")
-    ns_anal.interpolate(marker * ns_anal_lower + (1 - marker) * ns_anal_upper)
+    ns_anal = Function(W, name="AnalyticalNormalStress").interpolate(marker * ns_anal_lower + (1 - marker) * ns_anal_upper)
     ns_error = Function(W, name="NormalStressError").assign(ns_ - ns_anal)
 
     if do_write:

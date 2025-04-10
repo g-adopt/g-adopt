@@ -106,6 +106,8 @@ def model(level, k, nn, do_write=False):
     p_anal = Function(W, name="AnalyticalPressure")
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
     p_error = Function(W, name="PressureError").assign(p_-p_anal)
+
+    # compute normal stress analytical and error
     ns_anal = Function(W, name="AnalyticalSurfaceNormalStress")
     ns_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in pxy.dat.data]
     ns_error = Function(W, name="NormalStressError").assign(ns_ - ns_anal)
