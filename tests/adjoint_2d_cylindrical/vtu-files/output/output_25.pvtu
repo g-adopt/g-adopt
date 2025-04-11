@@ -1,0 +1,27 @@
+<?xml version="1.0" ?>
+<VTKFile type="PUnstructuredGrid" version="2.2" byte_order="LittleEndian">
+<PUnstructuredGrid>
+<PPoints>
+<PDataArray Name="firedrake_default_extruded_coordinates" type="Float64" NumberOfComponents="3" /></PPoints>
+<PCells>
+<PDataArray Name="connectivity" type="Int32" NumberOfComponents="" /><PDataArray Name="offsets" type="Int32" NumberOfComponents="" /><PDataArray Name="types" type="UInt8" NumberOfComponents="" /></PCells>
+<PPointData Vectors="Velocity" Scalars="Pressure">
+<PDataArray Name="Velocity" type="Float64" NumberOfComponents="3" /><PDataArray Name="Pressure" type="Float64" NumberOfComponents="" /><PDataArray Name="Temperature" type="Float64" NumberOfComponents="" /><PDataArray Name="Viscosity" type="Float64" NumberOfComponents="" /></PPointData>
+<Piece Source="output_25_0.vtu" />
+<Piece Source="output_25_1.vtu" />
+<Piece Source="output_25_2.vtu" />
+<Piece Source="output_25_3.vtu" />
+<Piece Source="output_25_4.vtu" />
+<Piece Source="output_25_5.vtu" />
+<Piece Source="output_25_6.vtu" />
+<Piece Source="output_25_7.vtu" />
+<Piece Source="output_25_8.vtu" />
+<Piece Source="output_25_9.vtu" />
+<Piece Source="output_25_10.vtu" />
+<Piece Source="output_25_11.vtu" />
+<Piece Source="output_25_12.vtu" />
+<Piece Source="output_25_13.vtu" />
+<Piece Source="output_25_14.vtu" />
+<Piece Source="output_25_15.vtu" />
+</PUnstructuredGrid>
+</VTKFile>
