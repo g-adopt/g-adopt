@@ -369,7 +369,7 @@ if __name__ == "__main__":
 
         # Taylor tests:
         # For taylor tests we use full memory checkpointing for fastest results
-        if scheduler_name == "FullMemory":
+        if scheduler_name == "fullmemory":
             minconv = annulus_taylor_test(*weightings, scheduler)
 
             log_file = ParameterLog(
