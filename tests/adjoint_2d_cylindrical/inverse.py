@@ -76,7 +76,6 @@ def run_forward_and_back(inverse_problem):
     return inverse_problem["objective"], inverse_problem["callback_function"]
 
 
-
 def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule):
     """
     Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
