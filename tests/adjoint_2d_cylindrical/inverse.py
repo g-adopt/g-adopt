@@ -58,11 +58,23 @@ def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing
     continue_annotation()
 
 
-def run_forward_and_back(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule):
-    inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule)
-    inverse_problem["reduced_functional"](inverse_problem["control"])
+def run_forward_and_back(inverse_problem):
+    # Make sure we are not annotating
+    if annotate_tape():
+        pause_annotation()
+
+    # inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule)
+    value = inverse_problem["reduced_functional"](inverse_problem["control"])
     inverse_problem["reduced_functional"].derivative()
+
+    continue_annotation()
+
+    # Using a scheduler returns None in the callback for the derivative (A bug that shall be fixed)
+    # For now we manually enter this value here
+    inverse_problem["callback_function"].values[-1] = value
+
     return inverse_problem["objective"], inverse_problem["callback_function"]
+
 
 
 def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule):
@@ -97,7 +109,9 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedu
     # to ensure the annotations are switched back on for the next code to use them
     continue_annotation()
 
-    return minconv
+    inverse_problem["minconv"] = minconv
+
+    return inverse_problem
 
 
 def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, checkpointing_schedule=None):
@@ -370,19 +384,19 @@ if __name__ == "__main__":
         # Taylor tests:
         # For taylor tests we use full memory checkpointing for fastest results
         if scheduler_name == "fullmemory":
-            minconv = annulus_taylor_test(*weightings, scheduler)
+            inverse_problem = annulus_taylor_test(*weightings, scheduler)
 
             log_file = ParameterLog(
                 f"{case_name}_{scheduler_name}.conv",
                 UnitSquareMesh(1, 1),   # Just passing a dummy mesh here
             )
-            log_file.log_str(f"{minconv}")
+            log_file.log_str(f"{inverse_problem['minconv']}")
             log_file.close()
 
         # Forward and Reverse tap
         # cb is a class containing values/derivatives/controls
         # val is the first objective calculation while populating the tape
-        val, cb = run_forward_and_back(*weightings, scheduler)
+        val, cb = run_forward_and_back(inverse_problem)
 
         # store one control and one derivative for test
         with CheckpointFile(f"{case_name}_{scheduler_name}_cb_res.h5", mode="w") as fi:
@@ -395,5 +409,5 @@ if __name__ == "__main__":
             f"{case_name}_{scheduler_name}_functional.dat",
             UnitSquareMesh(1, 1),
         )
-        log_file.log_str(f"{val}, {cb.values[0]}")
+        log_file.log_str(f"{val}, {cb.values[-1]}")
         log_file.close()
