@@ -1,5 +1,6 @@
 import argparse
 import itertools
+import os
 import subprocess
 import sys
 import importlib
@@ -136,7 +137,7 @@ def submit_subcommand(args):
             procs[paramstr] = subprocess.Popen(
                 [
                     *command.split(),
-                    sys.executable,
+                    os.path.basename(sys.executable),
                     sys.argv[0],
                     "run",
                     args.case,

@@ -66,6 +66,7 @@ jobs:
             Hostname ${{ steps.get_fqdn.outputs.fqdn }}
             User ${{ secrets[steps.get_sys_vars.outputs.user_var] }}
             IdentityFile ~/.ssh/${{ matrix.system }}.key
+            ServerAliveInterval 120
           EOF
 
       - name: Sync repository to ${{matrix.system}}

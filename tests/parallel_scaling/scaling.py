@@ -165,7 +165,5 @@ if __name__ == "__main__":
 
         sys.path.pop(0)
         system, args.template, args.extra_format = get_hpc_properties()
-        if "gadopt_setup" not in args.extra_format:
-            args.extra_format["gadopt_setup"] = f"{test_util_path}/hpc/{system}_gadopt_setup.sh"
 
     args.func(args)
