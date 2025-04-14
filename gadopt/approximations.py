@@ -448,6 +448,7 @@ class SmallDisplacementViscoelasticApproximation():
     def buoyancy(self, displacement):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
+        # written on RHS of equations
         return - self.Vi * self.g * -inner(displacement, grad(self.density))
 
     def rho_continuity(self):
@@ -459,7 +460,8 @@ class SmallDisplacementViscoelasticApproximation():
         return free_surface_normal_stress, None
 
     def hydrostatic_prestress_advection(self, u_r):
-        return self.Vi * self.density * self.g * u_r
+        # written on RHS of equations
+        return -self.Vi * grad(self.density * self.g * u_r)
 
 
 class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximation):
@@ -549,6 +551,7 @@ class CompressibleInternalVariableApproximation(SmallDisplacementViscoelasticApp
     def buoyancy(self, displacement):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
+        # written on rhs of equations
         buoyancy = super().buoyancy(displacement)
         if self.compressible_buoyancy:
             buoyancy += - self.Vi * self.g * -self.density * div(displacement)

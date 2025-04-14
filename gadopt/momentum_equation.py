@@ -212,4 +212,5 @@ residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosi
 residual_terms_mass = divergence_term
 residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]
 
-residual_terms_compressible_viscoelastic = [advection_hydrostatic_prestress_term, momentum_source_term, viscosity_term]
+#residual_terms_compressible_viscoelastic = [advection_hydrostatic_prestress_term, momentum_source_term, viscosity_term]
+residual_terms_compressible_viscoelastic = [momentum_source_term, viscosity_term]
