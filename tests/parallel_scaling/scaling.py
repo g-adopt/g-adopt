@@ -1,4 +1,5 @@
 import argparse
+import math
 import numpy as np
 import os
 import re
@@ -94,14 +95,20 @@ def run_subcommand(args):
 def submit_subcommand(args):
     config = cases[args.level]
     cores = config.pop("cores")
+    # HPC-specific formatting
     outname = args.outname.format(level=args.level)
     errname = args.errname.format(level=args.level)
     jobname = f"scaling_{args.level}"
+    if "procs_per_node" in args.extra_format:
+        # This can't be known until we know the number of cores, but it is required for
+        # job submission on some systems. subprocess.Popen uses execvpe, therefore we
+        # can't use $(( shell maths )) either
+        args.extra_format["nodes"] = math.ceil(cores / args.extra_format["procs_per_node"])
+
     command = args.template.format(
         cores=cores,
         mem=4 * cores,
         level=args.level,
-        nodes=max(1, cores // 104),
         errname=errname,
         outname=outname,
         jobname=jobname,
@@ -164,6 +171,8 @@ if __name__ == "__main__":
         from hpc import get_hpc_properties
 
         sys.path.pop(0)
-        system, args.template, args.extra_format = get_hpc_properties()
+        args.template, args.extra_format = get_hpc_properties()
+    else:
+        args.extra_format = {}
 
     args.func(args)

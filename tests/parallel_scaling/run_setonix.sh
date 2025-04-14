@@ -15,5 +15,5 @@ source "$GADOPT_SETUP"
 #fi
 
 srun ${BINDING} $@ -n 1 2> level_${level}_warmup.err > level_${level}_warmup.out
-export PETSC_OPTIONS="-log_view"
+export PETSC_OPTIONS="-log_view :profile_${level}.txt"
 srun ${BINDING} $@ 2> level_${level}_full.err > level_${level}_full.out

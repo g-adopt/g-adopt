@@ -1,5 +1,7 @@
 import argparse
+import asyncio
 import itertools
+import math
 import os
 import subprocess
 import sys
@@ -89,7 +91,7 @@ def param_sets(config, permutate=False):
     return zip(*config.values())
 
 
-def run_subcommand(args):
+async def run_subcommand(args):
     from mpi4py import MPI
 
     try:
@@ -110,7 +112,7 @@ def run_subcommand(args):
             f.write(" ".join(str(x) for x in errors))
 
 
-def submit_subcommand(args):
+async def submit_subcommand(args):
     config = get_case(cases, args.case)
     procs = {}
 
@@ -119,42 +121,46 @@ def submit_subcommand(args):
     for level, cores in zip(config.pop("levels"), config.pop("cores")):
         for params in param_sets(config, permutate):
             paramstr = "-".join([str(v) for v in params])
+            # HPC-specific formatting - will be ignored by the default template
             errname = args.errname.format(level=level, params=paramstr)
             outname = args.outname.format(level=level, params=paramstr)
             jobname = f"analytical_{paramstr}"
+            if "procs_per_node" in args.extra_format:
+                # This can't be known until we know the number of cores, but it is required for
+                # job submission on some systems. asyncio.create_subprocess_exec uses execvpe,
+                # therefore we can't use $(( shell maths )) either
+                args.extra_format["nodes"] = math.ceil(cores / args.extra_format["procs_per_node"])
+
             command = args.template.format(
                 cores=cores,
                 mem=4 * cores,
                 params=paramstr,
                 level=level,
-                nodes=max(1, cores // 104),
                 errname=errname,
                 outname=outname,
                 jobname=jobname,
                 **args.extra_format,
             )
 
-            procs[paramstr] = subprocess.Popen(
-                [
-                    *command.split(),
-                    os.path.basename(sys.executable),
-                    sys.argv[0],
-                    "run",
-                    args.case,
-                    str(level),
-                    *[str(v) for v in params],
-                ]
+            procs[(level, paramstr)] = await asyncio.create_subprocess_exec(
+                *command.split(),
+                os.path.basename(sys.executable),
+                sys.argv[0],
+                "run",
+                args.case,
+                str(level),
+                *[str(v) for v in params],
             )
 
-    failed = False
+    await asyncio.gather(*[p.wait() for p in procs.values()])
 
-    for cmd, proc in procs.items():
-        if proc.wait() != 0:
-            print(f"{cmd} failed: {proc.returncode}")
+    failed = False
+    for (lvl, cmd), proc in procs.items():
+        if proc.returncode != 0:
+            print(f"Level {lvl}, {cmd} failed: {proc.returncode}")
             failed = True
 
-    if failed:
-        sys.exit(1)
+    sys.exit(failed)
 
 
 # two modes, submit and run
@@ -203,8 +209,8 @@ if __name__ == "__main__":
         from hpc import get_hpc_properties
 
         sys.path.pop(0)
-        system, args.template, args.extra_format = get_hpc_properties()
+        args.template, args.extra_format = get_hpc_properties()
     else:
         args.extra_format = {}
 
-    args.func(args)
+    asyncio.run(args.func(args))

@@ -2,7 +2,7 @@ import os
 import socket
 from pathlib import Path
 
-from typing import Dict, Callable, Tuple, Set
+from typing import Dict, Callable, Tuple, Set, Union
 
 batch_templates: Dict[str, str] = {
     "gadi": "qsub -v GADOPT_CHECKOUT={gadopt_checkout},GADOPT_SETUP={gadopt_setup} -W block=true -N {jobname} -l storage=gdata/xd2+scratch/xd2+gdata/fp50,ncpus={cores},walltime=04:00:00,mem={mem}GB,wd,jobfs=200GB -q normalsr -P {project} -o {outname} -e {errname} -- {script_path}",
@@ -19,8 +19,16 @@ system_identifiers: Dict[str, Callable] = {
     "setonix": lambda: socket.getfqdn().endswith("setonix.pawsey.org.au"),
 }
 
+# Note - NOT cores per node, some systems with less memory per core
+# will require partially committed nodes in order to run some test
+# cases
+procs_per_node: Dict[str,int] = {
+    "gadi": 104,
+    "setonix": 70
+}
 
-def get_hpc_properties() -> Tuple[str, str, Dict[str, str]]:
+
+def get_hpc_properties() -> Tuple[str, Dict[str, Union[str,int]]]:
     system = None
     for s, func in system_identifiers.items():
         if func():
@@ -32,7 +40,7 @@ def get_hpc_properties() -> Tuple[str, str, Dict[str, str]]:
     for var in required_environment[system]:
         if var not in os.environ:
             raise KeyError(f"{var} is required in environment when running on {system}")
-    format_params = {var: os.environ[var] for var in required_environment[system]}
+    format_params: Dict[str, Union[str,int]] = {var: os.environ[var] for var in required_environment[system]}
     if "gadopt_setup" in os.environ:
         format_params["gadopt_setup"] = os.environ["gadopt_setup"]
     else:
@@ -43,4 +51,5 @@ def get_hpc_properties() -> Tuple[str, str, Dict[str, str]]:
     else:
         script_dir = this_dir
     format_params["script_path"] = str(script_dir / f"run_{system}.sh")
-    return system, batch_templates[system], format_params
+    format_params["procs_per_node"] = procs_per_node[system]
+    return batch_templates[system], format_params

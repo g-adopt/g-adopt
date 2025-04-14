@@ -80,7 +80,7 @@ jobs:
           ssh ${{ matrix.system }} "cd ${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }} && source ${{ secrets[steps.get_sys_vars.outputs.gadopt_setup_var] }} && make -j longtest gadopt_checkout=${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }} gadopt_setup=${{ secrets[steps.get_sys_vars.outputs.gadopt_setup_var] }} project=${{ secrets[steps.get_sys_vars.outputs.project_var] }}"
 
       - name: Test results
-        if: ${{ success() }}
+        if: ${{ !cancelled() }}
         run: |
           ssh ${{ matrix.system }} "cd ${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }} && source ${{ secrets[steps.get_sys_vars.outputs.gadopt_setup_var] }} && python3 -m pytest -m longtest --junit-xml=test_results.xml --ignore=tests/unit tests"
 
