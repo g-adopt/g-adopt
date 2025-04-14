@@ -3,7 +3,6 @@ import asyncio
 import itertools
 import math
 import os
-import subprocess
 import sys
 import importlib
 from pathlib import Path
@@ -112,53 +111,62 @@ async def run_subcommand(args):
             f.write(" ".join(str(x) for x in errors))
 
 
+async def run_subproc(args, level, cores, params):
+    paramstr = "-".join([str(v) for v in params])
+    # HPC-specific formatting - will be ignored by the default template
+    errname = args.errname.format(level=level, params=paramstr)
+    outname = args.outname.format(level=level, params=paramstr)
+    jobname = f"analytical_{paramstr}"
+    if "procs_per_node" in args.extra_format:
+        # This can't be known until we know the number of cores, but it is required for
+        # job submission on some systems. asyncio.create_subprocess_exec uses execvpe,
+        # therefore we can't use $(( shell maths )) either
+        args.extra_format["nodes"] = math.ceil(cores / args.extra_format["procs_per_node"])
+
+    command = args.template.format(
+        cores=cores,
+        mem=4 * cores,
+        params=paramstr,
+        level=level,
+        errname=errname,
+        outname=outname,
+        jobname=jobname,
+        **args.extra_format,
+    )
+
+    proc = await asyncio.create_subprocess_exec(
+        *command.split(),
+        os.path.basename(sys.executable),
+        sys.argv[0],
+        "run",
+        args.case,
+        str(level),
+        *[str(v) for v in params],
+    )
+
+    await proc.wait()
+
+    return level, paramstr, proc.returncode
+
+
 async def submit_subcommand(args):
     config = get_case(cases, args.case)
-    procs = {}
 
     permutate = config.pop("permutate", True)
 
+    procs = []
     for level, cores in zip(config.pop("levels"), config.pop("cores")):
         for params in param_sets(config, permutate):
-            paramstr = "-".join([str(v) for v in params])
-            # HPC-specific formatting - will be ignored by the default template
-            errname = args.errname.format(level=level, params=paramstr)
-            outname = args.outname.format(level=level, params=paramstr)
-            jobname = f"analytical_{paramstr}"
-            if "procs_per_node" in args.extra_format:
-                # This can't be known until we know the number of cores, but it is required for
-                # job submission on some systems. asyncio.create_subprocess_exec uses execvpe,
-                # therefore we can't use $(( shell maths )) either
-                args.extra_format["nodes"] = math.ceil(cores / args.extra_format["procs_per_node"])
-
-            command = args.template.format(
-                cores=cores,
-                mem=4 * cores,
-                params=paramstr,
-                level=level,
-                errname=errname,
-                outname=outname,
-                jobname=jobname,
-                **args.extra_format,
-            )
-
-            procs[(level, paramstr)] = await asyncio.create_subprocess_exec(
-                *command.split(),
-                os.path.basename(sys.executable),
-                sys.argv[0],
-                "run",
-                args.case,
-                str(level),
-                *[str(v) for v in params],
-            )
-
-    await asyncio.gather(*[p.wait() for p in procs.values()])
+            procs.append(run_subproc(args, level, cores, params))
 
     failed = False
-    for (lvl, cmd), proc in procs.items():
-        if proc.returncode != 0:
-            print(f"Level {lvl}, {cmd} failed: {proc.returncode}")
+    for coro in asyncio.as_completed(procs):
+        lvl, cmd, rc = await coro
+        if rc != 0:
+            print(f"Level {lvl}, {cmd} failed: {rc}")
             failed = True
+        else:
+            print(f"Level {lvl}, {cmd} succeeded: {rc}")
 
     sys.exit(failed)
 
