@@ -37,11 +37,45 @@ from gadopt import *
 # attribute to False. This ensures the correct configuration of a radially inward vertical direction.
 
 # +
-rmin, rmax, ncells, nlayers = 1.22, 2.22, 128, 32
-mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
-mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type='radial')  # extrude into a cylinder
-mesh.cartesian = False
-bottom_id, top_id = "bottom", "top"
+# Switches
+do_standard_demo = True
+rotational_nullspace = True
+stokes_kwargs = {"solver_parameters": "iterative"}
+if rotational_nullspace:
+    top_bc_type = "un"
+else:
+    top_bc_type = "u"
+# end Switches
+
+if do_standard_demo:
+    rmin, rmax, ncells, nlayers = 1.22, 2.22, 128, 32
+    mesh1d = CircleManifoldMesh(ncells, radius=rmin, degree=2)  # construct a circle mesh
+    mesh = ExtrudedMesh(mesh1d, layers=nlayers, extrusion_type="radial")  # extrude into a cylinder
+
+    bottom_id = "bottom"
+    top_id = "top"
+else:
+    from pathlib import Path
+
+    mesh_bad_dont_use = Mesh(str(Path().resolve().parent / "poisson_gravity" / "mesh.msh"))
+    rmax = 2.22
+    rmin = 1.22
+    X = SpatialCoordinate(mesh_bad_dont_use)
+    r = sqrt(X[0] ** 2 + X[1] ** 2)
+    label_mantle = 98
+    V_region_definitions = FunctionSpace(mesh_bad_dont_use, "DP", 0)
+    mantle = Function(V_region_definitions, name="rho").interpolate(
+        conditional(r > rmax, 0.0, conditional(r > rmin, 1.0, 0.0))
+    )
+    mesh2 = RelabeledMesh(mesh_bad_dont_use, [mantle], [label_mantle])
+    mesh2a = Submesh(mesh2, 2, label_mantle, name="mesh_mantle")
+    V_earth_bound_def = FunctionSpace(mesh2a, "HDiv Trace", 0)
+    f0 = Function(V_earth_bound_def)
+    mesh = RelabeledMesh(mesh2a, [f0], [5])
+    mesh.cartesian = False
+
+    bottom_id = 2
+    top_id = 3
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
@@ -115,7 +149,7 @@ T.interpolate(rmax - r + 0.02*cos(4*atan2(X[1], X[0])) * sin((r - rmin) * pi))
 # setting up a nullspace object as we did in the previous tutorial, albeit speciying the `rotational` keyword argument to be True.
 # This removes the requirement for a user to configure these options, further simplifying the task of setting up a (valid) geodynamical simulation.
 
-Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
+Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=rotational_nullspace)
 
 # Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative
 # solver parameters. As noted in our previous 3-D Cartesian tutorial, G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
@@ -132,7 +166,7 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # +
 stokes_bcs = {
     bottom_id: {'un': 0},
-    top_id: {'un': 0},
+    top_id: {top_bc_type: 0},
 }
 
 temp_bcs = {
@@ -164,7 +198,7 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
                              constant_jacobian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             near_nullspace=Z_near_nullspace)
+                             near_nullspace=Z_near_nullspace,**stokes_kwargs)
 # -
 
 # We now initiate the time loop, which runs until a steady-state solution has been attained.

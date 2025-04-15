@@ -16,8 +16,8 @@ from firedrake import *
 # A special mesh generated just for this purpose (see mesh.geo)
 mesh = Mesh("mesh.msh")
 
-r_surface = 1.0
-r_cmb = 0.55
+r_surface = 2.22
+r_cmb = 1.22
 
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2)
@@ -37,7 +37,10 @@ bcs = [DirichletBC(V, 0.0, 4)]
 L = inner(grad(v), grad(phi)) * dx  # - v * dot(grad(phi), FacetNormal(mesh)) * ds(4)
 R = 4 * pi * rho * v * dx
 # solve(L == R, solution, bcs=bcs)
-solve(L == R, solution, bcs=bcs)
+#solve(L == R, solution, bcs=bcs)
+p = LinearVariationalProblem(L,R,solution,bcs=bcs)
+s = LinearVariationalSolver(p)
+s.solve()
 
 fi = VTKFile("poisson.pvd")
 fi.write(solution, rho)

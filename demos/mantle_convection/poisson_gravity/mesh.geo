@@ -2,9 +2,9 @@ SetFactory("OpenCASCADE");  // Use OpenCASCADE geometry kernel
 
 // Define radii
 r_inner = 0.1;
-r_cmb = 0.55;
-r_surface = 1.0;
-r_inf = 20.0;
+r_cmb = 1.22;
+r_surface = 2.22;
+r_inf = 44.4;
 
 // Define mesh sizes
 lc_coarse = 1.0;
