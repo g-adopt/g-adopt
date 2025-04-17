@@ -91,39 +91,21 @@ def visualise_finalstates(working_path="./", output_name="finalstate.pvd"):
     
     Q = FunctionSpace(mesh, "CG", 1)
     FullT = Function(Q, name="T_final")  # Tobs (tomography)
-    Tave = Function(Q, name="Tave_obs")  # Tave of the 
+    Tave = Function(Q, name="Tave_final")  # Tave of the 
    
-    # Loading adiabatic reference fields
-    tala_parameters_dict = {}
-
-    with CheckpointFile(
-        reference_path.as_posix(),
-        mode="r",
-    ) as fi:
-        for key in ["Tbar"]:
-            tala_parameters_dict[key] = fi.load_function(mesh, name=key)
-
     # Write out the field
     vtk_fi = VTKFile(output_name)
     
     for filename in allfiles:
         # Load control and Tobs
         with CheckpointFile(filename.as_posix(), mode="r") as fi:
-            control.interpolate(fi.load_function(mesh, name="control"))
-            Tobs.interpolate(fi.load_function(mesh, name="Tobs"))
-
-        # dim of control 
-        control_dim.interpolate(
-            (control + tala_parameters_dict["Tbar"]) * Constant(3700.0) + Constant(300.0)
-        )
+            FullT.interpolate(fi.load_function(mesh, name="Temperature"))
 
         # Compute the average for 
-        averager.extrapolate_layer_average(Tave_obs, averager.get_layer_average(Tobs))
+        averager.extrapolate_layer_average(Tave, averager.get_layer_average(FullT))
 
         # Write out
-        vtk_fi.write(control_dim, Tobs, Tave_obs)
-
-
+        vtk_fi.write(FullT, Tave)
 
 
 if __name__ == "__main__":
