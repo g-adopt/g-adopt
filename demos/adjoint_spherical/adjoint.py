@@ -6,12 +6,13 @@ import numpy as np
 from pathlib import Path
 import gdrift
 from gdrift.profile import SplineProfile
-from checkpoint_schedules import SingleDiskStorageSchedule
+from checkpoint_schedules import SingleDiskStorageSchedule, SingleMemoryStorageSchedule
 from pyadjoint import Block
-import faulthandler, signal
+import faulthandler
+import sys
 
 # Angus's Trick
-faulthandler.register(signal.SIGUSR2)
+faulthandler.enable(sys.stderr)
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -47,14 +48,22 @@ def visualise_derivative():
     my_fi.write(my_der)
 
 
-def test_taping():
-    Tic, reduced_functional = forward_problem()
+def test_taping(scheduler):
+    Tic, reduced_functional = forward_problem(scheduler)
     repeat_val = reduced_functional([Tic])
-    log("Reduced Functional Repeat: ", repeat_val)
+    der = reduced_functional.derivative(options={"riesz_representation": "L2"})
+    der.rename("derivative")
+        
+    # write out
+    out_type = "disk" if isinstance(scheduler, SingleDiskStorageSchedule) else "memory"
+    log(f"{out_type}; Norm: ", assemble(der ** 2 * dx))
+    log(f"{out_type}; Reduced Functional Repeat: ", repeat_val)
+
+    VTKFile(f"derivative_{out_type}_None.pvd").write(der)
 
 
 def conduct_inversion():
-    Tic, reduced_functional = forward_problem()
+    Tic, reduced_functional = forward_problem(scheduler=SingleMemoryStorageSchedule())
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
@@ -63,7 +72,7 @@ def conduct_inversion():
     T_lb.assign(0.0)
     T_ub.assign(0.76)
 
-    minimisation_parameters["Status Test"]["Iteration Limit"] = 10
+    minimisation_parameters["Status Test"]["Iteration Limit"] = 20
     minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 0.1
     minimisation_parameters["Step"]["Trust Region"]["Radius Growing Rate"] = 5
     minimisation_parameters["Step"]["Trust Region"]["Radius Shrinking Rate (Negative rho)"] = 0.03125
@@ -84,7 +93,7 @@ def conduct_inversion():
     # optimiser.add_callback(callback)
 
     # Restore from previous checkpoint
-    # optimiser.restore(7)
+    optimiser.restore()
 
     # Run the optimisation
     optimiser.run()
@@ -97,9 +106,9 @@ def conduct_taylor_test():
     _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-def forward_problem():
-    # Enable disk checkpointing for the adjoint
-    enable_disk_checkpointing()
+def forward_problem(scheduler=SingleMemoryStorageSchedule()):
+    # # Enable disk checkpointing for the adjoint
+    # enable_disk_checkpointing()
 
     # Getting the working tape
     tape = get_working_tape()
@@ -107,10 +116,10 @@ def forward_problem():
     # clearing tape
     tape.clear_tape()
 
-    # # setting gc collection
-    # tape.enable_checkpointing(
-    #     SingleDiskStorageSchedule(), gc_timestep_frequency=1, gc_generation=2
-    # )
+    # setting gc collection
+    tape.enable_checkpointing(
+        scheduler, gc_timestep_frequency=1, gc_generation=2
+    )
 
     # Set up the base path
     base_path = Path(__file__).resolve().parent
@@ -184,7 +193,7 @@ def forward_problem():
         nseeds=1e4,
         scaling_factor=1.0,
         oldest_age=1800,
-        delta_t=2.0,
+        delta_t=1.0,
     )
 
     # Top velocity boundary condition
@@ -267,7 +276,7 @@ def forward_problem():
     presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
 
     # non-dimensionalised time for 40 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(5.0)
+    time = plate_reconstruction_model.age2ndtime(20.0)
 
     # Defining control
     control = Control(Tic)
@@ -294,7 +303,7 @@ def forward_problem():
 
     # timestep counter
     timestep_initial_phase = 3
-    stokes_solve_frequency = 3
+    stokes_solve_frequency = 4
     z.subfunctions[0].interpolate(as_vector((0.0, 0.0, 0.0)))
     z.subfunctions[1].interpolate(0.0)
 
@@ -328,8 +337,7 @@ def forward_problem():
 
         if should_end_timestepping:
             break
-
-
+        
 
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature").interpolate(
@@ -343,20 +351,20 @@ def forward_problem():
     norm_t_misfit = assemble((T_obs) ** 2 * dx)
 
     # Smoothing term
-    smoothing_weight = 2e-3
+    smoothing_weight = 1e-4
     smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
     norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
 
     # Damping term
-    damping_weight = 1e-2
+    damping_weight = 1e-3
     damping = assemble((T_0 - T_ave) ** 2 * dx)
     norm_damping = assemble(T_ave ** 2 * dx)
 
     # Assembling the objective
-    objective = t_misfit / norm_t_misfit  # In case of temperature only term
+    # objective = t_misfit / norm_t_misfit  # In case of temperature only term
     # objective = damping_weight * damping / norm_damping
     # objective = smoothing_weight * smoothing / norm_smoothing  # In case of smoothing only
-    # objective = 1e3 * (t_misfit / norm_t_misfit + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping)
+    objective = 1e3 * (t_misfit / norm_t_misfit + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping)
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
@@ -375,7 +383,7 @@ def forward_problem():
             self.cb_control = Function(Tic.function_space(), name="control")
 
             # Initial index
-            self.idx = 0
+            self.idx = 9
 
         def __call__(self, control):
             # Interpolating control
@@ -541,9 +549,13 @@ def generate_reference_fields():
     T_ave = Function(Q, name="T_ave_ref")
     averager.extrapolate_layer_average(T_ave, averager.get_layer_average(T_simulation))
 
+    # Compute average of T_simulation for regularisation
+    T_ave_obs = Function(Q, name="T_ave_obs")
+    averager.extrapolate_layer_average(T_ave_obs, averager.get_layer_average(T_obs))
+
     # Output for visualisation
     output = VTKFile(output_path.with_suffix(".pvd"))
-    output.write(T_obs, T_ave, T_simulation)
+    output.write(T_obs, T_ave_obs, T_ave, T_simulation)
 
     # Write out the file
     with CheckpointFile(str(output_path.with_suffix(".h5")), mode="w") as fi:
@@ -814,3 +826,12 @@ class DiagnosticBlock(Block):
 
     def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
         return
+
+
+def test_memory():
+    test_taping(SingleMemoryStorageSchedule())
+
+
+def test_disk():
+    test_taping(SingleDiskStorageSchedule())
+
