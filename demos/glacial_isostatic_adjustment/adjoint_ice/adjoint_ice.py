@@ -14,8 +14,7 @@
 # run a forward GIA simulation and record all relevant fields at each time step. In our case, this will be the displacement and velocity recorded at the surface of the Earth. We will use these outputs of the reference twin as the "observations" for our inversion.
 #
 # We have pre-run this simulation by running the forward 2D cylindrical case, and stored model output as a
-# checkpoint file on our servers.  These fields serve as benchmarks for evaluating our inverse problem's performance. To
-# download the reference benchmark checkpoint file if it doesn't already exist, execute the following command:
+# checkpoint file on our servers. To download the reference benchmark checkpoint file if it doesn't already exist, execute the following command:
 
 # + tags=["active-ipynb"]
 # ![ ! -f forward-2d-cylindrical-disp-incdisp.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-incdisp.h5
@@ -127,10 +126,18 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 
 # -
 
+# Defining the Control
+# ---------------------
+#
 # Now let's setup the ice load. For this tutorial we will start with an ice thickness of zero
 # everywhere, but our target ice load will be the same two synthetic ice sheets in the
 # previous demo. A key step is to define our control, i.e. the field or parameter that we are
 # inverting for. In our case, this is the normalised ice thickness.
+#
+# Since the ice thickness is only defined at the surface of the Earth we need to tell *G-ADOPT*
+# that the interior sensitivity should always be zero. We can do this by projecting the *control* field
+# to another function, imposing a homogenous Dirichlet boundary condition at all the interior nodes, i.e. 
+# fixing the interior elements to have an ice thickness of zero.
 
 # +
 rho_ice = 931
@@ -142,29 +149,29 @@ from gia_demo_utils import setup_normalised_ice_discs  # noqa: E402
 target_normalised_ice_thickness = Function(W, name="target normalised ice thickness")
 target_normalised_ice_thickness.interpolate(setup_normalised_ice_discs(X, radius_values, Hice))
 
+# Set up geometry:
+rmin = 3480e3
+rmax = 6371e3
+D = rmax-rmin
+nz = 32
+ncells = 180
+dz = D / nz
+
+# Construct a circle mesh and then extrude into a cylinder:
+#surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh2')
+#Wcontrol = FunctionSpace(surface_mesh, "CG", 1) # control space
+#control_ice_thickness = Function(Wcontrol) # control
+#control = Control(control_ice_thickness)
 # defining the control
 control_ice_thickness = Function(W, name="control normalised ice thickness")
 control = Control(control_ice_thickness)
 
 # the ice thickness that will be actually used in simulation
+#normalised_ice_thickness = Function(W, name="normalised ice thickness").interpolate(control_ice_thickness, allow_missing_dofs=True) 
 normalised_ice_thickness = Function(W, name="normalised ice thickness")
 normalised_ice_thickness.project(control_ice_thickness, bcs=[InteriorBC(W, 0, top_id)])
 
 ice_load = rho_ice * g * Hice * normalised_ice_thickness
-
-adj_ice_file = VTKFile("adj_ice.pvd")
-# Since we are calculating the sensitivity to a field that is only defined
-# on the top boundary, if we do the usual L2 projection (using the
-# mass matrix) to account for the size of the mesh element then we
-# will get spurious oscillating values in the output gradient in
-# cells not connected to the boundary. Instead we do the projection using
-# a surface integral, so that our output gradient accounts for the surface
-# area of each cell.
-converter = RieszL2BoundaryRepresentation(W, top_id)  # Convert to surface L2 representation
-
-# We add a diagnostic block to the tape which will output the gradient
-# field every time the tape is replayed.
-tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_options={'riesz_representation': "L2"}))
 # -
 
 
@@ -173,85 +180,10 @@ tape.add_block(DiagnosticBlock(adj_ice_file, normalised_ice_thickness, riesz_opt
 # + tags=["active-ipynb"]
 # import pyvista as pv
 # import matplotlib.pyplot as plt
-# ice_cmap = plt.get_cmap("Blues", 25)
-#
-# # Make two points at the bounds of the mesh and one at the center to
-# # construct a circular arc.
-# rmin = 3480e3
-# rmax = 6371e3
-# D = rmax-rmin
-# nz = 32
-# dz = D / nz
-#
-# normal = [0, 0, 1]
-# polar = [radius_values[0]-0.01*dz, 0, 0]
-# center = [0, 0, 0]
-# angle = 360.0
-# arc = pv.CircularArcFromNormal(center, 10000, normal, polar, angle)
-#
-# # Stretch line by 20%
-# transform_matrix = np.array(
-#     [
-#         [1.2, 0, 0, 0],
-#         [0, 1.2, 0, 0],
-#         [0, 0, 1.2, 0],
-#         [0, 0, 0, 1],
-#     ])
-#
-#
-# def add_ice(p, m, scalar="normalised ice thickness", scalar_bar_args=None):
-#
-#     if scalar_bar_args is None:
-#         scalar_bar_args = {
-#             "title": 'Normalised ice thickness',
-#             "position_x": 0.2,
-#             "position_y": 0.8,
-#             "vertical": False,
-#             "title_font_size": 22,
-#             "label_font_size": 18,
-#             "fmt": "%.1f",
-#             "font_family": "arial",
-#             "n_labels": 5,
-#         }
-#     data = m.read()[0]  # MultiBlock mesh with only 1 block
-#
-#     # Extract boundary surface, remove inner surface and expand ring width
-#     surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
-#                                       feature_edges=False,manifold_edges=False)
-#     sphere = pv.Sphere(radius=5e6)
-#     clipped_surf = surf.clip_surface(sphere, invert=False)
-#     transformed_surf = clipped_surf.transform(transform_matrix)
-#
-#     p.add_mesh(transformed_surf, scalars=scalar, line_width=10, clim=[0, 2], cmap=ice_cmap, scalar_bar_args=scalar_bar_args)
-#
+# from gia_demo_utils import add_ice, add_viscosity
 #
 # visc_file = VTKFile('viscosity.pvd').write(normalised_viscosity)
-# reader = pv.get_reader("viscosity.pvd")
-# visc_data = reader.read()[0]  # MultiBlock mesh with only 1 block
-# visc_cmap = plt.get_cmap("inferno_r", 25)
 #
-#
-# def add_viscosity(p):
-#     p.add_mesh(
-#         visc_data,
-#         component=None,
-#         lighting=False,
-#         show_edges=False,
-#         cmap=visc_cmap,
-#         clim=[-3, 2],
-#         scalar_bar_args={
-#             "title": 'Normalised viscosity',
-#             "position_x": 0.2,
-#             "position_y": 0.1,
-#             "vertical": False,
-#             "title_font_size": 22,
-#             "label_font_size": 18,
-#             "fmt": "%.0f",
-#             "font_family": "arial",
-#         }
-#     )
-#
-# # Read the PVD file
 # updated_ice_file = VTKFile('ice.pvd').write(normalised_ice_thickness, target_normalised_ice_thickness)
 # reader = pv.get_reader("ice.pvd")
 #
@@ -414,46 +346,10 @@ for timestep in range(max_timesteps):
 
 # -
 
-# Let's create a helper function to warp the mesh based on the displacement.
-
-
-# + tags=["active-ipynb"]
-# def add_displacement(p, m, disp="Displacement", scalar_bar_args=None):
-#     data = m.read()[0]  # MultiBlock mesh with only 1 block
-#
-#     # Make a colour map
-#     boring_cmap = plt.get_cmap("inferno_r", 25)
-#
-#     # Artificially warp the output data by the displacement field
-#     # Note the mesh is not really moving!
-#     warped = data.warp_by_vector(vectors=disp, factor=1500)
-#     if scalar_bar_args is None:
-#         scalar_bar_args = {
-#             "title": 'Displacement (m)',
-#             "position_x": 0.2,
-#             "position_y": 0.8,
-#             "vertical": False,
-#             "title_font_size": 20,
-#             "label_font_size": 16,
-#             "fmt": "%.0f",
-#             "font_family": "arial",
-#         }
-#
-#     # Add the warped displacement field to the frame
-#     plotter.add_mesh(
-#         warped,
-#         scalars=disp,
-#         component=None,
-#         lighting=False,
-#         clim=[0, 600],
-#         cmap=boring_cmap,
-#         scalar_bar_args=scalar_bar_args,
-#     )
-# -
-
 # As we can see from the plot below there is no displacement at the final time given there is no ice load!
 
 # + tags=["active-ipynb"]
+# from gia_demo_utils import add_displacement
 # # Read the PVD file
 # reader = pv.get_reader("output.pvd")
 # data = reader.read()[0]  # MultiBlock mesh with only 1 block
@@ -524,7 +420,8 @@ pause_annotation()
 # Let's setup some call backs to help us keep track of the inversion.
 
 # +
-updated_ice_thickness = Function(normalised_ice_thickness, name="updated ice thickness")
+#updated_ice_thickness = Function(normalised_ice_thickness, name="updated ice thickness")
+updated_ice_thickness = Function(control_ice_thickness, name="updated ice thickness")
 updated_ice_thickness_file = VTKFile("updated_ice_thickness.pvd")
 updated_displacement = Function(displacement, name="updated displacement")
 updated_velocity = Function(z.subfunctions[0], name="updated velocity")
@@ -556,7 +453,7 @@ def eval_cb(J, m):
 
     # Write out values of control and final forward model results
     updated_ice_thickness.assign(m)
-    updated_ice_thickness_file.write(updated_ice_thickness, target_normalised_ice_thickness)
+    updated_ice_thickness_file.write(updated_ice_thickness) #, target_normalised_ice_thickness)
     updated_displacement.interpolate(displacement.block_variable.checkpoint)
     updated_velocity.interpolate(z.subfunctions[0].block_variable.checkpoint / dt)
     updated_out_file.write(updated_displacement, final_target_displacement, updated_velocity, final_target_velocity)
@@ -564,9 +461,15 @@ def eval_cb(J, m):
 
 # -
 
+# Define the Reduced Functional
+# -----------------------------
 # The next important step is to define the reduced functional. This is pyadjoint's way of
 # associating our objective function with the control variable that we are trying to
-# optimise. We can pass our call back function which will be called every time
+# optimise. It does this without explicitly depending on all intermediary
+# state variables, hence the name "reduced".
+#
+# To define the reduced functional, we provide the class with an objective (which is an overloaded UFL object) and the control.
+#  We can also pass our call back function which will be called every time
 # the functional is evaluated.
 
 reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
@@ -579,7 +482,8 @@ reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 # reducted functional and print out the answer - it is good to see they are the same!
 
 log("J", J)
-log("Replay tape RF", reduced_functional(normalised_ice_thickness))
+#log("Replay tape RF", reduced_functional(normalised_ice_thickness))
+log("Replay tape RF", reduced_functional(control_ice_thickness))
 
 # ### Visualising the derivative
 #
@@ -587,48 +491,12 @@ log("Replay tape RF", reduced_functional(normalised_ice_thickness))
 # ice thickness.  This is as simple as calling the `derivative()` method on  our
 # reduced functional.
 
+# +
 dJdm = reduced_functional.derivative(options={"riesz_representation": "L2"})
 
-
-# We can also plot the derivative using pyvista. First of all let's define another helper
-# function to plot the sensitivity to the ice thickness as a ring outside the domain.
-
-
-# + tags=["active-ipynb"]
-# def add_sensitivity_ring(p, m, scalar_bar_args=None):
-#     # Make a colour map
-#     adj_cmap = plt.get_cmap("coolwarm", 25)
-#     if scalar_bar_args is None:
-#         scalar_bar_args = {
-#             "title": 'Adjoint sensitivity',
-#             "position_x": 0.2,
-#             "position_y": 0.8,
-#             "vertical": False,
-#             "title_font_size": 22,
-#             "label_font_size": 18,
-#             "fmt": "%.1e",
-#             "font_family": "arial",
-#             "n_labels": 3,
-#         }
-#     data = m.read()[0]  # MultiBlock mesh with only 1 block
-#
-#     # Extract boundary surface, remove inner surface and expand ring width
-#     surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
-#                                       feature_edges=False, manifold_edges=False)
-#     sphere = pv.Sphere(radius=5e6)
-#     clipped_surf = surf.clip_surface(sphere, invert=False)
-#
-#     transform_matrix = np.array(
-#         [
-#             [1.1, 0, 0, 0],
-#             [0, 1.1, 0, 0],
-#             [0, 0, 1.1, 0],
-#             [0, 0, 0, 1],
-#         ])
-#
-#     transformed_surf = clipped_surf.transform(transform_matrix)
-#     p.add_mesh(transformed_surf, line_width=8, scalar_bar_args=scalar_bar_args, clim=[-5e-7, 5e-7], cmap=adj_cmap)
+grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 # -
+
 
 # Next we read in the file that was written out as part of the diagnostic callback
 # added to the tape earlier. We can see there is a clear hemispherical pattern in
@@ -639,6 +507,7 @@ dJdm = reduced_functional.derivative(options={"riesz_representation": "L2"})
 # we expect increasing the ice thickness here to reduce our surface misfit.
 
 # + tags=["active-ipynb"]
+# from gia_demo_utils import add_sensitivity_ring
 # # Read the PVD file
 # reader = pv.get_reader("ice.pvd")
 # adj_reader = pv.get_reader("adj_ice.pvd")
@@ -691,9 +560,9 @@ dJdm = reduced_functional.derivative(options={"riesz_representation": "L2"})
 # Here is how you can perform a Taylor test in the code:
 
 # +
-h = Function(normalised_ice_thickness)
+h = Function(control_ice_thickness)
 h.dat.data[:] = np.random.random(h.dat.data_ro.shape)
-minconv = taylor_test(reduced_functional, normalised_ice_thickness, h)
+minconv = taylor_test(reduced_functional, control_ice_thickness, h)
 
 with open("taylor_test_minconv.txt", "w") as f:
     f.write(str(minconv))
@@ -707,8 +576,10 @@ with open("taylor_test_minconv.txt", "w") as f:
 # as we do not want negative ice thicknesses!
 
 # +
-ice_thickness_lb = Function(normalised_ice_thickness.function_space(), name="Lower bound ice thickness")
-ice_thickness_ub = Function(normalised_ice_thickness.function_space(), name="Upper bound ice thickness")
+#ice_thickness_lb = Function(normalised_ice_thickness.function_space(), name="Lower bound ice thickness")
+#ice_thickness_ub = Function(normalised_ice_thickness.function_space(), name="Upper bound ice thickness")
+ice_thickness_lb = Function(control_ice_thickness.function_space(), name="Lower bound ice thickness")
+ice_thickness_ub = Function(control_ice_thickness.function_space(), name="Upper bound ice thickness")
 ice_thickness_lb.assign(0.0)
 ice_thickness_ub.assign(5)
 

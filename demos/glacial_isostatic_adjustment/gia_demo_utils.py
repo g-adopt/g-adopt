@@ -1,5 +1,8 @@
 import firedrake as fd
 from gadopt.utility import step_func
+import pyvista as pv
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 def initialise_background_field(X, field, background_values, radius_values, vertical_tanh_width=40e3):
@@ -64,3 +67,135 @@ def setup_normalised_ice_discs(X, radius_values, Hice1):
     disc2 = 0.5*(1-fd.tanh((abs(abs(colatitude)-disc2_centre) - disc_halfwidth2) / (2*surface_resolution_radians)))
     Hice2 = 2*Hice1
     return disc1 + (Hice2/Hice1)*disc2
+
+
+ice_cmap = plt.get_cmap("Blues", 25)
+
+
+def add_ice(p, m, scalar="normalised ice thickness", scalar_bar_args=None):
+
+    if scalar_bar_args is None:
+        scalar_bar_args = {
+            "title": 'Normalised ice thickness',
+            "position_x": 0.2,
+            "position_y": 0.8,
+            "vertical": False,
+            "title_font_size": 22,
+            "label_font_size": 18,
+            "fmt": "%.1f",
+            "font_family": "arial",
+            "n_labels": 5,
+        }
+    data = m.read()[0]  # MultiBlock mesh with only 1 block
+
+    # Extract boundary surface, remove inner surface and expand ring width
+    surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
+                                      feature_edges=False, manifold_edges=False)
+    sphere = pv.Sphere(radius=5e6)
+    clipped_surf = surf.clip_surface(sphere, invert=False)
+
+    # Stretch line by 20%
+    transform_matrix = np.array(
+        [
+            [1.2, 0, 0, 0],
+            [0, 1.2, 0, 0],
+            [0, 0, 1.2, 0],
+            [0, 0, 0, 1],
+        ])
+    transformed_surf = clipped_surf.transform(transform_matrix)
+
+    p.add_mesh(transformed_surf, scalars=scalar, line_width=10, clim=[0, 2], cmap=ice_cmap, scalar_bar_args=scalar_bar_args)
+
+
+visc_cmap = plt.get_cmap("inferno_r", 25)
+
+
+def add_viscosity(p, fname="viscosity.pvd"):
+    reader = pv.get_reader(fname)
+    visc_data = reader.read()[0]
+    p.add_mesh(
+        visc_data,
+        component=None,
+        lighting=False,
+        show_edges=False,
+        cmap=visc_cmap,
+        clim=[-3, 2],
+        scalar_bar_args={
+            "title": 'Normalised viscosity',
+            "position_x": 0.2,
+            "position_y": 0.1,
+            "vertical": False,
+            "title_font_size": 22,
+            "label_font_size": 18,
+            "fmt": "%.0f",
+            "font_family": "arial",
+        }
+    )
+
+
+def add_displacement(p, m, disp="Displacement", scalar_bar_args=None):
+    data = m.read()[0]  # MultiBlock mesh with only 1 block
+
+    # Make a colour map
+    boring_cmap = plt.get_cmap("inferno_r", 25)
+
+    # Artificially warp the output data by the displacement field
+    # Note the mesh is not really moving!
+    warped = data.warp_by_vector(vectors=disp, factor=1500)
+    if scalar_bar_args is None:
+        scalar_bar_args = {
+            "title": 'Displacement (m)',
+            "position_x": 0.2,
+            "position_y": 0.8,
+            "vertical": False,
+            "title_font_size": 20,
+            "label_font_size": 16,
+            "fmt": "%.0f",
+            "font_family": "arial",
+        }
+
+    # Add the warped displacement field to the frame
+    p.add_mesh(
+        warped,
+        scalars=disp,
+        component=None,
+        lighting=False,
+        clim=[0, 600],
+        cmap=boring_cmap,
+        scalar_bar_args=scalar_bar_args,
+    )
+
+
+def add_sensitivity_ring(p, m, scalar_bar_args=None):
+    # Make a colour map
+    adj_cmap = plt.get_cmap("coolwarm", 25)
+    if scalar_bar_args is None:
+        scalar_bar_args = {
+            "title": 'Adjoint sensitivity',
+            "position_x": 0.2,
+            "position_y": 0.8,
+            "vertical": False,
+            "title_font_size": 22,
+            "label_font_size": 18,
+            "fmt": "%.1e",
+            "font_family": "arial",
+            "n_labels": 3,
+        }
+    data = m.read()[0]  # MultiBlock mesh with only 1 block
+
+    # Extract boundary surface, remove inner surface and expand ring width
+    surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
+                                      feature_edges=False, manifold_edges=False)
+    sphere = pv.Sphere(radius=5e6)
+    clipped_surf = surf.clip_surface(sphere, invert=False)
+
+    transform_matrix = np.array(
+        [
+            [1.1, 0, 0, 0],
+            [0, 1.1, 0, 0],
+            [0, 0, 1.1, 0],
+            [0, 0, 0, 1],
+        ])
+
+    transformed_surf = clipped_surf.transform(transform_matrix)
+    p.add_mesh(transformed_surf, line_width=8, scalar_bar_args=scalar_bar_args, clim=[-5e-7, 5e-7], cmap=adj_cmap)
