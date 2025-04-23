@@ -1,57 +1,59 @@
-from types import SimpleNamespace
-
-def updateSmoothingParameter( smoothingParameter, smoothingFactor, q, h, dimen, V ):
-    
-    import firedrake as fd
-    from firedrake.petsc import PETSc
-
-    qNorm = fd.Function(V).interpolate( fd.sqrt(fd.dot(q, q)) ) 
-    with qNorm.dat.vec_ro as v:
-        qMax = v.max()[1]
+import numpy as np
+import scipy.io
+import firedrake as fd
+from firedrake.petsc import PETSc
 
 
-    laplacian = fd.Function(V).interpolate(abs( h.dx(dimen-1) )) 
-    with laplacian.dat.vec_ro as v:
-        lapMax = v.max()[1]
+def data_2_function(mesh_coords, file_name):
+    # Takes a data set that defines a value defined at the surface of the mesh and defines a firedrake function from this data
 
-    smoothingParameter.assign( smoothingFactor*lapMax * qMax)
+    x_coord = mesh_coords[:, 0]
+    y_coord = mesh_coords[:, 1]
+    elevation = x_coord*0
+    distance = elevation + 100000
 
- #   smoothingParameter.assign( smoothingFactor)
+    mat = scipy.io.loadmat(file_name)
+    x = mat.get('x')
+    x_surface = x.flatten()
+    y = mat.get('y')
+    y_surface = y.flatten()
+    z = mat.get('z')
+    z_surface = z.flatten()
 
-    return smoothingParameter
+    for indexOuter in range(len(x_coord)):
+        xCurrent = x_coord[indexOuter]
+        yCurrent = y_coord[indexOuter]
 
-def updateTimeStep( h, hOld, timeStep, timeParameters, V ):
-   
-    import numpy as np
-    import firedrake as fd
-    from firedrake.petsc import PETSc
+        distance = np.sqrt((xCurrent - x_surface)**2 + (yCurrent - y_surface)**2)
+        indexMin = np.argmin(distance)
+        elevation[indexOuter] = z_surface[indexMin]
+
+    return elevation
+
+
+def updateTimeStep(h, hOld, timeStep, timeParameters, V):
 
     if timeParameters["timeStepType"] == 'constant':
 
-        timeStep.assign( timeParameters["timeStepSize"] ); 
+        timeStep.assign(timeParameters["timeStepSize"]); 
 
     elif timeParameters["timeStepType"] == 'adaptive':
 
-        relativeErrorFunc = fd.Function(V).interpolate(abs((h - hOld)/ (h)))
+        relativeErrorFunc = fd.Function(V).interpolate(abs((h - hOld)/(h)))
         with relativeErrorFunc.dat.vec_ro as v:
             relativeError = v.max()[1]
         PETSc.Sys.Print(relativeError)
 
-        if float(timeStep) <= 100:
-            base  = 1
-        else:
-            base = round(timeStep / 100) * 10
-        timeStepNew = float( timeStep ) * timeParameters['timeStepTolerance'] / (relativeError + 1e-06)
-       # timeStepNew = round( int(base * round(float(timeStepNew/base)) ))
-        timeStepNew = round( timeStepNew )
+        timeStepNew = float(timeStep) * timeParameters['timeStepTolerance'] / (relativeError + 1e-06)
+        timeStepNew = round(timeStepNew)
 
         timeStepNew = np.maximum(timeStepNew, 1e-1)
         timeStepNew = np.minimum(timeStepNew, timeParameters["maximumTimeStep"])
         timeStepNew = np.maximum(timeStepNew, timeParameters["minimumTimeStep"])
         PETSc.Sys.Print("dt ", float(timeStep))
 
-        timeStep.assign( timeStepNew ); 
-    
+        timeStep.assign(timeStepNew)
+
     else:
 
         PETSc.Sys.Print("Time stepping method not recognised")
