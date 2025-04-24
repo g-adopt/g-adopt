@@ -1,10 +1,13 @@
 include ../../rules.mk
 
 cases := damping smoothing Tobs uobs
+scheduler := fullmemory
+
+cases_schedulers := $(foreach case,$(cases),$(foreach sched,$(scheduler),$(case)_$(sched)))
 
 .PHONY: all clean check
 
-all: $(addsuffix .conv,$(cases))
+all: $(addsuffix .conv,$(cases_schedulers))
 
 %.conv : category := tests/adjoint
 %.conv : ncpus := 2
