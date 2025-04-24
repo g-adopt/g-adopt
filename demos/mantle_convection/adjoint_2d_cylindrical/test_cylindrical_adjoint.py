@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from cases import cases
+from .cases import cases
 
 
 @pytest.mark.parametrize("case_name", cases)
