@@ -54,7 +54,7 @@ g_left = conditional(y < 0.2, 0.0, 1.0)
 g_bottom = 0
 bcs = {3: {"g": g_bottom}, 1: {"g": g_left}}
 adv_diff_solver = GenericTransportSolver(
-    terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_diffusivity=kappa
+    terms, q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_advection=True
 )
 
 # Get nubar (additional SU diffusion) for plotting

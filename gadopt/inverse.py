@@ -175,6 +175,7 @@ class LinMoreOptimiser:
         for v in _vector_registry:
             x = [p.copy(deepcopy=True) for p in vec]
             v.dat = x
+            v.comm = x[0].comm
             v.load(self._mesh)
             v._optimiser = self
 

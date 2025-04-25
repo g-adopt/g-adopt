@@ -11,7 +11,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
     mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
     mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
     mesh.cartesian = False
-    bottom_id, top_id = "bottom", "top"
+    boundary = get_boundary_ids(mesh)
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -44,7 +44,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
     # evaluate P_lm node-wise using scipy lpmv
     l, m, eps_c, eps_s = 3, 2, 0.01, 0.01
     Plm = Function(Q, name="P_lm")
-    cos_phi = interpolate(cos(phi), Q)
+    cos_phi = Function(Q).interpolate(cos(phi))
     Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
     Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
     if m == 0:
@@ -66,12 +66,12 @@ def model(ref_level, nlayers, delta_t, steps=None):
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
     temp_bcs = {
-        bottom_id: {'T': 1.0},
-        top_id: {'T': 0.0},
+        boundary.bottom: {'T': 1.0},
+        boundary.top: {'T': 0.0},
     }
     stokes_bcs = {
-        bottom_id: {'un': 0},
-        top_id: {'un': 0},
+        boundary.bottom: {'un': 0},
+        boundary.top: {'un': 0},
     }
 
     energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)

@@ -81,7 +81,7 @@ optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
     checkpoint_dir=checkpoint_dir,
-    auto_checkpoint=False,
+    auto_checkpoint=True,
 )
 optimiser.restore()
 run(optimiser, rf, mesh.comm.rank, f"restored_optimisation_from_last_it_np{num_processes}.dat")
