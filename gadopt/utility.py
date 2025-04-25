@@ -1,4 +1,4 @@
-r"""This module provides several classes and functions to perform a number of pre-, syn-,
+r"""This module provides severalA classes and functions to perform a number of pre-, syn-,
 and post-processing tasks. Users incorporate utility as required in their code,
 depending on what they would like to achieve.
 
@@ -22,6 +22,8 @@ from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
+from typing import Optional
+from numbers import Number
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
