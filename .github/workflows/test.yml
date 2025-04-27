@@ -35,8 +35,7 @@ jobs:
     name: Benchmark regression test
     runs-on: self-hosted
     container:
-      image: ghcr.io/g-adopt/firedrake:2024-11-05
-      options: --shm-size 2g
+      image: firedrakeproject/firedrake-vanilla-default:latest
 
     concurrency:
       group: testing-${{ github.head_ref || github.run_id }}
@@ -53,15 +52,15 @@ jobs:
         env:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
-          sudo apt update
-          sudo apt install -y task-spooler time s3cmd unzip git-lfs
-          tsp -S 48
+          apt update
+          apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
-          s3cmd --config=$HOME/.s3cfg/config get --skip-existing s3://gadopt/github-actions/pygplates_0.36.0_py312_amd64.deb
-          sudo apt install -y --fix-broken ./pygplates_0.36.0_py312_amd64.deb
-          ln -s /usr/lib/pygplates.so /home/firedrake/firedrake/lib/python3.*/site-packages/
+          git config --global safe.directory '*'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
 
       - uses: actions/checkout@v4
         with:
@@ -71,10 +70,28 @@ jobs:
         run: |
           git lfs checkout
 
+      - name: Fetch task spooler
+        uses: actions/checkout@v4
+        with:
+          repository: dsroberts/tsp_for_hpc
+          path: ./tsp
+          ref: v1.1.0
+
+      - name: Build task spooler
+        uses: threeal/cmake-action@v2
+        with:
+          source-dir: ./tsp
+          build-dir: ./tsp_build
+          options: CGROUPV2=ON
+
+      - name: Put task spooler on PATH
+        run: |
+          mv tsp_build/tsp-hpc /usr/local/bin/tsp
+
       - name: Install Python dependencies
         run: |
-          . /home/firedrake/firedrake/bin/activate
-          python3 -m pip install .[demos,optimisation]
+          uv venv --system-site-packages
+          uv pip install .[demos,optimisation] pygplates
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
@@ -89,7 +106,8 @@ jobs:
 
       - name: Compile flib (Trim et al., 2023)
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          source .venv/bin/activate
+          uv pip install meson
           cd flib/Python
           rm *.so
           sed -i 's/f2py3/f2py/' create_library.sh
@@ -100,16 +118,17 @@ jobs:
       - name: Run test
         id: run_tests
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          tsp --timeout -T 7200
+          . .venv/bin/activate
           make -j test
         env:
           GADOPT_LOGLEVEL: INFO
-          TS_MAXFINISHED: 100
+          BATCH_MODE: 1
 
       - name: Pytest
         id: run_pytest
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          . .venv/bin/activate
           python -m pytest -m 'not longtest' --junit-xml=test_results.xml
 
       - name: Pytest report
@@ -125,53 +144,11 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          declare -A timings
-          declare -A success
-
-          digest="$(tsp)"
-
-          mkdir test_outputs
-
-          # extract info
-          for id in $(awk 'NR>1 { print $1 }' <<< "$digest"); do
-            st="$(tsp -i $id)"
-            label=$(awk "/^$id[[:space:]]/ { if (match(\$0, /\[[^]]*\]/)) { print substr(\$0, RSTART+1, RLENGTH-2) } }" <<< "$digest")
-            command=$(sed -En 's/^Command.*python3? //p' <<< "$st")
-            if [ -z "$label" ]; then
-              outfile=$command
-            else
-              outfile="[$label]$command"
-            fi
-            command="$label${label:+: }$command"
-            timings["$command"]=$(sed -n 's/^Time run: //p' <<< "$st")
-
-            tsp -c $id >> "test_outputs/$outfile" || true
-
-            if grep -q "exit code 0" <<< "$st"; then
-              success["$command"]=Yes
-            else
-              success["$command"]=No
-              echo "$command failed:"
-              tsp -c $id | tail -n 10 || true
-              echo $command >> test_outputs/test_output.log
-              tsp -c $id >> test_outputs/test_output.log || true
-            fi
-          done
-
-          # sort by case name
-          declare -a cases
-          while IFS= read -r -d '' entry; do
-            cases+=("$entry")
-          done < <(printf "%s\0" "${!timings[@]}" | sort -z)
-
-          printf "## Case timings\nCase | Time | Success?\n---- | ---- | ----\n" >> "$GITHUB_STEP_SUMMARY"
-          for case in "${cases[@]}"; do
-            printf "%s | %s | %s\n" "$case" ${timings["$case"]} ${success["$case"]} >> "$GITHUB_STEP_SUMMARY"
-          done
+          tsp --gh-summary >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload run log
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: run-log
-          path: test_outputs
+          path: /tmp/tsp_db.sqlite3
