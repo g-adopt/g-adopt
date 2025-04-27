@@ -33,6 +33,7 @@ from .time_stepper import (
 from .transport_solver import EnergySolver, GenericTransportSolver
 from .utility import (
     InteriorBC,
+    DiffusiveSmoothingSolver,
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,

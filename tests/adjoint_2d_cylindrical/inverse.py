@@ -76,7 +76,7 @@ def run_forward_and_back(inverse_problem):
     return inverse_problem["objective"], inverse_problem["callback_function"]
 
 
-def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule):
+def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, diffusion_length, checkpointing_schedule):
     """
     Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
 
@@ -91,7 +91,14 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedu
 
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
-    inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule)
+    inverse_problem = generate_inverse_problem(
+        alpha_T=alpha_T,
+        alpha_u=alpha_u,
+        alpha_d=alpha_d,
+        alpha_s=alpha_s,
+        diffusion_length=diffusion_length,
+        checkpointing_schedule=checkpointing_schedule,
+    )
 
     # generate perturbation for the control variable
     delta_temp = Function(inverse_problem["control"].function_space(), name="Delta_Temperature")
@@ -113,7 +120,28 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedu
     return inverse_problem
 
 
-def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, checkpointing_schedule=None):
+def compute_derivative(alpha_T, alpha_u, diffusion_length, checkpointing_schedule):
+    """
+    Compute Derivative
+    """
+    continue_annotation()
+    # For solving the inverse problem we the reduced functional, any callback functions,
+    # and the initial guess for the control variable
+    inverse_problem = generate_inverse_problem(
+        alpha_T=alpha_T,
+        alpha_u=alpha_u,
+        alpha_d=-1,
+        alpha_s=-1,
+        diffusion_length=diffusion_length,
+        checkpointing_schedule=checkpointing_schedule,
+    )
+    pause_annotation()
+    der = inverse_problem["reduced_functional"].derivative()
+    continue_annotation()
+    return der
+
+
+def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, diffusion_length=0.1, checkpointing_schedule=None):
     """
     Use adjoint-based optimisation to solve for the initial condition of the cylindrical
     problem.
@@ -181,8 +209,18 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     # Initialise the control to final state temperature from forward model.
     checkpoint_file = CheckpointFile("Checkpoint_State.h5", "r")
     Tic.project(
-        checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
+        DiffusiveSmoothingSolver(
+            function_space=T_0.function_space(),
+            wavelength=0.01,  # HARDCODED: 2.0; We just want to start from a very smooth guess.
+            bcs={"bottom": {"T": 1.0}, "top": {"T": 0.0}, }
+        ).action(
+            checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
+        )
     )
+    # Because we are testing smoothing, we want to load with average temperature
+    # Tic.project(
+    #     checkpoint_file.load_function(mesh, "Temperature", idx=max_timesteps - 1)
+    # )
     Taverage.project(checkpoint_file.load_function(mesh, "Average_Temperature", idx=0))
 
     # Temperature function in Q2, where we solve the equations
@@ -266,11 +304,17 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
 
     # We need to project the initial condition from Q1 to Q2,
     # and impose the boundary conditions at the same time
-    T_0.project(Tic, bcs=energy_solver.strong_bcs)
-    T.assign(T_0)
+    T_0.project(
+        DiffusiveSmoothingSolver(
+            function_space=Tic.function_space(),
+            wavelength=diffusion_length,
+            bcs=temp_bcs,
+        ).action(Tic)
+    )
 
+    T.assign(T_0)
     # if the weighting for misfit terms non-positive, then no need to integrate in time
-    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
+    min_timesteps = max_timesteps - 20 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # Generate a surface velocity reference
     uobs = Function(V, name="uobs")
@@ -369,11 +413,26 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     return inverse_problem
 
 
+def all_derivatives():
+    my_cases = {
+        "CCtemperature0.05": {
+            "alpha_T": 1,
+            "alpha_u": -1,
+            "diffusion_length": 0.05,
+            "checkpointing_schedule": schedulers["fullmemory"],
+        },
+    }
+    for case_name, values in my_cases.items():
+        gradJ = compute_derivative(**values)
+        gradJ.rename(f"der_{case_name}")
+        VTKFile(f"der_{case_name}.pvd", "w").write(gradJ)
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 1:
         product_of_cases_schedulers = itertools.product(cases.keys(), schedulers.keys())
         for case_name, scheduler_name in product_of_cases_schedulers:
-            minconv = annulus_taylor_test(*cases.get(case_name), schedulers.get(scheduler_name))
+            minconv = annulus_taylor_test(*cases.get(case_name), 0.1, schedulers.get(scheduler_name))
             print(f"case {case_name} & scheduler {scheduler_name}: result: {minconv}.")
     else:
         case_name, scheduler_name = sys.argv[1].split("_")
@@ -383,7 +442,7 @@ if __name__ == "__main__":
         # Taylor tests:
         # For taylor tests we use full memory checkpointing for fastest results
         if scheduler_name == "fullmemory":
-            inverse_problem = annulus_taylor_test(*weightings, scheduler)
+            inverse_problem = annulus_taylor_test(*weightings, 0.1, scheduler)
 
             log_file = ParameterLog(
                 f"{case_name}_{scheduler_name}.conv",
