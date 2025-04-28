@@ -9,11 +9,11 @@ parser.add_argument("--case", default="viscoelastic-compressible", type=str, hel
 args = parser.parse_args()
 
 
-def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11, bulk_modulus=2e11):
+def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, shear_modulus=1e11, bulk_modulus=2e11,lam_factor=64):
     # Set up geometry:
     nz = nx  # Number of vertical cells
     D = 3e6  # length of domain in m
-    L = D/2  # Depth of the domain in m
+    L = D/(lam_factor/4)  # Depth of the domain in m
     D_tilde = 1
     L_tilde = L / D
     mesh = RectangleMesh(nx, nz, L_tilde, D_tilde)  # Rectangle mesh generated via firedrake
@@ -58,16 +58,16 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     # timestepping
     rho0 = Function(R).assign(Constant(4500))  # density in kg/m^3
     g = 10  # gravitational acceleration in m/s^2
-    viscosity = Constant(1e21)  # Viscosity Pa s
+    viscosity = Constant(viscosity)  # Viscosity Pa s
     shear_modulus = Constant(shear_modulus)  # Shear modulus in Pa
     maxwell_time = viscosity / shear_modulus  # Maxwell time in s. This is nondimensional timescale.
     log("maxwell time (used for nondimensional time scale)", float(maxwell_time))
     bulk_modulus = Constant(bulk_modulus)
 
     # Set up surface load
-    lam = 1 / 8  # nondimensional wavenumber
+    lam = 1 / lam_factor  # nondimensional wavenumber
     kk = 2 * pi / lam  # nondimensional wavenumber
-    kk_dim = 2 * pi / (D/8)  # wavenumber in m^-1
+    kk_dim = 2 * pi / (D/lam_factor)  # wavenumber in m^-1
     F0 = Constant(1000/D)  # nondimensional initial free surface amplitude
     X = SpatialCoordinate(mesh)
     eta = -F0 * cos(kk * X[0])  # nondimensional surface load
@@ -92,7 +92,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     log("Vi = rho0*g*D/mu", float(Vi))
     bulk_shear_ratio = bulk_modulus/shear_modulus
     log("k/mu", float(bulk_shear_ratio))
-    approximation = CompressibleInternalVariableApproximation(bulk_modulus=1, density=Function(R).assign(Constant(1)), shear_modulus=1, viscosity=1, g=1, Vi=Vi, bulk_shear_ratio=bulk_shear_ratio)
+    approximation = CompressibleInternalVariableApproximation(bulk_modulus=1, density=Function(R).assign(Constant(1)), shear_modulus=1, viscosity=1, g=1, Vi=Vi, bulk_shear_ratio=bulk_shear_ratio,compressible_buoyancy=False)
 
     # Create output file
     if OUTPUT:
@@ -101,7 +101,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     # Setup boundary conditions
     stokes_bcs = {
         bottom_id: {'uy': 0},
-        top_id: {'normal_stress': Vi*eta, 'free_surface': {}},
+        top_id: {'normal_stress': Vi*eta, }, #'free_surface': {}},
         left_id: {'ux': 0},
         right_id: {'ux': 0},
     }
@@ -111,7 +111,14 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     eta_analytical_nondim = Function(Q, name="eta analytical nondim")
 
     lambda_lame = bulk_modulus - 2/3 * shear_modulus
-    f_e = (lambda_lame + 2*shear_modulus) / (lambda_lame + shear_modulus)
+    # Pseudo incompressible
+    if float(bulk_shear_ratio) > 100:
+        f_e = 1
+        log(f"Comparing with incompressible analytical, f_e={f_e}")
+    else:
+        f_e = (lambda_lame + 2*shear_modulus) / (lambda_lame + shear_modulus)
+        log(f"Comparing with compressible analytical, f_e={f_e}")
+
 
     h_elastic2 = Constant(D*F0/(1 + f_e*maxwell_time/(maxwell_time*tau0)))
     h_elastic = Constant(D*F0 - h_elastic2)  # Constant(F0/(1 + maxwell_time/tau0))
@@ -138,8 +145,13 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
         time.assign(time+dt)
 
         # Update analytical solution
-        eta_analytical.interpolate(((D*F0 - h_elastic) * (1-exp(-(time*maxwell_time)/(maxwell_time*tau0+f_e*maxwell_time)))+h_elastic) * cos(kk_dim * D*X[0]))
-        eta_analytical_nondim.interpolate(((F0 - h_elastic_nondim) * (1-exp(-(time)/(tau0+f_e)))+h_elastic_nondim) * cos(kk * X[0]))
+        if sim_time == 'long':
+            eta_analytical.interpolate(((D*F0 - h_elastic) * (1-exp(-(time*maxwell_time)/(maxwell_time*tau0+f_e*maxwell_time)))+h_elastic) * cos(kk_dim * D*X[0]))
+            eta_analytical_nondim.interpolate(((F0 - h_elastic_nondim) * (1-exp(-(time)/(tau0+f_e)))+h_elastic_nondim) * cos(kk * X[0]))
+        else:
+            eta_analytical.interpolate(h_elastic * cos(kk_dim * D*X[0]))
+            eta_analytical_nondim.interpolate(h_elastic_nondim * cos(kk * X[0]))
+
 
         # Calculate error
         local_error_nondim = assemble(pow(u[1]-eta_analytical_nondim, 2)*ds(top_id))
@@ -176,22 +188,23 @@ params = {
         "bulk_modulus": 2e11},
     "elastic-compressible": {
         "dtf_start": 0.001,
-        "nx": 160,
+        "nx": 320,
         "sim_time": "short",
         "shear_modulus": 1e11,
-        "bulk_modulus": 2e11},
-    "viscoelastic-incompressible-1e15": {
+        "bulk_modulus": 10e11},
+    "viscoelastic-incompressible-visc1e19-shear1e10-bulk1e15": {
         "dtf_start": 0.1,
         "nx": 320,
         "sim_time": "long",
-        "shear_modulus": 1e11,
+        "viscosity": 1e19,
+        "shear_modulus": 1e10,
         "bulk_modulus": 1e15},
-    "elastic-incompressible-1e16": {
+    "elastic-incompressible-1e15": {
         "dtf_start": 0.001,
         "nx": 320,
         "sim_time": "short",
         "shear_modulus": 1e11,
-        "bulk_modulus": 1e16},
+        "bulk_modulus": 1e15},
     "viscous-incompressible": {
         "dtf_start": 0.1,
         "nx": 320,
