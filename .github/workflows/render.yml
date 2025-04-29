@@ -55,8 +55,6 @@ jobs:
 
       - name: Set up for network namespacing
         run: |
-          sudo sed -i 's/ubuntu/firedrake/' /etc/subuid
-          sudo sed -i 's/ubuntu/firedrake/' /etc/subgid
           sudo apt install -y uidmap iproute2
           . .venv/bin/activate
           jupytext_location="$(which jupytext)"
