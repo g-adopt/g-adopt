@@ -201,6 +201,12 @@ gd = GeodynamicalDiagnostics(z, FullT, boundary.bottom, boundary.top)
 # passing in the approximation configured above.
 
 # +
+stokes_solver_prms = {
+    'snes_view': None, 'snes_type': 'ksponly', 'ksp_view': None,
+    'snes_monitor': None, 'mat_type': 'aij', 'ksp_type': 'preonly',
+    'pc_type': 'lu', 'pc_factor_mat_solver_type': 'mumps'
+}
+
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
