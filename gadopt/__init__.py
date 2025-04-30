@@ -30,10 +30,9 @@ from .time_stepper import (
     eSSPRKs3p3,
     eSSPRKs10p3,
 )
-from .transport_solver import EnergySolver, GenericTransportSolver
+from .transport_solver import EnergySolver, GenericTransportSolver, DiffusiveSmoothingSolver
 from .utility import (
     InteriorBC,
-    DiffusiveSmoothingSolver,
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,

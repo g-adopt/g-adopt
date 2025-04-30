@@ -7,11 +7,16 @@ This script demonstrates the application of isotropic and anisotropic diffusive 
 """
 
 from gadopt import *
+from pathlib import Path
+
+# We use the checkpoint file from the adjoint 2D cylindrical case for input temperature
+input_file = Path(__file__).resolve().parent / "../../tests/adjoint_2d_cylindrical/Checkpoint230.h5"
 
 # Load a cylindrical temperature field from a checkpoint file
-with CheckpointFile("../adjoint_2d_cylindrical/Checkpoint230.h5", mode="r") as f:
+with CheckpointFile(input_file.as_posix(), mode="r") as f:
     mesh = f.load_mesh("firedrake_default_extruded")
     T = f.load_function(mesh, "Temperature")
+mesh.cartesian = False
 
 # Define boundary conditions for the temperature field
 temp_bcs = {
@@ -22,7 +27,7 @@ temp_bcs = {
 # Compute layer average of the temperature for initial comparison
 # This helps to visualize changes pre and post smoothing
 T_avg = Function(T.function_space(), name='Layer_Averaged_Temp')
-averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
+averager = LayerAveraging(mesh, quad_degree=6)
 averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
 # Isotropic Smoothing
@@ -31,11 +36,11 @@ averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 # This simplifies the diffusion tensor to a scalar value, promoting uniform smoothing across all spatial directions.
 smooth_solution_isotropic = Function(T.function_space(), name="Smooth Temperature - Isotropic")
 smoother_isotropic = DiffusiveSmoothingSolver(
-    function_space=T.function_space(),
+    solution=smooth_solution_isotropic,
     wavelength=0.1,  # Smoothing duration
     bcs=temp_bcs)
 
-smooth_solution_isotropic.assign(smoother_isotropic.action(T))
+smoother_isotropic.smooth(T)
 VTKFile("isotropic_smoothing.pvd").write(T.assign(T - T_avg), smooth_solution_isotropic.assign(smooth_solution_isotropic - T_avg))
 
 # Anisotropic Smoothing
@@ -56,14 +61,14 @@ et = as_vector((-X[1]/r, X[0]/r))  # Unit tangential vector
 # Construct the anisotropic conductivity tensor
 # K = kr * outer(er, er) + kt * outer(et, et) defines how the diffusion behaves differently in radial and tangential directions.
 K = kr * outer(er, er) + kt * outer(et, et)
-
+smooth_solution_anisotropic = Function(T.function_space(), name="Smooth Temperature - Anisotropic")
 smoother_anisotropic = DiffusiveSmoothingSolver(
-    function_space=T.function_space(),
+    solution=smooth_solution_anisotropic,
     wavelength=0.1,
     bcs=temp_bcs,
     K=K)
 
-smooth_solution_anisotropic.assign(smoother_anisotropic.action(T))
+smooth_solution_anisotropic.assign(smoother_anisotropic.smooth(T))
 VTKFile("anisotropic_smoothing.pvd").write(T.assign(T - T_avg), smooth_solution_anisotropic.assign(smooth_solution_anisotropic - T_avg))
 
 # Visualization is handled by external software that can read .pvd files, such as Paraview.
