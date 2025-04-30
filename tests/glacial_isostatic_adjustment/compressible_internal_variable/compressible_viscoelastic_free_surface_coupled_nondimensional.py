@@ -1,7 +1,7 @@
 from gadopt import *
 import numpy as np
 import argparse
-OUTPUT = True
+OUTPUT = False
 output_directory = "./2d_analytic_compressible_internalvariable_viscoelastic_freesurface_nondimensional/"
 
 parser = argparse.ArgumentParser()
@@ -117,7 +117,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
         log(f"Comparing with incompressible analytical, f_e={f_e}")
     else:
         f_e = (lambda_lame + 2*shear_modulus) / (lambda_lame + shear_modulus)
-        log(f"Comparing with compressible analytical, f_e={f_e}")
+        log(f"Comparing with compressible analytical, f_e={float(f_e)}")
 
 
     h_elastic2 = Constant(D*F0/(1 + f_e*maxwell_time/(maxwell_time*tau0)))
@@ -180,23 +180,25 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
 
 
 params = {
-    "viscoelastic-compressible": {
+    "viscoelastic-compressible-visc1e21-shear5e9-bulk1e11-lam128": {
         "dtf_start": 0.1,
-        "nx": 160,
+        "nx": 640,
         "sim_time": "long",
-        "shear_modulus": 1e11,
-        "bulk_modulus": 2e11},
+        "viscosity": 1e21,
+        "shear_modulus": 5e9,
+        "bulk_modulus": 1e11,
+        "lam_factor": 128},
     "elastic-compressible": {
         "dtf_start": 0.001,
         "nx": 320,
         "sim_time": "short",
         "shear_modulus": 1e11,
         "bulk_modulus": 10e11},
-    "viscoelastic-incompressible-visc1e19-shear1e10-bulk1e15": {
+    "viscoelastic-incompressible-visc1e21-shear1e10-bulk1e15": {
         "dtf_start": 0.1,
-        "nx": 320,
+        "nx": 1280,
         "sim_time": "long",
-        "viscosity": 1e19,
+        "viscosity": 1e21,
         "shear_modulus": 1e10,
         "bulk_modulus": 1e15},
     "elastic-incompressible-1e15": {
@@ -205,12 +207,12 @@ params = {
         "sim_time": "short",
         "shear_modulus": 1e11,
         "bulk_modulus": 1e15},
-    "viscous-incompressible": {
+    "viscous-incompressible-visc1e21-shear1e13-bulk1e15": {
         "dtf_start": 0.1,
-        "nx": 320,
+        "nx": 1280,
         "sim_time": "long",
-        "shear_modulus": 1e14,
-        "bulk_modulus": 1e14}
+        "shear_modulus": 1e13,
+        "bulk_modulus": 1e15}
 }
 
 
@@ -221,7 +223,7 @@ def run_benchmark(case_name):
     params[case_name].pop("dtf_start")  # Don't pass this to viscoelastic_model
     dt_factors = dtf_start / (2 ** np.arange(4))
     nx = params[case_name]["nx"]
-    prefix = f"errors-{case_name}-internalvariable-coupled-{nx}cells_nondimensional"
+    prefix = f"errors-{case_name}-internalvariable-coupled-{nx}cells_nondimensional_direct_T2tau"
     errors = np.array([viscoelastic_model(dt_factor=dtf, **params[case_name]) for dtf in dt_factors])
 
     np.savetxt(f"{prefix}-free-surface.dat", errors)
