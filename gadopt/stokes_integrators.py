@@ -815,7 +815,7 @@ class InternalVariableSolver(MassMomentumBase):
     def set_equations(self) -> None:
         stress = self.approximation.stress(self.u, self.m)
         self.u_r = vertical_component(self.u)
-        source = self.approximation.buoyancy(self.u) * self.k + self.approximation.hydrostatic_prestress_advection(self.u_r)
+        source = self.approximation.buoyancy(self.u) * self.k
         strain = self.approximation.deviatoric_strain(self.u)
         maxwell_time = self.approximation.maxwell_time
 

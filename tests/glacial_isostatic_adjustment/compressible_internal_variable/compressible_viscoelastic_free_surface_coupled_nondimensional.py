@@ -9,7 +9,7 @@ parser.add_argument("--case", default="viscoelastic-compressible", type=str, hel
 args = parser.parse_args()
 
 
-def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, shear_modulus=1e11, bulk_modulus=2e11,lam_factor=64):
+def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, shear_modulus=1e11, bulk_modulus=2e11,lam_factor=64, compressible_adv_hyd_pre=True):
     # Set up geometry:
     nz = nx  # Number of vertical cells
     D = 3e6  # length of domain in m
@@ -92,7 +92,11 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
     log("Vi = rho0*g*D/mu", float(Vi))
     bulk_shear_ratio = bulk_modulus/shear_modulus
     log("k/mu", float(bulk_shear_ratio))
-    approximation = CompressibleInternalVariableApproximation(bulk_modulus=1, density=Function(R).assign(Constant(1)), shear_modulus=1, viscosity=1, g=1, Vi=Vi, bulk_shear_ratio=bulk_shear_ratio,compressible_buoyancy=False)
+    approximation = CompressibleInternalVariableApproximation(bulk_modulus=1, density=Function(R).assign(Constant(1)), 
+                                                              shear_modulus=1, viscosity=1, g=1, Vi=Vi, 
+                                                              bulk_shear_ratio=bulk_shear_ratio,
+                                                              compressible_buoyancy=False, 
+                                                              compressible_adv_hyd_pre=compressible_adv_hyd_pre)
 
     # Create output file
     if OUTPUT:
@@ -101,7 +105,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
     # Setup boundary conditions
     stokes_bcs = {
         bottom_id: {'uy': 0},
-        top_id: {'normal_stress': Vi*eta, }, #'free_surface': {}},
+        top_id: {'normal_stress': Vi*eta, 'free_surface': {}},
         left_id: {'ux': 0},
         right_id: {'ux': 0},
     }
@@ -180,6 +184,15 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
 
 
 params = {
+    "viscoelastic-compressible-visc1e21-shear1e11-bulk2e11-lam8-compahpFalse": {
+        "dtf_start": 0.1,
+        "nx": 320,
+        "sim_time": "long",
+        "viscosity": 1e21,
+        "shear_modulus": 1e11,
+        "bulk_modulus": 2e11,
+        "lam_factor": 8,
+        "compressible_adv_hyd_pre": False},
     "viscoelastic-compressible-visc1e21-shear5e9-bulk1e11-lam128": {
         "dtf_start": 0.1,
         "nx": 640,
@@ -188,12 +201,39 @@ params = {
         "shear_modulus": 5e9,
         "bulk_modulus": 1e11,
         "lam_factor": 128},
+    "elastic-compressible-visc1e21-shear1e11-bulk2e11-lam8-compahpFalse": {
+        "dtf_start": 0.001,
+        "nx": 320,
+        "sim_time": "short",
+        "viscosity": 1e21,
+        "shear_modulus": 1e11,
+        "bulk_modulus": 2e11,
+        "lam_factor": 8,
+        "compressible_adv_hyd_pre": False},
     "elastic-compressible": {
         "dtf_start": 0.001,
         "nx": 320,
         "sim_time": "short",
         "shear_modulus": 1e11,
         "bulk_modulus": 10e11},
+    "viscous-compressible-visc1e21-shear1e13-bulk2e11-lam8-compahpFalse": {
+        "dtf_start": 0.1,
+        "nx": 640,
+        "sim_time": "long",
+        "viscosity": 1e21,
+        "shear_modulus": 1e13,
+        "bulk_modulus": 2e11,
+        "lam_factor": 8,
+        "compressible_adv_hyd_pre": False},
+    "viscoelastic-incompressible-visc1e21-shear1e11-bulk1e15-lam8-compahpFalse": {
+        "dtf_start": 0.1,
+        "nx": 640,
+        "sim_time": "long",
+        "viscosity": 1e21,
+        "shear_modulus": 1e11,
+        "bulk_modulus": 1e15,
+        "lam_factor": 8,
+        "compressible_adv_hyd_pre": False},
     "viscoelastic-incompressible-visc1e21-shear1e10-bulk1e15": {
         "dtf_start": 0.1,
         "nx": 1280,
@@ -201,12 +241,30 @@ params = {
         "viscosity": 1e21,
         "shear_modulus": 1e10,
         "bulk_modulus": 1e15},
+    "elastic-incompressible-visc1e21-shear1e11-bulk1e15-lam8-compahpFalse": {
+        "dtf_start": 0.001,
+        "nx": 320,
+        "sim_time": "short",
+        "viscosity": 1e21,
+        "shear_modulus": 1e11,
+        "bulk_modulus": 1e15,
+        "lam_factor": 8,
+        "compressible_adv_hyd_pre": False},
     "elastic-incompressible-1e15": {
         "dtf_start": 0.001,
         "nx": 320,
         "sim_time": "short",
         "shear_modulus": 1e11,
         "bulk_modulus": 1e15},
+    "viscous-incompressible-visc1e21-shear1e13-bulk1e15-lam8-compahpFalse": {
+        "dtf_start": 0.1,
+        "nx": 640,
+        "sim_time": "long",
+        "viscosity": 1e21,
+        "shear_modulus": 1e13,
+        "bulk_modulus": 1e15,
+        "lam_factor": 8,
+        "compressible_adv_hyd_pre": False},
     "viscous-incompressible-visc1e21-shear1e13-bulk1e15": {
         "dtf_start": 0.1,
         "nx": 1280,

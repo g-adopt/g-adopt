@@ -191,8 +191,12 @@ def advection_hydrostatic_prestress_term(
         if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
             dS = dS_h
         F = Vi('+') * jump(rho0) * u_r('+') * g('+') * dot(eq.test('+'), eq.n('+')) * dS
-
-    F -= div(eq.test) * Vi * rho0 * g * u_r * eq.dx
+    if eq.approximation.compressible_adv_hyd_pre:
+        # Include body integral after i.b.p of hydrostatic prestress advection term
+        # Analytical solution from Cathles 2024 Eq 2b doesn't include prestress
+        # so we neglect this term but keep the free surface term that accounts for 
+        # viscous feedback at isostatic equibrium
+        F -= div(eq.test) * Vi * rho0 * g * u_r * eq.dx
 
     return -F
 
@@ -212,5 +216,4 @@ residual_terms_momentum = [momentum_source_term, pressure_gradient_term, viscosi
 residual_terms_mass = divergence_term
 residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]
 
-#residual_terms_compressible_viscoelastic = [advection_hydrostatic_prestress_term, momentum_source_term, viscosity_term]
-residual_terms_compressible_viscoelastic = [momentum_source_term, viscosity_term]
+residual_terms_compressible_viscoelastic = [advection_hydrostatic_prestress_term, momentum_source_term, viscosity_term]

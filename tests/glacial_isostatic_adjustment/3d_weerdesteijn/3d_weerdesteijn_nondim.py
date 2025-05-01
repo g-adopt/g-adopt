@@ -30,7 +30,7 @@ parser.add_argument("--optional_name", default="", type=str, help="Optional stri
 parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/", type=str, help="Optional output path", required=False)
 args = parser.parse_args()
 
-name = f"weerdesteijn-3d-internalvariable-prestressadv-{args.optional_name}"
+name = f"weerdesteijn-3d-internalvariable-{args.optional_name}"
 # Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and
 # 2891 km deep. To speed up things for this first demo, we consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
 #
@@ -307,8 +307,7 @@ if args.lateral_viscosity:
 # Setup boundary conditions
 stokes_bcs = {
     boundary.bottom: {'uz': 0},
-#    boundary.top: {'normal_stress': ice_load, 'free_surface': {}},
-    boundary.top: {'normal_stress': ice_load},
+    boundary.top: {'normal_stress': ice_load, 'free_surface': {}},
     boundary.left: {'ux': 0},
     boundary.right: {'ux': 0},
     boundary.front: {'uy': 0},
