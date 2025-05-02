@@ -1,6 +1,9 @@
 from gadopt import *
+from gadopt.utility import vertical_component as vc
 import numpy as np
 import argparse
+from mpi4py import MPI
+import pandas as pd
 OUTPUT = False
 output_directory = "./2d_analytic_compressible_internalvariable_viscoelastic_freesurface_nondimensional/"
 
@@ -77,7 +80,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
 
     log("nondimensional tau0", float(tau0))
     time = Constant(0.0)
-    dt = Constant(dt_factor * tau0)  # Initial time-step
+    dt = Constant(dt_factor)  # Initial time-step
     log("nondimensional dt", float(dt))
     if sim_time == "long":
         max_timesteps = round(2*tau0/dt)
@@ -139,6 +142,18 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
 
     if OUTPUT:
         output_file.write(u_, m_, eta_analytical_nondim, u_dim, eta_analytical)
+    
+    vertical_displacement = Function(V.sub(1), name="vertical displacement")  # Function to store vertical displacement for output
+    f = Function(V).interpolate(as_vector([X[0], X[1]]))
+    bc_displacement = DirichletBC(V.sub(1), 0, 4)
+
+    
+    surface_x = f.sub(0).dat.data_ro_with_halos[bc_displacement.nodes]
+    surface_x_all = f.sub(0).comm.gather(surface_x)
+    displacement_df = pd.DataFrame()
+    if MPI.COMM_WORLD.rank == 0:
+        surface_nodes = np.concatenate(surface_x_all)
+        displacement_df['surface_points'] = surface_nodes
 
     # Now perform the time loop:
     for timestep in range(1, max_timesteps+1):
@@ -155,6 +170,16 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
         else:
             eta_analytical.interpolate(h_elastic * cos(kk_dim * D*X[0]))
             eta_analytical_nondim.interpolate(h_elastic_nondim * cos(kk * X[0]))
+    
+        # get displacement at surface for plotting
+        vertical_displacement.interpolate(vc(z.subfunctions[0])*D)
+        surface_disp = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes]
+        surface_disp_all = vertical_displacement.comm.gather(surface_disp)
+
+
+        if MPI.COMM_WORLD.rank == 0:
+            surface_disp_concat = np.concatenate(surface_disp_all)
+            displacement_df[f'surface_disp_step{timestep}'] = surface_disp_concat
 
 
         # Calculate error
@@ -175,6 +200,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
         if timestep % dump_period == 0:
             log("timestep", timestep)
             log("time", float(time))
+            displacement_df.to_csv(f"surface_displacement_dt{float(dt)}_nx{nx}arrays_incompressible.csv")
             if OUTPUT:
                 u_dim.interpolate(D*u)
                 output_file.write(u_, m_, eta_analytical_nondim, u_dim, eta_analytical)
@@ -184,8 +210,8 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
 
 
 params = {
-    "viscoelastic-compressible-visc1e21-shear1e11-bulk2e11-lam8-compahpFalse": {
-        "dtf_start": 0.1,
+    "viscoelastic-compressible-visc1e21-shear1e11-bulk2e11-lam8-dtfstart16-compahpFalse": {
+        "dtf_start": 16,
         "nx": 320,
         "sim_time": "long",
         "viscosity": 1e21,
@@ -279,7 +305,7 @@ def run_benchmark(case_name):
     # Run default case run for four dt factors
     dtf_start = params[case_name]["dtf_start"]
     params[case_name].pop("dtf_start")  # Don't pass this to viscoelastic_model
-    dt_factors = dtf_start / (2 ** np.arange(4))
+    dt_factors = dtf_start / (2 ** np.arange(6))
     nx = params[case_name]["nx"]
     prefix = f"errors-{case_name}-internalvariable-coupled-{nx}cells_nondimensional_direct_T2tau"
     errors = np.array([viscoelastic_model(dt_factor=dtf, **params[case_name]) for dtf in dt_factors])
@@ -293,3 +319,5 @@ def run_benchmark(case_name):
 
 if __name__ == "__main__":
     run_benchmark(args.case)
+#    viscoelastic_model(nx=320, dt_factor=0.025, sim_time="long", viscosity=1e21, shear_modulus=1e11, bulk_modulus=1e15,lam_factor=8, compressible_adv_hyd_pre=False)
+
