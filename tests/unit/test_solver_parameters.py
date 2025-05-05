@@ -26,7 +26,7 @@ def test_solver_params():
     solve_name = None
     matches = 0
 
-    for line in params_output[mark + 1:]:
+    for line in params_output[mark + 1 :]:
         if state == 0:
             if m := re.match(setting_re, line):
                 solve_name = m.group(1)

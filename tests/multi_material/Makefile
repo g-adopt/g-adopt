@@ -23,5 +23,5 @@ clean:
 	@$(foreach case,$(cases),rm -f $(case)/*.npz;)
 	@$(foreach case,$(cases),rm -f $(case)/mesh/*.msh;)
 
-check: $(cases)
+check: all
 	python3 -m pytest

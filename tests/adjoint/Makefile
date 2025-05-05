@@ -26,5 +26,5 @@ clean:
 	rm -f *.h5 *.conv *.dat
 	rm -rf __pycache__
 
-check: $(addsuffix .conv,$(cases))
+check: all
 	python -m pytest

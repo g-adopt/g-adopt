@@ -33,7 +33,7 @@ diagnostics = {
                 np.asarray(data["normalised_time"])[
                     np.asarray(data["slab_necking"]) <= 0.2
                 ].min()
-                - 0.812
+                - 0.813
             ),
             operator.le,
             1e-3,

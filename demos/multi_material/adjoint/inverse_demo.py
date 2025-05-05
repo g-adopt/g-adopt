@@ -24,6 +24,8 @@ def callback(psi_control, psi_opt, optimisation_file):
 
 def simulation(iteration: int) -> None:
     tape.clear_tape()
+    if not annotate_tape():
+        continue_annotation()
 
     psi_control = Function(C, name="Level-set control").project(psi_obs)
     psi_opt = Function(C, name="Level-set optimisation")
@@ -38,56 +40,46 @@ def simulation(iteration: int) -> None:
     output_file.write(*z.subfunctions, psi, psi_grad, time=time_now)
     optimisation_file = VTKFile(f"optimisation_output_{iteration}.pvd")
 
-    step = 0
-    while True:
-        t_adapt.maximum_timestep = time_increment - time_now
-        t_adapt.update_timestep()
-
+    for timestep in tape.timestepper(iter(range(step_count))):
         level_set_solver.solve(disable_reinitialisation=True)
-        level_set_solver.update_level_set_gradient()
+        level_set_solver.update_gradient()
         stokes_solver.solve()
 
         time_now += float(delta_t)
-        step += 1
-
         output_file.write(*z.subfunctions, psi, psi_grad, time=time_now)
-
-        if time_now >= time_increment:
-            break
 
     psi_misfit = assemble((psi - psi_obs) ** 2 * dx)
     psi_reini = assemble(reinitialisation_steady(psi, psi_grad) ** 2 * dx)
     objective = psi_misfit + psi_reini
     reduced_functional = ReducedFunctional(objective, Control(psi_control))
 
-    with stop_annotating():
-        log(f"Reduced functional: {reduced_functional(psi_control)}")
-        log(f"Objective: {objective}")
+    pause_annotation()
 
-        perturbation = Function(psi_control, name="Level-set perturbation")
-        perturbation.interpolate(
-            0.5 - abs(min_value(max_value(psi_control, 0), 1) - 0.5)
-        )
-        # random_scale = np.random.default_rng().normal(
-        #     5e-2, 1e-3, size=perturbation.dat.data.shape
-        # )
-        # perturbation.dat.data[:] *= random_scale
+    log(f"Reduced functional: {reduced_functional(psi_control)}")
+    log(f"Objective: {objective}")
 
-        psi_lb = Function(psi_control, name="Lower bound").assign(0.0)
-        psi_ub = Function(psi_control, name="Upper bound").assign(1.0)
+    perturbation = Function(psi_control, name="Level-set perturbation")
+    perturbation.interpolate(0.5 - abs(min_value(max_value(psi_control, 0), 1) - 0.5))
+    # random_scale = np.random.default_rng().normal(
+    #     5e-2, 1e-3, size=perturbation.dat.data.shape
+    # )
+    # perturbation.dat.data[:] *= random_scale
 
-        taylor_convergence = taylor_test(reduced_functional, psi_control, perturbation)
-        log(f"Taylor test: {taylor_convergence}")
+    taylor_convergence = taylor_test(reduced_functional, psi_control, perturbation)
+    log(f"Taylor test: {taylor_convergence}")
 
-        minimisation_problem = MinimizationProblem(
-            reduced_functional, bounds=(psi_lb, psi_ub)
-        )
+    psi_lb = Function(psi_control, name="Lower bound").assign(0.0)
+    psi_ub = Function(psi_control, name="Upper bound").assign(1.0)
 
-        minimisation_parameters["Status Test"]["Gradient Tolerance"] = 1e-4
-        minimisation_parameters["Status Test"]["Iteration Limit"] = 50
-        optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
-        optimiser.add_callback(callback, psi_control, psi_opt, optimisation_file)
-        optimiser.run()
+    minimisation_problem = MinimizationProblem(
+        reduced_functional, bounds=(psi_lb, psi_ub)
+    )
+
+    minimisation_parameters["Status Test"]["Gradient Tolerance"] = 1e-4
+    minimisation_parameters["Status Test"]["Iteration Limit"] = 50
+    optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
+    optimiser.add_callback(callback, psi_control, psi_opt, optimisation_file)
+    optimiser.run()
 
     psi_obs.project(psi_opt)
 
@@ -120,7 +112,6 @@ Ra_c = material_field(psi, [Ra_c_buoyant := 0, Ra_c_dense := 1], interface="arit
 approximation = Approximation("BA", dimensional=False, parameters={"Ra_c": Ra_c})
 
 delta_t = Function(R).assign(1.0)
-t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
 Z_nullspace = create_stokes_nullspace(Z)
 
@@ -145,7 +136,9 @@ level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini
 psi_grad = level_set_solver.solution_grad
 
 target_time = 150
-time_increment = 30
+time_increment = 50
+time_step = 0.85
+step_count = int(time_increment / time_step)
 
 for iteration in range(target_time // time_increment):
     simulation(iteration + 1)

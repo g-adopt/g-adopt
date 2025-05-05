@@ -122,7 +122,23 @@ L2-norm of the function.
 """
 
 
-class CoupledMomentumBase(abc.ABC):
+class MetaPostInit(abc.ABCMeta):
+    """Calls the implemented `prepare_solver` method after `__init__` returns.
+
+    The implemented behaviour allows any subclass `__init__` method to first call its
+    parent class's `__init__` through super(), then execute its own code, and finally
+    call `prepare_solver`. The latter call is automatic and does not require any
+    attention from the developer or user.
+    """
+
+    def __call__(cls, *args, **kwargs):
+        class_instance = super().__call__(*args, **kwargs)
+        class_instance.prepare_solver()
+
+        return class_instance
+
+
+class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
     """Solver for a system involving mass and momentum conservation.
 
     ### Valid keys for boundary conditions
@@ -331,8 +347,6 @@ class CoupledMomentumBase(abc.ABC):
 
     def setup_solver(self) -> None:
         """Sets up the solver."""
-        self.prepare_solver()
-
         if self.constant_jacobian:
             trial = TrialFunction(self.solution_space)
             F = replace(self.F, {self.solution: trial})
@@ -748,8 +762,7 @@ def create_stokes_nullspace(
     # nullspace for ala
     if (approximation is None) != (top_subdomain_id is None):
         raise ValueError(
-            "Both approximation and top_subdomain_id must be provided, or both "
-            "must be None."
+            "`approximation` and `top_subdomain_id` must be provided together."
         )
 
     X = SpatialCoordinate(Z.mesh())
@@ -870,7 +883,7 @@ def ala_right_nullspace(
     p = Function(W, name="Pressure nullspace")
 
     F = inner(grad(q), grad(p)) * dx
-    F += vertical_component(grad(q) * approximation.buoyancy(p=p)) * dx
+    F += vertical_component(grad(q) * approximation.compressible_buoyancy) * dx
 
     # Fix the solution at the top boundary
     solve(F == 0, p, bcs=DirichletBC(W, 1.0, top_subdomain_id))

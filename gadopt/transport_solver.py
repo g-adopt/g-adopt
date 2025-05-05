@@ -62,7 +62,23 @@ Note:
 """
 
 
-class GenericTransportBase(abc.ABC):
+class MetaPostInit(abc.ABCMeta):
+    """Calls the implemented `prepare_solver` method after `__init__` returns.
+
+    The implemented behaviour allows any subclass `__init__` method to first call its
+    parent class's `__init__` through super(), then execute its own code, and finally
+    call `prepare_solver`. The latter call is automatic and does not require any
+    attention from the developer or user.
+    """
+
+    def __call__(cls, *args, **kwargs):
+        class_instance = super().__call__(*args, **kwargs)
+        class_instance.prepare_solver()
+
+        return class_instance
+
+
+class GenericTransportBase(abc.ABC, metaclass=MetaPostInit):
     """Base class for advancing a generic transport equation in time.
 
     All combinations of advection, diffusion, sink, and source terms are handled.
@@ -225,8 +241,6 @@ class GenericTransportBase(abc.ABC):
 
     def setup_solver(self) -> None:
         """Sets up the timestepper using specified parameters."""
-        self.prepare_solver()
-
         self.ts = self.timestepper(
             self.equation,
             self.solution,
