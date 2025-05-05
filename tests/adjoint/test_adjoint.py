@@ -1,12 +1,14 @@
 from pathlib import Path
 
 import pytest
-from cases import cases
+from .cases import cases, schedules
 
 
 @pytest.mark.parametrize("case_name", cases)
-def test_rectangular_taylor_test(case_name):
-    with open(Path(__file__).parent.resolve() / f"{case_name}.conv") as f:
+@pytest.mark.parametrize("schedule_name", schedules.keys())
+def test_rectangular_taylor_test(case_name, schedule_name):
+    case_scheduler = f"{case_name}_{schedule_name}"
+    with open(Path(__file__).parent.resolve() / f"{case_scheduler}.conv") as f:
         minconv = float(f.read())
 
     assert minconv > 1.98

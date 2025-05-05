@@ -36,6 +36,6 @@ style = ["pre-commit", "ruff"]
 ignore = ["E741", "F403", "F405"]
 
 [tool.setuptools]
-packages = ["gadopt"]
+packages = ["gadopt", "gadopt.gplates"]
 
 [tool.setuptools_scm]

@@ -48,9 +48,6 @@ jobs:
           s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
-      - name: Fix HOME environment variable
-        run: echo "HOME=/home/firedrake" >> "$GITHUB_ENV"
-
       - name: Install Firedrake kernel
         run: |
           . .venv/bin/activate
@@ -58,8 +55,6 @@ jobs:
 
       - name: Set up for network namespacing
         run: |
-          sudo sed -i 's/ubuntu/firedrake/' /etc/subuid
-          sudo sed -i 's/ubuntu/firedrake/' /etc/subgid
           sudo apt install -y uidmap iproute2
           . .venv/bin/activate
           jupytext_location="$(which jupytext)"
