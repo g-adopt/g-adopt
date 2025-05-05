@@ -23,8 +23,8 @@ nx, ny = 256, 64  # Number of cells in x and y directions
 lx, ly = 3e6, 7e5  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
-mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
+mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects
+boundary = get_boundary_ids(mesh)  # Object holding references to mesh boundary IDs
 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
@@ -150,10 +150,10 @@ t_adapt = TimestepAdaptor(
 
 # +
 stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 2, "rho_ext": 0}},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"uy": 0},
+    boundary.top: {"free_surface": {"eta_index": 2, "rho_ext": 0}},
+    boundary.left: {"ux": 0},
+    boundary.right: {"ux": 0},
 }
 # Instantiate a solver object for the Stokes system and perform a solve to obtain
 # initial pressure and velocity.

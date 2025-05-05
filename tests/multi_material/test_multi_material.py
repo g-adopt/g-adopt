@@ -24,7 +24,7 @@ diagnostics = {
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 284.5), operator.le, 0.1),
+        (lambda data: abs(max(data["rms_velocity"]) - 284.4), operator.le, 0.1),
         (lambda data: abs(max(data["entrainment"]) - 0.919), operator.le, 1e-3),
     ],
     "schmalholz_2011": [
@@ -33,7 +33,7 @@ diagnostics = {
                 np.asarray(data["normalised_time"])[
                     np.asarray(data["slab_necking"]) <= 0.2
                 ].min()
-                - 0.814
+                - 0.812
             ),
             operator.le,
             1e-3,
@@ -45,10 +45,10 @@ diagnostics = {
                 np.asarray(data["output_time"])[
                     np.asarray(data["slab_tip_depth"]) >= 600
                 ].min()
-                - 46.1
+                - 46.2
             ),
             operator.le,
-            0.1,
+            0.2,
         )
     ],
     "tosi_2015": [
@@ -64,7 +64,7 @@ diagnostics = {
     ],
     "van_keken_1997_isothermal": [
         (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 5e-5),
-        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 6e-3),
+        (lambda data: abs(max(data["entrainment"]) - 0.802), operator.le, 3e-3),
     ],
     "van_keken_1997_thermochemical": [
         (

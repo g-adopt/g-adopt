@@ -82,8 +82,8 @@ if MPI.COMM_WORLD.rank == 0:
 
 # +
 mesh = Mesh(mesh_file)  # Load the GMSH mesh using Firedrake
-mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
-boundary = get_boundary_ids(mesh)
+mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects
+boundary = get_boundary_ids(mesh)  # Object holding references to mesh boundary IDs
 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
@@ -151,7 +151,7 @@ psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 # +
 Ra = 3e5
 Ra_c = material_field(
-    psi, [Ra_c_dense := 4.5e5, Ra_c_reference := 0], interface="sharp"
+    psi, [Ra_c_dense := 4.5e5, Ra_c_reference := 0], interface="arithmetic"
 )
 approximation = Approximation(
     "BA", dimensional=False, parameters={"Ra": Ra, "Ra_c": Ra_c}

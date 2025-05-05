@@ -68,8 +68,8 @@ nx, ny = 64, 64  # Number of cells in x and y directions
 lx, ly = 0.9142, 1  # Domain dimensions in x and y directions
 # Rectangle mesh generated via Firedrake
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
-mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects.
-boundary = get_boundary_ids(mesh)
+mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects
+boundary = get_boundary_ids(mesh)  # Object holding references to mesh boundary IDs
 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
