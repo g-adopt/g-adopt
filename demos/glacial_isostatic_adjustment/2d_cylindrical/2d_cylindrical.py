@@ -110,7 +110,7 @@ X = SpatialCoordinate(mesh)
 # Layer properties from Spada et al. (2011)
 # N.B.We  have modified the viscosity of the Lithosphere viscosity from
 # Spada et al. (2011) because we are using coarse grid resolution.
-radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
+radius_values = [6371e3, 6301e3, 5951e3, 5701e3]
 rho_values = [3037, 3438, 3871, 4978]
 G_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 mu_values = [2, -2, -2, -1.698970004]  # mu = 1e23 * 10**mu_values
@@ -420,7 +420,6 @@ dt_years = 250
 dt = dt_years * year_in_seconds
 dt_out_years = 1e3
 dt_out = dt_out_years * year_in_seconds
-dt_years = 200
 
 max_timesteps = round((time_end - time_start) / dt)
 output_frequency = round(dt_out / dt)

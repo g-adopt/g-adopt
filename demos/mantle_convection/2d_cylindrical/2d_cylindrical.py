@@ -22,6 +22,7 @@
 # We also import pyvista, which is used for plotting vtk output.
 
 from gadopt import *
+
 # + tags=["active-ipynb"]
 # import pyvista as pv
 # -
@@ -133,7 +134,7 @@ Z_near_nullspace = create_stokes_nullspace(
 # of velocity is zero and all required changes are handled under the hood.
 
 # +
-stokes_bcs = {boundary.bottom: {"un": 0}, boundary.top: {"un": 0}}
+stokes_bcs = {boundary.bottom: {"un": 0.0}, boundary.top: {"un": 0.0}}
 
 temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
 # -
@@ -177,6 +178,10 @@ stokes_solver = StokesSolver(
 
 # We now initiate the time loop, which runs until a steady-state solution has been attained.
 
+f_ratio = rmin / rmax
+top_scaling = 1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
+bot_scaling = 0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
+
 for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
@@ -195,9 +200,6 @@ for timestep in range(timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    f_ratio = rmin / rmax
-    top_scaling = 1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
-    bot_scaling = 0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
     nusselt_number_top = gd.Nu_top() * top_scaling
     nusselt_number_base = gd.Nu_bottom() * bot_scaling
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
