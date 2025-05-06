@@ -50,7 +50,7 @@ def relativePermeability(modelParameters, h, x, time):
         n = modelParameters["n"]
         m = 1 - 1/n
 
-        K = Ks*((1 - (alpha*abs(h))**(n-1) * (1 + (alpha*abs(h))**n)**(-m))**2 / (1 + (alpha*abs(h)**n)**(m/2)))
+        K = Ks*((1 - abs(alpha*h)**(n-1) * (1 + abs(alpha*h)**n)**(-m))**2 / (1 + abs(alpha*h)**n)**(m/2))
 
     elif modelParameters["modelType"] == "exponential":
 
@@ -69,7 +69,7 @@ def waterRetention(modelParameters, h, x, time):
         thetaR = modelParameters["thetaR"]
         thetaS = modelParameters["thetaS"]
 
-        C = (-fd.sign(h)*alpha*beta*(thetaS - thetaR)*pow(abs(h),beta-1)) / (pow(alpha + pow(abs(h),beta),2))
+        C = (-fd.sign(h)*alpha*beta*(thetaS - thetaR)*pow(abs(h), beta-1)) / (pow(alpha + pow(abs(h), beta), 2))
 
     elif modelParameters["modelType"] == "VanGenuchten":
 

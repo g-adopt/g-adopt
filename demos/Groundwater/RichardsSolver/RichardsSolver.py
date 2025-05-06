@@ -61,7 +61,7 @@ def RichardsSolver(h0, V, mesh, solverParameters, modelParameters, timeParameter
             K.interpolate(relativePermeability(modelParameters, h, x, currentTime))
             q.assign(fd.project(fd.as_vector(-K*fd.grad(h + x[dimen-1])), VecSpace))
 
-            PETSc.Sys.Print(float(currentTime))
+            PETSc.Sys.Print("Time: " + str(float(currentTime)))
 
             outfile.write(h, theta, K, q, time=float(currentTime))
 
@@ -70,6 +70,7 @@ def RichardsSolver(h0, V, mesh, solverParameters, modelParameters, timeParameter
 
         hOld.assign(h)
         solverRichardsEqn.solve()
+
         currentTime.assign(currentTime + timeStep)
         iterations += 1
 

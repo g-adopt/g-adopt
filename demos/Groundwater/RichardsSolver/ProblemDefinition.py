@@ -75,20 +75,25 @@ def ProblemDefinitionNonlinear(h, hOld, hStar, timeConstant, timeStep, theta_dif
             solver_parameters={
                 'mat_type': 'aij',
                 'snes_type': 'newtonls',
-                'ksp_type': 'preonly',
-                'pc_type': 'lu',
+                'ksp_type': 'gmres',
+                'pc_type': 'jacobi',
                 })
 
     # Use iterative solvers
     else:
 
+        if theta_mid == 0:
+            snesType = 'ksponly'
+        else:
+            snesType = 'newtonls'
+
         solverRichardsNonlinear = fd.NonlinearVariationalSolver(problem,
                                     solver_parameters={
                                         'mat_type': 'aij',
-                                        'snes_type': 'newtonls',
-                                        'ksp_type': 'gmres',
+                                        'snes_type': snesType,
+                                        'ksp_type': 'bcgs',
                                         "ksp_rtol": 1e-5,
-                                        'pc_type': 'sor',
+                                        'pc_type': 'none',
                                     })
 
     return solverRichardsNonlinear

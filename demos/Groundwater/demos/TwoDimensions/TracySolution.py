@@ -12,9 +12,9 @@ import time
 timeParameters = {
     "finalTime": 2**17,
     "timeStepType": "constant",
-    "timeStepSize": 2**(7),
-    "theta_diff": 0.5,
-    "theta_nonlin": 0.5,
+    "timeStepSize": 2**(6),
+    "theta_diff": 0.45,
+    "theta_nonlin": 0,
 }
 
 # Steady state solution
@@ -22,7 +22,8 @@ timeParameters = {
 #    "finalTime": 5e07,
 #    "timeStepType": "constant",
 #    "timeStepSize": 5e07/1000,
-#    "timeIntegration": 'modifiedEuler'
+#    "theta_diff": 0.5,
+#    "theta_nonlin": 0.5,
 #}
 #
 
