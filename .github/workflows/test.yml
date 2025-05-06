@@ -60,7 +60,7 @@ jobs:
           git config --global safe.directory '*'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
 
       - uses: actions/checkout@v4
         with:
@@ -132,7 +132,7 @@ jobs:
           python -m pytest -m 'not longtest' --junit-xml=test_results.xml
 
       - name: Pytest report
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v5
         if: ${{ !cancelled() && steps.run_pytest.conclusion != 'skipped' }}
         with:
           check_name: Test suite report

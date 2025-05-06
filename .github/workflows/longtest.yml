@@ -47,7 +47,7 @@ jobs:
           scp gadi:${{secrets.GADI_REPO_PATH}}/test_results.xml .
 
       - name: Pytest report
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v5
         if: ${{ !cancelled() }}
         with:
           check_name: Test suite report

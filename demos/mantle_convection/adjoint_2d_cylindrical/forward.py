@@ -104,8 +104,8 @@ def run_forward():
 
     # Free-slip velocity boundary condition on all sides
     stokes_bcs = {
-        "bottom": {"un": 0},
-        "top": {"un": 0},
+        "bottom": {"un": 0.0},
+        "top": {"un": 0.0},
     }
     temp_bcs = {
         "bottom": {"T": 1.0},
@@ -121,10 +121,12 @@ def run_forward():
         approximation,
         T,
         bcs=stokes_bcs,
-        nullspace=Z_nullspace,
-        transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace,
         solver_parameters="direct",
+        nullspace={
+            "nullspace": Z_nullspace,
+            "transpose_nullspace": Z_nullspace,
+            "near_nullspace": Z_near_nullspace,
+        },
     )
 
     # Create output file and select output_frequency
@@ -138,7 +140,7 @@ def run_forward():
     p.rename("Pressure")
 
     # Now perform the time loop:
-    for timestep in range(0, max_timesteps):
+    for timestep in range(max_timesteps):
         stokes_solver.solve()
         energy_solver.solve()
 
