@@ -11,7 +11,7 @@ $(cases): functional_%.txt: PDE_constrained_%.py
 	$(run-python)
 
 clean:
-	rm $(cases) *.h5
+	rm -f $(cases) *.h5
 	rm -rf __pycache__
 
 check: $(cases)

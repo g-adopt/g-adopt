@@ -13,4 +13,4 @@ Checkpoint_State.h5: forward.py
 	tsp -L mantle_convection -N $(ncpus) -f mpiexec -np $(ncpus) python3 $<
 
 clean:
-	rm -f *.h5 *.conv
+	rm -rf *.h5 *.conv vtu-files
