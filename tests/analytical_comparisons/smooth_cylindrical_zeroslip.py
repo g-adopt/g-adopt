@@ -67,10 +67,6 @@ def model(level, k, nn, do_write=False):
         Z, closed=False, rotational=True, translations=[0, 1]
     )
 
-    solver_params = iterative_stokes_solver_parameters
-    # use tighter tolerances than default to ensure convergence:
-    solver_params["fieldsplit_0"]["ksp_rtol"] = 1e-13
-    solver_params["fieldsplit_1"]["ksp_rtol"] = 1e-11
     stokes_solver = StokesSolver(
         z,
         approximation,
@@ -83,6 +79,9 @@ def model(level, k, nn, do_write=False):
             "near_nullspace": Z_near_nullspace,
         },
     )
+    # use tighter tolerances than default to ensure convergence:
+    solver_params["fieldsplit_0"]["ksp_rtol"] = 1e-13
+    solver_params["fieldsplit_1"]["ksp_rtol"] = 1e-11
 
     normal_stress_solver = BoundaryNormalStressSolver(
         sigma, approximation, z, boundary.top

@@ -22,9 +22,6 @@ from .stokes_integrators import InternalVariableSolver as InternalVariableSolver
 from .stokes_integrators import StokesSolver as StokesSolver
 from .stokes_integrators import ViscoelasticSolver as ViscoelasticSolver
 from .stokes_integrators import create_stokes_nullspace as create_stokes_nullspace
-from .stokes_integrators import (
-    iterative_stokes_solver_parameters as iterative_stokes_solver_parameters,
-)
 from .time_stepper import BackwardEuler as BackwardEuler
 from .time_stepper import ImplicitMidpoint as ImplicitMidpoint
 from .transport_solver import EnergySolver as EnergySolver
