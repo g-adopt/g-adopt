@@ -523,10 +523,11 @@ class CompressibleInternalVariableApproximation(SmallDisplacementViscoelasticApp
     Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
     compressible = True
 
-    def __init__(self, bulk_modulus, density, shear_modulus, viscosity, bulk_shear_ratio=1, compressible_buoyancy=True, **kwargs):
+    def __init__(self, bulk_modulus, density, shear_modulus, viscosity, bulk_shear_ratio=1, compressible_buoyancy=True, compressible_adv_hyd_pre=True, **kwargs):
         self.bulk_modulus = ensure_constant(bulk_modulus)
         self.bulk_shear_ratio = ensure_constant(bulk_shear_ratio)
         self.compressible_buoyancy = compressible_buoyancy
+        self.compressible_adv_hyd_pre = compressible_adv_hyd_pre
         super().__init__(density, shear_modulus, viscosity, **kwargs)
         if len(self.shear_modulus):
             self.maxwell_time = [visc / mu for visc, mu in zip(self.viscosity, self.shear_modulus)]
