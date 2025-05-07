@@ -79,8 +79,8 @@ def model(level, k, nn, do_write=False):
         },
     )
     # use tighter tolerances than default to ensure convergence:
-    solver_params["fieldsplit_0"]["ksp_rtol"] = 1e-13
-    solver_params["fieldsplit_1"]["ksp_rtol"] = 1e-11
+    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-13
+    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-11
 
     normal_stress_solver = BoundaryNormalStressSolver(
         sigma, approximation, z, boundary.top
