@@ -72,7 +72,6 @@ def model(level, k, nn, do_write=False):
         approximation,
         T,
         bcs=stokes_bcs,
-        solver_parameters=solver_params,
         nullspace={
             "nullspace": Z_nullspace,
             "transpose_nullspace": Z_nullspace,
