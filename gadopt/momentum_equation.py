@@ -205,8 +205,8 @@ def advection_hydrostatic_prestress_term(
         F = 0
     else:
         # change ds for extruded mesh? maybe not a good idea?
-        if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
-            dS = dS_h
+#        if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
+#            dS = dS_h
         F = Vi('+') * jump(rho0) * u_r('+') * g('+') * dot(eq.test('+'), eq.n('+')) * dS
     return -F
 
