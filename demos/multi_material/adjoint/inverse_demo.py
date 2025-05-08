@@ -17,9 +17,13 @@ def callback(psi_control, psi_opt, optimisation_file):
     reinitialisation = assemble(
         reinitialisation_steady(psi_check, psi_grad_check) ** 2 * dx
     )
+    gradient = assemble(inner(psi_grad_check, psi_grad_check) * dx)
+    interface = assemble((0.25 - (psi_check - 0.5) ** 2) * dx)
 
     log(f"Level-set misfit: {misfit}")
     log(f"Level-set reinitialisation: {reinitialisation}")
+    log(f"Level-set gradient: {1e-4 * gradient}")
+    log(f"Level-set interface: {interface}")
 
 
 def simulation(iteration: int) -> None:
@@ -50,7 +54,9 @@ def simulation(iteration: int) -> None:
 
     psi_misfit = assemble((psi - psi_obs) ** 2 * dx)
     psi_reini = assemble(reinitialisation_steady(psi, psi_grad) ** 2 * dx)
-    objective = psi_misfit + psi_reini
+    psi_grad_inner = assemble(inner(psi_grad, psi_grad) * dx)
+    psi_interface = assemble((0.25 - (psi - 0.5) ** 2) * dx)
+    objective = psi_misfit + psi_reini + 1e-4 * psi_grad_inner + psi_interface
     reduced_functional = ReducedFunctional(objective, Control(psi_control))
 
     pause_annotation()
@@ -136,7 +142,7 @@ level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini
 psi_grad = level_set_solver.solution_grad
 
 target_time = 150
-time_increment = 50
+time_increment = 150
 time_step = 0.85
 step_count = int(time_increment / time_step)
 

@@ -189,8 +189,8 @@ momentum_source_term.optional_attrs = {"p", "T", "displ"}
 divergence_term.required_attrs = {"u"}
 divergence_term.optional_attrs = set()
 
-residual_terms_momentum = [viscosity_term, pressure_gradient_term, momentum_source_term]
-residual_terms_mass = divergence_term
-residual_terms_stokes = [residual_terms_momentum, residual_terms_mass]
+rsdl_terms_momentum = [viscosity_term, pressure_gradient_term, momentum_source_term]
+rsdl_terms_mass = divergence_term
+rsdl_terms_stokes = [rsdl_terms_momentum, rsdl_terms_mass]
 
-residual_terms_compressible_viscoelastic = [momentum_source_term, viscosity_term]
+rsdl_terms_viscoelastic = [viscosity_term, momentum_source_term]

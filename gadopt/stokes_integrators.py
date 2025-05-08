@@ -16,11 +16,8 @@ from .approximations import Approximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
-from .momentum_equation import (
-    residual_terms_compressible_viscoelastic,
-    residual_terms_stokes,
-)
-from .scalar_equation import mass_term, residual_terms_internal_variable
+from .momentum_equation import rsdl_terms_viscoelastic, rsdl_terms_stokes
+from .scalar_equation import mass_term, rsdl_terms_internal_variable
 from .utility import (
     DEBUG,
     INFO,
@@ -452,12 +449,12 @@ class StokesSolver(CoupledMomentumBase):
         u, p = self.solution_split[:2]
         eqs_attrs = [{"p": p, "T": self.T}, {"u": u}]
 
-        for i in range(len(residual_terms_stokes)):
+        for i in range(len(rsdl_terms_stokes)):
             self.equations.append(
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    residual_terms_stokes[i],
+                    rsdl_terms_stokes[i],
                     eq_attrs=eqs_attrs[i],
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
@@ -581,12 +578,12 @@ class ViscoelasticSolver(CoupledMomentumBase):
             {"u": u},
         ]
 
-        for i in range(len(residual_terms_stokes)):
+        for i in range(len(rsdl_terms_stokes)):
             self.equations.append(
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    residual_terms_stokes[i],
+                    rsdl_terms_stokes[i],
                     eq_attrs=eqs_attrs[i],
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
@@ -620,10 +617,7 @@ class InternalVariableSolver(CoupledMomentumBase):
         maxwell_time = self.approximation.mu / self.approximation.G
         strain = self.approximation.strain(u)
 
-        residual_terms = [
-            residual_terms_compressible_viscoelastic,
-            residual_terms_internal_variable,
-        ]
+        rsdl_terms = [rsdl_terms_viscoelastic, rsdl_terms_internal_variable]
         eqs_attrs = [
             {"m": m, "displ": u},
             {"source": strain / maxwell_time, "sink_coeff": 1 / maxwell_time},
@@ -636,7 +630,7 @@ class InternalVariableSolver(CoupledMomentumBase):
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    residual_terms[i],
+                    rsdl_terms[i],
                     mass_term=mass_terms[i],
                     eq_attrs=eqs_attrs[i],
                     approximation=self.approximation,
@@ -677,6 +671,20 @@ class BoundaryNormalStressSolver:
 
     name = "BoundaryNormalStressSolver"
 
+    direct_solver_parameters = {
+        "mat_type": "aij",
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    }
+    iterative_solver_parameters = {
+        "ksp_type": "cg",
+        "pc_type": "hypre",
+        "ksp_rtol": 1e-9,
+        "ksp_atol": 1e-12,
+        "ksp_converged_reason": None,
+    }
+
     def __init__(
         self,
         solution: Function,
@@ -712,6 +720,12 @@ class BoundaryNormalStressSolver:
         L = -test * dot(dot(n, stress - pressure), n) / Ra_bdy * self.ds
         # The calculated stress lives on the specified boundary only
         self.interior_null_bc = InteriorBC(solution_space, 0, boundary_id)
+
+        if not isinstance(solver_parameters, dict):
+            if mesh.topological_dimension() == 2 and mesh.cartesian:
+                solver_parameters = self.direct_solver_parameters
+            else:
+                solver_parameters = self.iterative_solver_parameters
 
         problem = LinearVariationalProblem(
             a, L, self.solution, bcs=self.interior_null_bc, constant_jacobian=True

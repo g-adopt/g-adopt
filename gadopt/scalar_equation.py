@@ -164,4 +164,4 @@ source_term.optional_attrs = set()
 sink_term.required_attrs = {"sink_coeff"}
 sink_term.optional_attrs = set()
 
-residual_terms_internal_variable = [source_term, sink_term]
+rsdl_terms_internal_variable = [source_term, sink_term]
