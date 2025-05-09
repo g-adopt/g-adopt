@@ -83,7 +83,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
     dt = Constant(dt_factor)  # Initial time-step
     log("nondimensional dt", float(dt))
     if sim_time == "long":
-        max_timesteps = round(2*tau0/dt)
+        max_timesteps = round(160/dt) # 2tau0 = 149 maxwell times ish 
     else:
         max_timesteps = 1
 
@@ -200,7 +200,8 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
         if timestep % dump_period == 0:
             log("timestep", timestep)
             log("time", float(time))
-            displacement_df.to_csv(f"surface_displacement_dt{float(dt)}_nx{nx}arrays_incompressible.csv")
+            if MPI.COMM_WORLD.rank == 0:
+                displacement_df.to_csv(f"surface_displacement_dt{float(dt)}_nx{nx}arrays_bulktoshear{float(bulk_shear_ratio)}.csv")
             if OUTPUT:
                 u_dim.interpolate(D*u)
                 output_file.write(u_, m_, eta_analytical_nondim, u_dim, eta_analytical)
@@ -210,7 +211,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", viscosity=1e21, sh
 
 
 params = {
-    "viscoelastic-compressible-visc1e21-shear1e11-bulk2e11-lam8-dtfstart16-compahpFalse": {
+    "viscoelastic-compressible-visc1e21-shear1e11-bulk2e11-lam8-dtfstart16alpha-compahpFalse_160alpha": {
         "dtf_start": 16,
         "nx": 320,
         "sim_time": "long",
@@ -220,7 +221,7 @@ params = {
         "lam_factor": 8,
         "compressible_adv_hyd_pre": False},
     "viscoelastic-compressible-visc1e21-shear5e9-bulk1e11-lam128": {
-        "dtf_start": 0.1,
+        "dtf_start": 0.1, # relative to tau0
         "nx": 640,
         "sim_time": "long",
         "viscosity": 1e21,
@@ -228,7 +229,7 @@ params = {
         "bulk_modulus": 1e11,
         "lam_factor": 128},
     "elastic-compressible-visc1e21-shear1e11-bulk2e11-lam8-compahpFalse": {
-        "dtf_start": 0.001,
+        "dtf_start": 0.1,
         "nx": 320,
         "sim_time": "short",
         "viscosity": 1e21,
@@ -237,13 +238,13 @@ params = {
         "lam_factor": 8,
         "compressible_adv_hyd_pre": False},
     "elastic-compressible": {
-        "dtf_start": 0.001,
+        "dtf_start": 0.001, # old relative to tau0
         "nx": 320,
         "sim_time": "short",
         "shear_modulus": 1e11,
         "bulk_modulus": 10e11},
     "viscous-compressible-visc1e21-shear1e13-bulk2e11-lam8-compahpFalse": {
-        "dtf_start": 0.1,
+        "dtf_start": 0.1, # old relative to tau0
         "nx": 640,
         "sim_time": "long",
         "viscosity": 1e21,
@@ -251,8 +252,8 @@ params = {
         "bulk_modulus": 2e11,
         "lam_factor": 8,
         "compressible_adv_hyd_pre": False},
-    "viscoelastic-incompressible-visc1e21-shear1e11-bulk1e15-lam8-compahpFalse": {
-        "dtf_start": 0.1,
+    "viscoelastic-incompressible-visc1e21-shear1e11-bulk1e15-lam8-dtfstart16alpha-compahpFalse_160alpha": {
+        "dtf_start": 16,
         "nx": 640,
         "sim_time": "long",
         "viscosity": 1e21,
@@ -261,14 +262,14 @@ params = {
         "lam_factor": 8,
         "compressible_adv_hyd_pre": False},
     "viscoelastic-incompressible-visc1e21-shear1e10-bulk1e15": {
-        "dtf_start": 0.1,
+        "dtf_start": 0.1, # old relative to tau0
         "nx": 1280,
         "sim_time": "long",
         "viscosity": 1e21,
         "shear_modulus": 1e10,
         "bulk_modulus": 1e15},
     "elastic-incompressible-visc1e21-shear1e11-bulk1e15-lam8-compahpFalse": {
-        "dtf_start": 0.001,
+        "dtf_start": 0.1,
         "nx": 320,
         "sim_time": "short",
         "viscosity": 1e21,
@@ -305,7 +306,7 @@ def run_benchmark(case_name):
     # Run default case run for four dt factors
     dtf_start = params[case_name]["dtf_start"]
     params[case_name].pop("dtf_start")  # Don't pass this to viscoelastic_model
-    dt_factors = dtf_start / (2 ** np.arange(6))
+    dt_factors = dtf_start / (2 ** np.arange(7))
     nx = params[case_name]["nx"]
     prefix = f"errors-{case_name}-internalvariable-coupled-{nx}cells_nondimensional_direct_T2tau"
     errors = np.array([viscoelastic_model(dt_factor=dtf, **params[case_name]) for dtf in dt_factors])
