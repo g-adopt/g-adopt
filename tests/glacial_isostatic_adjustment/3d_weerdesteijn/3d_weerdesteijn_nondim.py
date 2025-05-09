@@ -15,6 +15,9 @@ from mpi4py import MPI
 parser = argparse.ArgumentParser()
 parser.add_argument("--dx", default=50, type=float, help="Horizontal resolution in km", required=False)
 parser.add_argument("--refined_surface", action='store_true', help="Use refined surface mesh")
+parser.add_argument("--const_aspect", action='store_true', help="Also scale farfield dx for parallel scaling test to keep same aspect ratio")
+parser.add_argument("--structured_dz", action='store_true', help="Use constant vertical resolution")
+parser.add_argument("--nz", default=100, type=int, help="Number of vertical layers for structured dz")
 parser.add_argument("--DG0_layers", default=5, type=int, help="Number of cells per layer for DG0 discretisation of background profiles", required=False)
 parser.add_argument("--dt_years", default=1e3, type=float, help="Timestep in years", required=False)
 parser.add_argument("--dt_out_years", default=10e3, type=float, help="Output timestep in years", required=False)
@@ -58,21 +61,33 @@ L_tilde = L / D
 radius_values_tilde = np.array(radius_values)/D
  
 layer_height_list = []
-DG0_layers = args.DG0_layers
-nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
 
-for j in range(len(radius_values_tilde)-1):
-    i = len(radius_values_tilde)-2 - j  # want to start at the bottom
-    r = radius_values_tilde[i]
-    h = r - radius_values_tilde[i+1]
-    nz = nz_layers[i]
-    dz = h / nz
-
-    for i in range(nz):
+if args.structured_dz:
+    dz = 1./args.nz
+    for i in range(args.nz):
         layer_height_list.append(dz)
+    nz = args.nz
+
+else:
+    DG0_layers = args.DG0_layers
+    nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
+
+    for j in range(len(radius_values_tilde)-1):
+        i = len(radius_values_tilde)-2 - j  # want to start at the bottom
+        r = radius_values_tilde[i]
+        h = r - radius_values_tilde[i+1]
+        nz = nz_layers[i]
+        dz = h / nz
+
+        for i in range(nz):
+            layer_height_list.append(dz)
+    nz = f"{DG0_layers}perlayer"
 
 if args.refined_surface:
-    surface_mesh = Mesh(f"./weerdesteijn_box_refined_surface_{round(args.dx)}km_nondim.msh", name="surface_mesh")
+    if args.const_aspect:
+        surface_mesh = Mesh(f"./weerdesteijn_box_refined_surface_{round(args.dx)}km_nondim_constaspect.msh", name="surface_mesh")
+    else:
+        surface_mesh = Mesh(f"./weerdesteijn_box_refined_surface_{round(args.dx)}km_nondim.msh", name="surface_mesh")
 else:
     nx = round(L / (args.dx*1e3))
     surface_mesh = SquareMesh(nx, nx, L_tilde)
@@ -88,7 +103,6 @@ mesh.coordinates.dat.data[:, vertical_component] -= 1
 
 mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
-nz = f"{DG0_layers}perlayer"
 
 ds = CombinedSurfaceMeasure(mesh, degree=6)
 
@@ -321,7 +335,7 @@ gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_modulus, viscosity=viscosity, Vi=Vi, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy)
+approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_modulus, viscosity=viscosity, Vi=Vi, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=False)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `z` and various fields
@@ -339,7 +353,7 @@ direct_stokes_solver_parameters = {
 iterative_parameters = {"mat_type": "matfree",
                         "snes_type": "ksponly",
                         "ksp_type": "gmres",
-                        "ksp_rtol": 1e-7,
+                        "ksp_rtol": 1e-4,
                         "ksp_converged_reason": None,
                         "ksp_monitor": None,
                         "pc_type": "fieldsplit",
@@ -369,13 +383,16 @@ iterative_parameters = {"mat_type": "matfree",
                         "fieldsplit_1_ksp_rtol": 1e-5,
                         }
 Z_nullspace = None  # Default: don't add nullspace for now
-Z_near_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True, translations=[0, 1, 2])
+#Z_near_nullspace = None # create_stokes_nullspace(Z, closed=True, rotational=True, translations=[0, 1, 2])
+Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=False, translations=[0, 1, 2])
 
 coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=stokes_bcs,
                                         solver_parameters=iterative_parameters,
                                         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                         near_nullspace=Z_near_nullspace)
 
+
+coupled_stage = PETSc.Log.Stage("coupled_solve")
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
@@ -409,7 +426,8 @@ vertical_displacement = Function(V.sub(2), name="vertical displacement")  # Func
 for timestep in range(1, max_timesteps+1):
     # update time first so that ice load begins
     time.assign(time+dt)
-    coupled_solver.solve()
+    # Solve Stokes sytem:
+    with coupled_stage: coupled_solver.solve()
 
     # Log diagnostics:
     # Compute diagnostics:
