@@ -31,6 +31,8 @@ parser.add_argument("--lateral_viscosity", action='store_true', help="Include lo
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
 parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/", type=str, help="Optional output path", required=False)
+parser.add_argument("--gamg_threshold", default=0.01, type=int, help="Gamg threshold")
+parser.add_argument("--gamg_near_null_rot", action='store_true', help="Use rotational gamg near nullspace")
 args = parser.parse_args()
 
 name = f"weerdesteijn-3d-internalvariable-{args.optional_name}"
@@ -369,7 +371,7 @@ iterative_parameters = {"mat_type": "matfree",
                         "fieldsplit_0_assembled_pc_type": "gamg",
                         "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
                         "fieldsplit_0_ksp_rtol": 1e-5,
-                        "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
+                        "fieldsplit_0_assembled_pc_gamg_threshold": args.gamg_threshold,
                         "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
                         "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
                         "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
@@ -383,8 +385,7 @@ iterative_parameters = {"mat_type": "matfree",
                         "fieldsplit_1_ksp_rtol": 1e-5,
                         }
 Z_nullspace = None  # Default: don't add nullspace for now
-#Z_near_nullspace = None # create_stokes_nullspace(Z, closed=True, rotational=True, translations=[0, 1, 2])
-Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=False, translations=[0, 1, 2])
+Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=args.gamg_near_null_rot, translations=[0, 1, 2])
 
 coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=stokes_bcs,
                                         solver_parameters=iterative_parameters,
