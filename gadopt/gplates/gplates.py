@@ -229,10 +229,10 @@ class pyGplatesConnector(object):
 
         # Raising an error if the user is asking for invalid time
         if self.ndtime2age(ndtime=ndtime) < 0:
+            max_time = self.oldest_age / (self.time_dimDmyrs2sec / self.scaling_factor)
             raise ValueError(
-                ("Input non-dimensionalised time corresponds to negative age (it is in the future)!"
-                 f"maximum non-dimensionalised time:"
-                 f" {self.oldest_age/(pyGplatesConnector.time_dimDmyrs2sec/self.scaling_factor)}")
+                "Input non-dimensionalised time corresponds to negative age (it is in the future)!"
+                f" Maximum non-dimensionalised time: {max_time}"
             )
 
         # cache the reconstruction age
@@ -290,7 +290,7 @@ class pyGplatesConnector(object):
             float: The converted geologic age in millions of years before present day(Ma).
         """
 
-        return self.oldest_age - float(ndtime) * pyGplatesConnector.time_dimDmyrs2sec/self.scaling_factor
+        return self.oldest_age - float(ndtime) * self.time_dimDmyrs2sec / self.scaling_factor
 
     def age2ndtime(self, age):
         """Converts geologic age (years before present day in Myrs (Ma) to non-dimensionalised time.
@@ -301,7 +301,7 @@ class pyGplatesConnector(object):
         Returns:
 -            float: non-dimensionalised time
         """
-        return (self.oldest_age - age)*(self.scaling_factor / pyGplatesConnector.time_dimDmyrs2sec)
+        return (self.oldest_age - age) * (self.scaling_factor / self.time_dimDmyrs2sec)
 
     # convert seeds to Gplate features
     def _make_GPML_velocity_feature(self, coords):
@@ -356,8 +356,8 @@ class pyGplatesConnector(object):
             age=self.reconstruction_age,
             delta_t=self.delta_t)
 
-        seeds_u = np.array([i.to_xyz() for i in seeds_u]) *\
-            ((pyGplatesConnector.velocity_dimDcmyr) / self.scaling_factor)
+        seeds_u = np.array([i.to_xyz() for i in seeds_u])
+        seeds_u *= self.velocity_dimDcmyr / self.scaling_factor
 
         # if pyGplates does not find a plate id for a point, assings NaN to the velocity
         # here we make sure we only use velocities that are not NaN.
