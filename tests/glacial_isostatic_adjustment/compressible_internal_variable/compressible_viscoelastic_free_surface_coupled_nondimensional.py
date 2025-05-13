@@ -277,6 +277,15 @@ params = {
         "bulk_modulus": 1e15,
         "lam_factor": 8,
         "compressible_adv_hyd_pre": False},
+    "elastic-incompressible-visc1e21-shear1e11-bulk1e14-lam8-compahpFalse": {
+        "dtf_start": 0.1,
+        "nx": 320,
+        "sim_time": "short",
+        "viscosity": 1e21,
+        "shear_modulus": 1e11,
+        "bulk_modulus": 1e14,
+        "lam_factor": 8,
+        "compressible_adv_hyd_pre": False},
     "elastic-incompressible-1e15": {
         "dtf_start": 0.001,
         "nx": 320,
