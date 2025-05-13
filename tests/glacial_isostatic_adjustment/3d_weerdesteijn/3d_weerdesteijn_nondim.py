@@ -31,7 +31,7 @@ parser.add_argument("--lateral_viscosity", action='store_true', help="Include lo
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
 parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/", type=str, help="Optional output path", required=False)
-parser.add_argument("--gamg_threshold", default=0.01, type=int, help="Gamg threshold")
+parser.add_argument("--gamg_threshold", default=0.01, type=float, help="Gamg threshold")
 parser.add_argument("--gamg_near_null_rot", action='store_true', help="Use rotational gamg near nullspace")
 args = parser.parse_args()
 
