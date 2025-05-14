@@ -54,7 +54,7 @@ jobs:
           S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           apt update
-          apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev
+          apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
           mkdir -p $HOME/.s3cfg
           echo "${S3CONFIG}" > $HOME/.s3cfg/config
           chmod 600 $HOME/.s3cfg/config
@@ -119,7 +119,8 @@ jobs:
       - name: Run test
         id: run_tests
         run: |
-          tsp --timeout -T 7200 --memprof
+          tsp --timeout -T 7200
+          tsp --memprof
           . .venv/bin/activate
           make -j test
         env:
