@@ -169,8 +169,8 @@ materials = [dense_material, reference_material]
 
 Ra = 3e5  # Thermal Rayleigh number
 
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
+RaB = material_field(
+    psi, [material.RaB for material in materials], interface="arithmetic"
 )  # Compositional Rayleigh number, defined based on each material value and location
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
