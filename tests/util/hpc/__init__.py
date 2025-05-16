@@ -29,11 +29,11 @@ procs_per_node: Dict[str,int] = {
 
 
 def get_hpc_properties() -> Tuple[str, Dict[str, Union[str,int]]]:
-    system = None
     for s, func in system_identifiers.items():
         if func():
             system = s
-    if not system:
+            break
+    else:
         raise KeyError("HPC system requested but could not identify system")
     # check environment variables
     this_dir = Path(__file__).resolve().parent
