@@ -44,7 +44,7 @@ z.subfunctions[1].rename("Pressure")
 # -
 
 # We next specify the important constants for this problem, including those associated with the
-# compressible reference state. 
+# compressible reference state.
 
 X = SpatialCoordinate(mesh)
 Ra = Constant(1e4)  # Rayleigh number
