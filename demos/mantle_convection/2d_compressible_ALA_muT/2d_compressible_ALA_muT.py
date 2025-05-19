@@ -137,8 +137,7 @@ gd = GeodynamicalDiagnostics(z, FullT, boundary.bottom, boundary.top)
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace_transpose,
-                             constant_jacobian=True)
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace_transpose)
 # -
 
 # Next initiate the time loop, which runs until a steady-state solution has been attained:
