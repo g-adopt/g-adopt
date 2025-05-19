@@ -27,7 +27,7 @@ from gadopt import *
 # identically to our previous tutorials.
 
 # +
-nx, ny = 60, 60  # Number of cells in x and y directions.
+nx, ny = 80, 80  # Number of cells in x and y directions.
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
 mesh.cartesian = True
 boundary = get_boundary_ids(mesh)  # Boundary IDs
