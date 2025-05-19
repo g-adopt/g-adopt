@@ -44,9 +44,7 @@ z.subfunctions[1].rename("Pressure")
 # -
 
 # We next specify the important constants for this problem, including those associated with the
-# compressible reference state. Note that for ease of extension, we specify these as functions,
-# allowing for spatial variability. Given that we account for the effect of dynamic pressure on
-# buoyancy in this example, we need to specify the bulk modulus (`chibar`), which differs to the TALA case.
+# compressible reference state. 
 
 X = SpatialCoordinate(mesh)
 Ra = Constant(1e4)  # Rayleigh number
@@ -75,11 +73,10 @@ mu_field = Function(W, name="Viscosity")  # For vis only
 approximation = AnelasticLiquidApproximation(Ra, Di, rho=rhobar, Tbar=Tbar, mu=mu)
 
 # As with the previous examples, we next set up a *Timestep Adaptor*,
-# for controlling the time-step length (via a CFL
-# criterion) as the simulation advances in time. For the latter,
-# we specify the initial time, initial timestep $\Delta t$, and number of
-# timesteps. Given the low Ra, a steady-state tolerance is also specified,
-# allowing the simulation to exit when a steady-state has been achieved.
+# for controlling the time-step length (via a CFL criterion) as the simulation
+# advances in time. For the latter, we specify the initial time, initial timestep
+# $\Delta t$, and number of timesteps. Given the low Ra, a steady-state tolerance is
+# also specified, allowing the simulation to exit when a steady-state has been achieved.
 # The steady-state tolerance specified here is tight, and can be increased
 # to speed up the simulation, as required.
 
@@ -89,19 +86,8 @@ timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 steady_state_tolerance = 1e-9  # Used to determine if solution has reached a steady state.
 
-# We next set up and initialise our Temperature field. Note that here, we take into consideration
-# the non-dimensional surface temperature, T0. The full temperature field is also initialised.
-
-T = Function(Q, name="Temperature")
-T.interpolate((1.0 - (T0*exp(Di) - T0)) * ((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1]))))
-FullT = Function(Q, name="FullTemperature").assign(T+Tbar)
-
-# As noted above, this problem has a non-constant pressure nullspace (vertical, decreasing with depth)
+# This problem has a non-constant pressure nullspace (vertical, decreasing with depth)
 # for the right nullspace, and a constant nullspace for the transpose (left) nullspace.
-# We obtain the right nullspace (`Z_nullspace`) by providing the approximation object and subdomain marker
-# for the top boundary (where the pressure nullspace is referenced — see the
-# [nullspace visualisation](../visualise_ALA_p_nullspace) demo for more details). The left nullspace (`Z_nullspace_transpose`) is
-# handled identically to the previous [TALA](../2d_compressible_TALA) tutorial.
 
 Z_nullspace = create_stokes_nullspace(
     Z, closed=True, rotational=False,
