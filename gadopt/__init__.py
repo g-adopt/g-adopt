@@ -9,13 +9,7 @@ from .approximations import (
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
-from .level_set_tools import (
-    LevelSetSolver,
-    Material,
-    density_RaB,
-    entrainment,
-    field_interface,
-)
+from .level_set_tools import LevelSetSolver, Material, entrainment, material_field
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .stokes_integrators import (
