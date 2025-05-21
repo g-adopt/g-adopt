@@ -45,7 +45,7 @@ class Equation:
         quad_degree:
           Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
           where p is the polynomial degree of the trial space.
-        rescale_factor:
+        scaling_factor:
           A constant factor used to rescale mass and residual terms.
 
     """
@@ -59,7 +59,7 @@ class Equation:
     approximation: BaseApproximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[int | None] = None
-    rescale_factor: Number | fd.Constant = 1
+    scaling_factor: Number | fd.Constant = 1
 
     def __post_init__(
         self,
@@ -117,14 +117,14 @@ class Equation:
     ) -> fd.Form:
         """Generates the UFL form corresponding to the mass term."""
 
-        return self.rescale_factor * self.mass_term(self, trial)
+        return self.scaling_factor * self.mass_term(self, trial)
 
     def residual(
         self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
     ) -> fd.Form:
         """Generates the UFL form corresponding to the residual terms."""
 
-        return self.rescale_factor * sum(
+        return self.scaling_factor * sum(
             term(self, trial) for term in self.residual_terms
         )
 
