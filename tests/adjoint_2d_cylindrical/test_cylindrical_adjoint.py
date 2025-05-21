@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from pathlib import Path
-from cases import cases
+from cases import cases, schedulers
 from gadopt import *
 
 
@@ -14,7 +14,8 @@ def test_annulus_taylor_test(case_name):
 
 
 @pytest.mark.parametrize("case_name", cases)
-def test_derivatives_vs_schedulers(case_name):
+@pytest.mark.parametrize("scheduler", schedulers)
+def test_derivatives_vs_schedulers(case_name, scheduler):
     """
     Test the outputs from different checpoint_schedules outputs agains each other.
     Make sure the control and derivative in each case are the same -> Forward and Reverse on each scheduler should produce the same output
@@ -26,12 +27,12 @@ def test_derivatives_vs_schedulers(case_name):
     """
 
     # Making sure all the objective/functional values are the same
-    all_filenames = list(Path(__file__).parent.resolve().glob(f"{case_name}_*functional.dat"))
+    all_filenames = list(Path(__file__).parent.resolve().glob(f"{case_name}_{scheduler}_functional.dat"))
     func_vals = [x for fname in all_filenames for x in np.loadtxt(fname=fname.as_posix(), delimiter=",")]
     assert np.allclose(func_vals, func_vals[0], rtol=1e-12)
 
     # The filenames will tell us how many different schedulers are run
-    all_filenames = list(Path(__file__).parent.resolve().glob(f"{case_name}_*_cb_res.h5"))
+    all_filenames = list(Path(__file__).parent.resolve().glob(f"{case_name}_{scheduler}_cb_res.h5"))
 
     if len(all_filenames) == 1:
         # We have only tested one scheduler, no need to compare anything

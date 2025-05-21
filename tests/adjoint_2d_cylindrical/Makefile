@@ -1,7 +1,7 @@
 include ../../rules.mk
 
 cases := damping smoothing Tobs uobs
-schedulers := fullmemory # fulldisk
+schedulers := fullmemory fulldisk
 
 combo_cases := $(foreach c,$(cases),$(foreach s,$(schedulers),$(c)_$(s)))
 
@@ -22,6 +22,9 @@ Checkpoint_State.h5 : ncpus := 16
 Checkpoint_State.h5 : desc := forward
 Checkpoint_State.h5: forward.py
 	$(run-python)
+
+check: $(addsuffix .conv,$(combo_cases))
+	python3 -m pytest $(CURDIR)/test_cylindrical_adjoint.py
 
 clean:
 	rm -f *.conv

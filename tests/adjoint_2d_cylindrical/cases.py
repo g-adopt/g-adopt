@@ -1,4 +1,4 @@
-from checkpoint_schedules import SingleMemoryStorageSchedule  # ,SingleDiskStorageSchedule
+from checkpoint_schedules import SingleMemoryStorageSchedule, SingleDiskStorageSchedule
 
 cases = {
     "damping": [-1, -1, +1, -1],
@@ -9,5 +9,5 @@ cases = {
 
 schedulers = {
     "fullmemory": SingleMemoryStorageSchedule(),
-    # "fulldisk": SingleDiskStorageSchedule(),
+    "fulldisk": SingleDiskStorageSchedule(),
 }

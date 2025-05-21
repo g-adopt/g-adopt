@@ -17,6 +17,7 @@ import numpy as np
 import sys
 import itertools
 from cases import cases, schedulers
+from checkpoint_schedules import SingleDiskStorageSchedule
 
 
 def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing_schedule=None):
@@ -131,6 +132,9 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     # If we are not annotating, let's switch on taping
     if not annotate_tape():
         continue_annotation()
+
+    if isinstance(checkpointing_schedule, SingleDiskStorageSchedule):
+        enable_disk_checkpointing()
 
     # Using SingleMemoryStorageSchedule
     if any([alpha_T > 0, alpha_u > 0]):
@@ -391,6 +395,8 @@ if __name__ == "__main__":
             )
             log_file.log_str(f"{inverse_problem['minconv']}")
             log_file.close()
+        else:
+            inverse_problem = generate_inverse_problem(*weightings, scheduler)
 
         # Forward and Reverse tap
         # cb is a class containing values/derivatives/controls
