@@ -34,19 +34,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.setup.outputs.system_matrix) }}
+    env:
+      REPO_PATH: ${{ secrets[format('{0}_REPO_PATH',matrix.system)] }}
     steps:
       - uses: actions/checkout@v4
-      - name: Get system-specific variable names
-        id: get_sys_vars
-        run: |
-          tmp=${{ matrix.system }}
-          echo key_var=${tmp^^}_TESTING_KEY >> $GITHUB_OUTPUT
-          echo hkey_var=${tmp^^}_HOST_KEY >> $GITHUB_OUTPUT
-          echo user_var=${tmp^^}_USER >> $GITHUB_OUTPUT
-          echo repo_path_var=${tmp^^}_REPO_PATH >> $GITHUB_OUTPUT
-          echo gadopt_setup_var=${tmp^^}_GADOPT_SETUP >> $GITHUB_OUTPUT
-          echo project_var=${tmp^^}_PROJECT >> $GITHUB_OUTPUT
-
       - name: Get system FQDN
         id: get_fqdn
         shell: bash
@@ -55,16 +46,20 @@ jobs:
           echo "fqdn=${fqdn//${{matrix.system}}:/}" >> $GITHUB_OUTPUT
 
       - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets[format('{0}_TESTING_KEY',matrix.system)] }}
+          HOST_KEY: ${{ secrets[format('{0}_HOST_KEY',matrix.system)] }}
+          USER: ${{ secrets[format('{0}_USER',matrix.system)] }}
         run: |
           mkdir -p ~/.ssh/
-          echo "${{ secrets[steps.get_sys_vars.outputs.key_var] }}" > ~/.ssh/${{ matrix.system }}.key
+          echo "$SSH_KEY" > ~/.ssh/${{ matrix.system }}.key
           chmod 600 ~/.ssh/${{ matrix.system }}.key
-          echo "${{ secrets[steps.get_sys_vars.outputs.hkey_var] }}" >> ~/.ssh/known_hosts
+          echo "$HOST_KEY" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
           cat >>~/.ssh/config <<EOF
           Host ${{ matrix.system }}
             Hostname ${{ steps.get_fqdn.outputs.fqdn }}
-            User ${{ secrets[steps.get_sys_vars.outputs.user_var] }}
+            User "$USER"
             IdentityFile ~/.ssh/${{ matrix.system }}.key
             ServerAliveInterval 120
           EOF
@@ -72,22 +67,25 @@ jobs:
       - name: Sync repository to ${{matrix.system}}
         shell: bash
         run: |
-          rsync -avz --delete --exclude=/.git/ --exclude=/.github/ ./ ${{matrix.system}}:${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }}
+          rsync -avz --delete --exclude=/.git/ --exclude=/.github/ ./ ${{matrix.system}}:"$REPO_PATH"
 
       - name: Run test cases
         id: run_tests
+        env:
+          PROJECT: ${{ secrets[format('{0}_PROJECT',matrix.system)] }}
+          GADOPT_SETUP: ${{ secrets[format('{0}_GADOPT_SETUP',matrix.system)] }}
         run: |
-          ssh ${{ matrix.system }} "cd ${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }} && source ${{ secrets[steps.get_sys_vars.outputs.gadopt_setup_var] }} && make -j longtest gadopt_checkout=${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }} gadopt_setup=${{ secrets[steps.get_sys_vars.outputs.gadopt_setup_var] }} project=${{ secrets[steps.get_sys_vars.outputs.project_var] }}"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && make -j longtest gadopt_checkout=$REPO_PATH gadopt_setup=$GADOPT_SETUP project=$PROJECT"
 
       - name: Test results
         if: ${{ !cancelled() }}
         run: |
-          ssh ${{ matrix.system }} "cd ${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }} && source ${{ secrets[steps.get_sys_vars.outputs.gadopt_setup_var] }} && python3 -m pytest -m longtest --junit-xml=test_results.xml --ignore=tests/unit tests"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && python3 -m pytest -m longtest --junit-xml=test_results.xml --ignore=tests/unit tests"
 
       - name: Retrieve test results
         if: ${{ !cancelled() }}
         run: |
-          scp ${{ matrix.system }}:${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }}/test_results.xml .
+          scp ${{ matrix.system }}:"$REPO_PATH/test_results.xml" .
 
       - name: Pytest report
         uses: mikepenz/action-junit-report@v4
@@ -101,4 +99,4 @@ jobs:
       - name: Get error output
         if: ${{ failure() }}
         run: |
-          ssh ${{ matrix.system }} "cd ${{ secrets[steps.get_sys_vars.outputs.repo_path_var] }} && make longtest_output"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && make longtest_output"
