@@ -119,9 +119,7 @@ else:  # Initialise mesh and key functions
     Simulation.initialise_temperature(temperature)
 
     # Set up function spaces and functions used in the level-set approach
-    func_space_ls = fd.FunctionSpace(
-        mesh, "DQ", 1 if Simulation.name == "Schmalholz_2011" else 2
-    )
+    func_space_ls = fd.FunctionSpace(mesh, "DQ", 2)
     level_set = [
         fd.Function(func_space_ls, name=f"Level set #{i}")
         for i in range(len(Simulation.materials) - 1)
@@ -132,6 +130,10 @@ else:  # Initialise mesh and key functions
         epsilon = 1 / 2 / Simulation.k
     else:
         epsilon = ga.interface_thickness(level_set[0])
+    if Simulation.name == "Schmalholz_2011":
+        epsilon.interpolate(
+            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
+        )
 
     # Initialise level set
     for ls, kwargs in zip(level_set, Simulation.signed_distance_kwargs_list):
