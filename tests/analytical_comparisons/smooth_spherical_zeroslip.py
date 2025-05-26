@@ -80,11 +80,9 @@ def model(level, l, mm, k, do_write=False):
         T,
         approximation,
         bcs=stokes_bcs,
-        nullspace={
-            "nullspace": Z_nullspace,
-            "transpose_nullspace": Z_nullspace,
-            "near_nullspace": Z_near_nullspace,
-        },
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+        near_nullspace=Z_near_nullspace,
     )
     # use tighter tolerances than default to ensure convergence:
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-10

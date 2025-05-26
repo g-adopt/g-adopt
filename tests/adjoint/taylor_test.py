@@ -102,7 +102,8 @@ def rectangle_taylor_test(case, scheduler_name):
         approximation,
         bcs=stokes_bcs,
         constant_jacobian=True,
-        nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
     )
 
     initial_timestep = 0 if case in ["Tobs", "uobs"] else timesteps - 1

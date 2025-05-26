@@ -209,7 +209,8 @@ stokes_solver = StokesSolver(
     approximation,
     bcs=stokes_bcs,
     constant_jacobian=True,
-    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
 )
 # -
 

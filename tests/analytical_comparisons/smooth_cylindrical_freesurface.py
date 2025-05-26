@@ -110,11 +110,9 @@ def model(level, k, nn, do_write=False):
         approximation,
         bcs=stokes_bcs,
         free_surface_dt=dt,
-        nullspace={
-            "nullspace": Z_nullspace,
-            "transpose_nullspace": Z_nullspace,
-            "near_nullspace": Z_near_nullspace,
-        },
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+        near_nullspace=Z_near_nullspace,
     )
 
     # use tighter tolerances than default to ensure convergence:

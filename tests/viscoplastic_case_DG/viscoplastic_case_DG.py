@@ -150,7 +150,8 @@ stokes_solver = StokesSolver(
     T,
     approximation,
     bcs=stokes_bcs,
-    nullspace={"nullspace": Z_nullspace, "transpose_nullspace": Z_nullspace},
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
 )
 # -
 

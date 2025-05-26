@@ -450,11 +450,9 @@ stokes_solver = ViscoelasticStokesSolver(
     dt,
     bcs=stokes_bcs,
     constant_jacobian=True,
-    nullspace={
-        "nullspace": Z_nullspace,
-        "transpose_nullspace": Z_nullspace,
-        "near_nullspace": Z_near_nullspace,
-    },
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+    near_nullspace=Z_near_nullspace,
 )
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
