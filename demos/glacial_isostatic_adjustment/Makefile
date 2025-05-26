@@ -1,7 +1,8 @@
 include ../makefile.cases.inc
+
 cases := $(notdir $(gia_cases))
 
-.PHONY: all $(cases)
+.PHONY: all $(cases) clean check
 
 all: $(cases)
 
@@ -13,5 +14,5 @@ clean:
 		$(MAKE) -C $(case) $(MAKECMDGOALS); \
 	)
 
-check:
-	python -m pytest ../test_all.py -k $(gia_dir)
+check: $(cases)
+	python -m pytest $(CURDIR)/../test_all.py -k $(gia_dir)
