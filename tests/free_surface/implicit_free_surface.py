@@ -51,9 +51,9 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
             bcs=self.stokes_bcs,
             free_surface_dt=self.dt,
             solver_parameters=self.solver_parameters,
-            nullspace=Z_nullspace,
-            transpose_nullspace=Z_nullspace,
-            near_nullspace=Z_near_nullspace,
+            nullspace=self.Z_nullspace,
+            transpose_nullspace=self.Z_nullspace,
+            near_nullspace=self.Z_near_nullspace,
         )
 
     def calculate_error(self):
