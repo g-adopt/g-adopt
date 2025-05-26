@@ -16,7 +16,15 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import residual_terms_stokes
-from .utility import DEBUG, INFO, InteriorBC, depends_on, log_level, upward_normal
+from .utility import (
+    DEBUG,
+    INFO,
+    InteriorBC,
+    depends_on,
+    log_level,
+    upward_normal,
+    vertical_component,
+)
 
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
@@ -194,7 +202,7 @@ class StokesSolver:
     Note: Null space options can be generated using `create_stokes_nullspace`.
 
     Arguments:
-      z: Firedrake function representing mixed Stokes system
+      solution: Firedrake function representing mixed Stokes system
       T: Firedrake function representing temperature
       approximation: Approximation describing system of equations
       bcs: Dictionary of identifier-value pairs specifying boundary conditions
@@ -204,10 +212,10 @@ class StokesSolver:
                          specifying a default set of parameters defined in G-ADOPT
       J: Firedrake function representing the Jacobian of the system
       constant_jacobian: Whether the Jacobian of the system is constant
-      free_surface_dt: Timestep for advancing free surface equation
-      free_surface_theta: Timestepping prefactor for free surface equation, where
-                          theta = 0: Forward Euler, theta = 0.5: Crank-Nicolson (default),
-                          or theta = 1: Backward Euler
+      coupled_tstep: Timestep for advancing free surface equation
+      theta: Timestepping prefactor for free surface equation, where
+             theta = 0: Forward Euler, theta = 0.5: Crank-Nicolson (default),
+             or theta = 1: Backward Euler
       nullspace:
         A `MixedVectorSpaceBasis` for the operator's kernel
       transpose_nullspace:
@@ -222,7 +230,7 @@ class StokesSolver:
 
     def __init__(
         self,
-        z: fd.Function,
+        solution: fd.Function,
         T: fd.Function,
         approximation: BaseApproximation,
         bcs: dict[int, dict[str, Number]] = {},
@@ -230,24 +238,34 @@ class StokesSolver:
         solver_parameters: Optional[dict[str, str | Number] | str] = None,
         J: Optional[fd.Function] = None,
         constant_jacobian: bool = False,
-        free_surface_dt: Optional[float] = None,
-        free_surface_theta: float = 0.5,
+        coupled_tstep: Optional[float] = None,
+        theta: float = 0.5,
         nullspace: fd.MixedVectorSpaceBasis = None,
         transpose_nullspace: fd.MixedVectorSpaceBasis = None,
         near_nullspace: fd.MixedVectorSpaceBasis = None,
     ):
-        self.solution_space = z.function_space()
+        self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
-        self.test = fd.TestFunctions(self.solution_space)
-        self.solution = z
+        self.tests = fd.TestFunctions(self.solution_space)
+        self.solution = solution
         self.T = T
         self.approximation = approximation
         self.bcs = bcs
         self.quad_degree = quad_degree
         self.solver_parameters = solver_parameters
+        self.coupled_tstep = coupled_tstep
+        self.theta = theta
         self.nullspace = nullspace
         self.transpose_nullspace = transpose_nullspace
         self.near_nullspace = near_nullspace
+
+        self.solution_old = solution.copy(deepcopy=True)
+        self.solution_split = fd.split(solution)
+        self.solution_old_split = fd.split(self.solution_old)
+        self.solution_theta_split = [
+            theta * sol + (1 - theta) * sol_old
+            for sol, sol_old in zip(self.solution_split, self.solution_old_split)
+        ]
 
         self.J = J
         self.constant_jacobian = constant_jacobian
@@ -260,10 +278,9 @@ class StokesSolver:
         self.strong_bcs = []
 
         # Free surface parameters
-        self.free_surface_dict = {}
-        self.free_surface_dt = free_surface_dt
-        self.free_surface_theta = free_surface_theta  # theta = 0.5 gives a second order accurate integration scheme in time
-        self.free_surface = False
+        self.free_surface_map = {}
+        self.eta_ind = 2
+        self.buoyancy_fs = [None] * len(self.solution_split)
 
         self.set_boundary_conditions()
 
@@ -271,34 +288,12 @@ class StokesSolver:
         self.u, self.p, *self.eta = fd.split(self.solution)
 
         self.rho_mass = self.approximation.rho_continuity()
-        self.setup_equation_attributes()
 
         self.equations = []
-        for i, (terms_eq, eq_attrs) in enumerate(zip(residual_terms_stokes, self.eqs_attrs)):
-            self.equations.append(
-                Equation(
-                    self.test[i],
-                    self.solution_space[i],
-                    terms_eq,
-                    eq_attrs=eq_attrs,
-                    approximation=self.approximation,
-                    bcs=self.weak_bcs,
-                    quad_degree=quad_degree,
-                )
-            )
+        self.F = 0.0  # Weak form of the system
 
-        if self.free_surface:
-            self.setup_free_surface()
-
-        self.F = 0
-        for eq, trial in zip(self.equations, fd.split(self.solution)):
-            self.F -= eq.residual(trial)
-
-        if self.free_surface:
-            for i in range(len(self.eta)):
-                # Add free surface time derivative term
-                # (N.b. we already have two equations from StokesEquations)
-                self.F += self.equations[2+i].mass((self.eta[i]-self.eta_old[i])/self.free_surface_dt)
+        self.set_equations()
+        self.set_form()
 
         self.set_solver_options()
 
@@ -324,17 +319,10 @@ class StokesSolver:
                             fd.DirichletBC(bc_map[bc_type], val, bc_id)
                         )
                     case "free_surface":
-                        # N.B. stokes_integrators assumes that the order of the bcs
-                        # matches the order of the free surfaces defined in the mixed
-                        # space. This is not ideal - Python dictionaries are ordered by
-                        # insertion only since recently (since 3.7) - so relying on
-                        # their order is fraught and not considered pythonic. At the
-                        # moment let's consider having more than one free surface a bit
-                        # of a niche case for now, and leave it as is...
-
-                        # Copy free surface information to a new dictionary
-                        self.free_surface_dict[bc_id] = val
-                        self.free_surface = True
+                        weak_bc["normal_stress"] += self.set_free_surface_boundary(
+                            val, bc_id
+                        )
+                        self.eta_ind += 1
                     case _:
                         weak_bc[bc_type] += val
 
@@ -346,9 +334,9 @@ class StokesSolver:
         self.appctx = {
             "mu": self.approximation.mu / self.approximation.rho_continuity()
         }
-        if self.free_surface:
-            self.appctx["free_surface_id_list"] = self.free_surface_id_list
-            self.appctx["ds"] = self.equations[2].ds
+        if self.free_surface_map:
+            self.appctx["free_surface"] = self.free_surface_map
+            self.appctx["ds"] = self.equations[-1].ds
 
         if isinstance(solver_preset := self.solver_parameters, dict):
             return
@@ -382,95 +370,92 @@ class StokesSolver:
             elif INFO >= log_level:
                 self.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
 
-            if self.free_surface:
-                # Gather pressure and free surface fields for Schur complement solve
-                fields_ind = ",".join(map(str, range(1, len(self.solution_space))))
-                self.solver_parameters.update(
-                    {
-                        "pc_fieldsplit_0_fields": "0",
-                        "pc_fieldsplit_1_fields": fields_ind,
-                    }
-                )
+                if self.free_surface_map:
+                    # Gather pressure and free surface fields for Schur complement solve
+                    fields_ind = ",".join(map(str, range(1, len(self.solution_split))))
+                    self.solver_parameters.update(
+                        {
+                            "pc_fieldsplit_0_fields": "0",
+                            "pc_fieldsplit_1_fields": fields_ind,
+                        }
+                    )
+                    # Update mass inverse preconditioner
+                    self.solver_parameters["fieldsplit_1"].update(
+                        {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
+                    )
 
-                # Update mass inverse preconditioner
-                self.solver_parameters["fieldsplit_1"].update(
-                    {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
-                )
+    def set_free_surface_boundary(
+        self, params_fs: dict[str, int | bool], bc_id: int
+    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+        # Associate the free-surface index with the boundary id
+        # Note: This assumes that ordering of the free-surface boundary conditions is
+        # the same as that of free-surface functions in the mixed space.
+        self.free_surface_map[bc_id] = self.eta_ind
 
-    def setup_equation_attributes(self):
+        # Set internal degrees of freedom to zero to prevent singular matrix
+        self.strong_bcs.append(InteriorBC(self.solution_space[self.eta_ind], 0, bc_id))
+
+        normal_stress, self.buoyancy_fs[self.eta_ind] = (
+            self.approximation.free_surface_terms(
+                self.solution_split[1],
+                self.T,
+                self.solution_theta_split[self.eta_ind],
+                **params_fs,
+            )
+        )
+
+        return normal_stress
+
+    def set_equations(self) -> None:
+        u, p = self.solution_split[:2]
         stress = self.approximation.stress(self.u)
         source = self.approximation.buoyancy(self.p, self.T) * self.k
-        self.eqs_attrs = [{"p": self.p, "stress": stress, "source": source}, {"u": self.u, "rho_mass": self.rho_mass}]
+        eqs_attrs = [
+            {"p": p, "stress": stress, "source": source},
+            {"u": u, "rho_mass": self.approximation.rho_continuity()},
+        ]
 
-    def setup_free_surface(self):
-        if self.free_surface_dt is None:
-            raise TypeError(
-                "Please provide a timestep to advance the free surface, currently free_surface_dt=None."
-            )
-
-        u_, p_, *self.eta_ = self.solution.subfunctions
-        self.eta_old = []
-        self.eta_theta = []
-        self.free_surface_id_list = []
-
-        c = 0  # Counter for free surfaces (N.b. we already have two equations from StokesEquations)
-        for free_surface_id, free_surface_params in self.free_surface_dict.items():
-            # Define free surface variables for timestepping
-            self.eta_old.append(fd.Function(self.eta_[c]))
-            self.eta_theta.append(
-                (1 - self.free_surface_theta) * self.eta_old[c]
-                + self.free_surface_theta * self.eta[c]
-            )
-
-            # Normal stress #
-            # Depending on variable_free_surface_density flag provided to approximation the
-            # interior density below the free surface is either set to a constant density or
-            # varies spatially according to the buoyancy field
-            # N.b. constant reference density is needed for analytical cylindrical cases
-            # Prefactor #
-            # To ensure the top right and bottom left corners of the block matrix remains symmetric we need to
-            # multiply the free surface equation (kinematic bc) with -theta * delta_rho * g. This is similar
-            # to rescaling eta -> eta_tilde in Kramer et al. 2012 (e.g. see block matrix shown in Eq 23)
-            # N.b. in the case where the density contrast across the free surface is spatially variant due to
-            # interior buoyancy changes then the matrix will not be exactly symmetric.
-            normal_stress, prefactor = self.approximation.free_surface_terms(
-                self.p, self.T, self.eta_theta[c], self.free_surface_theta, **free_surface_params
-            )
-
-            # Add free surface stress term
-            if 'normal_stress' in self.weak_bcs[free_surface_id]:
-                # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
-                existing_value = self.weak_bcs[free_surface_id]['normal_stress']
-                self.weak_bcs[free_surface_id]['normal_stress'] = existing_value + normal_stress
-            else:
-                self.weak_bcs[free_surface_id] = {'normal_stress': normal_stress}
-
-            eq_attrs = {
-                "boundary_id": free_surface_id,
-                "buoyancy_scale": prefactor,
-                "u": self.u,
-            }
-
-            # Add the free surface equation
+        for i in range(len(residual_terms_stokes)):
             self.equations.append(
                 Equation(
-                    self.test[2 + c],
-                    self.solution_space[2 + c],
-                    free_surface_term,
-                    mass_term=mass_term_fs,
-                    eq_attrs=eq_attrs,
+                    self.tests[i],
+                    self.solution_space[i],
+                    residual_terms_stokes[i],
+                    eq_attrs=eqs_attrs[i],
+                    approximation=self.approximation,
+                    bcs=self.weak_bcs,
                     quad_degree=self.quad_degree,
                 )
             )
 
-            # Set internal dofs to zero to prevent singular matrix for free surface equation
-            self.strong_bcs.append(
-                InteriorBC(self.solution_space.sub(2 + c), 0, free_surface_id)
+        for bc_id, eta_ind in self.free_surface_map.items():
+            eq_attrs = {
+                "boundary_id": bc_id,
+                "buoyancy_scale": self.buoyancy_fs[eta_ind],
+                "u": u,
+            }
+
+            self.equations.append(
+                Equation(
+                    self.tests[eta_ind],
+                    self.solution_space[eta_ind],
+                    free_surface_term,
+                    mass_term=mass_term_fs,
+                    eq_attrs=eq_attrs,
+                    quad_degree=self.quad_degree,
+                    scaling_factor=-self.theta,
+                )
             )
 
-            self.free_surface_id_list.append(free_surface_id)
-
-            c += 1
+    def set_form(self) -> None:
+        """Sets the weak form including linear and bilinear terms."""
+        for equation, solution, solution_old in zip(
+            self.equations, self.solution_split, self.solution_old_split
+        ):
+            if equation.mass_term:
+                assert equation.scaling_factor == -self.theta
+                self.F += equation.mass((solution - solution_old) / self.coupled_tstep)
+            self.F -= equation.residual(solution)
 
     def setup_solver(self) -> None:
         """Sets up the solver."""
@@ -512,12 +497,9 @@ class StokesSolver:
         if not self._solver_ready:
             self.setup_solver()
 
-        # Need to update old free surface height for implicit free surface
-        if self.free_surface:
-            for i in range(len(self.eta_)):
-                self.eta_old[i].assign(self.eta_[i])
-
         self.solver.solve()
+
+        self.solution_old.assign(self.solution)
 
 
 def ala_right_nullspace(
@@ -640,40 +622,61 @@ class ViscoelasticStokesSolver(StokesSolver):
         # This isn't used in the viscoelastic code but StokesSolver currently assumes temperature is required as an argument
         T_placeholder = fd.Constant(0)
 
-        super().__init__(z, T_placeholder, approximation, bcs=bcs,
-                         quad_degree=quad_degree, solver_parameters=solver_parameters,
-                         J=J, constant_jacobian=constant_jacobian, free_surface_dt=self.dt,
-                         **kwargs)
+        super().__init__(
+            z,
+            T_placeholder,
+            approximation,
+            bcs=bcs,
+            quad_degree=quad_degree,
+            solver_parameters=solver_parameters,
+            J=J,
+            constant_jacobian=constant_jacobian,
+            coupled_tstep=self.dt,
+            **kwargs,
+        )
 
         scale_mu = fd.Constant(1e10)  # this is a scaling factor roughly size of mantle maxwell time to make sure that solve converges with strong bcs in parallel...
         self.F = (1 / scale_mu)*self.F
 
-    def setup_equation_attributes(self):
-        stress = self.approximation.stress(self.u, self.stress_old, self.dt)
+    def set_free_surface_boundary(
+        self, params_fs: dict[str, int | bool], bc_id: int
+    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+        # First, make the displacement term implicit by incorporating the unknown
+        # `incremental displacement' (u) that we are solving for. Then, calculate the
+        # free surface stress term. This is also referred to as the Hydrostatic
+        # Prestress advection term in the GIA literature.
+        u, p = self.solution_split[:2]
+        normal_stress, _ = self.approximation.free_surface_terms(
+            p,
+            self.T,
+            vertical_component(u + self.displacement),
+            **params_fs,
+        )
+
+        return normal_stress
+
+    def set_equations(self) -> None:
+        """Sets up UFL forms for the viscoelastic Stokes equations residual."""
+        u, p = self.solution_split
+        stress = self.approximation.stress(u, self.stress_old, self.dt)
         source = self.approximation.buoyancy(self.displacement) * self.k
-        self.eqs_attrs = [{"p": self.p, "stress": stress, "source": source}, {"u": self.u, "rho_mass": self.rho_mass}]
+        eqs_attrs = [
+            {"p": p, "stress": stress, "source": source},
+            {"u": u, "rho_mass": self.rho_mass},
+        ]
 
-    def setup_free_surface(self):
-        # Overload method
-        for free_surface_id, free_surface_params in self.free_surface_dict.items():
-            # First, make the displacement term implicit by incorporating
-            # the unknown `incremental displacement' (u) that
-            # we are solving for
-            implicit_displacement = self.u + self.displacement
-            implicit_displacement_up = fd.dot(implicit_displacement, self.k)
-            # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
-            normal_stress, _ = self.approximation.free_surface_terms(
-                self.p, self.T, implicit_displacement_up, self.free_surface_theta, **free_surface_params
+        for i in range(len(residual_terms_stokes)):
+            self.equations.append(
+                Equation(
+                    self.tests[i],
+                    self.solution_space[i],
+                    residual_terms_stokes[i],
+                    eq_attrs=eqs_attrs[i],
+                    approximation=self.approximation,
+                    bcs=self.weak_bcs,
+                    quad_degree=self.quad_degree,
+                )
             )
-            if 'normal_stress' in self.weak_bcs[free_surface_id]:
-                # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
-                existing_value = self.weak_bcs[free_surface_id]['normal_stress']
-                self.weak_bcs[free_surface_id]['normal_stress'] = existing_value + normal_stress
-            else:
-                self.weak_bcs[free_surface_id] = {'normal_stress': normal_stress}
-
-        # Turn off free surface flag because the viscoelastic free surface (for the small displacement approximation) is now setup
-        self.free_surface = False
 
     def solve(self):
         super().solve()
