@@ -317,7 +317,7 @@ direct_stokes_solver_parameters = {
 iterative_parameters = {"mat_type": "matfree",
                         "snes_type": "ksponly",
                         "ksp_type": "gmres",
-                        "ksp_rtol": 1e-7,
+                        "ksp_rtol": 1e-3,
                         "ksp_converged_reason": None,
                         "ksp_monitor": None,
                         "pc_type": "fieldsplit",
