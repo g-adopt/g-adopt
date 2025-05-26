@@ -12,6 +12,7 @@ from gadopt.utility import vertical_component as vc
 import argparse
 import numpy as np
 import scipy
+import math
 from mpi4py import MPI
 parser = argparse.ArgumentParser()
 parser.add_argument("--reflevel", default=4, type=float, help="Horizontal refinement level of surface cubed sphere mesh", required=False)
@@ -24,12 +25,15 @@ parser.add_argument("--lateral_visc", action='store_true', help="Use a lateral v
 parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
 parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
+parser.add_argument("--geometric_dt_steps", default=0, type=int, help="No. of steps used for a geometric progression for increasing dt")
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
 parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_sphere_burgers_displacement/", type=str, help="Optional output path", required=False)
 args = parser.parse_args()
 
 name = f"sphere-burgers-3d-internalvariable-{args.optional_name}"
+if args.geometric_dt_steps:
+    name = f"{name}-geomdt{args.geometric_dt_steps}"
 # Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and
 # 2891 km deep. To speed up things for this first demo, we consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
 #
@@ -227,17 +231,33 @@ for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
 Tstart = 0
 time = Function(R).assign(Tstart * year_in_seconds/ characteristic_maxwell_time)
 
-dt_years = args.dt_years
-dt = Constant(dt_years * year_in_seconds/characteristic_maxwell_time)
-Tend_years = args.Tend
-Tend = Constant(Tend_years * year_in_seconds/characteristic_maxwell_time)
-dt_out_years = 1e3
-dt_out = Constant(dt_out_years * year_in_seconds/characteristic_maxwell_time)
 
-max_timesteps = round((Tend - Tstart * year_in_seconds/characteristic_maxwell_time) / dt)
+
+if args.geometric_dt_steps:
+    start = 0.01 # nondimensional (relative to Maxwell time) first timstep value
+    dt_years = start * characteristic_maxwell_time / year_in_seconds # initial dt for writing filenames...
+    Tend_years = args.Tend
+    Tend = Tend_years * year_in_seconds/characteristic_maxwell_time
+    t_list = np.geomspace(start, Tend, num=args.geometric_dt_steps, endpoint=True, dtype=None, axis=0)
+    dt_list = np.diff(t_list)
+    dt_list = np.insert(dt_list, 0, t_list[0])
+    dt = Constant(dt_list[0])
+    print(dt_list)
+    max_timesteps = len(t_list)
+    output_frequency = 1
+
+else:
+    dt_years = args.dt_years
+    dt = Constant(dt_years * year_in_seconds/characteristic_maxwell_time)
+    Tend_years = args.Tend
+    Tend = Constant(Tend_years * year_in_seconds/characteristic_maxwell_time)
+    dt_out_years = 1e3
+    dt_out = Constant(dt_out_years * year_in_seconds/characteristic_maxwell_time)
+
+    max_timesteps = round((Tend - Tstart * year_in_seconds/characteristic_maxwell_time) / dt)
+    output_frequency = round(dt_out / dt)
 log("max timesteps: ", max_timesteps)
 
-output_frequency = round(dt_out / dt)
 log("output_frequency:", output_frequency)
 log(f"dt: {float(dt)} maxwell times")
 log(f"dt: {float(dt * characteristic_maxwell_time / year_in_seconds)} years")
@@ -424,6 +444,8 @@ vertical_displacement = Function(V.sub(2), name="radial displacement")  # Functi
 
 for timestep in range(1, max_timesteps+1):
     # update time first so that ice load begins
+    if args.geometric_dt_steps:
+        dt.assign(dt_list[timestep-1])
     time.assign(time+dt)
     coupled_solver.solve()
 
