@@ -42,7 +42,7 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
 
     def setup_bcs(self):
         self.stokes_bcs = {
-            self.boundary.top: {"free_surface": {"eta_index": 2, "RaFS": 1}},
+            self.boundary.top: {"free_surface": {"RaFS": 1}},
             self.boundary.bottom: {"un": 0},
         }
 

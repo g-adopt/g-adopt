@@ -37,7 +37,7 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
     def setup_bcs(self):
         # No normal flow except on the free surface
         self.stokes_bcs = {
-            self.boundary.top: {"free_surface": {"eta_index": 2, "RaFS": 1}},
+            self.boundary.top: {"free_surface": {"RaFS": 1}},
             self.boundary.bottom: {"un": 0},
             self.boundary.left: {"un": 0},
             self.boundary.right: {"un": 0},

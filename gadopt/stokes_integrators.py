@@ -267,6 +267,7 @@ class StokesSolver:
 
         # Free surface parameters
         self.free_surface_map = {}
+        self.eta_ind = 2
         self.buoyancy_fs = [None] * len(self.solution_split)
 
         self.set_boundary_conditions()
@@ -309,6 +310,7 @@ class StokesSolver:
                         weak_bc["normal_stress"] += self.set_free_surface_boundary(
                             val, bc_id
                         )
+                        self.eta_ind += 1
                     case _:
                         weak_bc[bc_type] += val
 
@@ -373,18 +375,19 @@ class StokesSolver:
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
     ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
-        # Extract the free-surface index and associate it with the boundary id
-        eta_ind = params_fs.pop("eta_index")
-        self.free_surface_map[bc_id] = eta_ind
+        # Associate the free-surface index with the boundary id
+        # Note: This assumes that ordering of the free-surface boundary conditions is
+        # the same as that of free-surface functions in the mixed space.
+        self.free_surface_map[bc_id] = self.eta_ind
 
         # Set internal degrees of freedom to zero to prevent singular matrix
-        self.strong_bcs.append(InteriorBC(self.solution_space[eta_ind], 0, bc_id))
+        self.strong_bcs.append(InteriorBC(self.solution_space[self.eta_ind], 0, bc_id))
 
-        normal_stress, self.buoyancy_fs[eta_ind] = (
+        normal_stress, self.buoyancy_fs[self.eta_ind] = (
             self.approximation.free_surface_terms(
                 self.solution_split[1],
                 self.T,
-                self.solution_theta_split[eta_ind],
+                self.solution_theta_split[self.eta_ind],
                 **params_fs,
             )
         )

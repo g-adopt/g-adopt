@@ -128,7 +128,7 @@ Bfs = 10.0  # Free surface buoyancy number
 
 stokes_bcs = {
     boundary.bottom: {"uy": 0},
-    boundary.top: {"free_surface": {"eta_index": 2, "RaFS": Ra * Bfs}},
+    boundary.top: {"free_surface": {"RaFS": Ra * Bfs}},
     boundary.left: {"ux": 0},
     boundary.right: {"ux": 0},
 }
