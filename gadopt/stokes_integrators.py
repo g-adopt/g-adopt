@@ -334,9 +334,6 @@ class StokesSolver:
         self.appctx = {
             "mu": self.approximation.mu / self.approximation.rho_continuity()
         }
-        if self.free_surface_map:
-            self.appctx["free_surface"] = self.free_surface_map
-            self.appctx["ds"] = self.equations[-1].ds
 
         if isinstance(solver_preset := self.solver_parameters, dict):
             return
@@ -459,6 +456,10 @@ class StokesSolver:
 
     def setup_solver(self) -> None:
         """Sets up the solver."""
+        if self.free_surface_map:
+            self.appctx["free_surface"] = self.free_surface_map
+            self.appctx["ds"] = self.equations[-1].ds
+
         if self.constant_jacobian:
             trial = fd.TrialFunction(self.solution_space)
             F = fd.replace(self.F, {self.solution: trial})
