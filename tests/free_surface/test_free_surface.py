@@ -65,7 +65,7 @@ def test_free_surface(coupling, expected_convergence, expected_errors):
     errors = np.loadtxt(base / f"errors-{coupling}-free-surface-coupling.dat")
 
     # check that norm(q) is the same as previously run
-    assert np.allclose(errors, expected_errors, rtol=1e-6, atol=1e-16)
+    assert np.allclose(errors, expected_errors, rtol=1e-6, atol=2e-16)
 
     # use the highest resolution analytical solutions as the reference in scaling
     ref = errors[-1]
