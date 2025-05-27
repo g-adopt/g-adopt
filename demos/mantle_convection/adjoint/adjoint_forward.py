@@ -138,9 +138,9 @@ stokes_solver = StokesSolver(
     T,
     approximation,
     bcs=stokes_bcs,
+    constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
-    constant_jacobian=True,
 )
 # -
 
