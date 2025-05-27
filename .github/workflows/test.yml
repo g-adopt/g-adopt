@@ -36,6 +36,7 @@ jobs:
     runs-on: self-hosted
     container:
       image: firedrakeproject/firedrake-vanilla-default:latest
+      options: --cap-add SYS_NICE
 
     concurrency:
       group: testing-${{ github.head_ref || github.run_id }}
@@ -123,7 +124,6 @@ jobs:
           make -j test
         env:
           GADOPT_LOGLEVEL: INFO
-          OMPI_MCA_hwloc_base_mem_bind_failure_action: silent
           BATCH_MODE: 1
 
       - name: Pytest
