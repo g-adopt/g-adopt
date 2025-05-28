@@ -83,7 +83,6 @@ jobs:
         with:
           source-dir: ./tsp
           build-dir: ./tsp_build
-          options: CGROUPV2=ON
 
       - name: Put task spooler on PATH
         run: |
