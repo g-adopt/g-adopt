@@ -36,6 +36,7 @@ jobs:
     runs-on: self-hosted
     container:
       image: firedrakeproject/firedrake-vanilla-default:latest
+      options: --cap-add SYS_NICE
 
     concurrency:
       group: testing-${{ github.head_ref || github.run_id }}

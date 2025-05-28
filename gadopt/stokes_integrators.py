@@ -201,6 +201,8 @@ def create_stokes_nullspace(
 class StokesSolver:
     """Solves the Stokes system in place.
 
+    Note: Null space options can be generated using `create_stokes_nullspace`.
+
     Arguments:
       solution: Firedrake function representing mixed Stokes system
       T: Firedrake function representing temperature
@@ -216,6 +218,13 @@ class StokesSolver:
       theta: Timestepping prefactor for free surface equation, where
              theta = 0: Forward Euler, theta = 0.5: Crank-Nicolson (default),
              or theta = 1: Backward Euler
+      nullspace:
+        A `MixedVectorSpaceBasis` for the operator's kernel
+      transpose_nullspace:
+        A `MixedVectorSpaceBasis` for the kernel of the operator's transpose
+      near_nullspace:
+        A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
+        body modes)
 
     """
 
@@ -233,7 +242,9 @@ class StokesSolver:
         constant_jacobian: bool = False,
         coupled_tstep: Optional[float] = None,
         theta: float = 0.5,
-        **kwargs,
+        nullspace: fd.MixedVectorSpaceBasis = None,
+        transpose_nullspace: fd.MixedVectorSpaceBasis = None,
+        near_nullspace: fd.MixedVectorSpaceBasis = None,
     ):
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
@@ -246,6 +257,9 @@ class StokesSolver:
         self.solver_parameters = solver_parameters
         self.coupled_tstep = coupled_tstep
         self.theta = theta
+        self.nullspace = nullspace
+        self.transpose_nullspace = transpose_nullspace
+        self.near_nullspace = near_nullspace
 
         self.solution_old = solution.copy(deepcopy=True)
         self.solution_split = fd.split(solution)
@@ -258,8 +272,6 @@ class StokesSolver:
         self.J = J
         self.constant_jacobian = constant_jacobian
         self.linear = not depends_on(self.approximation.mu, self.solution)
-
-        self.solver_kwargs = kwargs
 
         self.k = upward_normal(self.mesh)
 
@@ -287,8 +299,8 @@ class StokesSolver:
 
         self.set_solver_options()
 
-        # solver object is set up later to permit editing default solver parameters specified above
-        self._solver_setup = False
+        # Solver object is set up later to permit editing default solver options.
+        self._solver_ready = False
 
     def set_boundary_conditions(self) -> None:
         """Sets strong and weak boundary conditions."""
@@ -371,9 +383,6 @@ class StokesSolver:
                         {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
                     )
 
-        # solver object is set up later to permit editing default solver parameters specified above
-        self._solver_setup = False
-
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
     ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
@@ -447,7 +456,7 @@ class StokesSolver:
                 self.F += equation.mass((solution - solution_old) / self.coupled_tstep)
             self.F -= equation.residual(solution)
 
-    def setup_solver(self):
+    def setup_solver(self) -> None:
         """Sets up the solver."""
         if self.free_surface_map:
             self.appctx["free_surface"] = self.free_surface_map
@@ -464,9 +473,11 @@ class StokesSolver:
             self.solver = fd.LinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
-                options_prefix=self.name,
+                nullspace=self.nullspace,
+                transpose_nullspace=self.transpose_nullspace,
+                near_nullspace=self.near_nullspace,
                 appctx=self.appctx,
-                **self.solver_kwargs,
+                options_prefix=self.name,
             )
         else:
             self.problem = fd.NonlinearVariationalProblem(
@@ -475,16 +486,18 @@ class StokesSolver:
             self.solver = fd.NonlinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
-                options_prefix=self.name,
+                nullspace=self.nullspace,
+                transpose_nullspace=self.transpose_nullspace,
+                near_nullspace=self.near_nullspace,
                 appctx=self.appctx,
-                **self.solver_kwargs,
+                options_prefix=self.name,
             )
 
-        self._solver_setup = True
+        self._solver_ready = True
 
     def solve(self):
         """Solves the system."""
-        if not self._solver_setup:
+        if not self._solver_ready:
             self.setup_solver()
 
         self.solver.solve()
