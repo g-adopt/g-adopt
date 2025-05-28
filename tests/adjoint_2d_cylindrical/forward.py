@@ -123,10 +123,10 @@ def run_forward():
         T,
         approximation,
         bcs=stokes_bcs,
+        solver_parameters="direct",
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
-        solver_parameters="direct"
     )
 
     # Create output file and select output_frequency
