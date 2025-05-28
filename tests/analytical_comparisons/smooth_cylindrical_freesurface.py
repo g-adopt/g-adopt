@@ -109,7 +109,7 @@ def model(level, k, nn, do_write=False):
         T,
         approximation,
         bcs=stokes_bcs,
-        free_surface_dt=dt,
+        coupled_tstep=dt,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
