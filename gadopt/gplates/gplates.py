@@ -116,28 +116,27 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
 
 class pyGplatesConnector(object):
     # Non-dimensionalisation constants
-    # Factor to non-dimensionalise gplates velocities: d/kappa
-    #   u [metre/sec] * velocity_non_dim_factor = u []
-    velocity_non_dim_factor = 2890e3 / 1.0e-6
-    # Factor to dimensionalise model time: d^2/kappa
-    #   t [] X time_dim_factor = t [sec]
-    time_dim_factor = 2890e3**2 / 1.0e-6
-    #   t [year] X yrs2sec = t [sec]
+    # characteristic length scale: d
+    L = 2890e3  # [m]
+    # t [year] X yrs2sec = t [sec]
     yrs2sec = 365 * 24 * 60 * 60
     #   t [Myrs] X myrs2sec = t[sec]
     myrs2sec = 1e6*yrs2sec
-    #   t [] X time_dimDmyrs2sec = t [Myrs]
-    time_dimDmyrs2sec = time_dim_factor / myrs2sec
     #   L [cm] X cm2m = L [m]
     cm2m = 1e-2
-    #   u [cm/year] * velocity_dimDcmyr = u []
-    velocity_dimDcmyr = velocity_non_dim_factor * cm2m / yrs2sec
-
     # minimum distance, bellow which we do not interpolate
     #   this is just to avoid division by zero when weighted averaging
     epsilon_distance = 1e-8
 
-    def __init__(self, rotation_filenames, topology_filenames, oldest_age, delta_t=1., scaling_factor=1.0, nseeds=1e5, nneighbours=4):
+    def __init__(self,
+                 rotation_filenames,
+                 topology_filenames,
+                 oldest_age,
+                 delta_t=1.,
+                 scaling_factor=1.0,
+                 nseeds=1e5,
+                 nneighbours=4,
+                 kappa=1e-6):
         """An interface to pygplates, used for updating top Dirichlet boundary conditions
         using plate tectonic reconstructions.
 
@@ -158,6 +157,7 @@ class pyGplatesConnector(object):
                     seed point numbers result in finer representation of boundaries in pygpaltes. Notice that
                     the finer velocity variations will then result in more challenging Stokes solves.
             nneighbours (Optional[int]): Number of neighboring points when interpolating velocity for each grid point. Default is 4.
+            kappa: (Optional[float]): Diffusion constant used for don-dimensionalising time. Default is 1e-6.
 
         Examples:
             >>> connector = pyGplatesConnector(rotation_filenames, topology_filenames, oldest_age)
@@ -200,6 +200,9 @@ class pyGplatesConnector(object):
         # This is specially used in low-Rayleigh-number simulations
         self.scaling_factor = scaling_factor
 
+        # Factor to non-dimensionalise time
+        self.kappa = kappa
+
     # setting the time that we are interested in
     def get_plate_velocities(self, target_coords, ndtime):
         """Returns plate velocities for the specified target coordinates at the top boundary of a sphere,
@@ -226,10 +229,10 @@ class pyGplatesConnector(object):
 
         # Raising an error if the user is asking for invalid time
         if self.ndtime2age(ndtime=ndtime) < 0:
+            max_time = self.oldest_age / (self.time_dimDmyrs2sec / self.scaling_factor)
             raise ValueError(
-                ("Input non-dimensionalised time corresponds to negative age (it is in the future)!"
-                 f"maximum non-dimensionalised time:"
-                 f" {self.oldest_age/(pyGplatesConnector.time_dimDmyrs2sec/self.scaling_factor)}")
+                "Input non-dimensionalised time corresponds to negative age (it is in the future)!"
+                f" Maximum non-dimensionalised time: {max_time}"
             )
 
         # cache the reconstruction age
@@ -237,6 +240,45 @@ class pyGplatesConnector(object):
         # interpolate velicities onto our grid
         self.interpolated_u = self._interpolate_seeds_u(target_coords)
         return self.interpolated_u
+
+    @property
+    def velocity_non_dim_factor(self):
+        """
+        u [metre/sec] * velocity_non_dim_factor = u []
+        """
+        return pyGplatesConnector.L / self.kappa
+
+    @property
+    def time_dim_factor(self):
+        """
+        Factor to dimensionalise model time: d^2/kappa
+           t [] X time_dim_factor = t [sec]
+        """
+        return pyGplatesConnector.L**2 / self.kappa
+
+    @property
+    def time_dimDmyrs2sec(self):
+        """
+        Converts the time dimension factor from Myrs (million years) to seconds.
+
+        This method calculates the conversion factor to transform time values
+        from Myrs to seconds using the predefined `time_dim_factor` and the
+        constant `myrs2sec` from the `pyGplatesConnector` module.
+
+        Returns:
+            float: The time dimension factor in seconds.
+        """
+        return self.time_dim_factor / pyGplatesConnector.myrs2sec
+
+    @property
+    def velocity_dimDcmyr(self):
+        """
+        Converts velocity from cm/year to non-dimensionalised units.
+
+        Returns:
+            float: The conversion factor for velocity.
+        """
+        return self.velocity_non_dim_factor * pyGplatesConnector.cm2m / pyGplatesConnector.yrs2sec
 
     def ndtime2age(self, ndtime):
         """Converts non-dimensionalised time to age (Myrs before present day).
@@ -248,7 +290,7 @@ class pyGplatesConnector(object):
             float: The converted geologic age in millions of years before present day(Ma).
         """
 
-        return self.oldest_age - float(ndtime) * pyGplatesConnector.time_dimDmyrs2sec/self.scaling_factor
+        return self.oldest_age - float(ndtime) * self.time_dimDmyrs2sec / self.scaling_factor
 
     def age2ndtime(self, age):
         """Converts geologic age (years before present day in Myrs (Ma) to non-dimensionalised time.
@@ -259,7 +301,7 @@ class pyGplatesConnector(object):
         Returns:
 -            float: non-dimensionalised time
         """
-        return (self.oldest_age - age)*(self.scaling_factor / pyGplatesConnector.time_dimDmyrs2sec)
+        return (self.oldest_age - age) * (self.scaling_factor / self.time_dimDmyrs2sec)
 
     # convert seeds to Gplate features
     def _make_GPML_velocity_feature(self, coords):
@@ -314,8 +356,8 @@ class pyGplatesConnector(object):
             age=self.reconstruction_age,
             delta_t=self.delta_t)
 
-        seeds_u = np.array([i.to_xyz() for i in seeds_u]) *\
-            ((pyGplatesConnector.velocity_dimDcmyr) / self.scaling_factor)
+        seeds_u = np.array([i.to_xyz() for i in seeds_u])
+        seeds_u *= self.velocity_dimDcmyr / self.scaling_factor
 
         # if pyGplates does not find a plate id for a point, assings NaN to the velocity
         # here we make sure we only use velocities that are not NaN.

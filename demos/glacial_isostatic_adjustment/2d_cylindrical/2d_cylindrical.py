@@ -442,10 +442,18 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # along with the approximation, timestep and boundary conditions.
 #
 
-stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
-                                         dt, bcs=stokes_bcs, constant_jacobian=True,
-                                         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                         near_nullspace=Z_near_nullspace)
+stokes_solver = ViscoelasticStokesSolver(
+    z,
+    stress_old,
+    displacement,
+    approximation,
+    dt,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+    near_nullspace=Z_near_nullspace,
+)
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 

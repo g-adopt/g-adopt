@@ -24,6 +24,6 @@ demos = ["assess", "gmsh", "imageio", "jupytext", "openpyxl", "pandas", "pyvista
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]
-packages = ["gadopt"]
+packages = ["gadopt", "gadopt.gplates"]
 
 [tool.setuptools_scm]

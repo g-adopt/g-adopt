@@ -354,11 +354,11 @@ minimisation_parameters = {
             "Radius Shrinking Rate (Positive rho)": 0.25,
             "Radius Growing Rate": 10.0,
             "Sufficient Decrease Parameter": 1e-2,
-            "Safeguard Size": 100,
+            "Safeguard Size": 100.0,
         },
     },
     "Status Test": {
-        "Gradient Tolerance": 0,
+        "Gradient Tolerance": 0.0,
         "Iteration Limit": 100,
     },
 }
