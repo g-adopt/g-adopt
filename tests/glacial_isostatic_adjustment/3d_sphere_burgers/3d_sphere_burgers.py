@@ -26,6 +26,7 @@ parser.add_argument("--load_checkpoint", action='store_true', help="Load simulat
 parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
 parser.add_argument("--geometric_dt_steps", default=0, type=int, help="No. of steps used for a geometric progression for increasing dt")
+parser.add_argument("--split_dt_steps", default=0, type=int, help="No. of steps used for a split timestep approach nsteps before and after characteristic maxwell time")
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
 parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_sphere_burgers_displacement/", type=str, help="Optional output path", required=False)
@@ -34,6 +35,8 @@ args = parser.parse_args()
 name = f"sphere-burgers-3d-internalvariable-{args.optional_name}"
 if args.geometric_dt_steps:
     name = f"{name}-geomdt{args.geometric_dt_steps}"
+elif args.split_dt_steps:
+    name = f"{name}-splitdt{args.split_dt_steps}"
 # Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and
 # 2891 km deep. To speed up things for this first demo, we consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
 #
@@ -234,7 +237,6 @@ time = Function(R).assign(Tstart * year_in_seconds/ characteristic_maxwell_time)
 
 
 if args.geometric_dt_steps:
-    start = 0.01 # nondimensional (relative to Maxwell time) first timstep value
     dt_years = start * characteristic_maxwell_time / year_in_seconds # initial dt for writing filenames...
     Tend_years = args.Tend
     Tend = Tend_years * year_in_seconds/characteristic_maxwell_time
@@ -245,6 +247,16 @@ if args.geometric_dt_steps:
     print(dt_list)
     max_timesteps = len(t_list)
     output_frequency = 1
+
+elif args.split_dt_steps:
+    elastic_dt = 1 / args.split_dt_steps
+    Tend_years = args.Tend
+    Tend = Tend_years * year_in_seconds/characteristic_maxwell_time
+    viscous_dt = (Tend - 1) / args.split_dt_steps
+    dt = Constant(elastic_dt)
+    max_timesteps = round(2*args.split_dt_steps)
+    output_frequency = 1
+    dt_years = 'split'
 
 else:
     dt_years = args.dt_years
@@ -446,6 +458,8 @@ for timestep in range(1, max_timesteps+1):
     # update time first so that ice load begins
     if args.geometric_dt_steps:
         dt.assign(dt_list[timestep-1])
+    elif args.split_dt_steps:
+        dt.assign(conditional(time <1, elastic_dt, viscous_dt))
     time.assign(time+dt)
     coupled_solver.solve()
 
