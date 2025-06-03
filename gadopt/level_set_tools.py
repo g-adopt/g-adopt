@@ -161,7 +161,7 @@ def assign_level_set_values(
     interface_callable: Callable | str | None = None,
     interface_args: tuple[Any] | None = None,
     boundary_coordinates: list[list[float]] | np.ndarray | None = None,
-) -> list:
+):
     """Updates level-set field given interface thickness and signed-distance function.
 
     Generates signed-distance function values at level-set nodes and overwrites
@@ -211,7 +211,7 @@ def assign_level_set_values(
         A sequence of numeric coordinate pairs or an array-like with shape (N, 2)
     """
 
-    def stack_coordinates(func):
+    def stack_coordinates(func: Callable) -> Callable:
         """Decorator to stack coordinates when the material interface is a curve.
 
         Args:
@@ -222,7 +222,7 @@ def assign_level_set_values(
           A callable that can stack interface coordinates
         """
 
-        def wrapper(*args):
+        def wrapper(*args) -> float | np.ndarray:
             if isinstance(interface_coords_x := args[0], (int, float)):
                 return func(*args)
             else:
