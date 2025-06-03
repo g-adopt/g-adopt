@@ -8,6 +8,7 @@ instantiate the `StokesSolver` class by providing relevant parameters and call t
 from collections import defaultdict
 from numbers import Number
 from typing import Optional
+from warnings import warn
 
 import firedrake as fd
 
@@ -21,6 +22,7 @@ from .utility import (
     INFO,
     InteriorBC,
     depends_on,
+    is_continuous,
     log_level,
     upward_normal,
     vertical_component,
@@ -199,6 +201,8 @@ def create_stokes_nullspace(
 class StokesSolver:
     """Solves the Stokes system in place.
 
+    Note: Null space options can be generated using `create_stokes_nullspace`.
+
     Arguments:
       solution: Firedrake function representing mixed Stokes system
       T: Firedrake function representing temperature
@@ -214,6 +218,13 @@ class StokesSolver:
       theta: Timestepping prefactor for free surface equation, where
              theta = 0: Forward Euler, theta = 0.5: Crank-Nicolson (default),
              or theta = 1: Backward Euler
+      nullspace:
+        A `MixedVectorSpaceBasis` for the operator's kernel
+      transpose_nullspace:
+        A `MixedVectorSpaceBasis` for the kernel of the operator's transpose
+      near_nullspace:
+        A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
+        body modes)
 
     """
 
@@ -231,7 +242,9 @@ class StokesSolver:
         constant_jacobian: bool = False,
         coupled_tstep: Optional[float] = None,
         theta: float = 0.5,
-        **kwargs,
+        nullspace: fd.MixedVectorSpaceBasis = None,
+        transpose_nullspace: fd.MixedVectorSpaceBasis = None,
+        near_nullspace: fd.MixedVectorSpaceBasis = None,
     ):
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
@@ -244,6 +257,9 @@ class StokesSolver:
         self.solver_parameters = solver_parameters
         self.coupled_tstep = coupled_tstep
         self.theta = theta
+        self.nullspace = nullspace
+        self.transpose_nullspace = transpose_nullspace
+        self.near_nullspace = near_nullspace
 
         self.solution_old = solution.copy(deepcopy=True)
         self.solution_split = fd.split(solution)
@@ -256,8 +272,6 @@ class StokesSolver:
         self.J = J
         self.constant_jacobian = constant_jacobian
         self.linear = not depends_on(self.approximation.mu, self.solution)
-
-        self.solver_kwargs = kwargs
 
         self.k = upward_normal(self.mesh)
 
@@ -285,8 +299,8 @@ class StokesSolver:
 
         self.set_solver_options()
 
-        # solver object is set up later to permit editing default solver parameters specified above
-        self._solver_setup = False
+        # Solver object is set up later to permit editing default solver options.
+        self._solver_ready = False
 
     def set_boundary_conditions(self) -> None:
         """Sets strong and weak boundary conditions."""
@@ -369,9 +383,6 @@ class StokesSolver:
                         {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
                     )
 
-        # solver object is set up later to permit editing default solver parameters specified above
-        self._solver_setup = False
-
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
     ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
@@ -445,7 +456,7 @@ class StokesSolver:
                 self.F += equation.mass((solution - solution_old) / self.coupled_tstep)
             self.F -= equation.residual(solution)
 
-    def setup_solver(self):
+    def setup_solver(self) -> None:
         """Sets up the solver."""
         if self.free_surface_map:
             self.appctx["free_surface"] = self.free_surface_map
@@ -462,9 +473,11 @@ class StokesSolver:
             self.solver = fd.LinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
-                options_prefix=self.name,
+                nullspace=self.nullspace,
+                transpose_nullspace=self.transpose_nullspace,
+                near_nullspace=self.near_nullspace,
                 appctx=self.appctx,
-                **self.solver_kwargs,
+                options_prefix=self.name,
             )
         else:
             self.problem = fd.NonlinearVariationalProblem(
@@ -473,21 +486,43 @@ class StokesSolver:
             self.solver = fd.NonlinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
-                options_prefix=self.name,
+                nullspace=self.nullspace,
+                transpose_nullspace=self.transpose_nullspace,
+                near_nullspace=self.near_nullspace,
                 appctx=self.appctx,
-                **self.solver_kwargs,
+                options_prefix=self.name,
             )
 
-        self._solver_setup = True
+        self._solver_ready = True
 
     def solve(self):
         """Solves the system."""
-        if not self._solver_setup:
+        if not self._solver_ready:
             self.setup_solver()
 
         self.solver.solve()
 
         self.solution_old.assign(self.solution)
+
+    def force_on_boundary(self, subdomain_id: int | str, **kwargs) -> fd.Function:
+        """Computes the force acting on a boundary.
+
+        Arguments:
+          subdomain_id: The subdomain ID of a physical boundary.
+
+        Returns:
+          The force acting on the boundary.
+
+        """
+        if not hasattr(self, 'BoundaryNormalStressSolvers'):
+            self.BoundaryNormalStressSolvers = {}
+
+        if subdomain_id not in self.BoundaryNormalStressSolvers:
+            self.BoundaryNormalStressSolvers[subdomain_id] = BoundaryNormalStressSolver(
+                self, subdomain_id, **kwargs
+            )
+
+        return self.BoundaryNormalStressSolvers[subdomain_id].solve()
 
 
 def ala_right_nullspace(
@@ -674,3 +709,145 @@ class ViscoelasticStokesSolver(StokesSolver):
         u_sub = self.solution.subfunctions[0]
         self.stress_old.interpolate(self.approximation.prefactor_prestress(self.dt) * self.approximation.stress(u_sub, self.stress_old, self.dt))
         self.displacement.interpolate(self.displacement+u_sub)
+
+
+class BoundaryNormalStressSolver:
+    r"""A class for calculating surface forces acting on a boundary.
+
+    This solver computes topography on boundaries using the equation:
+
+    $$
+    h = sigma_(rr) / (g delta rho)
+    $$
+
+    where $sigma_(rr)$ is defined as:
+
+    $$
+    sigma_(rr) = [-p I + 2 mu (nabla u + nabla u^T)] . hat n . hat n
+    $$
+
+    Instead of assuming a unit normal vector $hat n$, this solver uses `FacetNormal`
+    from Firedrake to accurately determine the normal vectors, which is particularly
+    useful for complex meshes like icosahedron meshes in spherical simulations.
+
+    Arguments:
+        stokes_solver (StokesSolver): The Stokes solver providing the necessary fields for calculating stress.
+        subdomain_id (str | int): The subdomain ID of a physical boundary.
+        **kwargs: Optional keyword arguments. You can provide:
+            - solver_parameters (dict[str, str | Number]): Parameters to control the variational solver.
+            If not provided, defaults are chosen based on whether the Stokes solver is direct or iterative.
+    """
+
+    direct_solve_parameters = {
+        "mat_type": "aij",
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    }
+    iterative_solver_parameters = {
+        "ksp_type": "cg",
+        "pc_type": "hypre",
+        "ksp_rtol": 1e-9,
+        "ksp_atol": 1e-12,
+        "ksp_max_it": 1000,
+        "ksp_converged_reason": None,
+    }
+
+    name = "BoundaryNormalStressSolver"
+
+    def __init__(self,
+                 stokes_solver: StokesSolver,
+                 subdomain_id: int | str,
+                 **kwargs
+                 ):
+        # pressure and velocity together with viscosity are needed
+        self.u, self.p, *self.eta = stokes_solver.solution.subfunctions
+
+        # geometry
+        self.mesh = stokes_solver.mesh
+        self.dim = self.mesh.geometric_dimension()
+
+        # approximation tells us if we need to consider compressible formulation or not
+        self.approximation = stokes_solver.approximation
+
+        # Domain id that we want to use for boundary force
+        self.subdomain_id = subdomain_id
+
+        self._kwargs = kwargs
+
+        self.solver_parameters = self._kwargs.get(
+            "solver_parameters",
+            BoundaryNormalStressSolver.direct_solve_parameters
+            if stokes_solver.solver_parameters == direct_stokes_solver_parameters
+            else BoundaryNormalStressSolver.iterative_solver_parameters
+        )
+
+        self._solver_is_set_up = False
+
+    def solve(self):
+        """
+        Solves a linear system for the force and applies necessary boundary conditions.
+
+        Returns:
+            The modified force after solving the linear system and applying boundary conditions.
+        """
+        # Solve a linear system
+        if not self._solver_is_set_up:
+            self.setup_solver()
+        # Solve for the force
+        self.solver.solve()
+
+        # Take the average out
+        vave = fd.assemble(self.force * self.ds) / fd.assemble(1 * self.ds(self.mesh))
+        self.force.assign(self.force - vave)
+
+        # Re-apply the zero condition everywhere except for the boundary
+        self.interior_null_bc.apply(self.force)
+
+        return self.force
+
+    def setup_solver(self):
+        # Define the solution in the pressure function space
+        # Pressure is chosen as it has a lower rank compared to velocity
+        # If pressure is discontinuous, we need to use a continuous equivalent
+        if not is_continuous(self.p):
+            warn("BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element.")
+            Q = fd.FunctionSpace(self.mesh, "Lagrange", self.p.function_space().ufl_element().degree())
+        else:
+            Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
+
+        self.force = fd.Function(Q, name=f"force_{self.subdomain_id}")
+
+        # Normal vector
+        n = fd.FacetNormal(self.mesh)
+
+        phi = fd.TestFunction(Q)
+        v = fd.TrialFunction(Q)
+
+        stress_with_pressure = (
+            self.approximation.stress(self.u)
+            - self.p * fd.Identity(self.dim)
+        )
+
+        if self.mesh.extruded and self.subdomain_id in ["top", "bottom"]:
+            self.ds = {"top": fd.ds_t, "bottom": fd.ds_b}.get(self.subdomain_id)
+        else:
+            self.ds = fd.ds(self.subdomain_id)
+
+        # Setting up the variational problem
+        a = phi * v * self.ds
+        L = - phi * fd.dot(fd.dot(stress_with_pressure, n), n) * self.ds
+
+        # Setting up boundary condition, problem and solver
+        # The field is only meaningful on the boundary, so set zero everywhere else
+        self.interior_null_bc = InteriorBC(Q, 0., [self.subdomain_id])
+
+        self.problem = fd.LinearVariationalProblem(a, L, self.force,
+                                                   bcs=self.interior_null_bc,
+                                                   constant_jacobian=True)
+        self.solver = fd.LinearVariationalSolver(
+            self.problem,
+            solver_parameters=self.solver_parameters,
+            options_prefix=f"{BoundaryNormalStressSolver.name}_{self.subdomain_id}"
+        )
+        self._solver_is_set_up = True

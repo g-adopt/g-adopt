@@ -23,6 +23,7 @@ from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .stokes_integrators import (
     StokesSolver,
     ViscoelasticStokesSolver,
+    BoundaryNormalStressSolver,
     create_stokes_nullspace,
 )
 from .time_stepper import (
