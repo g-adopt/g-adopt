@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, fields
 from numbers import Number
 from typing import Any, Optional
+from warnings import warn
 
 import firedrake as fd
 import numpy as np
@@ -28,6 +29,21 @@ __all__ = [
     "entrainment",
     "field_interface",
 ]
+
+# Default parameters for level-set advection
+adv_params_default = {
+    "time_integrator": eSSPRKs10p3,
+    "bcs": {},
+    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+    "subcycles": 1,
+}
+# Default parameters for level-set reinitialisation
+reini_params_default = {
+    "timestep": 0.02,
+    "time_integrator": eSSPRKs3p3,
+    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+    "steps": 1,
+}
 
 
 @dataclass(kw_only=True)
@@ -214,48 +230,25 @@ class LevelSetSolver:
         self.set_gradient_solver()
 
         if isinstance(adv_kwargs, dict):
-            self.advection = True
-            self.adv_kwargs = adv_kwargs
+            if not all(param in adv_kwargs for param in ["u", "timestep"]):
+                raise KeyError("'u' and 'timestep' must be present in 'adv_kwargs'")
 
-            self.set_default_advection_args()
+            self.advection = True
+            self.adv_kwargs = adv_params_default | adv_kwargs
 
         if isinstance(reini_kwargs, dict):
-            self.reinitialisation = True
-            self.reini_kwargs = reini_kwargs
+            if "epsilon" not in reini_kwargs:
+                raise KeyError("'epsilon' must be present in 'reini_kwargs'")
 
-            self.set_default_reinitialisation_args()
+            self.reinitialisation = True
+            self.reini_kwargs = reini_params_default | reini_kwargs
+            if "frequency" not in self.reini_kwargs:
+                self.reini_kwargs["frequency"] = self.reinitialisation_frequency()
+
+        if not any([self.advection, self.reinitialisation]):
+            raise ValueError("Advection or reinitialisation must be initialised")
 
         self._solvers_ready = False
-
-    def set_default_advection_args(self) -> None:
-        """Set default values of optional arguments if not provided."""
-        if "time_integrator" not in self.adv_kwargs:
-            self.adv_kwargs["time_integrator"] = eSSPRKs10p3
-        if "bcs" not in self.adv_kwargs:
-            self.adv_kwargs["bcs"] = {}
-        if "solver_params" not in self.adv_kwargs:
-            self.adv_kwargs["solver_params"] = {
-                "pc_type": "bjacobi",
-                "sub_pc_type": "ilu",
-            }
-        if "subcycles" not in self.adv_kwargs:
-            self.adv_kwargs["subcycles"] = 1
-
-    def set_default_reinitialisation_args(self) -> None:
-        """Set default values of optional parameters if not provided."""
-        if "timestep" not in self.reini_kwargs:
-            self.reini_kwargs["timestep"] = 0.02
-        if "time_integrator" not in self.reini_kwargs:
-            self.reini_kwargs["time_integrator"] = eSSPRKs3p3
-        if "solver_params" not in self.reini_kwargs:
-            self.reini_kwargs["solver_params"] = {
-                "pc_type": "bjacobi",
-                "sub_pc_type": "ilu",
-            }
-        if "steps" not in self.reini_kwargs:
-            self.reini_kwargs["steps"] = 1
-        if "frequency" not in self.reini_kwargs and self.mesh.cartesian:
-            self.reini_kwargs["frequency"] = self.reinitialisation_frequency()
 
     def reinitialisation_frequency(self) -> int:
         """Implements default strategy for the reinitialisation frequency.
@@ -266,18 +259,27 @@ class LevelSetSolver:
         up to a certain cell size and then scale the frequency with the decrease in cell
         size.
         """
-        max_coords = self.mesh.coordinates.dat.data.max(axis=0)
-        min_coords = self.mesh.coordinates.dat.data.min(axis=0)
-        for i in range(len(max_coords)):
-            max_coords[i] = self.mesh.comm.allreduce(max_coords[i], MPI.MAX)
-            min_coords[i] = self.mesh.comm.allreduce(min_coords[i], MPI.MIN)
-        domain_size = np.sqrt(np.sum((max_coords - min_coords) ** 2))
-
         epsilon = self.reini_kwargs["epsilon"]
         if isinstance(epsilon, fd.Function):
             epsilon = self.mesh.comm.allreduce(epsilon.dat.data.min(), MPI.MIN)
 
-        return max(1, round(4.9e-3 * domain_size / epsilon - 0.25))
+        if self.mesh.cartesian:
+            max_coords = self.mesh.coordinates.dat.data.max(axis=0)
+            min_coords = self.mesh.coordinates.dat.data.min(axis=0)
+            for i in range(len(max_coords)):
+                max_coords[i] = self.mesh.comm.allreduce(max_coords[i], MPI.MAX)
+                min_coords[i] = self.mesh.comm.allreduce(min_coords[i], MPI.MIN)
+            domain_size = np.sqrt(np.sum((max_coords - min_coords) ** 2))
+
+            return max(1, round(4.9e-3 * domain_size / epsilon - 0.25))
+        else:
+            warn(
+                "No frequency strategy implemented for reinitialisation in "
+                "non-rectangular/cuboidal domains; applying reinitialisation at every "
+                "time step"
+            )
+
+            return 1
 
     def set_gradient_solver(self) -> None:
         """Constructs a solver to determine the level-set gradient.
