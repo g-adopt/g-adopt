@@ -42,6 +42,8 @@ def model(level, nn, do_write=False):
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
     W = FunctionSpace(mesh, "DPC", 1)  # pressure function space (scalar)
+    NSW = FunctionSpace(mesh, "CG", 1)  # normal stress function space (scalar)
+    NSWvec = VectorFunctionSpace(mesh, "CG", 1)  # normal stress function space (scalar)
     P0 = FunctionSpace(mesh, "DQ", 0)  # used for marker field
     Q1DG = FunctionSpace(mesh, "DQ", 1)  # used for analytical (disc.) pressure solution
     Q1DGvec = VectorFunctionSpace(mesh, "DQ", 1)  # for coordinates used in analytical pressure solution
@@ -105,6 +107,9 @@ def model(level, nn, do_write=False):
     coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
+    # calculating surface normal stress given the solution of the stokes problem
+    ns_ = stokes_solver.force_on_boundary(boundary.top)
+
     solution_upper = assess.CylindricalStokesSolutionDeltaFreeSlip(float(nn), +1, nu=float(mu))
     solution_lower = assess.CylindricalStokesSolutionDeltaFreeSlip(float(nn), -1, nu=float(mu))
 
@@ -129,20 +134,33 @@ def model(level, nn, do_write=False):
     p_anal.interpolate(marker*p_anal_lower + (1-marker)*p_anal_upper)
     p_error = Function(Q1DG, name="PressureError").assign(pdg-p_anal)
 
+    # compute ns_ analytical and error (note we are using the same space as pressure)
+    nsxy = Function(NSWvec).interpolate(as_vector((X[0], X[1])))
+    ns_anal_upper = Function(NSW, name="AnalyticalNormalStressUpper")
+    ns_anal_lower = Function(NSW, name="AnalyticalNormalStressLower")
+    ns_anal_upper.dat.data[:] = [-solution_upper.radial_stress_cartesian(xyi) for xyi in nsxy.dat.data]
+    ns_anal_lower.dat.data[:] = [-solution_lower.radial_stress_cartesian(xyi) for xyi in nsxy.dat.data]
+    ns_anal = Function(NSW, name="AnalyticalNormalStress").interpolate(marker * ns_anal_lower + (1 - marker) * ns_anal_upper)
+    ns_error = Function(NSW, name="NormalStressError").assign(ns_ - ns_anal)
+
     if do_write:
         # Write output files in VTK format:
         u_.rename("Velocity")
         p_.rename("Pressure")
         u_file = VTKFile("fs_velocity_{}.pvd".format(level))
         p_file = VTKFile("fs_pressure_{}.pvd".format(level))
+        ns_file = VTKFile("fs_normalstress_{}.pvd".format(level))
 
         # Write output:
         u_file.write(u_, u_anal, u_error)
         p_file.write(p_, p_anal, p_error)
+        ns_file.write(ns_, ns_anal, ns_error)
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*dx))
+    l2anal_ns = numpy.sqrt(assemble(dot(ns_anal, ns_anal)*ds_t))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*dx))
+    l2error_ns = numpy.sqrt(assemble(dot(ns_error, ns_error)*ds_t))
 
-    return l2error_u, l2error_p, l2anal_u, l2anal_p
+    return l2error_u, l2error_p, l2error_ns, l2anal_u, l2anal_p, l2anal_ns
