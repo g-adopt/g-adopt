@@ -1,7 +1,7 @@
 include ../../rules.mk
 
-cases := damping smoothing Tobs uobs
-schedulers := fullmemory fulldisk
+cases := damping smoothing Tobs uimposed uobs
+schedulers := noscheduler fullmemory
 
 combo_cases := $(foreach c,$(cases),$(foreach s,$(schedulers),$(c)_$(s)))
 

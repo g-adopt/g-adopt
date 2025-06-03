@@ -20,7 +20,7 @@ from cases import cases, schedulers
 from checkpoint_schedules import SingleDiskStorageSchedule
 
 
-def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing_schedule=None):
+def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing_schedule=None, uimposed=False):
 
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
@@ -28,7 +28,8 @@ def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing
         alpha_u=alpha_u,
         alpha_d=alpha_d,
         alpha_s=alpha_s,
-        checkpointing_schedule=checkpointing_schedule
+        checkpointing_schedule=checkpointing_schedule,
+        uimposed=uimposed,
     )
 
     # Perform a bounded nonlinear optimisation where temperature
@@ -60,11 +61,14 @@ def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing
 
 
 def run_forward_and_back(inverse_problem):
+    """
+    Running an already populated tape forward and backward for testing.
+    """
+
     # Make sure we are not annotating
     if annotate_tape():
         pause_annotation()
 
-    # inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule)
     value = inverse_problem["reduced_functional"](inverse_problem["control"])
     inverse_problem["reduced_functional"].derivative()
 
@@ -77,7 +81,7 @@ def run_forward_and_back(inverse_problem):
     return inverse_problem["objective"], inverse_problem["callback_function"]
 
 
-def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule):
+def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule, uimposed=False):
     """
     Perform a Taylor test to verify the correctness of the gradient for the inverse problem.
 
@@ -92,7 +96,7 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedu
 
     # For solving the inverse problem we the reduced functional, any callback functions,
     # and the initial guess for the control variable
-    inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule)
+    inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule, uimposed=uimposed)
 
     # generate perturbation for the control variable
     delta_temp = Function(inverse_problem["control"].function_space(), name="Delta_Temperature")
@@ -114,7 +118,7 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedu
     return inverse_problem
 
 
-def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, checkpointing_schedule=None):
+def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, checkpointing_schedule=None, uimposed=False):
     """
     Use adjoint-based optimisation to solve for the initial condition of the cylindrical
     problem.
@@ -124,6 +128,9 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
         alpha_d: The coefficient of the initial condition damping term
         alpha_s: The coefficient of the smoothing term
     """
+    # Check conditions on input parameters
+    if uimposed and alpha_u >= 0:
+        raise ValueError("When uimposed is True, alpha_u must be negative")
 
     # Get working tape
     tape = get_working_tape()
@@ -137,7 +144,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
         enable_disk_checkpointing()
 
     # Using SingleMemoryStorageSchedule
-    if any([alpha_T > 0, alpha_u > 0]):
+    if any([alpha_T > 0, alpha_u > 0]) and checkpointing_schedule is not None:
         tape.enable_checkpointing(checkpointing_schedule)
 
     # Set up geometry:
@@ -231,15 +238,18 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     approximation = BoussinesqApproximation(Ra, mu=mu)
 
     # Nullspaces and near-nullspaces:
-    Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
+    Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=not uimposed)
     Z_near_nullspace = create_stokes_nullspace(
         Z, closed=False, rotational=True, translations=[0, 1]
     )
 
+    # Generate a surface velocity reference
+    uobs = Function(V, name="uobs")
+
     # Free-slip velocity boundary condition on all sides
     stokes_bcs = {
         "bottom": {"un": 0},
-        "top": {"un": 0},
+        "top": {"u": uobs} if uimposed else {"un": 0},  # surface velocity is free-slip unless imposed
     }
     temp_bcs = {
         "bottom": {"T": 1.0},
@@ -276,17 +286,16 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     # if the weighting for misfit terms non-positive, then no need to integrate in time
     min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
-    # Generate a surface velocity reference
-    uobs = Function(V, name="uobs")
-
     # Populate the tape by running the forward simulation
     for timestep in tape.timestepper(iter(range(min_timesteps, max_timesteps))):
+        if alpha_u > 0 or uimposed:
+            # Update the accumulated surface velocity misfit using the observed value
+            uobs.assign(checkpoint_file.load_function(mesh, name="Velocity", idx=timestep))
+
         stokes_solver.solve()
         energy_solver.solve()
 
         if alpha_u > 0:
-            # Update the accumulated surface velocity misfit using the observed value
-            uobs.assign(checkpoint_file.load_function(mesh, name="Velocity", idx=timestep))
             u_misfit += assemble(Function(R, name="alpha_u").assign(float(alpha_u)/(max_timesteps - min_timesteps)) * dot(u - uobs, u - uobs) * ds_t)
 
     # Load observed final state.
@@ -377,7 +386,11 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         product_of_cases_schedulers = itertools.product(cases.keys(), schedulers.keys())
         for case_name, scheduler_name in product_of_cases_schedulers:
-            minconv = annulus_taylor_test(*cases.get(case_name), schedulers.get(scheduler_name))
+            minconv = annulus_taylor_test(
+                *cases.get(case_name),  # alpha_T, alpha_u, alpha_d, alpha_s
+                schedulers.get(scheduler_name),  # scheduler
+                uimposed=True if case_name == "uimposed" else False  # if surface velocities should be imposed or free-slip
+            )
             print(f"case {case_name} & scheduler {scheduler_name}: result: {minconv}.")
     else:
         case_name, scheduler_name = sys.argv[1].split("_")
