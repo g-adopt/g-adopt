@@ -433,8 +433,9 @@ approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulu
 # needed for the solve along with the approximation, timestep and boundary conditions.
 #
 
-stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
-                                         dt, bcs=stokes_bcs)
+stokes_solver = ViscoelasticStokesSolver(
+    z, displacement, stress_old, approximation, dt, bcs=stokes_bcs
+)
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
