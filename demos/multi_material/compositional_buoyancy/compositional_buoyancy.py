@@ -86,18 +86,24 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 
 # We now initialise the level-set field. All we have to provide to G-ADOPT is a
 # mathematical description of the interface location and use the available API. In this
-# case, the interface can be represented as a cosine, requiring a callable to be
-# provided. Under the hood, G-ADOPT uses the `Shapely` library to determine the
-# signed-distance function associated with the interface. We use G-ADOPT's default
-# strategy to obtain a smooth step function profile from the signed-distance function.
+# case, the interface is a curve and can be geometrically represented as a cosine
+# function. In general, specifying a mathematical function would warrant supplying a
+# callable (e.g. a function) implementing the mathematical operations, but given the
+# common use of cosines, G-ADOPT already provides it and only callable arguments are
+# required here. Additional presets are available for usual scenarios, and the API is
+# sufficiently flexible to generate most shapes. Under the hood, G-ADOPT uses the
+# `Shapely` library to determine the signed-distance function associated with the
+# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
+# from the signed-distance function.
 
 # +
 from numpy import linspace  # noqa: E402
 
-# Initialise the level-set field. First, determine the signed-distance function at each
-# level-set node using a mathematical description of the material-interface location.
-# Then, define the thickness of the hyperbolic tangent profile used in the conservative
-# level-set approach. Finally, overwrite level-set data array.
+# Initialise the level-set field according to the conservative level-set approach.
+# First, write out the mathematical description of the material-interface location.
+# Here, only arguments to the G-ADOPT cosine function are required. Then, use the
+# G-ADOPT API to generate the thickness of the hyperbolic tangent profile and update the
+# level-set field values.
 interface_coords_x = linspace(0, lx, 1000)
 callable_args = (
     interface_deflection := 0.02,
@@ -184,8 +190,9 @@ stokes_bcs = {
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
 # that uses the XML-based VTK file format. We also open a file for logging, instantiate
-# G-ADOPT geodynamical diagnostic utility, and define some parameters specific to this
-# problem.
+# G-ADOPT's geodynamical diagnostic utility, and define parameters to compute an
+# additional diagnostic specific to multi-material simulations, namely material
+# entrainment.
 
 # +
 output_file = VTKFile("output.pvd")

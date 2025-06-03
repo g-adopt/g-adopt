@@ -122,7 +122,7 @@ else:  # Initialise mesh and key functions
     Simulation.initialise_temperature(temperature)
 
     # Set up function spaces and functions used in the level-set approach
-    func_space_ls = fd.FunctionSpace(mesh, "DQ", 2)
+    func_space_ls = fd.FunctionSpace(mesh, "DQ", Simulation.level_set_func_space_deg)
     level_set = [
         fd.Function(func_space_ls, name=f"Level set #{i}")
         for i in range(len(Simulation.materials) - 1)
