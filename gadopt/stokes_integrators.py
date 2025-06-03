@@ -407,12 +407,7 @@ class StokesSolver:
 
     def set_equations(self) -> None:
         u, p = self.solution_split[:2]
-        stress = self.approximation.stress(self.u)
-        source = self.approximation.buoyancy(self.p, self.T) * self.k
-        eqs_attrs = [
-            {"p": p, "stress": stress, "source": source},
-            {"u": u, "rho_mass": self.approximation.rho_continuity()},
-        ]
+        eqs_attrs = [{"p": p, "T": self.T}, {"u": u}]
 
         for i in range(len(residual_terms_stokes)):
             self.equations.append(
