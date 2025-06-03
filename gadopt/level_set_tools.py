@@ -26,9 +26,11 @@ from .utility import node_coordinates
 __all__ = [
     "LevelSetSolver",
     "Material",
+    "assign_level_set_values",
     "density_RaB",
     "entrainment",
     "field_interface",
+    "interface_thickness",
 ]
 
 
@@ -129,8 +131,29 @@ class Material:
         return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
 
 
-def signed_distance(
+def interface_thickness(
+    level_set_space: fd.functionspaceimpl.WithGeometry, scale: float = 0.35
+) -> fd.Function:
+    """Default strategy for the thickness of the conservative level set profile.
+
+    Args:
+      level_set_space:
+        The Firedrake function space of the level-set field
+      scale:
+        A float to control interface thickness values relative to cell sizes
+
+    Returns:
+      A Firedrake function holding the interface thickness values
+    """
+    epsilon = fd.Function(level_set_space, name="Interface thickness")
+    epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space.mesh()))
+
+    return epsilon
+
+
+def assign_level_set_values(
     level_set: fd.Function,
+    epsilon: float | fd.Function,
     /,
     interface_geometry: str,
     interface_coordinates: list[list[float]] | list[list[float], float] | None = None,
@@ -139,9 +162,13 @@ def signed_distance(
     interface_args: tuple[Any] | None = None,
     boundary_coordinates: list[list[float]] | np.ndarray | None = None,
 ) -> list:
-    """Generates signed-distance function values at level-set nodes.
+    """Updates level-set field given interface thickness and signed-distance function.
 
-    Three scenarios are currently implemented:
+    Generates signed-distance function values at level-set nodes and overwrites
+    level-set data according to the conservative level-set method using the provided
+    interface thickness.
+
+    Three scenarios are currently implemented to generate the signed-distance function:
     - The material interface is described by a mathematical function y = f(x). In this
       case, `interface_geometry` should be "curve" and `interface_callable` must be
       provided along with any `interface_args` to implement the aforementioned
@@ -168,6 +195,8 @@ def signed_distance(
     Args:
       level_set:
         A Firedrake function for the targeted level-set field
+      epsilon:
+        A float or Firedrake function representing the interface thickness
       interface_geometry:
         A string specifying the geometry to create
       interface_coordinates:
@@ -180,9 +209,6 @@ def signed_distance(
         A tuple of arguments provided to the interface callable
       boundary_coordinates:
         A sequence of numeric coordinate pairs or an array-like with shape (N, 2)
-
-    Returns:
-        A list of signed-distance function values at the level-set nodes
     """
 
     def stack_coordinates(func):
@@ -300,45 +326,10 @@ def signed_distance(
                 "`interface_geometry` must be 'curve', 'polygon', or 'circle'."
             )
 
-    return signed_distance
-
-
-def interface_thickness(level_set: fd.Function, scale: float = 0.35) -> fd.Function:
-    """Default strategy for the thickness of the conservative level set profile.
-
-    Args:
-      level_set:
-        A Firedrake function for the level-set field
-      scale:
-        A float to control thickness values relative to cell sizes
-
-    Returns:
-      A Firedrake function holding the interface thickness values
-    """
-    epsilon = fd.Function(level_set, name="Interface thickness")
-    epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set.ufl_domain()))
-
-    return epsilon
-
-
-def conservative_level_set(
-    signed_distance: list | np.ndarray, epsilon: float | fd.Function
-) -> np.ndarray:
-    """Returns the conservative level set profile for a given signed-distance function.
-
-    Args:
-      signed_distance:
-        A list or NumPy array holding the signed-distance function values
-      epsilon:
-        A float or Firedrake function representing the interface thickness
-
-    Returns:
-      A NumPy array holding the conservative level-set node values
-    """
     if isinstance(epsilon, fd.Function):
         epsilon = epsilon.dat.data
 
-    return (1 + np.tanh(np.asarray(signed_distance) / 2 / epsilon)) / 2
+    level_set.dat.data[:] = (1 + np.tanh(np.asarray(signed_distance) / 2 / epsilon)) / 2
 
 
 def reinitialisation_term(

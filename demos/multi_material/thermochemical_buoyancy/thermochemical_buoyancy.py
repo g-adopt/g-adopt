@@ -116,14 +116,15 @@ from numpy import array  # noqa: E402
 # level-set approach. Finally, overwrite level-set data array.
 interface_coords_x = array([0.0, lx])
 callable_args = (interface_slope := 0, interface_y := 0.025)
-signed_distance_array = signed_distance(
+
+epsilon = interface_thickness(K)
+assign_level_set_values(
     psi,
+    epsilon,
     interface_geometry="curve",
     interface_callable="line",
     interface_args=(interface_coords_x, *callable_args),
 )
-epsilon = interface_thickness(psi)
-psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 # -
 
 # Let us visualise the location of the material interface that we have just initialised.

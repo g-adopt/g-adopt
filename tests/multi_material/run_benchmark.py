@@ -81,11 +81,14 @@ if Simulation.restart_from_checkpoint:  # Restore mesh and key functions
                 break
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if "Trim_2023" in Simulation.name:
-        epsilon = fd.Constant(1 / 2 / Simulation.k)
-    else:  # Empirical calibration that seems to be robust
-        local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+    if Simulation.name == "Trim_2023":
+        epsilon = 1 / 2 / Simulation.k
+    else:
+        epsilon = ga.interface_thickness(level_set[0].function_space())
+    if Simulation.name == "Schmalholz_2011":
+        epsilon.interpolate(
+            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
+        )
 
     time_now = time_output.dat.data[0]
 else:  # Initialise mesh and key functions
@@ -129,7 +132,7 @@ else:  # Initialise mesh and key functions
     if Simulation.name == "Trim_2023":
         epsilon = 1 / 2 / Simulation.k
     else:
-        epsilon = ga.interface_thickness(level_set[0])
+        epsilon = ga.interface_thickness(func_space_ls)
     if Simulation.name == "Schmalholz_2011":
         epsilon.interpolate(
             mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
@@ -137,8 +140,7 @@ else:  # Initialise mesh and key functions
 
     # Initialise level set
     for ls, kwargs in zip(level_set, Simulation.signed_distance_kwargs_list):
-        signed_distance_array = ga.signed_distance(ls, **kwargs)
-        ls.dat.data[:] = ga.conservative_level_set(signed_distance_array, epsilon)
+        ga.assign_level_set_values(ls, epsilon, **kwargs)
 
     time_output = fd.Function(func_space_pres, name="Time")
     time_now = 0

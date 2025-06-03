@@ -104,14 +104,15 @@ callable_args = (
     perturbation_wavelength := 2 * lx,
     initial_interface_y := 0.2,
 )
-signed_distance_array = signed_distance(
+
+epsilon = interface_thickness(K)
+assign_level_set_values(
     psi,
+    epsilon,
     interface_geometry="curve",
     interface_callable="cosine",
     interface_args=(interface_coords_x, *callable_args),
 )
-epsilon = interface_thickness(psi)
-psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 # -
 
 # Let us visualise the location of the material interface that we have just initialised.
