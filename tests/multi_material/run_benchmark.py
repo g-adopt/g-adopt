@@ -150,8 +150,7 @@ stokes_function.subfunctions[0].rename("Velocity")
 stokes_function.subfunctions[1].rename("Pressure")
 
 # Continuous function space for material field output
-finite_elem_output = fd.FiniteElement("DQ", fd.quadrilateral, 1, variant="equispaced")
-func_space_output = fd.FunctionSpace(mesh, finite_elem_output)
+func_space_output = fd.FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
 output_fields = []
 # Set up material fields and the equation system
 approximation_parameters = {}
