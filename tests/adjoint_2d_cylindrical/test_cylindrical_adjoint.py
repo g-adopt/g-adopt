@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from pathlib import Path
-from cases import cases, schedulers
+from .cases import cases, schedulers
 from gadopt import *
 
 
