@@ -1,14 +1,16 @@
-all: params.log
-current_dir := $(notdir $(patsubst %/,%,$(CURDIR)))
-test_class := $(notdir $(patsubst %/,%,$(dir $(CURDIR))))
+include ../../../rules.mk
 
+.PHONY: all clean check
+
+all: params.log
+
+params.log : category := mantle_convection
 params.log: gplates_global.py
-	echo "running $<" >&2
-	/usr/bin/time --format="$@ finished in %E" tsp -L mantle_convection -f python3 $<
+	$(run-python)
 
 clean:
 	rm -f *.pvd *.h5 params.log
 	rm -rf output
 
 check: params.log
-	python3 -m pytest ../../test_all.py -k $(test_class)/$(current_dir)
+	python3 -m pytest $(CURDIR)/../../test_all.py -k $(test_class)/$(current_dir)

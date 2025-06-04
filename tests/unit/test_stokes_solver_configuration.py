@@ -76,7 +76,6 @@ def test_solver_parameters_argument():
             stokes_function,
             temperature,
             approximation,
-            mu=mu,
             solver_parameters=solver_parameters,
         )
 

@@ -1,3 +1,5 @@
+include ../../rules.mk
+
 cases := smooth_cylindrical_freeslip smooth_cylindrical_zeroslip delta_cylindrical_freeslip delta_cylindrical_zeroslip delta_cylindrical_freeslip_dpc delta_cylindrical_zeroslip_dpc
 long_cases := smooth_cylindrical_freesurface smooth_spherical_freeslip smooth_spherical_zeroslip
 
@@ -11,10 +13,10 @@ longtest: $(long_cases)
 
 $(cases): %: .sentinel.%
 
+tsp_string = $(if $(BATCH_MODE),tsp -N {cores} -f)
 $(sentinels): analytical.py
-	echo "running analytical $(subst .sentinel.,,$@)" >&2
-	/usr/bin/time --format="analytical $(subst .sentinel.,,$@) finished in %E" python3 analytical.py submit -t "tsp -N {cores} -f mpiexec -np {cores}" $(subst .sentinel.,,$@)
-	echo "done" > $@
+	@$(call run_regular,python3 analytical.py submit -t "$(tsp_string) mpiexec -np {cores}" $(subst .sentinel.,,$@),analytical $(subst .sentinel.,,$@))
+	@echo "done" > $@
 
 .ONESHELL:
 SHELL = /bin/bash

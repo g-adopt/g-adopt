@@ -11,22 +11,27 @@ import abc
 import re
 from dataclasses import dataclass, fields
 from numbers import Number
-from typing import Optional
+from typing import Any, Callable, Optional
 
 import firedrake as fd
+import numpy as np
+import shapely as sl
 from firedrake.ufl_expr import extract_unique_domain
 
 from . import scalar_equation as scalar_eq
 from .equations import Equation, interior_penalty_factor
 from .time_stepper import eSSPRKs3p3
 from .transport_solver import GenericTransportSolver
+from .utility import node_coordinates
 
 __all__ = [
     "LevelSetSolver",
     "Material",
+    "assign_level_set_values",
     "density_RaB",
     "entrainment",
     "field_interface",
+    "interface_thickness",
 ]
 
 
@@ -125,6 +130,207 @@ class Material:
     def thermal_diffusivity(cls, *args, **kwargs):
         """Calculates thermal diffusivity (m^2 s^-1)."""
         return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
+
+
+def interface_thickness(
+    level_set_space: fd.functionspaceimpl.WithGeometry, scale: float = 0.35
+) -> fd.Function:
+    """Default strategy for the thickness of the conservative level set profile.
+
+    Args:
+      level_set_space:
+        The Firedrake function space of the level-set field
+      scale:
+        A float to control interface thickness values relative to cell sizes
+
+    Returns:
+      A Firedrake function holding the interface thickness values
+    """
+    epsilon = fd.Function(level_set_space, name="Interface thickness")
+    epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space.mesh()))
+
+    return epsilon
+
+
+def assign_level_set_values(
+    level_set: fd.Function,
+    epsilon: float | fd.Function,
+    /,
+    interface_geometry: str,
+    interface_coordinates: list[list[float]] | list[list[float], float] | None = None,
+    *,
+    interface_callable: Callable | str | None = None,
+    interface_args: tuple[Any] | None = None,
+    boundary_coordinates: list[list[float]] | np.ndarray | None = None,
+):
+    """Updates level-set field given interface thickness and signed-distance function.
+
+    Generates signed-distance function values at level-set nodes and overwrites
+    level-set data according to the conservative level-set method using the provided
+    interface thickness.
+
+    Three scenarios are currently implemented to generate the signed-distance function:
+    - The material interface is described by a mathematical function y = f(x). In this
+      case, `interface_geometry` should be "curve" and `interface_callable` must be
+      provided along with any `interface_args` to implement the aforementioned
+      mathematical function.
+    - The material interface is a polygon, and `interface_geometry` takes the value
+      "polygon". In this case, `interface_coordinates` must exclude the polygon sides
+      that do not act as a material interface and coincide with domain boundaries. The
+      coordinates of these sides should be provided using the `boundary_coordinates`
+      argument such that the concatenation of the two coordinate objects describes a
+      closed polygonal chain.
+    - The material interface is a circle, and `interface_geometry` takes the value
+      "circle". In this case, `interface_coordinates` is a list holding the coordinates
+      of the circle's centre and the circle radius. No other arguments are required.
+
+    Geometrical objects underpinning material interfaces are generated using Shapely.
+
+    Implemented interface geometry presets and associated arguments:
+    | Curve     |                     Arguments                      |
+    | :-------- | :------------------------------------------------: |
+    | line      | slope, intercept                                   |
+    | cosine    | amplitude, wavelength, vertical_shift, phase_shift |
+    | rectangle | ref_vertex_coords, edge_sizes                      |
+
+    Args:
+      level_set:
+        A Firedrake function for the targeted level-set field
+      epsilon:
+        A float or Firedrake function representing the interface thickness
+      interface_geometry:
+        A string specifying the geometry to create
+      interface_coordinates:
+        A sequence or an array-like with shape (N, 2) of numeric coordinate pairs
+        defining the interface or a list containing centre coordinates and radius
+      interface_callable:
+        A callable implementing the mathematical function depicting the interface or a
+        string matching an implemented callable preset
+      interface_args:
+        A tuple of arguments provided to the interface callable
+      boundary_coordinates:
+        A sequence of numeric coordinate pairs or an array-like with shape (N, 2)
+    """
+
+    def stack_coordinates(func: Callable) -> Callable:
+        """Decorator to stack coordinates when the material interface is a curve.
+
+        Args:
+          func:
+            A callable implementing the mathematical function depicting the interface
+
+        Returns:
+          A callable that can stack interface coordinates
+        """
+
+        def wrapper(*args) -> float | np.ndarray:
+            if isinstance(interface_coords_x := args[0], (int, float)):
+                return func(*args)
+            else:
+                return np.column_stack((interface_coords_x, func(*args)))
+
+        return wrapper
+
+    def line(x, slope, intercept) -> float | np.ndarray:
+        """Straight line equation"""
+        return slope * x + intercept
+
+    def cosine(
+        x, amplitude, wavelength, vertical_shift, phase_shift=0
+    ) -> float | np.ndarray:
+        """Cosine function with an amplitude and a vertical shift."""
+        cosine = np.cos(2 * np.pi / wavelength * x + phase_shift)
+
+        return amplitude * cosine + vertical_shift
+
+    def rectangle(
+        ref_vertex_coords: tuple[float], edge_sizes: tuple[float]
+    ) -> list[tuple[float]]:
+        """Material interface defined by a rectangle.
+
+        Edges are aligned with Cartesian directions and do not overlap domain boundaries.
+
+        Args:
+          ref_vertex_coords:
+            A tuple holding the coordinates of the lower-left vertex
+          edge_sizes:
+            A tuple holding the edge sizes
+
+        Returns:
+          A list of tuples representing the coordinates of the rectangle's vertices
+        """
+        interface_coords = [
+            (ref_vertex_coords[0], ref_vertex_coords[1]),
+            (ref_vertex_coords[0] + edge_sizes[0], ref_vertex_coords[1]),
+            (
+                ref_vertex_coords[0] + edge_sizes[0],
+                ref_vertex_coords[1] + edge_sizes[1],
+            ),
+            (ref_vertex_coords[0], ref_vertex_coords[1] + edge_sizes[1]),
+            (ref_vertex_coords[0], ref_vertex_coords[1]),
+        ]
+
+        return interface_coords
+
+    callable_presets = {"cosine": cosine, "line": line, "rectangle": rectangle}
+    if isinstance(interface_callable, str):
+        interface_callable = callable_presets[interface_callable]
+
+    if interface_callable is not None:
+        if interface_geometry == "curve":
+            interface_callable = stack_coordinates(interface_callable)
+        interface_coordinates = interface_callable(*interface_args)
+
+    match interface_geometry:
+        case "curve":
+            interface = sl.LineString(interface_coordinates)
+
+            signed_distance = [
+                (1 if y > interface_callable(x, *interface_args[1:]) else -1)
+                * interface.distance(sl.Point(x, y))
+                for x, y in node_coordinates(level_set).dat.data
+            ]
+        case "polygon":
+            if boundary_coordinates is None:
+                interface = sl.Polygon(interface_coordinates)
+                sl.prepare(interface)
+
+                signed_distance = [
+                    (1 if interface.contains(sl.Point(x, y)) else -1)
+                    * interface.boundary.distance(sl.Point(x, y))
+                    for x, y in node_coordinates(level_set).dat.data
+                ]
+            else:
+                interface = sl.LineString(interface_coordinates)
+                interface_with_boundaries = sl.Polygon(
+                    np.vstack((interface_coordinates, boundary_coordinates))
+                )
+                sl.prepare(interface_with_boundaries)
+
+                signed_distance = [
+                    (1 if interface_with_boundaries.intersects(sl.Point(x, y)) else -1)
+                    * interface.distance(sl.Point(x, y))
+                    for x, y in node_coordinates(level_set).dat.data
+                ]
+        case "circle":
+            centre, radius = interface_coordinates
+            interface = sl.Point(centre).buffer(radius)
+            sl.prepare(interface)
+
+            signed_distance = [
+                (1 if interface.contains(sl.Point(x, y)) else -1)
+                * interface.boundary.distance(sl.Point(x, y))
+                for x, y in node_coordinates(level_set).dat.data
+            ]
+        case _:
+            raise ValueError(
+                "`interface_geometry` must be 'curve', 'polygon', or 'circle'."
+            )
+
+    if isinstance(epsilon, fd.Function):
+        epsilon = epsilon.dat.data
+
+    level_set.dat.data[:] = (1 + np.tanh(np.asarray(signed_distance) / 2 / epsilon)) / 2
 
 
 def reinitialisation_term(

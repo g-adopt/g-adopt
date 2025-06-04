@@ -69,9 +69,15 @@ def model(level, k, nn, do_write=False):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
+    stokes_solver = StokesSolver(
+        z,
+        T,
+        approximation,
+        bcs=stokes_bcs,
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+        near_nullspace=Z_near_nullspace,
+    )
     # use tighter tolerances than default to ensure convergence:
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-11
@@ -90,6 +96,9 @@ def model(level, k, nn, do_write=False):
     coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
+    # calculating surface normal stress given by the solution of the stokes problem
+    ns_ = stokes_solver.force_on_boundary(boundary.top)
+
     solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
 
     # compute u analytical and error
@@ -104,6 +113,11 @@ def model(level, k, nn, do_write=False):
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyi) for xyi in pxy.dat.data]
     p_error = Function(W, name="PressureError").assign(p_-p_anal)
 
+    # compute normal stress analytical and error
+    ns_anal = Function(W, name="AnalyticalSurfaceNormalStress")
+    ns_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in pxy.dat.data]
+    ns_error = Function(W, name="NormalStressError").assign(ns_ - ns_anal)
+
     if do_write:
         # Write output files in VTK format:
         u_.rename("Velocity")
@@ -117,7 +131,9 @@ def model(level, k, nn, do_write=False):
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*dx))
+    l2anal_ns = numpy.sqrt(assemble(dot(ns_anal, ns_anal) * ds_t))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*dx))
+    l2error_ns = numpy.sqrt(assemble(dot(ns_error, ns_error) * ds_t))
 
-    return l2error_u, l2error_p, l2anal_u, l2anal_p
+    return l2error_u, l2error_p, l2error_ns, l2anal_u, l2anal_p, l2anal_ns
