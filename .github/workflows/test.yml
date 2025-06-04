@@ -2,9 +2,11 @@ name: Run regression tests
 
 on:
   push:
-    branches:
-      - master
+    branches-ignore:
+      - '**' 
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
