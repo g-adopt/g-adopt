@@ -20,4 +20,4 @@ check:
 	python -m pytest . ../demos -m 'not demo and not longtest'
 
 longcheck:
-	python -m pytest -m longtest
+	python -m pytest -m longtest_temp

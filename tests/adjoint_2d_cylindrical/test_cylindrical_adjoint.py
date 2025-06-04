@@ -5,7 +5,7 @@ from .cases import cases, schedulers
 from gadopt import *
 
 
-@pytest.mark.longtest
+@pytest.mark.longtest_temp
 @pytest.mark.parametrize("case_name", cases)
 def test_annulus_taylor_test(case_name):
     with open(Path(__file__).parent.resolve() / f"{case_name}_fullmemory.conv", "r") as f:
@@ -14,7 +14,7 @@ def test_annulus_taylor_test(case_name):
     assert minconv > 1.96
 
 
-@pytest.mark.longtest
+@pytest.mark.longtest_temp
 @pytest.mark.parametrize("case_name", cases)
 @pytest.mark.parametrize("scheduler", schedulers)
 def test_derivatives_vs_schedulers(case_name, scheduler):
