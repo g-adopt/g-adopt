@@ -1,8 +1,6 @@
 from dataclasses import dataclass
-from functools import partial
 
 import firedrake as fd
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
@@ -51,27 +49,34 @@ class Simulation:
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2
 
-    # Parameters to initialise level sets
-    bottom_material_interface_y = 6e5
-    bottom_interface_slope = 0
-    top_material_interface_y = 7e5
-    top_interface_deflection = 7e3
-    # The following two lists must be ordered such that, unpacking from the end, each
-    # pair of arguments enables initialising a level set whose 0-contour corresponds to
-    # the entire interface between a given material and the remainder of the numerical
-    # domain. By convention, the material thereby isolated occupies the positive side
-    # of the signed-distance level set.
-    isd_params = [
-        (bottom_interface_slope, bottom_material_interface_y),
-        (top_interface_deflection, domain_dims[0], top_material_interface_y),
-    ]
-    initialise_signed_distance = [
-        partial(
-            isd.isd_simple_curve, domain_origin[0], domain_dims[0], isd.straight_line
-        ),
-        partial(
-            isd.isd_simple_curve, domain_origin[0], domain_dims[0], isd.cosine_curve
-        ),
+    # Parameters to initialise surface level set
+    interface_coords_x = np.linspace(0.0, domain_dims[0], int(domain_dims[0] / 1e3) + 1)
+    callable_args = (
+        surface_deflection := 7e3,
+        surface_perturbation_wavelength := domain_dims[0],
+        surface_coord_y := 7e5,
+    )
+    surface_signed_distance_kwargs = {
+        "interface_geometry": "curve",
+        "interface_callable": "cosine",
+        "interface_args": (interface_coords_x, *callable_args),
+    }
+    # Parameters to initialise LAB level set
+    interface_coords_x = np.array([0.0, domain_dims[0]])
+    callable_args = (lab_slope := 0, lab_coord_y := 6e5)
+    lab_signed_distance_kwargs = {
+        "interface_geometry": "curve",
+        "interface_callable": "line",
+        "interface_args": (interface_coords_x, *callable_args),
+    }
+    # The following list must be ordered such that, unpacking from the end, each dictionary
+    # contains the keyword arguments required to initialise the signed-distance array
+    # corresponding to the interface between a given material and the remainder of the
+    # numerical domain (all previous materials excluded). By convention, the material thus
+    # isolated occupies the positive side of the signed-distance array.
+    signed_distance_kwargs_list = [
+        lab_signed_distance_kwargs,
+        surface_signed_distance_kwargs,
     ]
 
     # Material ordering must follow the logic implemented in the above two lists. In
@@ -124,10 +129,11 @@ class Simulation:
     @classmethod
     def diagnostics(cls, simu_time, geo_diag, diag_vars):
         max_topography_analytical = (
-            cls.top_interface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
+            cls.surface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
         )
 
-        epsilon = float(diag_vars["epsilon"])
+        epsilon = diag_vars["epsilon"]
+        eps_data = epsilon.dat.data_ro_with_halos
         level_set = diag_vars["level_set"][1]
         level_set_data = level_set.dat.data_ro_with_halos
         coords_data = (
@@ -154,14 +160,18 @@ class Simulation:
                     ]
 
                     ls_lower_bound = level_set_data[mask_ls][ind_lower_bound]
-                    sdls_lower_bound = epsilon * np.log(
+                    eps_lower_bound = eps_data[mask_ls][ind_lower_bound]
+                    sdls_lower_bound = eps_lower_bound * np.log(
                         ls_lower_bound / (1 - ls_lower_bound)
                     )
 
                     ls_upper_bound = level_set_data[~mask_ls][mask_hor_coord][
                         ind_upper_bound
                     ]
-                    sdls_upper_bound = epsilon * np.log(
+                    eps_upper_bound = eps_data[~mask_ls][mask_hor_coord][
+                        ind_upper_bound
+                    ]
+                    sdls_upper_bound = eps_upper_bound * np.log(
                         ls_upper_bound / (1 - ls_upper_bound)
                     )
 
@@ -181,7 +191,7 @@ class Simulation:
 
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
         cls.diag_fields["max_topography"].append(
-            (max_topo_global - cls.top_material_interface_y) / 1e3
+            (max_topo_global - cls.surface_coord_y) / 1e3
         )
         cls.diag_fields["max_topography_analytical"].append(max_topography_analytical)
 

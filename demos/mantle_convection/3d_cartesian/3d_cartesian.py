@@ -155,10 +155,16 @@ gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             constant_jacobian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             near_nullspace=Z_near_nullspace)
+stokes_solver = StokesSolver(
+    z,
+    T,
+    approximation,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+    near_nullspace=Z_near_nullspace,
+)
 # -
 
 # For all iterative solves, G-ADOPT utilises convergence criterion based on the relative reduction of the
