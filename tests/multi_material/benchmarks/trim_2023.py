@@ -1,8 +1,5 @@
-from functools import partial
-
 import firedrake as fd
 import flib
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
@@ -31,20 +28,20 @@ class Simulation:
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2
 
-    # Parameters to initialise level sets
-    slope = 0
-    intercept = 0.5
-    # The following two lists must be ordered such that, unpacking from the end, each
-    # pair of arguments enables initialising a level set whose 0-contour corresponds to
-    # the entire interface between a given material and the remainder of the numerical
-    # domain. By convention, the material thereby isolated occupies the positive side
-    # of the signed-distance level set.
-    isd_params = [(slope, intercept)]
-    initialise_signed_distance = [
-        partial(
-            isd.isd_simple_curve, domain_origin[0], domain_dims[0], isd.straight_line
-        )
-    ]
+    # Parameters to initialise level set
+    interface_coords_x = np.array([0.0, domain_dims[0]])
+    callable_args = (interface_slope := 0, interface_coord_y := 0.5)
+    signed_distance_kwargs = {
+        "interface_geometry": "curve",
+        "interface_callable": "line",
+        "interface_args": (interface_coords_x, *callable_args),
+    }
+    # The following list must be ordered such that, unpacking from the end, each dictionary
+    # contains the keyword arguments required to initialise the signed-distance array
+    # corresponding to the interface between a given material and the remainder of the
+    # numerical domain (all previous materials excluded). By convention, the material thus
+    # isolated occupies the positive side of the signed-distance array.
+    signed_distance_kwargs_list = [signed_distance_kwargs]
 
     # Material ordering must follow the logic implemented in the above two lists. In
     # other words, the last material in the below list corresponds to the portion of
@@ -67,8 +64,8 @@ class Simulation:
     k = 35
 
     # Boundary conditions
-    C0_0 = 1 / (1 + fd.exp(-2 * k * (intercept - 0)))
-    C0_1 = 1 / (1 + fd.exp(-2 * k * (intercept - 1)))
+    C0_0 = 1 / (1 + fd.exp(-2 * k * (interface_coord_y - 0)))
+    C0_1 = 1 / (1 + fd.exp(-2 * k * (interface_coord_y - 1)))
     temp_bc_bot = RaB / Ra * (C0_0 - 1) + 1
     temp_bc_top = RaB / Ra * C0_1
     temp_bcs = {3: {"T": temp_bc_bot}, 4: {"T": temp_bc_top}}
@@ -92,12 +89,12 @@ class Simulation:
         "rms_velocity_analytical": [],
         "entrainment": [],
     }
-    material_area = domain_dims[0] * intercept
+    material_area = domain_dims[0] * interface_coord_y
     entrainment_height = 0.5
 
     @classmethod
     def C0(cls, mesh_coord_y):
-        return 1 / (1 + fd.exp(-2 * cls.k * (cls.intercept - mesh_coord_y)))
+        return 1 / (1 + fd.exp(-2 * cls.k * (cls.interface_coord_y - mesh_coord_y)))
 
     @classmethod
     def f(cls, t):
@@ -127,15 +124,15 @@ class Simulation:
         # flib can be obtained from
         # https://github.com/seantrim/exact-thermochem-solution
         analytical_values = []
-        for coord_x, coord_y in ga.node_coordinates(int_heat_rate).dat.data:
+        for x, y in ga.node_coordinates(int_heat_rate).dat.data:
             analytical_values.append(
                 flib.h_python(
-                    coord_x,
-                    coord_y,
+                    x,
+                    y,
                     float(simu_time),
                     cls.domain_dims[0],
                     cls.k,
-                    cls.intercept,
+                    cls.interface_coord_y,
                     cls.Ra,
                     cls.RaB,
                 )
