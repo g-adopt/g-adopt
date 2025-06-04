@@ -138,6 +138,7 @@ assign_level_set_values(
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
+# from numpy import linspace
 
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
