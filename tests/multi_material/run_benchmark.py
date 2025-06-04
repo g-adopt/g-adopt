@@ -232,7 +232,7 @@ stokes_solver.solve()
 
 # Set up level-set solvers
 adv_kwargs = {"u": velocity, "timestep": timestep}
-reini_kwargs = {"epsilon": epsilon}
+reini_kwargs = {"epsilon": epsilon, "timestep": 1e-2, "frequency": 5}
 if Simulation.name == "Tosi_2015":
     # Speed up simulation by avoiding frequent reinitialisation
     reini_kwargs["frequency"] = 10
