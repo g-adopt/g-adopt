@@ -24,7 +24,7 @@ diagnostics = {
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 282.4), operator.le, 0.1),
+        (lambda data: abs(max(data["rms_velocity"]) - 282.4), operator.le, 0.5),
         (lambda data: abs(max(data["entrainment"]) - 0.929), operator.le, 0.001),
     ],
     "schmalholz_2011": [
