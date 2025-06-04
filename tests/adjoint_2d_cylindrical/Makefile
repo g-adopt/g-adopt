@@ -5,9 +5,9 @@ schedulers := noscheduler fullmemory
 
 combo_cases := $(foreach c,$(cases),$(foreach s,$(schedulers),$(c)_$(s)))
 
-.PHONY: all clean check
+.PHONY: longtest clean check
 
-all: $(addsuffix .conv,$(combo_cases))
+longtest: $(addsuffix .conv,$(combo_cases))
 
 %.conv : category := tests/adjoint_2d_cylindrical
 %.conv : ncpus := 16
