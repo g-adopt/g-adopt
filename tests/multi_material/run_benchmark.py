@@ -81,11 +81,14 @@ if Simulation.restart_from_checkpoint:  # Restore mesh and key functions
                 break
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if "Trim_2023" in Simulation.name:
-        epsilon = fd.Constant(1 / 2 / Simulation.k)
-    else:  # Empirical calibration that seems to be robust
-        local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+    if Simulation.name == "Trim_2023":
+        epsilon = 1 / 2 / Simulation.k
+    else:
+        epsilon = ga.interface_thickness(level_set[0].function_space())
+    if Simulation.name == "Schmalholz_2011":
+        epsilon.interpolate(
+            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
+        )
 
     time_now = time_output.dat.data[0]
 else:  # Initialise mesh and key functions
@@ -126,19 +129,18 @@ else:  # Initialise mesh and key functions
     ]
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if "Trim_2023" in Simulation.name:
-        epsilon = fd.Constant(1 / 2 / Simulation.k)
-    else:  # Empirical calibration that seems to be robust
-        local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+    if Simulation.name == "Trim_2023":
+        epsilon = 1 / 2 / Simulation.k
+    else:
+        epsilon = ga.interface_thickness(func_space_ls)
+    if Simulation.name == "Schmalholz_2011":
+        epsilon.interpolate(
+            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
+        )
 
     # Initialise level set
-    signed_dist_to_interface = fd.Function(level_set[0].function_space())
-    for ls, isd, params in zip(
-        level_set, Simulation.initialise_signed_distance, Simulation.isd_params
-    ):
-        signed_dist_to_interface.dat.data[:] = isd(params, ls)
-        ls.interpolate((1 + fd.tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
+    for ls, kwargs in zip(level_set, Simulation.signed_distance_kwargs_list):
+        ga.assign_level_set_values(ls, epsilon, **kwargs)
 
     time_output = fd.Function(func_space_pres, name="Time")
     time_now = 0
