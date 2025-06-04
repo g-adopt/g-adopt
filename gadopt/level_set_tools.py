@@ -27,9 +27,7 @@ __all__ = [
     "LevelSetSolver",
     "Material",
     "assign_level_set_values",
-    "density_RaB",
     "entrainment",
-    "field_interface",
     "interface_thickness",
     "material_field",
 ]
