@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-import firedrake as fd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI

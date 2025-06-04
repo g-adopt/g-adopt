@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-import firedrake as fd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
@@ -136,9 +135,7 @@ class Simulation:
         )
 
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
-        cls.diag_fields["max_topography"].append(
-            (max_topo - cls.top_material_interface_y) / 1e3
-        )
+        cls.diag_fields["max_topography"].append((max_topo - cls.surface_coord_y) / 1e3)
         cls.diag_fields["max_topography_analytical"].append(max_topography_analytical)
 
         if MPI.COMM_WORLD.rank == 0:
