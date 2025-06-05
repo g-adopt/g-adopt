@@ -7,20 +7,20 @@ function to calculate material entrainment in the simulation.
 
 """
 
-import abc
 import re
 from dataclasses import dataclass, fields
 from numbers import Number
 from typing import Any, Callable, Optional
+from warnings import warn
 
 import firedrake as fd
 import numpy as np
 import shapely as sl
-from firedrake.ufl_expr import extract_unique_domain
+from mpi4py import MPI
 
 from . import scalar_equation as scalar_eq
 from .equations import Equation, interior_penalty_factor
-from .time_stepper import eSSPRKs3p3
+from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
 from .utility import node_coordinates
 
@@ -34,20 +34,19 @@ __all__ = [
     "interface_thickness",
 ]
 
-
-# Default solver options for level-set advection and reinitialisation
-solver_params_default = {
-    "mat_type": "aij",
-    "ksp_type": "preonly",
-    "pc_type": "bjacobi",
-    "sub_pc_type": "ilu",
+# Default parameters for level-set advection
+adv_params_default = {
+    "time_integrator": eSSPRKs10p3,
+    "bcs": {},
+    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+    "subcycles": 1,
 }
-# Default parameters used to set up level-set reinitialisation
+# Default parameters for level-set reinitialisation
 reini_params_default = {
-    "tstep": 1e-2,
-    "tstep_alg": eSSPRKs3p3,
-    "frequency": 5,
-    "iterations": 1,
+    "timestep": 0.02,
+    "time_integrator": eSSPRKs3p3,
+    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+    "steps": 1,
 }
 
 
@@ -373,7 +372,7 @@ reinitialisation_term.optional_attrs = set()
 class LevelSetSolver:
     """Solver for the conservative level-set approach.
 
-    Solves the advection and reinitialisation equations for a level set function.
+    Advects and reinitialises a level-set field.
 
     Attributes:
       solution:
@@ -384,68 +383,122 @@ class LevelSetSolver:
         The Firedrake function space where the level set lives
       mesh:
         The Firedrake mesh representing the numerical domain
-        reini_params:
-          A dictionary containing parameters used in the reinitialisation approach.
-        ls_solver:
-          The G-ADOPT timestepper object for the advection equation.
-        reini_ts:
-          The G-ADOPT timestepper object for the reinitialisation equation.
+      advection:
+        A boolean specifying whether advection is set up
+      reinitialisation:
+        A boolean specifying whether reinitialisation is set up
+      adv_kwargs:
+        A dictionary holding the parameters used to set up advection
+      reini_kwargs:
+        A dictionary holding the parameters used to set up reinitialisation
+      adv_solver:
+        A G-ADOPT GenericTransportSolver tackling advection
       gradient_solver:
         A Firedrake LinearVariationalSolver to calculate the level-set gradient
-        subcycles:
-          An integer specifying the number of advection solves to perform.
+      reini_integrator:
+        A G-ADOPT time integrator tackling reinitialisation
+      step:
+        An integer representing the number of advection steps already made
     """
 
     def __init__(
         self,
         level_set: fd.Function,
-        velocity: fd.ufl.tensors.ListTensor,
-        tstep: fd.Constant,
-        tstep_alg: abc.ABCMeta,
-        subcycles: int,
-        epsilon: fd.Constant,
-        reini_params: Optional[dict] = None,
-        solver_params: Optional[dict] = None,
-    ):
+        /,
+        *,
+        adv_kwargs: dict[str, Any] | None = None,
+        reini_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """Initialises the solver instance.
 
+        Valid keys for `adv_kwargs`:
+        |    Argument     | Required |                   Description                   |
+        | :-------------- | :------: | :---------------------------------------------: |
+        | u               | True     | Velocity field (`Function`)                     |
+        | timestep        | True     | Integration time step (`Constant`)              |
+        | time_integrator | False    | Time integrator (class in `time_stepper.py`)    |
+        | bcs             | False    | Boundary conditions (`dict`, G-ADOPT API)       |
+        | solver_params   | False    | Solver parameters (`dict`, PETSc API)           |
+        | subcycles       | False    | Advection iterations in one time step (`int`)   |
+
+        Valid keys for `reini_kwargs`:
+        |    Argument     | Required |                   Description                   |
+        | :-------------- | :------: | :---------------------------------------------: |
+        | epsilon         | True     | Interface thickness (`float` or `Function`)     |
+        | timestep        | False    | Integration step in pseudo-time (`int`)         |
+        | time_integrator | False    | Time integrator (class in `time_stepper.py`)    |
+        | solver_params   | False    | Solver parameters (`dict`, PETSc API)           |
+        | steps           | False    | Pseudo-time integration steps (`int`)           |
+        | frequency       | False    | Advection steps before reinitialisation (`int`) |
+
         Args:
-            level_set:
-              The Firedrake function for the level set.
-            velocity:
-              The UFL expression for the velocity.
-            tstep:
-              The Firedrake function over the Real space for the simulation time step.
-            tstep_alg:
-              The class for the timestepping algorithm used in the advection solver.
-            subcycles:
-              An integer specifying the number of advection solves to perform.
-            epsilon:
-              A UFL constant denoting the thickness of the hyperbolic tangent profile.
-            reini_params:
-              A dictionary containing parameters used in the reinitialisation approach.
-            solver_params:
-              A dictionary containing solver parameters used in the advection and
-              reinitialisation approaches.
+          level_set:
+            The Firedrake function holding the level-set field
+          adv_kwargs:
+            A dictionary with parameters used to set up advection
+          reini_kwargs:
+            A dictionary with parameters used to set up reinitialisation
         """
         self.solution = level_set
-        self.u = velocity
-        self.tstep = tstep
-        self.tstep_alg = tstep_alg
-        self.subcycles = subcycles
-
-        self.reini_params = reini_params or reini_params_default
-        self.solver_params = solver_params or solver_params_default
-
-        self.mesh = extract_unique_domain(level_set)
+        self.solution_old = fd.Function(self.solution)
         self.solution_space = level_set.function_space()
+        self.mesh = self.solution.ufl_domain()
+        self.advection = False
+        self.reinitialisation = False
 
         self.set_gradient_solver()
 
-        self.ls_eq_attrs = {"u": velocity}
-        self.reini_eq_attrs = {"epsilon": epsilon}
+        if isinstance(adv_kwargs, dict):
+            if not all(param in adv_kwargs for param in ["u", "timestep"]):
+                raise KeyError("'u' and 'timestep' must be present in 'adv_kwargs'")
 
-        self.solvers_ready = False
+            self.advection = True
+            self.adv_kwargs = adv_params_default | adv_kwargs
+
+        if isinstance(reini_kwargs, dict):
+            if "epsilon" not in reini_kwargs:
+                raise KeyError("'epsilon' must be present in 'reini_kwargs'")
+
+            self.reinitialisation = True
+            self.reini_kwargs = reini_params_default | reini_kwargs
+            if "frequency" not in self.reini_kwargs:
+                self.reini_kwargs["frequency"] = self.reinitialisation_frequency()
+
+        if not any([self.advection, self.reinitialisation]):
+            raise ValueError("Advection or reinitialisation must be initialised")
+
+        self._solvers_ready = False
+
+    def reinitialisation_frequency(self) -> int:
+        """Implements default strategy for the reinitialisation frequency.
+
+        Reinitialisation becomes less frequent as mesh resolution increases, with the
+        underlying assumption that the minimum cell size occurs along the material
+        interface. The current strategy is to apply reinitialisation at every time step
+        up to a certain cell size and then scale the frequency with the decrease in cell
+        size.
+        """
+        epsilon = self.reini_kwargs["epsilon"]
+        if isinstance(epsilon, fd.Function):
+            epsilon = self.mesh.comm.allreduce(epsilon.dat.data.min(), MPI.MIN)
+
+        if self.mesh.cartesian:
+            max_coords = self.mesh.coordinates.dat.data.max(axis=0)
+            min_coords = self.mesh.coordinates.dat.data.min(axis=0)
+            for i in range(len(max_coords)):
+                max_coords[i] = self.mesh.comm.allreduce(max_coords[i], MPI.MAX)
+                min_coords[i] = self.mesh.comm.allreduce(min_coords[i], MPI.MIN)
+            domain_size = np.sqrt(np.sum((max_coords - min_coords) ** 2))
+
+            return max(1, round(4.9e-3 * domain_size / epsilon - 0.25))
+        else:
+            warn(
+                "No frequency strategy implemented for reinitialisation in "
+                "non-rectangular/cuboidal domains; applying reinitialisation at every "
+                "time step"
+            )
+
+            return 1
 
     def set_gradient_solver(self) -> None:
         """Constructs a solver to determine the level-set gradient.
@@ -458,7 +511,7 @@ class LevelSetSolver:
             grad_name += number_match.group()
 
         gradient_space = fd.VectorFunctionSpace(
-            mesh=self.mesh, family=self.solution_space.ufl_element()
+            self.mesh, "Q", self.solution.ufl_element().degree()
         )
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
 
@@ -485,59 +538,76 @@ class LevelSetSolver:
         """
         self.gradient_solver.solve()
 
-    def set_up_solvers(self):
-        """Sets up the time steppers for advection and reinitialisation."""
-        test = fd.TestFunction(self.solution_space)
+    def set_up_solvers(self) -> None:
+        """Sets up time integrators for advection and reinitialisation as required."""
+        if self.advection:
+            self.adv_solver = GenericTransportSolver(
+                "advection",
+                self.solution,
+                self.adv_kwargs["timestep"] / self.adv_kwargs["subcycles"],
+                self.adv_kwargs["time_integrator"],
+                solution_old=self.solution_old,
+                eq_attrs={"u": self.adv_kwargs["u"]},
+                bcs=self.adv_kwargs["bcs"],
+                solver_parameters=self.adv_kwargs["solver_params"],
+            )
 
-        self.ls_solver = GenericTransportSolver(
-            "advection",
-            self.solution,
-            self.tstep / self.subcycles,
-            self.tstep_alg,
-            eq_attrs={"u": self.u},
-            solver_parameters=self.solver_params,
-        )
+        if self.reinitialisation:
+            reinitialisation_equation = Equation(
+                fd.TestFunction(self.solution_space),
+                self.solution_space,
+                reinitialisation_term,
+                mass_term=scalar_eq.mass_term,
+                eq_attrs={
+                    "level_set_grad": self.solution_grad,
+                    "epsilon": self.reini_kwargs["epsilon"],
+                },
+            )
 
-        reinitialisation_equation = Equation(
-            test,
-            self.solution_space,
-            reinitialisation_term,
-            mass_term=scalar_eq.mass_term,
-            eq_attrs=self.reini_eq_attrs,
-        )
-        self.reini_ts = self.reini_params["tstep_alg"](
-            reinitialisation_equation,
-            self.solution,
-            self.reini_params["tstep"],
-            solver_parameters=self.solver_params,
-        )
+            self.reini_integrator = self.reini_kwargs["time_integrator"](
+                reinitialisation_equation,
+                self.solution,
+                self.reini_kwargs["timestep"],
+                solution_old=self.solution_old,
+                solver_parameters=self.reini_kwargs["solver_params"],
+            )
 
-    def solve(self, step: int):
-        """Updates the level-set function.
+        self.step = 0
+        self._solvers_ready = True
 
-        Calls advection and reinitialisation solvers within a subcycling loop.
-        The reinitialisation solver can be iterated and might not be called at each
-        simulation time step.
+    def reinitialise(self) -> None:
+        """Performs reinitialisation steps."""
+        for _ in range(self.reini_kwargs["steps"]):
+            self.reini_integrator.advance(t=0, update_forcings=self.update_gradient)
+
+    def solve(
+        self,
+        disable_advection: bool = False,
+        disable_reinitialisation: bool = False,
+    ) -> None:
+        """Updates the level-set function by means of advection and reinitialisation.
 
         Args:
-            step:
-              An integer representing the current simulation step.
+          disable_advection:
+            A boolean to disable the advection solve.
+          disable_reinitialisation:
+            A boolean to disable the reinitialisation solve.
         """
-        if not self.solvers_ready:
+        if not self._solvers_ready:
             self.set_up_solvers()
-            self.solvers_ready = True
 
-        for subcycle in range(self.subcycles):
-            self.ls_solver.solve()
+        if self.advection and not disable_advection:
+            for _ in range(self.adv_kwargs["subcycles"]):
+                self.adv_solver.solve()
+                self.step += 1
 
-            if step >= self.reini_params["frequency"]:
-                self.reini_ts.solution_old.assign(self.solution)
+                if self.reinitialisation and not disable_reinitialisation:
+                    if self.step % self.reini_kwargs["frequency"] == 0:
+                        self.reinitialise()
 
-            if step % self.reini_params["frequency"] == 0:
-                for reini_step in range(self.reini_params["iterations"]):
-                    self.reini_ts.advance()
-
-                self.ls_solver.solution_old.assign(self.solution)
+        elif self.reinitialisation and not disable_reinitialisation:
+            if self.step % self.reini_kwargs["frequency"] == 0:
+                self.reinitialise()
 
 
 def field_interface_recursive(
