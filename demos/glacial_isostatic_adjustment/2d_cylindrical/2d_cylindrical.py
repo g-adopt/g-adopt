@@ -362,7 +362,7 @@ ice_load = rho_ice * g * (Hice_1 * disc_1 + Hice_2 * disc_2)
 
 # # Write ice thicknesss .pvd file
 # ice_thickness = Function(W, name="Ice thickness").interpolate(
-#     Hice1 * disc1 + Hice2 * disc2
+#     Hice_1 * disc_1 + Hice_2 * disc_2
 # )
 # zero_ice_thickness = Function(W, name="zero").assign(0)  # Used for plotting later
 # ice_thickness_file = VTKFile("ice.pvd").write(ice_thickness, zero_ice_thickness)
@@ -592,16 +592,16 @@ for timestep in range(max_timesteps + 1):
 
 #     # Artificially warp the output data in the vertical direction by the free surface
 #     # height. Note the mesh is not really moving!
-#     warped = data.warp_by_vector(vectors="displacement", factor=1500)
+#     warped = data.warp_by_vector(vectors="Displacement", factor=1500)
 #     arrows = warped.glyph(
-#         orient="velocity", scale="velocity", factor=1e14, tolerance=0.01
+#         orient="Velocity", scale="Velocity", factor=1e14, tolerance=0.01
 #     )
 #     plotter.add_mesh(arrows, color="grey", lighting=False)
 
 #     # Add the warped displacement field to the frame
 #     plotter.add_mesh(
 #         warped,
-#         scalars="displacement",
+#         scalars="Displacement",
 #         component=None,
 #         lighting=False,
 #         # show_edges=True,
@@ -628,7 +628,7 @@ for timestep in range(max_timesteps + 1):
 #     plotter.add_text(f"Time: {times[i]:6} years", name="time-label")
 
 #     if i == 0:
-#         add_ice(plotter, scalar="zero")
+#         plot_ice_ring(plotter, ice_ring, scalar="zero")
 #         for j in range(10):
 #             plotter.write_frame()
 

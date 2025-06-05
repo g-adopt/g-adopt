@@ -76,6 +76,7 @@ psi.dat.data[:] = conservative_level_set(signed_distance_array, epsilon)
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
+# from numpy import linspace
 
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")

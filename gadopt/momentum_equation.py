@@ -180,6 +180,33 @@ def divergence_term(
     return -F
 
 
+def prestress_adv_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+    """Advection of background hydrostatic pressure for linearised GIA simulations."""
+    Vi = eq.approximation.Vi
+    rho0 = eq.approximation.density
+    g = eq.approximation.g
+    u_r = dot(trial, upward_normal(eq.mesh))
+
+    # Only include jump term for discontinuous density spaces?
+    if is_continuous(rho0):
+        F = 0
+    else:
+        # change ds for extruded mesh? maybe not a good idea?
+        if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
+            dS = dS_h
+        F = Vi("+") * jump(rho0) * u_r("+") * g("+") * dot(eq.test("+"), eq.n("+")) * dS
+    if eq.approximation.compressible_adv_hyd_pre:
+        # Include body integral after i.b.p of hydrostatic prestress advection term
+        # Analytical solution from Cathles 2024 Eq 2b doesn't include prestress
+        # so we neglect this term but keep the free surface term that accounts for
+        # viscous feedback at isostatic equibrium
+        F -= div(eq.test) * Vi * rho0 * g * u_r * eq.dx
+
+    return -F
+
+
 viscosity_term.required_attrs = set()
 viscosity_term.optional_attrs = {"m", "stress_old", "interior_penalty"}
 pressure_gradient_term.required_attrs = {"p"}
@@ -188,9 +215,11 @@ momentum_source_term.required_attrs = set()
 momentum_source_term.optional_attrs = {"p", "T", "displ"}
 divergence_term.required_attrs = {"u"}
 divergence_term.optional_attrs = set()
+prestress_adv_term.required_attrs = set()
+prestress_adv_term.optional_attrs = set()
 
 rsdl_terms_momentum = [viscosity_term, pressure_gradient_term, momentum_source_term]
 rsdl_terms_mass = divergence_term
 rsdl_terms_stokes = [rsdl_terms_momentum, rsdl_terms_mass]
 
-rsdl_terms_viscoelastic = [viscosity_term, momentum_source_term]
+rsdl_terms_viscoelastic = [viscosity_term, momentum_source_term, prestress_adv_term]

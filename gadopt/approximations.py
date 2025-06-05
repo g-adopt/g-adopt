@@ -372,3 +372,188 @@ class Approximation:
     def viscous_dissipation(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Product:
         """Calculates the viscous dissipation term in the energy conservation."""
         return self.viscous_dissipation_factor * fd.inner(self.stress(u), fd.grad(u))
+
+
+class ViscoelasticApproximation:
+    _presets = ["SDVA", "MDA", "CIVA"]
+    _equations = ["momentum", "mass"]
+
+    _momentum_components = {}
+    _momentum_components["SDVA"] = [
+        "hydrostatic_prestress_advection",
+        "viscoelastic_buoyancy",
+    ]
+    _momentum_components["MDA"] = _momentum_components["SDVA"]
+    _momentum_components["CIVA"] = _momentum_components["SDVA"] + [
+        "compressible_buoyancy",
+        "compressible_strain",
+        "compressible_stress",
+        "internal_variable",
+    ]
+
+    _mass_components = {}
+    _mass_components["SDVA"] = ["volume_continuity"]
+    _mass_components["MDA"] = _momentum_components["SDVA"]
+    _mass_components["CIVA"] = _momentum_components["SDVA"]
+
+    def __init__(
+        self,
+        preset_or_components: str | dict[str, list[str]],
+        /,
+        *,
+        dimensional: bool,
+        parameters: dict[str, Number | fd.Constant | fd.Function] = {},
+    ) -> None:
+        if isinstance(preset_or_components, str):
+            assert preset_or_components in self._presets, "Unknown preset provided."
+            self.preset = preset_or_components
+
+            for equation in self._equations:
+                setattr(
+                    self,
+                    f"{equation}_components",
+                    getattr(self, f"_{equation}_components").get(self.preset),
+                )
+        else:
+            self.preset = None
+
+            for equation, components in preset_or_components.items():
+                assert equation in self._equations, "Unknown equation provided."
+                setattr(self, f"{equation}_components", components)
+
+        self.dimensional = dimensional
+        for parameter, value in parameters.items():
+            setattr(self, parameter, ensure_constant(value))
+
+        if not self.dimensional:
+            self.check_reference_profiles()
+
+        if getattr(self, "momentum_components", None) is not None:
+            self.set_buoyancy()
+            self.set_compressible_stress()
+            self.set_hydrostatic_prestress_advection()
+
+        if getattr(self, "mass_components", None) is not None:
+            self.set_flux_divergence()
+
+    ####################################################################################
+
+    def check_reference_profiles(self) -> None:
+        """Ensures reference profiles are defined for non-dimensional systems."""
+        for attribute in ["G", "g", "K", "mu", "rho"]:
+            if not hasattr(self, attribute):
+                setattr(self, attribute, fd.Constant(1.0))
+
+    ####################################################################################
+
+    def set_buoyancy(self) -> None:
+        """Defines buoyancy factors in the momentum conservation."""
+        self.viscoelastic_buoyancy = 0.0
+        if "viscoelastic_buoyancy" in self.momentum_components:
+            self.viscoelastic_buoyancy = fd.grad(self.rho) * self.g
+            if not self.dimensional:
+                self.viscoelastic_buoyancy *= self.Wei
+
+        self.compressible_buoyancy = False
+        if "compressible_buoyancy" in self.momentum_components:
+            self.compressible_buoyancy = True
+
+    def set_compressible_strain(self) -> None:
+        """Defines the compressible strain factor in the momentum conservation."""
+        self.compressible_strain = 0.0
+        if "compressible_strain" in self.momentum_components:
+            self.compressible_strain = -1 / 3
+
+    def set_compressible_stress(self) -> None:
+        """Defines the compressible stress factor in the momentum conservation."""
+        self.compressible_stress = 0.0
+        if "compressible_stress" in self.momentum_components:
+            self.compressible_stress = -self.K
+
+    def set_flux_divergence(self) -> None:
+        """Defines the density contribution to the flux in the mass conservation."""
+        if "volume_continuity" in self.mass_components:
+            self.rho_flux = 1.0
+        elif "mass_continuity" in self.mass_components:
+            self.rho_flux = self.rho
+        else:
+            raise ValueError("Unknown continuity equation.")
+
+    def set_hydrostatic_prestress_advection(self) -> None:
+        """Defines the hydrostatic prestress advection in the momentum conservation."""
+        self.hydrostatic_prestress_advection = 0.0
+        if "hydrostatic_prestress_advection" in self.momentum_components:
+            self.hydrostatic_prestress_advection = self.rho * self.g
+            if not self.dimensional:
+                self.hydrostatic_prestress_advection *= self.Wei
+
+    def set_viscous_stress(self) -> None:
+        """Defines the viscous stress factor used in the momentum conservation."""
+        if "internal_variable" in self.momentum_components:
+            self.viscous_stress_factor = 2 * self.G
+        else:
+            self.viscous_stress_factor = 2 * self.mu
+
+    ####################################################################################
+
+    def buoyancy(
+        self,
+        *,
+        displ: fd.Function | float = 0.0,
+        params_fs: dict[str, Any] | None = None,
+    ) -> fd.ufl.algebra.Sum:
+        """Calculates the buoyancy term in the momentum conservation.
+
+        Either returns the buoyancy term for the interior of the domain or that of the
+        free surface described by `params_fs`.
+        """
+        # Calculates domain interior buoyancy
+        buoyancy = fd.inner(self.viscoelastic_buoyancy, displ)
+        if self.compressible_buoyancy:
+            buoyancy += self.viscoelastic_buoyancy * fd.div(displ)
+
+        if params_fs is not None:  # Calculates free-surface buoyancy
+            buoyancy_free_surface = (self.rho - params_fs.get("rho_ext", 0)) * self.g
+            if not self.dimensional:
+                buoyancy_free_surface *= params_fs["Ra_fs"]
+            if params_fs.get("include_buoyancy", True):
+                buoyancy_free_surface -= buoyancy
+
+            return buoyancy_free_surface
+
+        return buoyancy
+
+    def strain(self, u: fd.ufl.indexed.Indexed) -> fd.ufl.algebra.Sum:
+        """Calculates the strain term in the momentum conservation."""
+        identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
+
+        incompressible_part = fd.sym(fd.grad(u))
+        compressible_part = (
+            self.compressible_strain * fd.tr(incompressible_part) * identity
+        )
+
+        return incompressible_part + compressible_part
+
+    def stress(
+        self,
+        u: fd.ufl.indexed.Indexed,
+        *,
+        m: list[fd.ufl.indexed.Indexed] = [0.0],
+        stress_old: float | fd.Function = 0.0,
+        bulk_shear_ratio: float = 1.0,
+    ) -> fd.ufl.algebra.Sum:
+        """Calculates the stress term in momentum and energy conservations.
+
+        Note: In the SDVA, the stress term includes its value at the previous time step.
+        """
+        identity = fd.Identity(extract_unique_domain(u).geometric_dimension())
+        if isinstance(stress_old, float):
+            stress_old *= identity
+
+        compressive_part = (
+            bulk_shear_ratio * self.compressible_stress * fd.div(u) * identity
+        )
+        shear_part = self.viscous_stress_factor * len(m) * self.strain(u)
+        internal_variable_part = -self.viscous_stress_factor * sum(m)
+
+        return compressive_part + shear_part + internal_variable_part + stress_old

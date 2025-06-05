@@ -1,15 +1,15 @@
 # Global mantle convection simulation with sequentially imposed GPlates surface velocities
 # ========================================================================================
-#
+
 # In this tutorial, we transition from our idealised 3-D spherical
 # shell geometry simulation to a scenario where surface velocities
 # from a plate reconstruction model are used as the top-surface
 # velocity boundary condition.  This type of simulation has been
 # extensively used over recent decades to study the spatial and
-# temporal evolution of mantle flow.  This tutorial builds on the
+# temporal evolution of mantle flow. This tutorial builds on the
 # *idealised 3-D spherical shell geometry simulation* and a user
 # should follow that tutorial prior to this.
-#
+
 # This example focuses on:
 # 1. How to import GPlates functionalities into G-ADOPT. For being
 #    able to import gadopt.gplates module you need to have a working
@@ -21,14 +21,14 @@
 #    constraints on tangential velocities at the surface.
 # 4. How to load a 1-D radial profile from a file (here, to prescribe
 #    a spherically symmetric viscosity)
-#
+
 # Aside from these aspects, the case closely follows the previous 3-D
 # spherical example.
-#
+
 # Let's begin with the usual import of G-ADOPT, set up of the mesh,
 # function spaces, functions to hold our solutions, material
 # properties, approximations and initial conditions:
-#
+
 # Note that sometimes we get a confusing `SyntaxWarning` during the
 # set up. This is due to the pyGPlates module itself, but doesn't
 # affect any functionality and is safe to ignore.
@@ -259,11 +259,11 @@ gplates_velocities = GplatesVelocityFunction(
 # for mytime in [200, 100, 0]:
 #     gplates_velocities.update_plate_reconstruction(ndtime=plate_reconstruction_model.age2ndtime(mytime))
 #     vtk_file.write(gplates_velocities)
-#
+
 # import pyvista as pv
 # import os
 # dataset = pv.read("gplates_velocity/gplates_velocity_0.vtu")
-#
+
 # # Create a plotter object
 # plotter = pv.Plotter()
 # # Whether our plot should be interactive or not
@@ -324,9 +324,9 @@ stokes_solver = StokesSolver(
 # -
 
 # Before we begin with the time-stepping, we need to know when to
-# stop, which is when we arrive at the present-day.  To achieve this,
+# stop, which is when we arrive at the present-day. To achieve this,
 # we define `presentday_ndtime` which tells us when the simulation
-# should end.  Note that this tutorial terminates after reaching a
+# should end. Note that this tutorial terminates after reaching a
 # specified number of timesteps, prior to reaching the present-day.
 
 # +
