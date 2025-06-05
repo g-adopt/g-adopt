@@ -243,9 +243,6 @@ level_set_solver = [
     for ls in level_set
 ]
 level_set_grad = [ls_solv.solution_grad for ls_solv in level_set_solver]
-if "Trim_2023" in Simulation.name:
-    for ls_solver in level_set_solver:
-        ls_solver.reini_params["iterations"] = 0
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(

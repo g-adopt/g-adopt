@@ -531,13 +531,6 @@ class LevelSetSolver:
         )
         self.gradient_solver = fd.LinearVariationalSolver(problem)
 
-    def update_gradient(self) -> None:
-        """Calls the gradient solver.
-
-        Can be provided as a forcing to time integrators.
-        """
-        self.gradient_solver.solve()
-
     def set_up_solvers(self) -> None:
         """Sets up time integrators for advection and reinitialisation as required."""
         if self.advection:
@@ -574,6 +567,13 @@ class LevelSetSolver:
 
         self.step = 0
         self._solvers_ready = True
+
+    def update_gradient(self) -> None:
+        """Calls the gradient solver.
+
+        Can be provided as a forcing to time integrators.
+        """
+        self.gradient_solver.solve()
 
     def reinitialise(self) -> None:
         """Performs reinitialisation steps."""
