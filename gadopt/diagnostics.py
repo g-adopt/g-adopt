@@ -87,15 +87,15 @@ class GeodynamicalDiagnostics:
         return assemble(self.T * self.dx) / self.domain_volume
 
     def T_min(self):
-        T_data = self.T.dat.data_ro_with_halos[:]
+        T_data = self.T.dat.data_ro
         return self.T.comm.allreduce(T_data.min(), MPI.MIN)
 
     def T_max(self):
-        T_data = self.T.dat.data_ro_with_halos[:]
+        T_data = self.T.dat.data_ro
         return self.T.comm.allreduce(T_data.max(), MPI.MAX)
 
     def ux_max(self, boundary_id=None) -> float:
-        ux_data = self.u.dat.data_ro_with_halos[:, 0]
+        ux_data = self.u.dat.data_ro[:, 0]
 
         if boundary_id:
             bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
