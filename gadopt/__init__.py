@@ -13,9 +13,7 @@ from .level_set_tools import (
     LevelSetSolver,
     Material,
     assign_level_set_values,
-    density_RaB,
     entrainment,
-    field_interface,
     interface_thickness,
     material_field,
 )

@@ -32,7 +32,6 @@ __all__ = [
     "material_field",
 ]
 
-
 # Default solver options for level-set advection and reinitialisation
 solver_params_default = {
     "mat_type": "aij",
