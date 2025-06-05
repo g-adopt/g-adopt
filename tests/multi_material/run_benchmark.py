@@ -42,7 +42,7 @@ def write_output(output_file):
         *stokes_function.subfunctions,
         temperature,
         *level_set,
-        *level_set_grad_proj,
+        *level_set_grad,
         *output_fields,
     )
 
@@ -235,16 +235,16 @@ stokes_solver = ga.StokesSolver(
 stokes_solver.solve()
 
 # Set up level-set solvers
+adv_kwargs = {"u": velocity, "timestep": timestep}
+reini_kwargs = {"epsilon": epsilon, "timestep": 1e-2, "frequency": 5}
+if Simulation.name == "Tosi_2015":
+    # Speed up simulation by avoiding frequent reinitialisation
+    reini_kwargs["frequency"] = 10
 level_set_solver = [
-    ga.LevelSetSolver(
-        ls, velocity, timestep, ga.eSSPRKs10p3, Simulation.subcycles, epsilon
-    )
+    ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
     for ls in level_set
 ]
-level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solver]
-if "Trim_2023" in Simulation.name:
-    for ls_solver in level_set_solver:
-        ls_solver.reini_params["iterations"] = 0
+level_set_grad = [ls_solv.solution_grad for ls_solv in level_set_solver]
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
@@ -275,17 +275,20 @@ checkpoint_fields = {
 diag_vars = {
     "epsilon": epsilon,
     "level_set": level_set,
-    "level_set_grad_proj": level_set_grad_proj,
+    "level_set_grad": level_set_grad,
     "viscosity": viscosity,
 }
 geo_diag = ga.GeodynamicalDiagnostics(
     stokes_function, temperature, bottom_id=3, top_id=4
 )
 
-# Function to be coupled with the energy solver
-if "Trim_2023" in Simulation.name:
+if Simulation.name == "Trim_2023":
+    # Omit level-set reinitialisation
+    disable_reinitialisation = True
+    # Function to be coupled with the energy solver
     update_forcings = partial(Simulation.internal_heating_rate, H)
 else:
+    disable_reinitialisation = False
     update_forcings = None
 
 # Add old velocity to simulation class for steady state criteria for Tosi benchmark
@@ -318,7 +321,7 @@ while True:
 
     # Advect each level set
     for ls_solv in level_set_solver:
-        ls_solv.solve(step)
+        ls_solv.solve(disable_reinitialisation=disable_reinitialisation)
 
     if "Tosi_2015" in Simulation.name:
         # Update old velocity prior to solving for Tosi steady state criteria
