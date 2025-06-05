@@ -203,15 +203,15 @@ class Simulation:
     @classmethod
     def diagnostics(cls, simu_time, geo_diag, diag_vars):
         epsilon = diag_vars["epsilon"]
-        eps_data = epsilon.dat.data_ro_with_halos
+        eps_data = epsilon.dat.data_ro
         level_set = diag_vars["level_set"][0]
-        level_set_data = level_set.dat.data_ro_with_halos
+        level_set_data = level_set.dat.data_ro
         coords_data = (
             fd.Function(
                 fd.VectorFunctionSpace(level_set.ufl_domain(), level_set.ufl_element())
             )
             .interpolate(fd.SpatialCoordinate(level_set))
-            .dat.data_ro_with_halos
+            .dat.data_ro
         )
 
         mask_ls_outside = (

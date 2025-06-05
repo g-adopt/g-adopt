@@ -839,12 +839,12 @@ def min_max_height(
 
     coords = node_coordinates(level_set)
 
-    coords_data = coords.dat.data_ro_with_halos
-    ls_data = level_set.dat.data_ro_with_halos
+    coords_data = coords.dat.data_ro
+    ls_data = level_set.dat.data_ro
     if isinstance(epsilon, float):
         eps_data = epsilon * np.ones_like(ls_data)
     else:
-        eps_data = epsilon.dat.data_ro_with_halos
+        eps_data = epsilon.dat.data_ro
 
     mask_ls = comparison(ls_data, 0.5)
     if mask_ls.any():
