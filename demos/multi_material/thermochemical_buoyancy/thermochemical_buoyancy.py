@@ -138,6 +138,7 @@ assign_level_set_values(
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
+# from numpy import linspace
 
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
@@ -263,10 +264,12 @@ stokes_solver = StokesSolver(
     transpose_nullspace=Z_nullspace,
 )
 
-subcycles = 1  # Number of advection solves to perform within one time step
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
-# Increase the reinitialisation time step to make up for the coarseness of the mesh
-level_set_solver.reini_params["tstep"] *= 20
+# Instantiate a solver object for level-set advection and reinitialisation. G-ADOPT
+# provides default values for most arguments; we only provide those that do not have
+# one. No boundary conditions are required, as the numerical domain is closed.
+adv_kwargs = {"u": u, "timestep": delta_t}
+reini_kwargs = {"epsilon": epsilon}
+level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -296,7 +299,7 @@ while True:
     energy_solver.solve()
 
     # Advect level set
-    level_set_solver.solve(step)
+    level_set_solver.solve()
 
     # Calculate proportion of material entrained above a given height
     buoy_entr = entrainment(psi, material_area, entrainment_height)
