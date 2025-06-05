@@ -803,7 +803,7 @@ def min_max_height(
       epsilon:
         A float or Firedrake function denoting the thickness of the material interface
       side:
-        An integer (0 or 1) indicating the level-set side of the target material
+        An integer (0 or 1) denoting the level-set value on the target material side
       mode:
         A string ("min" or "max") specifying which extremum height is sought
 
