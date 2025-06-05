@@ -272,12 +272,7 @@ checkpoint_fields = {
 }
 
 # Objects used to calculate simulation diagnostics
-diag_vars = {
-    "epsilon": epsilon,
-    "level_set": level_set,
-    "level_set_grad": level_set_grad,
-    "viscosity": viscosity,
-}
+diag_vars = {"epsilon": epsilon, "level_set": level_set, "viscosity": viscosity}
 geo_diag = ga.GeodynamicalDiagnostics(
     stokes_function, temperature, bottom_id=3, top_id=4
 )
