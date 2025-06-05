@@ -551,10 +551,7 @@ class LevelSetSolver:
                 self.solution_space,
                 reinitialisation_term,
                 mass_term=scalar_eq.mass_term,
-                eq_attrs={
-                    "level_set_grad": self.solution_grad,
-                    "epsilon": self.reini_kwargs["epsilon"],
-                },
+                eq_attrs={"epsilon": self.reini_kwargs["epsilon"]},
             )
 
             self.reini_integrator = self.reini_kwargs["time_integrator"](
@@ -568,7 +565,7 @@ class LevelSetSolver:
         self.step = 0
         self._solvers_ready = True
 
-    def update_gradient(self) -> None:
+    def update_gradient(self, *args, **kwargs) -> None:
         """Calls the gradient solver.
 
         Can be provided as a forcing to time integrators.
