@@ -35,7 +35,7 @@ class GeodynamicalDiagnostics:
       T_avg: Average temperature in the domain
       T_min: Minimum temperature in domain
       T_max: Maximum temperature in domain
-      ux_max: Maximum velocity (optionally over a given boundary)
+      ux_max: Maximum velocity (first component, optionally over a given boundary)
 
     """
 
@@ -95,10 +95,10 @@ class GeodynamicalDiagnostics:
         return self.T.comm.allreduce(T_data.max(), MPI.MAX)
 
     def ux_max(self, boundary_id=None) -> float:
-        ux_data = self.u.dat.data_ro[:, 0]
-
         if boundary_id:
             bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
-            ux_data = ux_data[bcu.nodes]
+            ux_data = self.u.dat.data_ro_with_halos[bcu.nodes, 0]
+        else:
+            ux_data = self.u.dat.data_ro[:, 0]
 
-        return self.u.comm.allreduce(ux_data.max(initial=0), MPI.MAX)
+        return self.u.comm.allreduce(ux_data.max(), MPI.MAX)
