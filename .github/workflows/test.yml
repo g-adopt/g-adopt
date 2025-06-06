@@ -38,6 +38,9 @@ jobs:
     container:
       image: firedrakeproject/firedrake-vanilla-default:latest
 
+    needs: check_commit
+    if: ${{ needs.check_commit.outputs.skip != 'true' }}
+
     steps:
       - name: Install dependencies
         run: |
@@ -67,7 +70,7 @@ jobs:
       group: testing-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
 
-    needs: check_commit
+    needs: smoke_test
     if: ${{ needs.check_commit.outputs.skip != 'true' }}
 
     env:
