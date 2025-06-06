@@ -19,7 +19,7 @@ import shapely as sl
 from mpi4py import MPI
 
 from . import scalar_equation as scalar_eq
-from .equations import Equation
+from .equations import Equation, interior_penalty_factor
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
 from .utility import node_coordinates
@@ -335,7 +335,7 @@ def assign_level_set_values(
 def reinitialisation_term(
     eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
 ) -> fd.Form:
-    """Term for the conservative level set reinitialisation equation.
+    """Term for the conservative-level-set reinitialisation equation.
 
     Implements terms on the right-hand side of Equation 17 from
     Parameswaran, S., & Mandal, J. C. (2023).
@@ -344,15 +344,29 @@ def reinitialisation_term(
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
     sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
-    balance_term = (
-        eq.epsilon
-        * (1 - 2 * trial)
-        * fd.sqrt(fd.inner(eq.level_set_grad, eq.level_set_grad))
-        * eq.test
-        * eq.dx
-    )
 
-    return sharpen_term + balance_term
+    grad_norm = fd.sqrt(fd.inner(fd.grad(trial), fd.grad(trial)))
+    balance_term = eq.epsilon * (1 - 2 * trial) * grad_norm * eq.test * eq.dx
+
+    h = fd.avg(fd.CellVolume(eq.mesh)) / fd.FacetArea(eq.mesh)
+    sigma = interior_penalty_factor(eq)
+
+    alpha = h / sigma
+    beta = 1
+    gamma = h / sigma
+
+    grad_flux = beta * fd.jump(trial, eq.n) / h + fd.avg(fd.grad(trial))
+    grad_flux_norm = fd.sqrt(fd.inner(grad_flux, grad_flux))
+    balance_flux = fd.avg(eq.epsilon) * (1 - 2 * fd.avg(trial)) * grad_flux_norm
+    flux_term = alpha * balance_flux * fd.avg(eq.test) * eq.dS
+
+    penalty_term = gamma * fd.jump(trial) * fd.jump(eq.test) * eq.dS
+
+    return sharpen_term + balance_term + flux_term + penalty_term
+
+
+reinitialisation_term.required_attrs = {"epsilon"}
+reinitialisation_term.optional_attrs = set()
 
 
 class LevelSetSolver:
@@ -504,14 +518,13 @@ class LevelSetSolver:
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
-        bilinear_form = fd.inner(test, trial) * fd.dx(domain=self.mesh)
-        ibp_element = -self.solution * fd.div(test) * fd.dx(domain=self.mesh)
-        ibp_boundary = (
-            self.solution
-            * fd.dot(test, fd.FacetNormal(self.mesh))
-            * fd.ds(domain=self.mesh)
+        bilinear_form = fd.inner(test, trial) * fd.dx
+        ibp_element = -self.solution * fd.div(test) * fd.dx
+        ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * fd.ds
+        boundary_flux = (
+            fd.avg(self.solution) * fd.jump(test, fd.FacetNormal(self.mesh)) * fd.dS
         )
-        linear_form = ibp_element + ibp_boundary
+        linear_form = ibp_element + ibp_boundary + boundary_flux
 
         problem = fd.LinearVariationalProblem(
             bilinear_form, linear_form, self.solution_grad
@@ -538,10 +551,7 @@ class LevelSetSolver:
                 self.solution_space,
                 reinitialisation_term,
                 mass_term=scalar_eq.mass_term,
-                eq_attrs={
-                    "level_set_grad": self.solution_grad,
-                    "epsilon": self.reini_kwargs["epsilon"],
-                },
+                eq_attrs={"epsilon": self.reini_kwargs["epsilon"]},
             )
 
             self.reini_integrator = self.reini_kwargs["time_integrator"](
@@ -792,7 +802,3 @@ def entrainment(
         fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
         / material_area
     )
-
-
-reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
-reinitialisation_term.optional_attrs = set()
