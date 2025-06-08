@@ -1,7 +1,6 @@
 import argparse
 from cases import cases, schedulers
 from itertools import product
-import subprocess
 import sys
 
 
@@ -26,8 +25,7 @@ def submit_subcommand(args):
                 *command.split(),
                 sys.executable,
                 "inverse.py",
-                "_".join(test_mode)
-                ,
+                "_".join(test_mode),
             ])
         )
         return
