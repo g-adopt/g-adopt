@@ -393,6 +393,20 @@ if __name__ == "__main__":
             )
             print(f"case {case_name} & scheduler {scheduler_name}: result: {minconv}.")
     else:
+        # This is the part of the code run by longtest
+        # For each combination of case_name and scheduler_name
+        # we first run a Taylor test using *No Scheduler*, and
+        # write out the resulting `inverse_problem[minconv]` to
+        # {case_name}_{scheduler_name}.conv .
+        #
+        # Then after that, we run the tape Forward and Reverse
+        # And write out the obtained derivative and the functional
+        # and to make sure the corresponding values across all
+        # schedulers are the same.
+
+        # This way instead of computing an expensive taylor test for all
+        # scheduler cases, we only do it for one scheduling case, and
+        # then only compare functional+derivative values between them.
         case_name, scheduler_name = sys.argv[1].split("_")
         weightings = cases[case_name]
         scheduler = schedulers[scheduler_name]
@@ -411,7 +425,7 @@ if __name__ == "__main__":
         else:
             inverse_problem = generate_inverse_problem(*weightings, scheduler)
 
-        # Forward and Reverse tap
+        # Forward and Reverse tape
         # cb is a class containing values/derivatives/controls
         # val is the first objective calculation while populating the tape
         val, cb = run_forward_and_back(inverse_problem)
