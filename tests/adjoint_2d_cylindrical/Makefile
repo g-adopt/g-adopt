@@ -17,7 +17,7 @@ SHELL = /bin/bash
 	echo "running spherical $@" >&2
 	mkdir -p pbs_output
 	jobid=$$(cat .fwd_job_id); \
-	python3 ./test_runner.py submit -t \"qsub -v GADOPT_CHECKOUT=$(gadopt_checkout),GADOPT_SETUP=$(gadopt_setup) -W block=true -W depend=afterok:$${jobid} -N {test_mode} -l storage=gdata/xd2+scratch/xd2+gdata/fp50,ncpus=$(cores),walltime=04:00:00,mem={mem}GB,wd,jobfs=200GB -q normalsr -P $(project) -o pbs_output/{test_mode}.out -e pbs_output/{test_mode}.err -- ./run_gadi.sh \" $*
+	python3 driver.py submit -t \"qsub -v GADOPT_CHECKOUT=$(gadopt_checkout),GADOPT_SETUP=$(gadopt_setup) -W block=true -W depend=afterok:$${jobid} -N {test_mode} -l storage=gdata/xd2+scratch/xd2+gdata/fp50,ncpus=$(cores),walltime=04:00:00,mem={mem}GB,wd,jobfs=200GB -q normalsr -P $(project) -o pbs_output/{test_mode}.out -e pbs_output/{test_mode}.err -- ./run_gadi.sh \" $*
 	wait
 
 Checkpoint_State.h5: forward.py clean
