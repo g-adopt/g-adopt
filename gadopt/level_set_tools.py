@@ -600,7 +600,7 @@ def material_field_from_copy(
     level_set: fd.Function | list[fd.Function],
     field_values: list,
     interface: str,
-    adjoint: bool = False,
+    adjoint: bool,
 ) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
     """Generates UFL algebra describing a physical property across the domain.
 
@@ -679,6 +679,7 @@ def material_field(
     level_set: fd.Function | list[fd.Function],
     field_values: list,
     interface: str,
+    adjoint: bool = False,
 ) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
     """Generates UFL algebra describing a physical property across the domain.
 
@@ -692,6 +693,8 @@ def material_field(
         A list of physical property values specific to each material
       interface:
         A string specifying how property transitions between materials are calculated
+      adjoint:
+        A boolean indicating an adjoint-compatible implementation of the sharp interface
 
     Returns:
       UFL algebra representing the physical property throughout the domain
@@ -706,7 +709,7 @@ def material_field(
     if interface not in _impl_interface:
         raise ValueError(f"Interface must be one of {_impl_interface}.")
 
-    return material_field_from_copy(level_set.copy(), field_values, interface)
+    return material_field_from_copy(level_set.copy(), field_values, interface, adjoint)
 
 
 def entrainment(
