@@ -8,11 +8,12 @@ import gdrift
 from gdrift.profile import SplineProfile
 from checkpoint_schedules import SingleDiskStorageSchedule, SingleMemoryStorageSchedule
 from pyadjoint import Block
-import faulthandler
-import sys
+import faulthandler, signal
+# import sys
 
 # Angus's Trick
-faulthandler.enable(sys.stderr)
+# faulthandler.enable(sys.stderr)
+faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -48,22 +49,28 @@ def visualise_derivative():
     my_fi.write(my_der)
 
 
-def test_taping(scheduler):
-    Tic, reduced_functional = forward_problem(scheduler)
+def test_taping(scheduler, age0=10):
+    Tic, reduced_functional = forward_problem(scheduler=scheduler, age0=age0)
     repeat_val = reduced_functional([Tic])
     der = reduced_functional.derivative(options={"riesz_representation": "L2"})
     der.rename("derivative")
         
     # write out
-    out_type = "disk" if isinstance(scheduler, SingleDiskStorageSchedule) else "memory"
+    out_type = str(scheduler)
     log(f"{out_type}; Norm: ", assemble(der ** 2 * dx))
     log(f"{out_type}; Reduced Functional Repeat: ", repeat_val)
 
     VTKFile(f"derivative_{out_type}_None.pvd").write(der)
 
 
-def conduct_inversion():
-    Tic, reduced_functional = forward_problem(scheduler=SingleMemoryStorageSchedule())
+def conduct_inversion(age0=10, obj_scaling=1e3, smoothing_weight=1e-4, damping_weight=1e-3):
+    Tic, reduced_functional = forward_problem(
+        scheduler=None,  # SingleMemoryStorageSchedule(),
+        age0=age0,
+        obj_scaling=obj_scaling,
+        smoothing_weight=smoothing_weight,
+        damping_weight=damping_weight,
+    )
 
     # Perform a bounded nonlinear optimisation where temperature
     # is only permitted to lie in the range [0, 1]
@@ -72,7 +79,7 @@ def conduct_inversion():
     T_lb.assign(0.0)
     T_ub.assign(0.76)
 
-    minimisation_parameters["Status Test"]["Iteration Limit"] = 20
+    minimisation_parameters["Status Test"]["Iteration Limit"] = 100
     minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 0.1
     minimisation_parameters["Step"]["Trust Region"]["Radius Growing Rate"] = 5
     minimisation_parameters["Step"]["Trust Region"]["Radius Shrinking Rate (Negative rho)"] = 0.03125
@@ -92,23 +99,25 @@ def conduct_inversion():
     # Adding the callback function
     # optimiser.add_callback(callback)
 
-    # Restore from previous checkpoint
+    # Restore from previous checkpoint if there is a checkpoint path
+    # if find_last_checkpoint() is not None:
     optimiser.restore()
 
     # Run the optimisation
     optimiser.run()
 
 
-def conduct_taylor_test():
-    Tic, reduced_functional = forward_problem()
+def conduct_taylor_test(scheduler, age0=2.0):
+    Tic, reduced_functional = forward_problem(scheduler=scheduler, age0=age0)
     Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
     Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
     _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-def forward_problem(scheduler=SingleMemoryStorageSchedule()):
-    # # Enable disk checkpointing for the adjoint
-    # enable_disk_checkpointing()
+def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scaling=1e3, smoothing_weight=1e-4, damping_weight=1e-3):
+    # Enable disk checkpointing for the adjoint
+    if isinstance(scheduler, SingleDiskStorageSchedule):
+        enable_disk_checkpointing()
 
     # Getting the working tape
     tape = get_working_tape()
@@ -116,10 +125,12 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule()):
     # clearing tape
     tape.clear_tape()
 
-    # setting gc collection
-    tape.enable_checkpointing(
-        scheduler, gc_timestep_frequency=1, gc_generation=2
-    )
+    # # setting gc collection
+    if scheduler is not None:
+        log(f"using scheduler: {scheduler}")
+        tape.enable_checkpointing(
+            scheduler, gc_timestep_frequency=1, gc_generation=2
+        )
 
     # Set up the base path
     base_path = Path(__file__).resolve().parent
@@ -136,6 +147,9 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule()):
         # Average temperature field
         T_ave = fi.load_function(mesh, name="T_ave_ref")  # Used for regularising T_ic
         T_simulation = fi.load_function(mesh, name="T_ic_0")
+
+    # Making sure we are not overwritting callback results
+    callback_dir = create_next_callback_dir("callback_dir", mesh)
 
     # Loading adiabatic reference fields
     tala_parameters_dict = {}
@@ -276,7 +290,7 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule()):
     presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
 
     # non-dimensionalised time for 40 Myrs ago
-    time = plate_reconstruction_model.age2ndtime(20.0)
+    time = plate_reconstruction_model.age2ndtime(age0)
 
     # Defining control
     control = Control(Tic)
@@ -340,38 +354,35 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule()):
         
 
     # Converting temperature to full temperature and dimensionalising it
-    FullT = Function(Q, name="FullTemperature").interpolate(
+    FullT = Function(Q, name="FullTemperature")
+    FullT.interpolate(
         (T + tala_parameters_dict["Tbar"]) * Constant(3700.0) + Constant(300.0)
     )
 
-    tape.add_block(DiagnosticBlock(FullT, T_obs))
+    tape.add_block(DiagnosticBlock(FullT, T_obs, callback_dir))
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((FullT - T_obs) ** 2 * dx)
     norm_t_misfit = assemble((T_obs) ** 2 * dx)
 
-    # Smoothing term
-    smoothing_weight = 1e-4
-    smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
-    norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
+    # Objective is always accounting for temperature differenece
+    objective = obj_scaling * t_misfit / norm_t_misfit
 
-    # Damping term
-    damping_weight = 1e-3
     damping = assemble((T_0 - T_ave) ** 2 * dx)
     norm_damping = assemble(T_ave ** 2 * dx)
+    objective += obj_scaling * damping_weight * damping / norm_damping
 
-    # Assembling the objective
-    # objective = t_misfit / norm_t_misfit  # In case of temperature only term
-    # objective = damping_weight * damping / norm_damping
-    # objective = smoothing_weight * smoothing / norm_smoothing  # In case of smoothing only
-    objective = 1e3 * (t_misfit / norm_t_misfit + smoothing_weight * smoothing / norm_smoothing + damping_weight * damping / norm_damping)
+    smoothing = assemble(inner(grad(T_0 - T_ave), grad(T_0 - T_ave)) * dx)
+    norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
+    objective += obj_scaling * smoothing_weight * smoothing / norm_smoothing
+
 
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
 
-    # We want to avoid a second call to objective functional with the same value
-    first_call_decorator = first_call_value(predefined_value=objective)
-    ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
+    # # We want to avoid a second call to objective functional with the same value
+    # first_call_decorator = first_call_value(predefined_value=objective)
+    # ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
@@ -383,14 +394,14 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule()):
             self.cb_control = Function(Tic.function_space(), name="control")
 
             # Initial index
-            self.idx = 9
+            self.idx = 0
 
         def __call__(self, control):
             # Interpolating control
             self.cb_control.interpolate(control)
 
             # Writing out functions and mesh
-            with CheckpointFile(f"callback_{self.idx}.h5", mode="w") as checkpoint_fi:
+            with CheckpointFile(str(callback_dir / f"callback_{self.idx}.h5"), mode="w") as checkpoint_fi:
                 checkpoint_fi.save_mesh(mesh)
                 checkpoint_fi.save_function(self.cb_control)
                 checkpoint_fi.save_function(T_obs)
@@ -602,6 +613,23 @@ def find_last_checkpoint():
     return solution_path
 
 
+def find_one_checkpoint(iteration):
+    solution_path = Path.cwd().resolve() / "optimisation_checkpoint" / f"{iteration:1d}" / "solution_checkpoint.h5" 
+    return solution_path
+
+
+
+def create_next_callback_dir(base_name, mesh):
+    i = 0
+    while (Path.cwd() / f"{base_name}_{i}").exists():
+        i += 1
+    mesh.comm.Barrier()
+    new_dir = Path.cwd() / f"{base_name}_{i}"
+    if mesh.comm.rank == 0:
+        new_dir.mkdir()
+    mesh.comm.Barrier()
+    return new_dir
+
 def mu_constructor(mu_radial, Tave, T):
     r"""Constructing a temperature strain-rate dependent velocity
 
@@ -799,7 +827,7 @@ class DiagnosticBlock(Block):
     Useful for outputting gradients in time dependent simulations or inversions
     """
 
-    def __init__(self, function, function_ref):
+    def __init__(self, function, function_ref, callback_dir):
         """Initialises the Diagnostic block.
         """
         super().__init__()
@@ -808,6 +836,7 @@ class DiagnosticBlock(Block):
         self.add_output(function.block_variable)
         self.func_ref = function_ref
         self.f_name = function.name()
+        self.callback_dir = callback_dir
         self.my_idx = 0
 
     def recompute_component(self, inputs, block_variable, idx, prepared):
@@ -818,7 +847,7 @@ class DiagnosticBlock(Block):
 
         log(f"Temperature difference: {functional_value}")
 
-        fi = CheckpointFile(f"FinalState{self.my_idx}.h5", mode="w")
+        fi = CheckpointFile(str(self.callback_dir / f"FinalState{self.my_idx}.h5"), mode="w")
         fi.save_mesh(function_to_write.ufl_domain())
         fi.save_function(function_to_write, name="Temperature")
         self.my_idx += 1
@@ -829,9 +858,41 @@ class DiagnosticBlock(Block):
 
 
 def test_memory():
-    test_taping(SingleMemoryStorageSchedule())
+    test_taping(SingleMemoryStorageSchedule(), age0=10)
+
+
+def test_none():
+    test_taping(None, age0=10)
 
 
 def test_disk():
     test_taping(SingleDiskStorageSchedule())
+
+
+def taylor_memory():
+    conduct_taylor_test(scheduler=SingleMemoryStorageSchedule(), age0=2.0)
+
+
+def taylor_memory_with_age(age0=5.0):
+    conduct_taylor_test(scheduler=SingleMemoryStorageSchedule(), age0=age0)
+
+
+def taylor_memory_long():
+    conduct_taylor_test(scheduler=SingleMemoryStorageSchedule(), age0=10.0)
+
+
+def taylor_storage_2Ma():
+    conduct_taylor_test(scheduler=SingleDiskStorageSchedule(), age0=2.0)
+
+
+def taylor_storage_long():
+    conduct_taylor_test(scheduler=SingleDiskStorageSchedule(), age0=10.0)
+
+
+def taylor_none():
+    conduct_taylor_test(scheduler=None, age0=2.0)
+
+
+def taylor_none_long():
+    conduct_taylor_test(scheduler=None, age0=10.0)
 
