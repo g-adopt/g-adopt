@@ -2,13 +2,13 @@
 # ====================================================================
 #
 # One of the most commonly studied geodynamic observables is **dynamic topography** —
-# surface or lithospheric deflection caused by vertical stresses from mantle flow.
-# That is, regions being pushed up or pulled down by mantle convection beneath them.
-# This is not isostatic topography (like mountain-building from crustal thickening),
-# but instead time-varying, fluid-dynamically driven topography.
+# surface or lithospheric deflection caused by vertical stresses from mantle flow, with
+# regions being pushed up or pulled down due to underlying mantle convection.
+# This "dynamic" topography is transient, and differs to isostatic topography (like
+# mountain-building from crustal thickening).
 #
 # This tutorial demonstrates how to compute **normal stresses acting on a boundary**
-# using **G-ADOPT**.
+# and subsequent dynamic topohraphy using **G-ADOPT**.
 #
 # Specifically, we will compute the radial stress $\sigma_{rr}$ on the boundaries of a
 # 2-D annular domain, and use them to calculate dynamic topography. We examine a time-independent
@@ -46,8 +46,9 @@ from gadopt import *
 # -
 
 # We next load the mesh from a checkpoint file and initialise the temperature field
-# from the same checkpoint, noting that the temperature field is used only through the fixed buoyancy term.
-# Cartesian flags and boundary IDs are collected in a way that is consistent with our previous tutorials.
+# noting that in this tutorial the temperature field is used only through the fixed buoyancy term on the
+# RHS of the Stokes equation. Cartesian flags and boundary IDs are collected in a way that is
+# consistent with our previous tutorials.
 
 # +
 with CheckpointFile("../adjoint_2d_cylindrical/Checkpoint230.h5", mode="r") as f:
@@ -59,7 +60,7 @@ boundaries = get_boundary_ids(mesh)
 # -
 
 # We next set up function spaces, and specify functions to hold our solutions,
-# as with our previous tutorials.
+# as with our previous tutorials (using a Q2-Q1 element pair for velocity and pressure).
 
 # +
 V = VectorFunctionSpace(mesh, "CG", 2)
@@ -102,7 +103,7 @@ z.subfunctions[1].rename("Pressure")
 Ra = Constant(1e7)
 approximation = BoussinesqApproximation(Ra)
 
-# As noted in our previous tutorial, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
+# As noted previously, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
 # of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e. this case incorporates a velocity nullspace,
 # as well as a pressure nullspace). These lead to null-modes (eigenvectors) for the linear system, resulting in a singular matrix.
 # In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at every iteration. We do that below,
@@ -118,9 +119,9 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
-# Boundary conditions are next specified. Given we do not solve an energy equation for this time independent case, no boundary conditions
-# are required for temperature. For velocity, we specify free‐slip conditions on both boundaries.
-# As noted in our 2-D cylindrical tutorial, we incorporate these <b>weakly</b> through the <i>Nitsche</i> approximation.
+# Boundary conditions are next specified. For velocity, we specify free‐slip conditions on both boundaries. As noted in our
+# 2-D cylindrical tutorial, we incorporate these <b>weakly</b> through the <i>Nitsche</i> approximation. Given we do not solve
+# an energy equation for this time independent case, no boundary conditions are required for temperature.
 
 stokes_bcs = {
     "bottom": {"un": 0},
@@ -150,7 +151,12 @@ stokes_solver.solve()
 ns_top = stokes_solver.force_on_boundary(boundaries.top)
 ns_bottom = stokes_solver.force_on_boundary(boundaries.bottom)
 
-# We next setup our output for visualisation of results
+# With these normal stresses, we can now compute dynamic topography at the surface (assuming air loading),
+# and at the CMB (assuming a non-dimensional core density of XXX). Outward normals point in opposite directions at these boundaries.
+
+# SIA ADD CALCULATIONS HERE.
+
+# We next setup our output for visualisation of results:
 
 output_file = VTKFile("output.pvd")
 output_file.write(u, p, T, ns_top, ns_bottom)
@@ -165,8 +171,8 @@ output_file.write(u, p, T, ns_top, ns_bottom)
 # -
 
 # This tutorial has demonstrated how to:
-# - Load fields and meshes from checkpoint files,
-# - Solve the Stokes system using G-ADOPT,
-# - Compute normal stresses on top and bottom boundaries,
-# - Estimate dynamic topography from those normal stresses,
+# - Load fields and meshes from checkpoint files.
+# - Solve the Stokes system using G-ADOPT.
+# - Compute normal stresses on top and bottom boundaries.
+# - Estimate dynamic topography from those normal stresses.
 # - Save and visualize the results.
