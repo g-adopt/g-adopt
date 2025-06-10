@@ -38,7 +38,7 @@ class GPlatesFunctionalityMixin:
         # Assuming `self` is a Firedrake Function instance,
         self.dat.data_with_halos[self.dbc.nodes, :] = (
             self.gplates_connector.get_plate_velocities(
-                self.boundary_coords, ndtime)
+                self.boundary_coords, ndtime)[:, :2]
         )
 
         # At this point the values are updated.
@@ -237,7 +237,8 @@ class pyGplatesConnector(object):
         # cache the reconstruction age
         self.reconstruction_age = self.ndtime2age(ndtime)
         # interpolate velicities onto our grid
-        self.interpolated_u = self._interpolate_seeds_u(target_coords)
+        # self.interpolated_u = self._interpolate_seeds_u(target_coords)
+        self.interpolated_u = self._interpolate_seeds_u(np.column_stack((target_coords, np.zeros(target_coords.shape[0]))))
         return self.interpolated_u
 
     def ndtime2age(self, ndtime):
