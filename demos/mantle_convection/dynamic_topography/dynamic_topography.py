@@ -37,7 +37,7 @@
 #
 # The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
-# We also import pyvista and matplotlib, which is used for plottingoutput.
+# We also import pyvista and matplotlib, which are used for plotting purposes.
 
 from gadopt import *
 # + tags=["active-ipynb"]
@@ -47,7 +47,7 @@ from gadopt import *
 
 # We next load the mesh from a checkpoint file and initialise the temperature field
 # from the same checkpoint, noting that the temperature field is used only through the fixed buoyancy term.
-# Cartesian flags and boundary IDs are collected in a way that is consistent with out previous tutorials.
+# Cartesian flags and boundary IDs are collected in a way that is consistent with our previous tutorials.
 
 # +
 with CheckpointFile("../adjoint_2d_cylindrical/Checkpoint230.h5", mode="r") as f:
@@ -56,6 +56,20 @@ with CheckpointFile("../adjoint_2d_cylindrical/Checkpoint230.h5", mode="r") as f
 
 mesh.cartesian = False
 boundaries = get_boundary_ids(mesh)
+# -
+
+# We next set up function spaces, and specify functions to hold our solutions,
+# as with our previous tutorials.
+
+# +
+V = VectorFunctionSpace(mesh, "CG", 2)
+W = FunctionSpace(mesh, "CG", 1)
+Z = MixedFunctionSpace([V, W])
+
+z = Function(Z)
+u, p = split(z)  # Returns symbolic UFL expression for u and p
+z.subfunctions[0].rename("Velocity")
+z.subfunctions[1].rename("Pressure")
 # -
 
 # We can now visualise the mesh.
@@ -81,20 +95,6 @@ boundaries = get_boundary_ids(mesh)
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
 
-# We next set up function spaces, and specify functions to hold our solutions,
-# as with our previous tutorials.
-
-# +
-V = VectorFunctionSpace(mesh, "CG", 2)
-W = FunctionSpace(mesh, "CG", 1)
-Z = MixedFunctionSpace([V, W])
-
-z = Function(Z)
-u, p = split(z)  # Returns symbolic UFL expression for u and p
-z.subfunctions[0].rename("Velocity")
-z.subfunctions[1].rename("Pressure")
-# -
-
 # We next specify the important constants for this problem, and set up the approximation.
 # Note that this case is time independent and hence, when compared to most of our previous
 # tutorials, no timestepping options are specified.
@@ -104,7 +104,7 @@ approximation = BoussinesqApproximation(Ra)
 
 # As noted in our previous tutorial, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
 # of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e. this case incorporates a velocity nullspace,
-# as well as a pressure nullspace). These lead to null-modes (eigenvectors) for the linear system, rendering the resulting matrix singular.
+# as well as a pressure nullspace). These lead to null-modes (eigenvectors) for the linear system, resulting in a singular matrix.
 # In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at every iteration. We do that below,
 # setting up a nullspace object as we did in the previous tutorial, albeit speciying the `rotational` keyword argument to be True.
 # This removes the requirement for a user to configure these options, further simplifying the task of setting up a (valid) geodynamical simulation.
@@ -118,8 +118,8 @@ Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
-# Boundary conditions are next specified. Given we do not solve an energy equation for this time independent case, no boundary conditions are required
-# required for temperature.  For velocity, we specify free‐slip conditions on both boundaries.
+# Boundary conditions are next specified. Given we do not solve an energy equation for this time independent case, no boundary conditions
+# are required for temperature. For velocity, we specify free‐slip conditions on both boundaries.
 # As noted in our 2-D cylindrical tutorial, we incorporate these <b>weakly</b> through the <i>Nitsche</i> approximation.
 
 stokes_bcs = {
@@ -127,7 +127,7 @@ stokes_bcs = {
     "top": {"un": 0},
 }
 
-# We can now setup and solve the variational proble for the Stokes equations,
+# We can now setup and solve the variational problem for the Stokes equations,
 # passing in the approximation, nullspace and near-nullspace information configured above.
 
 # +
