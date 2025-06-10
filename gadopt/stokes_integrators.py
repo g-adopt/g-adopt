@@ -11,6 +11,7 @@ from typing import Optional
 from warnings import warn
 
 import firedrake as fd
+from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, AnelasticLiquidApproximation
 from .equations import Equation
@@ -385,7 +386,7 @@ class StokesSolver:
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
-    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+    ) -> Expr:
         # Associate the free-surface index with the boundary id
         # Note: This assumes that ordering of the free-surface boundary conditions is
         # the same as that of free-surface functions in the mixed space.
@@ -663,7 +664,7 @@ class ViscoelasticStokesSolver(StokesSolver):
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
-    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+    ) -> Expr:
         # First, make the displacement term implicit by incorporating the unknown
         # `incremental displacement' (u) that we are solving for. Then, calculate the
         # free surface stress term. This is also referred to as the Hydrostatic

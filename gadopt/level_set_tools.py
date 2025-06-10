@@ -17,8 +17,7 @@ import firedrake as fd
 import numpy as np
 import shapely as sl
 from mpi4py import MPI
-from ufl.algebra import Division, Product, Sum
-from ufl.classes import Conditional
+from ufl.core.expr import Expr
 
 from . import scalar_equation as scalar_eq
 from .equations import Equation
@@ -599,10 +598,7 @@ class LevelSetSolver:
 
 
 def material_interface(
-    level_set: fd.Function,
-    field_value: float,
-    other_side: float | Conditional | Sum | Product | Division,
-    interface: str,
+    level_set: fd.Function, field_value: float, other_side: float | Expr, interface: str
 ):
     """Generates UFL algebra describing a physical property across a material interface.
 
@@ -641,7 +637,7 @@ def material_interface(
 
 def material_field_from_copy(
     level_set: list[fd.Function], field_values: list[float], interface: str
-) -> Sum | Product | Division:
+) -> Expr:
     """Generates UFL algebra by consuming `level_set` and `field_values` lists.
 
     Args:
@@ -673,7 +669,7 @@ def material_field(
     level_set: fd.Function | list[fd.Function],
     field_values: list[float],
     interface: str,
-) -> Sum | Product | Division:
+) -> Expr:
     """Generates UFL algebra describing a physical property across the domain.
 
     Calls `material_field_from_copy` using a copy of the level-set list, preventing the
