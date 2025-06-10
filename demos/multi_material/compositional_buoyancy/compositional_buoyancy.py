@@ -84,56 +84,54 @@ T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
-# We now provide initial conditions for the level-set field. To this end, we use the
-# `shapely` library to represent the initial location of the material interface and
-# derive the signed-distance function. Finally, we apply the transformation to obtain a
-# smooth step function profile.
+# We now initialise the level-set field. All we have to provide to G-ADOPT is a
+# mathematical description of the interface location and use the available API. In this
+# case, the interface is a curve and can be geometrically represented as a cosine
+# function. In general, specifying a mathematical function would warrant supplying a
+# callable (e.g. a function) implementing the mathematical operations, but given the
+# common use of cosines, G-ADOPT already provides it and only callable arguments are
+# required here. Additional presets are available for usual scenarios, and the API is
+# sufficiently flexible to generate most shapes. Under the hood, G-ADOPT uses the
+# `Shapely` library to determine the signed-distance function associated with the
+# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
+# from the signed-distance function.
 
 # +
-import numpy as np  # noqa: E402
-import shapely as sl  # noqa: E402
+from numpy import linspace  # noqa: E402
 
+# Initialise the level-set field according to the conservative level-set approach.
+# First, write out the mathematical description of the material-interface location.
+# Here, only arguments to the G-ADOPT cosine function are required. Then, use the
+# G-ADOPT API to generate the thickness of the hyperbolic tangent profile and update the
+# level-set field values.
+interface_coords_x = linspace(0, lx, 1000)
+callable_args = (
+    interface_deflection := 0.02,
+    perturbation_wavelength := 2 * lx,
+    initial_interface_y := 0.2,
+)
 
-def cosine_curve(x, amplitude, wavelength, vertical_shift):
-    """Cosine curve equation with an amplitude and a vertical shift"""
-    return amplitude * np.cos(2 * np.pi / wavelength * x) + vertical_shift
+epsilon = interface_thickness(K)
+assign_level_set_values(
+    psi,
+    epsilon,
+    interface_geometry="curve",
+    interface_callable="cosine",
+    interface_args=(interface_coords_x, *callable_args),
+)
+# -
 
+# Let us visualise the location of the material interface that we have just initialised.
+# To this end, we use Firedrake's built-in plotting functionality.
 
-interface_deflection = 0.02  # Amplitude of the cosine function marking the interface
-interface_wavelength = 2 * lx  # Wavelength of the cosine function
-material_interface_y = 0.2  # Vertical shift of the interface along the y axis
-# Group parameters defining the cosine profile
-isd_params = (interface_deflection, interface_wavelength, material_interface_y)
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
 
-# Shapely LineString representation of the material interface
-interface_x = np.linspace(0, lx, 1000)  # Enough points to capture the interface shape
-interface_y = cosine_curve(interface_x, *isd_params)
-line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
-sl.prepare(line_string)
-
-# Extract node coordinates
-node_coords_x, node_coords_y = node_coordinates(psi)
-# Determine to which material nodes belong and calculate distance to interface
-node_relation_to_curve = [
-    (
-        node_coord_y > cosine_curve(node_coord_x, *isd_params),
-        line_string.distance(sl.Point(node_coord_x, node_coord_y)),
-    )
-    for node_coord_x, node_coord_y in zip(node_coords_x, node_coords_y)
-]
-
-# Define the signed-distance function and overwrite its value array
-signed_dist_to_interface = Function(K)
-signed_dist_to_interface.dat.data[:] = [
-    dist if is_above else -dist for is_above, dist in node_relation_to_curve
-]
-
-# Define thickness of the hyperbolic tangent profile
-min_mesh_edge_length = min(lx / nx, ly / ny)
-epsilon = Constant(min_mesh_edge_length / 4)
-
-# Initialise level set as a smooth step function
-psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
+# fig, axes = plt.subplots()
+# axes.set_aspect("equal")
+# contours = tricontourf(psi, levels=linspace(0, 1, 11), axes=axes, cmap="PiYG")
+# tricontour(psi, axes=axes, levels=[0.5])
+# fig.colorbar(contours, label="Conservative level-set")
 # -
 
 # We next define materials present in the simulation using the `Material` class. Here,
@@ -192,8 +190,9 @@ stokes_bcs = {
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
 # that uses the XML-based VTK file format. We also open a file for logging, instantiate
-# G-ADOPT geodynamical diagnostic utility, and define some parameters specific to this
-# problem.
+# G-ADOPT's geodynamical diagnostic utility, and define parameters to compute an
+# additional diagnostic specific to multi-material simulations, namely material
+# entrainment.
 
 # +
 output_file = VTKFile("output.pvd")
@@ -203,7 +202,7 @@ plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
-material_area = material_interface_y * lx  # Area of tracked material in the domain
+material_area = initial_interface_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
@@ -223,10 +222,12 @@ stokes_solver = StokesSolver(
     transpose_nullspace=Z_nullspace,
 )
 
-subcycles = 1  # Number of advection solves to perform within one time step
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
-# Increase the reinitialisation time step to make up for the coarseness of the mesh
-level_set_solver.reini_params["tstep"] *= 20
+# Instantiate a solver object for level-set advection and reinitialisation. G-ADOPT
+# provides default values for most arguments; we only provide those that do not have
+# one. No boundary conditions are required, as the numerical domain is closed.
+adv_kwargs = {"u": u, "timestep": delta_t}
+reini_kwargs = {"epsilon": epsilon}
+level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -253,7 +254,7 @@ while True:
     stokes_solver.solve()
 
     # Advect level set
-    level_set_solver.solve(step)
+    level_set_solver.solve()
 
     # Calculate proportion of material entrained above a given height
     buoy_entr = entrainment(psi, material_area, entrainment_height)

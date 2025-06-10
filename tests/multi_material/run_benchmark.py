@@ -43,7 +43,7 @@ def write_output(output_file):
         *stokes_function.subfunctions,
         temperature,
         *level_set,
-        *level_set_grad_proj,
+        *level_set_grad,
         RaB,
         density,
         viscosity,
@@ -81,11 +81,14 @@ if Simulation.restart_from_checkpoint:  # Restore mesh and key functions
                 break
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if "Trim_2023" in Simulation.name:
-        epsilon = fd.Constant(1 / 2 / Simulation.k)
-    else:  # Empirical calibration that seems to be robust
-        local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+    if Simulation.name == "Trim_2023":
+        epsilon = 1 / 2 / Simulation.k
+    else:
+        epsilon = ga.interface_thickness(level_set[0].function_space())
+    if Simulation.name == "Schmalholz_2011":
+        epsilon.interpolate(
+            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
+        )
 
     time_now = time_output.dat.data[0]
 else:  # Initialise mesh and key functions
@@ -126,19 +129,18 @@ else:  # Initialise mesh and key functions
     ]
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if "Trim_2023" in Simulation.name:
-        epsilon = fd.Constant(1 / 2 / Simulation.k)
-    else:  # Empirical calibration that seems to be robust
-        local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+    if Simulation.name == "Trim_2023":
+        epsilon = 1 / 2 / Simulation.k
+    else:
+        epsilon = ga.interface_thickness(func_space_ls)
+    if Simulation.name == "Schmalholz_2011":
+        epsilon.interpolate(
+            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
+        )
 
     # Initialise level set
-    signed_dist_to_interface = fd.Function(level_set[0].function_space())
-    for ls, isd, params in zip(
-        level_set, Simulation.initialise_signed_distance, Simulation.isd_params
-    ):
-        signed_dist_to_interface.dat.data[:] = isd(params, ls)
-        ls.interpolate((1 + fd.tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
+    for ls, kwargs in zip(level_set, Simulation.signed_distance_kwargs_list):
+        ga.assign_level_set_values(ls, epsilon, **kwargs)
 
     time_output = fd.Function(func_space_pres, name="Time")
     time_now = 0
@@ -231,16 +233,16 @@ stokes_solver = ga.StokesSolver(
 stokes_solver.solve()
 
 # Set up level-set solvers
+adv_kwargs = {"u": velocity, "timestep": timestep}
+reini_kwargs = {"epsilon": epsilon, "timestep": 1e-2, "frequency": 5}
+if Simulation.name == "Tosi_2015":
+    # Speed up simulation by avoiding frequent reinitialisation
+    reini_kwargs["frequency"] = 10
 level_set_solver = [
-    ga.LevelSetSolver(
-        ls, velocity, timestep, ga.eSSPRKs10p3, Simulation.subcycles, epsilon
-    )
+    ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
     for ls in level_set
 ]
-level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solver]
-if "Trim_2023" in Simulation.name:
-    for ls_solver in level_set_solver:
-        ls_solver.reini_params["iterations"] = 0
+level_set_grad = [ls_solv.solution_grad for ls_solv in level_set_solver]
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
@@ -271,7 +273,7 @@ checkpoint_fields = {
 diag_vars = {
     "epsilon": epsilon,
     "level_set": level_set,
-    "level_set_grad_proj": level_set_grad_proj,
+    "level_set_grad_proj": level_set_grad,
     "density": density,
     "viscosity": viscosity,
     "int_heat_rate": int_heat_rate,
@@ -280,10 +282,13 @@ geo_diag = ga.GeodynamicalDiagnostics(
     stokes_function, temperature, bottom_id=3, top_id=4
 )
 
-# Function to be coupled with the energy solver
-if "Trim_2023" in Simulation.name:
+if Simulation.name == "Trim_2023":
+    # Omit level-set reinitialisation
+    disable_reinitialisation = True
+    # Function to be coupled with the energy solver
     update_forcings = partial(Simulation.internal_heating_rate, int_heat_rate_ufl)
 else:
+    disable_reinitialisation = False
     update_forcings = None
 
 # Add old velocity to simulation class for steady state criteria for Tosi benchmark
@@ -316,7 +321,7 @@ while True:
 
     # Advect each level set
     for ls_solv in level_set_solver:
-        ls_solv.solve(step)
+        ls_solv.solve(disable_reinitialisation=disable_reinitialisation)
 
     if "Tosi_2015" in Simulation.name:
         # Update old velocity prior to solving for Tosi steady state criteria

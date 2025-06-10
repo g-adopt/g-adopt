@@ -6,7 +6,6 @@ all: params.log
 
 params.log : category := mantle_convection
 params.log : ncpus := 4
-params.log : PETSC_FLAGS := -Stokes_pc_factor_mat_solver_type superlu_dist
 params.log: 2d_compressible_TALA.py
 	$(run-python)
 
