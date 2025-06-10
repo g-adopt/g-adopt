@@ -17,6 +17,8 @@ import firedrake as fd
 import numpy as np
 import shapely as sl
 from mpi4py import MPI
+from ufl.algebra import Division, Product, Sum
+from ufl.classes import Conditional
 
 from . import scalar_equation as scalar_eq
 from .equations import Equation
@@ -596,32 +598,59 @@ class LevelSetSolver:
                 self.reinitialise()
 
 
-def material_field_from_copy(
-    level_set: fd.Function | list[fd.Function],
-    field_values: list,
+def material_interface(
+    level_set: fd.Function,
+    field_value: float,
+    other_side: float | Conditional | Sum | Product | Division,
     interface: str,
-    adjoint: bool,
-) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
-    """Generates UFL algebra describing a physical property across the domain.
+):
+    """Generates UFL algebra describing a physical property across a material interface.
 
     Ensures that the correct expression is assigned to each material based on the
-    level-set functions. Property transitions across material interfaces are expressed
-    according to the provided strategy.
+    level-set field.
 
     Args:
       level_set:
-        A Firedrake function for the level set (or a list of these)
+        A Firedrake function representing the level-set field
+      field_values:
+        A float corresponding to the value of a physical property for a given material
+      other_side:
+        A float or UFL instance expressing the field value outside the material
+      interface:
+        A string specifying how property transitions between materials are calculated
+
+    Returns:
+      UFL instance for a term of the physical-property algebraic expression
+
+    """
+    match interface:
+        case "sharp":
+            return fd.conditional(level_set > 0.5, field_value, other_side)
+        case "sharp_adjoint":
+            ls_shift = level_set - 0.5
+            heaviside = (ls_shift + abs(ls_shift)) / 2 / ls_shift
+
+            return field_value * heaviside + other_side * (1 - heaviside)
+        case "arithmetic":
+            return field_value * level_set + other_side * (1 - level_set)
+        case "geometric":
+            return field_value**level_set * other_side ** (1 - level_set)
+        case "harmonic":
+            return 1 / (level_set / field_value + (1 - level_set) / other_side)
+
+
+def material_field_from_copy(
+    level_set: list[fd.Function], field_values: list[float], interface: str
+) -> Sum | Product | Division:
+    """Generates UFL algebra by consuming `level_set` and `field_values` lists.
+
+    Args:
+      level_set:
+        A list of one or multiple Firedrake level-set functions
       field_values:
         A list of physical property values specific to each material
       interface:
         A string specifying how property transitions between materials are calculated
-      adjoint:
-        A boolean indicating an adjoint-compatible implementation of the sharp interface
-
-    Note:
-      When requesting the sharp interface with the adjoint flag, Stokes solver may raise
-      DIVERGED_FNORM_NAN if the nodal level-set value is exactly 0.5 (i.e. denoting the
-      location of the material interface).
 
     Returns:
       UFL algebra representing the physical property throughout the domain
@@ -630,71 +659,40 @@ def material_field_from_copy(
     ls = fd.max_value(fd.min_value(level_set.pop(), 1), 0)
 
     if level_set:  # Directly specify material value on only one side of the interface
-        match interface:
-            case "sharp":
-                if adjoint:
-                    heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
-                    return field_values.pop() * heaviside + material_field_from_copy(
-                        level_set, field_values, interface
-                    ) * (1 - heaviside)
-                else:
-                    return fd.conditional(
-                        ls > 0.5,
-                        field_values.pop(),
-                        material_field_from_copy(level_set, field_values, interface),
-                    )
-            case "arithmetic":
-                return field_values.pop() * ls + material_field_from_copy(
-                    level_set, field_values, interface
-                ) * (1 - ls)
-            case "geometric":
-                return field_values.pop() ** ls * material_field_from_copy(
-                    level_set, field_values, interface
-                ) ** (1 - ls)
-            case "harmonic":
-                return 1 / (
-                    ls / field_values.pop()
-                    + (1 - ls)
-                    / material_field_from_copy(level_set, field_values, interface)
-                )
+        return material_interface(
+            ls,
+            field_values.pop(),
+            material_field_from_copy(level_set, field_values, interface),
+            interface,
+        )
     else:  # Final level set; specify values for both sides of the interface
-        match interface:
-            case "sharp":
-                if adjoint:
-                    heaviside = (ls - 0.5 + abs(ls - 0.5)) / 2 / (ls - 0.5)
-                    return (
-                        field_values[0] * (1 - heaviside) + field_values[1] * heaviside
-                    )
-                else:
-                    return fd.conditional(ls < 0.5, *field_values)
-            case "arithmetic":
-                return field_values[0] * (1 - ls) + field_values[1] * ls
-            case "geometric":
-                return field_values[0] ** (1 - ls) * field_values[1] ** ls
-            case "harmonic":
-                return 1 / ((1 - ls) / field_values[0] + ls / field_values[1])
+        return material_interface(ls, field_values.pop(), field_values.pop(), interface)
 
 
 def material_field(
     level_set: fd.Function | list[fd.Function],
-    field_values: list,
+    field_values: list[float],
     interface: str,
-    adjoint: bool = False,
-) -> fd.ufl.algebra.Sum | fd.ufl.algebra.Product | fd.ufl.algebra.Division:
+) -> Sum | Product | Division:
     """Generates UFL algebra describing a physical property across the domain.
 
     Calls `material_field_from_copy` using a copy of the level-set list, preventing the
-    original one from being consumed by the function call.
+    potential original one from being consumed by the function call. Ordering of
+    `field_values` must be consistent with `level_set`, such that the last element
+    corresponds to the field value on the 1-side of the last conservative level set.
 
     Args:
       level_set:
-        A Firedrake function for the level set (or a list of these)
+        A Firedrake function for the level set (or a list thereof)
       field_values:
-        A list of physical property values specific to each material
+        A list of physical-property values specific to each material
       interface:
         A string specifying how property transitions between materials are calculated
-      adjoint:
-        A boolean indicating an adjoint-compatible implementation of the sharp interface
+
+    Note:
+      When requesting the `sharp_adjoint` interface, calling Stokes solver may raise
+      `DIVERGED_FNORM_NAN` if the nodal level-set value is exactly 0.5 (i.e. denoting
+      the location of the material interface).
 
     Returns:
       UFL algebra representing the physical property throughout the domain
@@ -702,14 +700,13 @@ def material_field(
     Raises:
       ValueError: Incorrect interface strategy supplied
     """
-    if not isinstance(level_set, list):
-        level_set = [level_set]
+    level_set = level_set.copy() if isinstance(level_set, list) else [level_set]
 
-    _impl_interface = ["sharp", "arithmetic", "geometric", "harmonic"]
+    _impl_interface = ["sharp", "sharp_adjoint", "arithmetic", "geometric", "harmonic"]
     if interface not in _impl_interface:
         raise ValueError(f"Interface must be one of {_impl_interface}.")
 
-    return material_field_from_copy(level_set.copy(), field_values, interface, adjoint)
+    return material_field_from_copy(level_set, field_values, interface)
 
 
 def entrainment(
