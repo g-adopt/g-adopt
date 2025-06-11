@@ -155,8 +155,12 @@ class Simulation:
         cls.diag_fields["rms_velocity"].append(geo_diag.u_rms())
         cls.diag_fields["rms_velocity_analytical"].append(rms_velocity_analytical)
         cls.diag_fields["entrainment"].append(
-            ga.entrainment(
-                diag_vars["level_set"][0], cls.material_area, cls.entrainment_height
+            ga.material_entrainment(
+                diag_vars["level_set"][0],
+                material_size=cls.material_area,
+                entrainment_height=cls.entrainment_height,
+                side=0,
+                direction="above",
             )
         )
 

@@ -1,9 +1,9 @@
 r"""This module provides a set of classes and functions enabling multi-material
 capabilities. Users initialise materials by instantiating the `Material` class and
-define the physical properties of material interfaces using `field_interface`. They
+define the physical properties of material interfaces using `material_field`. They
 instantiate the `LevelSetSolver` class by providing relevant parameters and call the
-`solve` method to request a solver update. Finally, they may call the `entrainment`
-function to calculate material entrainment in the simulation.
+`solve` method to request a solver update. Finally, they may call the
+`material_entrainment` function to calculate material entrainment in the simulation.
 
 """
 
@@ -18,6 +18,7 @@ import firedrake as fd
 import numpy as np
 import shapely as sl
 from mpi4py import MPI
+from numpy.testing import assert_allclose
 
 from . import scalar_equation as scalar_eq
 from .equations import Equation
@@ -30,9 +31,9 @@ __all__ = [
     "Material",
     "assign_level_set_values",
     "density_RaB",
-    "entrainment",
     "field_interface",
     "interface_thickness",
+    "material_entrainment",
 ]
 
 # Default parameters for level-set advection
@@ -167,27 +168,28 @@ def assign_level_set_values(
 
     Generates signed-distance function values at level-set nodes and overwrites
     level-set data according to the conservative level-set method using the provided
-    interface thickness.
+    interface thickness. By convention, the 1-side of the conservative level set is set
+    above the curve or inside the polygon or circle.
 
     Three scenarios are currently implemented to generate the signed-distance function:
     - The material interface is described by a mathematical function y = f(x). In this
-      case, `interface_geometry` should be "curve" and `interface_callable` must be
+      case, `interface_geometry` should be `curve` and `interface_callable` must be
       provided along with any `interface_args` to implement the aforementioned
       mathematical function.
     - The material interface is a polygon, and `interface_geometry` takes the value
-      "polygon". In this case, `interface_coordinates` must exclude the polygon sides
+      `polygon`. In this case, `interface_coordinates` must exclude the polygon sides
       that do not act as a material interface and coincide with domain boundaries. The
       coordinates of these sides should be provided using the `boundary_coordinates`
       argument such that the concatenation of the two coordinate objects describes a
       closed polygonal chain.
     - The material interface is a circle, and `interface_geometry` takes the value
-      "circle". In this case, `interface_coordinates` is a list holding the coordinates
-      of the circle's centre and the circle radius. No other arguments are required.
+      `circle`. In this case, `interface_coordinates` is a list holding the coordinates
+      of the circle's centre and radius. No other arguments are required.
 
     Geometrical objects underpinning material interfaces are generated using Shapely.
 
     Implemented interface geometry presets and associated arguments:
-    | Curve     |                     Arguments                      |
+    | Interface |                     Arguments                      |
     | :-------- | :------------------------------------------------: |
     | line      | slope, intercept                                   |
     | cosine    | amplitude, wavelength, vertical_shift, phase_shift |
@@ -324,7 +326,7 @@ def assign_level_set_values(
             ]
         case _:
             raise ValueError(
-                "`interface_geometry` must be 'curve', 'polygon', or 'circle'."
+                "'interface_geometry' must be 'curve', 'polygon', or 'circle'."
             )
 
     if isinstance(epsilon, fd.Function):
@@ -766,30 +768,64 @@ def density_RaB(
     return ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless
 
 
-def entrainment(
-    level_set: fd.Function, material_area: float, entrainment_height: float
+def material_entrainment(
+    level_set: fd.Function,
+    /,
+    *,
+    material_size: float,
+    entrainment_height: float,
+    side: int,
+    direction: str,
 ) -> float:
-    """Calculates the entrainment diagnostic.
-
-    Determines the proportion of a material located above a given height.
+    """Calculates the proportion of a material located above or below a given height.
 
     Args:
       level_set:
         A Firedrake function for the level-set field
-      material_area:
-        A float representing the total area occupied by the target material
+      material_size:
+        A float representing the total volume/area occupied by the target material
       entrainment_height:
         A float representing the height above which to calculate entrainment
+      side:
+        An integer (`0` or `1`) denoting the level-set value on the target material side
+      direction:
+        A string (`above` or `below`) denoting the target entrainment direction
 
     Returns:
-      A float corresponding to the material fraction above the target height
+      A float corresponding to the material fraction above or below the target height
     """
-    mesh_coords = node_coordinates(level_set)
-    target_region = mesh_coords[1] >= entrainment_height
-    material_entrained = fd.conditional(level_set < 0.5, 1, 0)
-    is_entrained = fd.conditional(target_region, material_entrained, 0)
+    if not level_set.ufl_domain().cartesian:
+        raise ValueError("Only Cartesian meshes are currently supported.")
 
-    return fd.assemble(is_entrained * fd.dx) / material_area
+    match side:
+        case 0:
+            material_check = operator.le
+        case 1:
+            material_check = operator.ge
+        case _:
+            raise ValueError("'side' must be 0 or 1.")
+
+    match direction:
+        case "above":
+            region_check = operator.ge
+        case "below":
+            region_check = operator.le
+        case _:
+            raise ValueError("'direction' must be 'above' or 'below'.")
+
+    material = fd.conditional(material_check(level_set, 0.5), 1, 0)
+    assert_allclose(
+        fd.assemble(material * fd.dx),
+        material_size,
+        rtol=5e-2,
+        err_msg="Material volume/area significantly different from 'material_size'",
+    )
+
+    *_, vertical_coord = node_coordinates(level_set)
+    target_region = region_check(vertical_coord, entrainment_height)
+    is_entrained = fd.conditional(target_region, material, 0)
+
+    return fd.assemble(is_entrained * fd.dx) / material_size
 
 
 def min_max_height(
@@ -803,14 +839,13 @@ def min_max_height(
       epsilon:
         A float or Firedrake function denoting the thickness of the material interface
       side:
-        An integer (0 or 1) denoting the level-set value on the target material side
+        An integer (`0` or `1`) denoting the level-set value on the target material side
       mode:
         A string ("min" or "max") specifying which extremum height is sought
 
     Returns:
       A float corresponding to the material interface extremum height
     """
-
     match side:
         case 0:
             comparison = operator.le
@@ -833,8 +868,7 @@ def min_max_height(
         case _:
             raise ValueError("'mode' must be 'min' or 'max'.")
 
-    mesh = level_set.ufl_domain()
-    if not mesh.cartesian:
+    if not level_set.ufl_domain().cartesian:
         raise ValueError("Only Cartesian meshes are currently supported.")
 
     coords = node_coordinates(level_set)

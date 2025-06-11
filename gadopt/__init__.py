@@ -14,9 +14,9 @@ from .level_set_tools import (
     Material,
     assign_level_set_values,
     density_RaB,
-    entrainment,
     field_interface,
     interface_thickness,
+    material_entrainment,
 )
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
