@@ -1,0 +1,36 @@
+name: Create memory profiling graphs
+
+on:
+  workflow_run:
+    workflows: ['Run regression tests']
+    types:
+      - completed
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Install plotter 
+        run: |
+          pip3 install git+https://github.com/g-adopt/memprof_plotter.git
+      - name: Make plots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NRUNS: 10
+        run: |
+          export JSON=$( gh run list -R g-adopt/g-adopt -w test.yml -s success -L "${NRUNS}" --json databaseId,number )
+          declare -a RUNIDS=( $( jq --jsonargs '.[].databaseId' <<<"${JSON}" ) )
+          declare -a RUNNOS=( $( jq --jsonargs '.[].number' <<<"${JSON}") )
+
+          for (( i=0; i<${NRUNS}; i++ )); do
+              gh run download -R g-adopt/g-adopt -D "${RUNNOS[$i]}" -n run-log "${RUNIDS[$i]}"
+          done
+
+          memprof_plotter "${RUNNOS[@]}"
+      - name: Upload plots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: memprof_plots
+          path: memprof_plots
