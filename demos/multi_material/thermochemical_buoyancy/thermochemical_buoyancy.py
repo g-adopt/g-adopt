@@ -308,6 +308,7 @@ while True:
         entrainment_height=entrainment_height,
         side=0,
         direction="above",
+        skip_material_size_check=True,
     )
 
     # Log diagnostics

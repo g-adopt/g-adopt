@@ -680,6 +680,10 @@ def material_field(
     `field_values` must be consistent with `level_set`, such that the last element
     corresponds to the field value on the 1-side of the last conservative level set.
 
+    **Note**: When requesting the `sharp_adjoint` interface, calling Stokes solver may
+    raise `DIVERGED_FNORM_NAN` if the nodal level-set value is exactly 0.5 (i.e.
+    denoting the location of the material interface).
+
     Args:
       level_set:
         A Firedrake function for the level set (or a list thereof)
@@ -687,11 +691,6 @@ def material_field(
         A list of physical-property values specific to each material
       interface:
         A string specifying how property transitions between materials are calculated
-
-    Note:
-      When requesting the `sharp_adjoint` interface, calling Stokes solver may raise
-      `DIVERGED_FNORM_NAN` if the nodal level-set value is exactly 0.5 (i.e. denoting
-      the location of the material interface).
 
     Returns:
       UFL algebra representing the physical property throughout the domain
@@ -716,23 +715,35 @@ def material_entrainment(
     entrainment_height: float,
     side: int,
     direction: str,
+    skip_material_size_check: bool = False,
 ) -> float:
     """Calculates the proportion of a material located above or below a given height.
+
+    For the diagnostic calculation to be meaningful, the level-set side provided must
+    spatially isolate the target material.
+
+    **Note**: This function checks if the total volume or area occupied by the target
+    material matches the `material_size` value.
 
     Args:
       level_set:
         A Firedrake function for the level-set field
       material_size:
-        A float representing the total volume/area occupied by the target material
+        A float representing the total volume or area occupied by the target material
       entrainment_height:
         A float representing the height above which to calculate entrainment
       side:
         An integer (`0` or `1`) denoting the level-set value on the target material side
       direction:
         A string (`above` or `below`) denoting the target entrainment direction
+      skip_material_size_check:
+        A boolean enabling to skip the consistency check of the material volume or area
 
     Returns:
       A float corresponding to the material fraction above or below the target height
+
+    Raises:
+      AssertionError: Material volume or area notably different from `material_size`
     """
     if not level_set.ufl_domain().cartesian:
         raise ValueError("Only Cartesian meshes are currently supported.")
@@ -754,12 +765,13 @@ def material_entrainment(
             raise ValueError("'direction' must be 'above' or 'below'.")
 
     material = fd.conditional(material_check(level_set, 0.5), 1, 0)
-    assert_allclose(
-        fd.assemble(material * fd.dx),
-        material_size,
-        rtol=5e-2,
-        err_msg="Material volume/area significantly different from 'material_size'",
-    )
+    if not skip_material_size_check:
+        assert_allclose(
+            fd.assemble(material * fd.dx),
+            material_size,
+            rtol=5e-2,
+            err_msg="Material volume or area notably different from 'material_size'",
+        )
 
     *_, vertical_coord = node_coordinates(level_set)
     target_region = region_check(vertical_coord, entrainment_height)

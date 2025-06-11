@@ -130,6 +130,7 @@ class Simulation:
                 entrainment_height=cls.diag_params["entrainment_height"],
                 side=0,
                 direction="above",
+                skip_material_size_check=True,
             )
         )
 
