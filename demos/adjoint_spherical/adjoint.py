@@ -8,7 +8,8 @@ import gdrift
 from gdrift.profile import SplineProfile
 from checkpoint_schedules import SingleDiskStorageSchedule, SingleMemoryStorageSchedule
 from pyadjoint import Block
-import faulthandler, signal
+import faulthandler
+import signal
 # import sys
 
 # Angus's Trick
@@ -54,7 +55,7 @@ def test_taping(scheduler, age0=10):
     repeat_val = reduced_functional([Tic])
     der = reduced_functional.derivative(options={"riesz_representation": "L2"})
     der.rename("derivative")
-        
+
     # write out
     out_type = str(scheduler)
     log(f"{out_type}; Norm: ", assemble(der ** 2 * dx))
@@ -148,8 +149,8 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
         T_ave = fi.load_function(mesh, name="T_ave_ref")  # Used for regularising T_ic
         T_simulation = fi.load_function(mesh, name="T_ic_0")
 
-    # Making sure we are not overwritting callback results
-    callback_dir = create_next_callback_dir("callback_dir", mesh)
+    # # Making sure we are not overwritting callback results
+    # callback_dir = create_next_callback_dir("callback_dir", mesh)
 
     # Loading adiabatic reference fields
     tala_parameters_dict = {}
@@ -241,7 +242,7 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
     # The near nullspaces gor gamg always include rotational and translational modes
     Z_near_nullspace = create_stokes_nullspace(
-        Z, closed=False, rotational=True, translations=[0, 1, 2]
+        Z, closed=False, rotational=True, translations=[0, 1]
     )
 
     # Section: Setting boundary conditions
@@ -276,15 +277,16 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
+        solver_parameters="direct",
     )
 
-    # tweaking solver parameters
-    stokes_solver.solver_parameters["snes_rtol"] = 1e-2
-    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
-    stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-3
-    stokes_solver.solver_parameters["fieldsplit_0"]["assembled_pc_gamg_threshold"] = -1
-    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
-    stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-2
+    # # tweaking solver parameters
+    # stokes_solver.solver_parameters["snes_rtol"] = 1e-2
+    # stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
+    # stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-3
+    # stokes_solver.solver_parameters["fieldsplit_0"]["assembled_pc_gamg_threshold"] = -1
+    # stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
+    # stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-2
 
     # non-dimensionalised time for present geologic day (0)
     presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
@@ -318,7 +320,7 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
     # timestep counter
     timestep_initial_phase = 3
     stokes_solve_frequency = 4
-    z.subfunctions[0].interpolate(as_vector((0.0, 0.0, 0.0)))
+    z.subfunctions[0].interpolate(as_vector((0.0, 0.0)))
     z.subfunctions[1].interpolate(0.0)
 
     should_end_timestepping = False
@@ -351,7 +353,6 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
 
         if should_end_timestepping:
             break
-        
 
     # Converting temperature to full temperature and dimensionalising it
     FullT = Function(Q, name="FullTemperature")
@@ -359,7 +360,7 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
         (T + tala_parameters_dict["Tbar"]) * Constant(3700.0) + Constant(300.0)
     )
 
-    tape.add_block(DiagnosticBlock(FullT, T_obs, callback_dir))
+    # tape.add_block(DiagnosticBlock(FullT, T_obs, callback_dir))
 
     # Temperature misfit between solution and observation
     t_misfit = assemble((FullT - T_obs) ** 2 * dx)
@@ -376,13 +377,12 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
     norm_smoothing = assemble(inner(grad(T_ave), grad(T_ave)) * dx)
     objective += obj_scaling * smoothing_weight * smoothing / norm_smoothing
 
-
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
 
-    # # We want to avoid a second call to objective functional with the same value
-    # first_call_decorator = first_call_value(predefined_value=objective)
-    # ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
+    # We want to avoid a second call to objective functional with the same value
+    first_call_decorator = first_call_value(predefined_value=objective)
+    ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
@@ -409,9 +409,9 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
             # Increasing index
             self.idx += 1
 
-    eval_cb = MyCallbackClass()
+    # eval_cb = MyCallbackClass()
 
-    return Tic, ReducedFunctional(objective, control, eval_cb_pre=eval_cb)
+    return Tic, ReducedFunctional(objective, control)
 
 
 def generate_reference_fields():
@@ -438,10 +438,10 @@ def generate_reference_fields():
     base_path = Path(__file__).resolve().parent
 
     # mesh/initial guess file is comming from a long-term simulation
-    mesh_path = base_path / "initial_condition_mat_prop/DG_GPlates_Late_2024_GPlates_2e8_Cao_C50_Final_State.h5"
+    mesh_path = base_path / "../mantle_convection/adjoint_2d_cylindrical/Checkpoint230.h5"
 
     # Name of the final output
-    output_path = base_path / "REVEAL_restart.pvd"
+    output_path = base_path / "REVEAL.pvd"
 
     # Load mesh from checkpoint
     with CheckpointFile(str(mesh_path), mode="r") as f:
@@ -495,7 +495,7 @@ def generate_reference_fields():
 
     # Compute the depth field
     depth = Function(Q, name="depth").interpolate(
-        Constant(gdrift.R_earth) - sqrt(r[0] ** 2 + r[1] ** 2 + r[2] ** 2)
+        Constant(gdrift.R_earth) - sqrt(r[0] ** 2 + r[1] ** 2)
     )
 
     # Load the REVEAL model
@@ -503,13 +503,13 @@ def generate_reference_fields():
 
     # Filling the vsh and vsv fields with the values from the seismic model
     reveal_vsh_vsv = seismic_model.at(
-        label=["vsh", "vsv"], coordinates=r.dat.data_with_halos
+        label=["vsh", "vsv"], coordinates=np.column_stack((r.dat.data_with_halos, np.zeros(r.dat.data_with_halos.shape[0])))
     )
     vsh.dat.data_with_halos[:] = (
-        reveal_vsh_vsv[:, 0] * 1e3
+        reveal_vsh_vsv[:, 0]
     )  # DROP when updating data in g-drift
     vsv.dat.data_with_halos[:] = (
-        reveal_vsh_vsv[:, 1] * 1e3
+        reveal_vsh_vsv[:, 1]
     )  # DROP when updating data in g-drift
 
     # Compute the isotropic velocity field
@@ -614,9 +614,8 @@ def find_last_checkpoint():
 
 
 def find_one_checkpoint(iteration):
-    solution_path = Path.cwd().resolve() / "optimisation_checkpoint" / f"{iteration:1d}" / "solution_checkpoint.h5" 
+    solution_path = Path.cwd().resolve() / "optimisation_checkpoint" / f"{iteration:1d}" / "solution_checkpoint.h5"
     return solution_path
-
 
 
 def create_next_callback_dir(base_name, mesh):
@@ -629,6 +628,7 @@ def create_next_callback_dir(base_name, mesh):
         new_dir.mkdir()
     mesh.comm.Barrier()
     return new_dir
+
 
 def mu_constructor(mu_radial, Tave, T):
     r"""Constructing a temperature strain-rate dependent velocity
@@ -896,3 +896,9 @@ def taylor_none():
 def taylor_none_long():
     conduct_taylor_test(scheduler=None, age0=10.0)
 
+
+if __name__ == "__main__":
+    # When the reference files are not present, generate them
+    if not (Path(__file__).parent.resolve() / "REVEAL.h5").exists():
+        generate_reference_fields()
+    taylor_memory_long()
