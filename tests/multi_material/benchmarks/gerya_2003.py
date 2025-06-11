@@ -67,7 +67,8 @@ class Simulation:
     materials = [buoyant_material, dense_material]
     reference_material = buoyant_material
 
-    # Physical parameters
+    # Approximation parameters
+    dimensional = True
     Ra, g = 1, 9.8
 
     # Boundary conditions
