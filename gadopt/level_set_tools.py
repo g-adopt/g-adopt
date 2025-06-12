@@ -1,12 +1,13 @@
 r"""This module provides a set of classes and functions enabling multi-material
 capabilities. Users initialise materials by instantiating the `Material` class and
-define the physical properties of material interfaces using `field_interface`. They
+define the physical properties of material interfaces using `material_field`. They
 instantiate the `LevelSetSolver` class by providing relevant parameters and call the
-`solve` method to request a solver update. Finally, they may call the `entrainment`
-function to calculate material entrainment in the simulation.
+`solve` method to request a solver update. Finally, they may call the
+`material_entrainment` function to calculate material entrainment in the simulation.
 
 """
 
+import operator
 import re
 from dataclasses import dataclass, fields
 from numbers import Number
@@ -17,6 +18,7 @@ import firedrake as fd
 import numpy as np
 import shapely as sl
 from mpi4py import MPI
+from numpy.testing import assert_allclose
 from ufl.core.expr import Expr
 
 from . import scalar_equation as scalar_eq
@@ -29,8 +31,8 @@ __all__ = [
     "LevelSetSolver",
     "Material",
     "assign_level_set_values",
-    "entrainment",
     "interface_thickness",
+    "material_entrainment",
     "material_field",
 ]
 
@@ -166,27 +168,28 @@ def assign_level_set_values(
 
     Generates signed-distance function values at level-set nodes and overwrites
     level-set data according to the conservative level-set method using the provided
-    interface thickness.
+    interface thickness. By convention, the 1-side of the conservative level set is set
+    above the curve or inside the polygon or circle.
 
     Three scenarios are currently implemented to generate the signed-distance function:
     - The material interface is described by a mathematical function y = f(x). In this
-      case, `interface_geometry` should be "curve" and `interface_callable` must be
+      case, `interface_geometry` should be `curve` and `interface_callable` must be
       provided along with any `interface_args` to implement the aforementioned
       mathematical function.
     - The material interface is a polygon, and `interface_geometry` takes the value
-      "polygon". In this case, `interface_coordinates` must exclude the polygon sides
+      `polygon`. In this case, `interface_coordinates` must exclude the polygon sides
       that do not act as a material interface and coincide with domain boundaries. The
       coordinates of these sides should be provided using the `boundary_coordinates`
       argument such that the concatenation of the two coordinate objects describes a
       closed polygonal chain.
     - The material interface is a circle, and `interface_geometry` takes the value
-      "circle". In this case, `interface_coordinates` is a list holding the coordinates
-      of the circle's centre and the circle radius. No other arguments are required.
+      `circle`. In this case, `interface_coordinates` is a list holding the coordinates
+      of the circle's centre and radius. No other arguments are required.
 
     Geometrical objects underpinning material interfaces are generated using Shapely.
 
     Implemented interface geometry presets and associated arguments:
-    | Curve     |                     Arguments                      |
+    | Interface |                     Arguments                      |
     | :-------- | :------------------------------------------------: |
     | line      | slope, intercept                                   |
     | cosine    | amplitude, wavelength, vertical_shift, phase_shift |
@@ -323,7 +326,7 @@ def assign_level_set_values(
             ]
         case _:
             raise ValueError(
-                "`interface_geometry` must be 'curve', 'polygon', or 'circle'."
+                "'interface_geometry' must be 'curve', 'polygon', or 'circle'."
             )
 
     if isinstance(epsilon, fd.Function):
@@ -677,6 +680,10 @@ def material_field(
     `field_values` must be consistent with `level_set`, such that the last element
     corresponds to the field value on the 1-side of the last conservative level set.
 
+    **Note**: When requesting the `sharp_adjoint` interface, calling Stokes solver may
+    raise `DIVERGED_FNORM_NAN` if the nodal level-set value is exactly 0.5 (i.e.
+    denoting the location of the material interface).
+
     Args:
       level_set:
         A Firedrake function for the level set (or a list thereof)
@@ -684,11 +691,6 @@ def material_field(
         A list of physical-property values specific to each material
       interface:
         A string specifying how property transitions between materials are calculated
-
-    Note:
-      When requesting the `sharp_adjoint` interface, calling Stokes solver may raise
-      `DIVERGED_FNORM_NAN` if the nodal level-set value is exactly 0.5 (i.e. denoting
-      the location of the material interface).
 
     Returns:
       UFL algebra representing the physical property throughout the domain
@@ -705,33 +707,174 @@ def material_field(
     return material_field_from_copy(level_set, field_values, interface)
 
 
-def entrainment(
-    level_set: fd.Function, material_area: Number, entrainment_height: Number
-):
-    """Calculates entrainment diagnostic.
+def material_entrainment(
+    level_set: fd.Function,
+    /,
+    *,
+    material_size: float,
+    entrainment_height: float,
+    side: int,
+    direction: str,
+    skip_material_size_check: bool = False,
+) -> float:
+    """Calculates the proportion of a material located above or below a given height.
 
-    Determines the proportion of a material that is located above a given height.
+    For the diagnostic calculation to be meaningful, the level-set side provided must
+    spatially isolate the target material.
+
+    **Note**: This function checks if the total volume or area occupied by the target
+    material matches the `material_size` value.
 
     Args:
-        level_set:
-          A level-set Firedrake function.
-        material_area:
-          An integer or a float representing the total area occupied by a material.
-        entrainment_height:
-          An integer or a float representing the height above which the entrainment
-          diagnostic is determined.
+      level_set:
+        A Firedrake function for the level-set field
+      material_size:
+        A float representing the total volume or area occupied by the target material
+      entrainment_height:
+        A float representing the height above which to calculate entrainment
+      side:
+        An integer (`0` or `1`) denoting the level-set value on the target material side
+      direction:
+        A string (`above` or `below`) denoting the target entrainment direction
+      skip_material_size_check:
+        A boolean enabling to skip the consistency check of the material volume or area
 
     Returns:
-        A float corresponding to the calculated entrainment diagnostic.
-    """
-    mesh_coords = fd.SpatialCoordinate(level_set.function_space().mesh())
-    target_region = mesh_coords[1] >= entrainment_height
-    material_entrained = fd.conditional(level_set < 0.5, 1, 0)
+      A float corresponding to the material fraction above or below the target height
 
-    return (
-        fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
-        / material_area
-    )
+    Raises:
+      AssertionError: Material volume or area notably different from `material_size`
+    """
+    if not level_set.ufl_domain().cartesian:
+        raise ValueError("Only Cartesian meshes are currently supported.")
+
+    match side:
+        case 0:
+            material_check = operator.le
+        case 1:
+            material_check = operator.ge
+        case _:
+            raise ValueError("'side' must be 0 or 1.")
+
+    match direction:
+        case "above":
+            region_check = operator.ge
+        case "below":
+            region_check = operator.le
+        case _:
+            raise ValueError("'direction' must be 'above' or 'below'.")
+
+    material = fd.conditional(material_check(level_set, 0.5), 1, 0)
+    if not skip_material_size_check:
+        assert_allclose(
+            fd.assemble(material * fd.dx),
+            material_size,
+            rtol=5e-2,
+            err_msg="Material volume or area notably different from 'material_size'",
+        )
+
+    *_, vertical_coord = node_coordinates(level_set)
+    target_region = region_check(vertical_coord, entrainment_height)
+    is_entrained = fd.conditional(target_region, material, 0)
+
+    return fd.assemble(is_entrained * fd.dx) / material_size
+
+
+def min_max_height(
+    level_set: fd.Function, epsilon: float | fd.Function, *, side: int, mode: str
+) -> float:
+    """Calculates the maximum or minimum height of a material interface.
+
+    Args:
+      level_set:
+        A Firedrake function for the level set field
+      epsilon:
+        A float or Firedrake function denoting the thickness of the material interface
+      side:
+        An integer (`0` or `1`) denoting the level-set value on the target material side
+      mode:
+        A string ("min" or "max") specifying which extremum height is sought
+
+    Returns:
+      A float corresponding to the material interface extremum height
+    """
+    match side:
+        case 0:
+            comparison = operator.le
+        case 1:
+            comparison = operator.ge
+        case _:
+            raise ValueError("'side' must be 0 or 1.")
+
+    match mode:
+        case "min":
+            extremum = np.min
+            ls_arg_extremum = np.argmax
+            irrelevant_data = np.inf
+            mpi_comparison = MPI.MIN
+        case "max":
+            extremum = np.max
+            ls_arg_extremum = np.argmin
+            irrelevant_data = -np.inf
+            mpi_comparison = MPI.MAX
+        case _:
+            raise ValueError("'mode' must be 'min' or 'max'.")
+
+    if not level_set.ufl_domain().cartesian:
+        raise ValueError("Only Cartesian meshes are currently supported.")
+
+    coords = node_coordinates(level_set)
+
+    coords_data = coords.dat.data_ro
+    ls_data = level_set.dat.data_ro
+    if isinstance(epsilon, float):
+        eps_data = epsilon * np.ones_like(ls_data)
+    else:
+        eps_data = epsilon.dat.data_ro
+
+    mask_ls = comparison(ls_data, 0.5)
+    if mask_ls.any():
+        coords_inside = coords_data[mask_ls, -1]
+        ind_coords_inside = np.flatnonzero(coords_inside == extremum(coords_inside))
+
+        if ind_coords_inside.size == 1:
+            ind_inside = ind_coords_inside.item()
+        else:
+            ind_min_ls_inside = ls_arg_extremum(ls_data[mask_ls][ind_coords_inside])
+            ind_inside = ind_coords_inside[ind_min_ls_inside]
+
+        height_inside = coords_inside[ind_inside]
+
+        hor_coords = coords_data[mask_ls, :-1][ind_inside]
+        hor_dist_vec = coords_data[~mask_ls, :-1] - hor_coords
+        hor_dist = np.sqrt(np.sum(hor_dist_vec**2, axis=1))
+
+        mask_hor_coords = hor_dist < eps_data[~mask_ls]
+
+        if mask_hor_coords.any():
+            ind_outside = abs(
+                coords_data[~mask_ls, -1][mask_hor_coords] - height_inside
+            ).argmin()
+            height_outside = coords_data[~mask_ls, -1][mask_hor_coords][ind_outside]
+
+            ls_inside = ls_data[mask_ls][ind_inside]
+            eps_inside = eps_data[mask_ls][ind_inside]
+            sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
+
+            ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
+            eps_outside = eps_data[~mask_ls][mask_hor_coords][ind_outside]
+            sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
+
+            sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
+            height = sdls_dist * height_inside + (1 - sdls_dist) * height_outside
+        else:
+            height = height_inside
+    else:
+        height = irrelevant_data
+
+    height_global = level_set.comm.allreduce(height, mpi_comparison)
+
+    return height_global
 
 
 reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}

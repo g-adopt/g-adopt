@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 
-import firedrake as fd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 
 import gadopt as ga
+from gadopt.level_set_tools import min_max_height
 
 
 @dataclass
@@ -128,71 +128,15 @@ class Simulation:
 
     @classmethod
     def diagnostics(cls, simu_time, geo_diag, diag_vars):
+        max_topo = min_max_height(
+            diag_vars["level_set"][1], diag_vars["epsilon"], side=0, mode="max"
+        )
         max_topography_analytical = (
             cls.surface_deflection / 1e3 * np.exp(cls.relaxation_rate * simu_time)
         )
 
-        epsilon = diag_vars["epsilon"]
-        eps_data = epsilon.dat.data_ro_with_halos
-        level_set = diag_vars["level_set"][1]
-        level_set_data = level_set.dat.data_ro_with_halos
-        coords_data = (
-            fd.Function(
-                fd.VectorFunctionSpace(level_set.ufl_domain(), level_set.ufl_element())
-            )
-            .interpolate(fd.SpatialCoordinate(level_set))
-            .dat.data_ro_with_halos
-        )
-
-        mask_ls = level_set_data <= 0.5
-        if mask_ls.any():
-            ind_lower_bound = coords_data[mask_ls, 1].argmax()
-            max_topo_lower_bound = coords_data[mask_ls, 1][ind_lower_bound]
-            if not mask_ls.all():
-                hor_coord_lower_bound = coords_data[mask_ls, 0][ind_lower_bound]
-                mask_hor_coord = (
-                    abs(coords_data[~mask_ls, 0] - hor_coord_lower_bound) < 1e3
-                )
-                if mask_hor_coord.any():
-                    ind_upper_bound = coords_data[~mask_ls, 1][mask_hor_coord].argmin()
-                    max_topo_upper_bound = coords_data[~mask_ls, 1][mask_hor_coord][
-                        ind_upper_bound
-                    ]
-
-                    ls_lower_bound = level_set_data[mask_ls][ind_lower_bound]
-                    eps_lower_bound = eps_data[mask_ls][ind_lower_bound]
-                    sdls_lower_bound = eps_lower_bound * np.log(
-                        ls_lower_bound / (1 - ls_lower_bound)
-                    )
-
-                    ls_upper_bound = level_set_data[~mask_ls][mask_hor_coord][
-                        ind_upper_bound
-                    ]
-                    eps_upper_bound = eps_data[~mask_ls][mask_hor_coord][
-                        ind_upper_bound
-                    ]
-                    sdls_upper_bound = eps_upper_bound * np.log(
-                        ls_upper_bound / (1 - ls_upper_bound)
-                    )
-
-                    ls_dist = sdls_upper_bound / (sdls_upper_bound - sdls_lower_bound)
-                    max_topo = (
-                        ls_dist * max_topo_lower_bound
-                        + (1 - ls_dist) * max_topo_upper_bound
-                    )
-                else:
-                    max_topo = max_topo_lower_bound
-            else:
-                max_topo = max_topo_lower_bound
-        else:
-            max_topo = -np.inf
-
-        max_topo_global = level_set.comm.allreduce(max_topo, MPI.MAX)
-
         cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
-        cls.diag_fields["max_topography"].append(
-            (max_topo_global - cls.surface_coord_y) / 1e3
-        )
+        cls.diag_fields["max_topography"].append((max_topo - cls.surface_coord_y) / 1e3)
         cls.diag_fields["max_topography_analytical"].append(max_topography_analytical)
 
         if MPI.COMM_WORLD.rank == 0:
