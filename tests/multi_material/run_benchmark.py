@@ -29,14 +29,13 @@ def write_output(output_file):
     """Write output fields to the output file."""
     time_output.assign(time_now)
 
-    RaB.interpolate(RaB_ufl) if dimensionless else density.interpolate(
-        dens_diff + ref_dens
-    )
-    viscosity.interpolate(viscosity_ufl)
-    if "Trim_2023" in Simulation.name:
-        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
+    if Simulation.dimensional:
+        density.interpolate(rho_material)
     else:
-        int_heat_rate.interpolate(int_heat_rate_ufl)
+        compo_rayleigh.interpolate(RaB)
+    viscosity.interpolate(mu)
+    if "Trim_2023" in Simulation.name:
+        Simulation.internal_heating_rate(H, time_now)
 
     output_file.write(
         time_output,
@@ -44,10 +43,7 @@ def write_output(output_file):
         temperature,
         *level_set,
         *level_set_grad,
-        RaB,
-        density,
-        viscosity,
-        int_heat_rate,
+        *output_fields,
     )
 
 
@@ -155,58 +151,64 @@ velocity, pressure = fd.split(stokes_function)  # UFL expressions
 stokes_function.subfunctions[0].rename("Velocity")
 stokes_function.subfunctions[1].rename("Pressure")
 
-# Set up fields that depend on the material interface
-func_space_interp = fd.FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
-
-if "Trim_2023" in Simulation.name:
-    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
-        Simulation, level_set, func_space_interp, method="arithmetic"
+# Continuous function space for material field output
+func_space_output = fd.FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
+output_fields = []
+# Set up material fields and the equation system
+approximation_parameters = {}
+if Simulation.dimensional:
+    rho_material = ga.material_field(
+        level_set,
+        [material.density for material in Simulation.materials],
+        interface="sharp",
     )
+    density = fd.Function(func_space_output, name="Density")
+    output_fields.append(density)
+    approximation_parameters["rho"] = Simulation.reference_material.density
+    approximation_parameters["delta_rho"] = (
+        rho_material - Simulation.reference_material.density
+    )
+    approximation_parameters["RaB"] = 1
 else:
-    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
-        Simulation, level_set, func_space_interp
+    if Simulation.materials[0].RaB is None:
+        RaB_material = [Simulation.Ra * material.B for material in Simulation.materials]
+    else:
+        RaB_material = [material.RaB for material in Simulation.materials]
+    RaB = ga.material_field(
+        level_set,
+        RaB_material,
+        interface="arithmetic" if Simulation.name == "Trim_2023" else "sharp",
     )
+    compo_rayleigh = fd.Function(func_space_output, name="RaB")
+    output_fields.append(compo_rayleigh)
+    approximation_parameters["RaB"] = RaB
 
-viscosity_ufl = ga.field_interface(
+mu = ga.material_field(
     level_set,
     [material.viscosity(velocity, temperature) for material in Simulation.materials],
-    method="sharp" if "Schmalholz_2011" in Simulation.name else "geometric",
+    interface="sharp" if Simulation.name == "Schmalholz_2011" else "geometric",
 )
-viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
+viscosity = fd.Function(func_space_output, name="Viscosity")
+output_fields.append(viscosity)
+approximation_parameters["mu"] = mu
 
-if "Trim_2023" in Simulation.name:
-    int_heat_rate_ufl = fd.Function(
-        temperature.function_space(), name="Internal heating rate"
-    )
-    int_heat_rate = int_heat_rate_ufl
-    Simulation.internal_heating_rate(int_heat_rate_ufl, 0)
-else:
-    int_heat_rate_ufl = ga.field_interface(
-        level_set,
-        [material.internal_heating_rate() for material in Simulation.materials],
-        method="geometric",
-    )
-    int_heat_rate = fd.Function(
-        func_space_interp, name="Internal heating rate"
-    ).interpolate(int_heat_rate_ufl)
+if Simulation.name == "Trim_2023":
+    H = fd.Function(temperature.function_space(), name="Internal heating rate")
+    output_fields.append(H)
+    approximation_parameters["H"] = H
+
+if Simulation.dimensional:
+    approximation_parameters["g"] = Simulation.g
+    approximation_parameters["T0"] = 0
+
+Ra = getattr(Simulation, "Ra", 0)
+approximation = ga.BoussinesqApproximation(Ra, **approximation_parameters)
 
 # Timestep object
 real_func_space = fd.FunctionSpace(mesh, "R", 0)
 timestep = fd.Function(real_func_space).assign(Simulation.initial_timestep)
 
 # Set up energy and Stokes solvers
-approximation = ga.BoussinesqApproximation(
-    Simulation.Ra,
-    mu=viscosity_ufl,
-    rho=ref_dens,
-    alpha=1,
-    g=Simulation.g,
-    T0=0,
-    RaB=RaB_ufl,
-    delta_rho=dens_diff,
-    kappa=1,
-    H=int_heat_rate_ufl,
-)
 energy_solver = ga.EnergySolver(
     temperature,
     velocity,
@@ -279,7 +281,7 @@ if Simulation.name == "Trim_2023":
     # Omit level-set reinitialisation
     disable_reinitialisation = True
     # Function to be coupled with the energy solver
-    update_forcings = partial(Simulation.internal_heating_rate, int_heat_rate_ufl)
+    update_forcings = partial(Simulation.internal_heating_rate, H)
 else:
     disable_reinitialisation = False
     update_forcings = None

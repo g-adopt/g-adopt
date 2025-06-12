@@ -153,8 +153,8 @@ materials = [buoyant_material, dense_material]
 
 Ra = 0  # Thermal Rayleigh number
 
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
+RaB = material_field(
+    psi, [material.RaB for material in materials], interface="arithmetic"
 )  # Compositional Rayleigh number, defined based on each material value and location
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
@@ -257,7 +257,13 @@ while True:
     level_set_solver.solve()
 
     # Calculate proportion of material entrained above a given height
-    buoy_entr = entrainment(psi, material_area, entrainment_height)
+    buoy_entr = material_entrainment(
+        psi,
+        material_size=material_area,
+        entrainment_height=entrainment_height,
+        side=0,
+        direction="above",
+    )
 
     # Log diagnostics
     plog.log_str(f"{step} {time_now} {float(delta_t)} {gd.u_rms()} {buoy_entr}")
