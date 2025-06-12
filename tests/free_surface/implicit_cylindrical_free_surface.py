@@ -40,12 +40,6 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         self.stokes_vars[2].interpolate(self.F0 * cos(self.number_of_lam * atan2(self.X[1], self.X[0])))  # Initial free surface condition
         self.eta_analytical = Function(self.stokes_vars[2], name="eta analytical")
 
-    def setup_solver(self):
-        super().setup_solver()
-
-        self.stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-6
-        self.stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
-
     def setup_bcs(self):
         self.stokes_bcs = {
             self.boundary.top: {"free_surface": {"RaFS": 1}},

@@ -56,6 +56,8 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
             transpose_nullspace=self.Z_nullspace,
             near_nullspace=self.Z_near_nullspace,
         )
+        self.stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-6
+        self.stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
 
     def calculate_error(self):
         local_error = assemble(pow(self.stokes_vars[2]-self.eta_analytical, 2)*self.ds(self.boundary.top))
