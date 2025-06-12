@@ -147,15 +147,9 @@ assign_level_set_values(
 
 
 # +
-buoyant_material = Material(RaB=-1)  # Vertical direction is flipped in the benchmark
-dense_material = Material(RaB=0)
-materials = [buoyant_material, dense_material]
-
 Ra = 0  # Thermal Rayleigh number
-
-RaB = material_field(
-    psi, [material.RaB for material in materials], interface="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
+# Compositional Rayleigh number, defined based on each material value and location
+RaB = material_field(psi, [RaB_buoyant := 0, RaB_dense := 1], interface="arithmetic")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # -

@@ -159,15 +159,11 @@ assign_level_set_values(
 # using averaging schemes, such as arithmetic, geometric, and harmonic means.
 
 # +
-dense_material = Material(RaB=4.5e5)
-reference_material = Material(RaB=0)
-materials = [dense_material, reference_material]
-
 Ra = 3e5  # Thermal Rayleigh number
-
+# Compositional Rayleigh number, defined based on each material value and location
 RaB = material_field(
-    psi, [material.RaB for material in materials], interface="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
+    psi, [RaB_dense := 4.5e5, RaB_reference := 0], interface="arithmetic"
+)
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # -
