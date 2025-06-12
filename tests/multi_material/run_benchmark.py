@@ -29,25 +29,21 @@ def write_output(output_file):
     """Write output fields to the output file."""
     time_output.assign(time_now)
 
-    RaB.interpolate(RaB_ufl) if dimensionless else density.interpolate(
-        dens_diff + ref_dens
-    )
-    viscosity.interpolate(viscosity_ufl)
-    if "Trim_2023" in Simulation.name:
-        Simulation.internal_heating_rate(int_heat_rate_ufl, time_now)
+    if Simulation.dimensional:
+        density.interpolate(rho_material)
     else:
-        int_heat_rate.interpolate(int_heat_rate_ufl)
+        compo_rayleigh.interpolate(RaB)
+    viscosity.interpolate(mu)
+    if "Trim_2023" in Simulation.name:
+        Simulation.internal_heating_rate(H, time_now)
 
     output_file.write(
         time_output,
         *stokes_function.subfunctions,
         temperature,
         *level_set,
-        *level_set_grad_proj,
-        RaB,
-        density,
-        viscosity,
-        int_heat_rate,
+        *level_set_grad,
+        *output_fields,
     )
 
 
@@ -81,11 +77,14 @@ if Simulation.restart_from_checkpoint:  # Restore mesh and key functions
                 break
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if "Trim_2023" in Simulation.name:
-        epsilon = fd.Constant(1 / 2 / Simulation.k)
-    else:  # Empirical calibration that seems to be robust
-        local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+    if Simulation.name == "Trim_2023":
+        epsilon = 1 / 2 / Simulation.k
+    else:
+        epsilon = ga.interface_thickness(level_set[0].function_space())
+    if Simulation.name == "Schmalholz_2011":
+        epsilon.interpolate(
+            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
+        )
 
     time_now = time_output.dat.data[0]
 else:  # Initialise mesh and key functions
@@ -126,19 +125,18 @@ else:  # Initialise mesh and key functions
     ]
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
-    if "Trim_2023" in Simulation.name:
-        epsilon = fd.Constant(1 / 2 / Simulation.k)
-    else:  # Empirical calibration that seems to be robust
-        local_min_mesh_size = mesh.cell_sizes.dat.data.min()
-        epsilon = fd.Constant(mesh.comm.allreduce(local_min_mesh_size, MPI.MIN) / 4)
+    if Simulation.name == "Trim_2023":
+        epsilon = 1 / 2 / Simulation.k
+    else:
+        epsilon = ga.interface_thickness(func_space_ls)
+    if Simulation.name == "Schmalholz_2011":
+        epsilon.interpolate(
+            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
+        )
 
     # Initialise level set
-    signed_dist_to_interface = fd.Function(level_set[0].function_space())
-    for ls, isd, params in zip(
-        level_set, Simulation.initialise_signed_distance, Simulation.isd_params
-    ):
-        signed_dist_to_interface.dat.data[:] = isd(params, ls)
-        ls.interpolate((1 + fd.tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
+    for ls, kwargs in zip(level_set, Simulation.signed_distance_kwargs_list):
+        ga.assign_level_set_values(ls, epsilon, **kwargs)
 
     time_output = fd.Function(func_space_pres, name="Time")
     time_now = 0
@@ -153,58 +151,64 @@ velocity, pressure = fd.split(stokes_function)  # UFL expressions
 stokes_function.subfunctions[0].rename("Velocity")
 stokes_function.subfunctions[1].rename("Pressure")
 
-# Set up fields that depend on the material interface
-func_space_interp = fd.FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
-
-if "Trim_2023" in Simulation.name:
-    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
-        Simulation, level_set, func_space_interp, method="arithmetic"
+# Continuous function space for material field output
+func_space_output = fd.FunctionSpace(mesh, "CG", Simulation.level_set_func_space_deg)
+output_fields = []
+# Set up material fields and the equation system
+approximation_parameters = {}
+if Simulation.dimensional:
+    rho_material = ga.material_field(
+        level_set,
+        [material.density for material in Simulation.materials],
+        interface="sharp",
     )
+    density = fd.Function(func_space_output, name="Density")
+    output_fields.append(density)
+    approximation_parameters["rho"] = Simulation.reference_material.density
+    approximation_parameters["delta_rho"] = (
+        rho_material - Simulation.reference_material.density
+    )
+    approximation_parameters["RaB"] = 1
 else:
-    ref_dens, dens_diff, density, RaB_ufl, RaB, dimensionless = ga.density_RaB(
-        Simulation, level_set, func_space_interp
+    if Simulation.materials[0].RaB is None:
+        RaB_material = [Simulation.Ra * material.B for material in Simulation.materials]
+    else:
+        RaB_material = [material.RaB for material in Simulation.materials]
+    RaB = ga.material_field(
+        level_set,
+        RaB_material,
+        interface="arithmetic" if Simulation.name == "Trim_2023" else "sharp",
     )
+    compo_rayleigh = fd.Function(func_space_output, name="RaB")
+    output_fields.append(compo_rayleigh)
+    approximation_parameters["RaB"] = RaB
 
-viscosity_ufl = ga.field_interface(
+mu = ga.material_field(
     level_set,
     [material.viscosity(velocity, temperature) for material in Simulation.materials],
-    method="sharp" if "Schmalholz_2011" in Simulation.name else "geometric",
+    interface="sharp" if Simulation.name == "Schmalholz_2011" else "geometric",
 )
-viscosity = fd.Function(func_space_interp, name="Viscosity").interpolate(viscosity_ufl)
+viscosity = fd.Function(func_space_output, name="Viscosity")
+output_fields.append(viscosity)
+approximation_parameters["mu"] = mu
 
-if "Trim_2023" in Simulation.name:
-    int_heat_rate_ufl = fd.Function(
-        temperature.function_space(), name="Internal heating rate"
-    )
-    int_heat_rate = int_heat_rate_ufl
-    Simulation.internal_heating_rate(int_heat_rate_ufl, 0)
-else:
-    int_heat_rate_ufl = ga.field_interface(
-        level_set,
-        [material.internal_heating_rate() for material in Simulation.materials],
-        method="geometric",
-    )
-    int_heat_rate = fd.Function(
-        func_space_interp, name="Internal heating rate"
-    ).interpolate(int_heat_rate_ufl)
+if Simulation.name == "Trim_2023":
+    H = fd.Function(temperature.function_space(), name="Internal heating rate")
+    output_fields.append(H)
+    approximation_parameters["H"] = H
+
+if Simulation.dimensional:
+    approximation_parameters["g"] = Simulation.g
+    approximation_parameters["T0"] = 0
+
+Ra = getattr(Simulation, "Ra", 0)
+approximation = ga.BoussinesqApproximation(Ra, **approximation_parameters)
 
 # Timestep object
 real_func_space = fd.FunctionSpace(mesh, "R", 0)
 timestep = fd.Function(real_func_space).assign(Simulation.initial_timestep)
 
 # Set up energy and Stokes solvers
-approximation = ga.BoussinesqApproximation(
-    Simulation.Ra,
-    mu=viscosity_ufl,
-    rho=ref_dens,
-    alpha=1,
-    g=Simulation.g,
-    T0=0,
-    RaB=RaB_ufl,
-    delta_rho=dens_diff,
-    kappa=1,
-    H=int_heat_rate_ufl,
-)
 energy_solver = ga.EnergySolver(
     temperature,
     velocity,
@@ -231,16 +235,16 @@ stokes_solver = ga.StokesSolver(
 stokes_solver.solve()
 
 # Set up level-set solvers
+adv_kwargs = {"u": velocity, "timestep": timestep}
+reini_kwargs = {"epsilon": epsilon, "timestep": 1e-2, "frequency": 5}
+if Simulation.name == "Tosi_2015":
+    # Speed up simulation by avoiding frequent reinitialisation
+    reini_kwargs["frequency"] = 10
 level_set_solver = [
-    ga.LevelSetSolver(
-        ls, velocity, timestep, ga.eSSPRKs10p3, Simulation.subcycles, epsilon
-    )
+    ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
     for ls in level_set
 ]
-level_set_grad_proj = [ls_solv.level_set_grad_proj for ls_solv in level_set_solver]
-if "Trim_2023" in Simulation.name:
-    for ls_solver in level_set_solver:
-        ls_solver.reini_params["iterations"] = 0
+level_set_grad = [ls_solv.solution_grad for ls_solv in level_set_solver]
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
@@ -268,22 +272,18 @@ checkpoint_fields = {
 }
 
 # Objects used to calculate simulation diagnostics
-diag_vars = {
-    "epsilon": epsilon,
-    "level_set": level_set,
-    "level_set_grad_proj": level_set_grad_proj,
-    "density": density,
-    "viscosity": viscosity,
-    "int_heat_rate": int_heat_rate,
-}
+diag_vars = {"epsilon": epsilon, "level_set": level_set, "viscosity": viscosity}
 geo_diag = ga.GeodynamicalDiagnostics(
     stokes_function, temperature, bottom_id=3, top_id=4
 )
 
-# Function to be coupled with the energy solver
-if "Trim_2023" in Simulation.name:
-    update_forcings = partial(Simulation.internal_heating_rate, int_heat_rate_ufl)
+if Simulation.name == "Trim_2023":
+    # Omit level-set reinitialisation
+    disable_reinitialisation = True
+    # Function to be coupled with the energy solver
+    update_forcings = partial(Simulation.internal_heating_rate, H)
 else:
+    disable_reinitialisation = False
     update_forcings = None
 
 # Add old velocity to simulation class for steady state criteria for Tosi benchmark
@@ -316,7 +316,7 @@ while True:
 
     # Advect each level set
     for ls_solv in level_set_solver:
-        ls_solv.solve(step)
+        ls_solv.solve(disable_reinitialisation=disable_reinitialisation)
 
     if "Tosi_2015" in Simulation.name:
         # Update old velocity prior to solving for Tosi steady state criteria

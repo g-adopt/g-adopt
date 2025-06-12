@@ -1,6 +1,3 @@
-from functools import partial
-
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
@@ -30,20 +27,24 @@ class Simulation:
     # Degree of the function space on which the level-set function is defined.
     level_set_func_space_deg = 2
 
-    # Parameters to initialise level sets
-    material_interface_y = 0.2
-    interface_deflection = 0.02
-    # The following two lists must be ordered such that, unpacking from the end, each
-    # pair of arguments enables initialising a level set whose 0-contour corresponds to
-    # the entire interface between a given material and the remainder of the numerical
-    # domain. By convention, the material thereby isolated occupies the positive side
-    # of the signed-distance level set.
-    isd_params = [(interface_deflection, 2 * domain_dims[0], material_interface_y)]
-    initialise_signed_distance = [
-        partial(
-            isd.isd_simple_curve, domain_origin[0], domain_dims[0], isd.cosine_curve
-        )
-    ]
+    # Parameters to initialise level set
+    interface_coords_x = np.linspace(0, domain_dims[0], 1000)
+    callable_args = (
+        interface_deflection := 0.02,
+        perturbation_wavelength := 2 * domain_dims[0],
+        initial_interface_y := 0.2,
+    )
+    signed_distance_kwargs = {
+        "interface_geometry": "curve",
+        "interface_callable": "cosine",
+        "interface_args": (interface_coords_x, *callable_args),
+    }
+    # The following list must be ordered such that, unpacking from the end, each dictionary
+    # contains the keyword arguments required to initialise the signed-distance array
+    # corresponding to the interface between a given material and the remainder of the
+    # numerical domain (all previous materials excluded). By convention, the material thus
+    # isolated occupies the positive side of the signed-distance array.
+    signed_distance_kwargs_list = [signed_distance_kwargs]
 
     # Material ordering must follow the logic implemented in the above two lists. In
     # other words, the last material in the below list corresponds to the portion of
@@ -56,7 +57,8 @@ class Simulation:
     materials = [buoyant_material, dense_material]
     reference_material = None
 
-    # Physical parameters
+    # Approximation parameters
+    dimensional = False
     Ra, g = 0, 1
 
     # Boundary conditions
@@ -84,7 +86,7 @@ class Simulation:
     entrainment_height = 0.2
     diag_params = {
         "domain_dim_x": domain_dims[0],
-        "material_interface_y": material_interface_y,
+        "material_interface_y": initial_interface_y,
         "entrainment_height": entrainment_height,
     }
 

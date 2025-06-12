@@ -16,11 +16,13 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
+  "pandas",
+  "shapely",
   "vtk>=9.0.1",
 ]
 
 [project.optional-dependencies]
-demos = ["assess", "gmsh", "imageio", "jupytext", "openpyxl", "pandas", "pyvista", "shapely"]
+demos = ["assess", "gmsh", "imageio", "jupytext", "openpyxl", "pyvista"]
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]

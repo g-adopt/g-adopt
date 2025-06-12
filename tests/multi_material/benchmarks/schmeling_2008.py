@@ -1,8 +1,6 @@
 from dataclasses import dataclass
-from functools import partial
 
 import firedrake as fd
-import initial_signed_distance as isd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
@@ -52,23 +50,37 @@ class Simulation:
     # is defined.cls
     level_set_func_space_deg = 2
 
-    # Parameters to initialise level sets
-    material_interface_y = 7e5
-    interface_slope = 0
-    # The following two lists must be ordered such that, unpacking from the end, each
-    # pair of arguments enables initialising a level set whose 0-contour corresponds to
-    # the entire interface between a given material and the remainder of the numerical
-    # domain. By convention, the material thereby isolated occupies the positive side
-    # of the signed-distance level set.
-    isd_params = [(interface_slope, material_interface_y), None]
-    initialise_signed_distance = [
-        partial(
-            isd.isd_simple_curve,
-            domain_origin[0],
-            domain_dims[0],
-            isd.straight_line,
-        ),
-        isd.isd_schmeling,
+    # Parameters to initialise surface level set
+    interface_coords_x = np.array([0.0, domain_dims[0]])
+    callable_args = (surface_slope := 0, surface_coord_y := 7e5)
+    surface_signed_distance_kwargs = {
+        "interface_geometry": "curve",
+        "interface_callable": "line",
+        "interface_args": (interface_coords_x, *callable_args),
+    }
+    # Parameters to initialise slab level set
+    slab_interface_coords = [
+        (domain_dims[0], 7e5),
+        (1e6, 7e5),
+        (1e6, 5e5),
+        (1.1e6, 5e5),
+        (1.1e6, 6e5),
+        (domain_dims[0], 6e5),
+    ]
+    slab_boundary_coords = [(domain_dims[0], 7e5)]
+    slab_signed_distance_kwargs = {
+        "interface_geometry": "polygon",
+        "interface_coordinates": slab_interface_coords,
+        "boundary_coordinates": slab_boundary_coords,
+    }
+    # The following list must be ordered such that, unpacking from the end, each dictionary
+    # contains the keyword arguments required to initialise the signed-distance array
+    # corresponding to the interface between a given material and the remainder of the
+    # numerical domain (all previous materials excluded). By convention, the material thus
+    # isolated occupies the positive side of the signed-distance array.
+    signed_distance_kwargs_list = [
+        surface_signed_distance_kwargs,
+        slab_signed_distance_kwargs,
     ]
 
     # Material ordering must follow the logic implemented in the above two lists. In
@@ -83,7 +95,8 @@ class Simulation:
     materials = [mantle, air, lithosphere]
     reference_material = mantle
 
-    # Physical parameters
+    # Approximation parameters
+    dimensional = True
     Ra, g = 1, 9.81
 
     # Boundary conditions
