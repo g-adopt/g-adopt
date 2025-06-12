@@ -324,11 +324,12 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
     z.subfunctions[1].interpolate(0.0)
 
     should_end_timestepping = False
-
+    updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
+    updated_plt_rec = False
     # Now perform the time loop:
     for timestep_index in tape.timestepper(iter(range(500))):
         # Update surface velocities
-        updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
+        # updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
 
         # We only solve stokes every 3 timesteps or during initial phase
         if (timestep_index % stokes_solve_frequency == 0 or timestep_index < timestep_initial_phase or updated_plt_rec):
@@ -380,9 +381,9 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
     # Loggin the first objective (Make sure ROL shows the same value)
     log(f"Objective value after the first run: {objective}")
 
-    # We want to avoid a second call to objective functional with the same value
-    first_call_decorator = first_call_value(predefined_value=objective)
-    ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
+    # # We want to avoid a second call to objective functional with the same value
+    # first_call_decorator = first_call_value(predefined_value=objective)
+    # ReducedFunctional.__call__ = first_call_decorator(ReducedFunctional.__call__)
 
     # All done with the forward run, stop annotating anything else to the tape
     pause_annotation()
