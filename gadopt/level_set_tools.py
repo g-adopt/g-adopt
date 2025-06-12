@@ -514,7 +514,7 @@ class LevelSetSolver:
             grad_name += number_match.group()
 
         gradient_space = fd.VectorFunctionSpace(
-            self.mesh, "Q", self.solution.ufl_element().degree()
+            mesh=self.mesh, family=self.solution_space.ufl_element()
         )
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
 
@@ -578,7 +578,7 @@ class LevelSetSolver:
     def reinitialise(self) -> None:
         """Performs reinitialisation steps."""
         for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(t=0, update_forcings=self.update_gradient)
+            self.reini_integrator.advance()
 
     def solve(
         self,
@@ -885,7 +885,3 @@ def min_max_height(
     height_global = level_set.comm.allreduce(height, mpi_comparison)
 
     return height_global
-
-
-reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
-reinitialisation_term.optional_attrs = set()
