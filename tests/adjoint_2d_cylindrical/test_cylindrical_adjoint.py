@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from pathlib import Path
-from .cases import cases, schedulers
+from cases import cases, schedulers
 from gadopt import *
 
 
@@ -19,7 +19,7 @@ def test_annulus_taylor_test(case_name):
 @pytest.mark.parametrize("scheduler", schedulers)
 def test_derivatives_vs_schedulers(case_name, scheduler):
     """
-    Test the outputs from different checpoint_schedules outputs agains each other.
+    Test the outputs from different checkpoint_schedules outputs against each other.
     Make sure the control and derivative in each case are the same -> Forward and Reverse on each scheduler should produce the same output
     compares the control/derivatives/ and objective+functional values.
     Control: In this case is the initial condition of the inverse simulation: Tic
