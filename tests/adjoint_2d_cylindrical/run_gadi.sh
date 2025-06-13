@@ -3,4 +3,6 @@
 export MY_GADOPT="$GADOPT_CHECKOUT"
 source "$GADOPT_SETUP"
 
-echo mpiexec $@
+export PYOP2_SPMD_STRICT=1
+
+mpiexec $@

@@ -1,5 +1,5 @@
 cases := analytical_comparisons multi_material optimisation_checkpointing scalar_advection scalar_advection_diffusion Drucker-Prager_rheology adjoint 2d_cylindrical_TALA_DG viscoplastic_case_DG free_surface viscoelastic base_gmsh
-long_cases := adjoint_2d_cylindrical
+long_cases := analytical_comparisons parallel_scaling adjoint_2d_cylindrical
 
 .PHONY: all longtest longtest_output $(cases) $(long_cases) clean check longcheck
 
@@ -20,4 +20,4 @@ check:
 	python -m pytest . ../demos -m 'not demo and not longtest'
 
 longcheck:
-	python -m pytest -m longtest_temp
+	python -m pytest -m longtest
