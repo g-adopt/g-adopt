@@ -8,9 +8,9 @@ all: $(cases)
 
 $(cases) : ncpus := 8
 $(cases) : category := multi_material
-$(cases) : exec_cmd = mpiexec -np $(ncpus) python3 $< benchmarks/$*
+$(cases) : exec_cmd = mpiexec -np $(ncpus) python3 $< $*
 $(cases): desc = $*
-$(cases): %: run_benchmark.py benchmarks/%/simulation.py
+$(cases): %: run_benchmark.py %/simulation.py
 	$(run-python)
 
 clean:
