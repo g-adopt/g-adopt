@@ -11,7 +11,6 @@ from .approximations import (
 from .diagnostics import GeodynamicalDiagnostics
 from .level_set_tools import (
     LevelSetSolver,
-    Material,
     assign_level_set_values,
     interface_thickness,
     material_entrainment,

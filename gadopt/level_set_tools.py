@@ -1,17 +1,17 @@
 r"""This module provides a set of classes and functions enabling multi-material
-capabilities. Users initialise materials by instantiating the `Material` class and
-define the physical properties of material interfaces using `material_field`. They
-instantiate the `LevelSetSolver` class by providing relevant parameters and call the
-`solve` method to request a solver update. Finally, they may call the
-`material_entrainment` function to calculate material entrainment in the simulation.
+capabilities. Users initialise level-set fields using the `interface_thickness` and
+`assign_level_set_values` functions. Given the level-set functions, users can define
+material-dependent physical properties via the `material_field` function. To evolve
+level-set fields, users instantiate the `LevelSetSolver` class, choosing if they require
+advection, reinitialisation, or both, and then call the `solve` method to request a
+solver update. Finally, they may call the `material_entrainment` and `min_max_height`
+functions to calculate useful simulation diagnostics.
 
 """
 
 import operator
 import re
-from dataclasses import dataclass, fields
-from numbers import Number
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 from warnings import warn
 
 import firedrake as fd
@@ -29,11 +29,11 @@ from .utility import node_coordinates
 
 __all__ = [
     "LevelSetSolver",
-    "Material",
     "assign_level_set_values",
     "interface_thickness",
     "material_entrainment",
     "material_field",
+    "min_max_height",
 ]
 
 # Default parameters for level-set advection
@@ -50,87 +50,6 @@ reini_params_default = {
     "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "steps": 1,
 }
-
-
-@dataclass(kw_only=True)
-class Material:
-    """A material with physical properties for the level-set approach.
-
-    Expects material buoyancy to be defined using a value for either the reference
-    density, buoyancy number, or compositional Rayleigh number.
-
-    Contains static methods to calculate the physical properties of a material.
-    Methods implemented here describe properties in the simplest non-dimensional
-    simulation setup and must be overriden for more complex scenarios.
-
-    Attributes:
-        density:
-          An integer or a float representing the reference density.
-        B:
-          An integer or a float representing the buoyancy number.
-        RaB:
-          An integer or a float representing the compositional Rayleigh number.
-        density_B_RaB:
-          A string to notify how the buoyancy term is calculated.
-    """
-
-    density: Optional[Number] = None
-    B: Optional[Number] = None
-    RaB: Optional[Number] = None
-
-    def __post_init__(self):
-        """Checks instance field values.
-
-        Raises:
-            ValueError:
-              Incorrect field types.
-        """
-        count_None = 0
-        for field_var in fields(self):
-            field_var_value = getattr(self, field_var.name)
-            if isinstance(field_var_value, Number):
-                self.density_B_RaB = field_var.name
-            elif field_var_value is None:
-                count_None += 1
-            else:
-                raise ValueError(
-                    "When provided, density, B, and RaB must have type int or float."
-                )
-        if count_None != 2:
-            raise ValueError(
-                "One, and only one, of density, B, and RaB must be provided, and it "
-                "must be an integer or a float."
-            )
-
-    @staticmethod
-    def viscosity(*args, **kwargs):
-        """Calculates dynamic viscosity (Pa s)."""
-        return 1.0
-
-    @staticmethod
-    def thermal_expansion(*args, **kwargs):
-        """Calculates volumetric thermal expansion coefficient (K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def thermal_conductivity(*args, **kwargs):
-        """Calculates thermal conductivity (W m^-1 K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def specific_heat_capacity(*args, **kwargs):
-        """Calculates specific heat capacity at constant pressure (J kg^-1 K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def internal_heating_rate(*args, **kwargs):
-        """Calculates internal heating rate per unit mass (W kg^-1)."""
-        return 0.0
-
-    @classmethod
-    def thermal_diffusivity(cls, *args, **kwargs):
-        """Calculates thermal diffusivity (m^2 s^-1)."""
-        return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
 
 
 def interface_thickness(
