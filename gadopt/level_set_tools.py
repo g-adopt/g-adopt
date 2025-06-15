@@ -199,7 +199,9 @@ def signed_distance(
     return signed_distance
 
 
-def interface_thickness(level_set: fd.Function, scale: float = 0.35) -> fd.Function:
+def interface_thickness(
+    level_set: fd.Function, scale: float | None = None
+) -> fd.Function:
     """Default strategy for the thickness of the conservative level set profile.
 
     Args:
@@ -211,8 +213,15 @@ def interface_thickness(level_set: fd.Function, scale: float = 0.35) -> fd.Funct
     Returns:
       A Firedrake function holding the interface thickness values
     """
+    mesh = level_set.ufl_domain()
     epsilon = fd.Function(level_set, name="Interface thickness")
-    epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set.ufl_domain()))
+
+    if mesh.extruded:
+        scale = scale or 0.25
+        epsilon.interpolate(scale * mesh.cell_sizes)
+    else:
+        scale = scale or 0.35
+        epsilon.interpolate(scale * fd.MinCellEdgeLength(mesh))
 
     return epsilon
 
