@@ -1,135 +1,115 @@
-from dataclasses import dataclass
+"""Compositional benchmark.
+Gerya, T. V., & Yuen, D. A. (2003).
+Characteristics-based marker-in-cell method with conservative finite-differences schemes
+for modeling geological flows with strongly variable transport properties.
+Physics of the Earth and Planetary Interiors, 140(4), 293-318.
+"""
 
 import firedrake as fd
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 
-import gadopt as ga
+from .materials import buoyant_material, dense_material
 
 
-@dataclass
-class BuoyantMaterial(ga.Material):
-    def viscosity(self, *args, **kwargs):
-        return 1e21
+def initialise_temperature(temperature):
+    pass
 
 
-@dataclass
-class DenseMaterial(ga.Material):
-    def viscosity(self, *args, **kwargs):
-        return 1e21
+def steady_state_condition(stokes_solver):
+    pass
 
 
-class Simulation:
-    """Compositional benchmark.
-    Gerya, T. V., & Yuen, D. A. (2003).
-    Characteristics-based marker-in-cell method with conservative finite-differences
-    schemes for modeling geological flows with strongly variable transport properties.
-    Physics of the Earth and Planetary Interiors, 140(4), 293-318.
-    """
+def diagnostics(simu_time, geo_diag, diag_vars, output_path):
+    level_set = diag_vars["level_set"][0]
 
-    name = "Gerya_2003"
+    block_area = fd.assemble(fd.conditional(level_set >= 0.5, 1, 0) * fd.dx)
 
-    restart_from_checkpoint = 0
+    diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e6)
+    diag_fields["block_area"].append(block_area / 1e10)
 
-    # Mesh resolution should be sufficient to capture eventual small-scale dynamics
-    # in the neighbourhood of material interfaces tracked by the level-set approach.
-    # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-    domain_dims = (5e5, 5e5)
-    domain_origin = (0, 0)
-    mesh_elements = (64, 64)
+    if MPI.COMM_WORLD.rank == 0:
+        np.savez(
+            f"{output_path}/output_{checkpoint_restart}_{tag}", diag_fields=diag_fields
+        )
 
-    # Degree of the function space on which the level-set function is defined.
-    level_set_func_space_deg = 2
 
-    # Parameters to initialise level set
-    callable_args = (ref_vertex_coords := (2e5, 3.5e5), edge_sizes := (1e5, 1e5))
-    signed_distance_kwargs = {
-        "interface_geometry": "polygon",
-        "interface_callable": "rectangle",
-        "interface_args": callable_args,
-    }
-    # The following list must be ordered such that, unpacking from the end, each dictionary
-    # contains the keyword arguments required to initialise the signed-distance array
-    # corresponding to the interface between a given material and the remainder of the
-    # numerical domain (all previous materials excluded). By convention, the material thus
-    # isolated occupies the positive side of the signed-distance array.
-    signed_distance_kwargs_list = [signed_distance_kwargs]
+def plot_diagnostics(output_path):
+    if MPI.COMM_WORLD.rank == 0:
+        fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
 
-    # Material ordering must follow the logic implemented in the above two lists. In
-    # other words, the last material in the below list corresponds to the portion of
-    # the numerical domain entirely isolated by the level set initialised using the
-    # first pair of arguments (unpacking from the end) in the above two lists.
-    # Consequently, the first material in the below list occupies the negative side of
-    # the level set resulting from the last pair of arguments above.
-    buoyant_material = BuoyantMaterial(density=3200)
-    dense_material = DenseMaterial(density=3300)
-    materials = [buoyant_material, dense_material]
-    reference_material = buoyant_material
+        ax.grid()
 
-    # Approximation parameters
-    dimensional = True
-    Ra, g = 1, 9.8
+        ax.set_xlabel("Time (Myr)")
+        ax.set_ylabel("Relative block area")
 
-    # Boundary conditions
-    temp_bcs = {}
-    stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
+        ax.plot(
+            diag_fields["output_time"],
+            diag_fields["block_area"],
+            label="Conservative level set",
+        )
 
-    # Stokes solver options
-    stokes_nullspace_args = {}
-    stokes_solver_params = None
+        ax.legend(fontsize=12, fancybox=True, shadow=True)
 
-    # Timestepping objects
-    initial_timestep = 1e11
-    subcycles = 1
-    dump_period = 1e5 * 365.25 * 8.64e4
-    checkpoint_period = 5
-    time_end = 9.886e6 * 365.25 * 8.64e4
+        fig.savefig(f"{output_path}/block_area_{tag}.pdf", dpi=300, bbox_inches="tight")
+        plt.close(fig)
 
-    # Diagnostic objects
-    diag_fields = {"output_time": [], "block_area": []}
 
-    @classmethod
-    def initialise_temperature(cls, temperature):
-        pass
+# A simulation name tag
+tag = "reference"
+# 0 indicates the initial run and positive integers corresponding restart runs.
+checkpoint_restart = 0
 
-    @classmethod
-    def steady_state_condition(cls, stokes_solver):
-        pass
+# Mesh resolution should be sufficient to capture eventual small-scale dynamics
+# in the neighbourhood of material interfaces tracked by the level-set approach.
+# Insufficient mesh refinement can lead to unwanted motion of material interfaces.
+domain_dims = (5e5, 5e5)
+mesh_gen = "firedrake"
+mesh_elements = (64, 64)
 
-    @classmethod
-    def diagnostics(cls, simu_time, geo_diag, diag_vars):
-        level_set = diag_vars["level_set"][0]
+# Degree of the function space on which the level-set function is defined.
+level_set_func_space_deg = 2
 
-        block_area = fd.assemble(fd.conditional(level_set >= 0.5, 1, 0) * fd.dx)
+# Parameters to initialise level set
+callable_args = (ref_vertex_coords := (2e5, 3.5e5), edge_sizes := (1e5, 1e5))
+signed_distance_kwargs = {
+    "interface_geometry": "polygon",
+    "interface_callable": "rectangle",
+    "interface_args": callable_args,
+}
+# The following list must be ordered such that, unpacking from the end, each dictionary
+# contains the keyword arguments required to initialise the signed-distance array
+# corresponding to the interface between a given material and the remainder of the
+# numerical domain (all previous materials excluded). By convention, the material thus
+# isolated occupies the positive side of the signed-distance array.
+signed_distance_kwargs_list = [signed_distance_kwargs]
 
-        cls.diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e6)
-        cls.diag_fields["block_area"].append(block_area / 1e10)
+# Material ordering must follow the logic implemented in the above list. In other words,
+# the last material in the below list must correspond to the portion of the numerical
+# domain isolated by the signed-distance array calculated using the last dictionary in
+# the above list. The first material in the below list will, therefore, occupy the
+# negative side of the signed-distance array calculated from the first dictionary above.
+materials = [buoyant_material, dense_material]
 
-        if MPI.COMM_WORLD.rank == 0:
-            np.savez(
-                f"{cls.name.lower()}/output_{Simulation.restart_from_checkpoint}_check",
-                diag_fields=cls.diag_fields,
-            )
+# Approximation parameters
+dimensional = True
+Ra, g = 1, 9.8
 
-    @classmethod
-    def plot_diagnostics(cls):
-        if MPI.COMM_WORLD.rank == 0:
-            fig, ax = plt.subplots(1, 1, figsize=(12, 10), constrained_layout=True)
+# Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
+temp_bcs = {}
+stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
-            ax.grid()
+# Stokes solver options
+stokes_nullspace_args = {}
+stokes_solver_params = None
 
-            ax.set_xlabel("Time (Myr)")
-            ax.set_ylabel("Relative block area")
+# Timestepping objects
+initial_timestep = 1e11
+subcycles = 1
+dump_period = 1e5 * 365.25 * 8.64e4
+checkpoint_period = 5
+time_end = 9.886e6 * 365.25 * 8.64e4
 
-            ax.plot(
-                cls.diag_fields["output_time"],
-                cls.diag_fields["block_area"],
-                label="Conservative level set",
-            )
-
-            ax.legend(fontsize=12, fancybox=True, shadow=True)
-
-            fig.savefig(
-                f"{cls.name}/block_area.pdf".lower(), dpi=300, bbox_inches="tight"
-            )
+# Diagnostic objects
+diag_fields = {"output_time": [], "block_area": []}

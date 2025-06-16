@@ -1,8 +1,8 @@
 """Compositional benchmark.
-Crameri, F., Schmeling, H., Golabek, G. J., Duretz, T., Orendt, R.,
-Buiter, S. J. H., ... & Tackley, P. J. (2012).
-A comparison of numerical surface topography calculations in geodynamic modelling:
-an evaluation of the 'sticky air' method.
+Crameri, F., Schmeling, H., Golabek, G. J., Duretz, T., Orendt, R., Buiter, S. J. H.,
+... & Tackley, P. J. (2012).
+A comparison of numerical surface topography calculations in geodynamic modelling: an
+evaluation of the 'sticky air' method.
 Geophysical Journal International, 189(1), 38-54.
 """
 
@@ -61,7 +61,7 @@ def plot_diagnostics(output_path):
             label="Conservative level set",
         )
 
-        ax.legend()
+        ax.legend(fontsize=12, fancybox=True, shadow=True)
 
         fig.savefig(
             f"{output_path}/maximum_topography_{tag}.pdf", dpi=300, bbox_inches="tight"
@@ -119,13 +119,12 @@ signed_distance_kwargs_list = [
 # the above list. The first material in the below list will, therefore, occupy the
 # negative side of the signed-distance array calculated from the first dictionary above.
 materials = [mantle, lithosphere, air]
-reference_material = mantle
 
 # Approximation parameters
 dimensional = True
 Ra, g = 1, 10
 
-# Boundary conditions
+# Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
 temp_bcs = {}
 stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"ux": 0, "uy": 0}, 4: {"uy": 0}}
 

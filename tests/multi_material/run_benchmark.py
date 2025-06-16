@@ -167,10 +167,8 @@ if simulation.dimensional:
     )
     density = fd.Function(func_space_output, name="Density")
     output_fields.append(density)
-    approximation_parameters["rho"] = simulation.reference_material.rho
-    approximation_parameters["delta_rho"] = (
-        rho_material - simulation.reference_material.rho
-    )
+    approximation_parameters["rho"] = simulation.materials[0].rho
+    approximation_parameters["delta_rho"] = rho_material - simulation.materials[0].rho
     approximation_parameters["RaB"] = 1
 else:
     if simulation.materials[0].RaB is None:
