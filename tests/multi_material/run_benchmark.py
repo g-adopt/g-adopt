@@ -108,6 +108,8 @@ else:  # Initialise mesh and key functions
             mesh = fd.RectangleMesh(
                 *simulation.mesh_elements, *simulation.domain_dims, quadrilateral=True
             )
+        case _:
+            raise ValueError("'mesh_gen' must be 'firedrake' or 'gmsh'")
 
     # Set up Stokes function spaces corresponding to the mixed Q2Q1 Taylor-Hood element
     func_space_vel = fd.VectorFunctionSpace(mesh, "CG", 2)
@@ -153,6 +155,9 @@ velocity, pressure = fd.split(stokes_function)  # UFL expressions
 # Associated Firedrake functions
 stokes_function.subfunctions[0].rename("Velocity")
 stokes_function.subfunctions[1].rename("Pressure")
+# Copy velocity function for steady-state convergence check
+if hasattr(simulation, "steady_state_threshold"):
+    velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
 
 # Continuous function space for material field output
 func_space_output = fd.FunctionSpace(mesh, "CG", simulation.level_set_func_space_deg)
@@ -252,7 +257,7 @@ t_adapt = ga.TimestepAdaptor(
     timestep,
     velocity,
     stokes_function.subfunctions[0].function_space(),
-    target_cfl=simulation.subcycles * 0.6,
+    target_cfl=0.6,
     maximum_timestep=simulation.dump_period,
 )
 output_file = fd.VTKFile(
@@ -286,12 +291,8 @@ else:
     disable_reinitialisation = False
     update_forcings = None
 
-# Add old velocity to simulation class for steady state criteria for Tosi benchmark
-if benchmark == "tosi_2015":
-    simulation.velocity_old = fd.Function(stokes_solver.solution.subfunctions[0])
-
 # Perform the time loop
-step = 0
+has_end_time = hasattr(simulation, "time_end")
 while True:
     # Calculate simulation diagnostics
     simulation.diagnostics(time_now, geo_diag, diag_vars, benchmark_path)
@@ -305,10 +306,8 @@ while True:
         dump_counter += 1
 
     # Update timestep
-    if simulation.time_end is not None:
-        t_adapt.maximum_timestep = min(
-            simulation.dump_period, simulation.time_end - time_now
-        )
+    if has_end_time and simulation.time_end - time_now < simulation.dump_period:
+        t_adapt.maximum_timestep = simulation.time_end - time_now
     t_adapt.update_timestep()
 
     # Solve energy system
@@ -318,21 +317,20 @@ while True:
     for ls_solv in level_set_solver:
         ls_solv.solve(disable_reinitialisation=disable_reinitialisation)
 
-    if benchmark == "tosi_2015":
-        # Update old velocity prior to solving for Tosi steady state criteria
-        simulation.velocity_old.assign(stokes_solver.solution.subfunctions[0])
-
     # Solve Stokes system
     stokes_solver.solve()
 
     # Progress simulation time and increment time-loop step counter
     time_now += float(timestep)
-    step += 1
 
     # Check if simulation has completed
-    end_time = simulation.time_end is not None and time_now >= simulation.time_end
-    steady = simulation.steady_state_condition(stokes_solver)
-    if end_time or steady:
+    if has_end_time:
+        exit_loop = time_now >= simulation.time_end
+    else:
+        exit_loop = fd.norm(velocity - velocity_old) < simulation.steady_state_threshold
+        velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
+
+    if exit_loop:
         # Calculate final simulation diagnostics
         simulation.diagnostics(time_now, geo_diag, diag_vars, benchmark_path)
         # Save post-processing fields and produce graphs

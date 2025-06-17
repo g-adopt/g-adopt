@@ -41,10 +41,6 @@ def initialise_temperature(temperature):
     temperature.interpolate(initial_temperature)
 
 
-def steady_state_condition(stokes_solver):
-    pass
-
-
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     diag_fields["output_time"].append(simu_time)
     diag_fields["rms_velocity"].append(geo_diag.u_rms())
@@ -154,7 +150,6 @@ stokes_solver_params = None
 
 # Timestepping objects
 initial_timestep = 1e-6
-subcycles = 1
 dump_period = 2e-4
 checkpoint_period = 5
 time_end = 0.0236

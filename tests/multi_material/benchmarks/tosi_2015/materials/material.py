@@ -17,7 +17,7 @@ def mu(velocity, temperature):
     return 2 / (1 / visc_lin + 1 / visc_plast)
 
 
-Ra_c = 0
+RaB = 0
 
 visc_contrast_temp = 1e5
 visc_contrast_pres = 1e1

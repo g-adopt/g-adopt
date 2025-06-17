@@ -108,7 +108,7 @@ interface_coords_x = linspace(0, lx, 1000)
 callable_args = (
     interface_deflection := 0.02,
     perturbation_wavelength := 2 * lx,
-    initial_interface_y := 0.2,
+    interface_coord_y := 0.2,
 )
 
 epsilon = interface_thickness(K)
@@ -149,7 +149,9 @@ assign_level_set_values(
 # +
 Ra = 0  # Thermal Rayleigh number
 # Compositional Rayleigh number, defined based on each material value and location
-RaB = material_field(psi, [RaB_buoyant := 0, RaB_dense := 1], interface="arithmetic")
+RaB_buoyant = 0.0
+RaB_dense = 1.0
+RaB = material_field(psi, [RaB_buoyant, RaB_dense], interface="arithmetic")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # -
@@ -196,7 +198,7 @@ plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
-material_area = initial_interface_y * lx  # Area of tracked material in the domain
+material_area = interface_coord_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 

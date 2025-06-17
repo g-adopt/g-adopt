@@ -121,7 +121,7 @@ from numpy import array  # noqa: E402
 # API to generate the thickness of the hyperbolic tangent profile and update the
 # level-set field values.
 interface_coords_x = array([0.0, lx])
-callable_args = (interface_slope := 0, interface_y := 0.025)
+callable_args = (interface_slope := 0, interface_coord_y := 0.025)
 
 epsilon = interface_thickness(K)
 assign_level_set_values(
@@ -161,9 +161,9 @@ assign_level_set_values(
 # +
 Ra = 3e5  # Thermal Rayleigh number
 # Compositional Rayleigh number, defined based on each material value and location
-RaB = material_field(
-    psi, [RaB_dense := 4.5e5, RaB_reference := 0], interface="arithmetic"
-)
+RaB_dense = 4.5e5
+RaB_reference = 0.0
+RaB = material_field(psi, [RaB_dense, RaB_reference], interface="arithmetic")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # -
@@ -235,7 +235,7 @@ plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
-material_area = interface_y * lx  # Area of tracked material in the domain
+material_area = interface_coord_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 

@@ -10,16 +10,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
 
-from gadopt.level_set_tools import min_max_height
+from gadopt import min_max_height
 
 from .materials import air, lithosphere, mantle
 
 
 def initialise_temperature(temperature):
-    pass
-
-
-def steady_state_condition(stokes_solver):
     pass
 
 
@@ -134,7 +130,6 @@ stokes_solver_params = None
 
 # Timestepping objects
 initial_timestep = 1e10
-subcycles = 1
 dump_period = 2e3 * 365.25 * 8.64e4
 checkpoint_period = 5
 time_end = 1e5 * 365.25 * 8.64e4

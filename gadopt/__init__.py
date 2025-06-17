@@ -15,6 +15,7 @@ from .level_set_tools import (
     interface_thickness,
     material_entrainment,
     material_field,
+    min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC

@@ -17,10 +17,6 @@ def initialise_temperature(temperature):
     pass
 
 
-def steady_state_condition(stokes_solver):
-    pass
-
-
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     level_set = diag_vars["level_set"][0]
 
@@ -106,7 +102,6 @@ stokes_solver_params = None
 
 # Timestepping objects
 initial_timestep = 1e11
-subcycles = 1
 dump_period = 1e5 * 365.25 * 8.64e4
 checkpoint_period = 5
 time_end = 9.886e6 * 365.25 * 8.64e4
