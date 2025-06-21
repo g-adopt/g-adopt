@@ -122,10 +122,12 @@ level_set_func_space_deg = 2
 # Parameters to initialise surface level set
 interface_coords_x = np.array([0.0, domain_dims[0]])
 callable_args = (surface_slope := 0, surface_coord_y := 7e5)
+boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, surface_coord_y)]
 surface_signed_distance_kwargs = {
     "interface_geometry": "curve",
     "interface_callable": "line",
     "interface_args": (interface_coords_x, *callable_args),
+    "boundary_coordinates": boundary_coordinates,
 }
 # Parameters to initialise slab level set
 slab_interface_coords = [
