@@ -110,10 +110,12 @@ callable_args = (
     perturbation_wavelength := 2 * domain_dims[0],
     interface_coord_y := 0.2,
 )
+boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, interface_coord_y)]
 signed_distance_kwargs = {
     "interface_geometry": "curve",
     "interface_callable": "cosine",
     "interface_args": (interface_coords_x, *callable_args),
+    "boundary_coordinates": boundary_coordinates,
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array

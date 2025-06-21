@@ -193,7 +193,7 @@ mesh_fine_layer_hor_res = 8e3
 level_set_func_space_deg = 2
 
 # Parameters to initialise level set
-interface_coords = [
+interface_coordinates = [
     (0, 5.8e5),
     (4.6e5, 5.8e5),
     (4.6e5, 3.3e5),
@@ -202,7 +202,7 @@ interface_coords = [
     (domain_dims[0], 5.8e5),
 ]
 
-boundary_coords = [
+boundary_coordinates = [
     (domain_dims[0], domain_dims[1]),
     (0, domain_dims[1]),
     (0, 5.8e5),
@@ -210,8 +210,8 @@ boundary_coords = [
 # Keyword arguments to define the signed-distance function
 signed_distance_kwargs = {
     "interface_geometry": "polygon",
-    "interface_coordinates": interface_coords,
-    "boundary_coordinates": boundary_coords,
+    "interface_coordinates": interface_coordinates,
+    "boundary_coordinates": boundary_coordinates,
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array

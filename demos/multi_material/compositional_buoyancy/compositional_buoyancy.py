@@ -110,6 +110,7 @@ callable_args = (
     perturbation_wavelength := 2 * lx,
     interface_coord_y := 0.2,
 )
+boundary_coordinates = [(lx, ly), (0.0, ly), (0.0, interface_coord_y)]
 
 epsilon = interface_thickness(K)
 assign_level_set_values(
@@ -118,6 +119,7 @@ assign_level_set_values(
     interface_geometry="curve",
     interface_callable="cosine",
     interface_args=(interface_coords_x, *callable_args),
+    boundary_coordinates=boundary_coordinates,
 )
 # -
 

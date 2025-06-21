@@ -86,18 +86,22 @@ callable_args = (
     surface_perturbation_wavelength := domain_dims[0],
     surface_coord_y := 7e5,
 )
+boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, surface_coord_y)]
 surface_signed_distance_kwargs = {
     "interface_geometry": "curve",
     "interface_callable": "cosine",
     "interface_args": (interface_coords_x, *callable_args),
+    "boundary_coordinates": boundary_coordinates,
 }
 # Parameters to initialise LAB level set
 interface_coords_x = np.array([0.0, domain_dims[0]])
 callable_args = (lab_slope := 0, lab_coord_y := 6e5)
+boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, lab_coord_y)]
 lab_signed_distance_kwargs = {
     "interface_geometry": "curve",
     "interface_callable": "line",
     "interface_args": (interface_coords_x, *callable_args),
+    "boundary_coordinates": boundary_coordinates,
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
