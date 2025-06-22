@@ -100,13 +100,13 @@ def assign_level_set_values(
     representation via `Shapely` and provide it to this function.
 
     Currently implemented base scenarios to generate the signed-distance function:
-    - The material interface is a plane curve described by an implicit equation of the
-      form `f(x, y) = 0`. In this case, `interface_geometry` should be `curve` and
-      `interface_callable` must be provided along with any `interface_args` to implement
-      the implicit equation. `interface_callable` can be a user-defined `Callable` or a
-      `str` matching an implemented preset. Additionally, `boundary_coordinates` must be
-      supplied as a `list` of coordinates along domain boundaries to enclose the 1-side
-      of the conservative level set.
+    - The material interface is a plane curve described by a parametric equation of the
+      form `(x, y) = (x(t), y(t))`. In this case, `interface_geometry` should be `curve`
+      and `interface_callable` must be provided along with any `interface_args` to
+      implement the parametric equation. `interface_callable` can be a user-defined
+      `Callable` or a `str` matching an implemented preset. Additionally,
+      `boundary_coordinates` must be supplied as a `list` of coordinates along domain
+      boundaries to enclose the 1-side of the conservative level set.
     - The material interface is a polygonal chain, and `interface_geometry` takes the
       value `polygon`. If the polygonal chain is closed, either `interface_coordinates`
       or `interface_callable` must be provided. The former is a `list` of vertex
@@ -146,7 +146,7 @@ def assign_level_set_values(
         A sequence or an array-like with shape (N, 2) of coordinates defining the
         interface or a sequence containing a circle's centre coordinates and radius
       interface_callable:
-        A callable implementing the implicit equation describing the interface or a
+        A callable implementing the parametric equation describing the interface or a
         string matching an implemented callable preset
       interface_args:
         A tuple of arguments provided to the interface callable
@@ -154,42 +154,21 @@ def assign_level_set_values(
         A sequence or an array-like with shape (N, 2) of coordinates along boundaries
     """
 
-    def stack_coordinates(func: Callable) -> Callable:
-        """Decorator to stack coordinates when the material interface is a curve.
-
-        Args:
-          func:
-            A callable implementing the mathematical function depicting the interface
-
-        Returns:
-          A callable that can stack interface coordinates
-        """
-
-        def wrapper(*args) -> float | np.ndarray:
-            if isinstance(interface_coords_x := args[0], (int, float)):
-                return func(*args)
-            else:
-                return np.column_stack((interface_coords_x, func(*args)))
-
-        return wrapper
-
-    def line(
-        x: float | np.ndarray, slope: float, intercept: float
-    ) -> float | np.ndarray:
+    def line(t: np.ndarray, slope: float, intercept: float) -> np.ndarray:
         """Straight line."""
-        return slope * x + intercept
+        return np.column_stack((t, slope * t + intercept))
 
     def cosine(
-        x: float | np.ndarray,
+        t: np.ndarray,
         amplitude: float,
         wavelength: float,
         vertical_shift: float,
         phase_shift: float = 0.0,
-    ) -> float | np.ndarray:
+    ) -> np.ndarray:
         """Cosine curve with an amplitude and a vertical shift."""
-        cosine = np.cos(2 * np.pi / wavelength * x + phase_shift)
+        cosine = np.cos(2 * np.pi / wavelength * t + phase_shift)
 
-        return amplitude * cosine + vertical_shift
+        return np.column_stack((t, amplitude * cosine + vertical_shift))
 
     def rectangle(
         ref_vertex_coords: tuple[float], edge_sizes: tuple[float]
@@ -247,8 +226,6 @@ def assign_level_set_values(
         interface_callable = callable_presets[interface_callable]
 
     if interface_callable is not None:
-        if interface_geometry == "curve":
-            interface_callable = stack_coordinates(interface_callable)
         interface_coordinates = interface_callable(*interface_args)
 
     match interface_geometry:
