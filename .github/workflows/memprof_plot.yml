@@ -26,3 +26,12 @@ jobs:
         with:
           name: memprof_plots
           path: memprof_plots
+      - name: Trigger gadopt_status page build
+        env:
+          GH_TOKEN: ${{ secrets.GADOPT_STATUS_DISPATCH_TOKEN }}
+        run: |
+          gh api --method POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          /repos/g-adopt/gadopt_status/dispatches \
+          -f "event_type=doc-rebuild" -F "client_payload[run_id]=${{ github.run_id }}"
