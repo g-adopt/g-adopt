@@ -171,8 +171,8 @@ viscosity_scale = 1e21
 density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_1_tilde = 0.5*np.array(shear_modulus_values)/shear_modulus_scale
 shear_modulus_values_2_tilde = 0.5*np.array(shear_modulus_values)/shear_modulus_scale
-viscosity_values_1_tilde = 0.5*np.array(viscosity_values)/viscosity_scale
-viscosity_values_2_tilde = args.viscosity_ratio*0.5*np.array(viscosity_values)/viscosity_scale
+viscosity_values_1_tilde_log = np.log10(0.5*np.array(viscosity_values)/viscosity_scale)
+viscosity_values_2_tilde_log = np.log10(args.viscosity_ratio*0.5*np.array(viscosity_values)/viscosity_scale)
 
 
 def initialise_background_field(field, background_values):
@@ -204,10 +204,10 @@ else:
     compressible_buoyancy = True
 
 viscosity_1 = Function(DG1, name="viscosity")
-initialise_background_field(viscosity_1, viscosity_values_1_tilde)
+initialise_background_field(viscosity_1, viscosity_values_1_tilde_log)
 
 viscosity_2 = Function(DG1, name="viscosity")
-initialise_background_field(viscosity_2, viscosity_values_2_tilde)
+initialise_background_field(viscosity_2, viscosity_values_2_tilde_log)
 
 # -
 
@@ -312,16 +312,17 @@ if args.lateral_visc:
     phi = atan2(X[1], X[0])  # (longitude )
     colatitude = atan2(sqrt(X[0]**2+X[1]**2), X[2]) 
 
-    l, m, eps_c, eps_s = 4, 1, 0.4, 0.4
+    l, m, eps_c, eps_s = 4, 1, 1, 1
     Plm = Function(P1, name="P_lm")
     cos_colatitude = Function(P1).interpolate(cos(colatitude))
     Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_colatitude.dat.data_ro)  # Evaluate P_lm node-wise using scipy lpmv
     Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
     if m == 0:
         Plm.assign(Plm/math.sqrt(2))
-
-    viscosity_1.interpolate(viscosity_1 * (1+(eps_c*cos(m*phi) + eps_s*sin(m*phi)) * Plm))
-    viscosity_2.interpolate(viscosity_2 * (1+(eps_c*cos(m*phi) + eps_s*sin(m*phi)) * Plm))
+    
+    # This should be an order of mangitude change in viscosity
+    viscosity_1.interpolate(10**(viscosity_1 + (eps_c*cos(m*phi) + eps_s*sin(m*phi)) * Plm))
+    viscosity_2.interpolate(10**(viscosity_2 + (eps_c*cos(m*phi) + eps_s*sin(m*phi)) * Plm))
     if OUTPUT:
         viscfile = VTKFile(f"{args.output_path}viscfile.pvd").write(viscosity_1, viscosity_2)
 
@@ -429,10 +430,12 @@ coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=sto
 # +
 # Create output file
 vertical_displacement = Function(V.sub(2), name="radial displacement")  # Function to store vertical displacement for output
+velocity = Function(V, name="velocity")  # Function to store velocity for output
+old_disp = Function(V, name="old disp").interpolate(z.subfunctions[0])  # Function to store velocity for output
 
 if OUTPUT:
     output_file = VTKFile(f"{args.output_path}{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.pvd")
-    output_file.write(*z.subfunctions, vertical_displacement)
+    output_file.write(*z.subfunctions, vertical_displacement, velocity, viscosity_1, viscosity_2)
 
 plog = ParameterLog(args.output_path+"params.log", mesh)
 plog.log_str(
@@ -446,7 +449,6 @@ displacement_filename = f"{args.output_path}displacement-{name}-reflevel{args.re
 # Initial displacement at time zero is zero
 displacement_min_array = [[0.0, 0.0]]
 
-vertical_displacement = Function(V.sub(2), name="radial displacement")  # Function to store vertical displacement for output
 # -
 
 # Now let's run the simulation! We are going to control the ice thickness using the `ramp` parameter.
@@ -465,6 +467,11 @@ for timestep in range(1, max_timesteps+1):
 
     # Log diagnostics:
     # Compute diagnostics:
+
+    
+    velocity.interpolate((z.subfunctions[0]-old_disp)/dt)
+    old_disp.interpolate(z.subfunctions[0])
+
     # output dimensional vertical displacement
     vertical_displacement.interpolate(vc(z.subfunctions[0])*D)
     bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
@@ -489,7 +496,7 @@ for timestep in range(1, max_timesteps+1):
         log("timestep", timestep)
 
         if OUTPUT:
-            output_file.write(*z.subfunctions, vertical_displacement)
+            output_file.write(*z.subfunctions, vertical_displacement, velocity, viscosity_1, viscosity_2)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(z, name="Stokes")
