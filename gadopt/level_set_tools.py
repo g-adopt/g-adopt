@@ -25,7 +25,7 @@ from . import scalar_equation as scalar_eq
 from .equations import Equation
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import node_coordinates
+from .utility import CombinedSurfaceMeasure, node_coordinates
 
 __all__ = [
     "LevelSetSolver",
@@ -53,7 +53,7 @@ reini_params_default = {
 
 
 def interface_thickness(
-    level_set_space: fd.functionspaceimpl.WithGeometry, scale: float = 0.35
+    level_set_space: fd.functionspaceimpl.WithGeometry, scale: float | None = None
 ) -> fd.Function:
     """Default strategy for the thickness of the conservative level set profile.
 
@@ -67,7 +67,13 @@ def interface_thickness(
       A Firedrake function holding the interface thickness values
     """
     epsilon = fd.Function(level_set_space, name="Interface thickness")
-    epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space.mesh()))
+
+    if level_set_space.extruded:
+        scale = scale or 0.25
+        epsilon.interpolate(scale * level_set_space.mesh().cell_sizes)
+    else:
+        scale = scale or 0.35
+        epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space))
 
     return epsilon
 
@@ -418,21 +424,25 @@ class LevelSetSolver:
         if number_match := re.search(r"\s#\d+$", self.solution.name()):
             grad_name += number_match.group()
 
-        gradient_space = fd.VectorFunctionSpace(
-            self.mesh, "Q", self.solution.ufl_element().degree()
-        )
+        grad_space_degree = self.solution.ufl_element().degree()
+        if not isinstance(grad_space_degree, int):
+            grad_space_degree = max(grad_space_degree)
+        gradient_space = fd.VectorFunctionSpace(self.mesh, "Q", grad_space_degree)
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
+
+        if gradient_space.extruded:
+            ds = CombinedSurfaceMeasure(
+                domain=self.mesh, degree=2 * grad_space_degree + 1
+            )
+        else:
+            ds = fd.ds(domain=self.mesh)
 
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
         bilinear_form = fd.inner(test, trial) * fd.dx(domain=self.mesh)
         ibp_element = -self.solution * fd.div(test) * fd.dx(domain=self.mesh)
-        ibp_boundary = (
-            self.solution
-            * fd.dot(test, fd.FacetNormal(self.mesh))
-            * fd.ds(domain=self.mesh)
-        )
+        ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * ds
         linear_form = ibp_element + ibp_boundary
 
         problem = fd.LinearVariationalProblem(
