@@ -8,7 +8,7 @@ from checkpoint_schedules import SingleDiskStorageSchedule, SingleMemoryStorageS
 from pyadjoint import Block
 import faulthandler
 import signal
-import sys
+# import sys
 
 # Angus's Trick
 # faulthandler.enable(sys.stderr)
@@ -106,22 +106,14 @@ def conduct_inversion(age0=10, obj_scaling=1e3, smoothing_weight=1e-4, damping_w
     optimiser.run()
 
 
-def conduct_taylor_test(scheduler, age0=2.0, extra=False):
+def conduct_taylor_test(scheduler, age0=2.0):
     Tic, reduced_functional = forward_problem(scheduler=scheduler, age0=age0)
     Delta_temp = Function(Tic.function_space(), name="Delta_Temperature")
-
-    if extra:
-        reduced_functional(Tic)
-        reduced_functional.derivative()
-
-    rng = np.random.default_rng(12345)
-    Delta_temp.dat.data_wo[:] = rng.random(Delta_temp.dat.data_ro.shape)
-
-    #_ = taylor_test(reduced_functional, Tic, Delta_temp)
-    print(taylor_to_dict(reduced_functional, Tic, Delta_temp))
+    Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)
+    _ = taylor_test(reduced_functional, Tic, Delta_temp)
 
 
-def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scaling=1e3, smoothing_weight=1e-4, damping_weight=1e-3):
+def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scaling=1e3, smoothing_weight=1e-4, damping_weight=1e-3, timesteps=4):
     # Enable disk checkpointing for the adjoint
     if isinstance(scheduler, SingleDiskStorageSchedule):
         enable_disk_checkpointing()
@@ -195,8 +187,8 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
 
     # Because we start from u := vec(0.0); we use very small timesteps
     # Initial time step
-    # delta_t = Function(R, name="delta_t").assign(3.0e-7)
-    delta_t = Function(R, name="delta_t").assign(1.0e-10)
+    delta_t = Function(R, name="delta_t").assign(5.0e-7)
+    #delta_t = Function(R, name="delta_t").assign(1.0e-10)
 
     if last_checkpoint_path is not None:
         with CheckpointFile(str(last_checkpoint_path), "r") as fi:
@@ -270,7 +262,8 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
     )
 
     # adjusting solver parameters
-    energy_solver.solver_parameters["ksp_converged_reason"] = None
+    #energy_solver.solver_parameters["ksp_converged_reason"] = None
+    energy_solver.solver_parameters.pop("ksp_converged_reason")
     energy_solver.solver_parameters["ksp_rtol"] = 1e-4
 
     # Stokes solver
@@ -288,6 +281,7 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
 
     # # tweaking solver parameters
     # stokes_solver.solver_parameters["snes_rtol"] = 1e-2
+    stokes_solver.solver_parameters.pop("snes_monitor")
     # stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
     # stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-3
     # stokes_solver.solver_parameters["fieldsplit_0"]["assembled_pc_gamg_threshold"] = -1
@@ -324,8 +318,9 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
     )
 
     # timestep counter
-    timestep_initial_phase = 3
-    stokes_solve_frequency = 4
+    timestep_initial_phase = 0
+    #stokes_solve_frequency = 4
+    stokes_solve_frequency = 2
     z.subfunctions[0].interpolate(as_vector((0.0, 0.0)))
     z.subfunctions[1].interpolate(0.0)
 
@@ -333,25 +328,38 @@ def forward_problem(scheduler=SingleMemoryStorageSchedule(), age0=10.0, obj_scal
     updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
     updated_plt_rec = False
     # Now perform the time loop:
-    for timestep_index in tape.timestepper(iter(range(500))):
+    #for timestep_index in tape.timestepper(iter(range(500))):
+    #for timestep_index in tape.timestepper(iter(range(4))):
+    for timestep_index in tape.timestepper(iter(range(timesteps))):
         # Update surface velocities
         # updated_plt_rec = gplates_velocities.update_plate_reconstruction(time)
 
         # We only solve stokes every 3 timesteps or during initial phase
-        if (timestep_index % stokes_solve_frequency == 0 or timestep_index < timestep_initial_phase or updated_plt_rec):
+        #if (timestep_index % stokes_solve_frequency == 0 or timestep_index < timestep_initial_phase or updated_plt_rec):
+        if True or timestep_index in [1, 3]:
             stokes_solver.solve()
 
         # If the surface velocity is updates, or it's initial time-steps, there is a high chance
         # that our velocity is not still not good! So do not do big time-steps
+        """
         if timestep_index < timestep_initial_phase or updated_plt_rec:
             delta_t.assign(1e-10)
         else:
             delta_t.assign(3e-7)
+        """
 
+        if timestep_index in [1, 2]:
+            #delta_t.assign(1e-10 * (timestep_index + 1))
+            #delta_t.assign(Constant(2e-10))
+            delta_t.assign(1e-7)
+
+        """
         # Make sure we are not going past present day
         if presentday_ndtime - time < float(delta_t):
+            print(f"only {presentday_ndtime - time} remaining (dt is {float(delta_t)}")
             should_end_timestepping = True
             delta_t.assign(presentday_ndtime - time)
+        """
 
         # Temperature system:
         energy_solver.solve()
@@ -909,10 +917,7 @@ if __name__ == "__main__":
     if not (Path(__file__).parent.resolve() / "REVEAL.h5").exists():
         generate_reference_fields()
 
-    duration = 2.0
-    if sys.argv[1] == "memory":
-        conduct_taylor_test(scheduler=SingleMemoryStorageSchedule(), age0=duration, extra=True)
-    if sys.argv[1] == "disk":
-        conduct_taylor_test(scheduler=SingleDiskStorageSchedule(), age0=duration)
-    elif sys.argv[1] == "none":
-        conduct_taylor_test(scheduler=None, age0=duration)
+    # diverges
+    #taylor_memory_long()
+    # converges
+    taylor_none_long()
