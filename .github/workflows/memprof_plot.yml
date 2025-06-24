@@ -28,7 +28,7 @@ jobs:
           path: memprof_plots
       - name: Trigger gadopt_status page build
         env:
-          GH_TOKEN: ${{ secrets.GADOPT_STATUS_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
         run: |
           gh api --method POST \
           -H "Accept: application/vnd.github+json" \
