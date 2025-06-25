@@ -226,6 +226,10 @@ class StokesSolver:
       near_nullspace:
         A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
         body modes)
+      scaling_factor:
+        A float to scale the coupled mass-momentum weak form and ease iterative solvers'
+        convergence. Typically, for dimensional mantle convection simulations, the
+        Grashof number should be a good guess.
 
     """
 
@@ -246,6 +250,7 @@ class StokesSolver:
         nullspace: fd.MixedVectorSpaceBasis = None,
         transpose_nullspace: fd.MixedVectorSpaceBasis = None,
         near_nullspace: fd.MixedVectorSpaceBasis = None,
+        scaling_factor: float = 1.0,
     ):
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
@@ -261,6 +266,7 @@ class StokesSolver:
         self.nullspace = nullspace
         self.transpose_nullspace = transpose_nullspace
         self.near_nullspace = near_nullspace
+        self.scaling_factor = scaling_factor
 
         self.solution_old = solution.copy(deepcopy=True)
         self.solution_split = fd.split(solution)
@@ -425,6 +431,7 @@ class StokesSolver:
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
                     quad_degree=self.quad_degree,
+                    scaling_factor=self.scaling_factor,
                 )
             )
 
