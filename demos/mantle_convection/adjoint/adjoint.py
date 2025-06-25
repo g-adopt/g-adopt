@@ -110,7 +110,7 @@ tape.clear_tape()
 # Set up function spaces:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (DQ; scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space
 
 # Specify test functions and functions to hold solutions:
