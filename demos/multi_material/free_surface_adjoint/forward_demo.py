@@ -5,7 +5,7 @@ lx, ly = 3e6, 7e5
 
 mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
 mesh.cartesian = True
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4
+boundary = get_boundary_ids(mesh)
 
 V = VectorFunctionSpace(mesh, "Q", 2)
 W = FunctionSpace(mesh, "Q", 1)
@@ -13,11 +13,11 @@ Z = MixedFunctionSpace([V, W, W])
 K = FunctionSpace(mesh, "DQ", 2)
 R = FunctionSpace(mesh, "R", 0)
 
-z = Function(Z)
-u, p, eta = split(z)
-z.subfunctions[0].rename("Velocity")
-z.subfunctions[1].rename("Pressure")
-z.subfunctions[2].rename("Free surface")
+stokes = Function(Z, name="Stokes")
+stokes.subfunctions[0].rename("Velocity")
+stokes.subfunctions[1].rename("Pressure")
+stokes.subfunctions[2].rename("Free surface")
+u, p, eta = split(stokes)
 psi = Function(K, name="Level set")
 
 interface_coords = [
@@ -50,19 +50,19 @@ approximation = Approximation(
 )
 
 myr_to_seconds = 1e6 * 365.25 * 8.64e4
-time_now, time_end = 0, 50 * myr_to_seconds
-delta_t = Function(R).assign(1e11)
+time_now, time_end = 0.0, 25 * myr_to_seconds
+delta_t = Function(R).assign(1e12)
 t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
 stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 2, "rho_ext": 0}},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"uy": 0.0},
+    boundary.top: {"free_surface": {"eta_index": 2, "rho_ext": 0.0}},
+    boundary.left: {"ux": 0.0},
+    boundary.right: {"ux": 0.0},
 }
 
 stokes_solver = StokesSolver(
-    z, approximation, coupled_tstep=delta_t, theta=0.5, bcs=stokes_bcs
+    stokes, approximation, coupled_tstep=delta_t, theta=0.5, bcs=stokes_bcs
 )
 stokes_solver.solve()
 
@@ -71,7 +71,7 @@ reini_kwargs = {"epsilon": epsilon}
 level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 
 output_file = VTKFile("forward_output.pvd")
-output_file.write(*z.subfunctions, psi, time=time_now / myr_to_seconds)
+output_file.write(*stokes.subfunctions, psi, time=time_now / myr_to_seconds)
 
 step = 0
 while True:
@@ -84,11 +84,12 @@ while True:
     time_now += float(delta_t)
     step += 1
 
-    output_file.write(*z.subfunctions, psi, time=time_now / myr_to_seconds)
+    output_file.write(*stokes.subfunctions, psi, time=time_now / myr_to_seconds)
 
     if time_now >= time_end:
         break
 
 with CheckpointFile("forward_checkpoint.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
+    final_checkpoint.save_function(stokes, name="Stokes")
     final_checkpoint.save_function(psi, name="Level set")

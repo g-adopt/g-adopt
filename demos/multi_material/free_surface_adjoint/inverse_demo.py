@@ -2,120 +2,58 @@ from gadopt import *
 from gadopt.inverse import *
 
 
-def reinitialisation_steady(psi, psi_grad):
+def reini_steady(psi: Function, psi_grad: Function) -> ufl.algebra.Sum:
     return -psi * (1 - psi) + epsilon * sqrt(inner(psi_grad, psi_grad))
 
 
-def callback(psi_control, psi_opt, optimisation_file):
+def callback() -> None:
+    psi_chk = psi.block_variable.checkpoint
+    psi_grad_chk = psi_grad.block_variable.checkpoint
+    eta_chk = stokes.block_variable.checkpoint.subfunctions[2]
+    eta_chk.rename("Free surface (optimisation)")
+
+    misfit = assemble((psi_chk - psi_obs) ** 2 * dx) / psi_misfit_scale
+    reini = assemble(reini_steady(psi_chk, psi_grad_chk) ** 2 * dx) / psi_reini_scale
+    gradient = assemble(inner(psi_grad_chk, psi_grad_chk) * dx) / psi_grad_scale
+    interface = assemble((0.25 - (psi_chk - 0.5) ** 2) * dx) / psi_interface_scale
+
+    misfit_fs = assemble((eta_chk - eta_obs) ** 2 * ds_top) / eta_misfit_scale
+
+    log(f"Level-set misfit: {misfit / domain_area}")
+    log(f"Level-set reinitialisation: {reini / domain_area}")
+    log(f"Level-set gradient: {gradient / domain_area}")
+    log(f"Level-set interface: {interface / domain_area}")
+    log(f"Free-surface misfit: {misfit_fs / boundary_length}")
+
     psi_opt.assign(psi_control.block_variable.checkpoint)
-    optimisation_file.write(psi_opt)
-
-    psi_check = psi.block_variable.checkpoint
-    psi_grad_check = psi_grad.block_variable.checkpoint
-
-    misfit = assemble((psi_check - psi_obs) ** 2 * dx)
-    reinitialisation = assemble(
-        reinitialisation_steady(psi_check, psi_grad_check) ** 2 * dx
-    )
-
-    log(f"Level-set misfit: {misfit}")
-    log(f"Level-set reinitialisation: {reinitialisation}")
-
-
-def simulation(iteration: int) -> None:
-    tape.clear_tape()
-
-    psi_control = Function(C, name="Level-set control").project(psi_obs)
-    psi_opt = Function(C, name="Level-set optimisation")
-    psi.project(psi_control)
-    level_set_solver.solution_old.assign(psi)
-
-    stokes_solver.solve()
-
-    time_now = 0
-
-    output_file = VTKFile(f"inverse_output_{iteration}.pvd")
-    output_file.write(*z.subfunctions, psi, psi_grad, time=time_now / myr_to_seconds)
-    optimisation_file = VTKFile(f"optimisation_output_{iteration}.pvd")
-
-    step = 0
-    while True:
-        t_adapt.maximum_timestep = time_increment - time_now
-        t_adapt.update_timestep()
-
-        level_set_solver.solve(disable_reinitialisation=True)
-        level_set_solver.update_level_set_gradient()
-        stokes_solver.solve()
-
-        time_now += float(delta_t)
-        step += 1
-
-        output_file.write(
-            *z.subfunctions, psi, psi_grad, time=time_now / myr_to_seconds
-        )
-
-        if time_now >= time_increment:
-            break
-
-    psi_misfit = assemble((psi - psi_obs) ** 2 * dx)
-    psi_reini = assemble(reinitialisation_steady(psi, psi_grad) ** 2 * dx)
-    objective = psi_misfit + psi_reini
-    reduced_functional = ReducedFunctional(objective, Control(psi_control))
-
-    with stop_annotating():
-        log(f"Reduced functional: {reduced_functional(psi_control)}")
-        log(f"Objective: {objective}")
-
-        perturbation = Function(psi_control, name="Level-set perturbation")
-        perturbation.interpolate(
-            0.5 - abs(min_value(max_value(psi_control, 0), 1) - 0.5)
-        )
-        # random_scale = np.random.default_rng().normal(
-        #     5e-2, 1e-3, size=perturbation.dat.data.shape
-        # )
-        # perturbation.dat.data[:] *= random_scale
-
-        psi_lb = Function(psi_control, name="Lower bound").assign(0.0)
-        psi_ub = Function(psi_control, name="Upper bound").assign(1.0)
-
-        taylor_convergence = taylor_test(reduced_functional, psi_control, perturbation)
-        log(f"Taylor test: {taylor_convergence}")
-
-        minimisation_problem = MinimizationProblem(
-            reduced_functional, bounds=(psi_lb, psi_ub)
-        )
-
-        minimisation_parameters["Status Test"]["Gradient Tolerance"] = 1e-4
-        minimisation_parameters["Status Test"]["Iteration Limit"] = 100
-        optimiser = LinMoreOptimiser(minimisation_problem, minimisation_parameters)
-        optimiser.add_callback(callback, psi_control, psi_opt, optimisation_file)
-        optimiser.run()
-
-    psi_obs.project(psi_opt)
+    optimisation_file.write(psi_opt, eta_chk)
 
 
 tape = get_working_tape()
+tape.clear_tape()
+if not annotate_tape():
+    continue_annotation()
 
-with CheckpointFile("forward_checkpoint.h5", "r") as forward_check:
-    mesh = forward_check.load_mesh("firedrake_default")
-    psi_obs = forward_check.load_function(mesh, "Level set")
-    psi_obs.rename("Level set observation")
+with CheckpointFile("forward_checkpoint.h5", "r") as forward_chk:
+    mesh = forward_chk.load_mesh("firedrake_default")
+    stokes_obs = forward_chk.load_function(mesh, "Stokes")
+    eta_obs = stokes_obs.subfunctions[2]
+    psi_obs = forward_chk.load_function(mesh, "Level set")
+    psi_obs.rename("Level set (observation)")
 
 mesh.cartesian = True
-left_id, right_id, bottom_id, top_id = 1, 2, 3, 4
+boundary = get_boundary_ids(mesh)
 
-V = VectorFunctionSpace(mesh, "Q", 2)
-W = FunctionSpace(mesh, "Q", 1)
-Z = MixedFunctionSpace([V, W, W])
 R = FunctionSpace(mesh, "R", 0)
 C = FunctionSpace(mesh, "Q", 1)
 
-z = Function(Z)
-u, p, eta = split(z)
-z.subfunctions[0].rename("Velocity")
-z.subfunctions[1].rename("Pressure")
-z.subfunctions[2].rename("Free surface")
-psi = Function(psi_obs, name="Level-set")
+stokes = Function(stokes_obs, name="Stokes")
+stokes.subfunctions[0].rename("Velocity")
+stokes.subfunctions[1].rename("Pressure")
+stokes.subfunctions[2].rename("Free surface")
+eta_func = stokes.subfunctions[2]
+u = split(stokes)[0]
+psi = Function(psi_obs, name="Level set")
 
 epsilon = interface_thickness(psi)
 
@@ -131,17 +69,16 @@ approximation = Approximation(
 )
 
 delta_t = Function(R).assign(1e13)
-t_adapt = TimestepAdaptor(delta_t, u, V, target_cfl=0.6)
 
 stokes_bcs = {
-    bottom_id: {"uy": 0},
-    top_id: {"free_surface": {"eta_index": 2, "rho_ext": 0}},
-    left_id: {"ux": 0},
-    right_id: {"ux": 0},
+    boundary.bottom: {"uy": 0.0},
+    boundary.top: {"free_surface": {"eta_index": 2, "rho_ext": 0.0}},
+    boundary.left: {"ux": 0.0},
+    boundary.right: {"ux": 0.0},
 }
 
 stokes_solver = StokesSolver(
-    z, approximation, coupled_tstep=delta_t, theta=0.5, bcs=stokes_bcs
+    stokes, approximation, coupled_tstep=delta_t, theta=0.5, bcs=stokes_bcs
 )
 del stokes_solver.solver_parameters["snes_monitor"]
 
@@ -151,8 +88,90 @@ level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini
 psi_grad = level_set_solver.solution_grad
 
 myr_to_seconds = 1e6 * 365.25 * 8.64e4
-target_time = 50 * myr_to_seconds
-time_increment = 10 * myr_to_seconds
+time_now = 0.0
+target_time = 25 * myr_to_seconds
+step_count = int(target_time / float(delta_t))
 
-for iteration in range(int(target_time // time_increment)):
-    simulation(iteration + 1)
+psi_control = Function(C, name="Level set (control)").project(psi_obs)
+psi_opt = Function(C, name="Level set (optimisation)")
+psi.project(psi_control)
+level_set_solver.solution_old.assign(psi)
+
+output_file = VTKFile("inverse_output.pvd")
+output_file.write(*stokes.subfunctions, psi, psi_grad, time=time_now / myr_to_seconds)
+optimisation_file = VTKFile("optimisation_output.pvd")
+
+for _ in tape.timestepper(iter(range(step_count))):
+    level_set_solver.solve(disable_reinitialisation=True)
+    level_set_solver.update_gradient()
+    stokes_solver.solve()
+
+    time_now += float(delta_t)
+    output_file.write(
+        *stokes.subfunctions, psi, psi_grad, time=time_now / myr_to_seconds
+    )
+
+ds_top = ds(boundary.top, domain=mesh)
+boundary_length = assemble(1.0 * ds_top)
+domain_area = assemble(1.0 * dx(domain=mesh))
+
+psi_misfit_scale = max((psi.dat.data_ro - psi_obs.dat.data_ro) ** 2)
+psi_grad_scale = np.sum(psi_grad.dat.data_ro**2, axis=1).max()
+psi_reini_scale = (-0.25 + epsilon.dat.data_ro.max() * np.sqrt(psi_grad_scale)) ** 2
+psi_interface_scale = 1.0
+
+eta_misfit_scale = max((eta_func.dat.data_ro - eta_obs.dat.data_ro) ** 2)
+
+psi_bounded = max_value(min_value(psi, 1.0), 0.0)
+
+psi_misfit = assemble((psi - psi_obs) ** 2 * dx) / psi_misfit_scale
+psi_reini = assemble(reini_steady(psi, psi_grad) ** 2 * dx) / psi_reini_scale
+psi_grad_inner = assemble(inner(psi_grad, psi_grad) * dx) / psi_grad_scale
+psi_interface = assemble((0.25 - (psi_bounded - 0.5) ** 2) * dx) / psi_interface_scale
+objective = psi_misfit + psi_reini + psi_grad_inner + psi_interface
+objective /= domain_area
+
+eta_misfit = assemble((eta_func - eta_obs) ** 2 * ds_top) / eta_misfit_scale
+objective += eta_misfit / boundary_length
+
+pause_annotation()
+
+reduced_functional = ReducedFunctional(objective, Control(psi_control))
+
+log(f"Reduced functional: {reduced_functional(psi_control)}")
+log(f"Objective: {objective}")
+
+psi_control_bounded = min_value(max_value(psi_control, 0.0), 1.0)
+perturbation = Function(psi_control, name="Level-set perturbation")
+perturbation.interpolate(0.5 - abs(psi_control_bounded - 0.5))
+# random_scale = np.random.default_rng().normal(
+#     1.0, 0.1, size=perturbation.dat.data.shape
+# )
+# perturbation.dat.data[:] *= random_scale
+
+perturbation_file = VTKFile("taylor_test_perturbation.pvd")
+perturbation_file.write(psi_control, perturbation, time=time_now / myr_to_seconds)
+
+taylor_convergence = taylor_test(reduced_functional, psi_control, perturbation)
+log(f"Taylor test: {taylor_convergence}")
+
+psi_lb = Function(psi_control, name="Lower bound").assign(0.0)
+psi_ub = Function(psi_control, name="Upper bound").assign(1.0)
+
+min_prob = MinimizationProblem(reduced_functional, bounds=(psi_lb, psi_ub))
+
+minimisation_parameters["Step"]["Trust Region"]["Initial Radius"] = 0.1
+minimisation_parameters["Step"]["Trust Region"]["Radius Shrinking Threshold"] = 0.15
+minimisation_parameters["Step"]["Trust Region"]["Radius Growing Threshold"] = 0.75
+minimisation_parameters["Step"]["Trust Region"][
+    "Radius Shrinking Rate (Negative rho)"
+] = 0.03125
+minimisation_parameters["Step"]["Trust Region"][
+    "Radius Shrinking Rate (Positive rho)"
+] = 0.125
+minimisation_parameters["Step"]["Trust Region"]["Radius Growing Rate"] = 5
+minimisation_parameters["Status Test"]["Iteration Limit"] = 100
+
+optimiser = LinMoreOptimiser(min_prob, minimisation_parameters)
+optimiser.add_callback(callback)
+optimiser.run()

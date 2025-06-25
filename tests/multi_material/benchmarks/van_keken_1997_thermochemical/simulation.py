@@ -147,7 +147,7 @@ def plot_diagnostics(output_path):
         plt.close(fig)
 
 
-# Simulation name tag
+# A simulation name tag
 tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0

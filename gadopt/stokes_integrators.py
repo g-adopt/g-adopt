@@ -308,7 +308,7 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
     def set_solver_options(self) -> None:
         """Sets PETSc solver parameters."""
         # Application context for the inverse mass matrix preconditioner
-        self.appctx = {"mu": self.approximation.mu / self.approximation.rho}
+        self.appctx = {"mu": self.approximation.mu / self.approximation.rho_flux}
 
         if isinstance(solver_preset := self.solver_parameters, dict):
             return
