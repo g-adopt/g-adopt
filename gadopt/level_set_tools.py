@@ -79,10 +79,12 @@ def assign_level_set_values(
     interface_geometry: str,
     *,
     interface: sl.LineString | sl.Polygon | None = None,
-    interface_coordinates: list[list[float]] | list[list[float], float] | None = None,
+    interface_coordinates: list[tuple[float, float]]
+    | tuple[tuple[float, float], float]
+    | None = None,
     interface_callable: Callable | str | None = None,
-    interface_args: tuple[Any] | None = None,
-    boundary_coordinates: list[list[float]] | None = None,
+    interface_args: tuple[Any, ...] | None = None,
+    boundary_coordinates: list[tuple[float, float]] | None = None,
 ):
     """Updates level-set field given interface thickness and signed-distance function.
 
@@ -117,7 +119,7 @@ def assign_level_set_values(
       must be supplied as a `list` of coordinates along domain boundaries to enclose the
       1-side of the conservative level set.
     - The material interface is a circle, and `interface_geometry` takes the value
-      `circle`. In this case, `interface_coordinates` must be provided as a `list`
+      `circle`. In this case, `interface_coordinates` must be provided as a `tuple`
       holding the coordinates of the circle's centre and the circle's radius.
 
     Implemented interface geometry presets and associated arguments:
@@ -171,8 +173,8 @@ def assign_level_set_values(
         return np.column_stack((t, amplitude * cosine + vertical_shift))
 
     def rectangle(
-        ref_vertex_coords: tuple[float], edge_sizes: tuple[float]
-    ) -> list[tuple[float]]:
+        ref_vertex_coords: tuple[float, float], edge_sizes: tuple[float, float]
+    ) -> list[tuple[float, float]]:
         """Material interface defined by a rectangle.
 
         Edges are aligned with Cartesian directions and do not overlap domain boundaries.
@@ -221,15 +223,36 @@ def assign_level_set_values(
             for x, y in node_coordinates(level_set).dat.data
         ]
 
+    if interface is not None and interface_geometry != "shapely":
+        raise ValueError(
+            "'interface_geometry' must be 'shapely' when providing 'interface'"
+        )
+    if interface_callable is not None and interface_geometry == "circle":
+        raise ValueError(
+            "'interface_callable' must not be provided when 'interface_geometry' is "
+            "'circle'"
+        )
+
     callable_presets = {"cosine": cosine, "line": line, "rectangle": rectangle}
     if isinstance(interface_callable, str):
         interface_callable = callable_presets[interface_callable]
 
     if interface_callable is not None:
         interface_coordinates = interface_callable(*interface_args)
+    elif interface_coordinates is None and interface_geometry != "shapely":
+        raise ValueError(
+            "Either 'interface_coordinates' or 'interface_geometry' must be provided "
+            "when 'interface_geometry' is not 'shapely'"
+        )
 
     match interface_geometry:
         case "curve":
+            if boundary_coordinates is None:
+                raise ValueError(
+                    "'boundary_coordinates' must be provided when 'interface_geometry' "
+                    "is 'curve'"
+                )
+
             interface = sl.LineString(interface_coordinates)
             enclosed_side = sl.Polygon(
                 np.vstack((interface_coordinates, boundary_coordinates))
@@ -254,8 +277,19 @@ def assign_level_set_values(
 
             signed_distance = sgn_dist_closed_itf(interface, level_set)
         case "shapely":
+            if interface is None:
+                raise ValueError(
+                    "'interface' must be provided when 'interface_geometry' is "
+                    "'shapely'"
+                )
+
             if isinstance(interface, sl.Polygon):
                 signed_distance = sgn_dist_closed_itf(interface, level_set)
+            elif boundary_coordinates is None:
+                raise ValueError(
+                    "'boundary_coordinates' must be provided when 'interface_geometry' "
+                    "is 'shapely' and `interface` is a shapely.LineString object"
+                )
             else:
                 enclosed_side = sl.Polygon(
                     np.vstack((interface.coords, boundary_coordinates))
@@ -264,7 +298,8 @@ def assign_level_set_values(
                 signed_distance = sgn_dist_open_itf(interface, enclosed_side, level_set)
         case _:
             raise ValueError(
-                "interface_geometry must be 'curve', 'polygon', 'circle', or 'shapely'"
+                "'interface_geometry' must be 'curve', 'polygon', 'circle', or "
+                "'shapely'"
             )
 
     if isinstance(epsilon, fd.Function):
@@ -640,7 +675,7 @@ def material_field(
 
     _impl_interface = ["sharp", "sharp_adjoint", "arithmetic", "geometric", "harmonic"]
     if interface not in _impl_interface:
-        raise ValueError(f"Interface must be one of {_impl_interface}.")
+        raise ValueError(f"Interface must be one of {_impl_interface}")
 
     return material_field_from_copy(level_set, field_values, interface)
 
@@ -684,7 +719,7 @@ def material_entrainment(
       AssertionError: Material volume or area notably different from `material_size`
     """
     if not level_set.ufl_domain().cartesian:
-        raise ValueError("Only Cartesian meshes are currently supported.")
+        raise ValueError("Only Cartesian meshes are currently supported")
 
     match side:
         case 0:
@@ -692,7 +727,7 @@ def material_entrainment(
         case 1:
             material_check = operator.ge
         case _:
-            raise ValueError("'side' must be 0 or 1.")
+            raise ValueError("'side' must be 0 or 1")
 
     match direction:
         case "above":
@@ -700,7 +735,7 @@ def material_entrainment(
         case "below":
             region_check = operator.le
         case _:
-            raise ValueError("'direction' must be 'above' or 'below'.")
+            raise ValueError("'direction' must be 'above' or 'below'")
 
     material = fd.conditional(material_check(level_set, 0.5), 1, 0)
     if not skip_material_size_check:
@@ -742,7 +777,7 @@ def min_max_height(
         case 1:
             comparison = operator.ge
         case _:
-            raise ValueError("'side' must be 0 or 1.")
+            raise ValueError("'side' must be 0 or 1")
 
     match mode:
         case "min":
@@ -756,10 +791,10 @@ def min_max_height(
             irrelevant_data = -np.inf
             mpi_comparison = MPI.MAX
         case _:
-            raise ValueError("'mode' must be 'min' or 'max'.")
+            raise ValueError("'mode' must be 'min' or 'max'")
 
     if not level_set.ufl_domain().cartesian:
-        raise ValueError("Only Cartesian meshes are currently supported.")
+        raise ValueError("Only Cartesian meshes are currently supported")
 
     coords = node_coordinates(level_set)
 
