@@ -137,13 +137,13 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # the G-ADOPT interface requires specific files for loading and
 # processing surface velocities from a reconstruction model. For this
 # tutorial, we will use the study published by Muller et al., 2022.
-# The files can be downloaded from EarthByte's server at:
-# https://earthbyte.org/webdav/ftp/Data_Collections/Muller_etal_2022_SE/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
-# Download and unzip this file into the current
+# The files can be downloaded from gadopt's server at:
+# https://data.gadopt.org/demos/Zahirovic_2022.tar.gz
+# Download and untar this file into the current
 # directory. Below, we verify the required paths in this directory and
 # ensure they exist:
 
-muller_2022_files = ensure_reconstruction("Muller 2022 SE v1.2", ".")
+zahirovic_2022_files = ensure_reconstruction("Zahirovic 2022", ".")
 
 # + tags=["active-ipynb"]
 # # These are the files that needs to be passed on to pyGPlates
@@ -169,8 +169,8 @@ muller_2022_files = ensure_reconstruction("Muller 2022 SE v1.2", ".")
 # scaling_factor.
 
 plate_reconstruction_model = pyGplatesConnector(
-    rotation_filenames=muller_2022_files["rotation_filenames"],
-    topology_filenames=muller_2022_files["topology_filenames"],
+    rotation_filenames=zahirovic_2022_files["rotation_filenames"],
+    topology_filenames=zahirovic_2022_files["topology_filenames"],
     oldest_age=1000,
     nseeds=1e5,
     nneighbours=4,
