@@ -473,7 +473,7 @@ class LevelSetSolver:
             grad_name += number_match.group()
 
         gradient_space = fd.VectorFunctionSpace(
-            self.mesh, "Q", self.solution.ufl_element().degree()
+            self.mesh, "CG", self.solution.ufl_element().degree()
         )
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
 
@@ -766,7 +766,7 @@ def min_max_height(
       side:
         An integer (`0` or `1`) denoting the level-set value on the target material side
       mode:
-        A string ("min" or "max") specifying which extremum height is sought
+        A string (`"min"` or `"max"`) specifying which extremum height is sought
 
     Returns:
       A float corresponding to the material interface extremum height
@@ -799,7 +799,7 @@ def min_max_height(
     coords = node_coordinates(level_set)
 
     coords_data = coords.dat.data_ro
-    ls_data = level_set.dat.data_ro
+    ls_data = level_set.dat.data_ro.clip(1e-6, 1.0 - 1e-6)
     if isinstance(epsilon, float):
         eps_data = epsilon * np.ones_like(ls_data)
     else:
@@ -832,14 +832,14 @@ def min_max_height(
 
             ls_inside = ls_data[mask_ls][ind_inside]
             eps_inside = eps_data[mask_ls][ind_inside]
-            sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
+            sdls_inside = eps_inside * np.log(ls_inside / (1.0 - ls_inside))
 
             ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
             eps_outside = eps_data[~mask_ls][mask_hor_coords][ind_outside]
-            sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
+            sdls_outside = eps_outside * np.log(ls_outside / (1.0 - ls_outside))
 
             sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
-            height = sdls_dist * height_inside + (1 - sdls_dist) * height_outside
+            height = sdls_dist * height_inside + (1.0 - sdls_dist) * height_outside
         else:
             height = height_inside
     else:
