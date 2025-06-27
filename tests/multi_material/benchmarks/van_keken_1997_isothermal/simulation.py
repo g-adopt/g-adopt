@@ -104,16 +104,18 @@ mesh_elements = (128, 128)
 level_set_func_space_deg = 2
 
 # Parameters to initialise level set
-interface_coords_x = np.linspace(0, domain_dims[0], 1000)
 callable_args = (
+    curve_parameter := np.linspace(0, domain_dims[0], 1000),
     interface_deflection := 0.02,
     perturbation_wavelength := 2 * domain_dims[0],
     interface_coord_y := 0.2,
 )
+boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, interface_coord_y)]
 signed_distance_kwargs = {
     "interface_geometry": "curve",
     "interface_callable": "cosine",
-    "interface_args": (interface_coords_x, *callable_args),
+    "interface_args": callable_args,
+    "boundary_coordinates": boundary_coordinates,
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
