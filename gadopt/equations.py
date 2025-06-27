@@ -137,22 +137,22 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     See Equation (3.7), Table 3.1, and Appendix C from Hillewaert's thesis:
     https://www.researchgate.net/publication/260085826
     """
-    cell_type = mesh.ufl_cell().cellname()
-    if cell_type == "triangle":
-        return (p + 1) * (p + 2) / 2.0
-    elif cell_type == "quadrilateral" or cell_type == "interval * interval":
-        return (p + 1) ** 2
-    elif cell_type == "triangle * interval":
-        return (p + 1) ** 2
-    elif cell_type == "quadrilateral * interval":
-        # if e is a wedge and f is a triangle: (p+1)**2
-        # if e is a wedge and f is a quad: (p+1)*(p+2)/2
-        # here we just return the largest of the the two (for p>=0)
-        return (p + 1) ** 2
-    elif cell_type == "tetrahedron":
-        return (p + 1) * (p + 3) / 3
-    else:
-        raise NotImplementedError("Unknown cell type in mesh: {}".format(cell_type))
+    match cell_type := mesh.ufl_cell().cellname():
+        case "triangle":
+            return (p + 1) * (p + 2) / 2.0
+        case "quadrilateral" | "interval * interval":
+            return (p + 1) ** 2
+        case "triangle * interval":
+            return (p + 1) ** 2
+        case "quadrilateral * interval" | "hexahedron":
+            # if e is a wedge and f is a triangle: (p+1)**2
+            # if e is a wedge and f is a quad: (p+1)*(p+2)/2
+            # here we just return the largest of the the two (for p>=0)
+            return (p + 1) ** 2
+        case "tetrahedron":
+            return (p + 1) * (p + 3) / 3
+        case _:
+            raise NotImplementedError(f"Unknown cell type in mesh: {cell_type}")
 
 
 def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
