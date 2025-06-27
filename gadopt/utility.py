@@ -518,7 +518,7 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
         # firedrake-assigned geometric_dimension
         if dim == 3:
             # For 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
-            axis_extremes_order.insert(1,["front", "back"])
+            axis_extremes_order.insert(1, ["front", "back"])
         bounding_box = mesh.topology_dm.getBoundingBox()
         boundary_tol = [abs(dim[1] - dim[0]) * 1e-6 for dim in bounding_box]
         if dim > 3:

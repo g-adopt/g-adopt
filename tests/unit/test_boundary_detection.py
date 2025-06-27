@@ -142,7 +142,7 @@ def test_extruded_mesh_cubed_sphere_to_sphere():
     assert not hasattr(boundary, "back")
 
 
-geo_files = (Path(__file__).parents[1] / "multi_material" / "benchmarks").glob("*.geo")
+geo_files = (Path(__file__).parents[1] / "multi_material" / "benchmarks").glob("*/mesh/*.geo")
 
 
 @pytest.mark.parametrize("geo_name", geo_files)
