@@ -3,10 +3,8 @@ from firedrake import *
 from firedrake.adjoint import *
 from checkpoint_schedules import SingleMemoryStorageSchedule, SingleDiskStorageSchedule
 import numpy as np
-from firedrake.petsc import PETSc
 import pickle
 from pathlib import Path
-import sys
 
 
 def tape_generation_control_invariant_assign(scheduler):
