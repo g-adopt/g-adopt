@@ -745,7 +745,7 @@ def material_entrainment(
 
     node_coords = node_coordinates(level_set)
     if node_coords.ufl_domain().cartesian:
-        gravity_direction_coord = node_coords[-1]
+        *_, gravity_direction_coord = node_coords
     else:
         gravity_direction_coord = fd.sqrt(fd.inner(node_coords, node_coords))
     target_region = region_check(gravity_direction_coord, entrainment_height)
