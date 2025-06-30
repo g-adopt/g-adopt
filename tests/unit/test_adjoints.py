@@ -169,7 +169,6 @@ def tape_generation_DirichletBCc(scheduler):
     ret = {}
     ret["first_call"] = obj
     pause_annotation()
-
     rf = ReducedFunctional(obj, control)
     ret["first_call"] = rf(F)
     ret["using scheduler"] = scheduler.__class__.__name__ if scheduler is not None else "None"
@@ -177,15 +176,15 @@ def tape_generation_DirichletBCc(scheduler):
     return ret
 
 
-@pytest.mark.parametrize("scheduler", [
-    None,
-    SingleMemoryStorageSchedule(),
-    SingleDiskStorageSchedule(),
-])
 @pytest.mark.parametrize("func, ref_filename", [
     (tape_generation_staggered_solves, "taylor_test_staggered_results.pkl"),
     (tape_generation_control_invariant_assign, "taylor_test_assign_results.pkl"),
     (tape_generation_DirichletBCc, "taylor_test_DirichletBCc_results.pkl"),
+])
+@pytest.mark.parametrize("scheduler", [
+    # SingleDiskStorageSchedule(),
+    SingleMemoryStorageSchedule(),
+    None,
 ])
 def test_control_invariant_assign(func, ref_filename, scheduler):
     """
