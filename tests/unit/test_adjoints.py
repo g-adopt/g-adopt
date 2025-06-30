@@ -2,26 +2,25 @@ import pytest
 import pickle
 from firedrake import *
 from firedrake.adjoint import *
-from checkpoint_schedules import SingleMemoryStorageSchedule, SingleDiskStorageSchedule
+from checkpoint_schedules import SingleMemoryStorageSchedule, SingleDiskStorageSchedule, StorageType
 import numpy as np
 from pathlib import Path
 
 
 def tape_generation_staggered_solves(scheduler):
+    """
+    Generating a tape with staggered solves.
+
+    Tape structure:
+    - u_0 (control) -> u -> r (every 3rd step) -> u -> r -> u -> ...
+    - Creates long-range dependencies: u at step i affects r at step i+3
+    """
 
     continue_annotation()
 
-    # get tape
     tape = get_working_tape()
-    tape.clear_tape()
-    ret = {}
 
-    if scheduler is not None:
-        if isinstance(scheduler, SingleDiskStorageSchedule):
-            enable_disk_checkpointing()
-        tape.enable_checkpointing(scheduler)
-
-    mesh = checkpointable_mesh(UnitSquareMesh(1, 1)) if isinstance(scheduler, SingleDiskStorageSchedule) else UnitSquareMesh(1, 1)
+    mesh = compatible_mesh_for_scheduler(scheduler)
 
     V = FunctionSpace(mesh, "CG", 1)
 
@@ -41,28 +40,25 @@ def tape_generation_staggered_solves(scheduler):
     reduced_functional = ReducedFunctional(J, Control(u_0))
 
     # Storing the diagnostics
-    ret["using scheduler"] = scheduler.__class__.__name__ if scheduler is not None else "None"
+    ret = {}
     ret["J1"] = reduced_functional(u_0)
     ret["dJdm1"] = reduced_functional.derivative().dat.data_ro.copy()
+
     return ret
 
 
 def tape_generation_control_invariant_assign(scheduler):
-    """ See bellow test_control_invariant_assign for references """
+    """
+    Generates a tape with control-invariant assignments.
+
+    Tape structure:
+    - u_0 (control) -> u -> r.assign(2.0) -> u.project(r*u) -> r.assign(1.0) -> u.project(r*u)
+
+    Tests pyadjoint's handling of control-independent assignments that affect later computations.
+    """
     continue_annotation()
-    tape = get_working_tape()
-    tape.clear_tape()
 
-    if isinstance(scheduler, SingleDiskStorageSchedule):
-        enable_disk_checkpointing()
-
-    if scheduler is not None:
-        tape.enable_checkpointing(scheduler)
-
-    mesh = UnitSquareMesh(1, 1)
-
-    if isinstance(scheduler, SingleDiskStorageSchedule):
-        mesh = checkpointable_mesh(mesh)
+    mesh = compatible_mesh_for_scheduler(scheduler)
 
     V = FunctionSpace(mesh, "CG", 1)
     R = FunctionSpace(mesh, "R", 0)
@@ -122,30 +118,24 @@ def tape_generation_control_invariant_assign(scheduler):
     ret["epsilons"] = epsilons
     ret["residuals"] = residuals
 
-    ret["using scheduler"] = scheduler.__class__.__name__ if scheduler is not None else "None"
     return ret
 
 
 def tape_generation_DirichletBCc(scheduler):
     """
-    See bellow test_DirichletBCc for references
+    Generartes a tape with updating DirichletBCs.
+
+    Tape structure:
+    - F (control) -> T.assign(T+1.0) -> solve(a==L, uu, bcs) -> T.assign(T+1.0) -> solve(a==L, uu, bcs) -> ...
+    - Tests BC evaluation correctness with disk checkpointing during timestepping
+
+    Tests pyadjoint's handling of DirichletBC with disk checkpointing in timestepper context.
     """
 
     continue_annotation()
 
-    if isinstance(scheduler, SingleDiskStorageSchedule):
-        enable_disk_checkpointing()
-
     tape = get_working_tape()
-    tape.clear_tape()
-
-    if scheduler is not None:
-        tape.enable_checkpointing(scheduler)
-
-    mesh = UnitSquareMesh(5, 5)
-
-    if isinstance(scheduler, SingleDiskStorageSchedule):
-        mesh = checkpointable_mesh(mesh)
+    mesh = compatible_mesh_for_scheduler(scheduler)
 
     V = FunctionSpace(mesh, "CG", 2)
     T = Function(V).interpolate(0.0)
@@ -171,54 +161,79 @@ def tape_generation_DirichletBCc(scheduler):
     pause_annotation()
     rf = ReducedFunctional(obj, control)
     ret["first_call"] = rf(F)
-    ret["using scheduler"] = scheduler.__class__.__name__ if scheduler is not None else "None"
 
     return ret
 
 
-@pytest.mark.parametrize("func, ref_filename", [
-    (tape_generation_staggered_solves, "taylor_test_staggered_results.pkl"),
-    (tape_generation_control_invariant_assign, "taylor_test_assign_results.pkl"),
-    (tape_generation_DirichletBCc, "taylor_test_DirichletBCc_results.pkl"),
+def compatible_mesh_for_scheduler(scheduler):
+    """
+    Returns a mesh that is compatible with the choice of the scheduler.
+    Enables disk checkpointing if the scheduler if Disk storage is enabled.
+    """
+    mesh = UnitSquareMesh(5, 5)
+
+    tape = get_working_tape()
+    tape.clear_tape()
+
+    if scheduler is None:
+        return mesh
+
+    if scheduler.uses_storage_type(StorageType.DISK):
+        enable_disk_checkpointing()
+        mesh = checkpointable_mesh(mesh)
+
+    tape.enable_checkpointing(scheduler)
+    return mesh
+
+
+def load_reference_results(func):
+    """
+    For each problem, load the associated benchmarks from pickle files.
+    """
+    if func is tape_generation_staggered_solves:
+        return pickle.load(open(Path(__file__).parent.resolve() / "data" / "taylor_test_staggered_results.pkl", "rb"))
+    elif func is tape_generation_control_invariant_assign:
+        return pickle.load(open(Path(__file__).parent.resolve() / "data" / "taylor_test_assign_results.pkl", "rb"))
+    elif func is tape_generation_DirichletBCc:
+        return pickle.load(open(Path(__file__).parent.resolve() / "data" / "taylor_test_DirichletBCc_results.pkl", "rb"))
+    else:
+        raise ValueError(f"Unknown function: {func}")
+
+
+@pytest.mark.parametrize("tape_generator", [
+    (tape_generation_staggered_solves),
+    (tape_generation_control_invariant_assign),
+    (tape_generation_DirichletBCc),
 ])
 @pytest.mark.parametrize("scheduler_class", [
     SingleDiskStorageSchedule,
     SingleMemoryStorageSchedule,
     None,
 ])
-def test_control_invariant_assign(func, ref_filename, scheduler_class):
+def test_control_invariant_assign(tape_generator, scheduler_class):
     """
-    See above tape_generation_control_invariant_assign for details.
-    Test case for pyadjoint issue #209: Incorrect derivatives with SingleMemoryStorageSchedule.
-
-    This test reproduces a bug in pyadjoint where adjoint derivatives are incorrect when using
-    SingleMemoryStorageSchedule with control-independent assignments, but correct with no checkpointing.
-
-    The bug occurs due to overly aggressive checkpoint pruning in pyadjoint's checkpointing.py.
-    When a FunctionAssignBlock is control-independent and its output is used later in the graph,
-    the pruning logic incorrectly discards the checkpoint because the output is not marked.
-    This causes the value to be reconstructed incorrectly on the next reverse pass.
-
-    Reference: https://github.com/dolfin-adjoint/pyadjoint/issues/209
+    Unit tests for the following issues:
+        control invariant assign : https://github.com/dolfin-adjoint/pyadjoint/issues/209
+        staggered solves: https://github.com/dolfin-adjoint/pyadjoint/issues/211
+        modifying DirichletBCs: https://github.com/firedrakeproject/firedrake/issues/4206
     """
 
     scheduler = None
     if scheduler_class is not None:
         scheduler = scheduler_class()
 
-    if isinstance(scheduler, SingleMemoryStorageSchedule) and func == tape_generation_control_invariant_assign:
+    if isinstance(scheduler, SingleMemoryStorageSchedule) and tape_generator == tape_generation_control_invariant_assign:
         pytest.xfail("pyadjoint issue #209 not yet fixed")
 
-    if isinstance(scheduler, SingleMemoryStorageSchedule) and func == tape_generation_staggered_solves:
+    if isinstance(scheduler, SingleMemoryStorageSchedule) and tape_generator == tape_generation_staggered_solves:
         pytest.xfail("pyadjoint issue #211 not yet fixed")
 
-    reference_results = pickle.load(open(Path(__file__).parent.resolve() / "data" / ref_filename, "rb"))
+    reference_results = load_reference_results(tape_generator)
 
-    with set_working_tape():
-        taylor_test_res = func(scheduler=scheduler)
+    taylor_test_res = tape_generator(scheduler=scheduler)
 
-    taylor_test_res.pop("using scheduler")
-
-    for key in taylor_test_res:
+    for key in reference_results:
+        if key == "using scheduler":
+            continue
         assert np.allclose(taylor_test_res[key], reference_results[key], rtol=1e-10), \
             f"Values differ for key '{key}'"
