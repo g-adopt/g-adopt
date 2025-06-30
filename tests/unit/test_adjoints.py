@@ -181,12 +181,12 @@ def tape_generation_DirichletBCc(scheduler):
     (tape_generation_control_invariant_assign, "taylor_test_assign_results.pkl"),
     (tape_generation_DirichletBCc, "taylor_test_DirichletBCc_results.pkl"),
 ])
-@pytest.mark.parametrize("scheduler", [
-    # SingleDiskStorageSchedule(),
-    SingleMemoryStorageSchedule(),
+@pytest.mark.parametrize("scheduler_class", [
+    SingleDiskStorageSchedule,
+    SingleMemoryStorageSchedule,
     None,
 ])
-def test_control_invariant_assign(func, ref_filename, scheduler):
+def test_control_invariant_assign(func, ref_filename, scheduler_class):
     """
     See above tape_generation_control_invariant_assign for details.
     Test case for pyadjoint issue #209: Incorrect derivatives with SingleMemoryStorageSchedule.
@@ -202,6 +202,10 @@ def test_control_invariant_assign(func, ref_filename, scheduler):
     Reference: https://github.com/dolfin-adjoint/pyadjoint/issues/209
     """
 
+    scheduler = None
+    if scheduler_class is not None:
+        scheduler = scheduler_class()
+
     if isinstance(scheduler, SingleMemoryStorageSchedule) and func == tape_generation_control_invariant_assign:
         pytest.xfail("pyadjoint issue #209 not yet fixed")
 
@@ -210,7 +214,9 @@ def test_control_invariant_assign(func, ref_filename, scheduler):
 
     reference_results = pickle.load(open(Path(__file__).parent.resolve() / "data" / ref_filename, "rb"))
 
-    taylor_test_res = func(scheduler=scheduler)
+    with set_working_tape():
+        taylor_test_res = func(scheduler=scheduler)
+
     taylor_test_res.pop("using scheduler")
 
     for key in taylor_test_res:
