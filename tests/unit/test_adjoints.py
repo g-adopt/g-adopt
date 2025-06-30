@@ -33,7 +33,7 @@ def tape_generation_staggered_solves(scheduler):
             r.project(1.01 * u)
         u.project(r * u)
 
-    J = assemble((u) ** 2 * dx)
+    J = assemble(u ** 2 * dx)
 
     pause_annotation()
 
@@ -222,10 +222,10 @@ def test_control_invariant_assign(tape_generator, scheduler_class):
     if scheduler_class is not None:
         scheduler = scheduler_class()
 
-    if isinstance(scheduler, SingleMemoryStorageSchedule) and tape_generator == tape_generation_control_invariant_assign:
+    if isinstance(scheduler, SingleMemoryStorageSchedule) and tape_generator is tape_generation_control_invariant_assign:
         pytest.xfail("pyadjoint issue #209 not yet fixed")
 
-    if isinstance(scheduler, SingleMemoryStorageSchedule) and tape_generator == tape_generation_staggered_solves:
+    if isinstance(scheduler, SingleMemoryStorageSchedule) and tape_generator is tape_generation_staggered_solves:
         pytest.xfail("pyadjoint issue #211 not yet fixed")
 
     reference_results = load_reference_results(tape_generator)
