@@ -1,10 +1,50 @@
 import pytest
+import pickle
 from firedrake import *
 from firedrake.adjoint import *
 from checkpoint_schedules import SingleMemoryStorageSchedule, SingleDiskStorageSchedule
 import numpy as np
-import pickle
 from pathlib import Path
+
+
+def tape_generation_staggered_solves(scheduler):
+
+    continue_annotation()
+
+    # get tape
+    tape = get_working_tape()
+    tape.clear_tape()
+    ret = {}
+
+    if scheduler is not None:
+        if isinstance(scheduler, SingleDiskStorageSchedule):
+            enable_disk_checkpointing()
+        tape.enable_checkpointing(scheduler)
+
+    mesh = checkpointable_mesh(UnitSquareMesh(1, 1)) if isinstance(scheduler, SingleDiskStorageSchedule) else UnitSquareMesh(1, 1)
+
+    V = FunctionSpace(mesh, "CG", 1)
+
+    u_0 = Function(V).assign(1.0)
+    u = Function(V).assign(u_0)
+    r = Function(V)
+
+    for i in tape.timestepper(iter(range(10))):
+        if i % 3 == 0:
+            r.project(1.01 * u)
+        u.project(r * u)
+
+    J = assemble((u) ** 2 * dx)
+
+    pause_annotation()
+
+    reduced_functional = ReducedFunctional(J, Control(u_0))
+
+    # Storing the diagnostics
+    ret["using scheduler"] = scheduler.__class__.__name__ if scheduler is not None else "None"
+    ret["J1"] = reduced_functional(u_0)
+    ret["dJdm1"] = reduced_functional.derivative().dat.data_ro.copy()
+    return ret
 
 
 def tape_generation_control_invariant_assign(scheduler):
@@ -132,24 +172,22 @@ def tape_generation_DirichletBCc(scheduler):
 
     rf = ReducedFunctional(obj, control)
     ret["first_call"] = rf(F)
+    ret["using scheduler"] = scheduler.__class__.__name__ if scheduler is not None else "None"
 
     return ret
 
 
-@pytest.fixture(scope="module")
-def reference_results():
-    """Load reference results from pickle file."""
-    with open(Path(__file__).parent.resolve() / "data/taylor_test_results.pkl", "rb") as f:
-        reference_taylor_test_res = pickle.load(f)
-        reference_taylor_test_res.pop("using scheduler")
-    return reference_taylor_test_res
-
-
 @pytest.mark.parametrize("scheduler", [
+    None,
     SingleMemoryStorageSchedule(),
-    None
+    SingleDiskStorageSchedule(),
 ])
-def test_control_invariant_assign(scheduler, reference_results):
+@pytest.mark.parametrize("func, ref_filename", [
+    (tape_generation_staggered_solves, "taylor_test_staggered_results.pkl"),
+    (tape_generation_control_invariant_assign, "taylor_test_assign_results.pkl"),
+    (tape_generation_DirichletBCc, "taylor_test_DirichletBCc_results.pkl"),
+])
+def test_control_invariant_assign(func, ref_filename, scheduler):
     """
     See above tape_generation_control_invariant_assign for details.
     Test case for pyadjoint issue #209: Incorrect derivatives with SingleMemoryStorageSchedule.
@@ -165,26 +203,17 @@ def test_control_invariant_assign(scheduler, reference_results):
     Reference: https://github.com/dolfin-adjoint/pyadjoint/issues/209
     """
 
-    if isinstance(scheduler, SingleMemoryStorageSchedule):
+    if isinstance(scheduler, SingleMemoryStorageSchedule) and func == tape_generation_control_invariant_assign:
         pytest.xfail("pyadjoint issue #209 not yet fixed")
 
-    taylor_test_res = tape_generation_control_invariant_assign(scheduler=scheduler)
+    if isinstance(scheduler, SingleMemoryStorageSchedule) and func == tape_generation_staggered_solves:
+        pytest.xfail("pyadjoint issue #211 not yet fixed")
+
+    reference_results = pickle.load(open(Path(__file__).parent.resolve() / "data" / ref_filename, "rb"))
+
+    taylor_test_res = func(scheduler=scheduler)
     taylor_test_res.pop("using scheduler")
 
     for key in taylor_test_res:
         assert np.allclose(taylor_test_res[key], reference_results[key], rtol=1e-10), \
-            f"Values differ for key '{key}'"
-
-
-@pytest.mark.parametrize("scheduler", [
-    SingleDiskStorageSchedule(),
-    SingleMemoryStorageSchedule(),
-    None
-])
-def test_DirichletBCc(scheduler):
-    """Testing the fix for  https://github.com/firedrakeproject/firedrake/issues/4206"""
-
-    taylor_test_res = tape_generation_DirichletBCc(scheduler=scheduler)
-    for key, value in taylor_test_res.items():
-        assert np.allclose(value, 9.000901957850, rtol=1e-10), \
             f"Values differ for key '{key}'"
