@@ -21,7 +21,9 @@ def tape_generation_staggered_solves(scheduler):
             enable_disk_checkpointing()
         tape.enable_checkpointing(scheduler)
 
-    mesh = checkpointable_mesh(UnitSquareMesh(1, 1)) if isinstance(scheduler, SingleDiskStorageSchedule) else UnitSquareMesh(1, 1)
+    mesh = UnitSquareMesh(1, 1)
+    if scheduler.uses_storage_type(StorageType.DISK):
+        mesh = checkpointable_mesh(mesh)
 
     V = FunctionSpace(mesh, "CG", 1)
 
@@ -34,7 +36,7 @@ def tape_generation_staggered_solves(scheduler):
             r.project(1.01 * u)
         u.project(r * u)
 
-    J = assemble((u) ** 2 * dx)
+    J = assemble(u ** 2 * dx)
 
     pause_annotation()
 
@@ -206,10 +208,10 @@ def test_control_invariant_assign(func, ref_filename, scheduler_class):
     if scheduler_class is not None:
         scheduler = scheduler_class()
 
-    if isinstance(scheduler, SingleMemoryStorageSchedule) and func == tape_generation_control_invariant_assign:
+    if isinstance(scheduler, SingleMemoryStorageSchedule) and func is tape_generation_control_invariant_assign:
         pytest.xfail("pyadjoint issue #209 not yet fixed")
 
-    if isinstance(scheduler, SingleMemoryStorageSchedule) and func == tape_generation_staggered_solves:
+    if isinstance(scheduler, SingleMemoryStorageSchedule) and func is tape_generation_staggered_solves:
         pytest.xfail("pyadjoint issue #211 not yet fixed")
 
     reference_results = pickle.load(open(Path(__file__).parent.resolve() / "data" / ref_filename, "rb"))
