@@ -1,6 +1,6 @@
-r"""This module provides a set of classes and functions enabling multi-material
+"""This module provides a set of classes and functions enabling multi-material
 capabilities. Users initialise level-set fields using the `interface_thickness` and
-`assign_level_set_values` functions. Given the level-set functions, users can define
+`assign_level_set_values` functions. Given the level-set function(s), users can define
 material-dependent physical properties via the `material_field` function. To evolve
 level-set fields, users instantiate the `LevelSetSolver` class, choosing if they require
 advection, reinitialisation, or both, and then call the `solve` method to request a
@@ -21,8 +21,8 @@ from mpi4py import MPI
 from numpy.testing import assert_allclose
 from ufl.core.expr import Expr
 
-from . import scalar_equation as scalar_eq
 from .equations import Equation
+from .scalar_equation import mass_term
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
 from .utility import node_coordinates
@@ -513,7 +513,7 @@ class LevelSetSolver:
                 fd.TestFunction(self.solution_space),
                 self.solution_space,
                 reinitialisation_term,
-                mass_term=scalar_eq.mass_term,
+                mass_term=mass_term,
                 eq_attrs={
                     "level_set_grad": self.solution_grad,
                     "epsilon": self.reini_kwargs["epsilon"],
@@ -649,9 +649,12 @@ def material_field(
     """Generates UFL algebra describing a physical property across the domain.
 
     Calls `material_field_from_copy` using a copy of the level-set list, preventing the
-    potential original one from being consumed by the function call. Ordering of
-    `field_values` must be consistent with `level_set`, such that the last element
-    corresponds to the field value on the 1-side of the last conservative level set.
+    potential original one from being consumed by the function call.
+
+    Ordering of `field_values` must be consistent with `level_set`, such that the first
+    element in the list corresponds to the field value on the 0-side of the first
+    level-set function and the last element in the list to the field value on the 1-side
+    of the last level-set function.
 
     **Note**: When requesting the `sharp_adjoint` interface, calling Stokes solver may
     raise `DIVERGED_FNORM_NAN` if the nodal level-set value is exactly 0.5 (i.e.
@@ -673,9 +676,9 @@ def material_field(
     """
     level_set = level_set.copy() if isinstance(level_set, list) else [level_set]
 
-    _impl_interface = ["sharp", "sharp_adjoint", "arithmetic", "geometric", "harmonic"]
-    if interface not in _impl_interface:
-        raise ValueError(f"Interface must be one of {_impl_interface}")
+    impl_interface = ["sharp", "sharp_adjoint", "arithmetic", "geometric", "harmonic"]
+    if interface not in impl_interface:
+        raise ValueError(f"Interface must be one of {impl_interface}")
 
     return material_field_from_copy(level_set, field_values, interface)
 
