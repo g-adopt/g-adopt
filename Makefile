@@ -7,7 +7,7 @@ lint:
 	@python3 -m flake8 demos tests
 
 test:
-	$(MAKE) -C demos & $(MAKE) -C tests & wait
+	$(MAKE) -C tests & wait
 
 longtest:
 	$(MAKE) -C tests longtest

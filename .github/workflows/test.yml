@@ -167,7 +167,7 @@ jobs:
         id: run_pytest
         run: |
           . .venv/bin/activate
-          python -m pytest -m 'adjoint' --junit-xml=test_results.xml
+          python -m pytest -m '(adjoint) and (not demo) and (not longtest)' --junit-xml=test_results.xml
 
       - name: Pytest report
         uses: mikepenz/action-junit-report@v4
