@@ -36,7 +36,7 @@ jobs:
       matrix: ${{ fromJson(needs.setup.outputs.system_matrix) }}
     env:
       REPO_PATH: ${{ secrets[format('{0}_REPO_PATH',matrix.system)] }}
-      GADOPT_SETUP: ${{ secrets[format('{0}_GADOPT_SETUP',matrix.system)] }}
+      GADOPT_SETUP: /scratch/xd2/dr4292/gadopt_setup.sh
     steps:
       - uses: actions/checkout@v4
       - name: Get system FQDN
