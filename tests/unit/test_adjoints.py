@@ -200,6 +200,7 @@ def load_reference_results(func):
         raise ValueError(f"Unknown function: {func}")
 
 
+@pytest.mark.adjoint
 @pytest.mark.parametrize("tape_generator", [
     (tape_generation_staggered_solves),
     (tape_generation_control_invariant_assign),
