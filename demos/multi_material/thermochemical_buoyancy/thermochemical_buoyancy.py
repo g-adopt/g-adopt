@@ -120,8 +120,12 @@ from numpy import array  # noqa: E402
 # Here, only arguments to the G-ADOPT line function are required. Then, use the G-ADOPT
 # API to generate the thickness of the hyperbolic tangent profile and update the
 # level-set field values.
-interface_coords_x = array([0.0, lx])
-callable_args = (interface_slope := 0, interface_y := 0.025)
+callable_args = (
+    curve_parameter := array([0.0, lx]),
+    interface_slope := 0,
+    interface_coord_y := 0.025,
+)
+boundary_coordinates = [(lx, ly), (0.0, ly), (0.0, interface_coord_y)]
 
 epsilon = interface_thickness(K)
 assign_level_set_values(
@@ -129,7 +133,8 @@ assign_level_set_values(
     epsilon,
     interface_geometry="curve",
     interface_callable="line",
-    interface_args=(interface_coords_x, *callable_args),
+    interface_args=callable_args,
+    boundary_coordinates=boundary_coordinates,
 )
 # -
 
@@ -159,15 +164,11 @@ assign_level_set_values(
 # using averaging schemes, such as arithmetic, geometric, and harmonic means.
 
 # +
-dense_material = Material(RaB=4.5e5)
-reference_material = Material(RaB=0)
-materials = [dense_material, reference_material]
-
 Ra = 3e5  # Thermal Rayleigh number
-
-RaB = material_field(
-    psi, [material.RaB for material in materials], interface="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
+# Compositional Rayleigh number, defined based on each material value and location
+RaB_dense = 4.5e5
+RaB_reference = 0.0
+RaB = material_field(psi, [RaB_dense, RaB_reference], interface="arithmetic")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # -
@@ -239,7 +240,7 @@ plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
-material_area = interface_y * lx  # Area of tracked material in the domain
+material_area = interface_coord_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
