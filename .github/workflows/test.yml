@@ -88,6 +88,12 @@ jobs:
           chmod 600 $HOME/.s3cfg/config
           git config --global safe.directory '*'
 
+      - name: Checkout Firedrake branch
+        run: |
+          cd /opt/firedrake
+          git fetch
+          git cherry-pick --no-commit origin/master..origin/dolci/update_bcs_for_adjs
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
