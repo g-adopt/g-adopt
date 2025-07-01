@@ -90,9 +90,12 @@ jobs:
 
       - name: Checkout Firedrake branch
         run: |
-          cd /opt/firedrake
-          git fetch
-          git cherry-pick --no-commit origin/master..origin/dolci/update_bcs_for_adjs
+          # cd /opt/firedrake
+          # git fetch
+          # git cherry-pick --no-commit origin/master..origin/dolci/update_bcs_for_adjs
+          # git cherry-pick --no-commit origin/master..origin/dolci/update_bcs_for_adjs
+          python3 -m pip install git+https://github.com/dolfin-adjoint/pyadjoint.git@dham/mark_functional_dependencies
+
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
