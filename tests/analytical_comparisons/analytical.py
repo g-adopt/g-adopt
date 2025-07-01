@@ -1,8 +1,17 @@
 import argparse
+import asyncio
 import itertools
-import subprocess
+import os
 import sys
 import importlib
+
+hpc_helper_available = False
+try:
+    import gadopt_hpc_helper
+
+    hpc_helper_available = True
+except ImportError:
+    pass
 
 cases = {
     "smooth": {
@@ -87,7 +96,7 @@ def param_sets(config, permutate=False):
     return zip(*config.values())
 
 
-def run_subcommand(args):
+async def run_subcommand(args):
     from mpi4py import MPI
 
     try:
@@ -108,38 +117,68 @@ def run_subcommand(args):
             f.write(" ".join(str(x) for x in errors))
 
 
-def submit_subcommand(args):
+async def run_subproc(args, level, cores, params):
+    paramstr = "-".join([str(v) for v in params])
+
+    command = args.template.format(cores=cores, params=paramstr, level=level)
+
+    proc = await asyncio.create_subprocess_exec(
+        *command.split(),
+        os.path.basename(sys.executable),
+        sys.argv[0],
+        "run",
+        args.case,
+        str(level),
+        *[str(v) for v in params],
+    )
+
+    await proc.wait()
+
+    return proc.returncode
+
+
+async def submit_subcommand(args):
     config = get_case(cases, args.case)
-    procs = {}
+    procs = []
 
     permutate = config.pop("permutate", True)
 
     for level, cores in zip(config.pop("levels"), config.pop("cores")):
         for params in param_sets(config, permutate):
             paramstr = "-".join([str(v) for v in params])
-            command = args.template.format(
-                cores=cores, mem=4 * cores, params=paramstr, level=level
-            )
 
-            procs[paramstr] = subprocess.Popen(
-                [
-                    *command.split(),
-                    sys.executable,
-                    sys.argv[0],
-                    "run",
-                    args.case,
-                    str(level),
-                    *[str(v) for v in params],
-                ]
-            )
+            if args.HPC:
+                outname = args.outname.format(level=level, params=paramstr)
+                errname = args.errname.format(level=level, params=paramstr)
+                procs.append(
+                    (
+                        level,
+                        paramstr,
+                        gadopt_hpc_helper.gadopt_hpcrun_async(
+                            cores,
+                            outfile=outname,
+                            errfile=errname,
+                            jobname=f"analytical_{paramstr}",
+                            cmd=[
+                                os.path.basename(sys.executable),
+                                sys.argv[0],
+                                "run",
+                                args.case,
+                                str(level),
+                                *[str(v) for v in params],
+                            ],
+                        ),
+                    )
+                )
+            else:
+                procs.append((level, paramstr, run_subproc(args, level, cores, params)))
 
     failed = False
-
-    for cmd, proc in procs.items():
-        if proc.wait() != 0:
-            print(f"{cmd} failed: {proc.returncode}")
+    rcs = await asyncio.gather(*[p[2] for p in procs])
+    for i, (level, paramstr, _) in enumerate(procs):
+        if rcs[i] != 0:
+            print(f"Level {level}, {paramstr} failed: {rcs[i]}")
             failed = True
-
     if failed:
         sys.exit(1)
 
@@ -168,22 +207,33 @@ if __name__ == "__main__":
     parser_run.add_argument("case")
     parser_run.add_argument("params", type=int, nargs="*")
     parser_run.set_defaults(func=run_subcommand)
-    parser_submit = subparsers.add_parser(
-        "submit", help="submit a PBS job to run a specific case"
+    parser_run.set_defaults(HPC=False)
+    parser_submit = subparsers.add_parser("submit", help="submit a PBS job to run a specific case")
+    group = parser_submit.add_mutually_exclusive_group()
+    group.add_argument(
+        "-t", "--template", default="mpiexec -np {cores}", help="template command for running commands under MPI"
+    )
+    group.add_argument(
+        "-H",
+        "--HPC",
+        help="Detect HPC system and run using known template for batch job submission for that system",
+        action="store_true",
     )
     parser_submit.add_argument(
-        "-t",
-        "--template",
-        default="mpiexec -np {cores}",
-        help="template command for running commands under MPI",
+        "-e", "--errname", type=str, help="stderr file for batch job", default="batch_output/l{level}.err"
+    )
+    parser_submit.add_argument(
+        "-o", "--outname", type=str, help="stdout file for batch job", default="batch_output/l{level}.out"
     )
     parser_submit.add_argument("case")
     parser_submit.set_defaults(func=submit_subcommand)
-    parser_count = subparsers.add_parser(
-        "count", help="return the number of jobs to run for a specific case"
-    )
+    parser_count = subparsers.add_parser("count", help="return the number of jobs to run for a specific case")
     parser_count.add_argument("case")
     parser_count.set_defaults(func=count_subcommand)
 
     args = parser.parse_args()
-    args.func(args)
+    if args.HPC:
+        if not hpc_helper_available:
+            raise RuntimeError("gadopt_hpc_helper module is unavailable - cannot run in HPC mode")
+
+    asyncio.run(args.func(args))
