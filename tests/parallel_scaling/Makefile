@@ -10,7 +10,7 @@ SHELL = /bin/bash
 profile_%.txt: scaling.py stokes_cubed_sphere.py
 	echo "running parallel scaling on level $*"
 	mkdir -p batch_output
-	gadopt_hpcrun -n $$( python3 scaling.py get_ncpus $* ) -v LEVEL=$* -N scaling_$* -o batch_output/l$*.out -e batch_output/l$*.err --template-file ./run.template python3 scaling.py run $*
+	gadopt_hpcrun --debug -n $$( python3 scaling.py get_ncpus $* ) -v LEVEL=$* -N scaling_$* -o batch_output/l$*.out -e batch_output/l$*.err --template-file ./run.template python3 scaling.py run $*
 
 clean:
 	rm -rf batch_output profile_*.txt level_*.out level_*.err

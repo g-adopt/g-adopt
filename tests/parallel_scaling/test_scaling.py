@@ -6,8 +6,8 @@ from pathlib import Path
 try:
     from gadopt_hpc_helper import system as ghpc_system
 except ImportError:
-    ### Need to be able to import this file to gather tests, but need the
-    ### tests to fail if gadopt_hpc_helper is not found
+    # Need to be able to import this file to gather tests, but need the
+    # tests to fail if gadopt_hpc_helper is not found
     ghpc_system = "GADOPT_HPC_HELPER_IS_MISSING"
 
 
