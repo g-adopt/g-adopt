@@ -309,7 +309,7 @@ class StokesSolver:
         if self.mesh.cartesian:
             bc_map["ux"] = bc_map["u"].sub(0)
             bc_map["uy"] = bc_map["u"].sub(1)
-            if self.mesh.geometric_dimension == 3:
+            if self.mesh.geometric_dimension() == 3:
                 bc_map["uz"] = bc_map["u"].sub(2)
 
         for bc_id, bc in self.bcs.items():
