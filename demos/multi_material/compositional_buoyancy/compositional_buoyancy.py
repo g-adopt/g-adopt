@@ -104,12 +104,13 @@ from numpy import linspace  # noqa: E402
 # Here, only arguments to the G-ADOPT cosine function are required. Then, use the
 # G-ADOPT API to generate the thickness of the hyperbolic tangent profile and update the
 # level-set field values.
-interface_coords_x = linspace(0, lx, 1000)
 callable_args = (
+    curve_parameter := linspace(0, lx, 1000),
     interface_deflection := 0.02,
     perturbation_wavelength := 2 * lx,
     interface_coord_y := 0.2,
 )
+boundary_coordinates = [(lx, ly), (0.0, ly), (0.0, interface_coord_y)]
 
 epsilon = interface_thickness(K)
 assign_level_set_values(
@@ -117,7 +118,8 @@ assign_level_set_values(
     epsilon,
     interface_geometry="curve",
     interface_callable="cosine",
-    interface_args=(interface_coords_x, *callable_args),
+    interface_args=callable_args,
+    boundary_coordinates=boundary_coordinates,
 )
 # -
 

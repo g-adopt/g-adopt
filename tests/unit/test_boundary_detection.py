@@ -39,18 +39,16 @@ def test_utility_meshes(mesh_name, ndim, args):
     else:
         assert boundary.left == 1
         assert boundary.right == 2
-        if ndim >= 2:
+        if ndim == 2:
             assert boundary.bottom == 3
             assert boundary.top == 4
-        else:
-            assert not hasattr(boundary, "bottom")
-            assert not hasattr(boundary, "top")
-        if ndim >= 3:
-            assert boundary.front == 5
-            assert boundary.back == 6
-        else:
             assert not hasattr(boundary, "front")
             assert not hasattr(boundary, "back")
+        if ndim == 3:
+            assert boundary.front == 3
+            assert boundary.back == 4
+            assert boundary.bottom == 5
+            assert boundary.top == 6
 
 
 @pytest.mark.parametrize("mesh_name,ndim,args", fd_supported_meshes)
@@ -78,18 +76,16 @@ def test_recover_from_checkpoint(mesh_name, ndim, args):
     else:
         assert boundary.left == 1
         assert boundary.right == 2
-        if ndim >= 2:
+        if ndim == 2:
             assert boundary.bottom == 3
             assert boundary.top == 4
-        else:
-            assert not hasattr(boundary, "bottom")
-            assert not hasattr(boundary, "top")
-        if ndim >= 3:
-            assert boundary.front == 5
-            assert boundary.back == 6
-        else:
             assert not hasattr(boundary, "front")
             assert not hasattr(boundary, "back")
+        if ndim == 3:
+            assert boundary.front == 3
+            assert boundary.back == 4
+            assert boundary.bottom == 5
+            assert boundary.top == 6
 
 
 # Make sure extruded meshes aren't adding subdomains we're not expecting
@@ -146,7 +142,7 @@ def test_extruded_mesh_cubed_sphere_to_sphere():
     assert not hasattr(boundary, "back")
 
 
-geo_files = (Path(__file__).parents[1] / "multi_material" / "benchmarks").glob("*.geo")
+geo_files = (Path(__file__).parents[1] / "multi_material" / "benchmarks").glob("*/mesh/*.geo")
 
 
 @pytest.mark.parametrize("geo_name", geo_files)

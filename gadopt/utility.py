@@ -512,13 +512,13 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
     # in its own mesh creation functions.
 
     if mesh.topology_dm.hasLabel("Face Sets"):
-        axis_extremes_order = [["left", "right"], ["bottom", "top"], ["front", "back"]]
+        axis_extremes_order = [["left", "right"], ["bottom", "top"]]
         dim = mesh.geometric_dimension()
         plex_dim = mesh.topology_dm.getCoordinateDim()  # In an extruded mesh, this is different to the
         # firedrake-assigned geometric_dimension
-        if dim == 3 and plex_dim == 2:
-            # For extruded 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
-            axis_extremes_order = [["left", "right"], ["front", "back"], ["bottom", "top"]]
+        if dim == 3:
+            # For 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
+            axis_extremes_order.insert(1, ["front", "back"])
         bounding_box = mesh.topology_dm.getBoundingBox()
         boundary_tol = [abs(dim[1] - dim[0]) * 1e-6 for dim in bounding_box]
         if dim > 3:
