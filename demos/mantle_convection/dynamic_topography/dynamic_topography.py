@@ -23,7 +23,7 @@
 # Under equilibrium, the vertical (radial) stress acting on this boundary is $\sigma_{rr}$.
 # Due to internal forces, the surface deforms by an amount $\delta h$, which can be calculated as follows:
 #
-# $$\delta h = \sigma_{rr} / (\delta \rho\,g)$$
+# $$\delta h = \sigma_{rr} / (\delta \rho g)$$
 #
 # Where:
 #   - $\sigma_{rr}$ is the normal stress at the boundary,
@@ -187,29 +187,31 @@ g_cmb = Constant(1.0)
 dynamic_topography_bottom.assign(ns_bottom / (delta_rho_cmb * g_cmb) * dimensionalisation_factor)
 # -
 
-# Now it's time to visualise our cool stuff:
+# Now it's time to visualise all the calculations in one figure.
 
 # + tags=["active-ipynb"]
+# # Let's write out dynamic topography fields to disk to visualise them using pyvista
 # VTKFile("dt.pvd").write(dynamic_topography_top, dynamic_topography_bottom)
 # # Loading dynamic topography calculations
 # dt_data = pv.read("./dt/dt_0.vtu")
-# # Scaling of the dynamic topography fields so we can see temperature and velocity fields
-# # Scale top boundary layer by  1.3 and bottom boundary layer by 0.7
+# # We scale the mesh for dynamic topography fields so we can see temperature and velocity fields
+# # Here, we scale top boundary layer by  1.3 and bottom boundary layer by 0.7
 # import numpy as np
 # transform_top = np.array([[1.3, 0, 0], [0, 1.3, 0], [0, 0, 1]])
 # transform_bottom = np.array([[0.7, 0, 0], [0, 0.7, 0], [0, 0, 1]])
 #
-# # Do complicated stuff to extract nice topography surfaces for the mesh
+# # Now a bit of complicated stuff to extract nice topography surfaces
+# # Extract the top part of the domain just for top boundary condition
 # dt_data.compute_implicit_distance(pv.Circle(2.21), inplace=True)
 # outter = dt_data.threshold(0.0, scalars='implicit_distance', invert=True).transform(transform_top, inplace=True)
 # warped_outter = outter.warp_by_scalar("Dynamic_Topography_Top", factor=1e-3)
+# # Extract the bottom part of the domain just for bottom boundary condition
 # dt_data.compute_implicit_distance(pv.Circle(1.23), inplace=True)
 # inner = dt_data.threshold(0.0, scalars='implicit_distance', invert=False).transform(transform_bottom, inplace=True)
 # warped_inner = inner.warp_by_scalar("Dynamic_Topography_Bottom", factor=2e-3)
 #
 # # Plot those nice surfaces
 # plotter = pv.Plotter(notebook=True)
-# # Assuming a 4000 temperature difference across the mantle for dimensionalisation
 # t_plot = plotter.add_mesh(temp_data, scalars="Temperature", cmap="coolwarm", clim=[0, 1], show_scalar_bar=False)
 # plotter.add_mesh(u_data, color="black")
 # dt_plot = plotter.add_mesh(warped_outter, scalars="Dynamic_Topography_Top", cmap="bwr", show_scalar_bar=False)
@@ -226,4 +228,4 @@ dynamic_topography_bottom.assign(ns_bottom / (delta_rho_cmb * g_cmb) * dimension
 # - Solve the Stokes system using G-ADOPT.
 # - Compute normal stresses on top and bottom boundaries.
 # - Estimate dynamic topography from those normal stresses.
-# - Save and visualize the results.
+# - Save and visualise the results.
