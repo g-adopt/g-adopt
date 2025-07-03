@@ -222,9 +222,6 @@ def test_control_invariant_assign(tape_generator, scheduler_class):
     if scheduler_class is not None:
         scheduler = scheduler_class()
 
-    if isinstance(scheduler, SingleMemoryStorageSchedule) and tape_generator is tape_generation_control_invariant_assign:
-        pytest.xfail("pyadjoint issue #209 not yet fixed")
-
     if isinstance(scheduler, SingleMemoryStorageSchedule) and tape_generator is tape_generation_staggered_solves:
         pytest.xfail("pyadjoint issue #211 not yet fixed")
 
