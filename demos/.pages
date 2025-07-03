@@ -16,6 +16,8 @@
         - [2d_cylindrical](mantle_convection/2d_cylindrical.ipynb)
         - [3d_spherical](mantle_convection/3d_spherical.ipynb)
         - [gplates_global](mantle_convection/gplates_global.ipynb)
+    - Dynamic topography
+        - [dynamic_topography](mantle_convection/dynamic_topography.ipynb)
     - Adjoint
         - [adjoint_forward](mantle_convection/adjoint_forward.ipynb)
         - [adjoint](mantle_convection/adjoint.ipynb)

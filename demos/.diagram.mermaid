@@ -21,6 +21,10 @@ graph TD
   free_surface[Free Surface]
   end
 
+  subgraph model_diagnostics[Model Diagnostics]
+  dynamic_topography[Dynamic Topography]
+  end
+
   subgraph compressibility[Compressibility]
   tala[TALA] --> ala[ALA] --> visualise_ala[ALA Nullspace]
   end
@@ -35,6 +39,7 @@ graph TD
   base --> geometry
   base --> bcs
   base --> adjoint
+  base --> model_diagnostics
   geometry --> gplates
 
   click base "mantle_convection/base_case"
