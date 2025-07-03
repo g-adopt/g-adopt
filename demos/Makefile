@@ -44,4 +44,7 @@ check:
 # port and writes that to a connection file. this is of course completely prone to race conditions.
 # instead of trying to fix it at the jupyter level, we can serialise the startup with a semaphore
 %.ipynb: %.py
-	jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))
+	jupytext --to ipynb $<
+	jupyter nbconvert --to notebook --execute \
+		--TagRemovePreprocessor.enabled=True --TagRemovePreprocessor.remove_cell_tags='["exercise"]' \
+		$@ --output $@
