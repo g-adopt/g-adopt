@@ -25,7 +25,7 @@ from . import scalar_equation as scalar_eq
 from .equations import Equation
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import node_coordinates
+from .utility import node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -743,11 +743,7 @@ def material_entrainment(
             err_msg="Material volume or area notably different from 'material_size'",
         )
 
-    node_coords = node_coordinates(level_set)
-    if node_coords.ufl_domain().cartesian:
-        *_, gravity_direction_coord = node_coords
-    else:
-        gravity_direction_coord = fd.sqrt(fd.inner(node_coords, node_coords))
+    gravity_direction_coord = vertical_component(node_coordinates(level_set))
     target_region = region_check(gravity_direction_coord, entrainment_height)
     is_entrained = fd.conditional(target_region, material, 0)
 
