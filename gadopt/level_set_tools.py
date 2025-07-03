@@ -76,7 +76,8 @@ def assign_level_set_values(
     level_set: fd.Function,
     epsilon: float | fd.Function,
     /,
-    interface_geometry: str,
+    signed_distance: fd.Function | Expr | None = None,
+    interface_geometry: str | None = None,
     *,
     interface: sl.LineString | sl.Polygon | None = None,
     interface_coordinates: list[tuple[float, float]]
@@ -85,7 +86,7 @@ def assign_level_set_values(
     interface_callable: Callable | str | None = None,
     interface_args: tuple[Any, ...] | None = None,
     boundary_coordinates: list[tuple[float, float]] | None = None,
-):
+) -> None:
     """Updates level-set field given interface thickness and signed-distance function.
 
     Generates signed-distance function values at level-set nodes and overwrites
@@ -94,12 +95,18 @@ def assign_level_set_values(
     inside the geometrical object outlined by the interface alone or extended with
     domain boundary segments (to form a closed loop).
 
-    This function uses `Shapely` to generate a geometrical representation of the
-    interface. It handles simple base scenarios for which the interface can be described
-    by a plane curve, a polygonal chain (open or closed), or a circle. In these cases, a
-    mathematical description of the latter geometrical objects is sufficient to generate
-    the interface. For more complex objects, users should set up their own geometrical
-    representation via `Shapely` and provide it to this function.
+    In the most simple case, the signed-distance function can be expressed via Firedrake
+    objects, such as mesh coordinates. When this scenario is possible, providing
+    `signed_distance` as the only optional argument is sufficient to populate the
+    conservative level-set field.
+
+    When the above is not possible, this function uses `Shapely` to generate a
+    geometrical representation of the interface. It handles simple base scenarios for
+    which the interface can be described by a plane curve, a polygonal chain (open or
+    closed), or a circle. In these cases, a mathematical description of the latter
+    geometrical objects is sufficient to generate the interface. For more complex
+    objects, users should set up their own geometrical representation via `Shapely`
+    and provide it to this function.
 
     Currently implemented base scenarios to generate the signed-distance function:
     - The material interface is a plane curve described by a parametric equation of the
@@ -140,6 +147,8 @@ def assign_level_set_values(
         A Firedrake function for the targeted level-set field
       epsilon:
         A float or Firedrake function representing the interface thickness
+      signed_distance:
+        A Firedrake function or UFL expression representing the signed-distance function
       interface_geometry:
         A string specifying the geometry to create
       interface:
@@ -222,6 +231,15 @@ def assign_level_set_values(
             * interface.distance(sl.Point(x, y))
             for x, y in node_coordinates(level_set).dat.data
         ]
+
+    if signed_distance is not None:
+        level_set.interpolate((1 + fd.tanh(signed_distance / 2 / epsilon)) / 2)
+
+        return
+    elif interface_geometry is None:
+        raise ValueError(
+            "Either 'signed_distance' or 'interface_geometry' must be provided"
+        )
 
     if interface is not None and interface_geometry != "shapely":
         raise ValueError(
@@ -473,7 +491,7 @@ class LevelSetSolver:
             grad_name += number_match.group()
 
         gradient_space = fd.VectorFunctionSpace(
-            self.mesh, "Q", self.solution.ufl_element().degree()
+            self.mesh, "CG", self.solution.ufl_element().degree()
         )
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
 
@@ -769,7 +787,7 @@ def min_max_height(
       side:
         An integer (`0` or `1`) denoting the level-set value on the target material side
       mode:
-        A string ("min" or "max") specifying which extremum height is sought
+        A string (`"min"` or `"max"`) specifying which extremum height is sought
 
     Returns:
       A float corresponding to the material interface extremum height
@@ -802,7 +820,7 @@ def min_max_height(
     coords = node_coordinates(level_set)
 
     coords_data = coords.dat.data_ro
-    ls_data = level_set.dat.data_ro
+    ls_data = level_set.dat.data_ro.clip(1e-6, 1.0 - 1e-6)
     if isinstance(epsilon, float):
         eps_data = epsilon * np.ones_like(ls_data)
     else:
@@ -835,14 +853,14 @@ def min_max_height(
 
             ls_inside = ls_data[mask_ls][ind_inside]
             eps_inside = eps_data[mask_ls][ind_inside]
-            sdls_inside = eps_inside * np.log(ls_inside / (1 - ls_inside))
+            sdls_inside = eps_inside * np.log(ls_inside / (1.0 - ls_inside))
 
             ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
             eps_outside = eps_data[~mask_ls][mask_hor_coords][ind_outside]
-            sdls_outside = eps_outside * np.log(ls_outside / (1 - ls_outside))
+            sdls_outside = eps_outside * np.log(ls_outside / (1.0 - ls_outside))
 
             sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
-            height = sdls_dist * height_inside + (1 - sdls_dist) * height_outside
+            height = sdls_dist * height_inside + (1.0 - sdls_dist) * height_outside
         else:
             height = height_inside
     else:
