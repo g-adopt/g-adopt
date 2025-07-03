@@ -1,6 +1,10 @@
 graph TD
   base[Base]
 
+  subgraph model_diagnostics[Model Diagnostics]
+  dynamic_topography[Dynamic Topography]
+  end
+
   subgraph adjoint[Adjoint]
   adjoint_forward[Forward] --> inverse[Inverse]
   end
@@ -19,10 +23,6 @@ graph TD
 
   subgraph bcs[Boundary Conditions]
   free_surface[Free Surface]
-  end
-
-  subgraph model_diagnostics[Model Diagnostics]
-  dynamic_topography[Dynamic Topography]
   end
 
   subgraph compressibility[Compressibility]
@@ -54,3 +54,4 @@ graph TD
   click adjoint_forward "mantle_convection/adjoint_forward"
   click inverse "mantle_convection/adjoint"
   click free_surface "mantle_convection/free_surface"
+  click dynamic_topography "mantle_convection/dynamic_topography"
