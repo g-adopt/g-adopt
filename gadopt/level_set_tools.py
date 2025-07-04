@@ -25,7 +25,7 @@ from .equations import Equation
 from .scalar_equation import mass_term
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import node_coordinates
+from .utility import node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -739,9 +739,6 @@ def material_entrainment(
     Raises:
       AssertionError: Material volume or area notably different from `material_size`
     """
-    if not level_set.ufl_domain().cartesian:
-        raise ValueError("Only Cartesian meshes are currently supported")
-
     match side:
         case 0:
             material_check = operator.le
@@ -767,8 +764,8 @@ def material_entrainment(
             err_msg="Material volume or area notably different from 'material_size'",
         )
 
-    *_, vertical_coord = node_coordinates(level_set)
-    target_region = region_check(vertical_coord, entrainment_height)
+    gravity_direction_coord = vertical_component(node_coordinates(level_set))
+    target_region = region_check(gravity_direction_coord, entrainment_height)
     is_entrained = fd.conditional(target_region, material, 0)
 
     return fd.assemble(is_entrained * fd.dx) / material_size
