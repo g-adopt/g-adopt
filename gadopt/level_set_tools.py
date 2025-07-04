@@ -25,7 +25,7 @@ from .equations import Equation
 from .scalar_equation import mass_term
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import node_coordinates, vertical_component
+from .utility import CombinedSurfaceMeasure, node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -55,7 +55,21 @@ reini_params_default = {
 def interface_thickness(
     level_set_space: fd.functionspaceimpl.WithGeometry, scale: float = 0.35
 ) -> fd.Function:
-    """Default strategy for the thickness of the conservative level set profile.
+    """Default strategy for the thickness of the conservative-level-set profile.
+
+    The interface thickness must not exceed the local minimum edge length to ensure
+    materials remain immiscible. In practice, there exists a tradeoff between interface
+    thickness and solution accuracy, for example, in terms of interface location and
+    material conservation. The default strategy implemented here is to multiply the
+    local minimum edge length by 0.35, but this choice can be modified via the `scale`
+    argument.
+
+    **Note**: UFL's `MinCellEdgeLength` is used to recover locally the minimum edge
+    length. This class, however, is not compatible with extruded meshes. In that case,
+    the `cell_sizes` attribute is used as an approximation, and the scaling factor
+    is divided by the square root of the mesh's geometric dimension. Do note that this
+    formulation is not equivalent and will result in measurable changes between
+    comparable extruded and non-extruded meshes.
 
     Args:
       level_set_space:
@@ -67,7 +81,12 @@ def interface_thickness(
       A Firedrake function holding the interface thickness values
     """
     epsilon = fd.Function(level_set_space, name="Interface thickness")
-    epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space.mesh()))
+
+    if level_set_space.extruded:
+        scale /= fd.sqrt(level_set_space.mesh().geometric_dimension())
+        epsilon.interpolate(scale * level_set_space.mesh().cell_sizes)
+    else:
+        epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space))
 
     return epsilon
 
@@ -490,21 +509,25 @@ class LevelSetSolver:
         if number_match := re.search(r"\s#\d+$", self.solution.name()):
             grad_name += number_match.group()
 
-        gradient_space = fd.VectorFunctionSpace(
-            self.mesh, "CG", self.solution.ufl_element().degree()
-        )
+        grad_space_degree = self.solution.ufl_element().degree()
+        if not isinstance(grad_space_degree, int):
+            grad_space_degree = max(grad_space_degree)
+        gradient_space = fd.VectorFunctionSpace(self.mesh, "CG", grad_space_degree)
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
+
+        if gradient_space.extruded:
+            ds = CombinedSurfaceMeasure(
+                domain=self.mesh, degree=2 * grad_space_degree + 1
+            )
+        else:
+            ds = fd.ds(domain=self.mesh)
 
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
         bilinear_form = fd.inner(test, trial) * fd.dx(domain=self.mesh)
         ibp_element = -self.solution * fd.div(test) * fd.dx(domain=self.mesh)
-        ibp_boundary = (
-            self.solution
-            * fd.dot(test, fd.FacetNormal(self.mesh))
-            * fd.ds(domain=self.mesh)
-        )
+        ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * ds
         linear_form = ibp_element + ibp_boundary
 
         problem = fd.LinearVariationalProblem(
