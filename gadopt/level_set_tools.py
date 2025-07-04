@@ -25,7 +25,7 @@ from .equations import Equation
 from .scalar_equation import mass_term
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import CombinedSurfaceMeasure, node_coordinates
+from .utility import CombinedSurfaceMeasure, node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -95,7 +95,8 @@ def assign_level_set_values(
     level_set: fd.Function,
     epsilon: float | fd.Function,
     /,
-    interface_geometry: str,
+    signed_distance: fd.Function | Expr | None = None,
+    interface_geometry: str | None = None,
     *,
     interface: sl.LineString | sl.Polygon | None = None,
     interface_coordinates: list[tuple[float, float]]
@@ -104,7 +105,7 @@ def assign_level_set_values(
     interface_callable: Callable | str | None = None,
     interface_args: tuple[Any, ...] | None = None,
     boundary_coordinates: list[tuple[float, float]] | None = None,
-):
+) -> None:
     """Updates level-set field given interface thickness and signed-distance function.
 
     Generates signed-distance function values at level-set nodes and overwrites
@@ -113,12 +114,18 @@ def assign_level_set_values(
     inside the geometrical object outlined by the interface alone or extended with
     domain boundary segments (to form a closed loop).
 
-    This function uses `Shapely` to generate a geometrical representation of the
-    interface. It handles simple base scenarios for which the interface can be described
-    by a plane curve, a polygonal chain (open or closed), or a circle. In these cases, a
-    mathematical description of the latter geometrical objects is sufficient to generate
-    the interface. For more complex objects, users should set up their own geometrical
-    representation via `Shapely` and provide it to this function.
+    In the most simple case, the signed-distance function can be expressed via Firedrake
+    objects, such as mesh coordinates. When this scenario is possible, providing
+    `signed_distance` as the only optional argument is sufficient to populate the
+    conservative level-set field.
+
+    When the above is not possible, this function uses `Shapely` to generate a
+    geometrical representation of the interface. It handles simple base scenarios for
+    which the interface can be described by a plane curve, a polygonal chain (open or
+    closed), or a circle. In these cases, a mathematical description of the latter
+    geometrical objects is sufficient to generate the interface. For more complex
+    objects, users should set up their own geometrical representation via `Shapely`
+    and provide it to this function.
 
     Currently implemented base scenarios to generate the signed-distance function:
     - The material interface is a plane curve described by a parametric equation of the
@@ -159,6 +166,8 @@ def assign_level_set_values(
         A Firedrake function for the targeted level-set field
       epsilon:
         A float or Firedrake function representing the interface thickness
+      signed_distance:
+        A Firedrake function or UFL expression representing the signed-distance function
       interface_geometry:
         A string specifying the geometry to create
       interface:
@@ -241,6 +250,15 @@ def assign_level_set_values(
             * interface.distance(sl.Point(x, y))
             for x, y in node_coordinates(level_set).dat.data
         ]
+
+    if signed_distance is not None:
+        level_set.interpolate((1 + fd.tanh(signed_distance / 2 / epsilon)) / 2)
+
+        return
+    elif interface_geometry is None:
+        raise ValueError(
+            "Either 'signed_distance' or 'interface_geometry' must be provided"
+        )
 
     if interface is not None and interface_geometry != "shapely":
         raise ValueError(
@@ -744,9 +762,6 @@ def material_entrainment(
     Raises:
       AssertionError: Material volume or area notably different from `material_size`
     """
-    if not level_set.ufl_domain().cartesian:
-        raise ValueError("Only Cartesian meshes are currently supported")
-
     match side:
         case 0:
             material_check = operator.le
@@ -772,8 +787,8 @@ def material_entrainment(
             err_msg="Material volume or area notably different from 'material_size'",
         )
 
-    *_, vertical_coord = node_coordinates(level_set)
-    target_region = region_check(vertical_coord, entrainment_height)
+    gravity_direction_coord = vertical_component(node_coordinates(level_set))
+    target_region = region_check(gravity_direction_coord, entrainment_height)
     is_entrained = fd.conditional(target_region, material, 0)
 
     return fd.assemble(is_entrained * fd.dx) / material_size
