@@ -53,9 +53,23 @@ reini_params_default = {
 
 
 def interface_thickness(
-    level_set_space: fd.functionspaceimpl.WithGeometry, scale: float | None = None
+    level_set_space: fd.functionspaceimpl.WithGeometry, scale: float = 0.35
 ) -> fd.Function:
-    """Default strategy for the thickness of the conservative level set profile.
+    """Default strategy for the thickness of the conservative-level-set profile.
+
+    The interface thickness must not exceed the local minimum edge length to ensure
+    materials remain immiscible. In practice, there exists a tradeoff between interface
+    thickness and solution accuracy, for example, in terms of interface location and
+    material conservation. The default strategy implemented here is to multiply the
+    local minimum edge length by 0.35, but this choice can be modified via the `scale`
+    argument.
+
+    **Note**: UFL's `MinCellEdgeLength` is used to recover locally the minimum edge
+    length. This class, however, is not compatible with extruded meshes. In that case,
+    the `cell_sizes` attribute is used as an approximation, and the scaling factor
+    is divided by the square root of the mesh's geometric dimension. Do note that this
+    formulation is not equivalent and will result in measurable changes between
+    comparable extruded and non-extruded meshes.
 
     Args:
       level_set_space:
@@ -69,10 +83,9 @@ def interface_thickness(
     epsilon = fd.Function(level_set_space, name="Interface thickness")
 
     if level_set_space.extruded:
-        scale = scale or 0.25
+        scale /= fd.sqrt(level_set_space.mesh().geometric_dimension())
         epsilon.interpolate(scale * level_set_space.mesh().cell_sizes)
     else:
-        scale = scale or 0.35
         epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space))
 
     return epsilon
