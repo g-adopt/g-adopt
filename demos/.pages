@@ -19,6 +19,8 @@
     - Adjoint
         - [adjoint_forward](mantle_convection/adjoint_forward.ipynb)
         - [adjoint](mantle_convection/adjoint.ipynb)
+    - Dynamic topography
+        - [dynamic_topography](mantle_convection/dynamic_topography.ipynb)
 - Multi-material
     - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
     - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)
