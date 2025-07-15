@@ -113,24 +113,17 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 # from the signed-distance function.
 
 # +
-from numpy import array  # noqa: E402
-
 # Initialise the level-set field according to the conservative level-set approach.
-# First, write out the mathematical description of the material-interface location.
-# Here, only arguments to the G-ADOPT line function are required. Then, use the G-ADOPT
-# API to generate the thickness of the hyperbolic tangent profile and update the
-# level-set field values.
-interface_coords_x = array([0.0, lx])
-callable_args = (interface_slope := 0, interface_y := 0.025)
+# Here, the material interface is a horizontal straight line, and so the conservative
+# level-set field can be simply defined using mesh coordinates. We first express the
+# signed-distance function and then use G-ADOPT's API to generate the thickness of the
+# hyperbolic tangent profile and update the level-set field values.
+x, y = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
+interface_coord_y = 0.025
+signed_distance = interface_coord_y - y
 
 epsilon = interface_thickness(K)
-assign_level_set_values(
-    psi,
-    epsilon,
-    interface_geometry="curve",
-    interface_callable="line",
-    interface_args=(interface_coords_x, *callable_args),
-)
+assign_level_set_values(psi, epsilon, signed_distance)
 # -
 
 # Let us visualise the location of the material interface that we have just initialised.
@@ -159,15 +152,11 @@ assign_level_set_values(
 # using averaging schemes, such as arithmetic, geometric, and harmonic means.
 
 # +
-dense_material = Material(RaB=4.5e5)
-reference_material = Material(RaB=0)
-materials = [dense_material, reference_material]
-
 Ra = 3e5  # Thermal Rayleigh number
-
-RaB = material_field(
-    psi, [material.RaB for material in materials], interface="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
+# Compositional Rayleigh number, defined based on each material value and location
+RaB_dense = 4.5e5
+RaB_reference = 0.0
+RaB = material_field(psi, [RaB_reference, RaB_dense], interface="arithmetic")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # -
@@ -204,19 +193,15 @@ temp_bcs = {boundary.bottom: {"T": 1}, boundary.top: {"T": 0}}
 # We move on to initialising the temperature field.
 
 # +
-X = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
-
 # Calculate quantities linked to the temperature initial condition using UFL
 u0 = lx ** (7 / 3) / (1 + lx**4) ** (2 / 3) * (Ra / 2 / sqrt(pi)) ** (2 / 3)
 v0 = u0
 Q_ic = 2 * sqrt(lx / pi / u0)
-Tu = erf((1 - X[1]) / 2 * sqrt(u0 / X[0])) / 2
-Tl = 1 - 1 / 2 * erf(X[1] / 2 * sqrt(u0 / (lx - X[0])))
-Tr = 1 / 2 + Q_ic / 2 / sqrt(pi) * sqrt(v0 / (X[1] + 1)) * exp(
-    -(X[0] ** 2) * v0 / (4 * X[1] + 4)
-)
-Ts = 1 / 2 - Q_ic / 2 / sqrt(pi) * sqrt(v0 / (2 - X[1])) * exp(
-    -((lx - X[0]) ** 2) * v0 / (8 - 4 * X[1])
+Tu = erf((1 - y) / 2 * sqrt(u0 / x)) / 2
+Tl = 1 - 1 / 2 * erf(y / 2 * sqrt(u0 / (lx - x)))
+Tr = 1 / 2 + Q_ic / 2 / sqrt(pi) * sqrt(v0 / (y + 1)) * exp(-(x**2) * v0 / (4 * y + 4))
+Ts = 1 / 2 - Q_ic / 2 / sqrt(pi) * sqrt(v0 / (2 - y)) * exp(
+    -((lx - x) ** 2) * v0 / (8 - 4 * y)
 )
 
 # Interpolate temperature initial condition and ensure boundary condition values
@@ -239,7 +224,7 @@ plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
-material_area = interface_y * lx  # Area of tracked material in the domain
+material_area = interface_coord_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
@@ -302,7 +287,14 @@ while True:
     level_set_solver.solve()
 
     # Calculate proportion of material entrained above a given height
-    buoy_entr = entrainment(psi, material_area, entrainment_height)
+    buoy_entr = material_entrainment(
+        psi,
+        material_size=material_area,
+        entrainment_height=entrainment_height,
+        side=0,
+        direction="above",
+        skip_material_size_check=True,
+    )
 
     # Log diagnostics
     plog.log_str(f"{step} {time_now} {float(delta_t)} {gd.u_rms()} {buoy_entr}")

@@ -11,11 +11,11 @@ from .approximations import (
 from .diagnostics import GeodynamicalDiagnostics
 from .level_set_tools import (
     LevelSetSolver,
-    Material,
     assign_level_set_values,
-    entrainment,
     interface_thickness,
+    material_entrainment,
     material_field,
+    min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC

@@ -1,37 +1,39 @@
-r"""This module provides a set of classes and functions enabling multi-material
-capabilities. Users initialise materials by instantiating the `Material` class and
-define the physical properties of material interfaces using `field_interface`. They
-instantiate the `LevelSetSolver` class by providing relevant parameters and call the
-`solve` method to request a solver update. Finally, they may call the `entrainment`
-function to calculate material entrainment in the simulation.
+"""This module provides a set of classes and functions enabling multi-material
+capabilities. Users initialise level-set fields using the `interface_thickness` and
+`assign_level_set_values` functions. Given the level-set function(s), users can define
+material-dependent physical properties via the `material_field` function. To evolve
+level-set fields, users instantiate the `LevelSetSolver` class, choosing if they require
+advection, reinitialisation, or both, and then call the `solve` method to request a
+solver update. Finally, they may call the `material_entrainment` and `min_max_height`
+functions to calculate useful simulation diagnostics.
 
 """
 
+import operator
 import re
-from dataclasses import dataclass, fields
-from numbers import Number
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 from warnings import warn
 
 import firedrake as fd
 import numpy as np
 import shapely as sl
 from mpi4py import MPI
+from numpy.testing import assert_allclose
 from ufl.core.expr import Expr
 
-from . import scalar_equation as scalar_eq
 from .equations import Equation
+from .scalar_equation import mass_term
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import node_coordinates
+from .utility import node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
-    "Material",
     "assign_level_set_values",
-    "entrainment",
     "interface_thickness",
+    "material_entrainment",
     "material_field",
+    "min_max_height",
 ]
 
 # Default parameters for level-set advection
@@ -48,87 +50,6 @@ reini_params_default = {
     "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "steps": 1,
 }
-
-
-@dataclass(kw_only=True)
-class Material:
-    """A material with physical properties for the level-set approach.
-
-    Expects material buoyancy to be defined using a value for either the reference
-    density, buoyancy number, or compositional Rayleigh number.
-
-    Contains static methods to calculate the physical properties of a material.
-    Methods implemented here describe properties in the simplest non-dimensional
-    simulation setup and must be overriden for more complex scenarios.
-
-    Attributes:
-        density:
-          An integer or a float representing the reference density.
-        B:
-          An integer or a float representing the buoyancy number.
-        RaB:
-          An integer or a float representing the compositional Rayleigh number.
-        density_B_RaB:
-          A string to notify how the buoyancy term is calculated.
-    """
-
-    density: Optional[Number] = None
-    B: Optional[Number] = None
-    RaB: Optional[Number] = None
-
-    def __post_init__(self):
-        """Checks instance field values.
-
-        Raises:
-            ValueError:
-              Incorrect field types.
-        """
-        count_None = 0
-        for field_var in fields(self):
-            field_var_value = getattr(self, field_var.name)
-            if isinstance(field_var_value, Number):
-                self.density_B_RaB = field_var.name
-            elif field_var_value is None:
-                count_None += 1
-            else:
-                raise ValueError(
-                    "When provided, density, B, and RaB must have type int or float."
-                )
-        if count_None != 2:
-            raise ValueError(
-                "One, and only one, of density, B, and RaB must be provided, and it "
-                "must be an integer or a float."
-            )
-
-    @staticmethod
-    def viscosity(*args, **kwargs):
-        """Calculates dynamic viscosity (Pa s)."""
-        return 1.0
-
-    @staticmethod
-    def thermal_expansion(*args, **kwargs):
-        """Calculates volumetric thermal expansion coefficient (K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def thermal_conductivity(*args, **kwargs):
-        """Calculates thermal conductivity (W m^-1 K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def specific_heat_capacity(*args, **kwargs):
-        """Calculates specific heat capacity at constant pressure (J kg^-1 K^-1)."""
-        return 1.0
-
-    @staticmethod
-    def internal_heating_rate(*args, **kwargs):
-        """Calculates internal heating rate per unit mass (W kg^-1)."""
-        return 0.0
-
-    @classmethod
-    def thermal_diffusivity(cls, *args, **kwargs):
-        """Calculates thermal diffusivity (m^2 s^-1)."""
-        return cls.thermal_conductivity() / cls.density() / cls.specific_heat_capacity()
 
 
 def interface_thickness(
@@ -155,96 +76,114 @@ def assign_level_set_values(
     level_set: fd.Function,
     epsilon: float | fd.Function,
     /,
-    interface_geometry: str,
-    interface_coordinates: list[list[float]] | list[list[float], float] | None = None,
+    signed_distance: fd.Function | Expr | None = None,
+    interface_geometry: str | None = None,
     *,
+    interface: sl.LineString | sl.Polygon | None = None,
+    interface_coordinates: list[tuple[float, float]]
+    | tuple[tuple[float, float], float]
+    | None = None,
     interface_callable: Callable | str | None = None,
-    interface_args: tuple[Any] | None = None,
-    boundary_coordinates: list[list[float]] | np.ndarray | None = None,
-):
+    interface_args: tuple[Any, ...] | None = None,
+    boundary_coordinates: list[tuple[float, float]] | None = None,
+) -> None:
     """Updates level-set field given interface thickness and signed-distance function.
 
     Generates signed-distance function values at level-set nodes and overwrites
     level-set data according to the conservative level-set method using the provided
-    interface thickness.
+    interface thickness. By convention, the 1-side of the conservative level set lies
+    inside the geometrical object outlined by the interface alone or extended with
+    domain boundary segments (to form a closed loop).
 
-    Three scenarios are currently implemented to generate the signed-distance function:
-    - The material interface is described by a mathematical function y = f(x). In this
-      case, `interface_geometry` should be "curve" and `interface_callable` must be
-      provided along with any `interface_args` to implement the aforementioned
-      mathematical function.
-    - The material interface is a polygon, and `interface_geometry` takes the value
-      "polygon". In this case, `interface_coordinates` must exclude the polygon sides
-      that do not act as a material interface and coincide with domain boundaries. The
-      coordinates of these sides should be provided using the `boundary_coordinates`
-      argument such that the concatenation of the two coordinate objects describes a
-      closed polygonal chain.
+    In the most simple case, the signed-distance function can be expressed via Firedrake
+    objects, such as mesh coordinates. When this scenario is possible, providing
+    `signed_distance` as the only optional argument is sufficient to populate the
+    conservative level-set field.
+
+    When the above is not possible, this function uses `Shapely` to generate a
+    geometrical representation of the interface. It handles simple base scenarios for
+    which the interface can be described by a plane curve, a polygonal chain (open or
+    closed), or a circle. In these cases, a mathematical description of the latter
+    geometrical objects is sufficient to generate the interface. For more complex
+    objects, users should set up their own geometrical representation via `Shapely`
+    and provide it to this function.
+
+    Currently implemented base scenarios to generate the signed-distance function:
+    - The material interface is a plane curve described by a parametric equation of the
+      form `(x, y) = (x(t), y(t))`. In this case, `interface_geometry` should be `curve`
+      and `interface_callable` must be provided along with any `interface_args` to
+      implement the parametric equation. `interface_callable` can be a user-defined
+      `Callable` or a `str` matching an implemented preset. Additionally,
+      `boundary_coordinates` must be supplied as a `list` of coordinates along domain
+      boundaries to enclose the 1-side of the conservative level set.
+    - The material interface is a polygonal chain, and `interface_geometry` takes the
+      value `polygon`. If the polygonal chain is closed, either `interface_coordinates`
+      or `interface_callable` must be provided. The former is a `list` of vertex
+      coordinates (first and last coordinates must match to ensure a closed chain),
+      whilst the latter is a `str` matching one of the implemented presets. If the
+      polygonal chain is open, `interface_coordinates` remains a `list` of vertex
+      coordinates, but first and last coordinates differ, and `boundary_coordinates`
+      must be supplied as a `list` of coordinates along domain boundaries to enclose the
+      1-side of the conservative level set.
     - The material interface is a circle, and `interface_geometry` takes the value
-      "circle". In this case, `interface_coordinates` is a list holding the coordinates
-      of the circle's centre and the circle radius. No other arguments are required.
-
-    Geometrical objects underpinning material interfaces are generated using Shapely.
+      `circle`. In this case, `interface_coordinates` must be provided as a `tuple`
+      holding the coordinates of the circle's centre and the circle's radius.
 
     Implemented interface geometry presets and associated arguments:
-    | Curve     |                     Arguments                      |
+    | Interface |                     Arguments                      |
     | :-------- | :------------------------------------------------: |
     | line      | slope, intercept                                   |
     | cosine    | amplitude, wavelength, vertical_shift, phase_shift |
     | rectangle | ref_vertex_coords, edge_sizes                      |
+
+    If the desired interface geometry cannot be generated using a base scenario,
+    `interface_geometry` takes the value `shapely` and `interface` must be provided,
+    either as a `shapely.LineString` or `shapely.Polygon`. In the former case,
+    `boundary_coordinates` must also be supplied as a `list` of coordinates along domain
+    boundaries to enclose the 1-side of the conservative level set.
 
     Args:
       level_set:
         A Firedrake function for the targeted level-set field
       epsilon:
         A float or Firedrake function representing the interface thickness
+      signed_distance:
+        A Firedrake function or UFL expression representing the signed-distance function
       interface_geometry:
         A string specifying the geometry to create
+      interface:
+        A Shapely LineString or Polygon describing the interface
       interface_coordinates:
-        A sequence or an array-like with shape (N, 2) of numeric coordinate pairs
-        defining the interface or a list containing centre coordinates and radius
+        A sequence or an array-like with shape (N, 2) of coordinates defining the
+        interface or a sequence containing a circle's centre coordinates and radius
       interface_callable:
-        A callable implementing the mathematical function depicting the interface or a
+        A callable implementing the parametric equation describing the interface or a
         string matching an implemented callable preset
       interface_args:
         A tuple of arguments provided to the interface callable
       boundary_coordinates:
-        A sequence of numeric coordinate pairs or an array-like with shape (N, 2)
+        A sequence or an array-like with shape (N, 2) of coordinates along boundaries
     """
 
-    def stack_coordinates(func: Callable) -> Callable:
-        """Decorator to stack coordinates when the material interface is a curve.
-
-        Args:
-          func:
-            A callable implementing the mathematical function depicting the interface
-
-        Returns:
-          A callable that can stack interface coordinates
-        """
-
-        def wrapper(*args) -> float | np.ndarray:
-            if isinstance(interface_coords_x := args[0], (int, float)):
-                return func(*args)
-            else:
-                return np.column_stack((interface_coords_x, func(*args)))
-
-        return wrapper
-
-    def line(x, slope, intercept) -> float | np.ndarray:
-        """Straight line equation"""
-        return slope * x + intercept
+    def line(t: np.ndarray, slope: float, intercept: float) -> np.ndarray:
+        """Straight line."""
+        return np.column_stack((t, slope * t + intercept))
 
     def cosine(
-        x, amplitude, wavelength, vertical_shift, phase_shift=0
-    ) -> float | np.ndarray:
-        """Cosine function with an amplitude and a vertical shift."""
-        cosine = np.cos(2 * np.pi / wavelength * x + phase_shift)
+        t: np.ndarray,
+        amplitude: float,
+        wavelength: float,
+        vertical_shift: float,
+        phase_shift: float = 0.0,
+    ) -> np.ndarray:
+        """Cosine curve with an amplitude and a vertical shift."""
+        cosine = np.cos(2 * np.pi / wavelength * t + phase_shift)
 
-        return amplitude * cosine + vertical_shift
+        return np.column_stack((t, amplitude * cosine + vertical_shift))
 
     def rectangle(
-        ref_vertex_coords: tuple[float], edge_sizes: tuple[float]
-    ) -> list[tuple[float]]:
+        ref_vertex_coords: tuple[float, float], edge_sizes: tuple[float, float]
+    ) -> list[tuple[float, float]]:
         """Material interface defined by a rectangle.
 
         Edges are aligned with Cartesian directions and do not overlap domain boundaries.
@@ -271,59 +210,114 @@ def assign_level_set_values(
 
         return interface_coords
 
+    def sgn_dist_closed_itf(
+        interface: sl.Polygon, level_set: fd.Function
+    ) -> list[float]:
+        sl.prepare(interface)
+
+        return [
+            (1 if interface.contains(sl.Point(x, y)) else -1)
+            * interface.boundary.distance(sl.Point(x, y))
+            for x, y in node_coordinates(level_set).dat.data
+        ]
+
+    def sgn_dist_open_itf(
+        interface: sl.LineString, enclosed_side: sl.Polygon, level_set: fd.Function
+    ) -> list[float]:
+        sl.prepare(enclosed_side)
+
+        return [
+            (1 if enclosed_side.intersects(sl.Point(x, y)) else -1)
+            * interface.distance(sl.Point(x, y))
+            for x, y in node_coordinates(level_set).dat.data
+        ]
+
+    if signed_distance is not None:
+        level_set.interpolate((1 + fd.tanh(signed_distance / 2 / epsilon)) / 2)
+
+        return
+    elif interface_geometry is None:
+        raise ValueError(
+            "Either 'signed_distance' or 'interface_geometry' must be provided"
+        )
+
+    if interface is not None and interface_geometry != "shapely":
+        raise ValueError(
+            "'interface_geometry' must be 'shapely' when providing 'interface'"
+        )
+    if interface_callable is not None and interface_geometry == "circle":
+        raise ValueError(
+            "'interface_callable' must not be provided when 'interface_geometry' is "
+            "'circle'"
+        )
+
     callable_presets = {"cosine": cosine, "line": line, "rectangle": rectangle}
     if isinstance(interface_callable, str):
         interface_callable = callable_presets[interface_callable]
 
     if interface_callable is not None:
-        if interface_geometry == "curve":
-            interface_callable = stack_coordinates(interface_callable)
         interface_coordinates = interface_callable(*interface_args)
+    elif interface_coordinates is None and interface_geometry != "shapely":
+        raise ValueError(
+            "Either 'interface_coordinates' or 'interface_geometry' must be provided "
+            "when 'interface_geometry' is not 'shapely'"
+        )
 
     match interface_geometry:
         case "curve":
-            interface = sl.LineString(interface_coordinates)
+            if boundary_coordinates is None:
+                raise ValueError(
+                    "'boundary_coordinates' must be provided when 'interface_geometry' "
+                    "is 'curve'"
+                )
 
-            signed_distance = [
-                (1 if y > interface_callable(x, *interface_args[1:]) else -1)
-                * interface.distance(sl.Point(x, y))
-                for x, y in node_coordinates(level_set).dat.data
-            ]
+            interface = sl.LineString(interface_coordinates)
+            enclosed_side = sl.Polygon(
+                np.vstack((interface_coordinates, boundary_coordinates))
+            )
+
+            signed_distance = sgn_dist_open_itf(interface, enclosed_side, level_set)
         case "polygon":
             if boundary_coordinates is None:
                 interface = sl.Polygon(interface_coordinates)
-                sl.prepare(interface)
 
-                signed_distance = [
-                    (1 if interface.contains(sl.Point(x, y)) else -1)
-                    * interface.boundary.distance(sl.Point(x, y))
-                    for x, y in node_coordinates(level_set).dat.data
-                ]
+                signed_distance = sgn_dist_closed_itf(interface, level_set)
             else:
                 interface = sl.LineString(interface_coordinates)
-                interface_with_boundaries = sl.Polygon(
+                enclosed_side = sl.Polygon(
                     np.vstack((interface_coordinates, boundary_coordinates))
                 )
-                sl.prepare(interface_with_boundaries)
 
-                signed_distance = [
-                    (1 if interface_with_boundaries.intersects(sl.Point(x, y)) else -1)
-                    * interface.distance(sl.Point(x, y))
-                    for x, y in node_coordinates(level_set).dat.data
-                ]
+                signed_distance = sgn_dist_open_itf(interface, enclosed_side, level_set)
         case "circle":
             centre, radius = interface_coordinates
             interface = sl.Point(centre).buffer(radius)
-            sl.prepare(interface)
 
-            signed_distance = [
-                (1 if interface.contains(sl.Point(x, y)) else -1)
-                * interface.boundary.distance(sl.Point(x, y))
-                for x, y in node_coordinates(level_set).dat.data
-            ]
+            signed_distance = sgn_dist_closed_itf(interface, level_set)
+        case "shapely":
+            if interface is None:
+                raise ValueError(
+                    "'interface' must be provided when 'interface_geometry' is "
+                    "'shapely'"
+                )
+
+            if isinstance(interface, sl.Polygon):
+                signed_distance = sgn_dist_closed_itf(interface, level_set)
+            elif boundary_coordinates is None:
+                raise ValueError(
+                    "'boundary_coordinates' must be provided when 'interface_geometry' "
+                    "is 'shapely' and `interface` is a shapely.LineString object"
+                )
+            else:
+                enclosed_side = sl.Polygon(
+                    np.vstack((interface.coords, boundary_coordinates))
+                )
+
+                signed_distance = sgn_dist_open_itf(interface, enclosed_side, level_set)
         case _:
             raise ValueError(
-                "`interface_geometry` must be 'curve', 'polygon', or 'circle'."
+                "'interface_geometry' must be 'curve', 'polygon', 'circle', or "
+                "'shapely'"
             )
 
     if isinstance(epsilon, fd.Function):
@@ -497,7 +491,7 @@ class LevelSetSolver:
             grad_name += number_match.group()
 
         gradient_space = fd.VectorFunctionSpace(
-            self.mesh, "Q", self.solution.ufl_element().degree()
+            self.mesh, "CG", self.solution.ufl_element().degree()
         )
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
 
@@ -537,7 +531,7 @@ class LevelSetSolver:
                 fd.TestFunction(self.solution_space),
                 self.solution_space,
                 reinitialisation_term,
-                mass_term=scalar_eq.mass_term,
+                mass_term=mass_term,
                 eq_attrs={
                     "level_set_grad": self.solution_grad,
                     "epsilon": self.reini_kwargs["epsilon"],
@@ -673,9 +667,16 @@ def material_field(
     """Generates UFL algebra describing a physical property across the domain.
 
     Calls `material_field_from_copy` using a copy of the level-set list, preventing the
-    potential original one from being consumed by the function call. Ordering of
-    `field_values` must be consistent with `level_set`, such that the last element
-    corresponds to the field value on the 1-side of the last conservative level set.
+    potential original one from being consumed by the function call.
+
+    Ordering of `field_values` must be consistent with `level_set`, such that the first
+    element in the list corresponds to the field value on the 0-side of the first
+    level-set function and the last element in the list to the field value on the 1-side
+    of the last level-set function.
+
+    **Note**: When requesting the `sharp_adjoint` interface, calling Stokes solver may
+    raise `DIVERGED_FNORM_NAN` if the nodal level-set value is exactly 0.5 (i.e.
+    denoting the location of the material interface).
 
     Args:
       level_set:
@@ -685,11 +686,6 @@ def material_field(
       interface:
         A string specifying how property transitions between materials are calculated
 
-    Note:
-      When requesting the `sharp_adjoint` interface, calling Stokes solver may raise
-      `DIVERGED_FNORM_NAN` if the nodal level-set value is exactly 0.5 (i.e. denoting
-      the location of the material interface).
-
     Returns:
       UFL algebra representing the physical property throughout the domain
 
@@ -698,40 +694,178 @@ def material_field(
     """
     level_set = level_set.copy() if isinstance(level_set, list) else [level_set]
 
-    _impl_interface = ["sharp", "sharp_adjoint", "arithmetic", "geometric", "harmonic"]
-    if interface not in _impl_interface:
-        raise ValueError(f"Interface must be one of {_impl_interface}.")
+    impl_interface = ["sharp", "sharp_adjoint", "arithmetic", "geometric", "harmonic"]
+    if interface not in impl_interface:
+        raise ValueError(f"Interface must be one of {impl_interface}")
 
     return material_field_from_copy(level_set, field_values, interface)
 
 
-def entrainment(
-    level_set: fd.Function, material_area: Number, entrainment_height: Number
-):
-    """Calculates entrainment diagnostic.
+def material_entrainment(
+    level_set: fd.Function,
+    /,
+    *,
+    material_size: float,
+    entrainment_height: float,
+    side: int,
+    direction: str,
+    skip_material_size_check: bool = False,
+) -> float:
+    """Calculates the proportion of a material located above or below a given height.
 
-    Determines the proportion of a material that is located above a given height.
+    For the diagnostic calculation to be meaningful, the level-set side provided must
+    spatially isolate the target material.
+
+    **Note**: This function checks if the total volume or area occupied by the target
+    material matches the `material_size` value.
 
     Args:
-        level_set:
-          A level-set Firedrake function.
-        material_area:
-          An integer or a float representing the total area occupied by a material.
-        entrainment_height:
-          An integer or a float representing the height above which the entrainment
-          diagnostic is determined.
+      level_set:
+        A Firedrake function for the level-set field
+      material_size:
+        A float representing the total volume or area occupied by the target material
+      entrainment_height:
+        A float representing the height above which to calculate entrainment
+      side:
+        An integer (`0` or `1`) denoting the level-set value on the target material side
+      direction:
+        A string (`above` or `below`) denoting the target entrainment direction
+      skip_material_size_check:
+        A boolean enabling to skip the consistency check of the material volume or area
 
     Returns:
-        A float corresponding to the calculated entrainment diagnostic.
-    """
-    mesh_coords = fd.SpatialCoordinate(level_set.function_space().mesh())
-    target_region = mesh_coords[1] >= entrainment_height
-    material_entrained = fd.conditional(level_set < 0.5, 1, 0)
+      A float corresponding to the material fraction above or below the target height
 
-    return (
-        fd.assemble(fd.conditional(target_region, material_entrained, 0) * fd.dx)
-        / material_area
-    )
+    Raises:
+      AssertionError: Material volume or area notably different from `material_size`
+    """
+    match side:
+        case 0:
+            material_check = operator.le
+        case 1:
+            material_check = operator.ge
+        case _:
+            raise ValueError("'side' must be 0 or 1")
+
+    match direction:
+        case "above":
+            region_check = operator.ge
+        case "below":
+            region_check = operator.le
+        case _:
+            raise ValueError("'direction' must be 'above' or 'below'")
+
+    material = fd.conditional(material_check(level_set, 0.5), 1, 0)
+    if not skip_material_size_check:
+        assert_allclose(
+            fd.assemble(material * fd.dx),
+            material_size,
+            rtol=5e-2,
+            err_msg="Material volume or area notably different from 'material_size'",
+        )
+
+    gravity_direction_coord = vertical_component(node_coordinates(level_set))
+    target_region = region_check(gravity_direction_coord, entrainment_height)
+    is_entrained = fd.conditional(target_region, material, 0)
+
+    return fd.assemble(is_entrained * fd.dx) / material_size
+
+
+def min_max_height(
+    level_set: fd.Function, epsilon: float | fd.Function, *, side: int, mode: str
+) -> float:
+    """Calculates the maximum or minimum height of a material interface.
+
+    Args:
+      level_set:
+        A Firedrake function for the level set field
+      epsilon:
+        A float or Firedrake function denoting the thickness of the material interface
+      side:
+        An integer (`0` or `1`) denoting the level-set value on the target material side
+      mode:
+        A string (`"min"` or `"max"`) specifying which extremum height is sought
+
+    Returns:
+      A float corresponding to the material interface extremum height
+    """
+    match side:
+        case 0:
+            comparison = operator.le
+        case 1:
+            comparison = operator.ge
+        case _:
+            raise ValueError("'side' must be 0 or 1")
+
+    match mode:
+        case "min":
+            extremum = np.min
+            ls_arg_extremum = np.argmax
+            irrelevant_data = np.inf
+            mpi_comparison = MPI.MIN
+        case "max":
+            extremum = np.max
+            ls_arg_extremum = np.argmin
+            irrelevant_data = -np.inf
+            mpi_comparison = MPI.MAX
+        case _:
+            raise ValueError("'mode' must be 'min' or 'max'")
+
+    if not level_set.ufl_domain().cartesian:
+        raise ValueError("Only Cartesian meshes are currently supported")
+
+    coords = node_coordinates(level_set)
+
+    coords_data = coords.dat.data_ro
+    ls_data = level_set.dat.data_ro.clip(1e-6, 1.0 - 1e-6)
+    if isinstance(epsilon, float):
+        eps_data = epsilon * np.ones_like(ls_data)
+    else:
+        eps_data = epsilon.dat.data_ro
+
+    mask_ls = comparison(ls_data, 0.5)
+    if mask_ls.any():
+        coords_inside = coords_data[mask_ls, -1]
+        ind_coords_inside = np.flatnonzero(coords_inside == extremum(coords_inside))
+
+        if ind_coords_inside.size == 1:
+            ind_inside = ind_coords_inside.item()
+        else:
+            ind_min_ls_inside = ls_arg_extremum(ls_data[mask_ls][ind_coords_inside])
+            ind_inside = ind_coords_inside[ind_min_ls_inside]
+
+        height_inside = coords_inside[ind_inside]
+
+        hor_coords = coords_data[mask_ls, :-1][ind_inside]
+        hor_dist_vec = coords_data[~mask_ls, :-1] - hor_coords
+        hor_dist = np.sqrt(np.sum(hor_dist_vec**2, axis=1))
+
+        mask_hor_coords = hor_dist < eps_data[~mask_ls]
+
+        if mask_hor_coords.any():
+            ind_outside = abs(
+                coords_data[~mask_ls, -1][mask_hor_coords] - height_inside
+            ).argmin()
+            height_outside = coords_data[~mask_ls, -1][mask_hor_coords][ind_outside]
+
+            ls_inside = ls_data[mask_ls][ind_inside]
+            eps_inside = eps_data[mask_ls][ind_inside]
+            sdls_inside = eps_inside * np.log(ls_inside / (1.0 - ls_inside))
+
+            ls_outside = ls_data[~mask_ls][mask_hor_coords][ind_outside]
+            eps_outside = eps_data[~mask_ls][mask_hor_coords][ind_outside]
+            sdls_outside = eps_outside * np.log(ls_outside / (1.0 - ls_outside))
+
+            sdls_dist = sdls_outside / (sdls_outside - sdls_inside)
+            height = sdls_dist * height_inside + (1.0 - sdls_dist) * height_outside
+        else:
+            height = height_inside
+    else:
+        height = irrelevant_data
+
+    height_global = level_set.comm.allreduce(height, mpi_comparison)
+
+    return height_global
 
 
 reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
