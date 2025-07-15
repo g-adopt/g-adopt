@@ -284,7 +284,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     T.assign(T_0)
 
     # if the weighting for misfit terms non-positive, then no need to integrate in time
-    min_timesteps = max_timesteps - 5 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
+    min_timesteps = 0 if any([w > 0 for w in [alpha_T, alpha_u]]) else max_timesteps
 
     # Populate the tape by running the forward simulation
     for timestep in tape.timestepper(iter(range(min_timesteps, max_timesteps))):
