@@ -195,8 +195,8 @@ dynamic_topography_bottom.assign(ns_bottom / (delta_rho_cmb * g_cmb) * dimension
 #
 # # Now a bit of complicated stuff to extract nice topography surfaces
 # # Extract the top part of the domain just for top boundary condition
-# outter = dt_data.clip(normal=[0, 1, 0], origin=[0, 0.99, 0], invert=False, inplace=False).transform(transform_top, inplace=False)
-# warped_outter = outter.warp_by_scalar("Dynamic_Topography_Top", factor=2e-6, normal=[0, 1, 0], inplace=False)
+# outer = dt_data.clip(normal=[0, 1, 0], origin=[0, 0.99, 0], invert=False, inplace=False).transform(transform_top, inplace=False)
+# warped_outer = outer.warp_by_scalar("Dynamic_Topography_Top", factor=2e-6, normal=[0, 1, 0], inplace=False)
 # # Extract the bottom part of the domain just for bottom boundary condition
 # inner = dt_data.clip(normal=[0, 1, 0], origin=[0, 0.01, 0], invert=True, inplace=False).transform(transform_bottom, inplace=False)
 # warped_inner = inner.warp_by_scalar("Dynamic_Topography_Bottom", factor=4e-6, normal=[0, +1, 0], inplace=False)
@@ -205,7 +205,7 @@ dynamic_topography_bottom.assign(ns_bottom / (delta_rho_cmb * g_cmb) * dimension
 # plotter = pv.Plotter(notebook=True)
 # t_plot = plotter.add_mesh(temp_data, scalars="Temperature", cmap="coolwarm", clim=[0, 1], show_scalar_bar=False)
 # plotter.add_mesh(u_data, color="black")
-# dt_plot_top = plotter.add_mesh(warped_outter, scalars="Dynamic_Topography_Top", cmap="bwr", show_scalar_bar=False)
+# dt_plot_top = plotter.add_mesh(warped_outer, scalars="Dynamic_Topography_Top", cmap="bwr", show_scalar_bar=False)
 # dt_plot_bot = plotter.add_mesh(warped_inner, scalars="Dynamic_Topography_Bottom", cmap="bwr", show_scalar_bar=False)
 # plotter.camera_position = "xy"
 # _ = plotter.add_scalar_bar( 'Topography Top [m]', mapper=dt_plot_top.mapper, position_x=0.85, position_y=0.5, vertical=True)
