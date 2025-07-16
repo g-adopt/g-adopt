@@ -55,11 +55,13 @@ from gadopt import *
 # consistent with our previous tutorials.
 
 # +
-with CheckpointFile("../adjoint_2d_cylindrical/Checkpoint230.h5", mode="r") as f:
-    mesh = f.load_mesh("firedrake_default_extruded")
+# Load the mesh and temperature field from the base case
+input_file = "../base_case/Final_State.h5"
+with CheckpointFile(input_file, mode="r") as f:
+    mesh = f.load_mesh("firedrake_default")
     T = f.load_function(mesh, "Temperature")
 
-mesh.cartesian = False
+mesh.cartesian = True
 boundaries = get_boundary_ids(mesh)
 # -
 
@@ -92,31 +94,24 @@ z.subfunctions[1].rename("Pressure")
 # Note that this case is time independent and hence, when compared to most of our previous
 # tutorials, no timestepping options are specified.
 
-Ra = Constant(1e7)
+Ra = Constant(1e4)
 approximation = BoussinesqApproximation(Ra)
 
-# As noted previously, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
-# of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e. this case incorporates a velocity nullspace,
-# as well as a pressure nullspace). These lead to null-modes (eigenvectors) for the linear system, resulting in a singular matrix.
+# As noted previously, with a free-slip boundary condition on both boundaries, one can add an arbitrary constant to the pressure solution (i.e. this case incorporates a pressure nullspace). These lead to null-modes (eigenvectors) for the linear system, resulting in a singular matrix.
 # In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at every iteration. We do that below,
 # setting up a nullspace object as we did in the previous tutorial.
 
-Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
-
-# Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative
-# solver parameters. G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
-# for the velocity block of the Stokes system, to which we must provide near-nullspace information,
-# which, in 2-D, consists of two rotational and two translational modes.
-
-Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
+Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # Boundary conditions are next specified. For velocity, we specify free‐slip conditions on both boundaries. As noted in our
 # 2-D cylindrical tutorial, we incorporate these <b>weakly</b> through the <i>Nitsche</i> approximation. Given we do not solve
 # an energy equation for this time independent case, no boundary conditions are required for temperature.
 
 stokes_bcs = {
-    "bottom": {"un": 0},
-    "top": {"un": 0},
+    boundaries.bottom: {'uy': 0},
+    boundaries.top: {'uy': 0},
+    boundaries.left: {'ux': 0},
+    boundaries.right: {'ux': 0},
 }
 
 # We can now setup and solve the variational problem for the Stokes equations,
@@ -130,7 +125,6 @@ stokes_solver = StokesSolver(
     bcs=stokes_bcs,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
-    near_nullspace=Z_near_nullspace,
     solver_parameters="direct",
 )
 
@@ -141,12 +135,11 @@ stokes_solver.solve()
 
 # + tags=["active-ipynb"]
 # VTKFile("velocity.pvd").write(z.subfunctions[0])
-# u_data = pv.read("velocity/velocity_0.vtu").glyph(factor=1e-5, orient="Velocity", tolerance=1e-2)
+# u_data = pv.read("velocity/velocity_0.vtu").glyph(factor=1e-3, orient="Velocity", tolerance=1e-2)
 # plotter = pv.Plotter(notebook=True)
 # plotter.add_mesh(temp_data)
 # plotter.add_mesh(u_data, color="black")
 # plotter.camera_position = "xy"
-# plotter.camera.zoom(1.5)
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
 
@@ -197,29 +190,26 @@ dynamic_topography_bottom.assign(ns_bottom / (delta_rho_cmb * g_cmb) * dimension
 # # We scale the mesh for dynamic topography fields so we can see temperature and velocity fields
 # # Here, we scale top boundary layer by  1.3 and bottom boundary layer by 0.7
 # import numpy as np
-# transform_top = np.array([[1.3, 0, 0], [0, 1.3, 0], [0, 0, 1]])
-# transform_bottom = np.array([[0.7, 0, 0], [0, 0.7, 0], [0, 0, 1]])
+# transform_top = pv.Transform().translate([0, 0.1, 0], multiply_mode="pre")
+# transform_bottom = pv.Transform().translate([0, -.1, 0], multiply_mode="pre")
 #
 # # Now a bit of complicated stuff to extract nice topography surfaces
 # # Extract the top part of the domain just for top boundary condition
-# dt_data.compute_implicit_distance(pv.Circle(2.21), inplace=True)
-# outter = dt_data.threshold(0.0, scalars='implicit_distance', invert=True).transform(transform_top, inplace=True)
-# warped_outter = outter.warp_by_scalar("Dynamic_Topography_Top", factor=1e-3)
+# outter = dt_data.clip(normal=[0, 1, 0], origin=[0, 0.99, 0], invert=False, inplace=False).transform(transform_top, inplace=False)
+# warped_outter = outter.warp_by_scalar("Dynamic_Topography_Top", factor=2e-6, normal=[0, 1, 0], inplace=False)
 # # Extract the bottom part of the domain just for bottom boundary condition
-# dt_data.compute_implicit_distance(pv.Circle(1.23), inplace=True)
-# inner = dt_data.threshold(0.0, scalars='implicit_distance', invert=False).transform(transform_bottom, inplace=True)
-# warped_inner = inner.warp_by_scalar("Dynamic_Topography_Bottom", factor=2e-3)
+# inner = dt_data.clip(normal=[0, 1, 0], origin=[0, 0.01, 0], invert=True, inplace=False).transform(transform_bottom, inplace=False)
+# warped_inner = inner.warp_by_scalar("Dynamic_Topography_Bottom", factor=4e-6, normal=[0, +1, 0], inplace=False)
 #
 # # Plot those nice surfaces
 # plotter = pv.Plotter(notebook=True)
 # t_plot = plotter.add_mesh(temp_data, scalars="Temperature", cmap="coolwarm", clim=[0, 1], show_scalar_bar=False)
 # plotter.add_mesh(u_data, color="black")
-# dt_plot = plotter.add_mesh(warped_outter, scalars="Dynamic_Topography_Top", cmap="bwr", show_scalar_bar=False)
-# plotter.add_mesh(warped_inner, scalars="Dynamic_Topography_Bottom", clim=[-1e4, 1e4], cmap="bwr", show_scalar_bar=False)
+# dt_plot_top = plotter.add_mesh(warped_outter, scalars="Dynamic_Topography_Top", cmap="bwr", show_scalar_bar=False)
+# dt_plot_bot = plotter.add_mesh(warped_inner, scalars="Dynamic_Topography_Bottom", cmap="bwr", show_scalar_bar=False)
 # plotter.camera_position = "xy"
-# plotter.camera.zoom(6)
-# _ = plotter.add_scalar_bar('Temperature []', mapper=t_plot.mapper, position_x=0.02, position_y=0.5, vertical=True)
-# _ = plotter.add_scalar_bar( 'Topography [m]', mapper=dt_plot.mapper, position_x=0.85, position_y=0.5, vertical=True)
+# _ = plotter.add_scalar_bar( 'Topography Top [m]', mapper=dt_plot_top.mapper, position_x=0.85, position_y=0.5, vertical=True)
+# _ = plotter.add_scalar_bar( 'Topography Bottom [m]', mapper=dt_plot_bot.mapper, position_x=0.12, position_y=0.5, vertical=True)
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
 
