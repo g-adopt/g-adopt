@@ -11,7 +11,6 @@ annulus_taylor_test is also added to this script for testing the correctness of 
             alpha_s (float): The coefficient of the smoothing term.
             float: The minimum convergence rate from the Taylor test. (Should be close to 2)
 """
-from weakref import ref
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
@@ -19,7 +18,7 @@ import sys
 import itertools
 from cases import cases, schedulers
 from checkpoint_schedules import SingleDiskStorageSchedule
-from forward import get_reference_values, get_geometry_parameters, get_viscosity
+from forward import get_reference_values, get_viscosity
 
 
 def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing_schedule=None, uimposed=False):
@@ -150,7 +149,6 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
         tape.enable_checkpointing(checkpointing_schedule)
 
     # Get geometry and reference values from the reference forward run
-    geo_constants = get_geometry_parameters()
     ref_values = get_reference_values()
 
     with CheckpointFile("Checkpoint_State.h5", "r") as f:

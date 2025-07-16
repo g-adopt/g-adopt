@@ -7,7 +7,7 @@ from gadopt import *
 import numpy as np
 
 
-def run_forward():
+def run_forward(visualise=False):
     # Set up geometry:
     geo_constants = get_geometry_parameters()
     ref_values = get_reference_values()
@@ -93,9 +93,10 @@ def run_forward():
         near_nullspace=Z_near_nullspace,
     )
 
-    # Create output file and select output_frequency
-    output_file = VTKFile("vtu-files/output.pvd")
-    dump_period = 10
+    if visualise:
+        # Create output file and select output_frequency
+        output_file = VTKFile("vtu-files/output.pvd")
+        dump_period = 10
 
     # Now perform the time loop:
     for timestep in range(0, max_timesteps):
@@ -105,7 +106,7 @@ def run_forward():
         # Storing velocity to be used in the objective F
         checkpoint_file.save_function(z.subfunctions[0], name="Velocity", idx=timestep)
 
-        if timestep % dump_period == 0 or timestep == max_timesteps - 1:
+        if (timestep % dump_period == 0 or timestep == max_timesteps - 1) and visualise:
             mu_function.interpolate(mu)
             output_file.write(*z.subfunctions, T, mu_function)
 
@@ -115,6 +116,9 @@ def run_forward():
 
 
 def get_geometry_parameters():
+    """
+    Returns the geometry parameters for the 2D cylindrical adjoint test case.
+    """
     rmin, rmax, nlayers = 1.22, 2.22, 128
     rmax_earth = 6370  # Radius of Earth [km]
     rmin_earth = rmax_earth - 2900  # Radius of CMB [km]
