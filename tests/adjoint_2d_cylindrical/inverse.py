@@ -11,6 +11,7 @@ annulus_taylor_test is also added to this script for testing the correctness of 
             alpha_s (float): The coefficient of the smoothing term.
             float: The minimum convergence rate from the Taylor test. (Should be close to 2)
 """
+from weakref import ref
 from gadopt import *
 from gadopt.inverse import *
 import numpy as np
@@ -18,6 +19,7 @@ import sys
 import itertools
 from cases import cases, schedulers
 from checkpoint_schedules import SingleDiskStorageSchedule
+from forward import get_reference_values, get_geometry_parameters, get_viscosity
 
 
 def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing_schedule=None, uimposed=False):
@@ -147,14 +149,9 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     if any([alpha_T > 0, alpha_u > 0]) and checkpointing_schedule is not None:
         tape.enable_checkpointing(checkpointing_schedule)
 
-    # Set up geometry:
-    rmax = 2.22
-    rmax_earth = 6370  # Radius of Earth [km]
-    rmin_earth = rmax_earth - 2900  # Radius of CMB [km]
-    r_410_earth = rmax_earth - 410  # 410 radius [km]
-    r_660_earth = rmax_earth - 660  # 660 raidus [km]
-    r_410 = rmax - (rmax_earth - r_410_earth) / (rmax_earth - rmin_earth)
-    r_660 = rmax - (rmax_earth - r_660_earth) / (rmax_earth - rmin_earth)
+    # Get geometry and reference values from the reference forward run
+    geo_constants = get_geometry_parameters()
+    ref_values = get_reference_values()
 
     with CheckpointFile("Checkpoint_State.h5", "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
@@ -163,7 +160,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-    Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+    DG = FunctionSpace(mesh, "DG", 2)  # Temperature function space (scalar)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
     Z = MixedFunctionSpace([V, W])
     R = FunctionSpace(mesh, "R", 0)  # Real number function space
@@ -177,16 +174,16 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
 
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
-    Ra = Constant(1e7)  # Rayleigh number
+    Ra = Constant(ref_values["Ra"])  # Rayleigh number
 
     # Define time stepping parameters:
-    max_timesteps = 250
-    delta_t = Function(R, name="delta_t").assign(3e-6)  # Constant time step
+    max_timesteps = ref_values["max_timesteps"]
+    delta_t = Function(R, name="delta_t").assign(ref_values["delta_t"])  # Constant time step
 
     # Without a restart to continue from, our initial guess is the final state of the forward run
     # We need to project the state from Q2 into Q1
     Tic = Function(Q1, name="Initial_Temperature")
-    T_0 = Function(Q, name="T_0")  # Temperature for zeroth time-step
+    T_0 = Function(DG, name="T_0")  # Temperature for zeroth time-step
     Taverage = Function(Q1, name="Average_Temperature")
 
     # Initialise the control to final state temperature from forward model.
@@ -197,42 +194,9 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     Taverage.project(checkpoint_file.load_function(mesh, "Average_Temperature", idx=0))
 
     # Temperature function in Q2, where we solve the equations
-    T = Function(Q, name="Temperature")
+    T = Function(DG, name="Temperature")
 
-    # A step function designed to design viscosity jumps
-    # Build a step centred at "centre" with given magnitude
-    # Increase with radius if "increasing" is True
-    def step_func(centre, mag, increasing=True, sharpness=50):
-        return mag * (
-            0.5 * (1 + tanh((1 if increasing else -1) * (r - centre) * sharpness))
-        )
-
-    # From this point, we define a depth-dependent viscosity mu_lin
-    mu_lin = 2.0
-
-    # Assemble the depth dependence
-    for line, step in zip(
-        [5.0 * (rmax - r), 1.0, 1.0],
-        [
-            step_func(r_660, 30, False),
-            step_func(r_410, 10, False),
-            step_func(2.2, 10, True),
-        ],
-    ):
-        mu_lin += line * step
-
-    # Add temperature dependence of viscosity
-    mu_lin *= exp(-ln(Constant(80)) * T)
-
-    # Assemble the viscosity expression in terms of velocity u
-    eps = sym(grad(u))
-    epsii = sqrt(inner(eps, eps) + 1e-10)
-    # yield stress and its depth dependence
-    # consistent with values used in Coltice et al. 2017
-    sigma_y = 2e4 + 4e5 * (rmax - r)
-    mu_plast = 0.1 + (sigma_y / epsii)
-    mu_eff = 2 * (mu_lin * mu_plast) / (mu_lin + mu_plast)
-    mu = conditional(mu_eff > 0.4, mu_eff, 0.4)
+    mu = get_viscosity(r, T, u)
 
     # Configure approximation
     approximation = BoussinesqApproximation(Ra, mu=mu)
