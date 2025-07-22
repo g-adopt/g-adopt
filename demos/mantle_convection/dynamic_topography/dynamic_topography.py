@@ -40,7 +40,9 @@
 # We also import pyvista and matplotlib, which are used for plotting purposes.
 
 # +
+import pandas as pd
 from gadopt import *
+from gadopt.utility import log_level
 # -
 
 # We also import pyvista for doing file visualisations for this notebook.
@@ -162,22 +164,33 @@ ns_bottom = stokes_solver.force_on_boundary(boundaries.bottom)
 #
 # Since the Stokes system in G-ADOPT is non-dimensionalized, we use non-dimensional values for density and gravity at the top boundary (both set to Constant(1.0)).
 # For the CMB, we assume the outer core is 2.5 times denser than the mantle (\Delta \rho_CMB = Constant(2.5)), and set gravity to Constant(1.0).
-# To further normalize, you can multiply the non-dimensional normal stress by the mantle depth,  $ L = 2.89 \times 10^6 $  m.
+# To further normalise, you can multiply the non-dimensional normal stress by the mantle depth,  $ L = 2.89 \times 10^6 $  m.
+# Below, we also log the average velocity of the domain, and dynamic topography at the top and bottom boundaries for our checks.
 
 # +
+parameter_log = ParameterLog('params.log', mesh)
+parameter_log.log_str("u_rms, dynamic_topography_top_average, dynamic_topography_bottom_average")
+gd = GeodynamicalDiagnostics(z, T, boundaries.top, boundaries.bottom)
+
 # Create Function objects for dynamic topography
 dimensionalisation_factor = Constant(3e-5 * 4e3 * 3e6) / Ra
 dynamic_topography_top = Function(W, name="Dynamic_Topography_Top")
 dynamic_topography_bottom = Function(W, name="Dynamic_Topography_Bottom")
 
 # Compute dynamic topography values
-delta_rho_top = Constant(2800 / 4e3)
+delta_rho_top = Constant(1.0)  # i.e., \Delta \rho_top = 1.0 \times \rho_mantle
 g_top = Constant(1.0)
 dynamic_topography_top.interpolate(ns_top / (delta_rho_top * g_top) * dimensionalisation_factor)
+dynamic_topography_top_average = sqrt(assemble(dynamic_topography_top ** 2 * ds(subdomain_id=boundaries.top)))
 
-delta_rho_cmb = Constant(-2.5)
+delta_rho_cmb = Constant(-2.5)  # i.e., \Delta \rho_CMB = (\rho_mantle - \rho_outer_core) / \rho_mantle
 g_cmb = Constant(1.0)
 dynamic_topography_bottom.assign(ns_bottom / (delta_rho_cmb * g_cmb) * dimensionalisation_factor)
+dynamic_topography_bottom_average = sqrt(assemble(dynamic_topography_bottom ** 2 * ds(subdomain_id=boundaries.bottom)))
+
+parameter_log.log_str(f"{gd.u_rms()}, {dynamic_topography_top_average}, {dynamic_topography_bottom_average}")
+parameter_log.close()
+
 # -
 
 # Now it's time to visualise all the calculations in one figure.

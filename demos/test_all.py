@@ -8,6 +8,7 @@ gia_path = "glacial_isostatic_adjustment"
 cases = {
     f"{mc_path}/base_case": {"extra_checks": ["nu_top"]},
     f"{mc_path}/free_surface": {"extra_checks": ["nu_top", "eta_min", "eta_max"]},
+    f"{mc_path}/dynamic_topography": {"extra_checks": ["dynamic_topography_bottom_average", "dynamic_topography_top_average"]},
     f"{mc_path}/2d_compressible_TALA": {"extra_checks": ["nu_top"]},
     f"{mc_path}/2d_compressible_ALA": {"extra_checks": ["nu_top"]},
     f"{mc_path}/viscoplastic_case": {"extra_checks": ["nu_top"]},
