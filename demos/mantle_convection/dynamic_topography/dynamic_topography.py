@@ -40,9 +40,7 @@
 # We also import pyvista and matplotlib, which are used for plotting purposes.
 
 # +
-import pandas as pd
 from gadopt import *
-from gadopt.utility import log_level
 # -
 
 # We also import pyvista for doing file visualisations for this notebook.
