@@ -1,4 +1,4 @@
-mc_test_names := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical 3d_spherical 3d_cartesian adjoint gplates_global free_surface
+mc_test_names := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical 3d_spherical 3d_cartesian adjoint gplates_global free_surface dynamic_topography
 mc_demo_names := base_case 2d_cylindrical 3d_spherical 2d_compressible_ALA visualise_ALA_p_nullspace 2d_compressible_TALA viscoplastic_case 3d_cartesian gplates_global adjoint free_surface dynamic_topography
 mc_dir := mantle_convection
 mc_demos := $(addprefix $(mc_dir)/,$(mc_demo_names))
