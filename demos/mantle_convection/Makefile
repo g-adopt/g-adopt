@@ -6,6 +6,9 @@ cases := $(notdir $(mc_cases))
 
 all: $(cases)
 
+# dynamic topography must come after base case
+dynamic_topography: .WAIT base_case
+
 $(cases):
 	$(MAKE) -C $@ $(MAKECMDGOALS)
 
