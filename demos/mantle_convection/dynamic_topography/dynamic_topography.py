@@ -167,7 +167,7 @@ ns_bottom = stokes_solver.force_on_boundary(boundaries.bottom)
 
 # +
 parameter_log = ParameterLog('params.log', mesh)
-parameter_log.log_str("u_rms, dynamic_topography_top_average, dynamic_topography_bottom_average")
+parameter_log.log_str("u_rms dyna_topo_avg_top dyna_topo_avg_bottom")
 gd = GeodynamicalDiagnostics(z, T, boundaries.top, boundaries.bottom)
 
 # Create Function objects for dynamic topography
@@ -179,14 +179,18 @@ dynamic_topography_bottom = Function(W, name="Dynamic_Topography_Bottom")
 delta_rho_top = Constant(1.0)  # i.e., \Delta \rho_top = 1.0 \times \rho_mantle
 g_top = Constant(1.0)
 dynamic_topography_top.interpolate(ns_top / (delta_rho_top * g_top) * dimensionalisation_factor)
-dynamic_topography_top_average = sqrt(assemble(dynamic_topography_top ** 2 * ds(subdomain_id=boundaries.top)))
+dyna_topo_avg_top = sqrt(
+    assemble(dynamic_topography_top**2 * ds(subdomain_id=boundaries.top))
+)
 
 delta_rho_cmb = Constant(-2.5)  # i.e., \Delta \rho_CMB = (\rho_mantle - \rho_outer_core) / \rho_mantle
 g_cmb = Constant(1.0)
 dynamic_topography_bottom.assign(ns_bottom / (delta_rho_cmb * g_cmb) * dimensionalisation_factor)
-dynamic_topography_bottom_average = sqrt(assemble(dynamic_topography_bottom ** 2 * ds(subdomain_id=boundaries.bottom)))
+dyna_topo_avg_bottom = sqrt(
+    assemble(dynamic_topography_bottom**2 * ds(subdomain_id=boundaries.bottom))
+)
 
-parameter_log.log_str(f"{gd.u_rms()}, {dynamic_topography_top_average}, {dynamic_topography_bottom_average}")
+parameter_log.log_str(f"{gd.u_rms()} {dyna_topo_avg_top} {dyna_topo_avg_bottom}")
 parameter_log.close()
 
 # -
