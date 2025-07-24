@@ -192,7 +192,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     Taverage.project(checkpoint_file.load_function(mesh, "Average_Temperature", idx=0))
 
     # Temperature function in Q2, where we solve the equations
-    T = Function(DG, name="Temperature")
+    T = Function(DQ, name="Temperature")
 
     mu = get_viscosity(r, T, u)
 
