@@ -163,7 +163,7 @@ def get_reference_values():
     """
     return {
         "Ra": 1e7,  # Rayleigh number
-        "max_timesteps": 10,  # Maximum number of timesteps
+        "max_timesteps": 125,  # Maximum number of timesteps
         "delta_t": 6e-6,  # Time-step length
         "mu_0": 2.0,  # Background viscosity
         "mu_plast": 0.1,  # minimum plastic viscosity: mu_plast = 0.1 + sigma_y / epsii
