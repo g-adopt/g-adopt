@@ -158,7 +158,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-    DQ = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar)
+    DG = FunctionSpace(mesh, "DG", 2)  # Temperature function space (scalar)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
     Z = MixedFunctionSpace([V, W])
     R = FunctionSpace(mesh, "R", 0)  # Real number function space
@@ -181,7 +181,7 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
     # Without a restart to continue from, our initial guess is the final state of the forward run
     # We need to project the state from Q2 into Q1
     Tic = Function(Q1, name="Initial_Temperature")
-    T_0 = Function(DQ, name="T_0")  # Temperature for zeroth time-step
+    T_0 = Function(DG, name="T_0")  # Temperature for zeroth time-step
     Taverage = Function(Q1, name="Average_Temperature")
 
     # Initialise the control to final state temperature from forward model.
@@ -348,13 +348,12 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         product_of_cases_schedulers = itertools.product(cases.keys(), schedulers.keys())
         for case_name, scheduler_name in product_of_cases_schedulers:
-            log(f"Running case {case_name} & scheduler {scheduler_name}.")
             minconv = annulus_taylor_test(
                 *cases.get(case_name),  # alpha_T, alpha_u, alpha_d, alpha_s
                 schedulers.get(scheduler_name),  # scheduler
                 uimposed=True if case_name == "uimposed" else False  # if surface velocities should be imposed or free-slip
             )
-            log(f"case {case_name} & scheduler {scheduler_name}: result: {minconv}.")
+            print(f"case {case_name} & scheduler {scheduler_name}: result: {minconv}.")
     else:
         # This is the part of the code run by longtest
         # For each combination of case_name and scheduler_name
