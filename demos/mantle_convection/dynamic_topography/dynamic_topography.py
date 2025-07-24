@@ -2,18 +2,19 @@
 # ====================================================================
 #
 # One of the most commonly studied geodynamic observables is **dynamic topography**
-# surface or lithospheric deflection caused by vertical stresses from mantle flow, with regions being pushed
+# surface or lithospheric deflection caused by vertical stresses from mantle flow. This means that
+# areas of Earth's surface or core-mantle boundary are pushed
 # up or pulled down due to underlying mantle convection.
-# This "dynamic" topography is transient, and differs to isostatic topography (like
-# mountain-building from crustal thickening).
+# This "dynamic" topography is transient, and differs from isostatic topography (like
+# mountain building from crustal thickening).
 #
 # This tutorial demonstrates how to compute **normal stresses acting on a boundary**
-# and subsequent dynamic topohraphy using **G-ADOPT**.
+# and subsequent dynamic topography using **G-ADOPT**.
 #
-# Specifically, we will compute the radial stress $\sigma_{rr}$ on the boundaries of a
-# 2-D annular domain, and use them to calculate dynamic topography. We examine a time-independent
+# Specifically, we will compute the vertical stress $\sigma_{yy}$ on the boundaries of a
+# 2-D square domain, and use them to calculate dynamic topography. We examine a time-independent
 # simulation with free-slip boundary conditions, where the internal structure is loaded
-# from a checkpoint file from a previous 2-D annulus case. Note that given the lack of time-dependence,
+# from a checkpoint file from our tutorials' base case. Note that given the lack of time-dependence,
 # we do not solve an energy equation, and deal with the Stokes system only.
 #
 # Theory Refresher
@@ -115,7 +116,7 @@ stokes_bcs = {
 }
 
 # We can now setup and solve the variational problem for the Stokes equations,
-# passing in the approximation, nullspace and near-nullspace information configured above.
+# passing in the approximation, nullspace information configured above.
 
 # +
 stokes_solver = StokesSolver(
@@ -151,12 +152,12 @@ ns_top = stokes_solver.force_on_boundary(boundaries.top)
 ns_bottom = stokes_solver.force_on_boundary(boundaries.bottom)
 # -
 
-# With these normal stresses, we can now calculate the dynamic topography at both the surface and the core-mantle boundary (CMB) using:
+# With these normal stresses, we can now calculate the dynamic topography at both the surface and bottom boundaries (CMB) using:
 #
-# $$\delta_{h} = \frac{\sigma_{rr}}{(\Delta \rho * g)}$$
+# $$\delta_{h} = \frac{\sigma_{yy}}{(\Delta \rho * g)}$$
 #
 # where:
-#   - $\sigma_{rr}$ is the normal stress at the boundary,
+#   - $\sigma_{yy}$ is the normal stress at the boundary,
 #   - $\Delta \rho$ is the density difference across the boundary,
 #   - $g$ is gravitational acceleration.
 #
@@ -171,7 +172,7 @@ parameter_log.log_str("u_rms dyna_topo_avg_top dyna_topo_avg_bottom")
 gd = GeodynamicalDiagnostics(z, T, boundaries.top, boundaries.bottom)
 
 # Create Function objects for dynamic topography
-dimensionalisation_factor = Constant(3e-5 * 4e3 * 3e6) / Ra
+dimensionalisation_factor = Constant(3e-5 * 4e3 * 3e6) / Ra  # i.e., (Thermal Expansivity) x (Background Earth's Mantle Density) x (Thickness of mantle) / (Ra number)
 dynamic_topography_top = Function(W, name="Dynamic_Topography_Top")
 dynamic_topography_bottom = Function(W, name="Dynamic_Topography_Bottom")
 
@@ -203,7 +204,7 @@ parameter_log.close()
 # # Loading dynamic topography calculations
 # dt_data = pv.read("./dt/dt_0.vtu")
 # # We scale the mesh for dynamic topography fields so we can see temperature and velocity fields
-# # Here, we scale top boundary layer by  1.3 and bottom boundary layer by 0.7
+# # Here, we scale top boundary layer by 1.3 and bottom boundary layer by 0.7
 # import numpy as np
 # transform_top = pv.Transform().translate([0, 0.1, 0], multiply_mode="pre")
 # transform_bottom = pv.Transform().translate([0, -.1, 0], multiply_mode="pre")
