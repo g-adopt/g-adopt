@@ -15,16 +15,16 @@ longtest: $(addsuffix _functional.dat,$(combo_cases))
 SHELL = /bin/bash
 
 Checkpoint_State.h5: forward.py
-	mkdir -p pbs_output
-	qsub -v GADOPT_CHECKOUT=$(gadopt_checkout),GADOPT_SETUP=$(gadopt_setup) -W block=true -N $@ -l storage=gdata/xd2+scratch/xd2+gdata/fp50,ncpus=${cores},walltime=03:00:00,mem=80GB,wd,jobfs=50GB -q normalsr -P $(project) -o pbs_output/$(basename $@).out -e pbs_output/$(basename $@).err -- ./run_gadi.sh python3 $<
+	mkdir -p batch_output
+	gadopt_hpcrun -n ${cores} -N $@ -o batch_output/$(basename $@).out -e batch_output/$(basename $@).err -v PYOP2_SPMD_STRICT=1 python3 $<
 
 %_functional.dat: inverse.py Checkpoint_State.h5
 	echo "running spherical $@" >&2
-	mkdir -p pbs_output
-	qsub -v GADOPT_CHECKOUT=$(gadopt_checkout),GADOPT_SETUP=$(gadopt_setup) -W block=true -N $* -l storage=gdata/xd2+scratch/xd2+gdata/fp50,ncpus=$(cores),walltime=04:00:00,mem=80GB,wd,jobfs=200GB -q normalsr -P $(project) -o pbs_output/$*.out -e pbs_output/$*.err -- ./run_gadi.sh python3 $< $*
+	mkdir -p batch_output
+	gadopt_hpcrun -n ${cores} -N $* -o batch_output/$*.out -e batch_output/$*.err -v PYOP2_SPMD_STRICT=1 python3 $< $*
 
 check: $(addsuffix _functional.dat,$(combo_cases))
 	python -m pytest -m longtest
 
 clean:
-	rm -f -r *.conv *_functional.dat *_res.h5 firedrake_adjoint_checkpoint_* vtu-files Checkpoint_State.h5 pbs_output
+	rm -f -r *.conv *_functional.dat *_res.h5 firedrake_adjoint_checkpoint_* vtu-files Checkpoint_State.h5 batch_output
