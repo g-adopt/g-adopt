@@ -6,6 +6,7 @@ all: params.log
 
 params.log : category := mantle_convection
 params.log: dynamic_topography.py
+	$(MAKE) -C ../base_case
 	$(run-python)
 
 clean:
