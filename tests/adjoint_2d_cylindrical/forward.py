@@ -19,9 +19,9 @@ def run_forward(visualise=False):
     # Set up function spaces for the Q2Q1 pair
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-    DG = FunctionSpace(mesh, "DG", 2)  # Temperature function space (scalar, DG2)
+    DQ = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar, DQ2)
     Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
-    Z = MixedFunctionSpace([V, W, DG])
+    Z = MixedFunctionSpace([V, W])
 
     # Test functions and functions to hold solutions:
     z = Function(Z)  # a field over the mixed function space Z.
@@ -29,7 +29,7 @@ def run_forward(visualise=False):
     u, p = split(z)  # Returns symbolic UFL expression for u and p
     z.subfunctions[0].rename("Velocity")
     z.subfunctions[1].rename("Pressure")
-    T = Function(DG, name="Temperature")
+    T = Function(DQ, name="Temperature")
 
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0] ** 2 + X[1] ** 2)
@@ -106,9 +106,10 @@ def run_forward(visualise=False):
         # Storing velocity to be used in the objective F
         checkpoint_file.save_function(z.subfunctions[0], name="Velocity", idx=timestep)
 
-        if (timestep % dump_period == 0 or timestep == max_timesteps - 1) and visualise:
-            mu_function.interpolate(mu)
-            output_file.write(*z.subfunctions, T, mu_function)
+        if visualise:
+            if (timestep % dump_period == 0 or timestep == max_timesteps - 1):
+                mu_function.interpolate(mu)
+                output_file.write(*z.subfunctions, T, mu_function)
 
     # Save the reference final temperature
     checkpoint_file.save_function(T, name="Temperature", idx=max_timesteps - 1)
