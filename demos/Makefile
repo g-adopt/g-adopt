@@ -1,47 +1,31 @@
-include makefile.cases.inc
+all: targets
 
-.PHONY: all convert_demos clean generate $(mc_cases) $(mm_cases) $(gia_cases) $(extra_cases) $(mc_dir) $(mm_dir) $(gia_dir)
+include ../.rules.mk
 
-all: $(mc_cases) $(mm_cases) $(gia_cases) $(extra_cases)
+define include_subdir =
+dir := $(dir)
+include $$(dir)/Makefile
+endef
 
-convert_demos: $(notebook_files) .pages .diagram.mermaid
-	tar --transform='s/.pages/CONTENTS.md/' --create --file artifact.tar .pages .diagram.mermaid
-	tar --transform='s|/.*/|/|' --append --file artifact.tar $(notebook_files)
-	tar --append --file artifact.tar $(mc_dir)/free_surface/temperature_warp.gif
-	tar --append --file artifact.tar $(gia_dir)/base_case/displacement_warp.gif
-	tar --append --file artifact.tar $(gia_dir)/2d_cylindrical/displacement_warp.gif
+define subdir_targets =
+.PHONY: $(1) clean-$(1)
+$(1): $$(TGT_$(1))
 
-# explicit dependencies between notebooks
-# adjoint uses the checkpoint from the forward run
-$(mc_dir)/adjoint/adjoint.ipynb: $(mc_dir)/adjoint/adjoint_forward.ipynb
+clean-$(1):
+	rm -f $$(CLEAN_$(1))
+	rm -rf $$(DIR_CLEAN_$(1))
+endef
 
-# free surface has a comparison plot against the base case
-$(mc_dir)/free_surface/free_surface.ipynb: $(mc_dir)/base_case/base_case.ipynb
+subdirs := mantle_convection multi_material glacial_isostatic_adjustment PDE_constrained_optimisation
 
-# dynamic topography requires the checkpoint from the base case
-$(mc_dir)/dynamic_topography/dynamic_topography.ipynb: $(mc_dir)/base_case/base_case.ipynb
+$(foreach dir,$(subdirs),$(eval $(include_subdir)))
 
-### make mantle_convection/base_case should just run the mantle_convection/base_case demo
-### make mantle_convection should run all mantle convection demos
-$(all_cases) $(mc_dir) $(mm_dir) $(gia_dir):
-	$(MAKE) -C $@
+.PHONY: targets
+targets: $(TGT)
 
-generate:
-	python3 generate_expected.py
+$(foreach dir,$(subdirs),$(eval $(call subdir_targets,$(dir))))
 
+.PHONY: clean
 clean:
-	rm -rf __pycache__
-	@$(foreach case, $(all_cases), \
-		$(MAKE) -C $(case) $(MAKECMDGOALS) ; \
-	)
-
-check:
-	python3 -m pytest -m demo
-
-# pattern rule for executing demo scripts as a notebook
-# because jupyter is an insane jumble of components, there's absolutely no way to configure it
-# to try to bind to its control port when it needs it. instead, the provisioner checks for a free
-# port and writes that to a connection file. this is of course completely prone to race conditions.
-# instead of trying to fix it at the jupyter level, we can serialise the startup with a semaphore
-%.ipynb: %.py
-	jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))
+	rm -f $(CLEAN)
+	rm -rf $(DIR_CLEAN)
