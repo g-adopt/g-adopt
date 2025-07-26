@@ -63,7 +63,7 @@ run_cmd = $(if $(BATCH_MODE),$(run_batch),$(run_regular))
 # to mpiexec, and additional command line arguments.
 # Should not be called directly.
 
-exec_cmd = $(if $(filter-out 1,$(ncpus)),mpiexec -np $(ncpus)) python3 $< $(PETSC_FLAGS) $(exec_args)
+exec_cmd = $(if $(filter-out 1,$(ncpus)),mpiexec -np $(ncpus)) python3 $(notdir $<) $(PETSC_FLAGS) $(exec_args)
 
 #
 # Canned recipe
@@ -77,14 +77,5 @@ exec_cmd = $(if $(filter-out 1,$(ncpus)),mpiexec -np $(ncpus)) python3 $< $(PETS
 #   	$(run-python)
 
 define run-python =
-@$(call run_cmd,$(exec_cmd),$(or $(desc),$<))
+@(cd $(dir $<); $(call run_cmd,$(exec_cmd),$(or $(desc),$(notdir $<))))
 endef
-
-# Test-related variables
-# ----------------------
-#
-# These are expansion rules that can be used to call the generic test_all.py
-# with reference to the current test/demo.
-
-current_dir = $(notdir $(patsubst %/,%,$(CURDIR)))
-test_class = $(notdir $(patsubst %/,%,$(dir $(CURDIR))))

@@ -1,17 +1,29 @@
-include ../../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-.PHONY: all clean check
+$(d)/.done: $(d)/params.log
+	@touch $@
 
-all: params.log
-
-params.log : category := mantle_convection
-params.log : ncpus := 4
-params.log: 3d_spherical.py
+$(d)/params.log : category := mantle_convection
+$(d)/params.log : ncpus := 4
+$(d)/params.log: $(d)/3d_spherical.py
 	$(run-python)
 
-clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
-	rm -rf output
+TGT_$(d) := $(d)/.done
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
+DIR_CLEAN_$(d) := output
 
-check: params.log
-	python3 -m pytest $(CURDIR)/../../test_all.py -k $(test_class)/$(current_dir)
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
+# XXX placeholder for old check routine
+ifdef undefined
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest ../../test_all.py -k mantle_convection/base_case
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
