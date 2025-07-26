@@ -1,18 +1,14 @@
-include ../makefile.cases.inc
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := $(notdir $(gia_cases))
+subdirs_$(d) := base_case 2d_cylindrical
 
-.PHONY: all $(cases) clean check
+$(foreach dir,$(addprefix $(d)/,$(subdirs_$(d))),$(eval $(include_subdir)))
 
-all: $(cases)
+TGT_$(d) := $(filter $(dir)/%,$(TGT))
+CLEAN_$(d) := $(filter $(dir)/%,$(CLEAN))
+DIR_CLEAN_$(d) := $(filter $(dir)/%,$(DIR_CLEAN))
 
-$(cases):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
-
-clean:
-	@$(foreach case, $(cases), \
-		$(MAKE) -C $(case) $(MAKECMDGOALS); \
-	)
-
-check: $(cases)
-	python -m pytest $(CURDIR)/../test_all.py -k $(gia_dir)
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

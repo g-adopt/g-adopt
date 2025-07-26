@@ -1,18 +1,30 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := functional_boundary.txt functional_field.txt
+CASES_$(d) := $(d)/functional_boundary.txt $(d)/functional_field.txt
 
-.PHONY: all clean check
+$(d)/.done: $(CASES_$(d))
+	@touch $@
 
-all: $(cases)
-
-functional_%.txt : category := pde_constrained
-$(cases): functional_%.txt: PDE_constrained_%.py
+$(CASES_$(d)) : category := pde_constrained
+$(CASES_$(d)): $(d)/functional_%.txt: $(d)/PDE_constrained_%.py
 	$(run-python)
 
-clean:
-	rm $(cases) *.h5
-	rm -rf __pycache__
+TGT_$(d) := $(d)/.done
+CLEAN_$(d) := $(CASES_$(d)) *.h5
+DIR_CLEAN_$(d) := __pycache__
 
-check: $(cases)
-	python3 -m pytest test_pde_constrained_optimisation.py
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
+# XXX placeholder for old check routine
+ifdef undefined
+.PHONY: check
+check: $(d)/.done $(d)/test_pde_constrained_optimtisation.py
+	python3 -m pytest $(d)/test_pde_constrained_optimtisation.py
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

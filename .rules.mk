@@ -79,12 +79,3 @@ exec_cmd = $(if $(filter-out 1,$(ncpus)),mpiexec -np $(ncpus)) python3 $< $(PETS
 define run-python =
 @$(call run_cmd,$(exec_cmd),$(or $(desc),$<))
 endef
-
-# Test-related variables
-# ----------------------
-#
-# These are expansion rules that can be used to call the generic test_all.py
-# with reference to the current test/demo.
-
-current_dir = $(notdir $(patsubst %/,%,$(CURDIR)))
-test_class = $(notdir $(patsubst %/,%,$(dir $(CURDIR))))
