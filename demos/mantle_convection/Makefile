@@ -1,21 +1,14 @@
-include ../makefile.cases.inc
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := $(notdir $(mc_cases))
+subdirs_$(d) := base_case 2d_compressible_ALA 2d_compressible_TALA viscoplastic_case 2d_cylindrical 3d_spherical 3d_cartesian adjoint gplates_global free_surface dynamic_topography
 
-.PHONY: all $(cases) clean check
+$(foreach dir,$(addprefix $(d)/,$(subdirs_$(d))),$(eval $(include_subdir)))
 
-all: $(cases)
+TGT_$(d) := $(filter $(dir)/%,$(TGT))
+CLEAN_$(d) := $(filter $(dir)/%,$(CLEAN))
+DIR_CLEAN_$(d) := $(filter $(dir)/%,$(DIR_CLEAN))
 
-# dynamic topography must come after base case
-dynamic_topography: .WAIT base_case
-
-$(cases):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
-
-clean:
-	@$(foreach case, $(cases), \
-		$(MAKE) -C $(case) $(MAKECMDGOALS); \
-	)
-
-check: $(cases)
-	python -m pytest $(CURDIR)/../test_all.py -k $(mc_dir)
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

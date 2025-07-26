@@ -1,16 +1,28 @@
-include ../../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-.PHONY: all clean check
+$(d)/.done: $(d)/params.log
+	@touch $@
 
-all: params.log
-
-params.log : category := gia
-params.log: 2d_cylindrical.py
+$(d)/params.log : category := gia
+$(d)/params.log: $(d)/2d_cylindrical.py $(d)/unstructured_annulus.py
 	$(run-python)
 
-clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.gif
-	rm -rf output ice mesh viscosity __pycache__
+TGT_$(d) := $(d)/.done
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 *.gif params.log .done
+DIR_CLEAN_$(d) := output ice mesh viscosity __pycache__
 
-check: params.log
-	python3 -m pytest $(CURDIR)/../../test_all.py -k $(test_class)/$(current_dir)
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
+# XXX placeholder for old check routine
+ifdef undefined
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest ../../test_all.py -k mantle_convection/base_case
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
