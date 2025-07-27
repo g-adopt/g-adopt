@@ -8,10 +8,6 @@ cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 .PHONY: all
 all:
 	$(MAKE) -C .. $(cwd)
-
-.PHONY: check
-check: all
-	pytest ../test_all.py . -k $(cwd)
 else
 
 subdirs_$(d) := compositional_buoyancy thermochemical_buoyancy
