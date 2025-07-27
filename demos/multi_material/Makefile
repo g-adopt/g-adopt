@@ -6,9 +6,9 @@ subdirs_$(d) := compositional_buoyancy thermochemical_buoyancy
 
 $(foreach dir,$(addprefix $(d)/,$(subdirs_$(d))),$(eval $(include_subdir)))
 
-TGT_$(d) := $(filter $(dir)/%,$(TGT))
-CLEAN_$(d) := $(filter $(dir)/%,$(CLEAN))
-DIR_CLEAN_$(d) := $(filter $(dir)/%,$(DIR_CLEAN))
+TGT_$(d) := $(filter $(d)/%,$(TGT))
+CLEAN_$(d) := $(filter $(d)/%,$(CLEAN))
+DIR_CLEAN_$(d) := $(filter $(d)/%,$(DIR_CLEAN))
 
 d := $(dirstack_$(sp))
 sp := $(basename $(sp))
