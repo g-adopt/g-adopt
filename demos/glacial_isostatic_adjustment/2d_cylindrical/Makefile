@@ -20,18 +20,21 @@ check: $(d)/.done
 
 else
 
+TGT_$(d) := $(d)/.done
+SRC_$(d) := $(d)/2d_cylindrical.py $(d)/unstructured_annulus.py
+NOTEBOOK_SRC_$(d) := $(d)/2d_cylindrical.py
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 *.gif params.log .done
+DIR_CLEAN_$(d) := output density ice mesh viscosity __pycache__
+
 $(d)/.done: $(d)/params.log
 	@touch $@
 
 $(d)/params.log : category := gia
-$(d)/params.log: $(d)/2d_cylindrical.py $(d)/unstructured_annulus.py
+$(d)/params.log: $(SRC_$(d))
 	$(run-python)
 
-TGT_$(d) := $(d)/.done
-CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 *.gif params.log .done
-DIR_CLEAN_$(d) := output density ice mesh viscosity __pycache__
-
 TGT := $(TGT) $(TGT_$(d))
+NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
 DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 

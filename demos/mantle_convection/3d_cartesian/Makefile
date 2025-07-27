@@ -20,19 +20,22 @@ check: $(d)/.done
 
 else
 
+TGT_$(d) := $(d)/.done
+SRC_$(d) := $(d)/3d_cartesian.py
+NOTEBOOK_SRC_$(d) := $(d)/3d_cartesian.py
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
+DIR_CLEAN_$(d) := output reference_state
+
 $(d)/.done: $(d)/params.log
 	@touch $@
 
 $(d)/params.log : category := mantle_convection
 $(d)/params.log : ncpus := 4
-$(d)/params.log: $(d)/3d_cartesian.py
+$(d)/params.log: $(SRC_$(d))
 	$(run-python)
 
-TGT_$(d) := $(d)/.done
-CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
-DIR_CLEAN_$(d) := output reference_state
-
 TGT := $(TGT) $(TGT_$(d))
+NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
 DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 

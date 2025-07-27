@@ -23,6 +23,12 @@ $(foreach dir,$(subdirs),$(eval $(include_subdir)))
 .PHONY: targets
 targets: $(TGT)
 
+notebook_files := $(NOTEBOOK_SRC:.py=.ipynb)
+artifact.tar: $(notebook_files) .pages .diagram.mermaid
+	tar --transform='s/.pages/CONTENTS.md/' --create --file $@ $(filter-out %.ipynb,$^)
+	tar --transform='s|/.*/|/|' --append --file $@ $(notebook_files)
+	$(foreach image,$(NOTEBOOK_IMGS),tar --append --file $@ $(image) ;)
+
 $(foreach dir,$(subdirs),$(eval $(call subdir_targets,$(dir))))
 
 .PHONY: clean

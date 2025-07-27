@@ -79,3 +79,6 @@ exec_cmd = $(if $(filter-out 1,$(ncpus)),mpiexec -np $(ncpus)) python3 $(notdir 
 define run-python =
 @(cd $(dir $<); $(call run_cmd,$(exec_cmd),$(or $(desc),$(notdir $<))))
 endef
+
+%.ipynb: %.py
+	jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))
