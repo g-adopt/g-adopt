@@ -14,10 +14,6 @@ all: $(d)/.done
 $(d)/.done:
 	$(MAKE) -C ../.. $(cwd)/.done
 
-.PHONY: check
-check: $(d)/.done
-	python3 -m pytest ../../test_all.py -k $(cwd)
-
 else
 
 $(d)/.done: $(d)/params.log
