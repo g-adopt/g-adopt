@@ -20,18 +20,21 @@ check: $(d)/.done
 
 else
 
+TGT_$(d) := $(d)/.done
+SRC_$(d) := $(d)/gplates_global.py
+NOTEBOOK_SRC_$(d) := $(d)/gplates_global.py
+CLEAN_$(d) := *.pvd *.h5 params.log .done
+DIR_CLEAN_$(d) := output
+
 $(d)/.done: $(d)/params.log
 	@touch $@
 
 $(d)/params.log : category := mantle_convection
-$(d)/params.log: $(d)/gplates_global.py
+$(d)/params.log: $(SRC_$(d))
 	$(run-python)
 
-TGT_$(d) := $(d)/.done
-CLEAN_$(d) := *.pvd *.h5 params.log .done
-DIR_CLEAN_$(d) := output
-
 TGT := $(TGT) $(TGT_$(d))
+NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
 DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 

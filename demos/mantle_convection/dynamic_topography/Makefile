@@ -20,18 +20,24 @@ check: $(d)/.done
 
 else
 
+TGT_$(d) := $(d)/.done
+SRC_$(d) := $(d)/dynamic_topography.py
+NOTEBOOK_SRC_$(d) := $(d)/dynamic_topography.py
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
+DIR_CLEAN_$(d) := output
+
 $(d)/.done: $(d)/params.log
 	@touch $@
 
 $(d)/params.log : category := mantle_convection
-$(d)/params.log: $(d)/dynamic_topography.py $(dir $(d))base_case/.done
+$(d)/params.log: $(SRC_$(d)) $(dir $(d))base_case/.done
 	$(run-python)
 
-TGT_$(d) := $(d)/.done
-CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
-DIR_CLEAN_$(d) := output
+# this case relies on the base case
+$(NOTEBOOK_SRC_$(d):.py=.ipynb): $(dir $(d))base_case/base_case.ipynb
 
 TGT := $(TGT) $(TGT_$(d))
+NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
 DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
