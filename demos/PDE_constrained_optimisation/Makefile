@@ -2,6 +2,24 @@ sp := $(sp).x
 dirstack_$(sp) := $(d)
 d := $(dir)
 
+ifeq ($(d),)
+
+d := .
+# current directory relative to root makefile
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
+
+.PHONY: all
+all: $(d)/.done
+
+$(d)/.done:
+	$(MAKE) -C .. $(cwd)/.done
+
+.PHONY: check
+check: $(d)/.done $(d)/test_pde_constrained_optimisation.py
+	python3 -m pytest $(d)/test_pde_constrained_optimisation.py
+
+else
+
 CASES_$(d) := $(d)/functional_boundary.txt $(d)/functional_field.txt
 
 $(d)/.done: $(CASES_$(d))
@@ -19,11 +37,6 @@ TGT := $(TGT) $(TGT_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
 DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
-# XXX placeholder for old check routine
-ifdef undefined
-.PHONY: check
-check: $(d)/.done $(d)/test_pde_constrained_optimtisation.py
-	python3 -m pytest $(d)/test_pde_constrained_optimtisation.py
 endif
 
 d := $(dirstack_$(sp))
