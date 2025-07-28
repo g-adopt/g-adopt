@@ -35,7 +35,7 @@ $(d)/params.log: $(SRC_$(d))
 	$(run-python)
 
 # this case relies on the base case
-$(NOTEBOOK_SRC_$(d):.py=.ipynb): $(dir $(d))base_case/base_case.ipynb
+$(NOTEBOOK_SRC_$(d):.py=.ipynb): demos/mantle_convection/base_case/base_case.ipynb
 
 TGT := $(TGT) $(TGT_$(d))
 NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
