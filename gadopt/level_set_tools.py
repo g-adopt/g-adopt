@@ -53,36 +53,46 @@ reini_params_default = {
 
 
 def interface_thickness(
-    level_set_space: fd.functionspaceimpl.WithGeometry, scale: float = 0.35
+    level_set_space: fd.functionspaceimpl.WithGeometry,
+    *,
+    scale: float = 0.35,
+    min_cell_edge_length: bool = False,
 ) -> fd.Function:
     """Default strategy for the thickness of the conservative-level-set profile.
 
     The interface thickness must not exceed the local minimum edge length to ensure
     materials remain immiscible. In practice, there exists a tradeoff between interface
     thickness and solution accuracy, for example, in terms of interface location and
-    material conservation. The default strategy implemented here is to multiply the
-    local minimum edge length by 0.35, but this choice can be modified via the `scale`
-    argument.
+    material conservation.
 
-    **Note**: UFL's `MinCellEdgeLength` is used to recover locally the minimum edge
-    length. This class, however, is not compatible with extruded meshes. In that case,
-    the `cell_sizes` attribute is used as an approximation, and the scaling factor
-    is divided by the square root of the mesh's geometric dimension. Do note that this
-    formulation is not equivalent and will result in measurable changes between
-    comparable extruded and non-extruded meshes.
+    UFL's `MinCellEdgeLength` can be used to recover locally the minimum edge length.
+    This class, however, is not compatible with extruded meshes or meshes for which the
+    polynomial degree of the coordinate function space exceeds 1. As a result, the
+    default strategy implemented here is to approximate the local minimum edge length
+    as the quotient of the `cell_sizes` mesh attribute and the square root of the mesh's
+    geometric dimension. If `MinCellEdgeLength` is desired instead, a value of `True`
+    must be provided for the `min_cell_edge_length` argument. The local minimum edge
+    length is then multiplied by a scaling factor, with a default value of 0.35 that can
+    be modified via the `scale` argument.
+
+    **Note**: The two different formulations implemented here are not equivalent and
+    will result in measurable changes, for example, between comparable extruded and
+    non-extruded meshes.
 
     Args:
       level_set_space:
         The Firedrake function space of the level-set field
       scale:
         A float to control interface thickness values relative to cell sizes
+      min_cell_edge_length:
+        A boolean to determine if `MinCellEdgeLength` is used
 
     Returns:
       A Firedrake function holding the interface thickness values
     """
     epsilon = fd.Function(level_set_space, name="Interface thickness")
 
-    if level_set_space.extruded:
+    if not min_cell_edge_length:
         scale /= fd.sqrt(level_set_space.mesh().geometric_dimension())
         epsilon.interpolate(scale * level_set_space.mesh().cell_sizes)
     else:
