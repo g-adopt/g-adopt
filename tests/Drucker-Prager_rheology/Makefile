@@ -19,9 +19,10 @@ check: $(d)/.done
 
 else
 
-CASES_$(d) := $(shell python3 $(d)/test_spiegelman.py)
-TGT_$(d) := $(CASES_$(d):%=$(d)/%d/newton.txt)
+CASES_$(d) := $(addprefix spiegelman_,$(shell python3 $(d)/test_spiegelman.py))
+TGT_$(d) := $(CASES_$(d):%=$(d)/%/newton.txt)
 SRC_$(d) := $(d)/spiegelman.py
+CLEAN_$(d) := .done
 DIR_CLEAN_$(d) := __pycache__ $(CASES_$(d))
 
 $(d)/.done: $(TGT_$(d))
@@ -30,7 +31,7 @@ $(d)/.done: $(TGT_$(d))
 $(TGT_$(d)) : category := Drucker-Prager_rheology
 $(TGT_$(d)) : exec_args = $*
 $(TGT_$(d)) : desc = $(exec_args)
-$(TGT_$(d)): $(d)/%/newton.txt: $(SRC_$(d))
+$(TGT_$(d)): $(d)/spiegelman_%/newton.txt: $(SRC_$(d))
 	$(run-python)
 
 TGT := $(TGT) $(TGT_$(d))
