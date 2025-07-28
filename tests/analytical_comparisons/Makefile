@@ -30,17 +30,18 @@ DIR_CLEAN_$(d) := batch_output __pycache__
 $(d)/.done: $(TGT_$(d))
 	@touch $@
 
+$(TGT_$(d)) : case = $(patsubst .sentinel.%,%,$(notdir $@))
+$(TGT_$(d)) : tsp_string := $(if $(BATCH_MODE),tsp -N {cores} -f )
 $(TGT_$(d)): $(SRC_$(d))
-	@$(let case tsp_string,$(patsubst .sentinel.%,%,$(notdir $@)) $(if $(BATCH_MODE),tsp -N {cores} -f ),\
-		$(call run_regular,python3 analytical.py submit -t "$(tsp_string)mpiexec -np {cores}" $(case),analytical $(case)))
+	@(cd $(dir $<); $(call run_regular,python3 analytical.py submit -t "$(tsp_string)mpiexec -np {cores}" $(case),analytical $(case)))
 	@touch $@
 
 batch_output:
 	mkdir batch_output
 
+$(HPC_TGT_$(d)) : case = $(patsubst .sentinel.%,%,$(notdir $@))
 $(HPC_TGT_$(d)): $(SRC_$(d)) batch_output clean-$(d)
-	$(let case,$(patsubst .sentinel.%,%,$(notdir $@)),\
-		python3 analytical.py submit $(case) -H -o batch_output/$(case)_l{level}_{params}.out -e batch_output/$(case)_l{level}_{params.err})
+	(cd $(dir $<); python3 analytical.py submit $(case) -H -o batch_output/$(case)_l{level}_{params}.out -e batch_output/$(case)_l{level}_{params.err}))
 
 TGT := $(TGT) $(TGT_$(d))
 HPC_TGT := $(HPC_TGT) $(HPC_TGT_$(d))
