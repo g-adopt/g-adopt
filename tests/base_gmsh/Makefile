@@ -1,19 +1,44 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-.PHONY: all clean check
+ifeq ($(d),)
 
-all: params.log
+d := .
+cwd := $(shell realpath --strip --relative-to=../.. $(CURDIR))
 
-%.msh: %.geo
+.PHONY: all
+all: $(d)/.done
+
+$(d)/.done:
+	$(MAKE) -C ../.. $(cwd)/.done
+
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest
+
+else
+
+TGT_$(d) := $(d)/params.log
+SRC_$(d) := $(d)/base_case.py
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 *.msh params.log .done
+DIR_CLEAN_$(d) := output
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(d)/square.msh: %.msh: %.geo
 	gmsh -2 $<
 
-params.log : category := tests/gmsh
-params.log: base_case.py square.msh
+$(TGT_$(d)): category := tests/gmsh
+$(TGT_$(d)): $(SRC_$(d)) $(d)/square.msh
 	$(run-python)
 
-clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.msh
-	rm -rf output
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
-check: params.log
-	python3 -m pytest
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

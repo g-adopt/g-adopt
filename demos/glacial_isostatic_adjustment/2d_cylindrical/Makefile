@@ -20,14 +20,14 @@ check: $(d)/.done
 
 else
 
-TGT_$(d) := $(d)/.done
+TGT_$(d) := $(d)/params.log
 SRC_$(d) := $(d)/2d_cylindrical.py $(d)/unstructured_annulus.py
 NOTEBOOK_SRC_$(d) := $(d)/2d_cylindrical.py
 NOTEBOOK_IMGS_$(d) := $(d)/displacement_warp.gif
 CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 *.gif params.log .done
 DIR_CLEAN_$(d) := output density ice mesh viscosity __pycache__
 
-$(d)/.done: $(d)/params.log
+$(d)/.done: $(TGT_$(d))
 	@touch $@
 
 $(d)/params.log : category := gia

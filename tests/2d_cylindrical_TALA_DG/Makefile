@@ -1,17 +1,42 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-.PHONY: all clean check
+ifeq ($(d),)
 
-all: params.log
+d := .
+cwd := $(shell realpath --strip --relative-to=../.. $(CURDIR))
 
-params.log : category := tests
-params.log : ncpus := 16
-params.log: 2d_cylindrical_TALA_DG.py
+.PHONY: all
+all: $(d)/.done
+
+$(d)/.done:
+	$(MAKE) -C ../.. $(cwd)/.done
+
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest ../../demos/test_all.py -k $(shell realpath --strip --relative-to=../../demos $(CURDIR))
+
+else
+
+TGT_$(d) := $(d)/params.log
+SRC_$(d) := $(d)/2d_cylindrical_TALA_DG.py
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
+DIR_CLEAN_$(d) := output reference_state __pycache__
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(TGT_$(d)): category := tests
+$(TGT_$(d)): ncpus := 16
+$(TGT_$(d)): $(SRC_$(d))
 	$(run-python)
 
-clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
-	rm -rf output reference_state __pycache__
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
-check: params.log
-	python3 -m pytest $(CURDIR)/../../demos/test_all.py -k "../tests/2d_cylindrical_TALA_DG"
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
