@@ -11,8 +11,8 @@ include .rules.mk
 dir := demos
 include $(dir)/Makefile
 
-# dir := tests
-# include $(dir)/Makefile
+dir := tests
+include $(dir)/Makefile
 
 all-tests: demos tests
 
