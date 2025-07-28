@@ -23,6 +23,7 @@ else
 TGT_$(d) := $(d)/.done
 SRC_$(d) := $(d)/2d_cylindrical.py $(d)/unstructured_annulus.py
 NOTEBOOK_SRC_$(d) := $(d)/2d_cylindrical.py
+NOTEBOOK_IMGS_$(d) := $(d)/displacement_warp.gif
 CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 *.gif params.log .done
 DIR_CLEAN_$(d) := output density ice mesh viscosity __pycache__
 
@@ -35,6 +36,7 @@ $(d)/params.log: $(SRC_$(d))
 
 TGT := $(TGT) $(TGT_$(d))
 NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
+NOTEBOOK_IMGS := $(NOTEBOOK_IMGS) $(NOTEBOOK_IMGS_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
 DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
