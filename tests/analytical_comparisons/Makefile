@@ -1,38 +1,53 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := smooth_cylindrical_freeslip smooth_cylindrical_zeroslip delta_cylindrical_freeslip delta_cylindrical_zeroslip delta_cylindrical_freeslip_dpc delta_cylindrical_zeroslip_dpc
-long_cases := smooth_cylindrical_freesurface smooth_spherical_freeslip smooth_spherical_zeroslip
+ifeq ($(d),)
 
-sentinels := $(addprefix .sentinel.,$(cases))
+d := .
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 
-.PHONY: all longtest longtest_output $(cases) $(long_cases) clean check longcheck
+.PHONY: all
+all: $(d)/.done
 
-all: $(cases)
+$(d)/.done:
+	$(MAKE) -C .. $(cwd)/.done
 
-longtest: $(long_cases)
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest -m "not longtest"
 
-$(cases): %: .sentinel.%
+else
 
-tsp_string = $(if $(BATCH_MODE),tsp -N {cores} -f)
-$(sentinels): analytical.py
-	@$(call run_regular,python3 analytical.py submit -t "$(tsp_string) mpiexec -np {cores}" $(subst .sentinel.,,$@),analytical $(subst .sentinel.,,$@))
-	@echo "done" > $@
+CASES_$(d) := smooth_cylindrical_freeslip smooth_cylindrical_zeroslip delta_cylindrical_freeslip delta_cylindrical_zeroslip delta_cylindrical_freeslip_dpc delta_cylindrical_zeroslip_dpc
+HPC_CASES_$(d) := smooth_cylindrical_freesurface smooth_spherical_freeslip smooth_spherical_zeroslip
+TGT_$(d) := $(addprefix $(d)/.sentinel.,$(CASES_$(d)))
+HPC_TGT_$(d) := $(addprefix $(d)/.sentinel.,$(HPC_CASES_$(d)))
+SRC_$(d) := $(d)/analytical.py
+CLEAN_$(d) := *.dat .sentinel.* .done
+DIR_CLEAN_$(d) := batch_output __pycache__
 
-.ONESHELL:
-SHELL = /bin/bash
-$(long_cases): analytical.py clean
-	echo "running spherical $@" >&2
-	mkdir -p batch_output
-	python3 analytical.py submit $@ -H -o batch_output/$(subst /,-,$@)_l{level}_{params}.out -e batch_output/$(subst /,-,$@)_l{level}_{params}.err
+$(d)/.done: $(TGT_$(d))
+	@touch $@
 
-clean:
-	rm -rf batch_output *.dat sentinel.* .sentinel.* __pycache__
+$(TGT_$(d)): $(SRC_$(d))
+	@$(let case tsp_string,$(patsubst .sentinel.%,%,$(notdir $@)) $(if $(BATCH_MODE),tsp -N {cores} -f ),\
+		$(call run_regular,python3 analytical.py submit -t "$(tsp_string)mpiexec -np {cores}" $(case),analytical $(case)))
+	@touch $@
 
-longtest_output:
-	[[ -d batch_output ]] && tail -n +1 batch_output/*
+batch_output:
+	mkdir batch_output
 
-check: $(sentinels)
-	python -m pytest -m 'not longtest'
+$(HPC_TGT_$(d)): $(SRC_$(d)) batch_output clean-$(d)
+	$(let case,$(patsubst .sentinel.%,%,$(notdir $@)),\
+		python3 analytical.py submit $(case) -H -o batch_output/$(case)_l{level}_{params}.out -e batch_output/$(case)_l{level}_{params.err})
 
-longcheck:
-	python -m pytest -m longtest
+TGT := $(TGT) $(TGT_$(d))
+HPC_TGT := $(HPC_TGT) $(HPC_TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

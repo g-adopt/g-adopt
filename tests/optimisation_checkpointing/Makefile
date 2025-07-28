@@ -1,19 +1,43 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := full_optimisation_np1.dat full_optimisation_np2.dat
+ifeq ($(d),)
 
-.PHONY: all clean check
+d := .
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 
-all: $(cases)
+.PHONY: all
+all: $(d)/.done
 
-full_optimisation_np%.dat : category := optimisation_checkpointing
-full_optimisation_np%.dat : ncpus = $*
+$(d)/.done:
+	$(MAKE) -C .. $(cwd)/.done
 
-$(cases): full_optimisation_np%.dat: helmholtz.py
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest
+
+else
+
+CASES_$(d) := full_optimisation_np1 full_optimisation_np2
+TGT_$(d) := $(CASES_$(d):%=$(d)/%.dat)
+SRC_$(d) := $(d)/helmholtz.py
+CLEAN_$(d) := *.dat *.h5 .done
+DIR_CLEAN_$(d) := optimisation_checkpoint_* __pycache__
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(TGT_$(d)): category := optimisation_checkpointing
+$(TGT_$(d)): ncpus = $*
+$(TGT_$(d)): $(d)/full_optimisation_np%.dat: $(SRC_$(d))
 	$(run-python)
 
-clean:
-	rm -rf optimisation_checkpoint_* __pycache__ *.h5 *.dat
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
-check: $(cases)
-	python -m pytest
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
