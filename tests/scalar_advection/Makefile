@@ -19,7 +19,7 @@ check: $(d)/.done
 
 else
 
-TGT_$(d) := final_error.log
+TGT_$(d) := $(d)/final_error.log
 SRC_$(d) := $(d)/scalar_advection.py
 CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 final_error.log .done
 DIR_CLEAN_$(d) := output
