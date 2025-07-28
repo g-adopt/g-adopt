@@ -20,19 +20,19 @@ check: $(d)/.done $(d)/test_pde_constrained_optimisation.py
 
 else
 
-TGT_$(d) := $(d)/.done
-SRC_$(d) := $(d)/PDE_constrained_boundary.py $(d)/PDE_constrained_field.py
+CASES_$(d) := boundary field
+
+TGT_$(d) := $(CASES_$(d):%=$(d)/functional_%.txt)
+SRC_$(d) := $(CASES_$(d):%=$(d)/PDE_constrained_%.py)
 NOTEBOOK_SRC_$(d) := $(d)/PDE_constrained_boundary.py $(d)/PDE_constrained_field.py
 CLEAN_$(d) := $(CASES_$(d)) *.h5
 DIR_CLEAN_$(d) := __pycache__
 
-CASES_$(d) := $(d)/functional_boundary.txt $(d)/functional_field.txt
-
-$(d)/.done: $(CASES_$(d))
+$(d)/.done: $(TGT_$(d))
 	@touch $@
 
-$(CASES_$(d)) : category := pde_constrained
-$(CASES_$(d)): $(d)/functional_%.txt: $(d)/PDE_constrained_%.py
+$(TGT_$(d)) : category := pde_constrained
+$(TGT_$(d)): $(d)/functional_%.txt: $(d)/PDE_constrained_%.py
 	$(run-python)
 
 TGT := $(TGT) $(TGT_$(d))

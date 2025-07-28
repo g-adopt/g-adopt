@@ -20,13 +20,13 @@ check: $(d)/.done
 
 else
 
-TGT_$(d) := $(d)/.done
+TGT_$(d) := $(d)/functional.txt
 SRC_$(d) := $(d)/adjoint.py $(d)/adjoint_forward.py
 NOTEBOOK_SRC_$(d) := $(d)/adjoint.py $(d)/adjoint_forward.py
 CLEAN_$(d) := functional.txt *.h5 *.pvd .done
 DIR_CLEAN_$(d) := solutions solution visualisation_vtk optimisation_checkpoint
 
-$(d)/.done: $(d)/functional.txt
+$(d)/.done: $(TGT_$(d))
 	@touch $@
 
 $(d)/functional.txt : category := mantle_convection
