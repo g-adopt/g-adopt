@@ -48,5 +48,5 @@ DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
 endif
 
-d := $(dirstack_$(sp)
+d := $(dirstack_$(sp))
 sp := $(basename $(sp))
