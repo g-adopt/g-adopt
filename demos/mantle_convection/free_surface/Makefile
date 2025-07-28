@@ -20,14 +20,14 @@ check: $(d)/.done
 
 else
 
-TGT_$(d) := $(d)/.done
+TGT_$(d) := $(d)/params.log
 SRC_$(d) := $(d)/free_surface.py
 NOTEBOOK_SRC_$(d) := $(d)/free_surface.py
 NOTEBOOK_IMGS_$(d) := $(d)/temperature_warp.gif
 CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
 DIR_CLEAN_$(d) := output
 
-$(d)/.done: $(d)/params.log
+$(d)/.done: $(TGT_$(d))
 	@touch $@
 
 $(d)/params.log : category := mantle_convection
