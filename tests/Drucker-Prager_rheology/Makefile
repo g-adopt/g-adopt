@@ -1,19 +1,43 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := $(shell python3 test_spiegelman.py)
+ifeq ($(d),)
 
-.PHONY: all clean check
+d := .
+cwd := $(shell realpath --strip --relative-to=../.. $(CURDIR))
 
-all: $(addprefix spiegelman_,$(cases))
+.PHONY: all
+all: $(d)/.done
 
-spiegelman_% : category := Drucker-Prager_rheology
-spiegelman_% : exec_args = $*
-spiegelman_% : desc = $(exec_args)
-spiegelman_%: spiegelman.py
+$(d)/.done:
+	$(MAKE) -C ../.. $(cwd)/.done
+
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest
+
+else
+
+CASES_$(d) := $(shell python3 $(d)/test_spiegelman.py)
+TGT_$(d) := $(CASES_$(d):%=$(d)/%d/newton.txt)
+SRC_$(d) := $(d)/spiegelman.py
+DIR_CLEAN_$(d) := __pycache__ $(CASES_$(d))
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(TGT_$(d)) : category := Drucker-Prager_rheology
+$(TGT_$(d)) : exec_args = $*
+$(TGT_$(d)) : desc = $(exec_args)
+$(TGT_$(d)): $(d)/%/newton.txt: $(SRC_$(d))
 	$(run-python)
 
-clean:
-	rm -rf $(addprefix spiegelman_,$(cases)) __pycache__
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
-check: $(addprefix spiegelman_,$(cases))
-	python -m pytest
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

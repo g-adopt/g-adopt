@@ -5,13 +5,13 @@ d := $(dir)
 ifeq ($(d),)
 
 d := .
-cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
+cwd := $(shell realpath --strip --relative-to=../.. $(CURDIR))
 
 .PHONY: all
 all: $(d)/.done
 
 $(d)/.done:
-	$(MAKE) -C .. $(cwd)/.done
+	$(MAKE) -C ../.. $(cwd)/.done
 
 .PHONY: check
 check: $(d)/.done

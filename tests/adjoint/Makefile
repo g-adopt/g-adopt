@@ -1,30 +1,52 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := damping smoothing Tobs uobs uimposed
-scheduler := noscheduler fullmemory fullstorage
+ifeq ($(d),)
 
-cases_schedulers := $(foreach case,$(cases),$(foreach sched,$(scheduler),$(case)_$(sched)))
+d := .
+cwd := $(shell realpath --strip --relative-to=../.. $(CURDIR))
 
-.PHONY: all clean check
+.PHONY: all
+all: $(d)/.done
 
-all: $(addsuffix .conv,$(cases_schedulers))
+$(d)/.done:
+	$(MAKE) -C ../.. $(cwd)/.done
 
-%.conv : category := tests/adjoint
-%.conv : ncpus := 2
-%.conv : exec_args = $*
-%.conv : desc = $(exec_args)
-%.conv: taylor_test.py adjoint-demo-checkpoint-state.h5
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest
+
+else
+
+CASES_COMPONENTS_$(d) := damping smoothing Tobs uobs uimposed
+CASES_SCHEDULERS_$(d) := noscheduler fullmemory fullstorage
+CASES_$(d) := $(foreach case,$(CASES_COMPONENTS_$(d)),$\
+	$(foreach scheduler,$(CASES_SCHEDULERS_$(d)),$\
+		$(case)_$(scheduler)))
+TGT_$(d) := $(CASES_$(d):%=$(d)/%.conv)
+SRC_$(d) := $(d)/taylor_test.py
+CLEAN_$(d) := *.h5 *.conv *.dat
+DIR_CLEAN_$(d) := __pycache__
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(d)/adjoint-demo-checkpoint-state.h5: $(realpath $(dir $(d))/../demos/mantle_convection/adjoint/adjoint-demo-checkpoint-state.h5)
+	@ln -sf $< $@
+
+$(TGT_$(d)) : category := tests/adjoint
+$(TGT_$(d)) : ncpus := 2
+$(TGT_$(d)) : exec_args = $*
+$(TGT_$(d)) : desc = $(exec_args)
+$(TGT_$(d)): $(d)/%.conv: $(SRC_$(d)) $(d)/adjoint-demo-checkpoint-state.h5
 	$(run-python)
 
-adjoint-demo-checkpoint-state.h5 : category := tests/adjoint
-adjoint-demo-checkpoint-state.h5 : ncpus := 2
-adjoint-demo-checkpoint-state.h5 : desc := forward
-adjoint-demo-checkpoint-state.h5: ../../demos/mantle_convection/adjoint/adjoint_forward.py
-	$(run-python)
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
-clean:
-	rm -f *.h5 *.conv *.dat
-	rm -rf __pycache__
+endif
 
-check: $(addsuffix .conv,$(cases))
-	python -m pytest
+d := $(dirstack_$(sp)
+sp := $(basename $(sp))

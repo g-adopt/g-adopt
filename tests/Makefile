@@ -1,33 +1,40 @@
-all: targets
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-include ../.rules.mk
+subdirs := analytical_comparisons multi_material optimisation_checkpointing scalar_advection scalar_advection_diffusion Drucker-Prager_rheology adjoint
 
-define include_subdir =
-dir := $(dir)
-include $$(dir)/Makefile
-endef
+ifeq ($(d),)
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 
-define subdir_targets =
-.PHONY $(1) clean-$(1)
-$(1): $$(TGT_$(1))
+.PHONY: all
+all:
+	$(MAKE) -C .. $(cwd)
 
-clean-$(1):
-	rm -f $$(CLEAN_$(1))
-	rm -rf $$(DIR_CLEAN_$(1))
-endef
-
-subdirs := analytical_comparisons multi_material optimisation_checkpointing scalar_advection scalar_advection_diffusion
-
-$(foreach dir,$(subdirs),$(eval $(include_subdir)))
-
-.PHONY: targets
-targets: $(TGT)
+.PHONY: check
+check:
+	python3 -m pytest ../demos/test_all.py . -k "../tests or tests"
 
 .PHONY: clean
 clean:
-	rm -f $(CLEAN)
-	rm -rf $(DIR_CLEAN)
+	$(MAKE) -C .. clean-$(cwd)
 
+include ../.rules.mk
+$(foreach dir,$(subdirs),$(eval $(call subdir_targets,$(dir),$(cwd))))
+
+else
+
+$(foreach dir,$(addprefix $(d)/,$(subdirs)),$(eval $(include_subdir)))
+
+TGT_$(d) := $(filter $(d)/%,$(TGT))
+CLEAN_$(d) := $(filter $(d)/%,$(CLEAN))
+DIR_CLEAN_$(d) := $(filter $(d)/%,$(DIR_CLEAN))
+
+$(eval $(call make_targets,$(d)))
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
 
 # ##############
 
