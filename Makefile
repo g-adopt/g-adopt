@@ -1,4 +1,4 @@
-.PHONY: lint test longtest longtest_output convert_demos
+.PHONY: lint all-tests demos clean check
 
 lint:
 	@echo "Linting module code"
@@ -6,21 +6,19 @@ lint:
 	@echo "Linting demos and tests"
 	@python3 -m flake8 demos tests
 
-test:
-	$(MAKE) -C demos & $(MAKE) -C tests & wait
+include .rules.mk
 
-longtest:
-	$(MAKE) -C tests longtest
+dir := demos
+include $(dir)/Makefile
 
-longtest_output:
-	$(MAKE) -C tests longtest_output
+# dir := tests
+# include $(dir)/Makefile
 
-# convert demo Python scripts to executed notebooks
-convert_demos:
-	$(MAKE) -C demos convert_demos
+all-tests: demos tests
+
+check: all-tests
+	python3 -m pytest -m "not longtest"
 
 clean:
-	$(MAKE) -C demos clean & $(MAKE) -C tests clean & wait
-
-check:
-	python -m pytest -m 'not longtest'
+	rm -f $(CLEAN)
+	rm -rf $(DIR_CLEAN)

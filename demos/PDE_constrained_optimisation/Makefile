@@ -6,13 +6,13 @@ ifeq ($(d),)
 
 d := .
 # current directory relative to root makefile
-cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
+cwd := $(shell realpath --strip --relative-to=../.. $(CURDIR))
 
 .PHONY: all
 all: $(d)/.done
 
 $(d)/.done:
-	$(MAKE) -C .. $(cwd)/.done
+	$(MAKE) -C ../.. $(cwd)/.done
 
 .PHONY: check
 check: $(d)/.done $(d)/test_pde_constrained_optimisation.py

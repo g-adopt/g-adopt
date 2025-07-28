@@ -1,37 +1,45 @@
-all: targets
-
-include ../.rules.mk
-
-define include_subdir =
-dir := $(dir)
-include $$(dir)/Makefile
-endef
-
-define subdir_targets =
-.PHONY: $(1) clean-$(1)
-$(1): $$(TGT_$(1))
-
-clean-$(1):
-	rm -f $$(CLEAN_$(1))
-	rm -rf $$(DIR_CLEAN_$(1))
-endef
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
 subdirs := mantle_convection multi_material glacial_isostatic_adjustment PDE_constrained_optimisation
 
-$(foreach dir,$(subdirs),$(eval $(include_subdir)))
+ifeq ($(d),)
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 
-.PHONY: targets
-targets: $(TGT)
+# all direct-execution targets in this directory
+.PHONY: all
+all:
+	$(MAKE) -C .. $(cwd)
+
+.PHONY: check
+check:
+	pytest -k 'not ../tests'
+
+.PHONY: clean
+clean:
+	$(MAKE) -C .. clean-$(cwd)
+
+# create a target for each of the subdirs
+include ../.rules.mk
+$(foreach dir,$(subdirs),$(eval $(call subdir_targets,$(dir),$(cwd))))
+
+else
+
+$(foreach dir,$(addprefix $(d)/,$(subdirs)),$(eval $(include_subdir)))
 
 notebook_files := $(NOTEBOOK_SRC:.py=.ipynb)
-artifact.tar: $(notebook_files) .pages .diagram.mermaid
+$(d)/artifact.tar: $(notebook_files) $(d)/.pages $(d)/.diagram.mermaid
 	tar --transform='s/.pages/CONTENTS.md/' --create --file $@ $(filter-out %.ipynb,$^)
 	tar --transform='s|/.*/|/|' --append --file $@ $(notebook_files)
 	$(foreach image,$(NOTEBOOK_IMGS),tar --append --file $@ $(image) ;)
 
-$(foreach dir,$(subdirs),$(eval $(call subdir_targets,$(dir))))
+TGT_$(d) := $(filter $(d)/%,$(TGT))
+CLEAN_$(d) := $(filter $(d)/%,$(CLEAN))
+DIR_CLEAN_$(d) := $(filter $(d)/%,$(DIR_CLEAN))
 
-.PHONY: clean
-clean:
-	rm -f $(CLEAN)
-	rm -rf $(DIR_CLEAN)
+$(eval $(call make_targets,$(d)))
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

@@ -82,3 +82,31 @@ endef
 
 %.ipynb: %.py
 	jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))
+
+# recurse into subdirs
+define include_subdir =
+dir := $(dir)
+include $$(dir)/Makefile
+endef
+
+# for defining the targets within e.g. demos or tests
+# this relies on make_targets having been called within the
+# directory within the "usual" path
+define subdir_targets =
+.PHONY: $(1) clean-$(1)
+$(1):
+	$$(MAKE) -C .. $(2)/$(1)
+
+clean-$(1):
+	$$(MAKE) -C .. clean-$(2)/$(1)
+endef
+
+# for defining the targets of the current directory
+define make_targets =
+.PHONY: $(1) clean-$(1)
+$(1): $$(TGT_$(1))
+
+clean-$(1):
+	rm -f $$(CLEAN_$(1))
+	rm -rf $$(DIR_CLEAN_$(1))
+endef
