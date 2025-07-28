@@ -1,4 +1,4 @@
-.PHONY: lint all-tests demos clean check
+.PHONY: lint all-tests clean check
 
 lint:
 	@echo "Linting module code"
