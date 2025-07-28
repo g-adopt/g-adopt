@@ -30,11 +30,11 @@ $(d)/.done: $(TGT_$(d))
 	@touch $@
 
 $(d)/params.log : category := mantle_convection
-$(d)/params.log: $(SRC_$(d)) $(dir $(d))base_case/.done
+$(d)/params.log: $(SRC_$(d)) demos/mantle_convection/base_case/.done
 	$(run-python)
 
 # this case relies on the base case
-$(NOTEBOOK_SRC_$(d):.py=.ipynb): $(dir $(d))base_case/base_case.ipynb
+$(NOTEBOOK_SRC_$(d):.py=.ipynb): demos/mantle_convection/base_case/base_case.ipynb
 
 TGT := $(TGT) $(TGT_$(d))
 NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))

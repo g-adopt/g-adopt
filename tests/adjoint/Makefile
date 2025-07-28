@@ -32,7 +32,7 @@ DIR_CLEAN_$(d) := __pycache__
 $(d)/.done: $(TGT_$(d))
 	@touch $@
 
-$(d)/adjoint-demo-checkpoint-state.h5: $(realpath $(dir $(d))/../demos/mantle_convection/adjoint/adjoint-demo-checkpoint-state.h5)
+$(d)/adjoint-demo-checkpoint-state.h5: demos/mantle_convection/adjoint/adjoint-demo-checkpoint-state.h5
 	@ln -sf $< $@
 
 $(TGT_$(d)) : category := tests/adjoint
