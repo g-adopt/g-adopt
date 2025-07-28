@@ -1,32 +1,56 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := $(shell python3 test_scalar_advection_diffusion_DH27.py)
+ifeq ($(d),)
 
-sentinels := $(addprefix .sentinel.,$(cases))
+d := .
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 
-.PHONY: all $(cases) clean check
+.PHONY: all
+all: $(d)/.done
 
-all: $(cases) integrated_q.log integrated_q_DH219.log
+$(d)/.done:
+	$(MAKE) -C .. $(cwd)/.done
 
-$(cases): %: .sentinel.%
-
-$(sentinels) : category := tests
-$(sentinels) : exec_args = $(subst .sentinel.,,$@)
-$(sentinels) : desc = $(exec_args)
-$(sentinels): scalar_advection_diffusion_DH27.py
-	$(run-python)
-
-integrated_q.log : category := tests
-integrated_q.log: scalar_advection_diffusion.py
-	$(run-python)
-
-integrated_q_DH219.log : category := tests
-integrated_q_DH219.log: scalar_advection_diffusion_DH219_skew.py
-	$(run-python)
-
-clean:
-	rm -f *.dat .sentinel.* *.log
-	rm -rf __pycache__
-
-check: all
+.PHONY: check
+check: $(d)/.done
 	python3 -m pytest
+
+else
+
+CASES_$(d) := $(shell python3 $(d)/test_scalar_advection_diffusion_DH27.py)
+TGT_$(d) := $(addprefix $(d)/.sentinel.,$(CASES_$(d)))
+SRC_$(d) := $(d)/scalar_advection_diffusion_DH27.py
+CLEAN_$(d) := *.dat *.log .sentinel.*
+DIR_CLEAN_$(d) := __pycache__
+
+$(TGT_$(d)) : category := scalar_advection_diffusion_DH27
+$(TGT_$(d)) : exec_args = $(patsubst .sentinel.%,%,$(notdir $@))
+$(TGT_$(d)) : desc = $(exec_args)
+$(TGT_$(d)): $(d)/scalar_advection_diffusion_DH27.py
+	$(run-python)
+
+TGT_$(d) += $(d)/integrated_q.log $(d)/integrated_q_DH219.log
+SRC_$(d) += $(d)/scalar_advection_diffusion.py $(d)/scalar_advection_diffusion_DH219_skew.py
+
+$(d)/integrated_q.log : category := tests
+$(d)/integrated_q.log: $(d)/scalar_advection_diffusion.py
+	$(run-python)
+
+$(d)/integrated_q_DH219.log : category := tests
+$(d)/integrated_q_DH219.log: $(d)/scalar_advection_diffusion_DH219_skew.py
+	$(run-python)
+
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

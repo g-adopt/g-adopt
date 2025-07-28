@@ -1,21 +1,45 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-.PHONY: all clean check
+ifeq ($(d),)
 
-all: final_error.log final_error_adaptive.log num_steps_adaptive.log dt_stats_adaptive.log
+d := .
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 
-final_error.log : category := tests
-final_error.log: scalar_advection.py
-	$(run-python)
+.PHONY: all
+all: $(d)/.done
 
-final_error_adaptive.log num_steps_adaptive.log dt_stats_adaptive.log : category := tests
-final_error_adaptive.log num_steps_adaptive.log dt_stats_adaptive.log: scalar_advection_adaptive.py
-	$(run-python)
+$(d)/.done:
+	$(MAKE) -C .. $(cwd)/.done
 
-clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 *.log
-	rm -f *.log
-	rm -rf output
-
-check: all
+.PHONY: check
+check: $(d)/.done
 	python3 -m pytest
+
+else
+
+TGT_$(d) := $(d)/final_error.log $(d)/final_error_adaptive.log
+SRC_$(d) := $(d)/scalar_advection.py $(d)/scalar_advection_adaptive.py
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 final_error.log .done
+DIR_CLEAN_$(d) := output
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(d)/final_error.log: category := tests
+$(d)/final_error.log: $(d)/scalar_advection.py
+	$(run-python)
+
+$(d)/final_error_adaptive.log: category := tests
+$(d)/final_error_adaptive.log: $(d)/scalar_advection_adaptive.py
+	$(run-python)
+
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
