@@ -20,17 +20,17 @@ check: $(d)/.done
 
 else
 
-$(d)/.done: $(d)/params.log
+TGT_$(d) := $(d)/params.log
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
+DIR_CLEAN_$(d) := output
+
+$(d)/.done: $(TGT_$(d))
 	@touch $@
 
 $(d)/params.log : category := mantle_convection
 $(d)/params.log : ncpus := 4
 $(d)/params.log: $(d)/3d_spherical.py
 	$(run-python)
-
-TGT_$(d) := $(d)/.done
-CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
-DIR_CLEAN_$(d) := output
 
 TGT := $(TGT) $(TGT_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
