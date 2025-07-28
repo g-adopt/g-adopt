@@ -33,7 +33,7 @@ $(d)/.done: $(TGT_$(d))
 	@touch $@
 
 $(d)/adjoint-demo-checkpoint-state.h5: demos/mantle_convection/adjoint/adjoint-demo-checkpoint-state.h5
-	@ln -sf $< $@
+	@ln -sf ../../$< $@
 
 $(TGT_$(d)) : category := tests/adjoint
 $(TGT_$(d)) : ncpus := 2
