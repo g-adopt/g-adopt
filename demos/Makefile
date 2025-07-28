@@ -14,7 +14,7 @@ all:
 
 .PHONY: check
 check:
-	pytest -k 'not ../tests'
+	python3 -m pytest -k "not ../tests"
 
 .PHONY: clean
 clean:
