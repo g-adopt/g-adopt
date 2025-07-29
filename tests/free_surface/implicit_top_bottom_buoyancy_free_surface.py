@@ -16,6 +16,12 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
 
         super().__init__(dt_factor, nx=nx, **kwargs)
 
+    def setup_solver(self):
+        super().setup_solver()
+        if self.solver_parameters == 'iterative':
+            self.stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-6
+            self.stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
+
     def initialise_wavenumber(self):
         lam_dimensional = self.D  # wavelength of load in m
         self.lam = lam_dimensional/self.L0  # dimensionless lambda
