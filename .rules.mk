@@ -13,8 +13,17 @@
 # Variables
 # ---------
 #
-# To configure the recipe, use per-target variables:
-# target : var := value (or the deferred variant)
+# To configure the recipe, use per-target variables. In many cases, we
+# can use simply-expanded variables which get a value directly at the
+# time of assignment, using the colon-equals syntax: target : var :=
+# value
+#
+# However, some variables need recursively-expanded variables. An
+# example is when we refer to an automatic variable like $* (the stem
+# of a pattern rule) for e.g. the current case name. We can't use
+# simple expansion, because $* doesn't exist at definition time. In
+# this case, we define the value with a bare equals sign:
+# target : var = value
 #
 # As a matter of style, it makes it more distinct from a regular rule
 # definition to include a space between the target and the first colon.
@@ -65,12 +74,16 @@ run_cmd = $(if $(BATCH_MODE),$(run_batch),$(run_regular))
 
 exec_cmd = $(if $(filter-out 1,$(ncpus)),mpiexec -np $(ncpus)) python3 $(notdir $<) $(PETSC_FLAGS) $(exec_args)
 
-#
 # Canned recipe
 # -------------
 #
 # In *most* cases, this is the preferred method of executing tasks.
-# For example:
+#
+# Note that this is also responsible for changing to the directory
+# containing the script for execution. If you're not using this
+# recipe, this responsibility falls on you!
+#
+# Example:
 #
 #   target : var := value
 #   target: script.py
@@ -80,18 +93,39 @@ define run-python =
 @(cd $(dir $<); $(call run_cmd,$(exec_cmd),$(or $(desc),$(notdir $<))))
 endef
 
-%.ipynb: %.py
-	jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))
+# ----------------------------------------------------------------------
 
-# recurse into subdirs
+# ======================================
+# Makefile rules for recursive inclusion
+# ======================================
+#
+# See the root Makefile or demos/Makefile for a bit of context into
+# how these rules are used. In short, these are some supporting rules for including subdirectories or defining targets.
+
+# Recursive inclusion
+# -------------------
+#
+# This is the key part of the system. Defining this rule allows us to
+# use $(eval ...) to automatically recurse into subdirectories from a
+# list (rather than manually listing them all).
+#
+# Example:
+#
+#   $(foreach dir,$(dirs),$(eval $(include_subdir)))
+
 define include_subdir =
 dir := $(dir)
 include $$(dir)/Makefile
 endef
 
-# for defining the targets within e.g. demos or tests
-# this relies on make_targets having been called within the
-# directory within the "usual" path
+# Define standalone subdirectory targets
+# --------------------------------------
+#
+# This is for defining the targets within e.g. demos or tests. It
+# should be called within the "standalone execution" branch, and
+# requires that make_targets (below) has been called in the standard
+# branch of execution. See demos/Makefile for the usage example.
+
 define subdir_targets =
 .PHONY: $(1) clean-$(1)
 $(1):
@@ -101,7 +135,13 @@ clean-$(1):
 	$$(MAKE) -C .. clean-$(2)/$(1)
 endef
 
-# for defining the targets of the current directory
+# Define current directory targets
+# --------------------------------
+#
+# This is the other half of the above rule. It defines the targets
+# corresponding to sub-categories. See demos/Makefile for the usage
+# example.
+
 define make_targets =
 .PHONY: $(1) clean-$(1)
 $(1): $$(TGT_$(1))
