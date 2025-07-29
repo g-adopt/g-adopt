@@ -70,14 +70,13 @@ def interface_thickness(
     polynomial degree of the coordinate function space exceeds 1. As a result, the
     default strategy implemented here is to approximate the local minimum edge length
     as the quotient of the `cell_sizes` mesh attribute and the square root of the mesh's
-    geometric dimension. If `MinCellEdgeLength` is desired instead, a value of `True`
-    must be provided for the `min_cell_edge_length` argument. The local minimum edge
-    length is then multiplied by a scaling factor, with a default value of 0.35 that can
-    be modified via the `scale` argument.
+    geometric dimension. If dealing with a compatible mesh, `MinCellEdgeLength` can be
+    used instead by providing a value of `True` for the `min_cell_edge_length` argument.
+    The local minimum edge length is then multiplied by a scaling factor, with a default
+    value of 0.35 that can be modified via the `scale` argument.
 
     **Note**: The two different formulations implemented here are not equivalent and
-    will result in measurable changes, for example, between comparable extruded and
-    non-extruded meshes.
+    will result in measurable changes for an otherwise identical simulation setup.
 
     Args:
       level_set_space:
@@ -96,6 +95,9 @@ def interface_thickness(
         scale /= fd.sqrt(level_set_space.mesh().geometric_dimension())
         epsilon.interpolate(scale * level_set_space.mesh().cell_sizes)
     else:
+        if level_set_space.extruded:
+            raise ValueError("MinCellEdgeLength does not handle extruded meshes.")
+
         epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space))
 
     return epsilon
@@ -530,13 +532,13 @@ class LevelSetSolver:
                 domain=self.mesh, degree=2 * grad_space_degree + 1
             )
         else:
-            ds = fd.ds(domain=self.mesh)
+            ds = fd.ds
 
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
-        bilinear_form = fd.inner(test, trial) * fd.dx(domain=self.mesh)
-        ibp_element = -self.solution * fd.div(test) * fd.dx(domain=self.mesh)
+        bilinear_form = fd.inner(test, trial) * fd.dx
+        ibp_element = -self.solution * fd.div(test) * fd.dx
         ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * ds
         linear_form = ibp_element + ibp_boundary
 
