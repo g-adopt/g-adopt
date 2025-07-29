@@ -36,17 +36,19 @@ $(TGT_$(d)): $(SRC_$(d))
 	@(cd $(dir $<); $(call run_regular,python3 analytical.py submit -t "$(tsp_string)mpiexec -np {cores}" $(case),analytical $(case)))
 	@touch $@
 
-batch_output:
-	mkdir batch_output
+$(d)/batch_output:
+	@mkdir $@
 
 $(HPC_TGT_$(d)) : case = $(patsubst .sentinel.%,%,$(notdir $@))
-$(HPC_TGT_$(d)): $(SRC_$(d)) batch_output clean-$(d)
+$(HPC_TGT_$(d)): $(SRC_$(d)) $(d)/batch_output clean-$(d)
 	(cd $(dir $<); python3 analytical.py submit $(case) -H -o batch_output/$(case)_l{level}_{params}.out -e batch_output/$(case)_l{level}_{params.err}))
 
 TGT := $(TGT) $(TGT_$(d))
 HPC_TGT := $(HPC_TGT) $(HPC_TGT_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
 DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
+$(eval $(call make_targets,$(d)))
 
 endif
 
