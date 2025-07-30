@@ -14,11 +14,11 @@ from warnings import warn
 import firedrake as fd
 from ufl.core.expr import Expr
 
-from .approximations import BaseApproximation, AnelasticLiquidApproximation
+from .approximations import AnelasticLiquidApproximation, BaseApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
-from .momentum_equation import residual_terms_stokes
+from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .utility import (
     DEBUG,
     INFO,
@@ -232,7 +232,7 @@ class MetaPostInit(abc.ABCMeta):
         return class_instance
 
 
-class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
+class SolverBase(abc.ABC, metaclass=MetaPostInit):
     """Solver for a system involving mass and momentum conservation.
 
     ### Valid keys for boundary conditions
@@ -266,7 +266,7 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
         Firedrake function representing the field over the mixed Stokes space
       approximation:
         G-ADOPT approximation defining terms in the system of equations
-      coupled_tstep:
+      dt:
         Float quantifying the time step used in a coupled time integration
       theta:
         Float quantifying the implicit contribution in a coupled time integration
@@ -292,7 +292,7 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
         approximation: BaseApproximation,
         /,
         *,
-        coupled_tstep: float | None = None,
+        dt: float | None = None,
         theta: float = 0.5,
         bcs: dict[int, dict[str, Any]] = {},
         quad_degree: int = 6,
@@ -305,7 +305,7 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
     ) -> None:
         self.solution = solution
         self.approximation = approximation
-        self.coupled_tstep = coupled_tstep
+        self.dt = dt
         self.theta = theta
         self.bcs = bcs
         self.quad_degree = quad_degree
@@ -316,19 +316,27 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
         self.transpose_nullspace = transpose_nullspace
         self.near_nullspace = near_nullspace
 
-        self.eta_ind = 2
-
         self.solution_old = solution.copy(deepcopy=True)
-        self.solution_split = fd.split(solution)
-        self.solution_old_split = fd.split(self.solution_old)
+        self.solution_space = solution.function_space()
+        self.mesh = self.solution_space.mesh()
+        self.k = upward_normal(self.mesh)
+
+        self.is_mixed_space = isinstance(
+            self.solution_space.topological, fd.functionspaceimpl.MixedFunctionSpace
+        )
+        if self.is_mixed_space:
+            self.tests = fd.TestFunctions(self.solution_space)
+            self.solution_split = fd.split(solution)
+            self.solution_old_split = fd.split(self.solution_old)
+        else:
+            self.test = fd.TestFunction(self.solution_space)
+            self.solution_split = (solution,)
+            self.solution_old_split = (self.solution_old,)
+
         self.solution_theta_split = [
             theta * sol + (1 - theta) * sol_old
             for sol, sol_old in zip(self.solution_split, self.solution_old_split)
         ]
-
-        self.solution_space = solution.function_space()
-        self.mesh = self.solution_space.mesh()
-        self.tests = fd.TestFunctions(self.solution_space)
 
         self.equations = []
         self.F = 0.0  # Weak form of the system
@@ -348,7 +356,10 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
         self.strong_bcs = []
         self.weak_bcs = {}
 
-        bc_map = {"u": self.solution_space.sub(0)}
+        if self.is_mixed_space:
+            bc_map = {"u": self.solution_space.sub(0)}
+        else:
+            bc_map = {"u": self.solution_space}
         if self.mesh.cartesian:
             bc_map["ux"] = bc_map["u"].sub(0)
             bc_map["uy"] = bc_map["u"].sub(1)
@@ -368,7 +379,6 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
                         weak_bc["normal_stress"] += self.set_free_surface_boundary(
                             val, bc_id
                         )
-                        self.eta_ind += 1
                     case _:
                         weak_bc[bc_type] += val
 
@@ -494,7 +504,7 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
         self.solution_old.assign(self.solution)
 
 
-class StokesSolver(CoupledMomentumBase):
+class StokesSolver(SolverBase):
     """Solver for the Stokes system.
 
     Args:
@@ -506,7 +516,7 @@ class StokesSolver(CoupledMomentumBase):
         Firedrake function representing the temperature field
       coupled_fields:
         Dictionary in a coupled time integration
-      coupled_tstep:
+      dt:
         Float quantifying the time step used in a coupled time integration
       theta:
         Float quantifying the implicit contribution in a coupled time integration
@@ -572,12 +582,12 @@ class StokesSolver(CoupledMomentumBase):
             {"u": u, "rho_mass": self.approximation.rho_continuity()},
         ]
 
-        for i in range(len(residual_terms_stokes)):
+        for i in range(len(stokes_terms)):
             self.equations.append(
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    residual_terms_stokes[i],
+                    stokes_terms[i],
                     eq_attrs=eqs_attrs[i],
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
@@ -727,16 +737,16 @@ def ala_right_nullspace(
     return p
 
 
-class ViscoelasticStokesSolver(CoupledMomentumBase):
+class ViscoelasticStokesSolver(SolverBase):
     """Solves the Stokes system assuming a Maxwell viscoelastic rheology.
 
     Args:
       solution:
         Firedrake function representing the field over the mixed Stokes space.
-      displ:
-        Firedrake function representing the total displacement.
-      tau_old:
+      stress_old:
         Firedrake function representing the deviatoric stress at the previous time step.
+      displacement:
+        Firedrake function representing the total displacement.
       approximation:
         G-ADOPT approximation defining terms in the system of equations.
       dt:
@@ -762,73 +772,162 @@ class ViscoelasticStokesSolver(CoupledMomentumBase):
     def __init__(
         self,
         solution: fd.Function,
-        displ: fd.Function,
-        tau_old: fd.Function,
+        stress_old: fd.Function,
+        displacement: fd.Function,
         approximation: BaseApproximation,
         dt: float | fd.Constant | fd.Function,
         **kwargs,
     ) -> None:
-        super().__init__(solution, approximation, **kwargs)
+        super().__init__(solution, approximation, dt=dt, **kwargs)
 
-        self.displ = displ
-        self.tau_old = tau_old
-        self.dt = dt
+        self.u, self.p = self.solution_split[:2]
+        self.stress_old = stress_old
+        self.displacement = displacement
 
         # Effective viscosity
-        approximation.mu = approximation.effective_viscosity(dt)
-        # Scaling factor for the previous stress
-        self.stress_scale = self.approximation.prefactor_prestress(dt)
+        self.approximation.mu = approximation.effective_viscosity(self.dt)
 
-    def set_free_surface_boundary(
-        self, params_fs: dict[str, int | bool], bc_id: int
-    ) -> Expr:
-        # First, make the displacement term implicit by incorporating the unknown
-        # `incremental displacement' (u) that we are solving for. Then, calculate the
-        # free surface stress term. This is also referred to as the Hydrostatic
-        # Prestress advection term in the GIA literature.
-        u, p = self.solution_split
-        normal_stress, _ = self.approximation.free_surface_terms(
-            p, 0.0, vertical_component(u + self.displ), **params_fs
-        )
-
-        return normal_stress
+    def setup_free_surface(self):
+        # Overload method
+        for free_surface_id, free_surface_params in self.free_surface_dict.items():
+            # First, make the displacement term implicit by incorporating
+            # the unknown `incremental displacement' (u) that
+            # we are solving for
+            implicit_displacement = self.u + self.displacement
+            implicit_displacement_up = fd.dot(implicit_displacement, self.k)
+            # Add free surface stress term. This is also referred to as the Hydrostatic Prestress advection term in the GIA literature.
+            normal_stress, _ = self.approximation.free_surface_terms(
+                implicit_displacement_up, **free_surface_params
+            )
+            if "normal_stress" in self.weak_bcs[free_surface_id]:
+                # Usually there will be also an ice/water loadi acting as a normal stress in the GIA problem
+                existing_value = self.weak_bcs[free_surface_id]["normal_stress"]
+                self.weak_bcs[free_surface_id]["normal_stress"] = (
+                    existing_value + normal_stress
+                )
+            else:
+                self.weak_bcs[free_surface_id] = {"normal_stress": normal_stress}
 
     def set_equations(self) -> None:
         """Sets up UFL forms for the viscoelastic Stokes equations residual."""
-        u, p = self.solution_split
-        stress = self.approximation.stress(u, self.tau_old, self.dt)
-        source = self.approximation.buoyancy(self.displ) * upward_normal(self.mesh)
+        stress = self.approximation.stress(self.u, self.stress_old, self.dt)
+        source = self.approximation.buoyancy(self.displacement) * self.k
+        rho_mass = self.approximation.rho_continuity()
         eqs_attrs = [
-            {"p": p, "stress": stress, "source": source},
-            {"u": u, "rho_mass": self.approximation.rho_continuity()},
+            {"p": self.p, "stress": stress, "source": source},
+            {"u": self.u, "rho_mass": rho_mass},
         ]
 
-        for i in range(len(residual_terms_stokes)):
+        scale_mu = fd.Constant(
+            1 / 1e10
+        )  # this is a scaling factor roughly size of mantle maxwell time to make sure that solve converges with strong bcs in parallel...
+        for i in range(len(stokes_terms)):
             self.equations.append(
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    residual_terms_stokes[i],
+                    stokes_terms[i],
                     eq_attrs=eqs_attrs[i],
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
                     quad_degree=self.quad_degree,
-                    # Scaling factor roughly size of mantle Maxwell time to make sure
-                    # that solve converges with strong bcs in parallel
-                    scaling_factor=1e-10,
+                    scaling_factor=scale_mu,
                 )
             )
 
-    def solve(self) -> None:
-        super().solve()
-
+    def solver_callback(self) -> None:
         # Update history stress term for using as a RHS explicit forcing in the next timestep
         # Interpolating with adjoint seems to need subfunction...
         # otherwise 'map toset must be same as Dataset' error
         u_sub = self.solution.subfunctions[0]
-        self.displ.interpolate(self.displ + u_sub)
-        self.tau_old.interpolate(
-            self.stress_scale * self.approximation.stress(u_sub, self.tau_old, self.dt)
+        self.stress_old.interpolate(
+            self.approximation.prefactor_prestress(self.dt)
+            * self.approximation.stress(u_sub, self.stress_old, self.dt)
+        )
+        self.displacement.interpolate(self.displacement + u_sub)
+
+
+class InternalVariableSolver(SolverBase):
+    """Solver for internal variable viscoelastic formulation.
+
+    Args:
+      solution:
+        Firedrake function representing the field over the mixed dipslacement, internal variable space
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations
+      dt:
+        Float quantifying the time step used in a coupled time integration
+      theta:
+        Float quantifying the implicit contribution in a coupled time integration
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      quad_degree:
+        Integer denoting the quadrature degree
+      solver_parameters:
+        Dictionary of PETSc solver options or string matching a default set thereof
+      J:
+        Firedrake function representing the Jacobian of the mixed Stokes system
+      constant_jacobian:
+        Boolean specifying whether the Jacobian of the system is constant
+    """
+
+    name = "InternalVariable"
+
+    def __init__(
+        self,
+        solution: fd.Function,
+        approximation: BaseApproximation,
+        /,
+        m: fd.Function,
+        **kwargs,
+    ) -> None:
+        super().__init__(solution, approximation, **kwargs)
+        self.m = m
+
+        # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
+        self.approximation.mu = approximation.shear_modulus
+
+    def set_equations(self) -> None:
+        self.strain = self.approximation.deviatoric_strain(self.solution)
+
+        m_new = (self.m + self.dt / self.approximation.maxwell_time * self.strain) / (
+            1 + self.dt / self.approximation.maxwell_time
+        )
+        stress = self.approximation.stress(self.solution, [m_new])
+        source = self.approximation.buoyancy(self.solution) * self.k
+
+        eqs_attrs = {"stress": stress, "source": source}
+
+        self.equations.append(
+            Equation(
+                self.test,
+                self.solution_space,
+                compressible_viscoelastic_terms,
+                eq_attrs=eqs_attrs,
+                approximation=self.approximation,
+                bcs=self.weak_bcs,
+                quad_degree=self.quad_degree,
+            )
+        )
+
+    def set_free_surface_boundary(
+        self, params_fs: dict[str, int | bool], bc_id: int
+    ) -> Expr:
+        normal_stress = params_fs.get("normal_stress", 0.0)
+        # Add free surface stress term. This is also referred to as the Hydrostatic
+        # Prestress advection term in the GIA literature.
+        normal_stress += self.approximation.hydrostatic_prestress_advection(
+            vertical_component(self.solution)
+        )
+
+        return normal_stress
+
+    def solve(self) -> None:
+        super().solve()
+        # Update internal variable term for using as a RHS explicit forcing in the next timestep
+        self.m.interpolate(
+            (self.m + self.dt / self.maxwell_time * self.strain)
+            / (1 + self.dt / self.maxwell_time)
         )
 
 
