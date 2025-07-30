@@ -12,6 +12,7 @@ from typing import Any, Optional
 from warnings import warn
 
 import firedrake as fd
+from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, AnelasticLiquidApproximation
 from .equations import Equation
@@ -149,7 +150,9 @@ def create_stokes_nullspace(
     """
     # ala_approximation and top_subdomain_id are both needed when calculating right nullspace for ala
     if (ala_approximation is None) != (top_subdomain_id is None):
-        raise ValueError("Both ala_approximation and top_subdomain_id must be provided, or both must be None.")
+        raise ValueError(
+            "Both ala_approximation and top_subdomain_id must be provided, or both must be None."
+        )
 
     X = fd.SpatialCoordinate(Z.mesh())
     dim = len(X)
@@ -157,12 +160,20 @@ def create_stokes_nullspace(
 
     if rotational:
         if dim == 2:
-            rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((-X[1], X[0])))
+            rotV = fd.Function(stokes_subspaces[0]).interpolate(
+                fd.as_vector((-X[1], X[0]))
+            )
             basis = [rotV]
         elif dim == 3:
-            x_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((0, -X[2], X[1])))
-            y_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((X[2], 0, -X[0])))
-            z_rotV = fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector((-X[1], X[0], 0)))
+            x_rotV = fd.Function(stokes_subspaces[0]).interpolate(
+                fd.as_vector((0, -X[2], X[1]))
+            )
+            y_rotV = fd.Function(stokes_subspaces[0]).interpolate(
+                fd.as_vector((X[2], 0, -X[0]))
+            )
+            z_rotV = fd.Function(stokes_subspaces[0]).interpolate(
+                fd.as_vector((-X[1], X[0], 0))
+            )
             basis = [x_rotV, y_rotV, z_rotV]
         else:
             raise ValueError("Unknown dimension")
@@ -173,7 +184,9 @@ def create_stokes_nullspace(
         for tdim in translations:
             vec = [0] * dim
             vec[tdim] = 1
-            basis.append(fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector(vec)))
+            basis.append(
+                fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector(vec))
+            )
 
     if basis:
         V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
@@ -183,7 +196,11 @@ def create_stokes_nullspace(
 
     if closed:
         if ala_approximation:
-            p = ala_right_nullspace(W=stokes_subspaces[1], approximation=ala_approximation, top_subdomain_id=top_subdomain_id)
+            p = ala_right_nullspace(
+                W=stokes_subspaces[1],
+                approximation=ala_approximation,
+                top_subdomain_id=top_subdomain_id,
+            )
             p_nullspace = fd.VectorSpaceBasis([p], comm=Z.mesh().comm)
             p_nullspace.orthonormalize()
         else:
@@ -335,7 +352,7 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
         if self.mesh.cartesian:
             bc_map["ux"] = bc_map["u"].sub(0)
             bc_map["uy"] = bc_map["u"].sub(1)
-            if self.mesh.geometric_dimension == 3:
+            if self.mesh.geometric_dimension() == 3:
                 bc_map["uz"] = bc_map["u"].sub(2)
 
         for bc_id, bc in self.bcs.items():
@@ -526,7 +543,7 @@ class StokesSolver(CoupledMomentumBase):
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
-    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+    ) -> Expr:
         # Associate the free-surface index with the boundary id
         # Note: This assumes that ordering of the free-surface boundary conditions is
         # the same as that of free-surface functions in the mixed space.
@@ -618,7 +635,7 @@ class StokesSolver(CoupledMomentumBase):
           The force acting on the boundary.
 
         """
-        if not hasattr(self, 'BoundaryNormalStressSolvers'):
+        if not hasattr(self, "BoundaryNormalStressSolvers"):
             self.BoundaryNormalStressSolvers = {}
 
         if subdomain_id not in self.BoundaryNormalStressSolvers:
@@ -630,9 +647,10 @@ class StokesSolver(CoupledMomentumBase):
 
 
 def ala_right_nullspace(
-        W: fd.functionspaceimpl.WithGeometry,
-        approximation: AnelasticLiquidApproximation,
-        top_subdomain_id: str | int):
+    W: fd.functionspaceimpl.WithGeometry,
+    approximation: AnelasticLiquidApproximation,
+    top_subdomain_id: str | int,
+):
     r"""Compute pressure nullspace for Anelastic Liquid Approximation.
 
         Arguments:
@@ -694,13 +712,16 @@ def ala_right_nullspace(
     p = fd.Function(W, name="pressure_nullspace")
 
     # Fix the solution at the top boundary
-    bc = fd.DirichletBC(W, 1., top_subdomain_id)
+    bc = fd.DirichletBC(W, 1.0, top_subdomain_id)
 
     F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
 
     k = upward_normal(W.mesh())
 
-    F += - fd.inner(fd.grad(q), k * approximation.dbuoyancydp(p, fd.Constant(1.0)) * p) * fd.dx
+    F += (
+        -fd.inner(fd.grad(q), k * approximation.dbuoyancydp(p, fd.Constant(1.0)) * p)
+        * fd.dx
+    )
 
     fd.solve(F == 0, p, bcs=bc)
     return p
@@ -760,7 +781,7 @@ class ViscoelasticStokesSolver(CoupledMomentumBase):
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
-    ) -> fd.ufl.algebra.Product | fd.ufl.algebra.Sum:
+    ) -> Expr:
         # First, make the displacement term implicit by incorporating the unknown
         # `incremental displacement' (u) that we are solving for. Then, calculate the
         # free surface stress term. This is also referred to as the Hydrostatic
@@ -855,11 +876,7 @@ class BoundaryNormalStressSolver:
 
     name = "BoundaryNormalStressSolver"
 
-    def __init__(self,
-                 stokes_solver: StokesSolver,
-                 subdomain_id: int | str,
-                 **kwargs
-                 ):
+    def __init__(self, stokes_solver: StokesSolver, subdomain_id: int | str, **kwargs):
         # pressure and velocity together with viscosity are needed
         self.u, self.p, *self.eta = stokes_solver.solution.subfunctions
 
@@ -879,7 +896,7 @@ class BoundaryNormalStressSolver:
             "solver_parameters",
             BoundaryNormalStressSolver.direct_solve_parameters
             if stokes_solver.solver_parameters == direct_stokes_solver_parameters
-            else BoundaryNormalStressSolver.iterative_solver_parameters
+            else BoundaryNormalStressSolver.iterative_solver_parameters,
         )
 
         self._solver_is_set_up = False
@@ -898,7 +915,7 @@ class BoundaryNormalStressSolver:
         self.solver.solve()
 
         # Take the average out
-        vave = fd.assemble(self.force * self.ds) / fd.assemble(1 * self.ds(self.mesh))
+        vave = fd.assemble(self.force * self.ds) / fd.assemble(1 * self.ds)
         self.force.assign(self.force - vave)
 
         # Re-apply the zero condition everywhere except for the boundary
@@ -911,8 +928,12 @@ class BoundaryNormalStressSolver:
         # Pressure is chosen as it has a lower rank compared to velocity
         # If pressure is discontinuous, we need to use a continuous equivalent
         if not is_continuous(self.p):
-            warn("BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element.")
-            Q = fd.FunctionSpace(self.mesh, "Lagrange", self.p.function_space().ufl_element().degree())
+            warn(
+                "BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element."
+            )
+            Q = fd.FunctionSpace(
+                self.mesh, "Lagrange", self.p.function_space().ufl_element().degree()
+            )
         else:
             Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
 
@@ -924,30 +945,33 @@ class BoundaryNormalStressSolver:
         phi = fd.TestFunction(Q)
         v = fd.TrialFunction(Q)
 
-        stress_with_pressure = (
-            self.approximation.stress(self.u)
-            - self.p * fd.Identity(self.dim)
+        stress_with_pressure = self.approximation.stress(self.u) - self.p * fd.Identity(
+            self.dim
         )
 
+        ds_kwargs = {
+            "domain": self.mesh,
+            "degree": self._kwargs.get("quad_degree", None),
+        }
         if self.mesh.extruded and self.subdomain_id in ["top", "bottom"]:
-            self.ds = {"top": fd.ds_t, "bottom": fd.ds_b}.get(self.subdomain_id)
+            self.ds = (fd.ds_t if self.subdomain_id == "top" else fd.ds_b)(**ds_kwargs)
         else:
-            self.ds = fd.ds(self.subdomain_id)
+            self.ds = fd.ds(self.subdomain_id, **ds_kwargs)
 
         # Setting up the variational problem
         a = phi * v * self.ds
-        L = - phi * fd.dot(fd.dot(stress_with_pressure, n), n) * self.ds
+        L = -phi * fd.dot(fd.dot(stress_with_pressure, n), n) * self.ds
 
         # Setting up boundary condition, problem and solver
         # The field is only meaningful on the boundary, so set zero everywhere else
-        self.interior_null_bc = InteriorBC(Q, 0., [self.subdomain_id])
+        self.interior_null_bc = InteriorBC(Q, 0.0, [self.subdomain_id])
 
-        self.problem = fd.LinearVariationalProblem(a, L, self.force,
-                                                   bcs=self.interior_null_bc,
-                                                   constant_jacobian=True)
+        self.problem = fd.LinearVariationalProblem(
+            a, L, self.force, bcs=self.interior_null_bc, constant_jacobian=True
+        )
         self.solver = fd.LinearVariationalSolver(
             self.problem,
             solver_parameters=self.solver_parameters,
-            options_prefix=f"{BoundaryNormalStressSolver.name}_{self.subdomain_id}"
+            options_prefix=f"{BoundaryNormalStressSolver.name}_{self.subdomain_id}",
         )
         self._solver_is_set_up = True

@@ -28,12 +28,14 @@ boundary = get_boundary_ids(mesh)
 
 # Defining Function Spaces
 # ------------------------
-# We set up the function spaces for velocity (Q2), pressure (Q1), and temperature (Q2). These function spaces will be
-# used to define the solution fields for our simulation.
+# We set up the function spaces for velocity (Q2), pressure (Q1), and temperature (Q2-DG). These function spaces will be
+# used to define the solution fields for our simulation. Note that we choose to use a DG function space for temperature here
+# relative to the CG discretisation in our base case because DG handles sharp gradients and advective transport more robustly,
+# offering better stability and reduced spurious oscillations—especially in under-resolved or highly convective regimes.
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar)
 Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
 Z = MixedFunctionSpace([V, W])  # Mixed function space for Stokes problem.
 

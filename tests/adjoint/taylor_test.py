@@ -37,8 +37,11 @@ def rectangle_taylor_test(case, scheduler_name):
     if not annotate_tape():
         continue_annotation()
 
+    if scheduler_name == "fullstorage":
+        enable_disk_checkpointing()
+
     # Schedulers are needed only for timestepping
-    if case in ["Tobs", "uobs"]:
+    if case in ["Tobs", "uobs", "uimposed"] and schedules[scheduler_name] is not None:
         tape.enable_checkpointing(schedules[scheduler_name])
 
     with CheckpointFile(str(checkpoint_filename), "r") as f:
@@ -83,9 +86,10 @@ def rectangle_taylor_test(case, scheduler_name):
 
     # Followed by boundary conditions, noting that all boundaries are free slip, whilst the domain is
     # heated from below (T = 1) and cooled from above (T = 0).
+    uobs = Function(V, name="Observed_Velocity")
     stokes_bcs = {
         boundary.bottom: {"uy": 0},
-        boundary.top: {"uy": 0},
+        boundary.top: {"uy": 0} if case != "uimposed" else {"u": uobs},
         boundary.left: {"ux": 0},
         boundary.right: {"ux": 0},
     }
@@ -138,12 +142,14 @@ def rectangle_taylor_test(case, scheduler_name):
 
     # Next populate the tape by running the forward simulation.
     for time_idx in tape.timestepper(iter(range(initial_timestep, timesteps))):
-        stokes_solver.solve()
-        energy_solver.solve()
         # Update the accumulated surface velocity misfit using the observed value.
         with CheckpointFile(str(checkpoint_filename), "r") as f:
-            uobs = f.load_function(mesh, name="Velocity", idx=time_idx)
-        u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
+            uobs.assign(f.load_function(mesh, name="Velocity", idx=time_idx))
+
+        stokes_solver.solve()
+        energy_solver.solve()
+        if case == "uobs":
+            u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
 
     # Define component terms of overall objective functional and their normalisation terms:
     damping = assemble((T0 - Taverage) ** 2 * dx)
@@ -156,7 +162,7 @@ def rectangle_taylor_test(case, scheduler_name):
     # Define temperature misfit between final state solution and observation:
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
-    if case == "Tobs":
+    if case in ["Tobs", "uimposed"]:
         objective = t_misfit
     elif case == "uobs":
         objective = norm_obs * u_misfit / timesteps / norm_u_surface

@@ -100,55 +100,44 @@ T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
-# We now provide initial conditions for the level-set field. To this end, we use the
-# `shapely` library to represent the initial location of the material interface and
-# derive the signed-distance function. Finally, we apply the transformation to obtain a
-# smooth step function profile.
+# We now initialise the level-set field. All we have to provide to G-ADOPT is a
+# mathematical description of the interface location and use the available API. In this
+# case, the interface is a curve and can be geometrically represented as a straight
+# line. In general, specifying a mathematical function would warrant supplying a
+# callable (e.g. a function) implementing the mathematical operations, but given the
+# common use of straight lines, G-ADOPT already provides it and only callable arguments
+# are required here. Additional presets are available for usual scenarios, and the API
+# is sufficiently flexible to generate most shapes. Under the hood, G-ADOPT uses the
+# `Shapely` library to determine the signed-distance function associated with the
+# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
+# from the signed-distance function.
 
 # +
-import numpy as np  # noqa: E402
-import shapely as sl  # noqa: E402
+# Initialise the level-set field according to the conservative level-set approach.
+# Here, the material interface is a horizontal straight line, and so the conservative
+# level-set field can be simply defined using mesh coordinates. We first express the
+# signed-distance function and then use G-ADOPT's API to generate the thickness of the
+# hyperbolic tangent profile and update the level-set field values.
+x, y = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
+interface_coord_y = 0.025
+signed_distance = interface_coord_y - y
 
+epsilon = interface_thickness(K)
+assign_level_set_values(psi, epsilon, signed_distance)
+# -
 
-def straight_line(x, slope, intercept):
-    """Straight line equation"""
-    return slope * x + intercept
+# Let us visualise the location of the material interface that we have just initialised.
+# To this end, we use Firedrake's built-in plotting functionality.
 
+# + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
+# from numpy import linspace
 
-interface_slope = 0  # Slope of the interface
-material_interface_y = 0.025  # Vertical shift of the interface along the y axis
-# Group parameters defining the straight-line profile
-isd_params = (interface_slope, material_interface_y)
-
-# Shapely LineString representation of the material interface
-interface_x = np.linspace(0, lx, 1000)  # Enough points to capture the interface shape
-interface_y = straight_line(interface_x, *isd_params)
-line_string = sl.LineString([*np.column_stack((interface_x, interface_y))])
-sl.prepare(line_string)
-
-# Extract node coordinates
-node_coords_x, node_coords_y = node_coordinates(psi)
-# Determine to which material nodes belong and calculate distance to interface
-node_relation_to_curve = [
-    (
-        node_coord_y > straight_line(node_coord_x, *isd_params),
-        line_string.distance(sl.Point(node_coord_x, node_coord_y)),
-    )
-    for node_coord_x, node_coord_y in zip(node_coords_x, node_coords_y)
-]
-
-# Define the signed-distance function and overwrite its value array
-signed_dist_to_interface = Function(K)
-signed_dist_to_interface.dat.data[:] = [
-    dist if is_above else -dist for is_above, dist in node_relation_to_curve
-]
-
-# Define thickness of the hyperbolic tangent profile
-min_mesh_edge_length = 5e-3
-epsilon = Constant(min_mesh_edge_length / 4)
-
-# Initialise level set as a smooth step function
-psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
+# fig, axes = plt.subplots()
+# axes.set_aspect("equal")
+# contours = tricontourf(psi, levels=linspace(0, 1, 11), axes=axes, cmap="PiYG")
+# tricontour(psi, axes=axes, levels=[0.5])
+# fig.colorbar(contours, label="Conservative level-set")
 # -
 
 # We next define materials present in the simulation using the `Material` class. Here,
@@ -163,15 +152,11 @@ psi.interpolate((1 + tanh(signed_dist_to_interface / 2 / epsilon)) / 2)
 # using averaging schemes, such as arithmetic, geometric, and harmonic means.
 
 # +
-dense_material = Material(RaB=4.5e5)
-reference_material = Material(RaB=0)
-materials = [dense_material, reference_material]
-
 Ra = 3e5  # Thermal Rayleigh number
-
-RaB = field_interface(
-    [psi], [material.RaB for material in materials], method="arithmetic"
-)  # Compositional Rayleigh number, defined based on each material value and location
+# Compositional Rayleigh number, defined based on each material value and location
+RaB_dense = 4.5e5
+RaB_reference = 0.0
+RaB = material_field(psi, [RaB_reference, RaB_dense], interface="arithmetic")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # -
@@ -208,19 +193,15 @@ temp_bcs = {boundary.bottom: {"T": 1}, boundary.top: {"T": 0}}
 # We move on to initialising the temperature field.
 
 # +
-X = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
-
 # Calculate quantities linked to the temperature initial condition using UFL
 u0 = lx ** (7 / 3) / (1 + lx**4) ** (2 / 3) * (Ra / 2 / sqrt(pi)) ** (2 / 3)
 v0 = u0
 Q_ic = 2 * sqrt(lx / pi / u0)
-Tu = erf((1 - X[1]) / 2 * sqrt(u0 / X[0])) / 2
-Tl = 1 - 1 / 2 * erf(X[1] / 2 * sqrt(u0 / (lx - X[0])))
-Tr = 1 / 2 + Q_ic / 2 / sqrt(pi) * sqrt(v0 / (X[1] + 1)) * exp(
-    -(X[0] ** 2) * v0 / (4 * X[1] + 4)
-)
-Ts = 1 / 2 - Q_ic / 2 / sqrt(pi) * sqrt(v0 / (2 - X[1])) * exp(
-    -((lx - X[0]) ** 2) * v0 / (8 - 4 * X[1])
+Tu = erf((1 - y) / 2 * sqrt(u0 / x)) / 2
+Tl = 1 - 1 / 2 * erf(y / 2 * sqrt(u0 / (lx - x)))
+Tr = 1 / 2 + Q_ic / 2 / sqrt(pi) * sqrt(v0 / (y + 1)) * exp(-(x**2) * v0 / (4 * y + 4))
+Ts = 1 / 2 - Q_ic / 2 / sqrt(pi) * sqrt(v0 / (2 - y)) * exp(
+    -((lx - x) ** 2) * v0 / (8 - 4 * y)
 )
 
 # Interpolate temperature initial condition and ensure boundary condition values
@@ -231,8 +212,9 @@ DirichletBC(Q, 0, boundary.top).apply(T)
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
 # that uses the XML-based VTK file format. We also open a file for logging, instantiate
-# G-ADOPT geodynamical diagnostic utility, and define some parameters specific to this
-# problem.
+# G-ADOPT's geodynamical diagnostic utility, and define parameters to compute an
+# additional diagnostic specific to multi-material simulations, namely material
+# entrainment.
 
 # +
 output_file = VTKFile("output.pvd")
@@ -242,7 +224,7 @@ plog.log_str("step time dt u_rms entrainment")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
-material_area = material_interface_y * lx  # Area of tracked material in the domain
+material_area = interface_coord_y * lx  # Area of tracked material in the domain
 entrainment_height = 0.2  # Height above which entrainment diagnostic is calculated
 # -
 
@@ -267,10 +249,12 @@ stokes_solver = StokesSolver(
     transpose_nullspace=Z_nullspace,
 )
 
-subcycles = 1  # Number of advection solves to perform within one time step
-level_set_solver = LevelSetSolver(psi, u, delta_t, eSSPRKs10p3, subcycles, epsilon)
-# Increase the reinitialisation time step to make up for the coarseness of the mesh
-level_set_solver.reini_params["tstep"] *= 20
+# Instantiate a solver object for level-set advection and reinitialisation. G-ADOPT
+# provides default values for most arguments; we only provide those that do not have
+# one. No boundary conditions are required, as the numerical domain is closed.
+adv_kwargs = {"u": u, "timestep": delta_t}
+reini_kwargs = {"epsilon": epsilon}
+level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -300,10 +284,17 @@ while True:
     energy_solver.solve()
 
     # Advect level set
-    level_set_solver.solve(step)
+    level_set_solver.solve()
 
     # Calculate proportion of material entrained above a given height
-    buoy_entr = entrainment(psi, material_area, entrainment_height)
+    buoy_entr = material_entrainment(
+        psi,
+        material_size=material_area,
+        entrainment_height=entrainment_height,
+        side=0,
+        direction="above",
+        skip_material_size_check=True,
+    )
 
     # Log diagnostics
     plog.log_str(f"{step} {time_now} {float(delta_t)} {gd.u_rms()} {buoy_entr}")

@@ -450,14 +450,18 @@ def step_func(r, centre, mag, increasing=True, sharpness=50):
     )
 
 
-def node_coordinates(function):
-    """Extract mesh coordinates and interpolate them onto the relevant function space"""
-    func_space = function.function_space()
-    mesh_coords = SpatialCoordinate(func_space.mesh())
+def node_coordinates(function: Function) -> Function:
+    """Interpolates mesh coordinates at each node of the provided function.
 
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]
+    Args:
+      function: A Firedrake function
+
+    Returns:
+      A Firedrake function for the interpolated mesh coordinates
+    """
+    vec_space = VectorFunctionSpace(function.ufl_domain(), function.ufl_element())
+
+    return Function(vec_space).interpolate(SpatialCoordinate(function))
 
 
 def interpolate_1d_profile(function: Function, one_d_filename: str):
@@ -508,13 +512,13 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
     # in its own mesh creation functions.
 
     if mesh.topology_dm.hasLabel("Face Sets"):
-        axis_extremes_order = [["left", "right"], ["bottom", "top"], ["front", "back"]]
+        axis_extremes_order = [["left", "right"], ["bottom", "top"]]
         dim = mesh.geometric_dimension()
         plex_dim = mesh.topology_dm.getCoordinateDim()  # In an extruded mesh, this is different to the
         # firedrake-assigned geometric_dimension
-        if dim == 3 and plex_dim == 2:
-            # For extruded 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
-            axis_extremes_order = [["left", "right"], ["front", "back"], ["bottom", "top"]]
+        if dim == 3:
+            # For 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
+            axis_extremes_order.insert(1, ["front", "back"])
         bounding_box = mesh.topology_dm.getBoundingBox()
         boundary_tol = [abs(dim[1] - dim[0]) * 1e-6 for dim in bounding_box]
         if dim > 3:
