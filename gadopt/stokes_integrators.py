@@ -418,7 +418,7 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
         ):
             if equation.mass_term:
                 assert equation.scaling_factor == -self.theta
-                self.F += equation.mass((solution - solution_old) / self.coupled_tstep)
+                self.F += equation.mass((solution - solution_old) / self.dt)
             self.F -= equation.residual(solution)
 
     def set_solver_options(self) -> None:
@@ -549,6 +549,7 @@ class StokesSolver(SolverBase):
         self.T = T
 
         self.free_surface_map = {}
+        self.eta_ind = 2
         self.buoyancy_fs = [None] * len(self.solution_split)
 
     def set_free_surface_boundary(
@@ -570,7 +571,7 @@ class StokesSolver(SolverBase):
                 **params_fs,
             )
         )
-
+        self.eta_ind += 1
         return normal_stress
 
     def set_equations(self) -> None:
@@ -598,7 +599,7 @@ class StokesSolver(SolverBase):
         for bc_id, eta_ind in self.free_surface_map.items():
             eq_attrs = {
                 "boundary_id": bc_id,
-                "buoyancy": self.buoyancy_fs[eta_ind],
+                "buoyancy_scale": self.buoyancy_fs[eta_ind],
                 "u": u,
             }
 
