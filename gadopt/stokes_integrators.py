@@ -853,23 +853,11 @@ class InternalVariableSolver(SolverBase):
 
     Args:
       solution:
-        Firedrake function representing the field over the mixed dipslacement, internal variable space
+        Firedrake function representing the displacement solution
       approximation:
         G-ADOPT approximation defining terms in the system of equations
-      dt:
-        Float quantifying the time step used in a coupled time integration
-      theta:
-        Float quantifying the implicit contribution in a coupled time integration
-      bcs:
-        Dictionary specifying boundary conditions (identifier, type, and value)
-      quad_degree:
-        Integer denoting the quadrature degree
-      solver_parameters:
-        Dictionary of PETSc solver options or string matching a default set thereof
-      J:
-        Firedrake function representing the Jacobian of the mixed Stokes system
-      constant_jacobian:
-        Boolean specifying whether the Jacobian of the system is constant
+      m_list:
+        List of internal variables
     """
 
     name = "InternalVariable"
@@ -879,22 +867,21 @@ class InternalVariableSolver(SolverBase):
         solution: fd.Function,
         approximation: BaseApproximation,
         /,
-        m: fd.Function,
+        m_list: list,
         **kwargs,
     ) -> None:
         super().__init__(solution, approximation, **kwargs)
-        self.m = m
+        self.m_list = m_list
 
         # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
-        self.approximation.mu = approximation.shear_modulus
+        self.approximation.mu = approximation.mu0
 
     def set_equations(self) -> None:
         self.strain = self.approximation.deviatoric_strain(self.solution)
 
-        m_new = (self.m + self.dt / self.approximation.maxwell_time * self.strain) / (
-            1 + self.dt / self.approximation.maxwell_time
-        )
-        stress = self.approximation.stress(self.solution, [m_new])
+        m_new_list = [self.update_m(m, alpha) for m, alpha in zip(self.m_list, self.approximation.maxwell_times)]
+
+        stress = self.approximation.stress(self.solution, m_new_list)
         source = self.approximation.buoyancy(self.solution) * self.k
 
         eqs_attrs = {"stress": stress, "source": source}
@@ -923,13 +910,16 @@ class InternalVariableSolver(SolverBase):
 
         return normal_stress
 
+    def update_m(self, m, alpha):
+        # Return updated internal variable using Backward Euler formula
+        m_new = (m + self.dt / alpha * self.strain) / (1 + self.dt / alpha)
+        return m_new
+
     def solve(self) -> None:
         super().solve()
         # Update internal variable term for using as a RHS explicit forcing in the next timestep
-        self.m.interpolate(
-            (self.m + self.dt / self.maxwell_time * self.strain)
-            / (1 + self.dt / self.maxwell_time)
-        )
+        for m, alpha in zip(self.m_list, self.approximation.maxwell_times):
+            m.interpolate(self.update_m(m, alpha))
 
 
 class BoundaryNormalStressSolver:

@@ -455,8 +455,6 @@ class SmallDisplacementViscoelasticApproximation:
         self.g = ensure_constant(g)
         self.Vi = ensure_constant(Vi)
 
-        self.maxwell_time = viscosity / shear_modulus
-
     def buoyancy(self, displacement):
         # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
         # accounts for advection of density in the absence of an evolution equation for temperature
@@ -501,6 +499,10 @@ class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximatio
     """
 
     compressible = False
+
+    def __init__(self):
+        super().__init__()
+        self.maxwell_time = self.viscosity / self.shear_modulus
 
     def effective_viscosity(self, dt):
         return self.viscosity / (self.maxwell_time + dt / 2)
@@ -550,6 +552,8 @@ class CompressibleInternalVariableApproximation(
         self.compressible_buoyancy = compressible_buoyancy
         self.compressible_adv_hyd_pre = compressible_adv_hyd_pre
         super().__init__(density, shear_modulus, viscosity, **kwargs)
+        self.maxwell_times = [ensure_constant(visc / mu) for visc, mu in zip(self.viscosity, self.shear_modulus)]
+        self.mu0 = ensure_constant(sum(self.shear_modulus))
 
     def div_u(self, u):
         dim = len(u)
@@ -563,12 +567,11 @@ class CompressibleInternalVariableApproximation(
     def stress(self, u, m_list):
         div_u = self.div_u(u)
         d = self.deviatoric_strain(u)
-        stress = (
-            self.bulk_shear_ratio * self.bulk_modulus * div_u
-            + 2 * len(m_list) * self.shear_modulus * d
-        )
-        for m in m_list:
-            stress -= 2 * self.shear_modulus * m
+
+        stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
+        stress += 2 * self.mu0 * d
+        for mu, m in zip(self.shear_modulus, m_list):
+            stress -= 2 * mu * m
         return stress
 
     # analytical solution for compressibility only converges without this term...
