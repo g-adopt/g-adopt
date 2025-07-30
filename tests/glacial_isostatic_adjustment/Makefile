@@ -10,7 +10,7 @@ all: $(output_files)
 errors-%-free-surface.dat : category := tests/gia
 errors-%-free-surface.dat : exec_args = --case $*
 errors-%-free-surface.dat : desc = $*
-errors-%-free-surface.dat: compressible_viscoelastic_free_surface_coupled_nondimensional.py
+errors-%-free-surface.dat: iv_ve_fs.py
 	$(run-python)
 	
 clean:
