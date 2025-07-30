@@ -1,3 +1,4 @@
+# Test internal variable viscoelastic free surface
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +19,7 @@ cases = [
 
 
 @pytest.mark.parametrize("case_name,expected_convergence", cases)
-def test_viscoelastic_free_surface(case_name, expected_convergence, expected_errors):
+def test_iv_ve_fs(case_name, expected_convergence, expected_errors):
     expected_errors = expected_errors[case_name]
     errors = np.loadtxt(base / f"errors-{case_name}-free-surface.dat")
 
