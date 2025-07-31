@@ -216,23 +216,7 @@ def create_stokes_nullspace(
     return fd.MixedVectorSpaceBasis(Z, null_space)
 
 
-class MetaPostInit(abc.ABCMeta):
-    """Calls the implemented `prepare_solver` method after `__init__` returns.
-
-    The implemented behaviour allows any subclass `__init__` method to first call its
-    parent class's `__init__` through super(), then execute its own code, and finally
-    call `prepare_solver`. The latter call is automatic and does not require any
-    attention from the developer or user.
-    """
-
-    def __call__(cls, *args, **kwargs):
-        class_instance = super().__call__(*args, **kwargs)
-        class_instance.prepare_solver()
-
-        return class_instance
-
-
-class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
+class CoupledMomentumBase():
     """Solver for a system involving mass and momentum conservation.
 
     ### Valid keys for boundary conditions
@@ -286,6 +270,28 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
     name = "CoupledMomentum"
 
+    def __new__(cls, solution: fd.Function, approximation: BaseApproximation, *args, **kwargs):
+        # This is an aretefact of the hard-coded timestepping and will hopefully
+        # be removed soon.
+        theta = kwargs.get("theta", 0.5)
+
+        cls = super(CoupledMomentumBase, cls).__new__(cls)
+
+        cls.solution = solution
+        cls.approximation = approximation
+        cls.solution_old = solution.copy(deepcopy=True)
+        cls.solution_split = fd.split(solution)
+        cls.solution_old_split = fd.split(cls.solution_old)
+        cls.solution_theta_split = [
+            theta * sol + (1 - theta) * sol_old for sol, sol_old in zip(cls.solution_split, cls.solution_old_split)
+        ]
+
+        cls.solution_space = solution.function_space()
+        cls.mesh = cls.solution_space.mesh()
+        cls.tests = fd.TestFunctions(cls.solution_space)
+
+        return cls
+
     def __init__(
         self,
         solution: fd.Function,
@@ -303,8 +309,7 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
         transpose_nullspace: fd.MixedVectorSpaceBasis = None,
         near_nullspace: fd.MixedVectorSpaceBasis = None,
     ) -> None:
-        self.solution = solution
-        self.approximation = approximation
+        """Runs methods that set up arguments for the variational problem and solver."""
         self.coupled_tstep = coupled_tstep
         self.theta = theta
         self.bcs = bcs
@@ -318,26 +323,12 @@ class CoupledMomentumBase(abc.ABC, metaclass=MetaPostInit):
 
         self.eta_ind = 2
 
-        self.solution_old = solution.copy(deepcopy=True)
-        self.solution_split = fd.split(solution)
-        self.solution_old_split = fd.split(self.solution_old)
-        self.solution_theta_split = [
-            theta * sol + (1 - theta) * sol_old
-            for sol, sol_old in zip(self.solution_split, self.solution_old_split)
-        ]
-
-        self.solution_space = solution.function_space()
-        self.mesh = self.solution_space.mesh()
-        self.tests = fd.TestFunctions(self.solution_space)
-
         self.equations = []
         self.F = 0.0  # Weak form of the system
 
         # Solver object is set up later to permit editing default solver options.
         self._solver_ready = False
 
-    def prepare_solver(self) -> None:
-        """Runs methods that set up arguments for the variational problem and solver."""
         self.set_boundary_conditions()
         self.set_equations()
         self.set_form()
@@ -534,12 +525,11 @@ class StokesSolver(CoupledMomentumBase):
         /,
         **kwargs,
     ) -> None:
-        super().__init__(solution, approximation, **kwargs)
-
         self.T = T
 
         self.free_surface_map = {}
         self.buoyancy_fs = [None] * len(self.solution_split)
+        super().__init__(solution, approximation, **kwargs)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
@@ -768,7 +758,6 @@ class ViscoelasticStokesSolver(CoupledMomentumBase):
         dt: float | fd.Constant | fd.Function,
         **kwargs,
     ) -> None:
-        super().__init__(solution, approximation, **kwargs)
 
         self.displ = displ
         self.tau_old = tau_old
@@ -778,6 +767,8 @@ class ViscoelasticStokesSolver(CoupledMomentumBase):
         approximation.mu = approximation.effective_viscosity(dt)
         # Scaling factor for the previous stress
         self.stress_scale = self.approximation.prefactor_prestress(dt)
+
+        super().__init__(solution, approximation, **kwargs)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
