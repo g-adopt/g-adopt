@@ -100,7 +100,27 @@ endef
 # ======================================
 #
 # See the root Makefile or demos/Makefile for a bit of context into
-# how these rules are used. In short, these are some supporting rules for including subdirectories or defining targets.
+# how these rules are used. In short, these are some supporting rules
+# for including subdirectories or defining targets.
+
+# Directory stack manipulation
+# ----------------------------
+#
+# These two defines can be used with $(eval $(header)) and $(eval
+# $(trailer)) respectively, as part of the directory stack
+# manipulation. Just remember that you need to use them both, at the
+# start and end of a file!
+
+define header =
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
+endef
+
+define trailer =
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
+endef
 
 # Recursive inclusion
 # -------------------
@@ -149,4 +169,26 @@ $(1): $$(TGT_$(1))
 clean-$(1):
 	rm -f $$(CLEAN_$(1))
 	rm -rf $$(DIR_CLEAN_$(1))
+endef
+
+# Define default targets for the current file
+# -------------------------------------------
+#
+# As opposed to the two rules above, the following rules is for test
+# cases or demos specifically. After variables like $(TGT_$(d)) and
+# $(CLEAN_$(d)) have been defined, include this rule with $(eval
+# $(default_targets)) to automatically define the .done and .clean
+# targets, allowing for standalone running.
+
+define default_targets =
+$(if $(TGT_$(d)),$(warning There are no defined targets for $(d)!))
+$(if $(CLEAN_$(d))$(DIR_CLEAN_$(d)),,$(warning There are no defined files to clean for $(d)!))
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+.PHONY: $(d)/.clean
+$(d)/.clean:
+	@rm -f $$(addprefix $(d)/,$$(CLEAN_$(d)))
+	@rm -rf $$(addprefix $(d)/,$$(DIR_CLEAN_$(d)))
 endef
