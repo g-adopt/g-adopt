@@ -1,35 +1,23 @@
 # Makefile stack management, refer to demos/Makefile for an idea of
 # what this does and why it's needed.
-sp := $(sp).x
-dirstack_$(sp) := $(d)
-d := $(dir)
+$(eval $(header))
 
 ifeq ($(d),)
 # If we're working on a single case, it's probably a bit easier to be
 # running a tighter development loop within its directory
 # specifically. We define targets specific to this directory, so we
 # can run "make check" to ensure the tests are still passing!
-#
-# Unlike the level above, we don't use a completely phony "all"
-# target: we want to rely on the ".done" sentinel that flags that all
-# the requisite output files for this case have been generated (or
-# recreates them if, for example, their corresponding source file
-# changes). To do this, we define $(d) just for some consistency in
-# style, but it's not completely necessary!
-d := .
-cwd := $(shell realpath --strip --relative-to=../../.. $(CURDIR))
 
-.PHONY: all
-all: $(d)/.done
-
-# This is the important rule that dispatches to the "real" Make
-# workflow to run the case if necessary.
-$(d)/.done:
-	$(MAKE) -C ../../.. $(cwd)/.done
+# We define some "standard" rules for demos, which allows us to run
+# "make" and "make clean". However, because the actual command to run
+# for "make check" changes depending on the actual case, we have to
+# define that on a case-by-case basis!
+include ../../.rules.mk
+$(eval $(standalone))
 
 .PHONY: check
-check: $(d)/.done
-	python3 -m pytest ../../test_all.py -k $(cwd)
+check: .done
+	python3 -m pytest ../../test_all.py -k mantle_convection/base_case
 
 else
 
@@ -68,12 +56,10 @@ CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
 # with "rm -f".
 DIR_CLEAN_$(d) := output
 
-# Now we create the actual targets for running the test. The .done
-# target just ensures the output files are created, and updates the
-# timestamp on .done. This exists just for the standalone invocation
-# within the current directory.
-$(d)/.done: $(TGT_$(d))
-	@touch $@
+# Now we create the actual targets for running the test. The following
+# rule defines the ".done" and ".clean" targets, which are used for
+# standalone running.
+$(eval $(default_targets))
 
 # This is where a lot of the magic happens. The "run-python" canned
 # recipe (defined in .rules.mk) is controlled by a few magic
@@ -94,5 +80,4 @@ DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
 endif
 
-d := $(dirstack_$(sp))
-sp := $(basename $(sp))
+$(eval $(trailer))
