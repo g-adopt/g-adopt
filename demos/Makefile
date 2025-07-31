@@ -1,47 +1,82 @@
-include makefile.cases.inc
+# Welcome to the Makefile for all the demos
+#
+# This Makefile is part of a "recursive inclusion system". At the top,
+# we maintain a directory stack, so that the $(d) variable ends up
+# where it should be once we've processed this file. To refer to the
+# current directory of a given Makefile, this is also the variable we
+# should be using!
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-.PHONY: all convert_demos clean generate $(mc_cases) $(mm_cases) $(gia_cases) $(extra_cases) $(mc_dir) $(mm_dir) $(gia_dir)
+# These are the subdirectories for recursive processing. In general,
+# we try not to pollute the global variable "namespace", so we suffix
+# things by the current directory.
+subdirs_$(d) := mantle_convection multi_material glacial_isostatic_adjustment PDE_constrained_optimisation
 
-all: $(mc_cases) $(mm_cases) $(gia_cases) $(extra_cases)
+ifeq ($(d),)
+# If we execute "make" within the demos/ directory, it would be nice
+# to do something sensible. We call the main Makefile, and can run the
+# test cases, check their correctness, or clean all artifacts.
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 
-convert_demos: $(notebook_files) .pages .diagram.mermaid
-	tar --transform='s/.pages/CONTENTS.md/' --create --file artifact.tar .pages .diagram.mermaid
-	tar --transform='s|/.*/|/|' --append --file artifact.tar $(notebook_files)
-	tar --append --file artifact.tar $(mc_dir)/free_surface/temperature_warp.gif
-	tar --append --file artifact.tar $(gia_dir)/base_case/displacement_warp.gif
-	tar --append --file artifact.tar $(gia_dir)/2d_cylindrical/displacement_warp.gif
+.PHONY: all
+all:
+	$(MAKE) -C .. $(cwd)
 
-# explicit dependencies between notebooks
-# adjoint uses the checkpoint from the forward run
-$(mc_dir)/adjoint/adjoint.ipynb: $(mc_dir)/adjoint/adjoint_forward.ipynb
-
-# free surface has a comparison plot against the base case
-$(mc_dir)/free_surface/free_surface.ipynb: $(mc_dir)/base_case/base_case.ipynb
-
-# dynamic topography requires the checkpoint from the base case
-$(mc_dir)/dynamic_topography/dynamic_topography.ipynb: $(mc_dir)/base_case/base_case.ipynb
-
-### make mantle_convection/base_case should just run the mantle_convection/base_case demo
-### make mantle_convection should run all mantle convection demos
-$(all_cases) $(mc_dir) $(mm_dir) $(gia_dir):
-	$(MAKE) -C $@
-
-generate:
-	python3 generate_expected.py
-
-clean:
-	rm -rf __pycache__
-	@$(foreach case, $(all_cases), \
-		$(MAKE) -C $(case) $(MAKECMDGOALS) ; \
-	)
-
+.PHONY: check
 check:
-	python3 -m pytest -m demo
+	python3 -m pytest -k "not ../tests"
 
-# pattern rule for executing demo scripts as a notebook
-# because jupyter is an insane jumble of components, there's absolutely no way to configure it
-# to try to bind to its control port when it needs it. instead, the provisioner checks for a free
-# port and writes that to a connection file. this is of course completely prone to race conditions.
-# instead of trying to fix it at the jupyter level, we can serialise the startup with a semaphore
+.PHONY: clean
+clean:
+	$(MAKE) -C .. clean-$(cwd)
+
+# Because each of the subdirectories is actually a "category", we
+# provide an additional target to run the tests specific to that
+# subdirectory directly.
+#
+# The documentation gets more sparse as we go, but you can check out
+# the mantle_convection/Makefile for an idea of how the category-level
+# Makefiles work.
+include ../.rules.mk
+$(foreach dir,$(subdirs_$(d)),$(eval $(call subdir_targets,$(dir),$(cwd))))
+
+else
+# Otherwise, we were included from the Makefile at the level above us,
+# and should continue to build out the tree.
+$(foreach dir,$(addprefix $(d)/,$(subdirs_$(d))),$(eval $(include_subdir)))
+
+# For the demos specifically, we have a second purpose: to convert the
+# demos to jupyter notebooks that serve as tutorials. This target
+# performs the conversion, then builds an archive containing the
+# notebooks and some supplementary files (a page index and flowchart,
+# and any external images that were generated and recorded in
+# $(NOTEBOOK_IMGS)).
+notebook_files := $(NOTEBOOK_SRC:.py=.ipynb)
+$(d)/artifact.tar: $(notebook_files) $(d)/.pages $(d)/.diagram.mermaid
+	tar --transform='s/.pages/CONTENTS.md/' --create --file $@ $(filter-out %.ipynb,$^)
+	tar --transform='s|/.*/|/|' --append --file $@ $(notebook_files)
+	$(foreach image,$(NOTEBOOK_IMGS),tar --append --file $@ $(image) ;)
+
+# Here is the pattern rule for converting a notebook from its linked
+# jupytext source file. The $< automatic variable is the name of the
+# first prerequisite (i.e. the source file), and we also make sure to
+# change to the directory containing the source file so path
+# references, etc. make sense from the viewpoint of the script.
 %.ipynb: %.py
 	jupytext --to ipynb --execute $< --run-path $(dir $(abspath $<))
+
+# Finally, we create the standalone build and clean targets for this
+# directory.
+TGT_$(d) := $(filter $(d)/%,$(TGT))
+CLEAN_$(d) := $(filter $(d)/%,$(CLEAN))
+DIR_CLEAN_$(d) := $(filter $(d)/%,$(DIR_CLEAN))
+
+$(eval $(call make_targets,$(d)))
+endif
+
+# This is the bookkeeping for a stack that returns $(d) to where it
+# was, so it continues to work after including sub-Makefiles.
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
