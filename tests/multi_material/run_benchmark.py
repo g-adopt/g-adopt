@@ -228,8 +228,8 @@ stokes_nullspace = ga.create_stokes_nullspace(
 )
 stokes_solver = ga.StokesSolver(
     stokes_function,
-    temperature,
     approximation,
+    temperature,
     bcs=simulation.stokes_bcs,
     quad_degree=None,
     solver_parameters=simulation.stokes_solver_params,

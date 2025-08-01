@@ -104,20 +104,22 @@ def model(level, k, nn, do_write=False):
     dt = Constant(tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
 
+    # Use tighter tolerances than default to ensure convergence
+    solver_parameters_update = {
+        "fieldsplit_0": {"ksp_rtol": 1e-13},
+        "fieldsplit_1": {"ksp_rtol": 1e-11},
+    }
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
+        T,
+        dt=dt,
         bcs=stokes_bcs,
-        coupled_tstep=dt,
+        solver_parameters_update=solver_parameters_update,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
     )
-
-    # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-11
 
     time = Constant(0.0)
     max_timesteps = round(20*tau0/dt)  # Simulation runs for 10 characteristic time scales so end state is close to being fully relaxed

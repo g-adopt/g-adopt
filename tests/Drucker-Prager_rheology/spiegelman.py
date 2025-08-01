@@ -62,7 +62,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     x = X[0]
     d = 1 - X[1]  # depth: d=0 at top and d=1 at bottom
 
-    # solver dicationaries:
+    # solver dictionaries:
 
     mumps_solver_parameters = {
         "mat_type": "aij",
@@ -204,10 +204,16 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     approximation_nl = BoussinesqApproximation(0, mu=mu_nl)
     approximation = BoussinesqApproximation(0, mu=mu)
     bcs = {boundary.left: {'ux': 1}, boundary.right: {'ux': -1}, boundary.bottom: {'uy': 0}}
-    picard_solver = StokesSolver(z, T, approximation_nl, bcs=bcs,
-                                 solver_parameters=initial_picard_solver_parameters)
-    newton_solver = StokesSolver(z, T, approximation, bcs=bcs,
-                                 solver_parameters=newton_solver_parameters)
+    picard_solver = StokesSolver(
+        z,
+        approximation_nl,
+        T,
+        bcs=bcs,
+        solver_parameters=initial_picard_solver_parameters,
+    )
+    newton_solver = StokesSolver(
+        z, approximation, T, bcs=bcs, solver_parameters=newton_solver_parameters
+    )
 
     if stabilisation:
         # need a trial function to express the Jacobian as a UFL 2-form:

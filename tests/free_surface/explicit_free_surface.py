@@ -131,11 +131,13 @@ class ExplicitFreeSurfaceModel:
 
     def setup_solver(self):
         # Set up the stokes solver
-        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs)
+        self.stokes_solver = StokesSolver(
+            self.z, self.approximation, self.T, bcs=self.stokes_bcs
+        )
 
         eq_attrs = {
             "boundary_id": self.boundary.top,
-            "buoyancy_scale": 1,
+            "buoyancy": 1,
             "u": self.stokes_vars[0],
         }
 
