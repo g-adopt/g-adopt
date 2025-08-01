@@ -418,13 +418,11 @@ stokes_bcs = {
     boundary.right: {'ux': 0},
 }
 
-gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
+gd = GeodynamicalDiagnostics(z, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
-
 
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
-
 
 approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
 
@@ -434,7 +432,7 @@ approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulu
 #
 
 stokes_solver = ViscoelasticStokesSolver(
-    z, displacement, stress_old, approximation, dt, bcs=stokes_bcs
+    z, approximation, stress_old, displacement, dt=dt, bcs=stokes_bcs
 )
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
