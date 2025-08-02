@@ -263,6 +263,8 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
         Float quantifying the time step used in a coupled time integration
       theta:
         Float quantifying the implicit contribution in a coupled time integration
+      forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
       bcs:
         Dictionary specifying boundary conditions (identifier, type, and value)
       quad_degree:
@@ -294,6 +296,7 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
         *,
         dt: float | None = None,
         theta: float = 0.5,
+        forcing_term: fd.Form | None = None,
         bcs: dict[int | str, dict[str, Any]] = {},
         quad_degree: int = 6,
         solver_parameters: dict[str, str | float] | str | None = None,
@@ -308,6 +311,7 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
         self.approximation = approximation
         self.dt = dt
         self.theta = theta
+        self.forcing_term = forcing_term
         self.bcs = bcs
         self.quad_degree = quad_degree
         self.solver_parameters = solver_parameters
@@ -457,6 +461,9 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
 
     def set_solver(self) -> None:
         """Sets up the Firedrake variational problem and solver."""
+        if self.forcing_term is not None:
+            self.F += self.forcing_term
+
         if self.constant_jacobian:
             trial = fd.TrialFunction(self.solution_space)
             F = fd.replace(self.F, {self.solution: trial})
@@ -508,6 +515,8 @@ class StokesSolver(SolverBase):
         Float quantifying the time step used in a coupled time integration
       theta:
         Float quantifying the implicit contribution in a coupled time integration
+      forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
       bcs:
         Dictionary specifying boundary conditions (identifier, type, and value)
       quad_degree:
@@ -545,7 +554,7 @@ class StokesSolver(SolverBase):
 
         self.eta_ind = 2
         self.free_surface_map = {}
-        self.buoyancy_fs = [None] * len(solution)
+        self.buoyancy_fs = [None] * len(self.solution_split)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
@@ -617,7 +626,7 @@ class StokesSolver(SolverBase):
             self.appctx["ds"] = self.equations[-1].ds
 
             # Gather pressure and free surface fields for Schur complement solve
-            fields_ind = ",".join(map(str, range(1, len(self.solution))))
+            fields_ind = ",".join(map(str, range(1, len(self.solution_split))))
             self.solver_parameters.update(
                 {"pc_fieldsplit_0_fields": "0", "pc_fieldsplit_1_fields": fields_ind}
             )
@@ -740,6 +749,8 @@ class ViscoelasticStokesSolver(SolverBase):
         Float quantifying the time step used in a coupled time integration
       theta:
         Float quantifying the implicit contribution in a coupled time integration
+      forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
       bcs:
         Dictionary specifying boundary conditions (identifier, type, and value)
       quad_degree:

@@ -62,68 +62,29 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     x = X[0]
     d = 1 - X[1]  # depth: d=0 at top and d=1 at bottom
 
-    # solver dictionaries:
+    # initial Picard solve, extra tight tolerance
+    initial_picard_solver_parameters_update = {
+        "ksp_rtol": 1e-16,
+        "fieldsplit_0": {"ksp_rtol": 1e-10},
+    }
 
-    mumps_solver_parameters = {
+    picard_solver_parameters = {
+        "snes_type": "ksponly",
+        "snes_monitor": None,
         "mat_type": "aij",
         "ksp_type": "preonly",
         "pc_type": "lu",
         "pc_factor_mat_solver_type": "mumps",
     }
-    iterative_solver_parameters = {
-        "mat_type": "matfree",
-        "ksp_type": "fgmres",
-        "ksp_monitor": None,
-        "ksp_rtol": 1e-8,
-        "pc_type": "fieldsplit",
-        "pc_fieldsplit_type": "schur",
-        "pc_fieldsplit_schur_type": "upper",
-        "fieldsplit_0": {
-            "ksp_type": "cg",
-            "pc_type": "python",
-            "pc_python_type": "firedrake.AssembledPC",
-            "assembled_pc_type": "gamg",
-            "assembled_pc_gamg_threshold": 0.01,
-            "assembled_pc_gamg_square_graph": 100,
-            "ksp_rtol": 1e-10,
-            "ksp_converged_reason": None,
-        },
-        "fieldsplit_1": {
-            "ksp_type": "preonly",
-            "ksp_converged_reason": None,
-            "pc_type": "python",
-            "pc_python_type": "firedrake.MassInvPC",
-            "Mp_pc_type": "ksp",
-            "Mp_ksp_ksp_type": "cg",
-            "Mp_ksp_pc_type": "sor",
-        }
-    }
 
-    # initial Picard solve, extra tight tolerance
-    initial_picard_solver_parameters = {
-        "snes_type": "ksponly",
-        "snes_monitor": None
-    }
-    initial_picard_solver_parameters.update(iterative_solver_parameters)
-    initial_picard_solver_parameters['ksp_rtol'] = 1e-16
-
-    picard_solver_parameters = {
-        "snes_type": "ksponly",
-        "snes_monitor": None,
-    }
-    picard_solver_parameters.update(mumps_solver_parameters)
-
-    newton_solver_parameters = {
-        "snes_type": "newtonls",
-        "snes_linesearch_type": "l2",
+    newton_solver_parameters_update = {
         "snes_max_it": 50,
         "snes_atol": 0,
         "snes_rtol": 1e-16,
         "snes_stol": 0,
-        "snes_monitor": ":"+os.path.join(output_dir, "newton.txt"),
+        "snes_monitor": ":" + os.path.join(output_dir, "newton.txt"),
         "snes_converged_reason": None,
     }
-    newton_solver_parameters.update(mumps_solver_parameters)
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     g = Constant(9.81)
@@ -199,20 +160,21 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     c_safety = Constant(1.0)
     alpha_SPD = conditional(beta < c_safety*2*mu, 1, c_safety*2*mu/beta)
 
-    # SCK:
-    T = 0
     approximation_nl = BoussinesqApproximation(0, mu=mu_nl)
     approximation = BoussinesqApproximation(0, mu=mu)
     bcs = {boundary.left: {'ux': 1}, boundary.right: {'ux': -1}, boundary.bottom: {'uy': 0}}
     picard_solver = StokesSolver(
         z,
         approximation_nl,
-        T,
         bcs=bcs,
-        solver_parameters=initial_picard_solver_parameters,
+        solver_parameters="iterative",
+        solver_parameters_update=initial_picard_solver_parameters_update,
     )
     newton_solver = StokesSolver(
-        z, approximation, T, bcs=bcs, solver_parameters=newton_solver_parameters
+        z,
+        approximation,
+        bcs=bcs,
+        solver_parameters_update=newton_solver_parameters_update,
     )
 
     if stabilisation:
@@ -226,6 +188,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         # Thus we simply subtract (1-alpha_SPD) times that term
         jac = derivative(newton_solver.F, z) - (1-alpha_SPD) * inner(grad(v), 2*derivative(mu, u, u_trial)*sym(grad(u))) * dx
         newton_solver.J = jac
+        newton_solver.set_solver()
 
     # switch off viscoplasticity in initial Picard solve as we start from u=0
     switch.assign(0.)
@@ -246,7 +209,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     # initial solve is done iteratively with extra tight tolerance
     # subsequent iterative solves are done with direct solvers
     picard_solver.solver_parameters = picard_solver_parameters
-    picard_solver.setup_solver()
+    picard_solver.set_solver()
 
     for i in range(picard_iterations):
         f_picard.write(f"{i:02}: {assemble(picard_solver.F, bcs=picard_solver.strong_bcs, zero_bc_nodes=True).dat.norm}\n")
