@@ -243,13 +243,12 @@ class BoussinesqApproximation(BaseApproximation):
     def free_surface_terms(
         self, p, T, eta, *, variable_rho_fs=True, RaFS=1, delta_rho_fs=1
     ):
-        free_surface_normal_stress = RaFS * delta_rho_fs * self.g * eta
+        buoyancy = RaFS * delta_rho_fs * self.g
+        normal_stress = buoyancy * eta
         if variable_rho_fs:
-            free_surface_normal_stress -= self.buoyancy(p, T) * eta
+            normal_stress -= self.buoyancy(p, T) * eta
 
-        prefactor = RaFS * delta_rho_fs * self.g
-
-        return free_surface_normal_stress, prefactor
+        return normal_stress, buoyancy
 
 
 class ExtendedBoussinesqApproximation(BoussinesqApproximation):

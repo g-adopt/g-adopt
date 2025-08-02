@@ -79,9 +79,15 @@ def model(ref_level, nlayers, delta_t, steps=None):
     energy_solver.solver_parameters['ksp_view'] = None
     energy_solver.solver_parameters['ksp_rtol'] = 1e-7
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
+    stokes_solver = StokesSolver(
+        z,
+        approximation,
+        T,
+        bcs=stokes_bcs,
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+        near_nullspace=Z_near_nullspace,
+    )
 
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
     stokes_solver.solver_parameters['fieldsplit_0']['ksp_monitor_true_residual'] = None

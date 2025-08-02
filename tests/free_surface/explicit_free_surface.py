@@ -104,7 +104,7 @@ class ExplicitFreeSurfaceModel:
         self.kk = Constant(2 * pi / self.lam)  # wavenumber (dimensionless)
 
     def initialise_temperature(self):
-        self.T = Function(self.Q, name="Temperature").assign(0)  # Setup a dummy function for temperature
+        pass
 
     def initialise_approximation(self):
         Ra = Constant(0)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
@@ -131,11 +131,13 @@ class ExplicitFreeSurfaceModel:
 
     def setup_solver(self):
         # Set up the stokes solver
-        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs)
+        self.stokes_solver = StokesSolver(
+            self.z, self.approximation, bcs=self.stokes_bcs
+        )
 
         eq_attrs = {
             "boundary_id": self.boundary.top,
-            "buoyancy_scale": 1,
+            "buoyancy": 1,
             "u": self.stokes_vars[0],
         }
 
