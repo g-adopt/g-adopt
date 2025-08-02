@@ -43,8 +43,9 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     def setup_solver(self):
         super().setup_solver()
 
-        self.stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-6
-        self.stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
+        self.stokes_solver.solver_parameters["fieldsplit_0"]["ksp_rtol"] = 1e-6
+        self.stokes_solver.solver_parameters["fieldsplit_1"]["ksp_rtol"] = 1e-5
+        self.stokes_solver.set_solver()
 
     def setup_bcs(self):
         self.stokes_bcs = {

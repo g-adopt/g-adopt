@@ -29,6 +29,9 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
         self.stokes_vars[1].rename("Pressure")
         self.stokes_vars[2].rename("eta")
 
+    def initialise_temperature(self):
+        self.T = 0.0
+
     def initialise_free_surfaces(self):
         self.F0 = Constant(1000 / self.L0)  # initial free surface amplitude (dimensionless)
         self.stokes_vars[2].interpolate(self.F0 * cos(self.kk * self.X[0]))  # Initial free surface condition
