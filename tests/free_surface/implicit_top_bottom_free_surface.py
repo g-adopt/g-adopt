@@ -15,6 +15,8 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     def __init__(self, dt_factor, **kwargs):
         self.rho_bottom = 2
         self.zeta_error = 0
+        self.absorption_penalty(dt_factor)
+
         super().__init__(dt_factor, **kwargs)
 
     def setup_function_space(self):
@@ -47,7 +49,6 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
             # Adding a small absorption term bringing the vertical velocity to zero
             # removes this nullspace and does not affect convergence provided that this
             # term is small compared with the overall numerical error.
-            self.absorption_penalty(dt_factor)
             self.stokes_solver.forcing_term = (
                 self.penalty
                 * self.stokes_solver.tests[0][1]

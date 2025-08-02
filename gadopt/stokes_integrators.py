@@ -336,6 +336,7 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
         self.tests = fd.TestFunctions(self.solution_space)
 
         self.rho_mass = self.approximation.rho_continuity()
+        self.is_linear = not depends_on(self.approximation.mu, self.solution)
 
         self.equations = []  # G-ADOPT's Equation instances
         self.F = 0.0  # Weak form of the system
@@ -423,7 +424,7 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
         if isinstance(solver_preset := self.solver_parameters, dict):
             return
 
-        if not depends_on(self.approximation.mu, self.solution):
+        if self.is_linear:
             self.solver_parameters = {"snes_type": "ksponly"}
         else:
             self.solver_parameters = newton_stokes_solver_parameters.copy()
@@ -464,13 +465,17 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
         if self.forcing_term is not None:
             self.F += self.forcing_term
 
-        if self.constant_jacobian:
+        if self.is_linear:
             trial = fd.TrialFunction(self.solution_space)
             F = fd.replace(self.F, {self.solution: trial})
             a, L = fd.lhs(F), fd.rhs(F)
 
             self.problem = fd.LinearVariationalProblem(
-                a, L, self.solution, bcs=self.strong_bcs, constant_jacobian=True
+                a,
+                L,
+                self.solution,
+                bcs=self.strong_bcs,
+                constant_jacobian=self.constant_jacobian,
             )
             self.solver = fd.LinearVariationalSolver(
                 self.problem,
