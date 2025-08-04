@@ -20,8 +20,8 @@ class DeleteParam:
 
 
 # Type alias
-DefaultConfigType = Mapping[str, str | float | int | Mapping[str, str | float | int]]
-ExtraConfigType = Mapping[str, str | float | int | type[DeleteParam] | Mapping[str, str | float | int]]
+DefaultConfigType = Mapping[str, str | float | int | None | Mapping[str, str | float | int | None]]
+ExtraConfigType = Mapping[str, str | float | int | None | type[DeleteParam] | Mapping[str, str | float | int | None]]
 
 
 class SolverOptions:
@@ -44,11 +44,10 @@ class SolverOptions:
     ) -> None:
         self.default_config = default_config
         self.extra_config = extra_config
-        # Convert default_config from an immutable Mapping to a mutable dict
-        # self.solver_parameters = dict(default_config)
         debug_print(self._top_level_class_name, "Input default solver configuration:")
         debug_print(self._top_level_class_name, pprint.pformat(self.default_config, indent=2))
         self.solver_parameters = {}
+        # Convert default_config from an immutable Mapping to a mutable dict
         debug_print(self._top_level_class_name, "Processing default config")
         self.update_solver_config(self.default_config)
         if self.extra_config:
