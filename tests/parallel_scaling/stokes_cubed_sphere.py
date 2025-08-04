@@ -107,15 +107,15 @@ def model(ref_level, nlayers, delta_t, steps=None):
         solver_parameters_extra=stokes_solver_extra_params,
     )
 
-
-
     # Now perform the time loop:
     for timestep in range(0, max_timesteps):
         dt = float(delta_t)
         time += dt
 
         # Solve Stokes sytem:
-        with stokes_stage: stokes_solver.solve()
+        with stokes_stage:
+            stokes_solver.solve()
 
         # Temperature system:
-        with energy_stage: energy_solver.solve()
+        with energy_stage:
+            energy_solver.solve()
