@@ -52,7 +52,7 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
             self.stokes_solver.forcing_term = (
                 self.penalty
                 * self.stokes_solver.tests[0][1]
-                * self.stokes_solver.solution_split[1]
+                * self.stokes_solver.solution_split[0][1]
                 * dx
             )
             self.stokes_solver.set_solver()

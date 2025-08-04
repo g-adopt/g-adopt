@@ -412,7 +412,7 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         return pressure_part + temperature_part
 
 
-class SmallDisplacementViscoelasticApproximation():
+class SmallDisplacementViscoelasticApproximation:
     """Expressions for the small displacement viscoelastic approximation.
 
     By assuming a small displacement, we can linearise the problem, assuming a perturbation

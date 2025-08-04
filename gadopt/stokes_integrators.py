@@ -336,7 +336,10 @@ class SolverBase(abc.ABC, metaclass=MetaPostInit):
         self.tests = fd.TestFunctions(self.solution_space)
 
         self.rho_mass = self.approximation.rho_continuity()
-        self.is_linear = not depends_on(self.approximation.mu, self.solution)
+        if hasattr(self.approximation, "mu"):
+            self.is_linear = not depends_on(self.approximation.mu, self.solution)
+        else:
+            self.is_linear = True
 
         self.equations = []  # G-ADOPT's Equation instances
         self.F = 0.0  # Weak form of the system

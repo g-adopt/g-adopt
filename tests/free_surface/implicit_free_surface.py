@@ -14,6 +14,7 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
 
     def __init__(self, dt_factor, iterative_2d=False, **kwargs):
         self.solver_parameters = 'iterative' if iterative_2d else 'direct'
+        self.solver_parameters_update = None
         super().__init__(dt_factor, **kwargs)
 
     def setup_function_space(self):
@@ -55,6 +56,7 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
             theta=0.5,
             bcs=self.stokes_bcs,
             solver_parameters=self.solver_parameters,
+            solver_parameters_update=self.solver_parameters_update,
             nullspace=self.Z_nullspace,
             transpose_nullspace=self.Z_nullspace,
             near_nullspace=self.Z_near_nullspace,
