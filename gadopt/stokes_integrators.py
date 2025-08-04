@@ -7,7 +7,6 @@ instantiate the `StokesSolver` class by providing relevant parameters and call t
 
 from collections import defaultdict
 from numbers import Number
-from typing import Optional
 from warnings import warn
 
 import firedrake as fd
@@ -18,6 +17,7 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import residual_terms_stokes
+from .solver_options_manager import SolverOptions, DefaultConfigType, ExtraConfigType
 from .utility import (
     DEBUG,
     INFO,
@@ -128,9 +128,9 @@ def create_stokes_nullspace(
     Z: fd.functionspaceimpl.WithGeometry,
     closed: bool = True,
     rotational: bool = False,
-    translations: Optional[list[int]] = None,
-    ala_approximation: Optional[AnelasticLiquidApproximation] = None,
-    top_subdomain_id: Optional[str | int] = None,
+    translations: list[int] | None = None,
+    ala_approximation: AnelasticLiquidApproximation | None = None,
+    top_subdomain_id: str | int | None = None,
 ) -> fd.nullspace.MixedVectorSpaceBasis:
     """Create a null space for the mixed Stokes system.
 
@@ -199,7 +199,7 @@ def create_stokes_nullspace(
     return fd.MixedVectorSpaceBasis(Z, null_space)
 
 
-class StokesSolver:
+class StokesSolver(SolverOptions):
     """Solves the Stokes system in place.
 
     Note: Null space options can be generated using `create_stokes_nullspace`.
@@ -238,14 +238,15 @@ class StokesSolver:
         approximation: BaseApproximation,
         bcs: dict[int, dict[str, Number]] = {},
         quad_degree: int = 6,
-        solver_parameters: Optional[dict[str, str | Number] | str] = None,
-        J: Optional[fd.Function] = None,
+        solver_parameters: DefaultConfigType | None = None,
+        solver_parameters_extra: ExtraConfigType | None = None,
+        J: fd.Function | None = None,
         constant_jacobian: bool = False,
-        coupled_tstep: Optional[float] = None,
+        coupled_tstep: float | None = None,
         theta: float = 0.5,
-        nullspace: fd.MixedVectorSpaceBasis = None,
-        transpose_nullspace: fd.MixedVectorSpaceBasis = None,
-        near_nullspace: fd.MixedVectorSpaceBasis = None,
+        nullspace: fd.MixedVectorSpaceBasis | None = None,
+        transpose_nullspace: fd.MixedVectorSpaceBasis | None = None,
+        near_nullspace: fd.MixedVectorSpaceBasis | None = None,
     ):
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
@@ -255,7 +256,6 @@ class StokesSolver:
         self.approximation = approximation
         self.bcs = bcs
         self.quad_degree = quad_degree
-        self.solver_parameters = solver_parameters
         self.coupled_tstep = coupled_tstep
         self.theta = theta
         self.nullspace = nullspace
@@ -297,11 +297,7 @@ class StokesSolver:
 
         self.set_equations()
         self.set_form()
-
-        self.set_solver_options()
-
-        # Solver object is set up later to permit editing default solver options.
-        self._solver_ready = False
+        self.set_solver_options(solver_parameters, solver_parameters_extra)
 
     def set_boundary_conditions(self) -> None:
         """Sets strong and weak boundary conditions."""
@@ -331,58 +327,61 @@ class StokesSolver:
 
             self.weak_bcs[bc_id] = weak_bc
 
-    def set_solver_options(self) -> None:
+    def set_solver_options(
+        self,
+        solver_preset: DefaultConfigType | None,
+        solver_extras: ExtraConfigType | None,
+    ) -> None:
         """Sets PETSc solver parameters."""
         # Application context for the inverse mass matrix preconditioner
         self.appctx = {
             "mu": self.approximation.mu / self.approximation.rho_continuity()
         }
 
-        if isinstance(solver_preset := self.solver_parameters, dict):
+        if isinstance(solver_preset, dict):
+            self.init_solver_config(solver_preset, solver_extras, self.setup_solver)
             return
 
         if not depends_on(self.approximation.mu, self.solution):
-            self.solver_parameters = {"snes_type": "ksponly"}
+            default_config = {"snes_type": "ksponly"}
         else:
-            self.solver_parameters = newton_stokes_solver_parameters.copy()
+            default_config = newton_stokes_solver_parameters
 
         if INFO >= log_level:
-            self.solver_parameters["snes_monitor"] = None
+            default_config |= {"snes_monitor": None}
 
         if solver_preset is not None:
             match solver_preset:
                 case "direct":
-                    self.solver_parameters.update(direct_stokes_solver_parameters)
+                    default_config |= direct_stokes_solver_parameters
                 case "iterative":
-                    self.solver_parameters.update(iterative_stokes_solver_parameters)
+                    default_config |= iterative_stokes_solver_parameters
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
         elif self.mesh.topological_dimension() == 2 and self.mesh.cartesian:
-            self.solver_parameters.update(direct_stokes_solver_parameters)
+            default_config |= direct_stokes_solver_parameters
         else:
-            self.solver_parameters.update(iterative_stokes_solver_parameters)
+            default_config |= iterative_stokes_solver_parameters
 
         # Extra options for iterative solvers
-        if self.solver_parameters.get("pc_type") == "fieldsplit":
+        if default_config.get("pc_type") == "fieldsplit":
             if DEBUG >= log_level:
-                self.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
-                self.solver_parameters["fieldsplit_1"]["ksp_monitor"] = None
+                default_config["fieldsplit_0"] |= {"ksp_converged_reason": None}
+                default_config["fieldsplit_1"] |= {"ksp_monitor": None}
+
             elif INFO >= log_level:
-                self.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
+                default_config["fieldsplit_1"] |= {"ksp_converged_reason": None}
 
                 if self.free_surface_map:
                     # Gather pressure and free surface fields for Schur complement solve
                     fields_ind = ",".join(map(str, range(1, len(self.solution_split))))
-                    self.solver_parameters.update(
-                        {
-                            "pc_fieldsplit_0_fields": "0",
-                            "pc_fieldsplit_1_fields": fields_ind,
-                        }
-                    )
+                    default_config |= {
+                        "pc_fieldsplit_0_fields": "0",
+                        "pc_fieldsplit_1_fields": fields_ind,
+                    }
                     # Update mass inverse preconditioner
-                    self.solver_parameters["fieldsplit_1"].update(
-                        {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
-                    )
+                    default_config["fieldsplit_1"] |= {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
+        self.init_solver_config(default_config, solver_extras, self.setup_solver)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
@@ -494,13 +493,8 @@ class StokesSolver:
                 options_prefix=self.name,
             )
 
-        self._solver_ready = True
-
     def solve(self):
         """Solves the system."""
-        if not self._solver_ready:
-            self.setup_solver()
-
         self.solver.solve()
 
         self.solution_old.assign(self.solution)
@@ -632,8 +626,8 @@ class ViscoelasticStokesSolver(StokesSolver):
         dt: Number | fd.Constant,
         bcs: dict[int, dict[str, Number]] = {},
         quad_degree: int = 6,
-        solver_parameters: Optional[dict[str, str | Number] | str] = None,
-        J: Optional[fd.Function] = None,
+        solver_parameters: dict[str, str | Number] | str | None = None,
+        J: fd.Function | None = None,
         constant_jacobian: bool = False,
         **kwargs,
     ):

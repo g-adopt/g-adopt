@@ -18,6 +18,7 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     iterative = True
 
     def __init__(self, dt_factor, **kwargs):
+        self.solver_parameters_extra = {"fieldsplit_0": {"ksp_rtol": 1e-6}, "fieldsplit_1": {"ksp_rtol": 1e-5}}
         super().__init__(dt_factor, cartesian=False, **kwargs)
 
     def setup_mesh(self):
@@ -39,12 +40,6 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         self.F0 = Constant(1000 / self.L0)  # initial free surface amplitude (dimensionless)
         self.stokes_vars[2].interpolate(self.F0 * cos(self.number_of_lam * atan2(self.X[1], self.X[0])))  # Initial free surface condition
         self.eta_analytical = Function(self.stokes_vars[2], name="eta analytical")
-
-    def setup_solver(self):
-        super().setup_solver()
-
-        self.stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-6
-        self.stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
 
     def setup_bcs(self):
         self.stokes_bcs = {

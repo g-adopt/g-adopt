@@ -15,6 +15,7 @@ from firedrake import *
 from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
+from .solver_options_manager import SolverOptions, DefaultConfigType, ExtraConfigType
 from .time_stepper import RungeKuttaTimeIntegrator
 from .utility import DEBUG, INFO, absv, is_continuous, log, log_level
 
@@ -62,7 +63,7 @@ Note:
 """
 
 
-class GenericTransportBase(abc.ABC):
+class GenericTransportBase(SolverOptions, abc.ABC):
     """Base class for advancing a generic transport equation in time.
 
     All combinations of advection, diffusion, sink, and source terms are handled.
@@ -108,7 +109,8 @@ class GenericTransportBase(abc.ABC):
         solution_old: Function | None = None,
         eq_attrs: dict[str, float] = {},
         bcs: dict[int, dict[str, Number]] = {},
-        solver_parameters: dict[str, str | Number] | str | None = None,
+        solver_parameters: DefaultConfigType | None = None,
+        solver_parameters_extra: ExtraConfigType | None = None,
         su_advection: bool = False,
     ) -> None:
         self.solution = solution
@@ -117,7 +119,6 @@ class GenericTransportBase(abc.ABC):
         self.solution_old = solution_old or Function(solution)
         self.eq_attrs = eq_attrs
         self.bcs = bcs
-        self.solver_parameters = solver_parameters
         self.su_advection = su_advection
 
         self.solution_space = solution.function_space()
@@ -126,13 +127,10 @@ class GenericTransportBase(abc.ABC):
 
         self.continuous_solution = is_continuous(self.solution)
 
-        # Solver object is set up later to permit editing default solver options.
-        self._solver_ready = False
-
         self.set_boundary_conditions()
         self.set_su_nubar()
         self.set_equation()
-        self.set_solver_options()
+        self.set_solver_options(solver_parameters, solver_parameters_extra)
 
     def set_boundary_conditions(self) -> None:
         """Sets up boundary conditions."""
@@ -197,30 +195,35 @@ class GenericTransportBase(abc.ABC):
         """Sets up the term contributions in the equation."""
         raise NotImplementedError
 
-    def set_solver_options(self) -> None:
+    def set_solver_options(
+        self,
+        solver_preset: DefaultConfigType | None,
+        solver_extras: ExtraConfigType | None = None,
+    ) -> None:
         """Sets PETSc solver parameters."""
-        if isinstance(self.solver_parameters, dict):
+        if isinstance(solver_preset, dict):
+            self.init_solver_config(solver_preset, solver_extras, self.setup_solver)
             return
 
-        if self.solver_parameters is not None:
-            match self.solver_parameters:
+        if solver_preset is not None:
+            match solver_preset:
                 case "direct":
-                    self.solver_parameters = direct_energy_solver_parameters.copy()
+                    default_config = direct_energy_solver_parameters
                 case "iterative":
-                    self.solver_parameters = iterative_energy_solver_parameters.copy()
+                    default_config = iterative_energy_solver_parameters
                 case _:
-                    raise ValueError(
-                        f"Solver type '{self.solver_parameters}' not implemented."
-                    )
+                    raise ValueError("Solver type must be 'direct' or 'iterative'.")
         elif self.mesh.topological_dimension() == 2:
-            self.solver_parameters = direct_energy_solver_parameters.copy()
+            default_config = direct_energy_solver_parameters
         else:
-            self.solver_parameters = iterative_energy_solver_parameters.copy()
+            default_config = iterative_energy_solver_parameters
 
         if DEBUG >= log_level:
-            self.solver_parameters["ksp_monitor"] = None
+            default_config |= {"ksp_monitor": None}
         elif INFO >= log_level:
-            self.solver_parameters["ksp_converged_reason"] = None
+            default_config |= {"ksp_converged_reason": None}
+
+        self.init_solver_config(default_config, solver_extras, self.setup_solver)
 
     def setup_solver(self) -> None:
         """Sets up the timestepper using specified parameters."""
@@ -233,19 +236,12 @@ class GenericTransportBase(abc.ABC):
             strong_bcs=self.strong_bcs,
         )
 
-        self._solver_ready = True
-
     def solver_callback(self) -> None:
         """Optional instructions to execute right after a solve."""
         pass
 
-    def solve(
-        self, update_forcings: Callable | None = None, t: float | None = None
-    ) -> None:
+    def solve(self, update_forcings: Callable | None = None, t: float | None = None) -> None:
         """Advances solver in time."""
-        if not self._solver_ready:
-            self.setup_solver()
-
         self.ts.advance(update_forcings, t)
 
         self.solver_callback()

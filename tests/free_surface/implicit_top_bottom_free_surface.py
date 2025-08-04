@@ -28,6 +28,7 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
                 * (self.stokes_solver.solution[1] - 0)
                 * dx
             )
+            self.stokes_solver.setup_solver()
 
     def setup_function_space(self):
         self.Z = MixedFunctionSpace([self.V, self.W, self.W, self.W])  # Mixed function space with bottom free surface.
