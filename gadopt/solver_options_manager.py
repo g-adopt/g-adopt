@@ -4,7 +4,6 @@ import sys
 import textwrap
 
 from .utility import (
-    INFO,
     DEBUG,
     log_level,
 )

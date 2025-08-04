@@ -13,8 +13,8 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
     iterative = True
 
     def __init__(self, dt_factor, iterative_2d=False, **kwargs):
-        self.solver_parameters = 'iterative' if iterative_2d else 'direct'
-        if not hasattr(self,"solver_parameters_extra"):
+        self.solver_parameters = "iterative" if iterative_2d else "direct"
+        if not hasattr(self, "solver_parameters_extra"):
             self.solver_parameters_extra = None
         super().__init__(dt_factor, **kwargs)
 
