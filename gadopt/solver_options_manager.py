@@ -6,6 +6,7 @@ import weakref
 
 from .utility import (
     DEBUG,
+    WARNING,
     log_level,
 )
 
@@ -19,6 +20,18 @@ def debug_print(class_name: str, string: str):
     resolution order (e.g. StokesSolver, EnergySolver, etc)
     """
     if DEBUG >= log_level:
+        print(textwrap.indent(string, f"{class_name}: "), file=sys.stderr)
+
+
+def warning_print(class_name: str, string: str):
+    """Print a warning message.
+
+    When `log_level` is set to DEBUG, print a formatted message to stderr.
+    The `class_name` variable is used to prefix each line, where `class_name`
+    is generally used to identify the lowest level class in the method
+    resolution order (e.g. StokesSolver, EnergySolver, etc)
+    """
+    if WARNING >= log_level:
         print(textwrap.indent(string, f"{class_name}: "), file=sys.stderr)
 
 
@@ -156,6 +169,15 @@ class SolverOptions:
                     outmap[k] = self.process_mapping(kp, {}, v)
             else:
                 debug_print(self._top_level_class_name, f"Adding {key_prefix}[{k}] = {v}")
+                if k in outmap and isinstance(outmap[k], Mapping):
+                    warning_print(
+                        self._top_level_class_name,
+                        (
+                            f"WARNING: key '{k}' holds a parameter dict in the original mapping"
+                            ", but is being overwritten with a scalar parameter. This may have "
+                            "unintended consequences for this solver's parameters"
+                        ),
+                    )
                 outmap[k] = v
 
         return outmap
