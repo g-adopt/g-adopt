@@ -23,6 +23,7 @@ from ufl.core.expr import Expr
 
 from .equations import Equation
 from .scalar_equation import mass_term
+from .solver_options_manager import SolverOptions
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
 from .utility import CombinedSurfaceMeasure, node_coordinates, vertical_component
@@ -40,17 +41,19 @@ __all__ = [
 adv_params_default = {
     "time_integrator": eSSPRKs10p3,
     "bcs": {},
-    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "subcycles": 1,
 }
+
 # Default parameters for level-set reinitialisation
 reini_params_default = {
     "timestep": 0.02,
     "time_integrator": eSSPRKs3p3,
-    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "steps": 1,
 }
-
+solver_params_default = {
+    "adv": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+    "reini": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+}
 
 def interface_thickness(
     level_set_space: fd.functionspaceimpl.WithGeometry,
@@ -380,7 +383,7 @@ def reinitialisation_term(
     return sharpen_term + balance_term
 
 
-class LevelSetSolver:
+class LevelSetSolver(SolverOptions):
     """Solver for the conservative level-set approach.
 
     Advects and reinitialises a level-set field.
@@ -459,12 +462,14 @@ class LevelSetSolver:
 
         self.set_gradient_solver()
 
+        solver_extra = {}
         if isinstance(adv_kwargs, dict):
             if not all(param in adv_kwargs for param in ["u", "timestep"]):
                 raise KeyError("'u' and 'timestep' must be present in 'adv_kwargs'")
 
             self.advection = True
             self.adv_kwargs = adv_params_default | adv_kwargs
+            solver_extra['adv'] = adv_kwargs['solver_params'] if 'solver_params' in adv_kwargs else {}
 
         if isinstance(reini_kwargs, dict):
             if "epsilon" not in reini_kwargs:
@@ -472,13 +477,16 @@ class LevelSetSolver:
 
             self.reinitialisation = True
             self.reini_kwargs = reini_params_default | reini_kwargs
+            solver_extra['reini'] = reini_kwargs['solver_params'] if 'solver_params' in reini_kwargs else {}
             if "frequency" not in self.reini_kwargs:
                 self.reini_kwargs["frequency"] = self.reinitialisation_frequency()
 
         if not any([self.advection, self.reinitialisation]):
             raise ValueError("Advection or reinitialisation must be initialised")
 
-        self._solvers_ready = False
+        self.init_solver_config(solver_params_default,solver_extra,self.set_up_solvers)
+        #self._solvers_ready = False
+        #self.set_up_solvers()
 
     def reinitialisation_frequency(self) -> int:
         """Implements default strategy for the reinitialisation frequency.
@@ -558,7 +566,8 @@ class LevelSetSolver:
                 solution_old=self.solution_old,
                 eq_attrs={"u": self.adv_kwargs["u"]},
                 bcs=self.adv_kwargs["bcs"],
-                solver_parameters=self.adv_kwargs["solver_params"],
+                #solver_parameters=self.adv_kwargs["solver_params"],
+                solver_parameters=self.solver_parameters['adv'],
             )
 
         if self.reinitialisation:
@@ -578,11 +587,12 @@ class LevelSetSolver:
                 self.solution,
                 self.reini_kwargs["timestep"],
                 solution_old=self.solution_old,
-                solver_parameters=self.reini_kwargs["solver_params"],
+                #solver_parameters=self.reini_kwargs["solver_params"],
+                solver_parameters=self.solver_parameters['reini'],
             )
 
         self.step = 0
-        self._solvers_ready = True
+        #self._solvers_ready = True
 
     def update_gradient(self, *args, **kwargs) -> None:
         """Calls the gradient solver.
@@ -609,8 +619,8 @@ class LevelSetSolver:
           disable_reinitialisation:
             A boolean to disable the reinitialisation solve.
         """
-        if not self._solvers_ready:
-            self.set_up_solvers()
+        #if not self._solvers_ready:
+        #    self.set_up_solvers()
 
         if self.advection and not disable_advection:
             for _ in range(self.adv_kwargs["subcycles"]):
