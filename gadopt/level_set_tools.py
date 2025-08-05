@@ -55,6 +55,7 @@ solver_params_default = {
     "reini": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
 }
 
+
 def interface_thickness(
     level_set_space: fd.functionspaceimpl.WithGeometry, scale: float = 0.35
 ) -> fd.Function:
@@ -453,9 +454,7 @@ class LevelSetSolver(SolverOptions):
         if not any([self.advection, self.reinitialisation]):
             raise ValueError("Advection or reinitialisation must be initialised")
 
-        self.init_solver_config(solver_params_default,solver_extra,self.set_up_solvers)
-        #self._solvers_ready = False
-        #self.set_up_solvers()
+        self.init_solver_config(solver_params_default, solver_extra, self.set_up_solvers)
 
     def reinitialisation_frequency(self) -> int:
         """Implements default strategy for the reinitialisation frequency.
@@ -531,7 +530,6 @@ class LevelSetSolver(SolverOptions):
                 solution_old=self.solution_old,
                 eq_attrs={"u": self.adv_kwargs["u"]},
                 bcs=self.adv_kwargs["bcs"],
-                #solver_parameters=self.adv_kwargs["solver_params"],
                 solver_parameters=self.solver_parameters['adv'],
             )
 
@@ -552,12 +550,10 @@ class LevelSetSolver(SolverOptions):
                 self.solution,
                 self.reini_kwargs["timestep"],
                 solution_old=self.solution_old,
-                #solver_parameters=self.reini_kwargs["solver_params"],
                 solver_parameters=self.solver_parameters['reini'],
             )
 
         self.step = 0
-        #self._solvers_ready = True
 
     def update_gradient(self, *args, **kwargs) -> None:
         """Calls the gradient solver.
@@ -584,8 +580,6 @@ class LevelSetSolver(SolverOptions):
           disable_reinitialisation:
             A boolean to disable the reinitialisation solve.
         """
-        #if not self._solvers_ready:
-        #    self.set_up_solvers()
 
         if self.advection and not disable_advection:
             for _ in range(self.adv_kwargs["subcycles"]):
