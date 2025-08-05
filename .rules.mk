@@ -113,7 +113,7 @@ endef
 
 define header =
 sp := $(sp).x
-dirstack_$(sp) := $(d)
+dirstack_$$(sp) := $(d)
 d := $(dir)
 endef
 
@@ -181,11 +181,11 @@ endef
 # targets, allowing for standalone running.
 
 define default_targets =
-$(if $(TGT_$(d)),$(warning There are no defined targets for $(d)!))
+$(if $(TGT_$(d)),,$(warning There are no defined targets for $(d)!))
 $(if $(CLEAN_$(d))$(DIR_CLEAN_$(d)),,$(warning There are no defined files to clean for $(d)!))
 
 $(d)/.done: $(TGT_$(d))
-	@touch $@
+	@touch $$@
 
 .PHONY: $(d)/.clean
 $(d)/.clean:
