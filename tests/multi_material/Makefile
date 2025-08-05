@@ -19,7 +19,7 @@ check: $(d)/.done
 
 else
 
-CASES_$(d) := $(notdir $(wildcard $(d)/benchmarks/*))
+CASES_$(d) := $(filter-out __pycache__ %.msh,$(notdir $(wildcard $(d)/benchmarks/*)))
 TGT_$(d) := $(CASES_$(d):%=$(d)/benchmarks/%/output_0_reference.npz)
 SRC_$(d) := $(d)/run_benchmark.py
 CLEAN_$(d) := .done $(CASES_$(d):%=benchmarks/%/*.pdf) $(CASES_$(d):%=benchmarks/%/*.npz) $(CASES_$(d):%=benchmarks/%/mesh/*.msh)
