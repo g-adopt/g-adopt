@@ -2,6 +2,7 @@ from collections.abc import Mapping, Callable
 import pprint
 import sys
 import textwrap
+import weakref
 
 from .utility import (
     DEBUG,
@@ -77,6 +78,8 @@ class SolverOptions:
         if callback is not None:
             debug_print(self._top_level_class_name, f"Registering callback: {callback.__name__}()")
             self.register_update_callback(callback)
+        else:
+            self.update_callback = None
         self.reset_solver_config(default_config, extra_config)
 
     def reset_solver_config(
@@ -125,7 +128,7 @@ class SolverOptions:
         when `solver_parameters` is ready, therefore `init_solver_config` can be
         the last call directly in a Solver's `__init__` method.
         """
-        self.update_callback = callback
+        self.update_callback = weakref.WeakMethod(callback)
 
     def process_mapping(
         self,
@@ -166,4 +169,4 @@ class SolverOptions:
         """
         self.solver_parameters = self.process_mapping("solver_parameters", self.solver_parameters, extra_config)
         if reinit and self.update_callback is not None:
-            self.update_callback()
+            self.update_callback()()
