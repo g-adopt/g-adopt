@@ -102,6 +102,8 @@ class SolverOptions:
         if self.extra_config:
             debug_print(self._top_level_class_name, "Processing extra config")
             self.update_solver_config(self.extra_config)
+        debug_print(self._top_level_class_name, "Final solver configuration:")
+        debug_print(self._top_level_class_name, pprint.pformat(self.solver_parameters, indent=2))
 
     def print_solver_config(self) -> None:
         """Prints the solver_parameters dict.
