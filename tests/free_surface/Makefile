@@ -36,6 +36,7 @@ $(TGT_PARALLEL_$(d)) : ncpus := 8
 $(TGT_$(d)) : category := tests/free_surface
 $(TGT_$(d)): $(d)/.sentinel.%: $(d)/%_free_surface.py
 	$(run-python)
+	@touch $@
 
 TGT := $(TGT) $(TGT_$(d))
 CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
