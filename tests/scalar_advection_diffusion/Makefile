@@ -30,6 +30,7 @@ $(TGT_$(d)) : exec_args = $(patsubst .sentinel.%,%,$(notdir $@))
 $(TGT_$(d)) : desc = $(exec_args)
 $(TGT_$(d)): $(d)/scalar_advection_diffusion_DH27.py
 	$(run-python)
+	@touch $@
 
 TGT_$(d) += $(d)/integrated_q.log $(d)/integrated_q_DH219.log
 SRC_$(d) += $(d)/scalar_advection_diffusion.py $(d)/scalar_advection_diffusion_DH219_skew.py
