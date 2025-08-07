@@ -2,3 +2,7 @@
 *.vtu
 *.h5
 __pycache__/
+
+# test artifacts
+.done
+params.log

@@ -1,18 +1,24 @@
-include ../makefile.cases.inc
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := $(notdir $(mm_cases))
+ifeq ($(d),)
+cwd := $(shell realpath --strip --relative-to=.. $(CURDIR))
 
-.PHONY: all $(cases) clean check
+.PHONY: all
+all:
+	$(MAKE) -C .. $(cwd)
+else
 
-all: $(cases)
+subdirs_$(d) := compositional_buoyancy thermochemical_buoyancy
 
-$(cases):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
+$(foreach dir,$(addprefix $(d)/,$(subdirs_$(d))),$(eval $(include_subdir)))
 
-clean:
-	@$(foreach case, $(cases), \
-		$(MAKE) -C $(case) $(MAKECMDGOALS); \
-	)
+TGT_$(d) := $(filter $(d)/%,$(TGT))
+CLEAN_$(d) := $(filter $(d)/%,$(CLEAN))
+DIR_CLEAN_$(d) := $(filter $(d)/%,$(DIR_CLEAN))
 
-check: $(cases)
-	python -m pytest $(CURDIR)/../test_all.py -k $(mm_dir)
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
