@@ -25,7 +25,7 @@ from .equations import Equation, interior_penalty_factor
 from .scalar_equation import mass_term
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import CombinedSurfaceMeasure, node_coordinates, vertical_component
+from .utility import node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -539,13 +539,6 @@ class LevelSetSolver:
             mesh=self.mesh, family=self.solution_space.ufl_element()
         )
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
-
-        if gradient_space.extruded:
-            ds = CombinedSurfaceMeasure(
-                domain=self.mesh, degree=2 * grad_space_degree + 1
-            )
-        else:
-            ds = fd.ds
 
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
