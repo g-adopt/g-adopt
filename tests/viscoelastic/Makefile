@@ -34,6 +34,10 @@ $(TGT_$(d)) : desc = $*
 $(TGT_$(d)): $(d)/errors-%-zhong-free-surface.dat: $(SRC_$(d))
 	$(run-python)
 
+TGT := $(TGT) $(TGT_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
 endif
 
 d := $(dirstack_$(sp))
