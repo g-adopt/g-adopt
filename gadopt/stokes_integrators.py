@@ -799,7 +799,7 @@ class BoundaryNormalStressSolver:
         self.solver.solve()
 
         # Take the average out
-        vave = fd.assemble(self.force * self.ds) / fd.assemble(1 * self.ds(self.mesh))
+        vave = fd.assemble(self.force * self.ds) / fd.assemble(1 * self.ds)
         self.force.assign(self.force - vave)
 
         # Re-apply the zero condition everywhere except for the boundary
@@ -830,10 +830,11 @@ class BoundaryNormalStressSolver:
             - self.p * fd.Identity(self.dim)
         )
 
+        ds_kwargs = {"domain": self.mesh, "degree": self._kwargs.get("quad_degree", None)}
         if self.mesh.extruded and self.subdomain_id in ["top", "bottom"]:
-            self.ds = {"top": fd.ds_t, "bottom": fd.ds_b}.get(self.subdomain_id)
+            self.ds = (fd.ds_t if self.subdomain_id == "top" else fd.ds_b)(**ds_kwargs)
         else:
-            self.ds = fd.ds(self.subdomain_id)
+            self.ds = fd.ds(self.subdomain_id, **ds_kwargs)
 
         # Setting up the variational problem
         a = phi * v * self.ds

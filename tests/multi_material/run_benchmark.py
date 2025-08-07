@@ -85,7 +85,9 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
     if benchmark == "trim_2023":
         epsilon = 1 / 2 / simulation.k
     else:
-        epsilon = ga.interface_thickness(level_set[0].function_space())
+        epsilon = ga.interface_thickness(
+            level_set[0].function_space(), min_cell_edge_length=True
+        )
     if benchmark == "schmalholz_2011":
         epsilon.interpolate(
             mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
@@ -133,7 +135,7 @@ else:  # Initialise mesh and key functions
     if benchmark == "trim_2023":
         epsilon = 1 / 2 / simulation.k
     else:
-        epsilon = ga.interface_thickness(func_space_ls)
+        epsilon = ga.interface_thickness(func_space_ls, min_cell_edge_length=True)
     if benchmark == "schmalholz_2011":
         epsilon.interpolate(
             mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4

@@ -18,7 +18,7 @@ classifiers = [
 dependencies = [
   "pandas",
   "shapely",
-  "vtk<9.5.0",
+  "vtk",
 ]
 
 [project.optional-dependencies]
