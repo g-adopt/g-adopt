@@ -562,7 +562,6 @@ class StokesSolver(SolverBase):
 
         self.eta_ind = 2
         self.free_surface_map = {}
-        self.buoyancy_fs = [None] * len(self.solution_split)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
@@ -610,7 +609,7 @@ class StokesSolver(SolverBase):
             )
 
         for bc_id, (eta_ind, buoyancy) in self.free_surface_map.items():
-            eq_attrs = {"boundary_id": bc_id, "buoyancy": buoyancy, "u": u}
+            eq_attrs = {"boundary_id": bc_id, "buoyancy_scale": buoyancy, "u": u}
 
             self.equations.append(
                 Equation(
