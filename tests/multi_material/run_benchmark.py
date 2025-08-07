@@ -89,7 +89,9 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
     if benchmark == "trim_2023":
         epsilon = 1.0 / 2.0 / simulation.k
     else:
-        epsilon = ga.interface_thickness(level_set[0].function_space())
+        epsilon = ga.interface_thickness(
+            level_set[0].function_space(), min_cell_edge_length=True
+        )
 else:  # Initialise mesh and key functions
     match simulation.mesh_gen:  # Generate mesh
         case "gmsh":
@@ -134,7 +136,7 @@ else:  # Initialise mesh and key functions
     if benchmark == "trim_2023":
         epsilon = 1.0 / 2.0 / simulation.k
     else:
-        epsilon = ga.interface_thickness(func_space_ls)
+        epsilon = ga.interface_thickness(func_space_ls, min_cell_edge_length=True)
 
     # Initialise level set
     for ls, kwargs in zip(level_set, simulation.signed_distance_kwargs_list):

@@ -123,7 +123,7 @@ x, y = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordina
 interface_coord_y = 0.025
 signed_distance = interface_coord_y - y
 
-epsilon = interface_thickness(K)
+epsilon = interface_thickness(K, min_cell_edge_length=True)
 assign_level_set_values(psi, epsilon, signed_distance)
 # -
 

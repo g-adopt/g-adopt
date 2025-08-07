@@ -114,7 +114,7 @@ callable_args = (
 )
 boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, interface_coord_y)]
 
-epsilon = interface_thickness(K)
+epsilon = interface_thickness(K, min_cell_edge_length=True)
 assign_level_set_values(
     psi,
     epsilon,
