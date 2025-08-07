@@ -137,7 +137,7 @@ class ExplicitFreeSurfaceModel:
 
         eq_attrs = {
             "boundary_id": self.boundary.top,
-            "buoyancy": 1,
+            "buoyancy_scale": 1,
             "u": self.stokes_vars[0],
         }
 
