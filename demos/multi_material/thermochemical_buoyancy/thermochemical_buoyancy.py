@@ -346,5 +346,5 @@ while True:
 # axes.set_aspect("equal")
 # contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="inferno")
 # tricontour(psi, axes=axes, levels=[0.5])
-# fig.colorbar(collection, label="Temperature")
+# fig.colorbar(contours, label="Temperature")
 # -
