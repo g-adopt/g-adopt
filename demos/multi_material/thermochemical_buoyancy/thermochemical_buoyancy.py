@@ -167,7 +167,7 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
 # contours = tricontourf(
-#     Function(psi).interpolate(Ra_c), levels=linspace(0.0, 4.5e5, 11), axes=axes
+#     Function(psi).interpolate(RaB), levels=linspace(0.0, 4.5e5, 11), axes=axes
 # )
 # fig.colorbar(contours, label="Compositional Rayleigh number")
 # -
