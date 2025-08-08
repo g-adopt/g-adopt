@@ -40,7 +40,7 @@ def run_forward(visualise=False):
     delta_t = Constant(ref_values["delta_t"])  # Constant time step
 
     with CheckpointFile("Checkpoint230.h5", mode="r") as f:
-        T = f.load_function(mesh, "Temperature")
+		T.project(f.load_function(mesh, "Temperature")
 
     # Build the viscosity using u, T, and the geometry parameters
     mu = get_viscosity(r, T, u)
@@ -152,8 +152,8 @@ def get_reference_values():
     Returns:
         dict: Dictionary containing simulation parameters:
             - Ra: Rayleigh number (1e7)
-            - max_timesteps: Maximum number of timesteps (250)
-            - delta_t: Time-step length (3e-6)
+            - max_timesteps: Maximum number of timesteps (125)
+            - delta_t: Time-step length (6e-6)
             - mu_0: Background viscosity (2.0)
             - mu_plast: Minimum plastic viscosity (0.1)
             - mu_min: Minimum effective viscosity (0.4)
