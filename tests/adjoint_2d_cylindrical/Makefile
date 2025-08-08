@@ -5,7 +5,6 @@ schedulers := noscheduler fullmemory fulldisk
 
 combo_cases := $(foreach c,$(cases),$(foreach s,$(schedulers),$(c)_$(s)))
 cores := 16
-project := xd2
 
 .PHONY: longtest check clean
 
