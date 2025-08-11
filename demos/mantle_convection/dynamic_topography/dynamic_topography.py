@@ -194,6 +194,10 @@ dyna_topo_avg_bottom = sqrt(
 parameter_log.log_str(f"{gd.u_rms()} {dyna_topo_avg_top} {dyna_topo_avg_bottom}")
 parameter_log.close()
 
+
+VTKFile("dt.pvd").write(dynamic_topography_top, dynamic_topography_bottom)
+
+
 # -
 
 # Now it's time to visualise all the calculations in one figure.
