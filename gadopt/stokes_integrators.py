@@ -785,6 +785,18 @@ class BoundaryNormalStressSolver:
 
         self._solver_is_set_up = False
 
+        # Define the solution in the pressure function space
+        # Note that the solution is determined by the accuracy of FacetNormal, which is in DG0 space
+        # So this is just a mere interpolation of the force to the pressure space
+        if not is_continuous(self.p):
+            Q = fd.FunctionSpace(self.mesh, "Lagrange", self.p.function_space().ufl_element().degree())
+        else:
+            Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
+
+        # The pressure is computed on continuous space
+        self.force = fd.Function(Q, name=f"force_{self.subdomain_id}")
+        self.interior_null_bc = InteriorBC(Q, 0., [self.subdomain_id])
+
     def solve(self):
         """
         Solves a linear system for the force and applies necessary boundary conditions.
@@ -795,35 +807,29 @@ class BoundaryNormalStressSolver:
         # Solve a linear system
         if not self._solver_is_set_up:
             self.setup_solver()
+
         # Solve for the force
         self.solver.solve()
 
-        # Take the average out
-        vave = fd.assemble(self.force * self.ds) / fd.assemble(1 * self.ds)
-        self.force.assign(self.force - vave)
+        # # Take the average out
+        vave = fd.assemble(self.solution * self.ds) / fd.assemble(1 * self.ds)
+        self.force.interpolate(self.solution - vave)
 
-        # Re-apply the zero condition everywhere except for the boundary
+        # # Re-apply the zero condition everywhere except for the boundary
         self.interior_null_bc.apply(self.force)
 
         return self.force
 
     def setup_solver(self):
-        # Define the solution in the pressure function space
-        # Pressure is chosen as it has a lower rank compared to velocity
-        # If pressure is discontinuous, we need to use a continuous equivalent
-        if not is_continuous(self.p):
-            warn("BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element.")
-            Q = fd.FunctionSpace(self.mesh, "Lagrange", self.p.function_space().ufl_element().degree())
-        else:
-            Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
-
-        self.force = fd.Function(Q, name=f"force_{self.subdomain_id}")
+        # The solution is computed on DG0 space
+        # This is because FacetNormal is define on every facet, which would be the equivalent of DG0 space
+        solve_space = fd.FunctionSpace(self.mesh, "DG", 0)
+        self.solution = fd.Function(solve_space, name=f"DG_force_{self.subdomain_id}")
 
         # Normal vector
         n = fd.FacetNormal(self.mesh)
-
-        phi = fd.TestFunction(Q)
-        v = fd.TrialFunction(Q)
+        phi = fd.TestFunction(solve_space)
+        v = fd.TrialFunction(solve_space)
 
         stress_with_pressure = (
             self.approximation.stress(self.u)
@@ -842,11 +848,7 @@ class BoundaryNormalStressSolver:
 
         # Setting up boundary condition, problem and solver
         # The field is only meaningful on the boundary, so set zero everywhere else
-        self.interior_null_bc = InteriorBC(Q, 0., [self.subdomain_id])
-
-        self.problem = fd.LinearVariationalProblem(a, L, self.force,
-                                                   bcs=self.interior_null_bc,
-                                                   constant_jacobian=True)
+        self.problem = fd.LinearVariationalProblem(a, L, self.solution, constant_jacobian=True)
         self.solver = fd.LinearVariationalSolver(
             self.problem,
             solver_parameters=self.solver_parameters,
