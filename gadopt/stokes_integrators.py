@@ -8,7 +8,6 @@ instantiate the `StokesSolver` class by providing relevant parameters and call t
 from collections import defaultdict
 from numbers import Number
 from typing import Optional
-from warnings import warn
 
 import firedrake as fd
 from ufl.core.expr import Expr
