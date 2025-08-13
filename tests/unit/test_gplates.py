@@ -3,6 +3,7 @@ from pathlib import Path
 
 from gadopt import *
 from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, ensure_reconstruction
+from gadopt.utility import upward_normal
 
 
 def test_obtain_muller_2022_se():
@@ -29,9 +30,10 @@ def test_gplates():
         layer_height=(rmax - rmin)/(nlayers-1),
         extrusion_type="radial",
     )
+    mesh.cartesian = False
 
     V = VectorFunctionSpace(mesh, "CG", 2)
-
+    r = upward_normal(mesh)
     mueller_2022_se = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
 
     # compute surface velocities
@@ -50,6 +52,13 @@ def test_gplates():
 
     for t in np.arange(409, 0, -50):
         gplates_function.update_plate_reconstruction(rec_model.age2ndtime(t))
+
+        # Calculate and test radial component
+        radial_component = assemble(inner(gplates_function, r) * ds_t)
+
+        # Assert that radial component is essentially zero
+        assert abs(radial_component) < 1e-10, f"Radial component at time {t} Ma is {radial_component}, should be 0"
+
         surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
 
     # Loading reference plate velocities

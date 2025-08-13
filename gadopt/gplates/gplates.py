@@ -384,6 +384,26 @@ class pyGplatesConnector(object):
         # Now handle the case where points are too close to each other:
         res_u[close_points_mask, :] = seeds_u[non_nan_values][idx[close_points_mask, 0]]
 
+        # Calculate radial component for res_u: res_u · e_r where e_r is the normalised radial unit vector
+        radial_velocity_res = np.sum(res_u * target_coords, axis=1)  # Dot product for each point
+
+        # Store original magnitudes before projection
+        original_magnitudes = np.linalg.norm(res_u, axis=1)
+
+        # Project res_u onto tangent plane to remove radial component
+        # res_u_tangential = res_u - (res_u · e_r) * e_r
+        res_u_tangential = res_u - radial_velocity_res[:, np.newaxis] * target_coords
+
+        # Calculate new magnitudes after projection
+        tangential_magnitudes = np.linalg.norm(res_u_tangential, axis=1)
+
+        # Rescale to preserve original magnitude (avoid division by zero)
+        scale_factor = np.divide(original_magnitudes, tangential_magnitudes,
+                                 out=np.ones_like(tangential_magnitudes),
+                                 where=tangential_magnitudes != 0)
+
+        res_u = res_u_tangential * scale_factor[:, np.newaxis]
+
         return res_u
 
     def _calc_velocities(self, velocity_domain_features, topology_features, rotation_model, age, delta_t):
