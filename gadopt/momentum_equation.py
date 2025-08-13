@@ -123,6 +123,23 @@ def viscosity_term(
             # We only keep the normal part of stress; the tangential part is assumed to
             # be zero stress (i.e. free slip) or prescribed via "stress".
             F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
+            
+            # Hack in bulk compressibility part of un bc - Fix in gadopt... 
+            # is this physics or discretisation?
+            trial_tensor_jump = identity * (dot(eq.n, trial) - bc["un"])
+            trial_tensor_jump += transpose(trial_tensor_jump)
+            bulk = eq.approximation.bulk_modulus * eq.approximation.bulk_shear_ratio 
+            # Terms below are similar to the above terms for the DG dS integrals.
+            F += (
+                2
+                * sigma
+                * inner(outer(eq.n, eq.test), bulk * trial_tensor_jump)
+                * eq.ds(bc_id)
+            )
+            F -= inner(bulk * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
+            # We only keep the normal part of stress; the tangential part is assumed to
+            # be zero stress (i.e. free slip) or prescribed via "stress".
+            F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
 
         if "stress" in bc:  # a momentum flux, a.k.a. "force"
             # Here we need only the third term because we assume jump_u = 0
