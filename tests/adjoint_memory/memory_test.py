@@ -9,11 +9,11 @@ import gc
 
 
 def rectangle_taylor_test(scheduler_name, **kwargs):
-    # Making the mesh
-    mesh1d = IntervalMesh(150, length_or_left=0.0, right=1.0)
-    mesh = ExtrudedMesh(
-        mesh1d, layers=150, layer_height=1. / 150, extrusion_type="uniform"
-    )
+
+    a, b, c = 1.0079, 0.6283, 1.0
+    nx, ny, nz = 20, int(b/c * 20), 20
+    mesh2d = RectangleMesh(nx, ny, a, b, quadrilateral=True)  # Rectangular 2D mesh
+    mesh = ExtrudedMesh(mesh2d, nz)
 
     # Clear the tape of any previous operations to ensure
     # the adjoint reflects the forward problem we solve here
@@ -39,52 +39,25 @@ def rectangle_taylor_test(scheduler_name, **kwargs):
         tape.enable_checkpointing(schedules[scheduler_name])
 
     V = VectorFunctionSpace(mesh, "CG", 2)
-    W = FunctionSpace(mesh, "CG", 1)
-    Q = FunctionSpace(mesh, "CG", 2)
-    Z = MixedFunctionSpace([V, W])
+    Q = FunctionSpace(mesh, "DQ", 3)
+    u = Function(V, name="Velocity")
+    u.assign(0.0)
 
-    z = Function(Z)
-    u, p = split(z)
-    z.subfunctions[0].rename("Velocity")
-    z.subfunctions[1].rename("Pressure")
     T = Function(Q, name="Temperature")
 
-    # Specify important constants for the problem, alongside the approximation:
-    Ra = Constant(1e6)  # Rayleigh number
-    approximation = BoussinesqApproximation(Ra)
+    approximation = BoussinesqApproximation(10**2)
 
-    # Nullspaces for the problem are next defined:
-    Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
-
-    # Followed by boundary conditions, noting that all boundaries are free slip, whilst the domain is
-    # heated from below (T = 1) and cooled from above (T = 0).
-    stokes_bcs = {
-        boundary.bottom: {"uy": 0},
-        boundary.top: {"uy": 0},
-        boundary.left: {"ux": 0},
-        boundary.right: {"ux": 0},
-    }
     temp_bcs = {
         boundary.bottom: {"T": 1.0},
         boundary.top: {"T": 0.0},
     }
 
     # Setup Energy and Stokes solver
-    energy_solver = EnergySolver(T, u, approximation, Constant(4e-6), ImplicitMidpoint, bcs=temp_bcs, solver_parameters=direct_energy_solver_parameters)
-    stokes_solver = StokesSolver(
-        z,
-        T,
-        approximation,
-        bcs=stokes_bcs,
-        constant_jacobian=True,
-        nullspace=Z_nullspace,
-        transpose_nullspace=Z_nullspace,
-        solver_parameters=direct_stokes_solver_parameters,
-    )
+    energy_solver = EnergySolver(T, u, approximation, Constant(1e-9), ImplicitMidpoint, bcs=temp_bcs)
 
     Tic = Function(Q, name="Initial_Condition_Temperature").interpolate(
         0.5 * (erf((1 - X[1]) * 3.0) + erf(-X[1] * 3.0) + 1) +
-        0.1 * exp(-0.5 * ((X - as_vector((0.5, 0.2))) / Constant(0.1)) ** 2)
+        0.1 * exp(-0.5 * ((X - as_vector((0.5, 0.2, 0.5))) / Constant(0.1)) ** 2)
     )
 
     # We next make pyadjoint aware of our control problem:
@@ -94,8 +67,7 @@ def rectangle_taylor_test(scheduler_name, **kwargs):
     T.assign(Tic)
 
     # Next populate the tape by running the forward simulation.
-    for time_idx in tape.timestepper(iter(range(50))):
-        stokes_solver.solve()
+    for time_idx in tape.timestepper(iter(range(2))):
         energy_solver.solve()
 
     # Define temperature misfit between final state solution and observation:
