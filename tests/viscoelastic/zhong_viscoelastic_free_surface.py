@@ -118,8 +118,14 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     eta_analytical.interpolate(((F0 - h_elastic) * (1-exp(-(time)/(tau0+maxwell_time)))+h_elastic) * cos(kk * X[0]))
     error = 0  # Initialise error
 
-    stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
-                                             dt, bcs=stokes_bcs,)
+    stokes_solver = ViscoelasticStokesSolver(
+        z,
+        approximation,
+        stress_old,
+        displacement,
+        dt=dt,
+        bcs=stokes_bcs,
+    )
 
     if args.output:
         output_file.write(*z.subfunctions, displacement, eta_analytical, stress_old)
