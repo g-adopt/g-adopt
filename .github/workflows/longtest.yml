@@ -12,8 +12,6 @@ on:
           - gadi
           - setonix
 
-concurrency: longtest_environment
-
 jobs:
   setup:
     runs-on: ubuntu-latest
@@ -33,7 +31,9 @@ jobs:
     needs: setup
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.system_matrix) }}
+    concurrency: longtest-${{ matrix.system }}
     env:
       REPO_PATH: ${{ secrets[format('{0}_REPO_PATH',matrix.system)] }}
       GADOPT_SETUP: ${{ secrets[format('{0}_GADOPT_SETUP',matrix.system)] }}
