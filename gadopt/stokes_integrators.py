@@ -874,7 +874,8 @@ class InternalVariableSolver(SolverBase):
         self.m_list = m_list
 
         # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
-        self.approximation.mu = approximation.mu0
+        self.approximation.mu = approximation.viscosity[0]/(self.approximation.maxwell_times[0]+self.dt)
+        print('hello gadopt')
 
     def set_equations(self) -> None:
         self.strain = self.approximation.deviatoric_strain(self.solution)
