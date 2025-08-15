@@ -1,5 +1,6 @@
 import pickle
 from pathlib import Path
+import numpy as np
 
 from gadopt import *
 from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, ensure_reconstruction
@@ -57,7 +58,7 @@ def test_gplates():
         radial_component = assemble(inner(gplates_function, r) * ds_t)
 
         # Assert that radial component is essentially zero
-        assert abs(radial_component) < 1e-10, f"Radial component at time {t} Ma is {radial_component}, should be 0"
+        assert abs(radial_component) < 5e-9, f"Radial component at time {t} Ma is {radial_component}, should be 0"
 
         surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
 

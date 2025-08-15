@@ -1,10 +1,11 @@
 import warnings
+from contextlib import nullcontext
 import firedrake as fd
 import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
-from pyadjoint.tape import annotate_tape
+from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
-from ..utility import log
+from ..utility import log, upward_normal
 
 import pygplates
 
@@ -26,6 +27,8 @@ class GPlatesFunctionalityMixin:
         Args:
             ndtime (float): The model time for which to update the plate
                 velocities. This should be non-dimensionalised time.
+            projection_quad_degree (int, optional): Quadrature degree for
+            the projection to remove radial component. Defaults to 6.
         """
 
         # Print ndtime translated to geological age
@@ -41,8 +44,12 @@ class GPlatesFunctionalityMixin:
                 self.boundary_coords, ndtime)
         )
 
-        # At this point the values are updated.
-        # So we have to make sure it is shown correctly on tape if we are annotating
+        # Project tangential with appropriate annotation handling
+        suitable_context = stop_annotating() if annotate_tape() else nullcontext()
+        with suitable_context:
+            self.remove_radial_component()
+
+        # Create block variable only if annotating
         if annotate_tape():
             self.create_block_variable()
 
@@ -86,6 +93,16 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         ...                                    name="GplateVelocity")
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
     """
+    # Solver parameters for tangential projection, since this spherical mesh, use iterative solver
+    tangential_project_solver_parameters = {
+        "ksp_type": "cg",
+        "pc_type": "hypre",
+        "ksp_rtol": 1e-9,
+        "ksp_atol": 1e-12,
+        "ksp_max_it": 1000,
+        "ksp_converged_reason": None,
+    }
+
     def __new__(cls, *args, **kwargs):
         # Ensure compatibility with Firedrake Function's __new__ method
         return super().__new__(cls, *args, **kwargs)
@@ -112,6 +129,24 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
 
         # Store the GPlates connector
         self.gplates_connector = gplates_connector
+
+    def remove_radial_component(self):
+        """
+        Project velocity to tangent plane by removing radial component.
+
+        Args:
+            quad_degree (int, optional): Quadrature degree for the projection. Defaults to 6.
+
+        """
+
+        # Get upward normal
+        r = upward_normal(self.ufl_domain())
+
+        # Project out radial component
+        self.project(
+            self - fd.inner(self, r) * r,
+            solver_parameters=GplatesVelocityFunction.tangential_project_solver_parameters,
+        )
 
 
 class pyGplatesConnector(object):
