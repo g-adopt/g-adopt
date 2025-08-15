@@ -45,6 +45,6 @@ check:
 # instead of trying to fix it at the jupyter level, we can serialise the startup with a semaphore
 %.ipynb: %.py
 	jupytext --to ipynb $<
-	jupyter nbconvert --to notebook --execute --inplace \
+	jupyter-nbconvert --to notebook --execute --inplace \
 		--TagRemovePreprocessor.enabled=True --TagRemovePreprocessor.remove_cell_tags='["exercise"]' \
 		$@

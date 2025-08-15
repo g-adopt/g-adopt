@@ -57,9 +57,9 @@ jobs:
         run: |
           apt install -y uidmap iproute2
           . .venv/bin/activate
-          jupytext_location="$(which jupytext)"
-          cp .testing/jupytext "$jupytext_location"
-          chmod +x "$jupytext_location"
+          nbconvert_location="$(which jupyter-nbconvert)"
+          cp .testing/jupyter-nbconvert "$nbconvert_location"
+          chmod +x "$nbconvert_location"
 
       - name: Convert notebooks
         run: |
