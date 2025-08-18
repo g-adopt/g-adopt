@@ -213,7 +213,7 @@ def create_stokes_nullspace(
     # If free surface unknowns, add dummy free surface nullspace
     null_space += stokes_subspaces[2:]
 
-    return fd.MixedVectorSpaceBasis(Z, null_space)
+    return V_nullspace #fd.MixedVectorSpaceBasis(Z, null_space)
 
 
 class MetaPostInit(abc.ABCMeta):
@@ -879,9 +879,15 @@ class InternalVariableSolver(SolverBase):
     def set_equations(self) -> None:
         self.strain = self.approximation.deviatoric_strain(self.solution)
 
-        m_new_list = [self.update_m(m, alpha) for m, alpha in zip(self.m_list, self.approximation.maxwell_times)]
-
+        if self.approximation.power_law:
+            # try linearising dev stress...
+            dev_stress = self.approximation.deviatoric_stress(self.solution_old, self.m_list)
+            self.visc_factor = self.approximation.power_law_factor(dev_stress)
+            m_new_list = [self.update_m(m, self.visc_factor * alpha) for m, alpha in zip(self.m_list, self.approximation.maxwell_times)]
+        else:
+            m_new_list = [self.update_m(m, alpha) for m, alpha in zip(self.m_list, self.approximation.maxwell_times)]
         stress = self.approximation.stress(self.solution, m_new_list)
+       
         source = self.approximation.buoyancy(self.solution) * self.k
 
         eqs_attrs = {"stress": stress, "source": source}
@@ -895,6 +901,7 @@ class InternalVariableSolver(SolverBase):
                 approximation=self.approximation,
                 bcs=self.weak_bcs,
                 quad_degree=self.quad_degree,
+                scaling_factor=1e6,
             )
         )
 
@@ -919,7 +926,10 @@ class InternalVariableSolver(SolverBase):
         super().solve()
         # Update internal variable term for using as a RHS explicit forcing in the next timestep
         for m, alpha in zip(self.m_list, self.approximation.maxwell_times):
-            m.interpolate(self.update_m(m, alpha))
+            if self.approximation.power_law:
+                m.interpolate(self.update_m(m, self.visc_factor * alpha))
+            else:
+                m.interpolate(self.update_m(m, alpha))
 
 
 class BoundaryNormalStressSolver:

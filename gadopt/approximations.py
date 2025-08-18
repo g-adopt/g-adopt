@@ -10,7 +10,7 @@ import abc
 from numbers import Number
 from typing import Optional
 
-from firedrake import Function, Identity, div, grad, inner, sym, tr, ufl
+from firedrake import Function, Identity, div, grad, inner, sym, tr, ufl, sqrt
 
 from .utility import ensure_constant, vertical_component
 
@@ -545,12 +545,21 @@ class CompressibleInternalVariableApproximation(
         bulk_shear_ratio=1,
         compressible_buoyancy=True,
         compressible_adv_hyd_pre=True,
+        power_law=False,
+        exponent=3.5,
+        transition_stress=None,
+        background_stress=0,
+
         **kwargs,
     ):
         self.bulk_modulus = ensure_constant(bulk_modulus)
         self.bulk_shear_ratio = ensure_constant(bulk_shear_ratio)
         self.compressible_buoyancy = compressible_buoyancy
         self.compressible_adv_hyd_pre = compressible_adv_hyd_pre
+        self.power_law = power_law
+        self.exponent = exponent
+        self.transition_stress=transition_stress
+        self.background_stress=background_stress
         super().__init__(density, shear_modulus, viscosity, **kwargs)
         self.maxwell_times = [ensure_constant(visc / mu) for visc, mu in zip(self.viscosity, self.shear_modulus)]
         self.mu0 = ensure_constant(sum(self.shear_modulus))
@@ -564,15 +573,29 @@ class CompressibleInternalVariableApproximation(
         e = sym(grad(u))
         return e - 1 / 3 * tr(e) * Identity(dim)
 
+    def deviatoric_stress(self, u, m_list):
+        d = self.deviatoric_strain(u)
+        dev_stress = 2 * self.mu0 * d
+        for mu, m in zip(self.shear_modulus, m_list):
+            dev_stress -= 2 * mu * m
+        return dev_stress
+
     def stress(self, u, m_list):
         div_u = self.div_u(u)
-        d = self.deviatoric_strain(u)
-
         stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
-        stress += 2 * self.mu0 * d
-        for mu, m in zip(self.shear_modulus, m_list):
-            stress -= 2 * mu * m
+        stress += self.deviatoric_stress(u, m_list)
         return stress
+
+    def second_stress_invariant(self, dev_stress):
+        # 2nd invariant 
+        return sqrt(inner(dev_stress, dev_stress) + 1e-16)
+    
+    def power_law_factor(self, dev_stress):
+        dev_stress_2 = self.second_stress_invariant(dev_stress)
+        a = self.background_stress / self.transition_stress
+        b =  (dev_stress_2 + self.background_stress)/self.transition_stress
+        n = self.exponent
+        return (1 + a**(n-1)) / (1 + b**(n-1) )
 
     # analytical solution for compressibility only converges without this term...
     def buoyancy(self, displacement):
