@@ -27,8 +27,6 @@ class GPlatesFunctionalityMixin:
         Args:
             ndtime (float): The model time for which to update the plate
                 velocities. This should be non-dimensionalised time.
-            projection_quad_degree (int, optional): Quadrature degree for
-            the projection to remove radial component. Defaults to 6.
         """
 
         # Print ndtime translated to geological age
