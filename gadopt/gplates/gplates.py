@@ -94,10 +94,10 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
     # Solver parameters for tangential projection, since this spherical mesh, use iterative solver
     tangential_project_solver_parameters = {
         "ksp_type": "cg",
-        "pc_type": "hypre",
+        "pc_type": "bjacobi",
         "ksp_rtol": 1e-9,
         "ksp_atol": 1e-12,
-        "ksp_max_it": 1000,
+        "ksp_max_it": 20,
         "ksp_converged_reason": None,
     }
 
