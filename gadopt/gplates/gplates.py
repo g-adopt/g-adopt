@@ -1,5 +1,4 @@
 import warnings
-from contextlib import nullcontext
 import firedrake as fd
 import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
@@ -95,6 +94,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
     tangential_project_solver_parameters = {
         "ksp_type": "cg",
         "pc_type": "bjacobi",
+        "mat_type": "matfree",
         "ksp_rtol": 1e-9,
         "ksp_atol": 1e-12,
         "ksp_max_it": 20,
