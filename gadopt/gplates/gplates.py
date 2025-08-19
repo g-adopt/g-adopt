@@ -42,9 +42,9 @@ class GPlatesFunctionalityMixin:
                 self.boundary_coords, ndtime)
         )
 
-        # Project tangential with appropriate annotation handling
-        suitable_context = stop_annotating() if annotate_tape() else nullcontext()
-        with suitable_context:
+        # Remove radial component of surface velocities. If annotation is on, do not
+        # put this on tape, as we will manually create a block variable for this (see below)
+        with stop_annotating():
             self.remove_radial_component()
 
         # Create block variable only if annotating
@@ -128,23 +128,37 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         # Store the GPlates connector
         self.gplates_connector = gplates_connector
 
-    def remove_radial_component(self):
-        """
-        Project velocity to tangent plane by removing radial component.
+        # Set up the projector for tangential projection
+        self.set_up_projector()
 
-        Args:
-            quad_degree (int, optional): Quadrature degree for the projection. Defaults to 6.
-
-        """
-
+    def set_up_projector(self):
+        """Set up the projector for removing radial component."""
         # Get upward normal
         r = upward_normal(self.ufl_domain())
 
-        # Project out radial component
-        self.project(
-            self - fd.inner(self, r) * r,
-            solver_parameters=GplatesVelocityFunction.tangential_project_solver_parameters,
+        # Define the tangential projection expression
+        tangential_expr = self - fd.inner(self, r) * r
+
+        # Create the projector
+        self.projector = fd.Projector(
+            v=tangential_expr,
+            v_out=self,
+            bcs=None,
+            solver_parameters=self.tangential_project_solver_parameters,
+            form_compiler_parameters=None,
+            constant_jacobian=True,
+            use_slate_for_inverse=False,
         )
+
+    def remove_radial_component(self):
+        """
+        Project velocity to tangent plane by removing radial component using cached projector.
+
+        This method uses a pre-built Projector for efficiency, avoiding the overhead
+        of rebuilding the projection operator each time.
+        """
+        # Use the pre-built projector for efficiency
+        self.projector.project()
 
 
 class pyGplatesConnector(object):
@@ -160,6 +174,9 @@ class pyGplatesConnector(object):
     # minimum distance, bellow which we do not interpolate
     #   this is just to avoid division by zero when weighted averaging
     epsilon_distance = 1e-8
+    # minimum magnitude, bellow which we do not scale the velocities
+    # This is to avoid division by zero when scaling the velocities
+    eps_rel = 1e-10
 
     def __init__(self,
                  rotation_filenames,
@@ -433,7 +450,7 @@ class pyGplatesConnector(object):
         # Rescale to preserve original magnitude (avoid division by zero)
         scale_factor = np.divide(original_magnitudes, tangential_magnitudes,
                                  out=np.ones_like(tangential_magnitudes),
-                                 where=tangential_magnitudes != 0)
+                                 where=tangential_magnitudes > pyGplatesConnector.eps_rel)
 
         res_u = res_u_tangential * scale_factor[:, np.newaxis]
 
