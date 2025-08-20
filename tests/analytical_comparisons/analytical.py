@@ -37,16 +37,16 @@ cases = {
         },
         "spherical": {
             "freeslip": {
-                "cores": [24, 48, 96, 192],  # cascade lake
-                "levels": [3, 4, 5, 6],
+                "cores": [48, 96, 192],  # cascade lake
+                "levels": [4, 5, 6],
                 "l": [2, 8],
                 "m": [2, 1],  # divide l by this value to get actual m
                 "k": [3, 9],
                 "permutate": False,
             },
             "zeroslip": {
-                "cores": [24, 48, 96, 192],
-                "levels": [3, 4, 5, 6],
+                "cores": [48, 96, 192],
+                "levels": [4, 5, 6],
                 "l": [2, 8],
                 "m": [2, 1],
                 "k": [3, 9],
