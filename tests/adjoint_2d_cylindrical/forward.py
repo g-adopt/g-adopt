@@ -40,7 +40,7 @@ def run_forward(visualise=False):
     delta_t = Constant(ref_values["delta_t"])  # Constant time step
 
     with CheckpointFile("Checkpoint230.h5", mode="r") as f:
-		T.project(f.load_function(mesh, "Temperature")
+        T.project(f.load_function(mesh, "Temperature"))
 
     # Build the viscosity using u, T, and the geometry parameters
     mu = get_viscosity(r, T, u)
