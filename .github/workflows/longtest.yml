@@ -11,16 +11,20 @@ on:
           - all
           - gadi
           - setonix
+  schedule:
+    - cron: "5 19 * * 0"
 
 jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
       system_matrix: ${{ steps.build_matrix.outputs.system_matrix }}
+    env:
+      SYSTEM: ${{ inputs.system || 'all' }}
     steps:
     - id: build_matrix
       run: |
-        if [[ "${{ inputs.system }}" == "all" ]]; then
+        if [[ "${SYSTEM}" == "all" ]]; then
           export SYSTEMS='[ "gadi", "setonix" ]'
         else
           export SYSTEMS='[ "${{ inputs.system }}" ]'
