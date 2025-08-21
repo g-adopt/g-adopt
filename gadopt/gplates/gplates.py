@@ -2,9 +2,9 @@ import warnings
 import firedrake as fd
 import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
-from pyadjoint.tape import annotate_tape
+from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
-from ..utility import log
+from ..utility import log, upward_normal
 
 import pygplates
 
@@ -41,8 +41,12 @@ class GPlatesFunctionalityMixin:
                 self.boundary_coords, ndtime)
         )
 
-        # At this point the values are updated.
-        # So we have to make sure it is shown correctly on tape if we are annotating
+        # Remove radial component of surface velocities. If annotation is on, do not
+        # put this on tape, as we will manually create a block variable for this (see below)
+        with stop_annotating():
+            self.remove_radial_component()
+
+        # Create block variable only if annotating
         if annotate_tape():
             self.create_block_variable()
 
@@ -86,6 +90,17 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         ...                                    name="GplateVelocity")
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
     """
+    # Solver parameters for tangential projection, since this spherical mesh, use iterative solver
+    tangential_project_solver_parameters = {
+        "ksp_type": "cg",
+        "pc_type": "bjacobi",
+        "mat_type": "matfree",
+        "ksp_rtol": 1e-9,
+        "ksp_atol": 1e-12,
+        "ksp_max_it": 20,
+        "ksp_converged_reason": None,
+    }
+
     def __new__(cls, *args, **kwargs):
         # Ensure compatibility with Firedrake Function's __new__ method
         return super().__new__(cls, *args, **kwargs)
@@ -113,6 +128,38 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         # Store the GPlates connector
         self.gplates_connector = gplates_connector
 
+        # Set up the projector for tangential projection
+        self.set_up_projector()
+
+    def set_up_projector(self):
+        """Set up the projector for removing radial component."""
+        # Get upward normal
+        r = upward_normal(self.ufl_domain())
+
+        # Define the tangential projection expression
+        tangential_expr = self - fd.inner(self, r) * r
+
+        # Create the projector
+        self.projector = fd.Projector(
+            v=tangential_expr,
+            v_out=self,
+            bcs=None,
+            solver_parameters=self.tangential_project_solver_parameters,
+            form_compiler_parameters=None,
+            constant_jacobian=True,
+            use_slate_for_inverse=False,
+        )
+
+    def remove_radial_component(self):
+        """
+        Project velocity to tangent plane by removing radial component using cached projector.
+
+        This method uses a pre-built Projector for efficiency, avoiding the overhead
+        of rebuilding the projection operator each time.
+        """
+        # Use the pre-built projector for efficiency
+        self.projector.project()
+
 
 class pyGplatesConnector(object):
     # Non-dimensionalisation constants
@@ -127,6 +174,9 @@ class pyGplatesConnector(object):
     # minimum distance, bellow which we do not interpolate
     #   this is just to avoid division by zero when weighted averaging
     epsilon_distance = 1e-8
+    # minimum magnitude, bellow which we do not scale the velocities
+    # This is to avoid division by zero when scaling the velocities
+    eps_rel = 1e-10
 
     def __init__(self,
                  rotation_filenames,
@@ -383,6 +433,26 @@ class pyGplatesConnector(object):
         close_points_mask = dists[:, 0] < pyGplatesConnector.epsilon_distance
         # Now handle the case where points are too close to each other:
         res_u[close_points_mask, :] = seeds_u[non_nan_values][idx[close_points_mask, 0]]
+
+        # Calculate radial component for res_u: res_u · e_r where e_r is the normalised radial unit vector
+        radial_velocity_res = np.sum(res_u * target_coords, axis=1)  # Dot product for each point
+
+        # Store original magnitudes before projection
+        original_magnitudes = np.linalg.norm(res_u, axis=1)
+
+        # Project res_u onto tangent plane to remove radial component
+        # res_u_tangential = res_u - (res_u · e_r) * e_r
+        res_u_tangential = res_u - radial_velocity_res[:, np.newaxis] * target_coords
+
+        # Calculate new magnitudes after projection
+        tangential_magnitudes = np.linalg.norm(res_u_tangential, axis=1)
+
+        # Rescale to preserve original magnitude (avoid division by zero)
+        scale_factor = np.divide(original_magnitudes, tangential_magnitudes,
+                                 out=np.ones_like(tangential_magnitudes),
+                                 where=tangential_magnitudes > pyGplatesConnector.eps_rel)
+
+        res_u = res_u_tangential * scale_factor[:, np.newaxis]
 
         return res_u
 
