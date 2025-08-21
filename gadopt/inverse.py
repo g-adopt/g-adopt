@@ -271,12 +271,27 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
             for i, func in enumerate(self.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def load(self, mesh, checkpoint_path):
+    def load(self, mesh, checkpoint_path: Path):
         """Loads the checkpointed data for this vector from disk.
 
         Called by the parent Optimiser after the ROL state has
         been deserialised. The pickling routine will register
         this vector within the registry.
+
+        The serialisation will have saved the absolute path to the
+        checkpoint directory at the time it was being saved.  However,
+        at restoration time, we might have moved this directory
+        elsewhere. Because of this, we only use the `.name` component
+        from the serialisation, and use the runtime-specified path for
+        the base of the checkpoint.
+
+        Args:
+          mesh:
+            The mesh on which the function is defined.
+          checkpoint_path:
+            The directory (as a Path) containing the checkpoint from which this
+            vector is being restored.
+
         """
 
         with CheckpointFile(str(checkpoint_path / self.checkpoint_path.name), "r") as f:
