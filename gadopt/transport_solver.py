@@ -108,6 +108,7 @@ class GenericTransportBase(abc.ABC):
         solution_old: Function | None = None,
         eq_attrs: dict[str, float] = {},
         bcs: dict[int, dict[str, Number]] = {},
+        quad_degree: int = None,
         solver_parameters: dict[str, str | Number] | str | None = None,
         su_advection: bool = False,
     ) -> None:
@@ -117,6 +118,7 @@ class GenericTransportBase(abc.ABC):
         self.solution_old = solution_old or Function(solution)
         self.eq_attrs = eq_attrs
         self.bcs = bcs
+        self.quad_degree = quad_degree
         self.solver_parameters = solver_parameters
         self.su_advection = su_advection
 
@@ -315,6 +317,7 @@ class GenericTransportSolver(GenericTransportBase):
             mass_term=scalar_eq.mass_term,
             eq_attrs=self.eq_attrs,
             bcs=self.weak_bcs,
+            quad_degree=self.quad_degree,
         )
 
 
@@ -386,4 +389,5 @@ class EnergySolver(GenericTransportBase):
             eq_attrs=self.eq_attrs,
             approximation=self.approximation,
             bcs=self.weak_bcs,
+            quad_degree=self.quad_degree,
         )
