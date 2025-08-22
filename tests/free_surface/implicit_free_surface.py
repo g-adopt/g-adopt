@@ -46,9 +46,9 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
     def setup_solver(self):
         self.stokes_solver = StokesSolver(
             self.z,
-            self.T,
             self.approximation,
-            coupled_tstep=self.dt,
+            self.T,
+            dt=self.dt,
             theta=0.5,
             bcs=self.stokes_bcs,
             solver_parameters=self.solver_parameters,
