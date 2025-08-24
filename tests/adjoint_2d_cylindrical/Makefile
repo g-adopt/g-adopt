@@ -22,6 +22,9 @@ Checkpoint_State.h5: forward.py
 	mkdir -p batch_output
 	gadopt_hpcrun -n ${cores} -N $* -o batch_output/$*.out -e batch_output/$*.err -v PYOP2_SPMD_STRICT=1 python3 $< $*
 
+longtest_output:
+	[[ -d batch_output ]] && tail -n +1 batch_output/*
+
 check: $(addsuffix _functional.dat,$(combo_cases))
 	python -m pytest -m longtest
 
