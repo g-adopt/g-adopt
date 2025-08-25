@@ -39,6 +39,10 @@ def test_scaling_iterations(level, component):
 def test_scaling_pc_setup_time(level):
     assert not isinstance(ghpc_system, str), "Attempted to run longtest without gadopt_hpc_helper module"
 
+    # The level 5 parallel scaling tests run on less than a full node, so can
+    # be scheduled across a single CPU, or across multiple CPUs. This leads to
+    # the level 5 tests having a much more variable runtime than the level 6 or
+    # 7 tests. Therefore the level 5 tests have a higher timing tolerance.
     tol = 0.2 if level == 5 else 0.1
 
     b = Path(__file__).parent.resolve()
@@ -55,6 +59,10 @@ def test_scaling_pc_setup_time(level):
 def test_scaling_total_solve_time(level):
     assert not isinstance(ghpc_system, str), "Attempted to run longtest without gadopt_hpc_helper module"
 
+    # The level 5 parallel scaling tests run on less than a full node, so can
+    # be scheduled across a single CPU, or across multiple CPUs. This leads to
+    # the level 5 tests having a much more variable runtime than the level 6 or
+    # 7 tests. Therefore the level 5 tests have a higher timing tolerance.
     tol = 0.2 if level == 5 else 0.1
 
     b = Path(__file__).parent.resolve()
