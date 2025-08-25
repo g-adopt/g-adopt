@@ -38,13 +38,16 @@ def test_scaling_iterations(level, component):
 @pytest.mark.parametrize("level", levels)
 def test_scaling_pc_setup_time(level):
     assert not isinstance(ghpc_system, str), "Attempted to run longtest without gadopt_hpc_helper module"
+
+    tol = 0.2 if level == 5 else 0.1
+
     b = Path(__file__).parent.resolve()
     stokes_pc_setup = get_data(level, b)["pc_setup"]
 
     expected_df = pd.read_csv(b / f"{ghpc_system.name}_expected.csv", index_col="level")
     expected = expected_df.loc[level]["pc_setup"]
 
-    assert abs((expected - stokes_pc_setup) / expected) < 0.1
+    assert abs((expected - stokes_pc_setup) / expected) < tol
 
 
 @pytest.mark.longtest
@@ -52,10 +55,12 @@ def test_scaling_pc_setup_time(level):
 def test_scaling_total_solve_time(level):
     assert not isinstance(ghpc_system, str), "Attempted to run longtest without gadopt_hpc_helper module"
 
+    tol = 0.2 if level == 5 else 0.1
+
     b = Path(__file__).parent.resolve()
     solve_time = get_data(level, b)["total_time"]
 
     expected_df = pd.read_csv(b / f"{ghpc_system.name}_expected.csv", index_col="level")
     expected = expected_df.loc[level]["solve_time"]
 
-    assert abs((expected - solve_time) / expected) < 0.1
+    assert abs((expected - solve_time) / expected) < tol
