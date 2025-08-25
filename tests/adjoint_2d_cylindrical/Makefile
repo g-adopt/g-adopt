@@ -20,7 +20,7 @@ Checkpoint_State.h5: forward.py
 %_functional.dat: inverse.py Checkpoint_State.h5
 	echo "running spherical $@" >&2
 	mkdir -p batch_output
-	gadopt_hpcrun -n ${cores} -N $* -o batch_output/$*.out -e batch_output/$*.err -v PYOP2_SPMD_STRICT=1 python3 $< $*
+	gadopt_hpcrun -n ${cores} -m 64GB -N $* -o batch_output/$*.out -e batch_output/$*.err -v PYOP2_SPMD_STRICT=1 python3 $< $*
 
 longtest_output:
 	[[ -d batch_output ]] && tail -n +1 batch_output/*
