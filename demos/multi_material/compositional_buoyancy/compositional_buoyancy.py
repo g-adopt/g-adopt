@@ -210,8 +210,10 @@ stokes_solver = StokesSolver(
 stokes_solver.solve()
 
 # Instantiate a solver object for level-set advection and reinitialisation. G-ADOPT
-# provides default values for most arguments; we only provide those that do not have
-# one. No boundary conditions are required, as the numerical domain is closed.
+# defines default values for most arguments; here, we only provide those without one,
+# namely the velocity field and time step (needed for advection) and the level-set
+# interface thickness (needed for reinitialisation). No boundary conditions are
+# required, as the numerical domain is closed.
 adv_kwargs = {"u": u, "timestep": time_step}
 reini_kwargs = {"epsilon": epsilon}
 level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)

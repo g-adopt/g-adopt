@@ -10,7 +10,7 @@ params.log: thermochemical_buoyancy.py
 	$(run-python)
 
 clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
+	rm -f *.msh *.pvd *.vtu *.pvtu *.h5 params.log
 	rm -rf output
 
 check: params.log

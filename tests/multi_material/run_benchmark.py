@@ -126,7 +126,7 @@ else:  # Initialise mesh and key functions
     # Set up function spaces and functions used in the level-set approach
     func_space_ls = fd.FunctionSpace(
         mesh, "DQ", 1 if benchmark == "schmalholz_2011" else 2
-    )
+    )  # Stokes solver diverges when using DQ2 for the Schmalholz benchmark
     level_set = [
         fd.Function(func_space_ls, name=f"Level set #{i}")
         for i in range(len(simulation.materials) - 1)
@@ -167,7 +167,7 @@ if simulation.dimensional:
     rho_material = ga.material_field(
         level_set,
         [material.rho for material in simulation.materials],
-        interface="arithmetic" if benchmark == "woidt_1978" else "sharp",
+        interface="sharp",
     )
     density = fd.Function(func_space_output, name="Density")
     output_fields.append(density)
@@ -187,6 +187,7 @@ else:
 mu = ga.material_field(
     level_set,
     [material.mu(velocity, temperature) for material in simulation.materials],
+    # Sharp viscosity interface required to reproduce Schmalholz benchmark diagnostic
     interface="sharp" if benchmark == "schmalholz_2011" else "geometric",
 )
 viscosity = fd.Function(func_space_output, name="Viscosity")
@@ -230,15 +231,15 @@ stokes_solver = ga.StokesSolver(
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )
-if benchmark == "schmalholz_2011":
+if benchmark == "schmalholz_2011":  # Update line search algorithm to ensure convergence
     stokes_solver.solver_parameters["snes_linesearch_type"] = "cp"
 stokes_solver.solve()  # Determine initial velocity and pressure fields
 
 # Set up level-set solvers
 adv_kwargs = {"u": velocity, "timestep": timestep}
 reini_kwargs = {"epsilon": epsilon}
-if benchmark == "tosi_2015":
-    reini_kwargs["frequency"] = 10  # Avoiding expensive frequent reinitialisation
+if benchmark == "tosi_2015":  # Avoid expensive frequent reinitialisation
+    reini_kwargs["frequency"] = 10
 level_set_solver = [
     ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
     for ls in level_set
@@ -275,9 +276,8 @@ geo_diag = ga.GeodynamicalDiagnostics(
 )
 
 if benchmark == "trim_2023":
-    # Omit level-set reinitialisation
-    disable_reinitialisation = True
-    # Function to be coupled with the energy solver
+    disable_reinitialisation = True  # Omit level-set reinitialisation
+    # Update time-dependent internal heating during energy solve
     update_forcings = partial(simulation.internal_heating_rate, H)
 else:
     disable_reinitialisation = False

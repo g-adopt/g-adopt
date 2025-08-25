@@ -16,10 +16,10 @@
 # convection presented in [van Keken et al. (1997)](https://doi.org/10.1029/97JB01353).
 # Inside a 2-D domain heated from below, a denser material sits at the bottom boundary
 # beneath a lighter material. Whilst the compositional stratification is stable, heat
-# transfer from the boundary generates positive buoyancy in the denser material,
-# allowing thin tendrils to be entrained in the convective circulation. To resolve these
-# tendrils using the level-set approach, significant mesh refinement is needed, making
-# the simulation computationally expensive. This tutorial will be updated soon once the
+# transfer from the boundary generates positive buoyancy, allowing thin tendrils of
+# denser material to be entrained by convective circulation. To resolve these tendrils
+# using the level-set approach, significant mesh refinement is needed, making the
+# simulation computationally expensive. This tutorial will be updated soon once the
 # development of adaptive mesh refinement in Firedrake is complete. We describe below
 # the current implementation of this problem in G-ADOPT.
 
@@ -28,10 +28,10 @@
 
 from gadopt import *
 
-# For this problem, in the absence of adaptive mesh refinement, it is useful to define a
-# mesh with non-uniform spatial refinement. To this end, we use the GMSH library to
-# generate a mesh file in a format compatible with Firedrake. We specifically increase
-# vertical resolution at the top and bottom boundaries of the domain.
+# For this problem, it is useful to define a mesh with non-uniform spatial refinement.
+# To this end, we use the Python API of the GMSH library to generate a mesh file in a
+# format compatible with Firedrake. We specifically increase vertical resolution at the
+# top and bottom boundaries of the domain.
 
 # +
 import gmsh
@@ -45,34 +45,36 @@ if MPI.COMM_WORLD.rank == 0:
     gmsh.initialize()
     gmsh.model.add("mesh")
 
+    # Generate two points delimiting the domain's bottom boundary.
     point_1 = gmsh.model.geo.addPoint(0.0, 0.0, 0.0, mesh_hor_res)
     point_2 = gmsh.model.geo.addPoint(domain_dims[0], 0.0, 0.0, mesh_hor_res)
-
+    # Generate a line joining the two points.
     line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
+    # Generate points and lines in the remainder of the domain using multiple
+    # extrusions. For each extrusion, the number of elements and (cumulative) height of
+    # the layer determine the (vertical) resolution of the mesh.
     gmsh.model.geo.extrude(
-        [(1, line_1)], 0.0, 0.1, 0.0, numElements=[20], recombine=True
-    )  # Vertical resolution: 5e-3
-
-    gmsh.model.geo.extrude(
-        [(1, line_1 + 1)], 0.0, 0.8, 0.0, numElements=[16], recombine=True
-    )  # Vertical resolution: 5e-2
-
-    gmsh.model.geo.extrude(
-        [(1, line_1 + 5)], 0.0, 0.1, 0.0, numElements=[20], recombine=True
-    )  # Vertical resolution: 5e-3
+        [(1, line_1)],
+        0.0,
+        1.0,
+        0.0,
+        numElements=[20, 16, 20],
+        heights=[0.1, 0.9, 1.0],  # Vertical resolution: [5e-3, 5e-2, 5e-3]
+        recombine=True,
+    )
 
     gmsh.model.geo.synchronize()
 
-    gmsh.model.addPhysicalGroup(1, [line_1 + 2, line_1 + 6, line_1 + 10], tag=1)
-    gmsh.model.addPhysicalGroup(1, [line_1 + 3, line_1 + 7, line_1 + 11], tag=2)
+    # Generate physical groups for domain boundaries with appropriate tags.
+    gmsh.model.addPhysicalGroup(1, [line_1 + 2], tag=1)
+    gmsh.model.addPhysicalGroup(1, [line_1 + 3], tag=2)
     gmsh.model.addPhysicalGroup(1, [line_1], tag=3)
-    gmsh.model.addPhysicalGroup(1, [line_1 + 9], tag=4)
+    gmsh.model.addPhysicalGroup(1, [line_1 + 1], tag=4)
+    gmsh.model.addPhysicalGroup(2, [line_1 + 4], tag=1)
 
-    gmsh.model.addPhysicalGroup(2, [line_1 + 4, line_1 + 8, line_1 + 12], tag=1)
-
+    # Generate mesh file.
     gmsh.model.mesh.generate(2)
-
     gmsh.write(mesh_file)
     gmsh.finalize()
 # -
@@ -88,8 +90,7 @@ boundary = get_boundary_ids(mesh)  # Object holding references to mesh boundary 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Stokes function space (mixed)
-# Temperature function space (scalar, discontinuous, equispaced)
-Q = FunctionSpace(mesh, "DQ", 2, variant="equispaced")
+Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar, discontinuous)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space (constants across the domain)
 
@@ -192,10 +193,8 @@ Ts = 1.0 / 2.0 - Q_ic / 2.0 / sqrt(pi) * sqrt(v0 / (2.0 - y)) * exp(
     -((domain_dims[0] - x) ** 2.0) * v0 / (8.0 - 4.0 * y)
 )
 
-# Interpolate temperature initial condition and ensure boundary condition values
+# Interpolate temperature initial condition
 T.interpolate(max_value(min_value(Tu + Tl + Tr + Ts - 3.0 / 2.0, 1.0), 0.0))
-DirichletBC(Q, 1.0, boundary.bottom).apply(T)
-DirichletBC(Q, 0.0, boundary.top).apply(T)
 # -
 
 # Let us visualise the temperature field that we have just initialised.
