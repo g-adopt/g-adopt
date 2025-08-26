@@ -4,8 +4,10 @@ from firedrake.output import VTKFile
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
+    CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
     SmallDisplacementViscoelasticApproximation,
+    MaxwellDisplacementApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
@@ -20,9 +22,10 @@ from .level_set_tools import (
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .stokes_integrators import (
+    BoundaryNormalStressSolver,
+    InternalVariableSolver,
     StokesSolver,
     ViscoelasticStokesSolver,
-    BoundaryNormalStressSolver,
     create_stokes_nullspace,
 )
 from .time_stepper import (
