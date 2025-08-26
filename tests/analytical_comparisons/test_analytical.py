@@ -25,8 +25,16 @@ enabled_cases = {
         "rtol": 2e-1,
         "ns_lb": 5e-2,
     },
-    "smooth_spherical_freeslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
-    "smooth_spherical_zeroslip": {"convergence": (4.0, 2.0, 2.0), "rtol": 1e-1},
+    "smooth_spherical_freeslip": {
+        "convergence": (4.0, 2.0, 2.0),
+        "rtol": 1e-1,
+        "ns_lb": 1e-1,
+    },
+    "smooth_spherical_zeroslip": {
+        "convergence": (4.0, 2.0, 2.0),
+        "rtol": 1e-1,
+        "ns_lb": 1e-1,
+    },
 }
 
 longtest_cases = [

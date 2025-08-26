@@ -1,3 +1,0 @@
-#!/bin/bash
-
-XDG_CACHE_HOME=$HOME/.cache unshare --map-root-user --net bash -c "ip link set lo up && python3 -m jupytext $*" -- "$@"
