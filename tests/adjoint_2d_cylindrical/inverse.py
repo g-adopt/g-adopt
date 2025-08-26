@@ -1,15 +1,29 @@
 """
-This runs the optimisation portion of the adjoint test case. A forward run first sets up
-the tape with the adjoint information, then a misfit functional is constructed to be
-used as the goal condition for nonlinear optimisation using ROL.
+Testing inverse problem solver for 2D cylindrical mantle convection (cylindrical case in Ghelichkhan et al. 2024)
 
-annulus_taylor_test is also added to this script for testing the correctness of the gradient for the inverse problem.
-    taylor_test(alpha_T, alpha_u, alpha_d, alpha_s):
-            alpha_T (float): The coefficient of the temperature misfit term.
-            alpha_u (float): The coefficient of the velocity misfit term.
-            alpha_d (float): The coefficient of the initial condition damping term.
-            alpha_s (float): The coefficient of the smoothing term.
-            float: The minimum convergence rate from the Taylor test. (Should be close to 2)
+Main Functions:
+    generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule, uimposed):
+        Core function that sets up the forward simulation, populates the adjoint tape, and
+        constructs the multi-term objective functional including temperature misfit, velocity
+        misfit, damping, and smoothing regularisation terms.
+
+    inverse(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule, uimposed):
+        Main optimisation routine that sets up and runs the inverse problem using ROL
+
+    annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule, uimposed):
+        Performs Taylor test to ensure gradient correctness for the gradient information
+
+    run_forward_and_back(inverse_problem):
+        Executes forward and backward tape evaluation for testing purposes, returning objective
+        values and callback function results for validation across different schedulers.
+
+Parameters:
+    alpha_T (float): Weight for temperature misfit term
+    alpha_u (float): Weight for velocity misfit term
+    alpha_d (float): Weight for initial condition damping
+    alpha_s (float): Weight for smoothing regularization
+    checkpointing_schedule: Memory management strategy for adjoint computation
+    uimposed (bool): Whether surface velocities are imposed or free-slip
 """
 from gadopt import *
 from gadopt.inverse import *
@@ -23,7 +37,7 @@ from forward import get_reference_values, get_viscosity
 
 def inverse(alpha_T=1e0, alpha_u=1e-1, alpha_d=1e-2, alpha_s=1e-1, checkpointing_schedule=None, uimposed=False):
 
-    # For solving the inverse problem we the reduced functional, any callback functions,
+    # For solving the inverse problem we store the reduced functional, any callback functions,
     # and the initial guess for the control variable
     inverse_problem = generate_inverse_problem(
         alpha_u=alpha_u,
@@ -95,7 +109,7 @@ def annulus_taylor_test(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedu
         minconv (float): The minimum convergence rate from the Taylor test.
     """
 
-    # For solving the inverse problem we the reduced functional, any callback functions,
+    # For solving the inverse problem we store the reduced functional, any callback functions,
     # and the initial guess for the control variable
     inverse_problem = generate_inverse_problem(alpha_T, alpha_u, alpha_d, alpha_s, checkpointing_schedule, uimposed=uimposed)
 
