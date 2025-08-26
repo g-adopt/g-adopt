@@ -4,7 +4,7 @@ import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
-from ..utility import log, upward_normal
+from ..utility import log, upward_normal, DEBUG, INFO, log_level
 
 import pygplates
 
@@ -90,16 +90,22 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         ...                                    name="GplateVelocity")
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
     """
-    # Solver parameters for tangential projection, since this spherical mesh, use iterative solver
-    tangential_project_solver_parameters = {
-        "ksp_type": "cg",
-        "pc_type": "bjacobi",
-        "mat_type": "matfree",
-        "ksp_rtol": 1e-9,
-        "ksp_atol": 1e-12,
-        "ksp_max_it": 20,
-        "ksp_converged_reason": None,
-    }
+    # Deciding on the right level of verbosity
+    # for the tangential projection solver
+    if DEBUG >= log_level:
+        # GADOPT_LOGLEVEL=DEBUG: Show convergence reason and monitor
+        tangential_project_solver_parameters = {
+            "ksp_converged_reason": None,
+            "ksp_monitor": None
+        }
+    elif INFO >= log_level:
+        # GADOPT_LOGLEVEL=INFO: Show only convergence reason
+        tangential_project_solver_parameters = {
+            "ksp_converged_reason": None
+        }
+    else:
+        # No verbosity
+        tangential_project_solver_parameters = None
 
     def __new__(cls, *args, **kwargs):
         # Ensure compatibility with Firedrake Function's __new__ method
