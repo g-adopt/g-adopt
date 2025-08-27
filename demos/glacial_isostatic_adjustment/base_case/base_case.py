@@ -48,7 +48,7 @@
 #     \textbf{0} = \nabla \cdot \boldsymbol{\sigma} - B_{\mu}\, (\rho_0 + \rho_1)\,g\,\boldsymbol{\hat{e}}_{k} ,
 # \end{equation}
 #
-# where $\boldsymbol{\sigma}$ is the non-dimensional stress tensor, $g$ is the non-dimensional gravity, and $ B_{\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\mu}}$ is a non-dimensional number describing the ratio of buoyancy to elastic shear strength. Note that $\boldsymbol{\hat{e}}_k$ is aligned with either the $z$-axis or radial direction in Cartesian or spherical coordinates, respectively. 
+# where $\boldsymbol{\sigma}$ is the non-dimensional stress tensor, $g$ is the non-dimensional gravity, and $ B_{\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\mu}}$ is a non-dimensional number describing the ratio of buoyancy to elastic shear strength. Note that $\boldsymbol{\hat{e}}_k$ is aligned with either the $z$-axis or radial direction in Cartesian or spherical coordinates, respectively.
 
 # Linearisation
 # -------------
@@ -95,9 +95,9 @@
 # viscous stresses are the same but the total displacements combine.
 #
 #
-# We follow the internal variable formulation adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018), in which viscoelastic constitutive equations are expressed in integral form and reformulated using so-called *internal variables*. Conceptually, this approach consists of a set of elements with different shear relaxation timescales, arranged in parallel. This formulation provides a compact, flexible and convenient means to incorporate transient rheology into viscoelastic deformation models: using a single internal variable is equivalent to a simple Maxwell material; two correspond to a Burgers model with two characteristic relaxation frequencies; and using a series of internal variables permits approximation of a continuous range of relaxation timescales for more complicated rheologies. 
+# We follow the internal variable formulation adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018), in which viscoelastic constitutive equations are expressed in integral form and reformulated using so-called *internal variables*. Conceptually, this approach consists of a set of elements with different shear relaxation timescales, arranged in parallel. This formulation provides a compact, flexible and convenient means to incorporate transient rheology into viscoelastic deformation models: using a single internal variable is equivalent to a simple Maxwell material; two correspond to a Burgers model with two characteristic relaxation frequencies; and using a series of internal variables permits approximation of a continuous range of relaxation timescales for more complicated rheologies.
 #
-# For a linear, compressible viscoelastic material, the constitutive equation takes the form 
+# For a linear, compressible viscoelastic material, the constitutive equation takes the form
 # \begin{equation}
 #     \boldsymbol{\sigma}^L_1 = \kappa \nabla \cdot \boldsymbol{u}(t)\, \boldsymbol{I} + 2 \mu_0 \boldsymbol{d}(t) - 2 \sum_i \mu_i \boldsymbol{m}_i(t),
 # \end{equation}
@@ -107,13 +107,13 @@
 # \begin{equation}
 #     \mu_0 = \sum_i \mu_i
 # \end{equation}
-# where $\mu_i$ are the non-dimensional shear moduli associated with each internal variable, $\boldsymbol{m}_i$. The deviatoric strain tensor is given as 
+# where $\mu_i$ are the non-dimensional shear moduli associated with each internal variable, $\boldsymbol{m}_i$. The deviatoric strain tensor is given as
 #
 # \begin{equation}
 #     \boldsymbol{d} = \boldsymbol{e} -\frac{1}{3} \textrm{Tr}(\boldsymbol{e}) \boldsymbol{I},
 # \end{equation}
-#  
-#  where $\textrm{Tr}(\cdot)$ is the trace operator and the strain tensor, $\boldsymbol{e}$, is 
+#
+#  where $\textrm{Tr}(\cdot)$ is the trace operator and the strain tensor, $\boldsymbol{e}$, is
 # \begin{equation}
 #    \boldsymbol{e}  = \frac{1}{2} \left( \nabla \boldsymbol{u}  + \left( \nabla \boldsymbol{u}\right)^T \right).
 # \end{equation}
@@ -125,9 +125,9 @@
 # \begin{equation}
 #     \boldsymbol{m}_i = \frac{1}{\alpha_i} \int^t_{t_0} \textrm{e}^{-\frac{(t-t')}{\alpha_i}} \boldsymbol{d}(t') \, dt',
 # \end{equation}
-# where $\alpha_i$ is the Maxwell time for each element. 
+# where $\alpha_i$ is the Maxwell time for each element.
 #
-# Equivalently, each internal variable evolves according to 
+# Equivalently, each internal variable evolves according to
 # \begin{equation}
 #     \partial_t \boldsymbol{m}_i + \frac{1}{\alpha_i} \left( \boldsymbol{m}_i - \boldsymbol{d} \right) = \boldsymbol{0}, \quad \boldsymbol{m}_i(t_0) = \boldsymbol{0}.
 # \end{equation}
@@ -166,14 +166,14 @@
 # which we then simplify by multiplying both sides by -1 and splitting into three components
 # \begin{equation}
 #     0 = S + H + D,
-# \end{equation} 
+# \end{equation}
 # where
 # \begin{equation}
-#     S  = \int_\Omega -\boldsymbol{\phi} \cdot \nabla \cdot \boldsymbol{\sigma}_1^L  \, dx, 
-# \end{equation} 
+#     S  = \int_\Omega -\boldsymbol{\phi} \cdot \nabla \cdot \boldsymbol{\sigma}_1^L  \, dx,
+# \end{equation}
 # \begin{equation}
-#     H  = \int_\Omega \boldsymbol{\phi} \cdot B_{\mu} \nabla \left( \rho_0 g u_k\right) \, dx, 
-# \end{equation} 
+#     H  = \int_\Omega \boldsymbol{\phi} \cdot B_{\mu} \nabla \left( \rho_0 g u_k\right) \, dx,
+# \end{equation}
 # and
 # \begin{equation}
 #     D  = \int_\Omega \boldsymbol{\phi} \cdot  B_{\mu} \rho_1 g \, \boldsymbol{\hat{e}}_k  \, dx .
@@ -188,35 +188,35 @@
 #
 # \begin{equation}
 #     S  = \sum_n \left(\int_{K_n} \nabla \boldsymbol{\phi} : \boldsymbol{\sigma}_1^L  \, dx - \int_{\partial K_n}  \boldsymbol{\phi} \cdot \left( \hat{\boldsymbol{n}} \cdot \boldsymbol{\sigma}_1^L  \right) \, ds \right) ,
-# \end{equation} 
+# \end{equation}
 #
 # where $\hat{\boldsymbol{n}}$ is the outward pointing normal vector to an element edge, represented by $\partial K_n$. Given that test functions are continuous across cell edges and we assume that there is no jump in stress across material discontinuities this simplifies to
 #
 # \begin{equation}
-#     S  = \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( \kappa \nabla \cdot \boldsymbol{u}\, \boldsymbol{I}  + 2 \mu_0 \boldsymbol{d}(\boldsymbol{u})   - 2 \sum_i \mu_i \boldsymbol{m}_i(\boldsymbol{u})   \right) \, dx 
+#     S  = \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( \kappa \nabla \cdot \boldsymbol{u}\, \boldsymbol{I}  + 2 \mu_0 \boldsymbol{d}(\boldsymbol{u})   - 2 \sum_i \mu_i \boldsymbol{m}_i(\boldsymbol{u})   \right) \, dx
 #      + \int_{\partial \Omega_\textrm{top}}  \boldsymbol{\phi} \cdot \left( B_{\mu} \, \rho_\mathrm{load} \, g \, h_\mathrm{load}  \hat{\boldsymbol{n}} \right) \, ds ,
 # \end{equation}
 #
-# where we have substituted the constitutive relation and the boundary condition at the top of the domain, $\partial \Omega_\textrm{top}$. For bottom (and side) boundaries where we specify no normal displacement, we utilise two different strategies depending on domain geometry. In Cartesian domains, we apply the boundary condition strongly by modifying the discrete test and trial spaces, such that the surface integral vanishes. For spherical domains, we implement that condition weakly using the Symmetric Interior Penalty Galerkin method. 
+# where we have substituted the constitutive relation and the boundary condition at the top of the domain, $\partial \Omega_\textrm{top}$. For bottom (and side) boundaries where we specify no normal displacement, we utilise two different strategies depending on domain geometry. In Cartesian domains, we apply the boundary condition strongly by modifying the discrete test and trial spaces, such that the surface integral vanishes. For spherical domains, we implement that condition weakly using the Symmetric Interior Penalty Galerkin method.
 #
 # The same approach is taken for advection of the hydrostatic pre-stress term, initially integrating by parts to give
 #
 # \begin{equation}
 #     H  = \sum_i \left(\int_{K_i} -\nabla \cdot \boldsymbol{\phi}~   B_{\mu} \rho_0 g u_k  \, dx  + \int_{\partial K_i} \boldsymbol{\phi} \cdot \hat{\boldsymbol{n}}  B_{\mu} \rho_0 g u_k \, ds  \right).
-# \end{equation} 
+# \end{equation}
 #
 # Since we allow density and gravity discontinuities through the $DG0$ discretisation, we need to also account for the contribution of surface integrals along interior facets, denoted by $\Gamma$, using
 #
 # \begin{equation}
 #     H  = -\int_{\Omega} \nabla \cdot \boldsymbol{\phi} B_{\mu} \rho_0 g u_k \, dx  + \int_{\Gamma} \boldsymbol{\phi} \cdot B_{\mu} u_k [[\rho_0 g \hat{\boldsymbol{n}}]]  \, ds  + \int_{\partial \Omega_\textrm{top}} \boldsymbol{\phi} \cdot \hat{\boldsymbol{n}} B_{\mu} \rho_0 g u_k \, ds  ,
-# \end{equation} 
+# \end{equation}
 #
 # where the jump term is given by
 # \begin{equation}
 #     [[\rho_0 g \hat{\boldsymbol{n}}]] = \hat{\boldsymbol{n}}^+ \rho_0^+ g^+ + \hat{\boldsymbol{n}}^- \rho_0^- g^-.
 # \end{equation}
 #
-# The (arbitrary) labels $+$ and $-$ mark contributions from either side of the cell edge and  $\hat{\boldsymbol{n}}^+ = -\hat{\boldsymbol{n}}^-$. Note that the interior facet term is only non zero across layers with material density and gravity jumps and is similar to the Winkler foundations as described in Wu (2004). The last term in is similar to a free surface feedback term encountered in mantle convection. 
+# The (arbitrary) labels $+$ and $-$ mark contributions from either side of the cell edge and  $\hat{\boldsymbol{n}}^+ = -\hat{\boldsymbol{n}}^-$. Note that the interior facet term is only non zero across layers with material density and gravity jumps and is similar to the Winkler foundations as described in Wu (2004). The last term in is similar to a free surface feedback term encountered in mantle convection.
 
 # Time discretisation
 # -------------------
@@ -232,8 +232,8 @@
 #
 # We then substitute this result into the stress divergence term, yielding
 # \begin{equation}
-#     S  = \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( \kappa \nabla \cdot \boldsymbol{u}^{n+1}\, \boldsymbol{I}  +  2 \sum_i \dfrac{\eta_i}{\alpha_i + \Delta t} \left(\boldsymbol{d}(\boldsymbol{u}^{n+1}) - \boldsymbol{m}_i^n \right)  \right) \, dx 
-#      + \int_{\partial \Omega_\textrm{top}}  \boldsymbol{\phi} \cdot \left( B_{\mu} \, \rho_\mathrm{load} \, g\, h_\mathrm{load}  \hat{\boldsymbol{n}} \right) \, ds 
+#     S  = \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( \kappa \nabla \cdot \boldsymbol{u}^{n+1}\, \boldsymbol{I}  +  2 \sum_i \dfrac{\eta_i}{\alpha_i + \Delta t} \left(\boldsymbol{d}(\boldsymbol{u}^{n+1}) - \boldsymbol{m}_i^n \right)  \right) \, dx
+#      + \int_{\partial \Omega_\textrm{top}}  \boldsymbol{\phi} \cdot \left( B_{\mu} \, \rho_\mathrm{load} \, g\, h_\mathrm{load}  \hat{\boldsymbol{n}} \right) \, ds
 # \end{equation}
 # where $\eta_i$ is the non-dimensional viscosity of the the internal variable $\boldsymbol{m}_i$. Recombining the final system of equations is
 #
@@ -244,7 +244,7 @@
 #     = - \int_{\partial \Omega_\textrm{top}}  \boldsymbol{\phi} \cdot \left( B_{\mu} \, \rho_\mathrm{load} \, g\, h_\mathrm{load}  \hat{\boldsymbol{n}} \right) \, ds + \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( 2 \sum_i \dfrac{\eta_i}{\alpha_i + \Delta t}  \boldsymbol{m}_i^n  \right) \, dx ,
 # \end{multline}
 #
-# where implicit terms involving the unknown displacement at the next time step, $\boldsymbol{u}^{n+1}$, have been collected on the left-hand side and explicit terms known from the current time step are on the right-hand side. Finding the new values of $\boldsymbol{u}^{n+1}$ requires solving a linear system at each timestep, which is solved in Firedrake through PETSc's  comprehensive linear algebra library. 
+# where implicit terms involving the unknown displacement at the next time step, $\boldsymbol{u}^{n+1}$, have been collected on the left-hand side and explicit terms known from the current time step are on the right-hand side. Finding the new values of $\boldsymbol{u}^{n+1}$ requires solving a linear system at each timestep, which is solved in Firedrake through PETSc's  comprehensive linear algebra library.
 
 # This example
 # -------------
@@ -254,7 +254,6 @@
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
-from gadopt.utility import step_func
 from gadopt.utility import vertical_component as vc
 
 # Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and
@@ -262,7 +261,7 @@ from gadopt.utility import vertical_component as vc
 #
 # We have chosen a mesh with 60 elements in the $x$ direction and 5 elements per rheological layer in the $y$ direction. It is worth emphasising that the setup has coarse grid resolution so that the
 # demo is quick to run! For real simulations we can use fully unstructured meshes to accurately resolve important features in the model, for
-# instance near coastlines or sharp discontinuities in mantle properties. 
+# instance near coastlines or sharp discontinuities in mantle properties.
 #
 # On the mesh, we also denote that our geometry is Cartesian, i.e. gravity points
 # in the negative z-direction. This attribute is used by G-ADOPT specifically, not
@@ -281,7 +280,6 @@ radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 D = radius_values[0]-radius_values[-1]
 L_tilde = L / D
 radius_values_tilde = np.array(radius_values)/D
- 
 layer_height_list = []
 
 DG0_layers = 5
@@ -318,7 +316,7 @@ boundary = get_boundary_ids(mesh)
 # function space's computational implementation, recording the
 # association of degrees of freedom with the mesh and pointing to the
 # finite element basis. We will choose Q2 for the displacement similar to the velocity field in our mantle convection demos.
-# We also initialise a discontinuous tensor function space that will store our previous values of the internal variable 
+# We also initialise a discontinuous tensor function space that will store our previous values of the internal variable
 # as the gradient of the continous displacement field will be discontinuous. Given that we have purely radial variations in density, viscosity and shear modulus, we choose the DG0 space (i.e., constant within a finite element cell but discontinuous between cells),
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
@@ -428,7 +426,7 @@ for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
 # +
 # Timestepping parameters
 Tstart = 0
-time = Function(R).assign(Tstart * year_in_seconds/ characteristic_maxwell_time)
+time = Function(R).assign(Tstart * year_in_seconds / characteristic_maxwell_time)
 
 dt_years = 1000
 dt = Constant(dt_years * year_in_seconds / characteristic_maxwell_time)
@@ -493,7 +491,7 @@ stokes_bcs = {
     boundary.right: {'ux': 0},
 }
 
-#gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
+# gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
 # -
 
 
@@ -508,9 +506,9 @@ approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modu
 # needed for the solve along with the approximation, timestep, list of internal variables and boundary conditions.
 #
 
-stokes_solver = InternalVariableSolver(u, approximation, dt=dt,m_list=m_list, bcs=stokes_bcs)
+stokes_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs)
 
-# We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview. 
+# We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 # We also create a function to store the velocity field at each timestep.
 
 # +
@@ -583,17 +581,13 @@ for timestep in range(max_timesteps):
 #     reader.set_active_time_point(i)
 #     data = reader.read()[0]
 #
-#     # Make displacement and 
-#     #data['displacement'] *= D
-#     #data['velocity'] *= D / characteristic_maxwell_time
-#
 #     # Artificially warp the output data in the vertical direction by the free surface height
 #     # Note the mesh is not really moving!
 #     warped = data.warp_by_vector(vectors="displacement", factor=500)
 #     arrows = data.glyph(orient="velocity", scale="velocity", factor=75000, tolerance=0.05)
 #     plotter.add_mesh(arrows, color="white", lighting=False)
 #
-#     data['displacement'] *= D
+#     data['displacement'] *= D  # Make displacement dimensional
 #     # Add the warped displacement field to the frame
 #     plotter.add_mesh(
 #         warped,
