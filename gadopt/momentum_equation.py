@@ -123,12 +123,12 @@ def viscosity_term(
             # We only keep the normal part of stress; the tangential part is assumed to
             # be zero stress (i.e. free slip) or prescribed via "stress".
             F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
-            
-            # Hack in bulk compressibility part of un bc - Fix in gadopt... 
+
+            # Add bulk compressibility part of un bc
             # is this physics or discretisation?
             trial_tensor_jump = identity * (dot(eq.n, trial) - bc["un"])
             trial_tensor_jump += transpose(trial_tensor_jump)
-            bulk = eq.approximation.bulk_modulus * eq.approximation.bulk_shear_ratio 
+            bulk = eq.approximation.bulk_modulus * eq.approximation.bulk_shear_ratio
             # Terms below are similar to the above terms for the DG dS integrals.
             F += (
                 2

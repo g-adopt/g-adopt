@@ -213,7 +213,7 @@ def create_stokes_nullspace(
     # If free surface unknowns, add dummy free surface nullspace
     null_space += stokes_subspaces[2:]
 
-    return V_nullspace #fd.MixedVectorSpaceBasis(Z, null_space)
+    return V_nullspace  # fd.MixedVectorSpaceBasis(Z, null_space)
 
 
 class MetaPostInit(abc.ABCMeta):
