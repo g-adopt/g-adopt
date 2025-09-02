@@ -1,10 +1,11 @@
 import warnings
+from warnings import warn
 import firedrake as fd
 import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
-from ..utility import log, upward_normal, DEBUG, INFO, log_level
+from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
 
 import pygplates
 
@@ -90,22 +91,29 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         ...                                    name="GplateVelocity")
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
     """
+    # Base solver parameters shared across all logging scenarios
+    tangential_project_solver_parameters = {
+        "ksp_type": "cg",
+        "pc_type": "bjacobi",
+        "sub_pc_type": "icc",
+        "ksp_rtol": 1e-9,
+        "ksp_atol": 1e-12,
+        "ksp_max_it": 20,
+    }
+
     # Deciding on the right level of verbosity
     # for the tangential projection solver
     if DEBUG >= log_level:
         # GADOPT_LOGLEVEL=DEBUG: Show convergence reason and monitor
-        tangential_project_solver_parameters = {
+        tangential_project_solver_parameters |= {
             "ksp_converged_reason": None,
             "ksp_monitor": None
         }
     elif INFO >= log_level:
         # GADOPT_LOGLEVEL=INFO: Show only convergence reason
-        tangential_project_solver_parameters = {
+        tangential_project_solver_parameters |= {
             "ksp_converged_reason": None
         }
-    else:
-        # No verbosity
-        tangential_project_solver_parameters = None
 
     def __new__(cls, *args, **kwargs):
         # Ensure compatibility with Firedrake Function's __new__ method
@@ -118,6 +126,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         # Cache all the necessary information that will be used to assign surface velocities
         # the marker for surface boundary. This is typically "top" in extruded mesh.
         self.top_boundary_marker = top_boundary_marker
+
         # establishing the DirichletBC that will be used to find surface nodes
         self.dbc = fd.DirichletBC(
             self.function_space(),
@@ -134,37 +143,79 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         # Store the GPlates connector
         self.gplates_connector = gplates_connector
 
-        # Set up the projector for tangential projection
-        self.set_up_projector()
+        # Set up the solver for tangential projection
+        self.setup_solver()
 
-    def set_up_projector(self):
-        """Set up the projector for removing radial component."""
-        # Get upward normal
-        r = upward_normal(self.ufl_domain())
+    def setup_solver(self):
+        """Set up the linear variational solver for removing radial component."""
+        # Define the solution in the velocity function space
+        # If velocity is discontinuous, we need to use a continuous equivalent
+        if not is_continuous(self):
+            warn("GplatesVelocityFunction: Velocity field is discontinuous. Using an equivalent continuous lagrange element.")
+            V = fd.FunctionSpace(self.function_space().mesh(), "Lagrange", self.function_space().ufl_element().degree())
+        else:
+            V = fd.FunctionSpace(self.function_space().mesh(), self.ufl_element())
 
-        # Define the tangential projection expression
+        self.tangential_velocity = fd.Function(V, name="tangential_velocity")
+
+        # Normal vector (radial direction for spherical geometry)
+        r = fd.FacetNormal(self.ufl_domain())
+
+        phi = fd.TestFunction(V)
+        v = fd.TrialFunction(V)
+
+        # Define the tangential projection: v_tangential = v - (v·r)r
         tangential_expr = self - fd.inner(self, r) * r
 
-        # Create the projector
-        self.projector = fd.Projector(
-            v=tangential_expr,
-            v_out=self,
-            bcs=None,
+        # Properties for getting the ds measure
+        ds_kwargs = {
+            "domain": self.function_space().mesh(),
+            "degree": 2 * V.ufl_element().degree()[0] + 1
+        }
+
+        if ds_kwargs["domain"].extruded:
+            self.ds = fd.ds_t(**ds_kwargs)
+        else:
+            ds_kwargs["subdomain_id"] = self.top_boundary_marker
+            self.ds = fd.ds(**ds_kwargs)
+
+        # Setting up a manual projection
+        # Project onto the tangential space: solve for tangential component
+        a = fd.inner(phi, v) * self.ds
+        L = fd.inner(phi, tangential_expr) * self.ds
+
+        # Setting up boundary condition, problem and solver
+        # The field is only meaningful on the boundary, so set zero everywhere else
+        self.interior_null_bc = InteriorBC(V, 0., [self.top_boundary_marker])
+
+        self.problem = fd.LinearVariationalProblem(a, L, self.tangential_velocity,
+                                                   bcs=self.interior_null_bc,
+                                                   constant_jacobian=True)
+        self.solver = fd.LinearVariationalSolver(
+            self.problem,
             solver_parameters=self.tangential_project_solver_parameters,
-            form_compiler_parameters=None,
-            constant_jacobian=True,
-            use_slate_for_inverse=False,
+            options_prefix="tangential_projection"
         )
+        self._solver_is_set_up = True
 
     def remove_radial_component(self):
         """
-        Project velocity to tangent plane by removing radial component using cached projector.
+        Project velocity to tangent plane by removing radial component using linear variational solver.
 
-        This method uses a pre-built Projector for efficiency, avoiding the overhead
+        This method uses a pre-built linear variational solver for efficiency, avoiding the overhead
         of rebuilding the projection operator each time.
         """
-        # Use the pre-built projector for efficiency
-        self.projector.project()
+        # Use the a linear variational solver for removing the radial component
+        if not hasattr(self, '_solver_is_set_up') or not self._solver_is_set_up:
+            self.setup_solver()
+
+        # Project the velocity to the tangential plane
+        self.solver.solve()
+
+        # Copy the tangential velocity back to self
+        self.dat.data_with_halos[self.dbc.nodes, :] = (
+            self.tangential_velocity.dat.data_with_halos[self.dbc.nodes, :]
+        )
 
 
 class pyGplatesConnector(object):
