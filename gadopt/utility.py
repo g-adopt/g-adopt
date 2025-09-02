@@ -26,6 +26,14 @@ from types import SimpleNamespace
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
 
 
+try:  # firedrake main
+    from firedrake import MeshSequenceGeometry  # noqa: F401
+
+    using_firedrake_main = True
+except ImportError:  # firedrake release
+    using_firedrake_main = False
+
+
 def log(*args):
     """Log output to stdout from root processor only"""
     PETSc.Sys.Print(*args)
@@ -92,8 +100,17 @@ class TimestepAdaptor:
         return float(self.dt_const)
 
 
+def is_cartesian(mesh):
+    if using_firedrake_main:
+        return mesh.unique().cartesian
+    else:
+        # Using Firedrake release.
+        # TODO: Remove this block upon next release.
+        return mesh.cartesian
+
+
 def upward_normal(mesh):
-    if mesh.cartesian:
+    if is_cartesian(mesh):
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
@@ -105,7 +122,7 @@ def upward_normal(mesh):
 def vertical_component(u):
     mesh = extract_unique_domain(u)
 
-    if mesh.cartesian:
+    if is_cartesian(mesh):
         return u[u.ufl_shape[0]-1]
     else:
         n = upward_normal(mesh)
@@ -303,7 +320,7 @@ class LayerAveraging:
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if mesh.cartesian:
+        if is_cartesian(mesh):
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))

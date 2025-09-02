@@ -32,6 +32,7 @@ from .utility import (
     INFO,
     InteriorBC,
     depends_on,
+    is_cartesian,
     is_continuous,
     log_level,
     upward_normal,
@@ -375,7 +376,7 @@ class StokesSolverBase(abc.ABC, metaclass=MetaPostInit):
         self.weak_bcs = {}
 
         bc_map = {"u": self.solution_space.sub(0)}
-        if self.mesh.cartesian:
+        if is_cartesian(self.mesh):
             bc_map["ux"] = bc_map["u"].sub(0)
             bc_map["uy"] = bc_map["u"].sub(1)
             if self.mesh.geometric_dimension() == 3:
@@ -467,7 +468,7 @@ class StokesSolverBase(abc.ABC, metaclass=MetaPostInit):
                     self.solver_parameters |= iterative_stokes_solver_parameters
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
-        elif self.mesh.topological_dimension() == 2 and self.mesh.cartesian:
+        elif self.mesh.topological_dimension() == 2 and is_cartesian(self.mesh):
             self.solver_parameters |= direct_stokes_solver_parameters
         else:
             self.solver_parameters |= iterative_stokes_solver_parameters
