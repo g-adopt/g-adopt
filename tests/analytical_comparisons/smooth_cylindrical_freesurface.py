@@ -61,23 +61,19 @@ def model(level, k, nn, do_write=False):
 
     # Define geometric quantities
     X = SpatialCoordinate(mesh)
-    r = sqrt(X[0] ** 2 + X[1] ** 2)
+    r = sqrt(X[0]**2 + X[1]**2)
     phi = atan2(X[1], X[0])
 
     # Set up function spaces - currently using the P2P1 element pair :
     V = VectorFunctionSpace(mesh, "CG", 2)  # velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # pressure function space (scalar)
-    Wvec = VectorFunctionSpace(
-        mesh, "CG", 1
-    )  # vector version of W, used for coordinates in anal. pressure solution
+    Wvec = VectorFunctionSpace(mesh, "CG", 1)  # vector version of W, used for coordinates in anal. pressure solution
     Z = MixedFunctionSpace([V, W, W])  # Mixed function space.
     v, w, w1 = TestFunctions(Z)
 
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
-    Z_near_nullspace = create_stokes_nullspace(
-        Z, closed=False, rotational=True, translations=[0, 1]
-    )
+    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
     # Set up fields on these function spaces - split into each component so that they are easily accessible:
     z = Function(Z)  # a field over the mixed function space Z.
@@ -87,7 +83,7 @@ def model(level, k, nn, do_write=False):
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
 
-    T = -(r**k) / rmax**k * cos(nn * phi)  # RHS
+    T = -r**k/rmax**k*cos(nn*phi)  # RHS
 
     # To get the test to converge to the Assess solutions we need to set the variable density
     # flag to false. This is probably because the solution is not accounting for buoyancy changes
@@ -103,9 +99,7 @@ def model(level, k, nn, do_write=False):
 
     rho0 = approximation.rho
     g = approximation.g
-    tau0 = Constant(
-        2 * nn * mu / (rho0 * g)
-    )  # Characteristic time scale (dimensionless)
+    tau0 = Constant(2 * nn * mu / (rho0 * g))  # Characteristic time scale (dimensionless)
     log("tau0", tau0)
     dt = Constant(tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
@@ -128,9 +122,7 @@ def model(level, k, nn, do_write=False):
     )
 
     time = Constant(0.0)
-    max_timesteps = round(
-        20 * tau0 / dt
-    )  # Simulation runs for 20 characteristic time scales so end state is close to being fully relaxed
+    max_timesteps = round(20*tau0/dt)  # Simulation runs for 20 characteristic time scales so end state is close to being fully relaxed
     log("max_timesteps", max_timesteps)
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
@@ -148,14 +140,9 @@ def model(level, k, nn, do_write=False):
         p_file = VTKFile("fs_pressure_{}.pvd".format(level))
         eta_file = VTKFile("fs_eta_{}_theta.pvd".format(level))
         temp_file = VTKFile("fs_temp_{}.pvd".format(level))
-        temp_file.write(
-            Function(W, name="T").interpolate(T),
-            Function(W, name="Density").interpolate(approximation.rho_field(0, T)),
-        )
+        temp_file.write(Function(W, name="T").interpolate(T), Function(W, name="Density").interpolate(approximation.rho_field(0, T)))
 
-    solution = assess.CylindricalStokesSolutionSmoothFreeSlip(
-        int(float(nn)), int(float(k)), nu=float(mu)
-    )
+    solution = assess.CylindricalStokesSolutionSmoothFreeSlip(int(float(nn)), int(float(k)), nu=float(mu))
 
     # compute u analytical and error
     uxy = Function(V).interpolate(as_vector((X[0], X[1])))
@@ -170,33 +157,32 @@ def model(level, k, nn, do_write=False):
     # compute eta analytical and error
     etaxy = Function(Wvec).interpolate(as_vector((X[0], X[1])))
     eta_anal = Function(W, name="AnalyticalEta")
-    eta_anal.dat.data[:] = [
-        -solution.radial_stress_cartesian(xyi) for xyi in etaxy.dat.data
-    ]
+    eta_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyi) for xyi in etaxy.dat.data]
 
     steady_state_tolerance = 1e-9
     u_old = Function(V, name="VelocityOld")
 
-    u_error = Function(V, name="VelocityError").assign(u_ - u_anal)
-    p_error = Function(W, name="PressureError").assign(p_ - p_anal)
-    eta_error = Function(W, name="EtaError").assign(eta_ - eta_anal)
+    u_error = Function(V, name="VelocityError").assign(u_-u_anal)
+    p_error = Function(W, name="PressureError").assign(p_-p_anal)
+    eta_error = Function(W, name="EtaError").assign(eta_-eta_anal)
 
     # Now perform the time loop:
     for timestep in range(1, max_timesteps):
+
         # Solve Stokes sytem:
         stokes_solver.solve()
         time.assign(time + dt)
 
         # Calculate L2-norm of change in velocity:
-        maxchange = sqrt(assemble((u - u_old) ** 2 * dx))
+        maxchange = sqrt(assemble((u - u_old)**2 * dx))
         log("maxchange = ", maxchange)
 
         u_old.assign(u_)
 
         if do_write:
-            u_error.assign(u_ - u_anal)
-            p_error.assign(p_ - p_anal)
-            eta_error.assign(eta_ - eta_anal)
+            u_error.assign(u_-u_anal)
+            p_error.assign(p_-p_anal)
+            eta_error.assign(eta_-eta_anal)
 
             # Write output:
             u_file.write(u_, u_anal, u_error)
@@ -207,15 +193,15 @@ def model(level, k, nn, do_write=False):
             log("Steady-state achieved -- exiting time-step loop")
             break
 
-    u_error.assign(u_ - u_anal)
-    p_error.assign(p_ - p_anal)
-    eta_error.assign(eta_ - eta_anal)
+    u_error.assign(u_-u_anal)
+    p_error.assign(p_-p_anal)
+    eta_error.assign(eta_-eta_anal)
 
-    l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal) * _dx))
-    l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal) * _dx))
-    l2anal_eta = numpy.sqrt(assemble(dot(eta_anal, eta_anal) * ds(boundary.top)))
-    l2error_u = numpy.sqrt(assemble(dot(u_error, u_error) * _dx))
-    l2error_p = numpy.sqrt(assemble(dot(p_error, p_error) * _dx))
-    l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error) * ds(boundary.top)))
+    l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*_dx))
+    l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*_dx))
+    l2anal_eta = numpy.sqrt(assemble(dot(eta_anal, eta_anal)*ds(boundary.top)))
+    l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*_dx))
+    l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*_dx))
+    l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error)*ds(boundary.top)))
 
     return l2error_u, l2error_p, l2error_eta, l2anal_u, l2anal_p, l2anal_eta
