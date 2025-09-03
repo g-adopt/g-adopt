@@ -1,5 +1,4 @@
 import warnings
-from warnings import warn
 import firedrake as fd
 import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
