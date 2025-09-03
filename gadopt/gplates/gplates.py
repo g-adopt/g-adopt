@@ -59,7 +59,8 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
     `GplatesVelocityFunction` is designed to associate a Firedrake function with a GPlates
     connector, allowing the integration of plate tectonics reconstructions. This is particularly
     useful when setting "top" boundary condition for the Stokes systems when performing
-    data assimilation (sequential or adjoint).
+    data assimilation (sequential or adjoint). Note that we subtract the radial component of the velocity
+    field to ensure that the velocity field is tangential to the surface in a FEM sense.
 
     Attributes:
         dbc (firedrake.DirichletBC): A Dirichlet boundary condition that applies the function
@@ -77,6 +78,8 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         val (optional): Initial values for the function. Defaults to None.
         name (str, optional): Name for the function. Defaults to None.
         dtype (data type, optional): Data type for the function. Defaults to ScalarType.
+        kwargs (dict, optional): Additional keyword arguments, inlcuding `solver_parameters`
+            (dict, optional), and `ds_kwargs` (dict, optional) for the ds measure.
 
     Methods:
         update_plate_reconstruction(ndtime):
@@ -91,7 +94,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         ...                                    name="GplateVelocity")
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
     """
-    # Base solver parameters shared across all logging scenarios
+    # We use the default BaseProjector solver parameters.
     tangential_project_solver_parameters = {
         "ksp_type": "cg",
         "pc_type": "bjacobi",
@@ -128,10 +131,12 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         self.top_boundary_marker = top_boundary_marker
 
         # establishing the DirichletBC that will be used to find surface nodes
+        # Note: If one day we are moving towards adaptive mesh, we need to be dynamic with this.
         self.dbc = fd.DirichletBC(
             self.function_space(),
             self,
             sub_domain=self.top_boundary_marker)
+
         # coordinates of surface points
         self.boundary_coords = fd.Function(
             self.function_space(),
@@ -143,6 +148,9 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         # Store the GPlates connector
         self.gplates_connector = gplates_connector
 
+        # Store the kwargs in case we need to change solver parameters or surface measure
+        self.kwargs = kwargs
+
         # Set up the solver for tangential projection
         self.setup_solver()
 
@@ -151,27 +159,35 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         # Define the solution in the velocity function space
         # If velocity is discontinuous, we need to use a continuous equivalent
         if not is_continuous(self):
-            warn("GplatesVelocityFunction: Velocity field is discontinuous. Using an equivalent continuous lagrange element.")
-            V = fd.FunctionSpace(self.function_space().mesh(), "Lagrange", self.function_space().ufl_element().degree())
+            raise ValueError(
+                "GplatesVelocityFunction: Velocity field is discontinuous."
+                "Removing the radial component of discontinuous velocity fields is not supported."
+            )
         else:
             V = fd.FunctionSpace(self.function_space().mesh(), self.ufl_element())
 
         self.tangential_velocity = fd.Function(V, name="tangential_velocity")
 
         # Normal vector (radial direction for spherical geometry)
-        r = fd.FacetNormal(extract_unique_domain(self))
+        r = fd.FacetNormal(self.function_space().mesh())
 
+        # Define the test and trial functions for a projection solve
         phi = fd.TestFunction(V)
         v = fd.TrialFunction(V)
 
         # Define the tangential projection: v_tangential = v - (v·r)r
         tangential_expr = self - fd.inner(self, r) * r
 
-        # Properties for getting the ds measure
+        # Getting ds measure: this can be set by the user through kwargs
+        # We are only looking at the surface measure at the top boundary
         ds_kwargs = {
             "domain": self.function_space().mesh(),
             "degree": 2 * V.ufl_element().degree()[0] + 1
         }
+
+        # Update the ds_kwargs with the kwargs (only if key already exists in
+        # ds_kwargs, we don't want to add non-relevant keys)
+        ds_kwargs.update({k: v for k, v in self.kwargs.items() if k in ds_kwargs})
 
         if ds_kwargs["domain"].extruded:
             self.ds = fd.ds_t(**ds_kwargs)
@@ -193,8 +209,8 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
                                                    constant_jacobian=True)
         self.solver = fd.LinearVariationalSolver(
             self.problem,
-            solver_parameters=self.tangential_project_solver_parameters,
-            options_prefix="tangential_projection"
+            solver_parameters=self.kwargs.get("solver_parameters", self.tangential_project_solver_parameters),
+            options_prefix="gplates_projection"
         )
         self._solver_is_set_up = True
 
