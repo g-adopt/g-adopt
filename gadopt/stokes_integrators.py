@@ -358,8 +358,6 @@ class StokesSolverBase(abc.ABC, metaclass=MetaPostInit):
         self.tests = fd.TestFunctions(self.solution_space)
 
         self.rho_continuity = self.approximation.rho_continuity()
-        self.is_linear = not depends_on(self.approximation.mu, self.solution)
-
         self.equations = []  # G-ADOPT's Equation instances
         self.F = 0.0  # Weak form of the system
 
@@ -393,7 +391,7 @@ class StokesSolverBase(abc.ABC, metaclass=MetaPostInit):
                             fd.DirichletBC(bc_map[bc_type], val, bc_id)
                         )
                     case "free_surface":
-                        if not hasattr("set_free_surface_boundary", self):
+                        if not hasattr(self, "set_free_surface_boundary"):
                             raise ValueError(
                                 "This solver does not implement a free surface."
                             )
@@ -453,7 +451,7 @@ class StokesSolverBase(abc.ABC, metaclass=MetaPostInit):
         if isinstance(solver_preset := self.solver_parameters, dict):
             return
 
-        if self.is_linear:
+        if not depends_on(self.approximation.mu, self.solution):
             self.solver_parameters = {"snes_type": "ksponly"}
         else:
             self.solver_parameters = newton_stokes_solver_parameters.copy()
