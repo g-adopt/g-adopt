@@ -159,7 +159,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         self.tangential_velocity = fd.Function(V, name="tangential_velocity")
 
         # Normal vector (radial direction for spherical geometry)
-        r = fd.FacetNormal(self.ufl_domain())
+        r = fd.FacetNormal(extract_unique_domain(self))
 
         phi = fd.TestFunction(V)
         v = fd.TrialFunction(V)
