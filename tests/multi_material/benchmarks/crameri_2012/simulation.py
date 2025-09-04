@@ -15,21 +15,15 @@ from gadopt import min_max_height
 from .materials import air, lithosphere, mantle
 
 
-def initialise_temperature(temperature):
-    pass
-
-
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     max_topo = min_max_height(
         diag_vars["level_set"][1], diag_vars["epsilon"], side=0, mode="max"
     )
-    max_topography_analytical = (
-        surface_deflection / 1e3 * np.exp(relaxation_rate * simu_time)
-    )
+    max_topo_analytical = surface_deflection / 1e3 * np.exp(relaxation_rate * simu_time)
 
     diag_fields["output_time"].append(simu_time / 8.64e4 / 365.25 / 1e3)
     diag_fields["max_topography"].append((max_topo - surface_coord_y) / 1e3)
-    diag_fields["max_topography_analytical"].append(max_topography_analytical)
+    diag_fields["max_topography_analytical"].append(max_topo_analytical)
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(
@@ -57,7 +51,7 @@ def plot_diagnostics(output_path):
             label="Conservative level set",
         )
 
-        ax.legend(fontsize=12, fancybox=True, shadow=True)
+        ax.legend()
 
         fig.savefig(
             f"{output_path}/maximum_topography_{tag}.pdf", dpi=300, bbox_inches="tight"
@@ -65,7 +59,7 @@ def plot_diagnostics(output_path):
         plt.close(fig)
 
 
-# A simulation name tag
+# Simulation name tag
 tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
@@ -75,9 +69,6 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (2.8e6, 8e5)
 mesh_gen = "gmsh"
-
-# Degree of the function space on which the level-set function is defined.
-level_set_func_space_deg = 2
 
 # Parameters to initialise surface level set
 callable_args = (
@@ -125,15 +116,10 @@ materials = [mantle, lithosphere, air]
 
 # Approximation parameters
 dimensional = True
-Ra, g = 1, 10
+g = 10
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
-temp_bcs = {}
-stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"ux": 0, "uy": 0}, 4: {"uy": 0}}
-
-# Stokes solver options
-stokes_nullspace_args = {}
-stokes_solver_params = None
+stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"u": 0}, 4: {"uy": 0}}
 
 # Timestepping objects
 initial_timestep = 1e10
@@ -142,9 +128,5 @@ checkpoint_period = 5
 time_end = 1e5 * 365.25 * 8.64e4
 
 # Diagnostic objects
-diag_fields = {
-    "output_time": [],
-    "max_topography": [],
-    "max_topography_analytical": [],
-}
+diag_fields = {"output_time": [], "max_topography": [], "max_topography_analytical": []}
 relaxation_rate = -0.2139e-11

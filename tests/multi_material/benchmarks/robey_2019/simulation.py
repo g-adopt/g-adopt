@@ -95,7 +95,7 @@ def plot_diagnostics(output_path):
         plt.close(fig)
 
 
-# A simulation name tag
+# Simulation name tag
 tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
@@ -105,10 +105,7 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (3, 1)
 mesh_gen = "firedrake"
-mesh_elements = (96, 32)
-
-# Degree of the function space on which the level-set function is defined.
-level_set_func_space_deg = 2
+mesh_elements = (192, 64)
 
 # Parameters to initialise level set
 callable_args = (
@@ -139,19 +136,15 @@ materials = [bottom_material, top_material]
 
 # Approximation parameters
 dimensional = False
-Ra, g = 1e5, 1
+Ra = 1e5
 
-# Parameters to initialise temperature
+# Temperature parameters
 A = 0.05
 k = 1.5
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
 temp_bcs = {3: {"T": 1}, 4: {"T": 0}}
 stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
-
-# Stokes solver options
-stokes_nullspace_args = {}
-stokes_solver_params = None
 
 # Timestepping objects
 initial_timestep = 1e-6

@@ -43,8 +43,7 @@ def initialise_temperature(temperature):
 
 
 def internal_heating_rate(int_heat_rate, simu_time):
-    # flib can be obtained from
-    # https://github.com/seantrim/exact-thermochem-solution
+    # flib can be obtained from https://github.com/seantrim/exact-thermochem-solution
     analytical_values = []
     for x, y in node_coordinates(int_heat_rate).dat.data:
         analytical_values.append(
@@ -113,7 +112,7 @@ def plot_diagnostics(output_path):
         plt.close(fig)
 
 
-# A simulation name tag
+# Simulation name tag
 tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
@@ -123,10 +122,7 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (1, 1)
 mesh_gen = "firedrake"
-mesh_elements = (128, 128)
-
-# Degree of the function space on which the level-set function is defined.
-level_set_func_space_deg = 2
+mesh_elements = (256, 256)
 
 # Parameters to initialise level set
 callable_args = (
@@ -157,10 +153,10 @@ materials = [bottom_material, top_material]
 
 # Approximation parameters
 dimensional = False
-Ra, g = 1e5, 1
+Ra = 1e5
 B = 0.5
 
-# Parameters to initialise temperature
+# Temperature parameters
 a = 100
 b = 100
 k = 35
@@ -171,15 +167,11 @@ temp_bc_top = B * C0(1)
 temp_bcs = {3: {"T": temp_bc_bot}, 4: {"T": temp_bc_top}}
 stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
-# Stokes solver options
-stokes_nullspace_args = {}
-stokes_solver_params = None
-
 # Timestepping objects
 initial_timestep = 1e-6
-dump_period = 1e-4
+dump_period = 5e-5
 checkpoint_period = 5
-time_end = 0.01
+time_end = 0.0025
 
 # Diagnostic objects
 diag_fields = {
