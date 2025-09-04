@@ -49,7 +49,7 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
             # Adding a small absorption term bringing the vertical velocity to zero
             # removes this nullspace and does not affect convergence provided that this
             # term is small compared with the overall numerical error.
-            self.stokes_solver.forcing_term = (
+            self.stokes_solver.additional_forcing_term = (
                 self.penalty
                 * self.stokes_solver.tests[0][1]
                 * self.stokes_solver.solution_split[0][1]

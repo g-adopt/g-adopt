@@ -75,7 +75,7 @@ def model(level, nn, do_write=False):
     # integral over facets where the marker jump from 0 to 1
     marker = Function(P0).interpolate(conditional(r < rp, 1, 0))
     n = FacetNormal(mesh)
-    forcing_term = g * cos(nn * phi) * dot(jump(marker, n), avg(v)) * dS_h
+    additional_forcing_term = g * cos(nn * phi) * dot(jump(marker, n), avg(v)) * dS_h
     # Use tighter tolerances than default to ensure convergence
     solver_parameters_update = {
         "fieldsplit_0": {"ksp_rtol": 1e-13},
@@ -84,7 +84,7 @@ def model(level, nn, do_write=False):
     stokes_solver = StokesSolver(
         z,
         approximation,
-        forcing_term=forcing_term,
+        additional_forcing_term=additional_forcing_term,
         bcs=stokes_bcs,
         solver_parameters_update=solver_parameters_update,
         nullspace=Z_nullspace,
