@@ -31,21 +31,15 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        env:
-          S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
-          apt install -y xvfb gmsh gh s3cmd unzip
-
-          mkdir -p $HOME/.s3cfg
-          echo "${S3CONFIG}" > $HOME/.s3cfg/config
-          chmod 600 $HOME/.s3cfg/config
+          apt install -y xvfb gmsh gh unzip
 
           uv venv --system-site-packages
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
-          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
+          curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
       - name: Install Firedrake kernel
