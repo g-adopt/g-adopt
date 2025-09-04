@@ -62,7 +62,6 @@ radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 D = radius_values[0]-radius_values[-1]
 L_tilde = L / D
 radius_values_tilde = np.array(radius_values)/D
- 
 layer_height_list = []
 
 if args.structured_dz:
@@ -155,10 +154,10 @@ stress = Function(S, name='deviatoric stress')  # A field over the mixed functio
 
 m_list = [m1, m2]
 # Function to store the solutions:
-#u, m = split(z)  # Returns symbolic UFL expression for u and m
+# u, m = split(z)  # Returns symbolic UFL expression for u and m
 # Next rename for output:
-#z.subfunctions[0].rename("Displacement")
-#z.subfunctions[1].rename("Internal variable")
+# z.subfunctions[0].rename("Displacement")
+# z.subfunctions[1].rename("Internal variable")
 # -
 
 # We can output function space information, for example the number of degrees
@@ -190,11 +189,8 @@ density_scale = 4500
 shear_modulus_scale = 1e11
 viscosity_scale = 1e21
 
-
-
-
 density_values_tilde = np.array(density_values)/density_scale
-# Set each component of shear mod and viscosity to half to get same behaviour 
+# Set each component of shear mod and viscosity to half to get same behaviour
 # as original Maxwell model with 1 internal variable.
 shear_modulus_values_1_tilde = 0.5*np.array(shear_modulus_values)/shear_modulus_scale
 shear_modulus_values_2_tilde = 0.5*np.array(shear_modulus_values)/shear_modulus_scale
@@ -202,13 +198,11 @@ viscosity_values_1_tilde = 0.5*np.array(viscosity_values)/viscosity_scale
 viscosity_values_2_tilde = args.viscosity_ratio*0.5*np.array(viscosity_values)/viscosity_scale
 
 
-
 def initialise_background_field(field, background_values):
     for i in range(0, len(background_values)):
         field.interpolate(conditional(vc(X) >= radius_values_tilde[i+1] - radius_values_tilde[0],
                           conditional(vc(X) <= radius_values_tilde[i] - radius_values_tilde[0],
                           background_values[i], field), field))
-
 
 
 density = Function(DG0, name="density")
@@ -260,7 +254,7 @@ for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
 # +
 # Timestepping parameters
 Tstart = 0
-time = Function(R).assign(Tstart * year_in_seconds/ characteristic_maxwell_time)
+time = Function(R).assign(Tstart * year_in_seconds / characteristic_maxwell_time)
 
 dt_years = args.dt_years
 dt = Constant(dt_years * year_in_seconds/characteristic_maxwell_time)
@@ -325,7 +319,7 @@ if args.lateral_viscosity:
         X[2] < upper_depth, conditional(X[2] > lower_depth, 1, 0),
         0
     )
-    low_visc = 1e19 / viscosity_scale 
+    low_visc = 1e19 / viscosity_scale
     cylinder_mask = Function(DG0).interpolate(cylinder_thickness * disc)
     viscosity.interpolate(cylinder_mask * low_visc + (1-cylinder_mask) * viscosity)
 
@@ -351,10 +345,8 @@ stokes_bcs = {
     boundary.back: {'uy': 0},
 }
 
-#gd = GeodynamicalDiagnostics([u,u], density, boundary.bottom, boundary.top)
+# gd = GeodynamicalDiagnostics([u,u], density, boundary.bottom, boundary.top)
 # -
-
-
 
 
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
@@ -384,8 +376,6 @@ iterative_parameters = {"mat_type": "matfree",
                         "ksp_monitor": None,
                         "pc_type": "python",
                         "pc_fieldsplit_type": "firedrake.AssembledPC",
-
-#                        "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
                         "pc_python_type": "firedrake.AssembledPC",
                         "assembled_pc_type": "gamg",
                         "assembled_mg_levels_pc_type": "sor",
@@ -398,7 +388,7 @@ iterative_parameters = {"mat_type": "matfree",
 Z_nullspace = None  # Default: don't add nullspace for now
 Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=args.gamg_near_null_rot, translations=[0, 1, 2])
 
-coupled_solver = InternalVariableSolver(u, approximation, dt=dt,m_list=m_list, bcs=stokes_bcs,
+coupled_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs,
                                         solver_parameters=iterative_parameters,
                                         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                         near_nullspace=Z_near_nullspace)
@@ -477,7 +467,7 @@ for timestep in range(1, max_timesteps+1):
         if MPI.COMM_WORLD.rank == 0:
             np.savetxt(displacement_filename, displacement_min_array)
 
-        #plog.log_str(f"{timestep} {float(time)} {float(dt)} "
+        # plog.log_str(f"{timestep} {float(time)} {float(dt)} "
         #             f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} "
         #             )
 
