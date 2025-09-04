@@ -78,14 +78,9 @@ jobs:
 
     steps:
       - name: Install prerequisites
-        env:
-          S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           apt update
-          apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
-          mkdir -p $HOME/.s3cfg
-          echo "${S3CONFIG}" > $HOME/.s3cfg/config
-          chmod 600 $HOME/.s3cfg/config
+          apt install -y time unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
           git config --global safe.directory '*'
 
       - name: Install uv
@@ -123,7 +118,7 @@ jobs:
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
-          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
+          curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
       - name: Check out repository linked to Trim et al. (2023)
