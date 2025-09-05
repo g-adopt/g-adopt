@@ -204,15 +204,14 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
+    solver_parameters_update={"fieldsplit_0": {"ksp_converged_reason": None}},
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
 )
-stokes_solver.solver_parameters["fieldsplit_0"]["ksp_converged_reason"] = None
-stokes_solver.solver_parameters["fieldsplit_1"]["ksp_converged_reason"] = None
 
 # We now initiate the time loop, which runs for the number of timesteps specified above.
 
