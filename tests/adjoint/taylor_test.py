@@ -102,8 +102,8 @@ def rectangle_taylor_test(case, scheduler_name):
     energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
+        T,
         bcs=stokes_bcs,
         constant_jacobian=True,
         nullspace=Z_nullspace,

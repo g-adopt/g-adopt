@@ -84,8 +84,8 @@ def run_forward(visualise=False):
 
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
+        T,
         bcs=stokes_bcs,
         solver_parameters="direct",
         nullspace=Z_nullspace,

@@ -137,8 +137,8 @@ energy_solver = EnergySolver(
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
     constant_jacobian=True,
     nullspace=Z_nullspace,
