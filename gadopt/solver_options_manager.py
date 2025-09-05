@@ -1,14 +1,9 @@
 from collections.abc import Mapping, Callable
 import pprint
-import sys
 import textwrap
 import weakref
 
-from .utility import (
-    DEBUG,
-    WARNING,
-    log_level,
-)
+from .utility import DEBUG, WARNING, log_level, log
 
 
 def debug_print(class_name: str, string: str):
@@ -20,7 +15,7 @@ def debug_print(class_name: str, string: str):
     resolution order (e.g. StokesSolver, EnergySolver, etc)
     """
     if DEBUG >= log_level:
-        print(textwrap.indent(string, f"{class_name}: "), file=sys.stderr)
+        log(textwrap.indent(string, f"{class_name}: "))
 
 
 def warning_print(class_name: str, string: str):
@@ -32,14 +27,14 @@ def warning_print(class_name: str, string: str):
     resolution order (e.g. StokesSolver, EnergySolver, etc)
     """
     if WARNING >= log_level:
-        print(textwrap.indent(string, f"{class_name}: "), file=sys.stderr)
+        log(textwrap.indent(string, f"{class_name}: "))
 
 
 class DeleteParam:
     """An empty class to indicate a solver option will be deleted.
 
     Since `None` is a valid value for PETSc solver options, a separate object
-    must me used to denote that a parameter is to be deleted from the solver
+    must be used to denote that a parameter is to be deleted from the solver
     configuration at __init__ time. Use as follows:
     ```
     stokes_solver = StokesSolver( ...
@@ -63,9 +58,8 @@ class SolverOptions:
 
     This class is designed to be subclassed by the base class for any solvers
     included in G-ADOPT. It provides methods for handling and modifying solver
-    parameters on object initialisation, allowing the firedrake
-    `[Non]LinearVariationalSolver solver object to be fully initialised during
-    construction of a G-ADOPT solver object.
+    parameters passed to Firedrake's `[Non]LinearVariationalSolver solver object
+    during initialisation of a G-ADOPT solver object.
     """
 
     def init_solver_config(
@@ -76,23 +70,23 @@ class SolverOptions:
     ) -> None:
         """Initialise a `SolverOptions` object.
 
-        This method generates a logging prefix based on the class hierarchy, registers an `update_callback`
-        if provided and sets the solver configuration based on the `default_config` and `extra_config`
+        This method generates a logging prefix based on the class hierarchy, registers a reference to a
+        callback if provided and sets the solver configuration based on the `default_config` and `extra_config`
         provided. This structure allows a subclass to determine its default solver settings, and a user
-        to override settings as necessary. The `update_callback` allows a subclass to specify a function that
-        must be called when the solver settings are changed such that the firedrake objects that depend on
+        to override settings as necessary. The `callback` argument allows a subclass to specify a function that
+        must be called when the solver settings are changed such that the Firedrake objects that depend on
         these settings are reinitialised whenever the solver settings are changed.
 
         Any Mapping type can be passed into this function, and the function will take care of copying
         the mapping to a mutable dictionary. The `extra_config` argument is optional and reflects the
-        case when the user does not wish to modify the default solver settings provided by a subclass.
+        case when the wishes to modify the default solver settings provided by a subclass.
         """
         self._top_level_class_name = self.__class__.__mro__[0].__name__
         if callback is not None:
             debug_print(self._top_level_class_name, f"Registering callback: {callback.__name__}()")
             self.register_update_callback(callback)
         else:
-            self.update_callback = None
+            self.callback_ref = None
         self.reset_solver_config(default_config, extra_config)
 
     def reset_solver_config(
@@ -105,7 +99,7 @@ class SolverOptions:
         Empties the existing `solver_parameters` dict and creates a new one by
         first running `update_solver_config` on the empty dict with `default_config`,
         and then again on the resulting dict with `extra_config`. `default_config`
-        is mandatory, `extra_config` is optional. Will invoke the `update_callback`
+        is mandatory, `extra_config` is optional. Will invoke `callback_ref`
         if it is set.
         """
         self.default_config = default_config
@@ -133,15 +127,15 @@ class SolverOptions:
     def register_update_callback(self, callback: Callable[[], None]) -> None:
         """Register a function to call whenever `solver_parameters` is updated
 
-        The function provided to `update_callback` must take no arguments and return
+        The function provided to `register_update_callback` must take no arguments and return
         nothing. When a subclass provides this function, a user does not need to
         be aware of the underlying Problem/Solver objects in order to ensure that
         a configuration update during an in-progress simulation takes effect properly.
-        When provided in the `init_solver_config` call, `update_callback` will run
+        When provided in the `init_solver_config` call, `callback_ref` will run
         when `solver_parameters` is ready, therefore `init_solver_config` can be
         the last call directly in a Solver's `__init__` method.
         """
-        self.update_callback = weakref.WeakMethod(callback)
+        self.callback_ref = weakref.WeakMethod(callback)
 
     def process_mapping(
         self,
@@ -186,9 +180,9 @@ class SolverOptions:
         """Updates the `solver_parameters` dict
 
         Takes a single Mapping argument that is treated like the `extra_config` option in
-        `init_solver_config`. By default, will call the registered `update_callback` if
+        `init_solver_config`. By default, will call the registered `callback_ref` if
         present, unless the second argument (`reinit`) is `False`.
         """
         self.solver_parameters = self.process_mapping("solver_parameters", self.solver_parameters, extra_config)
-        if reinit and self.update_callback is not None:
-            self.update_callback()()
+        if reinit and self.callback_ref is not None:
+            self.callback_ref()()
