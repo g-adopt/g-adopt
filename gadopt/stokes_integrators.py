@@ -265,7 +265,7 @@ class StokesSolverBase(abc.ABC, metaclass=MetaPostInit):
       quad_degree:
         Integer denoting the quadrature degree
       solver_parameters:
-        Dictionary of PETSc solver options or string matching a default set thereof
+        Dictionary of PETSc solver options or string matching one of the default sets
       solver_parameters_update:
         Dictionary of PETSc solver options used to update the default G-ADOPT options
       J:
@@ -404,7 +404,7 @@ class StokesSolverBase(abc.ABC, metaclass=MetaPostInit):
             self.weak_bcs[bc_id] = weak_bc
 
     def set_free_surface_boundary(
-        self, params_fs: dict[str, int | bool], bc_id: int
+        self, params_fs: dict[str, int | bool], bc_id: int | str
     ) -> Expr:
         """Sets the given boundary as a free surface.
 
@@ -550,7 +550,7 @@ class StokesSolver(StokesSolverBase):
       quad_degree:
         Integer denoting the quadrature degree
       solver_parameters:
-        Dictionary of PETSc solver options or string matching a default set thereof
+        Dictionary of PETSc solver options or string matching one of the default sets
       solver_parameters_update:
         Dictionary of PETSc solver options used to update the default G-ADOPT options
       J:
@@ -584,7 +584,7 @@ class StokesSolver(StokesSolverBase):
         self.free_surface_map = {}
 
     def set_free_surface_boundary(
-        self, params_fs: dict[str, int | bool], bc_id: int
+        self, params_fs: dict[str, int | bool], bc_id: int | str
     ) -> Expr:
         # Set internal degrees of freedom to zero to prevent singular matrix
         self.strong_bcs.append(
@@ -787,7 +787,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
       quad_degree:
         Integer denoting the quadrature degree
       solver_parameters:
-        Dictionary of PETSc solver options or string matching a default set thereof
+        Dictionary of PETSc solver options or string matching one of the default sets
       solver_parameters_update:
         Dictionary of PETSc solver options used to update the default G-ADOPT options
       J:
@@ -824,7 +824,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         self.stress_scale = self.approximation.prefactor_prestress(self.dt)
 
     def set_free_surface_boundary(
-        self, params_fs: dict[str, int | bool], bc_id: int
+        self, params_fs: dict[str, int | bool], bc_id: int | str
     ) -> Expr:
         # First, make the displacement term implicit by incorporating the unknown
         # `incremental displacement' (u) that we are solving for. Then, calculate the
