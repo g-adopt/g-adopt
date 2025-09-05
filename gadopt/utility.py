@@ -22,16 +22,13 @@ import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
 
+try:
+    from firedrake import MeshSequenceGeometry
+except ImportError:
+    MeshSequenceGeometry = None
+
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
-
-
-try:  # firedrake main
-    from firedrake import MeshSequenceGeometry  # noqa: F401
-
-    using_firedrake_main = True
-except ImportError:  # firedrake release
-    using_firedrake_main = False
 
 
 def log(*args):
@@ -101,11 +98,9 @@ class TimestepAdaptor:
 
 
 def is_cartesian(mesh):
-    if using_firedrake_main:
+    if MeshSequenceGeometry is not None and isinstance(mesh, MeshSequenceGeometry):
         return mesh.unique().cartesian
     else:
-        # Using Firedrake release.
-        # TODO: Remove this block upon next release.
         return mesh.cartesian
 
 
