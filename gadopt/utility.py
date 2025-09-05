@@ -22,6 +22,11 @@ import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
 
+try:
+    from firedrake import MeshSequenceGeometry
+except ImportError:
+    MeshSequenceGeometry = None
+
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
 
@@ -92,8 +97,15 @@ class TimestepAdaptor:
         return float(self.dt_const)
 
 
+def is_cartesian(mesh):
+    if MeshSequenceGeometry is not None and isinstance(mesh, MeshSequenceGeometry):
+        return mesh.unique().cartesian
+    else:
+        return mesh.cartesian
+
+
 def upward_normal(mesh):
-    if mesh.cartesian:
+    if is_cartesian(mesh):
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
@@ -105,7 +117,7 @@ def upward_normal(mesh):
 def vertical_component(u):
     mesh = extract_unique_domain(u)
 
-    if mesh.cartesian:
+    if is_cartesian(mesh):
         return u[u.ufl_shape[0]-1]
     else:
         n = upward_normal(mesh)
@@ -303,7 +315,7 @@ class LayerAveraging:
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if mesh.cartesian:
+        if is_cartesian(mesh):
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))
