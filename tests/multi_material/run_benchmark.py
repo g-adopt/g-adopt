@@ -252,6 +252,8 @@ level_set_solver = [
     ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
     for ls in level_set
 ]
+for ls_solv in level_set_solver:
+    ls_solv.update_gradient()
 level_set_grad = [ls_solv.solution_grad for ls_solv in level_set_solver]
 
 # Time-loop objects
@@ -318,6 +320,7 @@ while True:
     # Advect each level set
     for ls_solv in level_set_solver:
         ls_solv.solve(disable_reinitialisation=disable_reinitialisation)
+        ls_solv.update_gradient()
 
     # Solve Stokes system
     stokes_solver.solve()
