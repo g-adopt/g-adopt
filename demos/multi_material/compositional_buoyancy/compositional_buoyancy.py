@@ -74,7 +74,6 @@ boundary = get_boundary_ids(mesh)  # Object holding references to mesh boundary 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Stokes function space (mixed)
-Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space (constants across the domain)
 
@@ -82,7 +81,6 @@ stokes = Function(Z)  # A field over the mixed function space Z
 stokes.subfunctions[0].rename("Velocity")  # Firedrake function for velocity
 stokes.subfunctions[1].rename("Pressure")  # Firedrake function for pressure
 u = split(stokes)[0]  # Indexed expression for velocity in the mixed space
-T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
 # -
 
@@ -201,7 +199,6 @@ stokes_bcs = {
 # initial pressure and velocity.
 stokes_solver = StokesSolver(
     stokes,
-    T,
     approximation,
     bcs=stokes_bcs,
     nullspace=stokes_nullspace,
@@ -231,7 +228,7 @@ output_file.write(*stokes.subfunctions, psi, time=time_now)
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms entrainment")
 
-gd = GeodynamicalDiagnostics(stokes, T, boundary.bottom, boundary.top)
+gd = GeodynamicalDiagnostics(stokes, bottom_id=boundary.bottom, top_id=boundary.top)
 
 # Area of tracked material in the domain
 material_area = interface_coord_y * domain_dims[0]

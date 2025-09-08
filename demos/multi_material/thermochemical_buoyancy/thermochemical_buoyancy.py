@@ -245,8 +245,8 @@ energy_solver = EnergySolver(
 # initial pressure and velocity.
 stokes_solver = StokesSolver(
     stokes,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,

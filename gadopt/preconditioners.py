@@ -34,7 +34,7 @@ class FreeSurfaceMassInvPC(fd.MassInvPC):
 
         ds = appctx["ds"]
         bcs = []
-        for bc_id, eta_ind in appctx["free_surface"].items():
+        for bc_id, (eta_ind, _) in appctx["free_surface"].items():
             a += 1 / mu * fd.inner(trials[eta_ind - 1], tests[eta_ind - 1]) * ds(bc_id)
 
             bcs.append(InteriorBC(trials.function_space()[eta_ind - 1], 0, bc_id))

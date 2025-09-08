@@ -225,8 +225,8 @@ if hasattr(simulation, "initialise_temperature"):
 stokes_nullspace = ga.create_stokes_nullspace(stokes_function.function_space())
 stokes_solver = ga.StokesSolver(
     stokes_function,
-    temperature,
     approximation,
+    temperature,
     bcs=simulation.stokes_bcs,
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
