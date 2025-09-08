@@ -25,7 +25,7 @@ from .equations import Equation
 from .scalar_equation import mass_term
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import CombinedSurfaceMeasure, node_coordinates, vertical_component
+from .utility import CombinedSurfaceMeasure, is_cartesian, node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -493,7 +493,7 @@ class LevelSetSolver:
         if isinstance(epsilon, fd.Function):
             epsilon = self.mesh.comm.allreduce(epsilon.dat.data.min(), MPI.MIN)
 
-        if self.mesh.cartesian:
+        if is_cartesian(self.mesh):
             max_coords = self.mesh.coordinates.dat.data.max(axis=0)
             min_coords = self.mesh.coordinates.dat.data.min(axis=0)
             for i in range(len(max_coords)):
@@ -846,7 +846,7 @@ def min_max_height(
         case _:
             raise ValueError("'mode' must be 'min' or 'max'")
 
-    if not level_set.ufl_domain().cartesian:
+    if not is_cartesian(level_set.ufl_domain()):
         raise ValueError("Only Cartesian meshes are currently supported")
 
     coords = node_coordinates(level_set)
