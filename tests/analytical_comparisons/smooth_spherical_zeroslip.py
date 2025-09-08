@@ -79,8 +79,8 @@ def model(level, l, mm, k, do_write=False):
     solver_params_extra = {"fieldsplit_0": {"ksp_rtol": 1e-10}, "fieldsplit_1": {"ksp_rtol": 1e-9}}
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
+        T,
         bcs=stokes_bcs,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,

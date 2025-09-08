@@ -47,6 +47,14 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
             self.boundary.bottom: {"un": 0},
         }
 
+    def setup_solver(self):
+        self.solver_parameters_update = {
+            "fieldsplit_0": {"ksp_rtol": 1e-6},
+            "fieldsplit_1": {"ksp_rtol": 1e-5},
+        }
+
+        super().setup_solver()
+
     def setup_nullspaces(self):
         # Nullspaces and near-nullspaces:
         self.Z_nullspace = create_stokes_nullspace(self.Z, closed=False, rotational=True)

@@ -104,7 +104,7 @@ class ExplicitFreeSurfaceModel:
         self.kk = Constant(2 * pi / self.lam)  # wavenumber (dimensionless)
 
     def initialise_temperature(self):
-        self.T = Function(self.Q, name="Temperature").assign(0)  # Setup a dummy function for temperature
+        pass
 
     def initialise_approximation(self):
         Ra = Constant(0)  # Rayleigh number, here we set this to zero as there are no bouyancy terms
@@ -131,7 +131,9 @@ class ExplicitFreeSurfaceModel:
 
     def setup_solver(self):
         # Set up the stokes solver
-        self.stokes_solver = StokesSolver(self.z, self.T, self.approximation, bcs=self.stokes_bcs)
+        self.stokes_solver = StokesSolver(
+            self.z, self.approximation, bcs=self.stokes_bcs
+        )
 
         eq_attrs = {
             "boundary_id": self.boundary.top,
@@ -168,7 +170,9 @@ class ExplicitFreeSurfaceModel:
         self.final_error = pow(self.error, 0.5)/self.L0
 
     def setup_output_file(self):
-        self.output_file = File(f"{self.name}_freesurface_D{float(self.D/self.L0)}_mu{float(self.mu)}_nx{self.nx}_dt{float(self.dt/self.tau0)}tau.pvd")
+        self.output_file = VTKFile(
+            f"{self.name}_freesurface_D{float(self.D / self.L0)}_mu{float(self.mu)}_nx{self.nx}_dt{float(self.dt / self.tau0)}tau.pvd"
+        )
 
     def write_file(self):
         self.output_file.write(self.stokes_vars[0], self.stokes_vars[1], self.eta, self.eta_analytical)

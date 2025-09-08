@@ -206,9 +206,10 @@ solver_params_extra = {"fieldsplit_0": {"ksp_converged_reason": None}, "fieldspl
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
+    solver_parameters_update={"fieldsplit_0": {"ksp_converged_reason": None}},
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,

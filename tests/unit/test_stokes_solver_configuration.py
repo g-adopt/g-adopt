@@ -10,7 +10,6 @@ from gadopt.stokes_integrators import (
 )
 from gadopt.solver_options_manager import DeleteParam
 
-
 test_cases = [
     "unspecified",
     "direct",
@@ -95,8 +94,8 @@ def test_solver_parameters_argument(test_case):
 
     stokes_solver = StokesSolver(
         stokes_function,
-        temperature,
         approximation,
+        temperature,
         solver_parameters=solver_parameters,
         solver_parameters_extra=solver_parameters_extra,
     )
@@ -104,4 +103,4 @@ def test_solver_parameters_argument(test_case):
     assert stokes_solver.solver_parameters == expected_value
 
     with pytest.raises(ValueError):
-        StokesSolver(stokes_function, temperature, approximation, solver_parameters="")
+        StokesSolver(stokes_function, approximation, temperature, solver_parameters="")

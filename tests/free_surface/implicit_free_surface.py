@@ -31,6 +31,9 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
         self.stokes_vars[1].rename("Pressure")
         self.stokes_vars[2].rename("eta")
 
+    def initialise_temperature(self):
+        self.T = 0.0
+
     def initialise_free_surfaces(self):
         self.F0 = Constant(1000 / self.L0)  # initial free surface amplitude (dimensionless)
         self.stokes_vars[2].interpolate(self.F0 * cos(self.kk * self.X[0]))  # Initial free surface condition
@@ -48,9 +51,9 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
     def setup_solver(self):
         self.stokes_solver = StokesSolver(
             self.z,
-            self.T,
             self.approximation,
-            coupled_tstep=self.dt,
+            self.T,
+            dt=self.dt,
             theta=0.5,
             bcs=self.stokes_bcs,
             solver_parameters=self.solver_parameters,

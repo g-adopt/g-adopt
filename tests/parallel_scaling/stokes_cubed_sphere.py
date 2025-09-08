@@ -9,7 +9,7 @@ def model(ref_level, nlayers, delta_t, steps=None):
 
     # Construct a CubedSphere mesh and then extrude into a sphere:
     mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
-    mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+    mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
     mesh.cartesian = False
     boundary = get_boundary_ids(mesh)
 
@@ -36,21 +36,22 @@ def model(ref_level, nlayers, delta_t, steps=None):
     # Set up temperature field and initialise:
     T = Function(Q, name="Temperature")
     X = SpatialCoordinate(mesh)
-    r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
+    r = sqrt(X[0] ** 2 + X[1] ** 2 + X[2] ** 2)
     theta = atan2(X[1], X[0])  # Theta (longitude - different symbol to Zhong)
-    phi = atan2(sqrt(X[0]**2+X[1]**2), X[2])  # Phi (co-latitude - different symbol to Zhong)
+    phi = atan2(sqrt(X[0] ** 2 + X[1] ** 2), X[2])  # Phi (co-latitude - different symbol to Zhong)
 
-    conductive_term = rmin*(rmax - r) / (r*(rmax - rmin))
+    conductive_term = rmin * (rmax - r) / (r * (rmax - rmin))
     # evaluate P_lm node-wise using scipy lpmv
     l, m, eps_c, eps_s = 3, 2, 0.01, 0.01
     Plm = Function(Q, name="P_lm")
     cos_phi = Function(Q).interpolate(cos(phi))
     Plm.dat.data[:] = scipy.special.lpmv(m, l, cos_phi.dat.data_ro)
-    Plm.assign(Plm*math.sqrt(((2*l+1)*math.factorial(l-m))/(2*math.pi*math.factorial(l+m))))
+    Plm.assign(Plm * math.sqrt(((2 * l + 1) * math.factorial(l - m)) / (2 * math.pi * math.factorial(l + m))))
     if m == 0:
-        Plm.assign(Plm/math.sqrt(2))
-    T.interpolate(conductive_term +
-                  (eps_c*cos(m*theta) + eps_s*sin(m*theta)) * Plm * sin(pi*(r - rmin)/(rmax-rmin)))
+        Plm.assign(Plm / math.sqrt(2))
+    T.interpolate(
+        conductive_term + (eps_c * cos(m * theta) + eps_s * sin(m * theta)) * Plm * sin(pi * (r - rmin) / (rmax - rmin))
+    )
 
     Ra = Constant(7e3)  # Rayleigh number
     mu = exp(4.605170185988092 * (0.5 - T))
@@ -66,12 +67,12 @@ def model(ref_level, nlayers, delta_t, steps=None):
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
     temp_bcs = {
-        boundary.bottom: {'T': 1.0},
-        boundary.top: {'T': 0.0},
+        boundary.bottom: {"T": 1.0},
+        boundary.top: {"T": 0.0},
     }
     stokes_bcs = {
-        boundary.bottom: {'un': 0},
-        boundary.top: {'un': 0},
+        boundary.bottom: {"un": 0},
+        boundary.top: {"un": 0},
     }
 
     energy_solver_extra_params = {
@@ -90,21 +91,17 @@ def model(ref_level, nlayers, delta_t, steps=None):
             "ksp_view": None,
             "ksp_rtol": 1e-7,
         },
-        "fieldsplit_1": {
-            "ksp_converged_reason": None,
-            "ksp_view": None,
-            "ksp_rtol": 1e-5,
-        },
+        "fieldsplit_1": {"ksp_view": None, "ksp_rtol": 1e-5},
     }
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
+        T,
         bcs=stokes_bcs,
+        solver_parameters_update=stokes_solver_extra_params,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
-        solver_parameters_extra=stokes_solver_extra_params,
     )
 
     # Now perform the time loop:
