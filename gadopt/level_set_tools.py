@@ -486,6 +486,7 @@ class LevelSetSolver(SolverOptions):
             raise ValueError("Advection or reinitialisation must be initialised")
 
         self.init_solver_config(solver_params_default, solver_extra, self.set_up_solvers)
+        self.set_up_solvers()
 
     def reinitialisation_frequency(self) -> int:
         """Implements default strategy for the reinitialisation frequency.

@@ -86,6 +86,8 @@ class GenericTransportBase(SolverOptions, abc.ABC):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -131,6 +133,7 @@ class GenericTransportBase(SolverOptions, abc.ABC):
         self.set_su_nubar()
         self.set_equation()
         self.set_solver_options(solver_parameters, solver_parameters_extra)
+        self.setup_solver()
 
     def set_boundary_conditions(self) -> None:
         """Sets up boundary conditions."""

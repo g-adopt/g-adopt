@@ -82,12 +82,13 @@ class SolverOptions:
         case when the wishes to modify the default solver settings provided by a subclass.
         """
         self._top_level_class_name = self.__class__.__mro__[0].__name__
+        self.callback_ref = None
+        self.reset_solver_config(default_config, extra_config)
         if callback is not None:
             debug_print(self._top_level_class_name, f"Registering callback: {callback.__name__}()")
             self.register_update_callback(callback)
         else:
             self.callback_ref = None
-        self.reset_solver_config(default_config, extra_config)
 
     def reset_solver_config(
         self,
@@ -102,18 +103,14 @@ class SolverOptions:
         is mandatory, `extra_config` is optional. Will invoke `callback_ref`
         if it is set.
         """
-        self.default_config = default_config
-        self.extra_config = extra_config
         debug_print(self._top_level_class_name, "Input default solver configuration:")
-        debug_print(self._top_level_class_name, pprint.pformat(self.default_config, indent=2))
+        debug_print(self._top_level_class_name, pprint.pformat(default_config, indent=2))
         self.solver_parameters = {}
         debug_print(self._top_level_class_name, "Processing default config")
-        self.update_solver_config(self.default_config, not self.extra_config)
-        if self.extra_config:
+        self.update_solver_config(default_config, extra_config is None)
+        if extra_config is not None:
             debug_print(self._top_level_class_name, "Processing extra config")
-            self.update_solver_config(self.extra_config)
-        debug_print(self._top_level_class_name, "Final solver configuration:")
-        debug_print(self._top_level_class_name, pprint.pformat(self.solver_parameters, indent=2))
+            self.update_solver_config(extra_config)
 
     def print_solver_config(self) -> None:
         """Prints the solver_parameters dict.
@@ -184,5 +181,11 @@ class SolverOptions:
         present, unless the second argument (`reinit`) is `False`.
         """
         self.solver_parameters = self.process_mapping("solver_parameters", self.solver_parameters, extra_config)
+        debug_print(self._top_level_class_name, "Solver configuration after update:")
+        debug_print(self._top_level_class_name, pprint.pformat(self.solver_parameters, indent=2))
         if reinit and self.callback_ref is not None:
+            debug_print(self._top_level_class_name, "Running callback")
             self.callback_ref()()
+
+    def is_iterative_solver(self) -> bool:
+        return self.solver_parameters.get("pc_type") not in ["lu", "cholesky"]
