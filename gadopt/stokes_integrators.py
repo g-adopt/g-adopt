@@ -797,19 +797,19 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         displacement: fd.Function,
         **kwargs,
     ) -> None:
-        super().__init__(solution, approximation, **kwargs)
+        if "dt" not in kwargs:
+            raise TypeError(f"A timestep (the 'dt' keyword argument) must be provided "
+                            f"to {self.__class__.__name__}")
 
         self.stress_old = stress_old  # Deviatoric stress from previous time step
         self.displacement = displacement  # Total displacement
-
         # Replace approximation's viscosity with effective viscosity
-        approximation.mu = approximation.effective_viscosity(self.dt)
+        approximation.mu = approximation.effective_viscosity(kwargs["dt"])
+        super().__init__(solution, approximation, **kwargs)
         # Scaling factor for the previous stress
         self.stress_scale = self.approximation.prefactor_prestress(self.dt)
 
-    def set_free_surface_boundary(
-        self, params_fs: dict[str, int | bool], bc_id: int | str
-    ) -> Expr:
+    def set_free_surface_boundary(self, params_fs: dict[str, int | bool], bc_id: int | str) -> Expr:
         # First, make the displacement term implicit by incorporating the unknown
         # `incremental displacement' (u) that we are solving for. Then, calculate the
         # free surface stress term. This is also referred to as the Hydrostatic

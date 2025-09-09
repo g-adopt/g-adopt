@@ -168,13 +168,13 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         approximation_nl,
         bcs=bcs,
         solver_parameters="iterative",
-        solver_parameters_update=initial_picard_solver_parameters_update,
+        solver_parameters_extra=initial_picard_solver_parameters_update,
     )
     newton_solver = StokesSolver(
         z,
         approximation,
         bcs=bcs,
-        solver_parameters_update=newton_solver_parameters_update,
+        solver_parameters_extra=newton_solver_parameters_update,
     )
 
     if stabilisation:
