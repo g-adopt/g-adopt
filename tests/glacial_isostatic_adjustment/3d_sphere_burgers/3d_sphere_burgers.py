@@ -320,16 +320,18 @@ if args.lateral_visc:
     if m == 0:
         Plm.assign(Plm/math.sqrt(2))
     
-    # This should be an order of mangitude change in viscosity
+    # This should be an order of magnitude change in viscosity
     viscosity_1.interpolate(10**(viscosity_1 + (eps_c*cos(m*phi) + eps_s*sin(m*phi)) * Plm))
     viscosity_2.interpolate(10**(viscosity_2 + (eps_c*cos(m*phi) + eps_s*sin(m*phi)) * Plm))
-    if OUTPUT:
-        viscfile = VTKFile(f"{args.output_path}viscfile.pvd").write(viscosity_1, viscosity_2)
+else:
+    viscosity_1.interpolate(10**viscosity_1)
+    viscosity_2.interpolate(10**viscosity_2)
 
 
 if OUTPUT:
     discfunc = Function(P1).interpolate(disc)
     discfile = VTKFile(f"{args.output_path}discfile.pvd").write(discfunc)
+    viscfile = VTKFile(f"{args.output_path}viscfile.pvd").write(viscosity_1, viscosity_2)
 
 ice_load = Vi * rho_ice * Hice * disc
 
