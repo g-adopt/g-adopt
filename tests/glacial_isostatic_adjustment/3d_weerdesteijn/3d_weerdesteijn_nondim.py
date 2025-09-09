@@ -15,16 +15,24 @@ from mpi4py import MPI
 parser = argparse.ArgumentParser()
 parser.add_argument("--dx", default=50, type=float, help="Horizontal resolution in km", required=False)
 parser.add_argument("--refined_surface", action='store_true', help="Use refined surface mesh")
+parser.add_argument("--const_aspect", action='store_true', help="Also scale farfield dx for parallel scaling test to keep same aspect ratio")
+parser.add_argument("--structured_dz", action='store_true', help="Use constant vertical resolution")
+parser.add_argument("--nz", default=100, type=int, help="Number of vertical layers for structured dz")
 parser.add_argument("--DG0_layers", default=5, type=int, help="Number of cells per layer for DG0 discretisation of background profiles", required=False)
 parser.add_argument("--dt_years", default=1e3, type=float, help="Timestep in years", required=False)
+parser.add_argument("--dt_out_years", default=10e3, type=float, help="Output timestep in years", required=False)
 parser.add_argument("--Tend", default=110e3, type=float, help="Simulation end time in years", required=False)
 parser.add_argument("--bulk_shear_ratio", default=100, type=float, help="Ratio of Bulk modulus / Shear modulus", required=False)
 parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
 parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
+parser.add_argument("--short_simulation", action='store_true', help="Run simulation with short ice history from Weerdesteijn et a. 2023 testcase")
+parser.add_argument("--lateral_viscosity", action='store_true', help="Include low viscosity cylinder from Weerdesteijn et a. 2023 testcase")
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
 parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/", type=str, help="Optional output path", required=False)
+parser.add_argument("--gamg_threshold", default=0.01, type=float, help="Gamg threshold")
+parser.add_argument("--gamg_near_null_rot", action='store_true', help="Use rotational gamg near nullspace")
 args = parser.parse_args()
 
 name = f"weerdesteijn-3d-internalvariable-{args.optional_name}"
@@ -55,21 +63,33 @@ L_tilde = L / D
 radius_values_tilde = np.array(radius_values)/D
  
 layer_height_list = []
-DG0_layers = args.DG0_layers
-nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
 
-for j in range(len(radius_values_tilde)-1):
-    i = len(radius_values_tilde)-2 - j  # want to start at the bottom
-    r = radius_values_tilde[i]
-    h = r - radius_values_tilde[i+1]
-    nz = nz_layers[i]
-    dz = h / nz
-
-    for i in range(nz):
+if args.structured_dz:
+    dz = 1./args.nz
+    for i in range(args.nz):
         layer_height_list.append(dz)
+    nz = args.nz
+
+else:
+    DG0_layers = args.DG0_layers
+    nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
+
+    for j in range(len(radius_values_tilde)-1):
+        i = len(radius_values_tilde)-2 - j  # want to start at the bottom
+        r = radius_values_tilde[i]
+        h = r - radius_values_tilde[i+1]
+        nz = nz_layers[i]
+        dz = h / nz
+
+        for i in range(nz):
+            layer_height_list.append(dz)
+    nz = f"{DG0_layers}perlayer"
 
 if args.refined_surface:
-    surface_mesh = Mesh(f"./weerdesteijn_box_refined_surface_{round(args.dx)}km_nondim.msh", name="surface_mesh")
+    if args.const_aspect:
+        surface_mesh = Mesh(f"./weerdesteijn_box_refined_surface_{round(args.dx)}km_nondim_constaspect.msh", name="surface_mesh")
+    else:
+        surface_mesh = Mesh(f"./weerdesteijn_box_refined_surface_{round(args.dx)}km_nondim.msh", name="surface_mesh")
 else:
     nx = round(L / (args.dx*1e3))
     surface_mesh = SquareMesh(nx, nx, L_tilde)
@@ -85,7 +105,6 @@ mesh.coordinates.dat.data[:, vertical_component] -= 1
 
 mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
-nz = f"{DG0_layers}perlayer"
 
 ds = CombinedSurfaceMeasure(mesh, degree=6)
 
@@ -110,7 +129,7 @@ log("Area of back side: ", assemble(Constant(1) * ds(boundary.back, domain=mesh)
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (vector)
 S = TensorFunctionSpace(mesh, "DQ", 1)  # (Discontinuous) Stress tensor function space (tensor)
-DG0 = FunctionSpace(mesh, "DG", 0)  # (Discontinuous) Stress tensor function space (tensor)
+DG0 = FunctionSpace(mesh, "DG", 0)  # DG0 for 1d radial profiles
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 # Function spaces can be combined in the natural way to create mixed
@@ -189,10 +208,12 @@ initialise_background_field(shear_modulus, shear_modulus_values_tilde)
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
     compressible_buoyancy = False
+    compressible_adv_hyd_pre = False
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
     compressible_buoyancy = True
+    compressible_adv_hyd_pre = True
 
 viscosity = Function(DG0, name="viscosity")
 initialise_background_field(viscosity, viscosity_values_tilde)
@@ -226,7 +247,7 @@ dt_years = args.dt_years
 dt = Constant(dt_years * year_in_seconds/characteristic_maxwell_time)
 Tend_years = args.Tend
 Tend = Constant(Tend_years * year_in_seconds/characteristic_maxwell_time)
-dt_out_years = 10e3
+dt_out_years = args.dt_out_years
 dt_out = Constant(dt_out_years * year_in_seconds/characteristic_maxwell_time)
 
 max_timesteps = round((Tend - Tstart * year_in_seconds/characteristic_maxwell_time) / dt)
@@ -256,13 +277,20 @@ rho_ice = 931 / density_scale
 g = 9.815
 Vi = Constant(density_scale * D * g / shear_modulus_scale)
 log("Ratio of buoyancy/shear = rho g D / mu = ", float(Vi))
-Hice = 1000 / D
-t1_load = 90e3 * year_in_seconds / characteristic_maxwell_time
-t2_load = 100e3 * year_in_seconds / characteristic_maxwell_time
-ramp_after_t1 = conditional(
-    time < t2_load, 1 - (time - t1_load) / (t2_load - t1_load), 0
-)
-ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
+
+if args.short_simulation:
+    Hice = 100 / D
+    t1_load = 100 * year_in_seconds / characteristic_maxwell_time
+    ramp = conditional(time < t1_load, time / t1_load, 1)
+else:
+    Hice = 1000 / D
+    t1_load = 90e3 * year_in_seconds / characteristic_maxwell_time
+    t2_load = 100e3 * year_in_seconds / characteristic_maxwell_time
+    ramp_after_t1 = conditional(
+        time < t2_load, 1 - (time - t1_load) / (t2_load - t1_load), 0
+    )
+    ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
+
 # Disc ice load but with a smooth transition given by a tanh profile
 disc_radius = 100e3 / D
 disc_dx = 1e3 / D
@@ -270,6 +298,18 @@ k_disc = 1/disc_dx  # wavenumber for disk 2pi / lambda
 r = pow(pow(X[0], 2) + pow(X[1], 2), 0.5)
 disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
 ice_load = ramp * Vi * rho_ice * Hice * disc
+
+if args.lateral_viscosity:
+    upper_depth = -70e3 / D
+    lower_depth = -170e3 / D
+    cylinder_thickness = conditional(
+        X[2] < upper_depth, conditional(X[2] > lower_depth, 1, 0),
+        0
+    )
+    low_visc = 1e19 / viscosity_scale 
+    cylinder_mask = Function(DG0).interpolate(cylinder_thickness * disc)
+    viscosity.interpolate(cylinder_mask * low_visc + (1-cylinder_mask) * viscosity)
+
 
 # We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and
 # side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing
@@ -285,7 +325,7 @@ ice_load = ramp * Vi * rho_ice * Hice * disc
 # Setup boundary conditions
 stokes_bcs = {
     boundary.bottom: {'uz': 0},
-    boundary.top: {'normal_stress': ice_load, 'free_surface': {'delta_rho_fs': density}},
+    boundary.top: {'normal_stress': ice_load, 'free_surface': {}},
     boundary.left: {'ux': 0},
     boundary.right: {'ux': 0},
     boundary.front: {'uy': 0},
@@ -299,7 +339,7 @@ gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_modulus, viscosity=viscosity, Vi=Vi, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy)
+approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus], viscosity=[viscosity], Vi=Vi, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `z` and various fields
@@ -317,7 +357,7 @@ direct_stokes_solver_parameters = {
 iterative_parameters = {"mat_type": "matfree",
                         "snes_type": "ksponly",
                         "ksp_type": "gmres",
-                        "ksp_rtol": 1e-3,
+                        "ksp_rtol": 1e-2,
                         "ksp_converged_reason": None,
                         "ksp_monitor": None,
                         "pc_type": "fieldsplit",
@@ -333,7 +373,7 @@ iterative_parameters = {"mat_type": "matfree",
                         "fieldsplit_0_assembled_pc_type": "gamg",
                         "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
                         "fieldsplit_0_ksp_rtol": 1e-5,
-                        "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
+                        "fieldsplit_0_assembled_pc_gamg_threshold": args.gamg_threshold,
                         "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
                         "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
                         "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
@@ -347,13 +387,15 @@ iterative_parameters = {"mat_type": "matfree",
                         "fieldsplit_1_ksp_rtol": 1e-5,
                         }
 Z_nullspace = None  # Default: don't add nullspace for now
-Z_near_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True, translations=[0, 1, 2])
+Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=args.gamg_near_null_rot, translations=[0, 1, 2])
 
 coupled_solver = InternalVariableSolver(z, approximation, coupled_dt=dt, bcs=stokes_bcs,
                                         solver_parameters=iterative_parameters,
                                         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                         near_nullspace=Z_near_nullspace)
 
+
+coupled_stage = PETSc.Log.Stage("coupled_solve")
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
 
@@ -387,7 +429,8 @@ vertical_displacement = Function(V.sub(2), name="vertical displacement")  # Func
 for timestep in range(1, max_timesteps+1):
     # update time first so that ice load begins
     time.assign(time+dt)
-    coupled_solver.solve()
+    # Solve Stokes sytem:
+    with coupled_stage: coupled_solver.solve()
 
     # Log diagnostics:
     # Compute diagnostics:
