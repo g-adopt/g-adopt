@@ -168,13 +168,13 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
         approximation_nl,
         bcs=bcs,
         solver_parameters="iterative",
-        solver_parameters_update=initial_picard_solver_parameters_update,
+        solver_parameters_extra=initial_picard_solver_parameters_update,
     )
     newton_solver = StokesSolver(
         z,
         approximation,
         bcs=bcs,
-        solver_parameters_update=newton_solver_parameters_update,
+        solver_parameters_extra=newton_solver_parameters_update,
     )
 
     if stabilisation:
@@ -208,8 +208,7 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
 
     # initial solve is done iteratively with extra tight tolerance
     # subsequent iterative solves are done with direct solvers
-    picard_solver.solver_parameters = picard_solver_parameters
-    picard_solver.set_solver()
+    picard_solver.reset_solver_config(picard_solver_parameters)
 
     for i in range(picard_iterations):
         f_picard.write(f"{i:02}: {assemble(picard_solver.F, bcs=picard_solver.strong_bcs, zero_bc_nodes=True).dat.norm}\n")
