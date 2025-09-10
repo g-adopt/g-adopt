@@ -63,6 +63,8 @@ class SolverOptions:
     during initialisation of a G-ADOPT solver object.
     """
 
+    _solver_options_initialised = False
+
     def reset_solver_config(
         self,
         default_config: ConfigType,
@@ -167,12 +169,12 @@ class SolverOptions:
         If the `callback_ref` attribute is set, it will be called on completion of the update.
         """
         # "Initialise" solver config attrs on first call
-        if not hasattr(self, "_top_level_class_name"):
+        if not self._solver_options_initialised:
             self._top_level_class_name = self.__class__.__mro__[0].__name__
-        if not hasattr(self, "solver_parameters"):
             self.solver_parameters = {}
-        if not hasattr(self, "callback_ref"):
             self.callback_ref = None
+            self._solver_options_initialised = True
+            debug_print(self._top_level_class_name, "Initialised SolverOptions")
 
         if in_config is not None:
             self.solver_parameters = self.process_mapping("solver_parameters", self.solver_parameters, in_config)
