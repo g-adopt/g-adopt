@@ -7,6 +7,7 @@ documented parameters and call the `solve` method to request a solver update.
 """
 
 import abc
+from collections.abc import Mapping
 from numbers import Number
 from typing import Any, Callable
 
@@ -15,7 +16,7 @@ from firedrake import *
 from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
-from .solver_options_manager import SolverOptions, DefaultConfigType, ExtraConfigType
+from .solver_options_manager import SolverOptions, ConfigType
 from .time_stepper import RungeKuttaTimeIntegrator
 from .utility import DEBUG, INFO, absv, is_continuous, log, log_level
 
@@ -111,8 +112,8 @@ class GenericTransportBase(SolverOptions, abc.ABC):
         solution_old: Function | None = None,
         eq_attrs: dict[str, float] = {},
         bcs: dict[int, dict[str, Number]] = {},
-        solver_parameters: DefaultConfigType | None = None,
-        solver_parameters_extra: ExtraConfigType | None = None,
+        solver_parameters: ConfigType | str | None = None,
+        solver_parameters_extra: ConfigType | None = None,
         su_advection: bool = False,
     ) -> None:
         self.solution = solution
@@ -200,33 +201,36 @@ class GenericTransportBase(SolverOptions, abc.ABC):
 
     def set_solver_options(
         self,
-        solver_preset: DefaultConfigType | None,
-        solver_extras: ExtraConfigType | None = None,
+        solver_preset: ConfigType | str | None,
+        solver_extras: ConfigType | None = None,
     ) -> None:
         """Sets PETSc solver parameters."""
-        if isinstance(solver_preset, dict):
-            self.init_solver_config(solver_preset, solver_extras, self.setup_solver)
+        if isinstance(solver_preset, Mapping):
+            self.add_to_solver_config(solver_preset)
+            self.add_to_solver_config(solver_extras)
+            self.register_update_callback(self.setup_solver)
             return
 
         if solver_preset is not None:
             match solver_preset:
                 case "direct":
-                    default_config = direct_energy_solver_parameters
+                    self.add_to_solver_config(direct_energy_solver_parameters)
                 case "iterative":
-                    default_config = iterative_energy_solver_parameters
+                    self.add_to_solver_config(iterative_energy_solver_parameters)
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
         elif self.mesh.topological_dimension() == 2:
-            default_config = direct_energy_solver_parameters
+            self.add_to_solver_config(direct_energy_solver_parameters)
         else:
-            default_config = iterative_energy_solver_parameters
+            self.add_to_solver_config(iterative_energy_solver_parameters)
 
         if DEBUG >= log_level:
-            default_config |= {"ksp_monitor": None}
+            self.add_to_solver_config({"ksp_monitor": None})
         elif INFO >= log_level:
-            default_config |= {"ksp_converged_reason": None}
+            self.add_to_solver_config({"ksp_converged_reason": None})
 
-        self.init_solver_config(default_config, solver_extras, self.setup_solver)
+        self.add_to_solver_config(solver_extras)
+        self.register_update_callback(self.setup_solver)
 
     def setup_solver(self) -> None:
         """Sets up the timestepper using specified parameters."""

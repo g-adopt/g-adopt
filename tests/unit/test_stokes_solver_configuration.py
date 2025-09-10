@@ -1,6 +1,8 @@
 import firedrake as fd
 import pytest
 
+from copy import deepcopy
+
 from gadopt.approximations import BoussinesqApproximation
 from gadopt.stokes_integrators import (
     StokesSolver,
@@ -41,19 +43,25 @@ def test_solver_parameters_argument(test_case):
     mu = 1
     mesh.cartesian = True
 
+    # Create copies of the solver parameters
+    direct_params = deepcopy(direct_stokes_solver_parameters)
+    iterative_params = deepcopy(iterative_stokes_solver_parameters)
+    newton_params = deepcopy(newton_stokes_solver_parameters)
+
     match test_case:
         case "unspecified":
             solver_parameters = None
             solver_parameters_extra = None
-            expected_value = base_linear_params_with_log | direct_stokes_solver_parameters
+            expected_value = base_linear_params_with_log | direct_params
         case "direct":
             solver_parameters = "direct"
             solver_parameters_extra = None
-            expected_value = base_linear_params_with_log | direct_stokes_solver_parameters
+            expected_value = base_linear_params_with_log | direct_params
         case "iterative":
             solver_parameters = "iterative"
             solver_parameters_extra = None
-            expected_value = base_linear_params_with_log | iterative_stokes_solver_parameters
+            expected_value = base_linear_params_with_log | iterative_params
+            expected_value["fieldsplit_1"]["ksp_converged_reason"] = None
         case "dictionary":
             solver_parameters = example_solver_params
             solver_parameters_extra = None
@@ -62,23 +70,23 @@ def test_solver_parameters_argument(test_case):
             mesh.cartesian = False
             solver_parameters = None
             solver_parameters_extra = None
-            expected_value = base_linear_params_with_log | iterative_stokes_solver_parameters
-            expected_value["fieldsplit_1"] |= {"ksp_converged_reason": None}
+            expected_value = base_linear_params_with_log | iterative_params
+            expected_value["fieldsplit_1"]["ksp_converged_reason"] = None
         case "linear_false":
             mu = fd.sym(fd.grad(fd.split(stokes_function)[0]))
             solver_parameters = "direct"
             solver_parameters_extra = None
-            expected_value = {"snes_monitor": None} | newton_stokes_solver_parameters | direct_stokes_solver_parameters
+            expected_value = {"snes_monitor": None} | newton_params | direct_params
         case "add_parameter":
             solver_parameters = None
             solver_parameters_extra = {"ksp_converged_reason": None}
             expected_value = (
-                {"ksp_converged_reason": None} | base_linear_params_with_log | direct_stokes_solver_parameters
+                {"ksp_converged_reason": None} | base_linear_params_with_log | direct_params
             )
         case "delete_parameter":
             solver_parameters = None
             solver_parameters_extra = {"snes_monitor": DeleteParam}
-            expected_value = base_linear_params_with_log | direct_stokes_solver_parameters
+            expected_value = base_linear_params_with_log | direct_params
             del expected_value["snes_monitor"]
         case "change_tolerance":
             solver_parameters = "iterative"
@@ -86,9 +94,10 @@ def test_solver_parameters_argument(test_case):
                 "fieldsplit_0": {"ksp_rtol": 1e-4},
                 "fieldsplit_1": {"ksp_rtol": 1e-3},
             }
-            expected_value = base_linear_params_with_log | iterative_stokes_solver_parameters
+            expected_value = base_linear_params_with_log | iterative_params
             expected_value["fieldsplit_0"]["ksp_rtol"] = 1e-4
             expected_value["fieldsplit_1"]["ksp_rtol"] = 1e-3
+            expected_value["fieldsplit_1"]["ksp_converged_reason"] = None
 
     approximation = BoussinesqApproximation(1, mu=mu)
 

@@ -18,7 +18,6 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     iterative = True
 
     def __init__(self, dt_factor, **kwargs):
-        self.solver_parameters_extra = {"fieldsplit_0": {"ksp_rtol": 1e-6}, "fieldsplit_1": {"ksp_rtol": 1e-5}}
         super().__init__(dt_factor, cartesian=False, **kwargs)
 
     def setup_mesh(self):
@@ -48,11 +47,7 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         }
 
     def setup_solver(self):
-        self.solver_parameters_update = {
-            "fieldsplit_0": {"ksp_rtol": 1e-6},
-            "fieldsplit_1": {"ksp_rtol": 1e-5},
-        }
-
+        self.solver_parameters_extra = {"fieldsplit_0": {"ksp_rtol": 1e-6}, "fieldsplit_1": {"ksp_rtol": 1e-5}}
         super().setup_solver()
 
     def setup_nullspaces(self):

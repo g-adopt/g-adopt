@@ -91,14 +91,14 @@ def model(ref_level, nlayers, delta_t, steps=None):
             "ksp_view": None,
             "ksp_rtol": 1e-7,
         },
-        "fieldsplit_1": {"ksp_view": None, "ksp_rtol": 1e-5},
+        "fieldsplit_1": {"ksp_view": None, "ksp_rtol": 1e-5, "ksp_converged_reason": None},
     }
     stokes_solver = StokesSolver(
         z,
         approximation,
         T,
         bcs=stokes_bcs,
-        solver_parameters_update=stokes_solver_extra_params,
+        solver_parameters_extra=stokes_solver_extra_params,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,

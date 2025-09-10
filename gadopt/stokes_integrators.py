@@ -12,6 +12,7 @@ a relevant set of arguments and then call the `solve` method to request a solver
 
 import abc
 from collections import defaultdict
+from collections.abc import Mapping
 from typing import Any
 from warnings import warn
 
@@ -27,7 +28,7 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import residual_terms_stokes
-from .solver_options_manager import SolverOptions, DefaultConfigType, ExtraConfigType
+from .solver_options_manager import SolverOptions, ConfigType
 from .utility import (
     DEBUG,
     INFO,
@@ -307,8 +308,8 @@ class StokesSolverBase(SolverOptions, abc.ABC):
         additional_forcing_term: fd.Form | None = None,
         bcs: dict[int | str, dict[str, Any]] = {},
         quad_degree: int = 6,
-        solver_parameters: DefaultConfigType | None = None,
-        solver_parameters_extra: ExtraConfigType | None = None,
+        solver_parameters: ConfigType | str | None = None,
+        solver_parameters_extra: ConfigType | None = None,
         J: fd.Function | None = None,
         constant_jacobian: bool = False,
         nullspace: fd.MixedVectorSpaceBasis | None = None,
@@ -427,49 +428,55 @@ class StokesSolverBase(SolverOptions, abc.ABC):
 
     def set_solver_options(
         self,
-        solver_preset: DefaultConfigType | None,
-        solver_extras: ExtraConfigType | None,
+        solver_preset: ConfigType | str | None,
+        solver_extras: ConfigType | None,
     ) -> None:
         """Sets PETSc solver options."""
         # Application context for the inverse mass matrix preconditioner
         self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
 
-        if isinstance(solver_preset, dict):
-            self.init_solver_config(solver_preset, solver_extras, self.set_solver)
+        if isinstance(solver_preset, Mapping):
+            self.add_to_solver_config(solver_preset)
+            self.add_to_solver_config(solver_extras)
+            self.register_update_callback(self.set_solver)
             return
 
-        default_config = {}
         if not depends_on(self.approximation.mu, self.solution):
-            default_config |= {"snes_type": "ksponly"}
+            self.add_to_solver_config({"snes_type": "ksponly"})
         else:
-            default_config |= newton_stokes_solver_parameters
+            self.add_to_solver_config(newton_stokes_solver_parameters)
 
         if INFO >= log_level:
-            default_config |= {"snes_monitor": None}
+            self.add_to_solver_config({"snes_monitor": None})
 
         if solver_preset is not None:
             match solver_preset:
                 case "direct":
-                    default_config |= direct_stokes_solver_parameters
+                    self.add_to_solver_config(direct_stokes_solver_parameters)
                 case "iterative":
-                    default_config |= iterative_stokes_solver_parameters
+                    self.add_to_solver_config(iterative_stokes_solver_parameters)
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
         elif self.mesh.topological_dimension() == 2 and is_cartesian(self.mesh):
-            default_config |= direct_stokes_solver_parameters
+            self.add_to_solver_config(direct_stokes_solver_parameters)
         else:
-            default_config |= iterative_stokes_solver_parameters
+            self.add_to_solver_config(iterative_stokes_solver_parameters)
 
         # Extra monitoring options for iterative solvers
-        if default_config.get("pc_type") == "fieldsplit":
+        if self.solver_parameters.get("pc_type") == "fieldsplit":
             if DEBUG >= log_level:
-                default_config["fieldsplit_0"] |= {"ksp_converged_reason": None}
-                default_config["fieldsplit_1"] |= {"ksp_monitor": None}
+                self.add_to_solver_config(
+                    {
+                        "fieldsplit_0": {"ksp_converged_reason": None},
+                        "fieldsplit_1": {"ksp_monitor": None},
+                    }
+                )
 
             elif INFO >= log_level:
-                default_config["fieldsplit_1"] |= {"ksp_converged_reason": None}
+                self.add_to_solver_config({"fieldsplit_1": {"ksp_converged_reason": None}})
 
-        self.init_solver_config(default_config, solver_extras, self.set_solver)
+        self.add_to_solver_config(solver_extras)
+        self.register_update_callback(self.set_solver)
 
     def set_solver(self) -> None:
         """Sets up the Firedrake variational problem and solver."""
@@ -627,7 +634,7 @@ class StokesSolver(StokesSolverBase):
             )
 
     def set_solver_options(
-        self, solver_preset: DefaultConfigType | None, solver_extras: ExtraConfigType | None
+        self, solver_preset: ConfigType | None, solver_extras: ConfigType | None
     ) -> None:
         super().set_solver_options(solver_preset, None)
         if self.free_surface_map and self.is_iterative_solver():
@@ -637,14 +644,10 @@ class StokesSolver(StokesSolverBase):
 
             # Gather pressure and free surface fields for Schur complement solve
             fields_ind = ",".join(map(str, range(1, len(self.solution_split))))
-            pres_freesurf_solver_opts = {"pc_fieldsplit_0_fields": "0", "pc_fieldsplit_1_fields": fields_ind}
+            self.add_to_solver_config({"pc_fieldsplit_0_fields": "0", "pc_fieldsplit_1_fields": fields_ind})
             # Update mass inverse preconditioner
-            pres_freesurf_solver_opts["fieldsplit_1"] = {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}
-            # Update solver params with pressure/free surface options - do not run the update callback
-            self.update_solver_config(pres_freesurf_solver_opts, False)
-        if solver_extras is not None:
-            # Update solver params with user changes - do not run the update callback
-            self.update_solver_config(solver_extras, False)
+            self.add_to_solver_config({"fieldsplit_1": {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}})
+        self.add_to_solver_config(solver_extras)
 
     def force_on_boundary(self, subdomain_id: int | str, **kwargs) -> fd.Function:
         """Computes the force acting on a boundary.
@@ -931,7 +934,9 @@ class BoundaryNormalStressSolver(SolverOptions):
             else BoundaryNormalStressSolver.direct_solve_parameters,
         )
 
-        self.init_solver_config(solver_parameters, self._kwargs.get("solver_parameters_extra"))
+        self.add_to_solver_config(solver_parameters)
+        self.add_to_solver_config(self._kwargs.get("solver_parameters_extra"))
+        self.register_update_callback(self.setup_solver)
         self.setup_solver()
 
     def solve(self):

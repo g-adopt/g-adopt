@@ -49,8 +49,9 @@ class DeleteParam:
 
 
 # Type alias
-DefaultConfigType = Mapping[str, str | float | int | None | Mapping[str, str | float | int | None]]
-ExtraConfigType = Mapping[str, str | float | int | None | type[DeleteParam] | Mapping[str, str | float | int | None]]
+ConfigType = Mapping[
+    str, str | float | int | None | type[DeleteParam] | Mapping[str, str | float | int | None | type[DeleteParam]]
+]
 
 
 class SolverOptions:
@@ -62,43 +63,15 @@ class SolverOptions:
     during initialisation of a G-ADOPT solver object.
     """
 
-    def init_solver_config(
-        self,
-        default_config: DefaultConfigType,
-        extra_config: ExtraConfigType | None = None,
-        callback: Callable[[], None] | None = None,
-    ) -> None:
-        """Initialise a `SolverOptions` object.
-
-        This method generates a logging prefix based on the class hierarchy, registers a reference to a
-        callback if provided and sets the solver configuration based on the `default_config` and `extra_config`
-        provided. This structure allows a subclass to determine its default solver settings, and a user
-        to override settings as necessary. The `callback` argument allows a subclass to specify a function that
-        must be called when the solver settings are changed such that the Firedrake objects that depend on
-        these settings are reinitialised whenever the solver settings are changed.
-
-        Any Mapping type can be passed into this function, and the function will take care of copying
-        the mapping to a mutable dictionary. The `extra_config` argument is optional and reflects the
-        case when the wishes to modify the default solver settings provided by a subclass.
-        """
-        self._top_level_class_name = self.__class__.__mro__[0].__name__
-        self.callback_ref = None
-        self.reset_solver_config(default_config, extra_config)
-        if callback is not None:
-            debug_print(self._top_level_class_name, f"Registering callback: {callback.__name__}()")
-            self.register_update_callback(callback)
-        else:
-            self.callback_ref = None
-
     def reset_solver_config(
         self,
-        default_config: DefaultConfigType,
-        extra_config: ExtraConfigType | None = None,
+        default_config: ConfigType,
+        extra_config: ConfigType | None = None,
     ) -> None:
         """Resets the `solver_parameters` dict.
 
         Empties the existing `solver_parameters` dict and creates a new one by
-        first running `update_solver_config` on the empty dict with `default_config`,
+        first running `add_to_solver_config` on the empty dict with `default_config`,
         and then again on the resulting dict with `extra_config`. `default_config`
         is mandatory, `extra_config` is optional. Will invoke `callback_ref`
         if it is set.
@@ -107,10 +80,10 @@ class SolverOptions:
         debug_print(self._top_level_class_name, pprint.pformat(default_config, indent=2))
         self.solver_parameters = {}
         debug_print(self._top_level_class_name, "Processing default config")
-        self.update_solver_config(default_config, extra_config is None)
+        self.add_to_solver_config(default_config, extra_config is None)
         if extra_config is not None:
             debug_print(self._top_level_class_name, "Processing extra config")
-            self.update_solver_config(extra_config)
+            self.add_to_solver_config(extra_config, True)
 
     def print_solver_config(self) -> None:
         """Prints the solver_parameters dict.
@@ -128,9 +101,10 @@ class SolverOptions:
         nothing. When a subclass provides this function, a user does not need to
         be aware of the underlying Problem/Solver objects in order to ensure that
         a configuration update during an in-progress simulation takes effect properly.
-        When provided in the `init_solver_config` call, `callback_ref` will run
-        when `solver_parameters` is ready, therefore `init_solver_config` can be
-        the last call directly in a Solver's `__init__` method.
+
+        A weakref is used here in order to prevent circular references, which would
+        prevent Python's automatic garbage collection from cleaning up G-ADOPT
+        solver objects.
         """
         self.callback_ref = weakref.WeakMethod(callback)
 
@@ -152,6 +126,11 @@ class SolverOptions:
                 if k in outmap:
                     debug_print(self._top_level_class_name, f"Deleting {key_prefix}[{k}]")
                     del outmap[k]
+                else:
+                    debug_print(
+                        self._top_level_class_name,
+                        f"Requested deletion of {key_prefix}[{k}] but this key was not found in original mapping",
+                    )
             elif isinstance(v, Mapping):
                 kp = f"{key_prefix}[{k}]"
                 if k in inmap:
@@ -173,19 +152,43 @@ class SolverOptions:
 
         return outmap
 
-    def update_solver_config(self, extra_config: ExtraConfigType, reinit=True) -> None:
+    def add_to_solver_config(self, in_config: ConfigType | None, reinit=False) -> None:
         """Updates the `solver_parameters` dict
 
-        Takes a single Mapping argument that is treated like the `extra_config` option in
-        `init_solver_config`. By default, will call the registered `callback_ref` if
-        present, unless the second argument (`reinit`) is `False`.
+        Takes a single Mapping argument that added to the existing `solver_parameters` dict,
+        overwriting any existing parameters of the same name. On the first call to this method
+        the `SolverOptions` objects are created; a logging prefix based on the class hierarchy,
+        a reference to a callback initialised to `None` and an empty solver configuration. This
+        structure allows a subclass to build its solver parameters step-by-step.
+
+        Any Mapping type can be passed into this function, and the function will take care of copying
+        the mapping to a mutable dictionary.
+
+        If the `callback_ref` attribute is set, it will be called on completion of the update.
         """
-        self.solver_parameters = self.process_mapping("solver_parameters", self.solver_parameters, extra_config)
-        debug_print(self._top_level_class_name, "Solver configuration after update:")
-        debug_print(self._top_level_class_name, pprint.pformat(self.solver_parameters, indent=2))
-        if reinit and self.callback_ref is not None:
-            debug_print(self._top_level_class_name, "Running callback")
-            self.callback_ref()()
+        # "Initialise" solver config attrs on first call
+        if not hasattr(self, "_top_level_class_name"):
+            self._top_level_class_name = self.__class__.__mro__[0].__name__
+        if not hasattr(self, "solver_parameters"):
+            self.solver_parameters = {}
+        if not hasattr(self, "callback_ref"):
+            self.callback_ref = None
+
+        if in_config is not None:
+            self.solver_parameters = self.process_mapping("solver_parameters", self.solver_parameters, in_config)
+            debug_print(self._top_level_class_name, "Solver configuration after additions:")
+            debug_print(self._top_level_class_name, pprint.pformat(self.solver_parameters, indent=2))
+            if reinit and self.callback_ref is not None:
+                debug_print(self._top_level_class_name, "Running callback")
+                self.callback_ref()()
+        else:
+            debug_print(self._top_level_class_name, "in_config is empty, doing nothing")
 
     def is_iterative_solver(self) -> bool:
+        """
+        Decide if a solver is iterative or not
+
+        Return a boolean that indicates whether this solver is an iterative
+        solver or a direct solver.
+        """
         return self.solver_parameters.get("pc_type") not in ["lu", "cholesky"]
