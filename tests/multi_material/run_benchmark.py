@@ -223,16 +223,17 @@ if hasattr(simulation, "initialise_temperature"):
     )
 # Set up Stokes solver
 stokes_nullspace = ga.create_stokes_nullspace(stokes_function.function_space())
+# Update line search algorithm to ensure convergence
+upd_ls_type = {"snes_linesearch_type": "cp"} if benchmark == "schmalholz_2011" else None
 stokes_solver = ga.StokesSolver(
     stokes_function,
     approximation,
     temperature,
     bcs=simulation.stokes_bcs,
+    solver_parameters_update=upd_ls_type,
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )
-if benchmark == "schmalholz_2011":  # Update line search algorithm to ensure convergence
-    stokes_solver.solver_parameters["snes_linesearch_type"] = "cp"
 stokes_solver.solve()  # Determine initial velocity and pressure fields
 
 # Set up level-set solvers
