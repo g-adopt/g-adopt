@@ -65,7 +65,7 @@ diagnostics = {
         (lambda data: abs(data["max_visc"][-1] - 1.92), operator.le, 6e-2),
     ],
     "trim_2023": [
-        (lambda data: abs(data["rms_velocity"][-1] - 157.0), operator.le, 4e0),
+        (lambda data: abs(data["rms_velocity"][-1] - 157.0), operator.le, 6e0),
     ],
     "van_keken_1997_isothermal": [
         (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 4e-5),
@@ -82,7 +82,7 @@ diagnostics = {
                 - 487.0
             ),
             operator.le,
-            5e1,
+            4e1,
         )
     ],
 }

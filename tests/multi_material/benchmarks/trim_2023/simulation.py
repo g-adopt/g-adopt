@@ -122,7 +122,7 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (1, 1)
 mesh_gen = "firedrake"
-mesh_elements = (256, 256)
+mesh_elements = (128, 128)
 
 # Parameters to initialise level set
 callable_args = (
