@@ -152,9 +152,12 @@ gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
 # passing in the approximation, nullspace and near-nullspace information configured above.
 
-# For all iterative solves, G-ADOPT utilises convergence criterion based on the relative reduction of the
-# preconditioned residual, *ksp\_rtol*. These are set to 1e-5 for the *fieldslip\_0* and 1e-4 for *fieldsplit\_1*.
-# We can change these default values by creating an appropriate dict for solver_parameters_extra.
+# For all iterative solves, G-ADOPT utilises convergence criterion based on the relative
+# reduction of the preconditioned residual, *ksp\_rtol*. By default, these are set to
+# 1e-5 for the *fieldsplit\_0* and 1e-4 for *fieldsplit\_1*. We can change these default
+# values by creating an appropriate dict for the solver_parameters_extra argument for
+# any of the Solver classes G-ADOPT provides. In this case, we are relaxing the
+# tolerances used by the StokesSolver in order to reduce the run time of this demo.
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 

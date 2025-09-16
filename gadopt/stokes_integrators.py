@@ -95,7 +95,7 @@ Note:
   `solver_parameters="iterative"` is provided or in 3-D if the `solver_parameters`
   argument is omitted. To make modifications to these default values, the most
   convenient approach is to provide the modified values as a dictionary via the
-  `solver_parameters_update` argument. This dictionary can also hold new pairs of keys
+  `solver_parameters_extra` argument. This dictionary can also hold new pairs of keys
   and values to extend the default ones.
   .
 """
@@ -116,7 +116,7 @@ Note:
   `solver_parameters="direct"` is provided or in 2-D if the `solver_parameters`
   argument is omitted. To make modifications to these default values, the most
   convenient approach is to provide the modified values as a dictionary via the
-  `solver_parameters_update` argument. This dictionary can also hold new pairs of keys
+  `solver_parameters_extra` argument. This dictionary can also hold new pairs of keys
   and values to extend the default ones.
 """
 
@@ -137,7 +137,7 @@ Note:
   the above iterative or default solver parameters if the viscosity, `mu`, provided to
   the approximation depends on the solver's solution. To make modifications to these
   default values, the most convenient approach is to provide the modified values as a
-  dictionary via the `solver_parameters_update` argument. This dictionary can also hold
+  dictionary via the `solver_parameters_extra` argument. This dictionary can also hold
   new pairs of keys and values to extend the default ones.
 """
 
