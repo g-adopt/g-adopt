@@ -15,7 +15,7 @@ jobs:
   render:
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake-vanilla-default:latest
+      image: firedrakeproject/firedrake-vanilla-default:dev-main
       options: --cap-add=SYS_ADMIN
 
     env:
