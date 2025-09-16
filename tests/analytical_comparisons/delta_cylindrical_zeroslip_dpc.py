@@ -60,7 +60,6 @@ def model(level, nn, do_write=False):
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     mu = Constant(1.0)  # Constant viscosity
     g = Constant(1.0)  # Overall scaling of delta forcing
-    T = Constant(0.0)
 
     approximation = BoussinesqApproximation(1)
     stokes_bcs = {
@@ -72,26 +71,26 @@ def model(level, nn, do_write=False):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
+    # Add delta forcing as an ad-hoc additional term, applied as "internal" boundary
+    # integral over facets where the marker jump from 0 to 1
+    marker = Function(P0).interpolate(conditional(r < rp, 1, 0))
+    n = FacetNormal(mesh)
+    additional_forcing_term = g * cos(nn * phi) * dot(jump(marker, n), avg(v)) * dS_h
+    # Use tighter tolerances than default to ensure convergence
+    solver_parameters_update = {
+        "fieldsplit_0": {"ksp_rtol": 1e-13},
+        "fieldsplit_1": {"ksp_rtol": 1e-11},
+    }
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
+        additional_forcing_term=additional_forcing_term,
         bcs=stokes_bcs,
+        solver_parameters_update=solver_parameters_update,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
     )
-    # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-11
-
-    # add delta forcing as ad-hoc aditional term
-    # forcing is applied as "internal" boundary integral over facets
-    # where the marker jump from 0 to 1
-    marker = Function(P0)
-    marker.interpolate(conditional(r < rp, 1, 0))
-    n = FacetNormal(mesh)
-    stokes_solver.F += g * cos(nn*phi) * dot(jump(marker, n), avg(v)) * dS_h
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
     # and the RHS == 0.

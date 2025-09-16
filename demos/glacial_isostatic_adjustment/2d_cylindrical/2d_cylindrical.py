@@ -414,9 +414,7 @@ stokes_bcs = {boundary.top: {'normal_stress': ice_load, 'free_surface': {'delta_
               boundary.bottom: {'un': 0}
               }
 
-
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields needed for the viscoelastic loading problem.
-
 
 approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
 
@@ -444,10 +442,10 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 
 stokes_solver = ViscoelasticStokesSolver(
     z,
+    approximation,
     stress_old,
     displacement,
-    approximation,
-    dt,
+    dt=dt,
     bcs=stokes_bcs,
     constant_jacobian=True,
     nullspace=Z_nullspace,
@@ -472,7 +470,7 @@ plog.log_str(
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
-gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
+gd = GeodynamicalDiagnostics(z, bottom_id=boundary.bottom, top_id=boundary.top)
 
 # Initialise a (scalar!) function for logging vertical displacement
 U = FunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (scalar)

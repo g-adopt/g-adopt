@@ -12,9 +12,8 @@ import gadopt as ga
 
 def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
     """Write checkpointed fields to the checkpoint file."""
-    time_output.assign(time_now)
-
     checkpoint_file.save_mesh(mesh)
+
     for field_name, field in checkpoint_fields.items():
         if isinstance(field, list):
             for i, field_element in enumerate(field):
@@ -24,11 +23,11 @@ def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
         else:
             checkpoint_file.save_function(field, name=field_name, idx=dump_counter)
 
+    checkpoint_file.set_attr("/", "time", time_now)
+
 
 def write_output(output_file):
     """Write output fields to the output file."""
-    time_output.assign(time_now)
-
     if simulation.dimensional:
         density.interpolate(rho_material)
     else:
@@ -38,18 +37,23 @@ def write_output(output_file):
         simulation.internal_heating_rate(H, time_now)
 
     output_file.write(
-        time_output,
         *stokes_function.subfunctions,
         temperature,
         *level_set,
         *level_set_grad,
         *output_fields,
+        time=time_now / 1e6 / 365.25 / 8.64e4 if simulation.dimensional else time_now,
     )
 
 
 # Import simulation module
 parser = ArgumentParser()
 parser.add_argument("benchmark", help="Path to the benchmark directory")
+parser.add_argument(
+    "--without-plot",
+    action="store_true",
+    help="Speed up simulation by skipping time-loop updates of diagnostic plots",
+)
 args = parser.parse_args()
 
 benchmark = args.benchmark.split("/")[1]
@@ -64,9 +68,7 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
     old_check_file = f"checkpoint_{simulation.checkpoint_restart}_{simulation.tag}.h5"
     with fd.CheckpointFile(str(output_path / old_check_file), "r") as h5_check:
         mesh = h5_check.load_mesh("firedrake_default")
-
-        dump_counter = h5_check.get_timestepping_history(mesh, "Time")["index"][-1]
-        time_output = h5_check.load_function(mesh, "Time", idx=dump_counter)
+        dump_counter = h5_check.get_timestepping_history(mesh, "Stokes")["index"][-1]
         stokes_function = h5_check.load_function(mesh, "Stokes", idx=dump_counter)
         temperature = h5_check.load_function(mesh, "Temperature", idx=dump_counter)
 
@@ -81,19 +83,15 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
             except RuntimeError:
                 break
 
+        time_now = h5_check.get_attr("/", "time")
+
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if benchmark == "trim_2023":
-        epsilon = 1 / 2 / simulation.k
+        epsilon = 1.0 / 2.0 / simulation.k
     else:
         epsilon = ga.interface_thickness(
             level_set[0].function_space(), min_cell_edge_length=True
         )
-    if benchmark == "schmalholz_2011":
-        epsilon.interpolate(
-            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
-        )
-
-    time_now = time_output.dat.data[0]
 else:  # Initialise mesh and key functions
     match simulation.mesh_gen:  # Generate mesh
         case "gmsh":
@@ -114,18 +112,21 @@ else:  # Initialise mesh and key functions
             raise ValueError("'mesh_gen' must be 'firedrake' or 'gmsh'")
 
     # Set up Stokes function spaces corresponding to the mixed Q2Q1 Taylor-Hood element
-    func_space_vel = fd.VectorFunctionSpace(mesh, "CG", 2)
-    func_space_pres = fd.FunctionSpace(mesh, "CG", 1)
+    func_space_vel = fd.VectorFunctionSpace(mesh, "Q", 2)
+    func_space_pres = fd.FunctionSpace(mesh, "Q", 1)
     func_space_stokes = fd.MixedFunctionSpace([func_space_vel, func_space_pres])
     stokes_function = fd.Function(func_space_stokes)
 
     # Define temperature function space and initialise temperature
-    func_space_temp = fd.FunctionSpace(mesh, "CG", 2)
+    func_space_temp = fd.FunctionSpace(mesh, "DQ", 2, variant="equispaced")
     temperature = fd.Function(func_space_temp, name="Temperature")
-    simulation.initialise_temperature(temperature)
+    if hasattr(simulation, "initialise_temperature"):
+        simulation.initialise_temperature(temperature)
 
     # Set up function spaces and functions used in the level-set approach
-    func_space_ls = fd.FunctionSpace(mesh, "DQ", simulation.level_set_func_space_deg)
+    func_space_ls = fd.FunctionSpace(
+        mesh, "DQ", 1 if benchmark == "schmalholz_2011" else 2
+    )  # Stokes solver diverges when using DQ2 for the Schmalholz benchmark
     level_set = [
         fd.Function(func_space_ls, name=f"Level set #{i}")
         for i in range(len(simulation.materials) - 1)
@@ -133,36 +134,32 @@ else:  # Initialise mesh and key functions
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if benchmark == "trim_2023":
-        epsilon = 1 / 2 / simulation.k
+        epsilon = 1.0 / 2.0 / simulation.k
     else:
         epsilon = ga.interface_thickness(func_space_ls, min_cell_edge_length=True)
-    if benchmark == "schmalholz_2011":
-        epsilon.interpolate(
-            mesh.comm.allreduce(mesh.cell_sizes.dat.data.min(), MPI.MIN) / 4
-        )
 
     # Initialise level set
     for ls, kwargs in zip(level_set, simulation.signed_distance_kwargs_list):
         ga.assign_level_set_values(ls, epsilon, **kwargs)
 
-    time_output = fd.Function(func_space_pres, name="Time")
-    time_now = 0
+    time_now = 0.0
     dump_counter = 0
 
-# Whether we start from checkpoint or not, we annotate our mesh as cartesian
+# Annotate mesh as Cartesian to inform other G-ADOPT objects
 mesh.cartesian = True
 
-# Extract velocity and pressure from the Stokes function
-velocity, pressure = fd.split(stokes_function)  # UFL expressions
-# Associated Firedrake functions
+# Rename Firedrake functions for velocity and pressure
 stokes_function.subfunctions[0].rename("Velocity")
 stokes_function.subfunctions[1].rename("Pressure")
+# Extract velocity indexed expression from the function defined on the mixed space
+velocity = fd.split(stokes_function)[0]
 # Copy velocity function for steady-state convergence check
 if hasattr(simulation, "steady_state_threshold"):
     velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
 
 # Continuous function space for material field output
-func_space_output = fd.FunctionSpace(mesh, "CG", simulation.level_set_func_space_deg)
+finite_elem_output = fd.FiniteElement("DQ", fd.quadrilateral, 1, variant="equispaced")
+func_space_output = fd.FunctionSpace(mesh, finite_elem_output)
 output_fields = []
 # Set up material fields and the equation system
 approximation_parameters = {}
@@ -176,15 +173,11 @@ if simulation.dimensional:
     output_fields.append(density)
     approximation_parameters["rho"] = simulation.materials[0].rho
     approximation_parameters["delta_rho"] = rho_material - simulation.materials[0].rho
-    approximation_parameters["RaB"] = 1
+    approximation_parameters["RaB"] = 1.0
 else:
-    if simulation.materials[0].RaB is None:
-        RaB_material = [simulation.Ra * material.B for material in simulation.materials]
-    else:
-        RaB_material = [material.RaB for material in simulation.materials]
     RaB = ga.material_field(
         level_set,
-        RaB_material,
+        [material.RaB for material in simulation.materials],
         interface="arithmetic" if benchmark == "trim_2023" else "sharp",
     )
     compo_rayleigh = fd.Function(func_space_output, name="RaB")
@@ -194,6 +187,7 @@ else:
 mu = ga.material_field(
     level_set,
     [material.mu(velocity, temperature) for material in simulation.materials],
+    # Sharp viscosity interface required to reproduce Schmalholz benchmark diagnostic
     interface="sharp" if benchmark == "schmalholz_2011" else "geometric",
 )
 viscosity = fd.Function(func_space_output, name="Viscosity")
@@ -207,52 +201,51 @@ if benchmark == "trim_2023":
 
 if simulation.dimensional:
     approximation_parameters["g"] = simulation.g
-    approximation_parameters["T0"] = 0
+    approximation_parameters["T0"] = 0.0
 
-Ra = getattr(simulation, "Ra", 0)
+Ra = getattr(simulation, "Ra", 0.0)
 approximation = ga.BoussinesqApproximation(Ra, **approximation_parameters)
 
 # Timestep object
 real_func_space = fd.FunctionSpace(mesh, "R", 0)
 timestep = fd.Function(real_func_space).assign(simulation.initial_timestep)
 
-# Set up energy and Stokes solvers
-energy_solver = ga.EnergySolver(
-    temperature,
-    velocity,
-    approximation,
-    timestep,
-    ga.ImplicitMidpoint,
-    bcs=simulation.temp_bcs,
-)
-stokes_nullspace = ga.create_stokes_nullspace(
-    stokes_function.function_space(), **simulation.stokes_nullspace_args
-)
+# Set up possible energy solver
+energy_solver = None
+if hasattr(simulation, "initialise_temperature"):
+    energy_solver = ga.EnergySolver(
+        temperature,
+        velocity,
+        approximation,
+        timestep,
+        ga.ImplicitMidpoint,
+        bcs=simulation.temp_bcs,
+    )
+# Set up Stokes solver
+stokes_nullspace = ga.create_stokes_nullspace(stokes_function.function_space())
+# Update line search algorithm to ensure convergence
+upd_ls_type = {"snes_linesearch_type": "cp"} if benchmark == "schmalholz_2011" else None
 stokes_solver = ga.StokesSolver(
     stokes_function,
-    temperature,
     approximation,
+    temperature,
     bcs=simulation.stokes_bcs,
-    quad_degree=None,
-    solver_parameters=simulation.stokes_solver_params,
+    solver_parameters_update=upd_ls_type,
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )
-
-# Solve initial Stokes system
-stokes_solver.solve()
+stokes_solver.solve()  # Determine initial velocity and pressure fields
 
 # Set up level-set solvers
 adv_kwargs = {"u": velocity, "timestep": timestep}
-reini_kwargs = {"epsilon": epsilon, "timestep": 1e-2, "frequency": 5}
-if benchmark == "tosi_2015":
-    # Speed up simulation by avoiding frequent reinitialisation
+reini_kwargs = {"epsilon": epsilon}
+if benchmark == "tosi_2015":  # Avoid expensive frequent reinitialisation
     reini_kwargs["frequency"] = 10
 level_set_solver = [
     ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
     for ls in level_set
 ]
-level_set_grad = [ls_solv.solution_grad for ls_solv in level_set_solver]
+level_set_grad = [ls_solver.solution_grad for ls_solver in level_set_solver]
 
 # Time-loop objects
 t_adapt = ga.TimestepAdaptor(
@@ -272,10 +265,9 @@ checkpoint_file = fd.CheckpointFile(
 
 # Fields to include in checkpoints
 checkpoint_fields = {
-    "Time": time_output,
     "Stokes": stokes_function,
-    "Temperature": temperature,
     "Level set": level_set,
+    "Temperature": temperature,
 }
 
 # Objects used to calculate simulation diagnostics
@@ -285,9 +277,8 @@ geo_diag = ga.GeodynamicalDiagnostics(
 )
 
 if benchmark == "trim_2023":
-    # Omit level-set reinitialisation
-    disable_reinitialisation = True
-    # Function to be coupled with the energy solver
+    disable_reinitialisation = True  # Omit level-set reinitialisation
+    # Update time-dependent internal heating during energy solve
     update_forcings = partial(simulation.internal_heating_rate, H)
 else:
     disable_reinitialisation = False
@@ -298,6 +289,8 @@ has_end_time = hasattr(simulation, "time_end")
 while True:
     # Calculate simulation diagnostics
     simulation.diagnostics(time_now, geo_diag, diag_vars, benchmark_path)
+    if not args.without_plot:
+        simulation.plot_diagnostics(benchmark_path)
 
     # Write to output file and increment dump counter
     if time_now >= dump_counter * simulation.dump_period:
@@ -313,16 +306,17 @@ while True:
     t_adapt.update_timestep()
 
     # Solve energy system
-    energy_solver.solve(update_forcings=update_forcings, t=time_now)
+    if energy_solver is not None:
+        energy_solver.solve(update_forcings, time_now)
 
     # Advect each level set
-    for ls_solv in level_set_solver:
-        ls_solv.solve(disable_reinitialisation=disable_reinitialisation)
+    for ls_solver in level_set_solver:
+        ls_solver.solve(disable_reinitialisation=disable_reinitialisation)
 
     # Solve Stokes system
     stokes_solver.solve()
 
-    # Progress simulation time and increment time-loop step counter
+    # Progress simulation time
     time_now += float(timestep)
 
     # Check if simulation has completed
