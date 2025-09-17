@@ -447,6 +447,7 @@ stokes_solver = ViscoelasticStokesSolver(
     displacement,
     dt=dt,
     bcs=stokes_bcs,
+    solver_parameters="iterative",
     constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
