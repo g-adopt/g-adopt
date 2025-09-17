@@ -244,7 +244,6 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
-        solver_parameters="direct",
     )
 
     # Control variable for optimisation
