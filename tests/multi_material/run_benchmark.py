@@ -230,7 +230,7 @@ stokes_solver = ga.StokesSolver(
     approximation,
     temperature,
     bcs=simulation.stokes_bcs,
-    solver_parameters_update=upd_ls_type,
+    solver_parameters_extra=upd_ls_type,
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )

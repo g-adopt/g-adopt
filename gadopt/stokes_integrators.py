@@ -798,17 +798,17 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         approximation: SmallDisplacementViscoelasticApproximation,
         stress_old: fd.Function,
         displacement: fd.Function,
+        /,
+        *,
+        dt: float,
         **kwargs,
     ) -> None:
-        if "dt" not in kwargs:
-            raise TypeError(f"A timestep (the 'dt' keyword argument) must be provided "
-                            f"to {self.__class__.__name__}")
 
         self.stress_old = stress_old  # Deviatoric stress from previous time step
         self.displacement = displacement  # Total displacement
         # Replace approximation's viscosity with effective viscosity
-        approximation.mu = approximation.effective_viscosity(kwargs["dt"])
-        super().__init__(solution, approximation, **kwargs)
+        approximation.mu = approximation.effective_viscosity(dt)
+        super().__init__(solution, approximation, dt=dt, **kwargs)
         # Scaling factor for the previous stress
         self.stress_scale = self.approximation.prefactor_prestress(self.dt)
 
