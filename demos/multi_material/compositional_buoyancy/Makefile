@@ -5,6 +5,7 @@ include ../../../rules.mk
 all: params.log
 
 params.log : category := multi_material
+params.log : ncpus := 4
 params.log: compositional_buoyancy.py
 	$(run-python)
 
