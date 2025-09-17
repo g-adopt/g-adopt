@@ -3,6 +3,7 @@ import pprint
 import textwrap
 import weakref
 
+from typing import Union
 from .utility import DEBUG, WARNING, log_level, log
 
 
@@ -49,9 +50,9 @@ class DeleteParam:
 
 
 # Type alias
-ConfigType = Mapping[
-    str, str | float | int | None | type[DeleteParam] | Mapping[str, str | float | int | None | type[DeleteParam]]
-]
+ConfigType = Mapping[str, Union[str | float | None | type[DeleteParam], "ConfigType"]]
+_InternalConfigType = Mapping[str, Union[str | float | None, "_InternalConfigType"]]
+_InternalMutableConfigType = dict[str, Union[str | float | None, "_InternalMutableConfigType"]]
 
 
 class SolverOptions:
@@ -59,7 +60,7 @@ class SolverOptions:
 
     This class is designed to be subclassed by the base class for any solvers
     included in G-ADOPT. It provides methods for handling and modifying solver
-    parameters passed to Firedrake's `[Non]LinearVariationalSolver solver object
+    parameters passed to Firedrake's `[Non]LinearVariationalSolver` solver object
     during initialisation of a G-ADOPT solver object.
     """
 
@@ -113,9 +114,9 @@ class SolverOptions:
     def process_mapping(
         self,
         key_prefix: str,
-        inmap: Mapping[str, str | float | int | None | Mapping],
-        delta_map: Mapping[str, str | float | int | None | type[DeleteParam] | Mapping],
-    ) -> dict[str, str | float | int | None | dict]:
+        inmap: _InternalConfigType,
+        delta_map: ConfigType,
+    ) -> _InternalMutableConfigType:
         """Copy a Mapping object into a dictionary
 
         If an element of a Mapping is another Mapping, recursively calls itself to
