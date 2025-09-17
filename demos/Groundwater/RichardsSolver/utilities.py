@@ -2,7 +2,7 @@ import numpy as np
 import scipy.io
 import firedrake as fd
 from firedrake.petsc import PETSc
-
+from scipy.interpolate import griddata
 
 def data_2_function(mesh_coords, file_name):
     # Takes a data set that defines a value defined at the surface of the mesh and defines a firedrake function from this data
@@ -20,13 +20,10 @@ def data_2_function(mesh_coords, file_name):
     z = mat.get('z')
     z_surface = z.flatten()
 
-    for indexOuter in range(len(x_coord)):
-        xCurrent = x_coord[indexOuter]
-        yCurrent = y_coord[indexOuter]
+    points = np.vstack((x_surface, y_surface))
+    points = points.T
 
-        distance = np.sqrt((xCurrent - x_surface)**2 + (yCurrent - y_surface)**2)
-        indexMin = np.argmin(distance)
-        elevation[indexOuter] = z_surface[indexMin]
+    elevation = griddata(points, z_surface, (x_coord, y_coord), method='linear')
 
     return elevation
 
