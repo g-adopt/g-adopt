@@ -28,7 +28,7 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import residual_terms_stokes
-from .solver_options_manager import SolverOptions, ConfigType
+from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
     DEBUG,
     INFO,
@@ -233,7 +233,7 @@ def create_stokes_nullspace(
     return fd.MixedVectorSpaceBasis(Z, null_space)
 
 
-class StokesSolverBase(SolverOptions, abc.ABC):
+class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
     """Solver for a system involving mass and momentum conservation.
 
     Args:
@@ -457,7 +457,7 @@ class StokesSolverBase(SolverOptions, abc.ABC):
                     self.add_to_solver_config(iterative_stokes_solver_parameters)
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
-        elif self.mesh.topological_dimension():
+        elif self.mesh.topological_dimension() == 2:
             self.add_to_solver_config(direct_stokes_solver_parameters)
         else:
             self.add_to_solver_config(iterative_stokes_solver_parameters)
@@ -865,7 +865,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         self.displacement.interpolate(self.displacement + u_sub)
 
 
-class BoundaryNormalStressSolver(SolverOptions):
+class BoundaryNormalStressSolver(SolverConfigurationMixin):
     r"""A class for calculating surface forces acting on a boundary.
 
     This solver computes topography on boundaries using the equation:

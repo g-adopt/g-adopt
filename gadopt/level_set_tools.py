@@ -23,7 +23,7 @@ from ufl.core.expr import Expr
 
 from .equations import Equation
 from .scalar_equation import mass_term
-from .solver_options_manager import SolverOptions
+from .solver_options_manager import SolverConfigurationMixin
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
 from .utility import CombinedSurfaceMeasure, is_cartesian, node_coordinates, vertical_component
@@ -384,7 +384,7 @@ def reinitialisation_term(
     return sharpen_term + balance_term
 
 
-class LevelSetSolver(SolverOptions):
+class LevelSetSolver(SolverConfigurationMixin):
     """Solver for the conservative level-set approach.
 
     Advects and reinitialises a level-set field.
@@ -470,7 +470,7 @@ class LevelSetSolver(SolverOptions):
 
             self.advection = True
             self.adv_kwargs = adv_params_default | adv_kwargs
-            solver_extra['adv'] = adv_kwargs['solver_params'] if 'solver_params' in adv_kwargs else {}
+            solver_extra["adv"] = adv_kwargs.get("solver_params", {})
 
         if isinstance(reini_kwargs, dict):
             if "epsilon" not in reini_kwargs:
@@ -478,7 +478,7 @@ class LevelSetSolver(SolverOptions):
 
             self.reinitialisation = True
             self.reini_kwargs = reini_params_default | reini_kwargs
-            solver_extra['reini'] = reini_kwargs['solver_params'] if 'solver_params' in reini_kwargs else {}
+            solver_extra["reini"] = reini_kwargs.get("solver_params", {})
             if "frequency" not in self.reini_kwargs:
                 self.reini_kwargs["frequency"] = self.reinitialisation_frequency()
 

@@ -69,10 +69,10 @@ def test_solver_parameters_argument(test_case):
         case "cartesian_false":
             mesh.cartesian = False
             solver_parameters = None
+            solver_parameters_extra = None
             expected_value = (
                 base_linear_params_with_log | direct_stokes_solver_parameters
             )
-            expected_value["fieldsplit_1"]["ksp_converged_reason"] = None
         case "linear_false":
             mu = fd.sym(fd.grad(fd.split(stokes_function)[0]))
             solver_parameters = "direct"

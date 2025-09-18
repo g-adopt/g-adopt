@@ -16,7 +16,7 @@ from firedrake import *
 from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
-from .solver_options_manager import SolverOptions, ConfigType
+from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .time_stepper import RungeKuttaTimeIntegrator
 from .utility import DEBUG, INFO, absv, is_continuous, log, log_level
 
@@ -64,7 +64,7 @@ Note:
 """
 
 
-class GenericTransportBase(SolverOptions, abc.ABC):
+class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
     """Base class for advancing a generic transport equation in time.
 
     All combinations of advection, diffusion, sink, and source terms are handled.

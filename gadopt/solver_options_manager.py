@@ -10,10 +10,10 @@ from .utility import DEBUG, WARNING, log_level, log
 def debug_print(class_name: str, string: str):
     """Print a debugging message.
 
-    When `log_level` is set to DEBUG, print a formatted message to stderr.
-    The `class_name` variable is used to prefix each line, where `class_name`
-    is generally used to identify the lowest level class in the method
-    resolution order (e.g. StokesSolver, EnergySolver, etc)
+    When `log_level` is set to DEBUG or higher, print a formatted message to stderr.
+    The `class_name` variable is used to prefix each line, where `class_name` is
+    generally used to identify the lowest level class in the method resolution order
+    (e.g. StokesSolver, EnergySolver, etc)
     """
     if DEBUG >= log_level:
         log(textwrap.indent(string, f"{class_name}: "))
@@ -22,10 +22,10 @@ def debug_print(class_name: str, string: str):
 def warning_print(class_name: str, string: str):
     """Print a warning message.
 
-    When `log_level` is set to DEBUG, print a formatted message to stderr.
-    The `class_name` variable is used to prefix each line, where `class_name`
-    is generally used to identify the lowest level class in the method
-    resolution order (e.g. StokesSolver, EnergySolver, etc)
+    When `log_level` is set to WARNING or higher, print a formatted message to stderr.
+    The `class_name` variable is used to prefix each line, where `class_name` is
+    generally used to identify the lowest level class in the method resolution order
+    (e.g. StokesSolver, EnergySolver, etc)
     """
     if WARNING >= log_level:
         log(textwrap.indent(string, f"{class_name}: "))
@@ -34,9 +34,9 @@ def warning_print(class_name: str, string: str):
 class DeleteParam:
     """An empty class to indicate a solver option will be deleted.
 
-    Since `None` is a valid value for PETSc solver options, a separate object
-    must be used to denote that a parameter is to be deleted from the solver
-    configuration at __init__ time. Use as follows:
+    Since `None` is a valid value for PETSc solver options, a separate object must be
+    used to denote that a parameter is to be deleted from the solver configuration at
+    __init__ time. Use as follows:
     ```
     stokes_solver = StokesSolver( ...
         solver_parameters_extra = { 'ksp_monitor' : DeleteParam }
@@ -55,13 +55,13 @@ _InternalConfigType = Mapping[str, Union[str | float | None, "_InternalConfigTyp
 _InternalMutableConfigType = dict[str, Union[str | float | None, "_InternalMutableConfigType"]]
 
 
-class SolverOptions:
+class SolverConfigurationMixin:
     """Manage PETSc solver options in G-ADOPT.
 
-    This class is designed to be subclassed by the base class for any solvers
-    included in G-ADOPT. It provides methods for handling and modifying solver
-    parameters passed to Firedrake's `[Non]LinearVariationalSolver` solver object
-    during initialisation of a G-ADOPT solver object.
+    This class is designed to be subclassed by the base class for any solvers included
+    in G-ADOPT. It provides methods for handling and modifying solver parameters passed
+    to Firedrake's `[Non]LinearVariationalSolver` solver object during initialisation
+    of a G-ADOPT solver object.
     """
 
     _solver_options_initialised = False
@@ -73,41 +73,40 @@ class SolverOptions:
     ) -> None:
         """Resets the `solver_parameters` dict.
 
-        Empties the existing `solver_parameters` dict and creates a new one by
-        first running `add_to_solver_config` on the empty dict with `default_config`,
-        and then again on the resulting dict with `extra_config`. `default_config`
-        is mandatory, `extra_config` is optional. Will invoke `callback_ref`
-        if it is set.
+        Empties the existing `solver_parameters` dict and creates a new one by first
+        running `add_to_solver_config` on the empty dict with `default_config`, and
+        then again on the resulting dict with `extra_config`. `default_config` is
+        mandatory, `extra_config` is optional. Will invoke `callback_ref` if it is set.
         """
-        debug_print(self._top_level_class_name, "Input default solver configuration:")
-        debug_print(self._top_level_class_name, pprint.pformat(default_config, indent=2))
+        debug_print(self._class_name, "Input default solver configuration:")
+        debug_print(self._class_name, pprint.pformat(default_config, indent=2))
         self.solver_parameters = {}
-        debug_print(self._top_level_class_name, "Processing default config")
+        debug_print(self._class_name, "Processing default config")
         self.add_to_solver_config(default_config, extra_config is None)
         if extra_config is not None:
-            debug_print(self._top_level_class_name, "Processing extra config")
+            debug_print(self._class_name, "Processing extra config")
             self.add_to_solver_config(extra_config, True)
 
     def print_solver_config(self) -> None:
         """Prints the solver_parameters dict.
 
-        Uses pprint to write the final `solver_paramseters` dict in a
-        human-readable way. Useful for debugging purposes when a user
-        wishes to verify PETSc solver settings.
+        Uses pprint to write the final `solver_paramseters` dict in a human-readable
+        way. Useful for debugging purposes when a user wishes to verify PETSc solver
+        settings.
         """
         pprint.pprint(self.solver_parameters, indent=2)
 
     def register_update_callback(self, callback: Callable[[], None]) -> None:
         """Register a function to call whenever `solver_parameters` is updated
 
-        The function provided to `register_update_callback` must take no arguments and return
-        nothing. When a subclass provides this function, a user does not need to
-        be aware of the underlying Problem/Solver objects in order to ensure that
-        a configuration update during an in-progress simulation takes effect properly.
+        The function provided to `register_update_callback` must take no arguments and
+        return nothing. When a subclass provides this function, a user does not need to
+        be aware of the underlying Problem/Solver objects in order to ensure that a
+        configuration update during an in-progress simulation takes effect properly.
 
         A weakref is used here in order to prevent circular references, which would
-        prevent Python's automatic garbage collection from cleaning up G-ADOPT
-        solver objects.
+        prevent Python's automatic garbage collection from cleaning up G-ADOPT solver
+        objects.
         """
         self.callback_ref = weakref.WeakMethod(callback)
 
@@ -117,21 +116,25 @@ class SolverOptions:
         inmap: _InternalConfigType,
         delta_map: ConfigType,
     ) -> _InternalMutableConfigType:
-        """Copy a Mapping object into a dictionary
+        """Copy `inmap` into a dictionary and apply the changes in `delta_map`
 
-        If an element of a Mapping is another Mapping, recursively calls itself to
-        process that Mapping. If an element of the mapping is `DeleteParam`, remove
-        it from the dict if it exists in the Mapping
+        If any element of `delta_map` is another Mapping, recursively calls itself to
+        process the changes in that mapping to the corresponding element in inmap. If
+        an element `delta_map` is `DeleteParam`, remove it from the dict if it exists
+        in `inmap`.
+
+        The `key_prefix` argument is provided for logging purposes to indicate the
+        current mapping being processed
         """
         outmap = dict(inmap)
         for k, v in delta_map.items():
             if v is DeleteParam:
                 if k in outmap:
-                    debug_print(self._top_level_class_name, f"Deleting {key_prefix}[{k}]")
+                    debug_print(self._class_name, f"Deleting {key_prefix}[{k}]")
                     del outmap[k]
                 else:
                     debug_print(
-                        self._top_level_class_name,
+                        self._class_name,
                         f"Requested deletion of {key_prefix}[{k}] but this key was not found in original mapping",
                     )
             elif isinstance(v, Mapping):
@@ -141,10 +144,10 @@ class SolverOptions:
                 else:
                     outmap[k] = self.process_mapping(kp, {}, v)
             else:
-                debug_print(self._top_level_class_name, f"Adding {key_prefix}[{k}] = {v}")
+                debug_print(self._class_name, f"Adding {key_prefix}[{k}] = {v}")
                 if k in outmap and isinstance(outmap[k], Mapping):
                     warning_print(
-                        self._top_level_class_name,
+                        self._class_name,
                         (
                             f"WARNING: key '{k}' holds a parameter dict in the original mapping"
                             ", but is being overwritten with a scalar parameter. This may have "
@@ -158,40 +161,42 @@ class SolverOptions:
     def add_to_solver_config(self, in_config: ConfigType | None, reinit=False) -> None:
         """Updates the `solver_parameters` dict
 
-        Takes a single Mapping argument that added to the existing `solver_parameters` dict,
-        overwriting any existing parameters of the same name. On the first call to this method
-        the `SolverOptions` objects are created; a logging prefix based on the class hierarchy,
-        a reference to a callback initialised to `None` and an empty solver configuration. This
-        structure allows a subclass to build its solver parameters step-by-step.
+        Takes a single Mapping argument that added to the existing `solver_parameters`
+        dict, overwriting any existing parameters of the same name. On the first call
+        to this method the `SolverConfigurationMixin` objects are created; a logging
+        prefix based on the class hierarchy, a reference to a callback initialised to
+        `None` and an empty solver configuration. This structure allows a subclass to
+        build its solver parameters step-by-step.
 
-        Any Mapping type can be passed into this function, and the function will take care of copying
-        the mapping to a mutable dictionary.
+        Any Mapping type can be passed into this function, and the function will take
+        care of copying the mapping to a mutable dictionary.
 
-        If the `callback_ref` attribute is set, it will be called on completion of the update.
+        If the `callback_ref` attribute is set, it will be called on completion of the
+        update.
         """
         # "Initialise" solver config attrs on first call
         if not self._solver_options_initialised:
-            self._top_level_class_name = self.__class__.__mro__[0].__name__
+            self._class_name = self.__class__.__name__
             self.solver_parameters = {}
             self.callback_ref = None
             self._solver_options_initialised = True
-            debug_print(self._top_level_class_name, "Initialised SolverOptions")
+            debug_print(self._class_name, "Initialised SolverConfigurationMixin")
 
         if in_config is not None:
             self.solver_parameters = self.process_mapping("solver_parameters", self.solver_parameters, in_config)
-            debug_print(self._top_level_class_name, "Solver configuration after additions:")
-            debug_print(self._top_level_class_name, pprint.pformat(self.solver_parameters, indent=2))
+            debug_print(self._class_name, "Solver configuration after additions:")
+            debug_print(self._class_name, pprint.pformat(self.solver_parameters, indent=2))
             if reinit and self.callback_ref is not None:
-                debug_print(self._top_level_class_name, "Running callback")
+                debug_print(self._class_name, "Running callback")
                 self.callback_ref()()
         else:
-            debug_print(self._top_level_class_name, "in_config is empty, doing nothing")
+            debug_print(self._class_name, "in_config is empty, doing nothing")
 
     def is_iterative_solver(self) -> bool:
         """
         Decide if a solver is iterative or not
 
-        Return a boolean that indicates whether this solver is an iterative
-        solver or a direct solver.
+        Return a boolean that indicates whether this solver is an iterative solver or a
+        direct solver.
         """
         return self.solver_parameters.get("pc_type") not in ["lu", "cholesky"]
