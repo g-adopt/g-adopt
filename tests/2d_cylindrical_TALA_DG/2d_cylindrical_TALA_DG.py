@@ -202,16 +202,18 @@ gd = GeodynamicalDiagnostics(z, FullT, boundary.bottom, boundary.top, quad_degre
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
+solver_params_extra = {"fieldsplit_0": {"ksp_converged_reason": None}, "fieldsplit_1": {"ksp_converged_reason": None}}
+
 stokes_solver = StokesSolver(
     z,
     approximation,
     T,
     bcs=stokes_bcs,
     solver_parameters="iterative",
-    solver_parameters_update={"fieldsplit_0": {"ksp_converged_reason": None}},
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
+    solver_parameters_extra=solver_params_extra,
 )
 
 # We now initiate the time loop, which runs for the number of timesteps specified above.

@@ -69,21 +69,19 @@ def model(level, k, nn, do_write=False):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
-    # Use tighter tolerances than default to ensure convergence
-    solver_parameters_update = {
-        "fieldsplit_0": {"ksp_rtol": 1e-13},
-        "fieldsplit_1": {"ksp_rtol": 1e-11},
-    }
+    # use tighter tolerances than default to ensure convergence:
+    solver_params_extra = {"fieldsplit_0": {"ksp_rtol": 1e-13}, "fieldsplit_1": {"ksp_rtol": 1e-11}}
+
     stokes_solver = StokesSolver(
         z,
         approximation,
         T,
         bcs=stokes_bcs,
         solver_parameters="iterative",
-        solver_parameters_update=solver_parameters_update,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
+        solver_parameters_extra=solver_params_extra,
     )
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)

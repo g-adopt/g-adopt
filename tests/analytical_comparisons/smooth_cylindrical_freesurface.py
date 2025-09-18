@@ -104,11 +104,9 @@ def model(level, k, nn, do_write=False):
     dt = Constant(tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
 
-    # Use tighter tolerances than default to ensure convergence
-    solver_parameters_update = {
-        "fieldsplit_0": {"ksp_rtol": 1e-13},
-        "fieldsplit_1": {"ksp_rtol": 1e-11},
-    }
+    # use tighter tolerances than default to ensure convergence:
+    solver_params_extra = {"fieldsplit_0": {"ksp_rtol": 1e-11}, "fieldsplit_1": {"ksp_rtol": 1e-10}}
+
     stokes_solver = StokesSolver(
         z,
         approximation,
@@ -116,10 +114,10 @@ def model(level, k, nn, do_write=False):
         dt=dt,
         bcs=stokes_bcs,
         solver_parameters="iterative",
-        solver_parameters_update=solver_parameters_update,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
+        solver_parameters_extra=solver_params_extra,
     )
 
     time = Constant(0.0)

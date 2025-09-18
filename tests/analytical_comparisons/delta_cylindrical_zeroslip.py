@@ -70,26 +70,24 @@ def model(level, nn, do_write=False):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
+    # use tighter tolerances than default to ensure convergence:
+    solver_params_extra = {"fieldsplit_0": {"ksp_rtol": 1e-13}, "fieldsplit_1": {"ksp_rtol": 1e-11}}
     # Add delta forcing as an ad-hoc additional term, applied as "internal" boundary
     # integral over facets where the marker jump from 0 to 1
     marker = Function(P0).interpolate(conditional(r < rp, 1, 0))
     n = FacetNormal(mesh)
     additional_forcing_term = g * cos(nn * phi) * dot(jump(marker, n), avg(v)) * dS_h
-    # Use tighter tolerances than default to ensure convergence
-    solver_parameters_update = {
-        "fieldsplit_0": {"ksp_rtol": 1e-13},
-        "fieldsplit_1": {"ksp_rtol": 1e-11},
-    }
+
     stokes_solver = StokesSolver(
         z,
         approximation,
         additional_forcing_term=additional_forcing_term,
         bcs=stokes_bcs,
         solver_parameters="iterative",
-        solver_parameters_update=solver_parameters_update,
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
+        solver_parameters_extra=solver_params_extra,
     )
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
