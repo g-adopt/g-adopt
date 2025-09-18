@@ -113,6 +113,7 @@ def model(level, k, nn, do_write=False):
         T,
         dt=dt,
         bcs=stokes_bcs,
+        solver_parameters="iterative",
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,

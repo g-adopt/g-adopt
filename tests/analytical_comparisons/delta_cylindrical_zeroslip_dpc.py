@@ -84,6 +84,7 @@ def model(level, nn, do_write=False):
         approximation,
         additional_forcing_term=additional_forcing_term,
         bcs=stokes_bcs,
+        solver_parameters="iterative",
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,

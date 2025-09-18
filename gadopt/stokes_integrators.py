@@ -457,7 +457,7 @@ class StokesSolverBase(SolverOptions, abc.ABC):
                     self.add_to_solver_config(iterative_stokes_solver_parameters)
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
-        elif self.mesh.topological_dimension() == 2 and is_cartesian(self.mesh):
+        elif self.mesh.topological_dimension():
             self.add_to_solver_config(direct_stokes_solver_parameters)
         else:
             self.add_to_solver_config(iterative_stokes_solver_parameters)
