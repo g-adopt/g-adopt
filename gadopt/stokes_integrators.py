@@ -902,12 +902,20 @@ class BoundaryNormalStressSolver(SolverConfigurationMixin):
     }
     iterative_solver_parameters = {
         "ksp_type": "cg",
-        "pc_type": "hypre",
+        "pc_type": "bjacobi",
+        "sub_pc_type": "icc",
         "ksp_rtol": 1e-9,
         "ksp_atol": 1e-12,
         "ksp_max_it": 1000,
-        "ksp_converged_reason": None,
     }
+    # Deciding on the right level of verbosity
+    if DEBUG >= log_level:
+        iterative_solver_parameters["ksp_converged_reason"] = None
+        iterative_solver_parameters["ksp_monitor"] = None
+    elif INFO >= log_level:
+        iterative_solver_parameters["ksp_converged_reason"] = None
+    else:
+        iterative_solver_parameters = None
 
     name = "BoundaryNormalStressSolver"
 
