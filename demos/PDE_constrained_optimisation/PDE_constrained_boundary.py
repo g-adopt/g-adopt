@@ -100,11 +100,9 @@ u = Function(V, name="Velocity").interpolate(as_vector((-y, x)))
 
 approximation = BoussinesqApproximation(Ra=1, kappa=5e-2)
 delta_t = 0.1
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
-
-# Make our solver output a little less verbose:
-if "ksp_converged_reason" in energy_solver.solver_parameters:
-    del energy_solver.solver_parameters["ksp_converged_reason"]
+energy_solver = EnergySolver(
+    T, u, approximation, delta_t, ImplicitMidpoint, solver_parameters_extra={"ksp_converged_reason": DeleteParam}
+)
 # -
 
 # As a first guess we use a Gaussian that is in the wrong place: centred around $(0.7, 0.7)$

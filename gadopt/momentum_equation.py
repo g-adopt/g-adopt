@@ -174,7 +174,7 @@ def divergence_term(
 ) -> Form:
     assert normal_is_continuous(eq.u)
 
-    rho = eq.rho_mass
+    rho = eq.rho_continuity
     F = -dot(eq.test, div(rho * eq.u)) * eq.dx
 
     # Add boundary integral for bcs that specify the normal component of u.
@@ -227,7 +227,7 @@ viscosity_term.required_attrs = {"stress"}
 viscosity_term.optional_attrs = {"interior_penalty"}
 pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
-divergence_term.required_attrs = {"u", "rho_mass"}
+divergence_term.required_attrs = {"u", "rho_continuity"}
 divergence_term.optional_attrs = set()
 momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()

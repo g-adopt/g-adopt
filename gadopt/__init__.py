@@ -21,6 +21,7 @@ from .level_set_tools import (
 )
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
+from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
     BoundaryNormalStressSolver,
     InternalVariableSolver,

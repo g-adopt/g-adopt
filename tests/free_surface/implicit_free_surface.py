@@ -13,7 +13,9 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
     iterative = True
 
     def __init__(self, dt_factor, iterative_2d=False, **kwargs):
-        self.solver_parameters = 'iterative' if iterative_2d else 'direct'
+        self.solver_parameters = "iterative" if iterative_2d else "direct"
+        if not hasattr(self, "solver_parameters_extra"):
+            self.solver_parameters_extra = None
         super().__init__(dt_factor, **kwargs)
 
     def setup_function_space(self):
@@ -28,6 +30,9 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
         self.stokes_vars[0].rename("Velocity")
         self.stokes_vars[1].rename("Pressure")
         self.stokes_vars[2].rename("eta")
+
+    def initialise_temperature(self):
+        self.T = 0.0
 
     def initialise_free_surfaces(self):
         self.F0 = Constant(1000 / self.L0)  # initial free surface amplitude (dimensionless)
@@ -52,6 +57,7 @@ class ImplicitFreeSurfaceModel(ExplicitFreeSurfaceModel):
             theta=0.5,
             bcs=self.stokes_bcs,
             solver_parameters=self.solver_parameters,
+            solver_parameters_extra=self.solver_parameters_extra,
             nullspace=self.Z_nullspace,
             transpose_nullspace=self.Z_nullspace,
             near_nullspace=self.Z_near_nullspace,

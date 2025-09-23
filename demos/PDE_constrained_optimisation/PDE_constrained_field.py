@@ -113,12 +113,9 @@ u = Function(V, name="Velocity").interpolate(as_vector((-y + 0.5, x - 0.5)))
 
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
-
-# Make our solver output a little less verbose, aiding interpretation of optimisation output below:
-if "ksp_converged_reason" in energy_solver.solver_parameters:
-    del energy_solver.solver_parameters["ksp_converged_reason"]
-# -
+energy_solver = EnergySolver(
+    T, u, approximation, delta_t, ImplicitMidpoint, solver_parameters_extra={"ksp_converged_reason": DeleteParam}
+)
 
 # This time, however, we don't want to use the known initial condition. Instead we will start with
 # the final state from our synthetic forward model, which will then be further rotated and diffused. After

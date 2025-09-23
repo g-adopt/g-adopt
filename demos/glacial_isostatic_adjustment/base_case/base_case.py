@@ -494,7 +494,6 @@ stokes_bcs = {
 # gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
 # -
 
-
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 

@@ -23,9 +23,10 @@ from ufl.core.expr import Expr
 
 from .equations import Equation
 from .scalar_equation import mass_term
+from .solver_options_manager import SolverConfigurationMixin
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import node_coordinates, vertical_component
+from .utility import CombinedSurfaceMeasure, is_cartesian, node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -40,34 +41,68 @@ __all__ = [
 adv_params_default = {
     "time_integrator": eSSPRKs10p3,
     "bcs": {},
-    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "subcycles": 1,
 }
+
 # Default parameters for level-set reinitialisation
 reini_params_default = {
     "timestep": 0.02,
     "time_integrator": eSSPRKs3p3,
-    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "steps": 1,
+}
+solver_params_default = {
+    "adv": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+    "reini": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
 }
 
 
 def interface_thickness(
-    level_set_space: fd.functionspaceimpl.WithGeometry, scale: float = 0.35
+    level_set_space: fd.functionspaceimpl.WithGeometry,
+    *,
+    scale: float = 0.35,
+    min_cell_edge_length: bool = False,
 ) -> fd.Function:
-    """Default strategy for the thickness of the conservative level set profile.
+    """Default strategy for the thickness of the conservative-level-set profile.
+
+    The interface thickness must not exceed the local minimum edge length to ensure
+    materials remain immiscible. In practice, there exists a tradeoff between interface
+    thickness and solution accuracy, for example, in terms of interface location and
+    material conservation.
+
+    UFL's `MinCellEdgeLength` can be used to recover locally the minimum edge length.
+    This class, however, is not compatible with extruded meshes or meshes for which the
+    polynomial degree of the coordinate function space exceeds 1. As a result, the
+    default strategy implemented here is to approximate the local minimum edge length
+    as the quotient of the `cell_sizes` mesh attribute and the square root of the mesh's
+    geometric dimension. If dealing with a compatible mesh, `MinCellEdgeLength` can be
+    used instead by providing a value of `True` for the `min_cell_edge_length` argument.
+    The local minimum edge length is then multiplied by a scaling factor, with a default
+    value of 0.35 that can be modified via the `scale` argument.
+
+    **Note**: The two different formulations implemented here are not equivalent and
+    will result in measurable changes for an otherwise identical simulation setup.
 
     Args:
       level_set_space:
         The Firedrake function space of the level-set field
       scale:
         A float to control interface thickness values relative to cell sizes
+      min_cell_edge_length:
+        A boolean to determine if `MinCellEdgeLength` is used
 
     Returns:
       A Firedrake function holding the interface thickness values
     """
     epsilon = fd.Function(level_set_space, name="Interface thickness")
-    epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space.mesh()))
+
+    if not min_cell_edge_length:
+        scale /= fd.sqrt(level_set_space.mesh().geometric_dimension())
+        epsilon.interpolate(scale * level_set_space.mesh().cell_sizes)
+    else:
+        if level_set_space.extruded:
+            raise ValueError("MinCellEdgeLength does not handle extruded meshes.")
+
+        epsilon.interpolate(scale * fd.MinCellEdgeLength(level_set_space))
 
     return epsilon
 
@@ -349,7 +384,7 @@ def reinitialisation_term(
     return sharpen_term + balance_term
 
 
-class LevelSetSolver:
+class LevelSetSolver(SolverConfigurationMixin):
     """Solver for the conservative level-set approach.
 
     Advects and reinitialises a level-set field.
@@ -428,12 +463,14 @@ class LevelSetSolver:
 
         self.set_gradient_solver()
 
+        solver_extra = {}
         if isinstance(adv_kwargs, dict):
             if not all(param in adv_kwargs for param in ["u", "timestep"]):
                 raise KeyError("'u' and 'timestep' must be present in 'adv_kwargs'")
 
             self.advection = True
             self.adv_kwargs = adv_params_default | adv_kwargs
+            solver_extra["adv"] = adv_kwargs.get("solver_params", {})
 
         if isinstance(reini_kwargs, dict):
             if "epsilon" not in reini_kwargs:
@@ -441,13 +478,17 @@ class LevelSetSolver:
 
             self.reinitialisation = True
             self.reini_kwargs = reini_params_default | reini_kwargs
+            solver_extra["reini"] = reini_kwargs.get("solver_params", {})
             if "frequency" not in self.reini_kwargs:
                 self.reini_kwargs["frequency"] = self.reinitialisation_frequency()
 
         if not any([self.advection, self.reinitialisation]):
             raise ValueError("Advection or reinitialisation must be initialised")
 
-        self._solvers_ready = False
+        self.add_to_solver_config(solver_params_default)
+        self.add_to_solver_config(solver_extra)
+        self.register_update_callback(self.set_up_solvers)
+        self.set_up_solvers()
 
     def reinitialisation_frequency(self) -> int:
         """Implements default strategy for the reinitialisation frequency.
@@ -462,7 +503,7 @@ class LevelSetSolver:
         if isinstance(epsilon, fd.Function):
             epsilon = self.mesh.comm.allreduce(epsilon.dat.data.min(), MPI.MIN)
 
-        if self.mesh.cartesian:
+        if is_cartesian(self.mesh):
             max_coords = self.mesh.coordinates.dat.data.max(axis=0)
             min_coords = self.mesh.coordinates.dat.data.min(axis=0)
             for i in range(len(max_coords)):
@@ -490,21 +531,25 @@ class LevelSetSolver:
         if number_match := re.search(r"\s#\d+$", self.solution.name()):
             grad_name += number_match.group()
 
-        gradient_space = fd.VectorFunctionSpace(
-            self.mesh, "CG", self.solution.ufl_element().degree()
-        )
+        grad_space_degree = self.solution.ufl_element().degree()
+        if not isinstance(grad_space_degree, int):
+            grad_space_degree = max(grad_space_degree)
+        gradient_space = fd.VectorFunctionSpace(self.mesh, "CG", grad_space_degree)
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
+
+        if gradient_space.extruded:
+            ds = CombinedSurfaceMeasure(
+                domain=self.mesh, degree=2 * grad_space_degree + 1
+            )
+        else:
+            ds = fd.ds
 
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
-        bilinear_form = fd.inner(test, trial) * fd.dx(domain=self.mesh)
-        ibp_element = -self.solution * fd.div(test) * fd.dx(domain=self.mesh)
-        ibp_boundary = (
-            self.solution
-            * fd.dot(test, fd.FacetNormal(self.mesh))
-            * fd.ds(domain=self.mesh)
-        )
+        bilinear_form = fd.inner(test, trial) * fd.dx
+        ibp_element = -self.solution * fd.div(test) * fd.dx
+        ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * ds
         linear_form = ibp_element + ibp_boundary
 
         problem = fd.LinearVariationalProblem(
@@ -523,7 +568,7 @@ class LevelSetSolver:
                 solution_old=self.solution_old,
                 eq_attrs={"u": self.adv_kwargs["u"]},
                 bcs=self.adv_kwargs["bcs"],
-                solver_parameters=self.adv_kwargs["solver_params"],
+                solver_parameters=self.solver_parameters['adv'],
             )
 
         if self.reinitialisation:
@@ -543,11 +588,10 @@ class LevelSetSolver:
                 self.solution,
                 self.reini_kwargs["timestep"],
                 solution_old=self.solution_old,
-                solver_parameters=self.reini_kwargs["solver_params"],
+                solver_parameters=self.solver_parameters['reini'],
             )
 
         self.step = 0
-        self._solvers_ready = True
 
     def update_gradient(self, *args, **kwargs) -> None:
         """Calls the gradient solver.
@@ -574,8 +618,6 @@ class LevelSetSolver:
           disable_reinitialisation:
             A boolean to disable the reinitialisation solve.
         """
-        if not self._solvers_ready:
-            self.set_up_solvers()
 
         if self.advection and not disable_advection:
             for _ in range(self.adv_kwargs["subcycles"]):
@@ -811,7 +853,7 @@ def min_max_height(
         case _:
             raise ValueError("'mode' must be 'min' or 'max'")
 
-    if not level_set.ufl_domain().cartesian:
+    if not is_cartesian(level_set.ufl_domain()):
         raise ValueError("Only Cartesian meshes are currently supported")
 
     coords = node_coordinates(level_set)

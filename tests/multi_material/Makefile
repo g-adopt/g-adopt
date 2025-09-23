@@ -9,8 +9,8 @@ outputs := $(foreach case,$(cases),$(case)/${archive})
 all: $(outputs)
 
 %/${archive} : category := multi_material
-%/${archive} : ncpus := 8
-%/${archive} : exec_cmd = mpiexec -np $(ncpus) python3 $< $(dir $@)
+%/${archive} : ncpus := 4
+%/${archive} : exec_cmd = mpiexec -np $(ncpus) python3 $< $(dir $@) --without-plot
 %/${archive} : desc = $*
 %/${archive}: run_benchmark.py
 	$(run-python)
