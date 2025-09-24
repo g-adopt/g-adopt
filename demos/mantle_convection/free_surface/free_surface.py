@@ -124,11 +124,11 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 # Typically, when the exterior density is negligbile compared with the interior density (i.e. air vs rock!) and with $\alpha$ = 3x10$^{-5}$ K$^{-1}$ and $\Delta T$ = 3000 K, $B_{fs}$ is about 10. For dimensional simulations you can specify the density contrast across the free surface with *delta_rho_fs* through the free surface dictionary, as well as providing $\rho_0$ and $g$ through the approximation object in the usual way.
 
 # +
-Bfs = 10.  # Free surface buoyancy number
+Bfs = 10.0  # Free surface buoyancy number
 
 stokes_bcs = {
     boundary.bottom: {"uy": 0},
-    boundary.top: {"free_surface": {"RaFS": Ra*Bfs}},
+    boundary.top: {"free_surface": {"RaFS": Ra * Bfs}},
     boundary.left: {"ux": 0},
     boundary.right: {"ux": 0},
 }
@@ -171,7 +171,7 @@ energy_solver = EnergySolver(
 )
 
 stokes_solver = StokesSolver(
-    z, T, approximation, bcs=stokes_bcs, constant_jacobian=False, free_surface_dt=delta_t
+    z, approximation, T, dt=delta_t, bcs=stokes_bcs, constant_jacobian=False
 )
 
 # -

@@ -45,7 +45,7 @@ class Equation:
         quad_degree:
           Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
           where p is the polynomial degree of the trial space.
-        rescale_factor:
+        scaling_factor:
           A constant factor used to rescale mass and residual terms.
 
     """
@@ -59,7 +59,7 @@ class Equation:
     approximation: BaseApproximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[int | None] = None
-    rescale_factor: Number | fd.Constant = 1
+    scaling_factor: Number | fd.Constant = 1
 
     def __post_init__(
         self,
@@ -117,14 +117,14 @@ class Equation:
     ) -> fd.Form:
         """Generates the UFL form corresponding to the mass term."""
 
-        return self.rescale_factor * self.mass_term(self, trial)
+        return self.scaling_factor * self.mass_term(self, trial)
 
     def residual(
         self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
     ) -> fd.Form:
         """Generates the UFL form corresponding to the residual terms."""
 
-        return self.rescale_factor * sum(
+        return self.scaling_factor * sum(
             term(self, trial) for term in self.residual_terms
         )
 
@@ -137,22 +137,22 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     See Equation (3.7), Table 3.1, and Appendix C from Hillewaert's thesis:
     https://www.researchgate.net/publication/260085826
     """
-    cell_type = mesh.ufl_cell().cellname()
-    if cell_type == "triangle":
-        return (p + 1) * (p + 2) / 2.0
-    elif cell_type == "quadrilateral" or cell_type == "interval * interval":
-        return (p + 1) ** 2
-    elif cell_type == "triangle * interval":
-        return (p + 1) ** 2
-    elif cell_type == "quadrilateral * interval":
-        # if e is a wedge and f is a triangle: (p+1)**2
-        # if e is a wedge and f is a quad: (p+1)*(p+2)/2
-        # here we just return the largest of the the two (for p>=0)
-        return (p + 1) ** 2
-    elif cell_type == "tetrahedron":
-        return (p + 1) * (p + 3) / 3
-    else:
-        raise NotImplementedError("Unknown cell type in mesh: {}".format(cell_type))
+    match cell_type := mesh.ufl_cell().cellname():
+        case "triangle":
+            return (p + 1) * (p + 2) / 2.0
+        case "quadrilateral" | "interval * interval":
+            return (p + 1) ** 2
+        case "triangle * interval":
+            return (p + 1) ** 2
+        case "quadrilateral * interval" | "hexahedron":
+            # if e is a wedge and f is a triangle: (p+1)**2
+            # if e is a wedge and f is a quad: (p+1)*(p+2)/2
+            # here we just return the largest of the the two (for p>=0)
+            return (p + 1) ** 2
+        case "tetrahedron":
+            return (p + 1) * (p + 3) / 3
+        case _:
+            raise NotImplementedError(f"Unknown cell type in mesh: {cell_type}")
 
 
 def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:

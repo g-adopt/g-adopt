@@ -110,7 +110,7 @@ tape.clear_tape()
 # Set up function spaces:
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (DQ; scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space
 
 # Specify test functions and functions to hold solutions:
@@ -146,8 +146,15 @@ temp_bcs = {
 
 # Setup Energy and Stokes solver
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace, constant_jacobian=True)
+stokes_solver = StokesSolver(
+    z,
+    approximation,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+)
 # -
 
 # Specify Problem Length

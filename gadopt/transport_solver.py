@@ -7,6 +7,7 @@ documented parameters and call the `solve` method to request a solver update.
 """
 
 import abc
+from collections.abc import Mapping
 from numbers import Number
 from typing import Any, Callable
 
@@ -15,6 +16,7 @@ from firedrake import *
 from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
+from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .time_stepper import RungeKuttaTimeIntegrator
 from .utility import DEBUG, INFO, absv, is_continuous, log, log_level
 
@@ -62,7 +64,7 @@ Note:
 """
 
 
-class GenericTransportBase(abc.ABC):
+class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
     """Base class for advancing a generic transport equation in time.
 
     All combinations of advection, diffusion, sink, and source terms are handled.
@@ -85,9 +87,11 @@ class GenericTransportBase(abc.ABC):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
-      su_diffusivity:
-        Float activating the streamline-upwind stabilisation scheme and specifying the
-        corresponding diffusivity
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
+      su_advection:
+        Boolean activating the streamline-upwind stabilisation scheme when using
+        continuous finite elements
 
     """
 
@@ -108,8 +112,9 @@ class GenericTransportBase(abc.ABC):
         solution_old: Function | None = None,
         eq_attrs: dict[str, float] = {},
         bcs: dict[int, dict[str, Number]] = {},
-        solver_parameters: dict[str, str | Number] | str | None = None,
-        su_diffusivity: float | None = None,
+        solver_parameters: ConfigType | str | None = None,
+        solver_parameters_extra: ConfigType | None = None,
+        su_advection: bool = False,
     ) -> None:
         self.solution = solution
         self.delta_t = delta_t
@@ -117,8 +122,7 @@ class GenericTransportBase(abc.ABC):
         self.solution_old = solution_old or Function(solution)
         self.eq_attrs = eq_attrs
         self.bcs = bcs
-        self.solver_parameters = solver_parameters
-        self.su_diffusivity = su_diffusivity
+        self.su_advection = su_advection
 
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
@@ -126,13 +130,11 @@ class GenericTransportBase(abc.ABC):
 
         self.continuous_solution = is_continuous(self.solution)
 
-        # Solver object is set up later to permit editing default solver options.
-        self._solver_ready = False
-
         self.set_boundary_conditions()
         self.set_su_nubar()
         self.set_equation()
-        self.set_solver_options()
+        self.set_solver_options(solver_parameters, solver_parameters_extra)
+        self.setup_solver()
 
     def set_boundary_conditions(self) -> None:
         """Sets up boundary conditions."""
@@ -168,12 +170,12 @@ class GenericTransportBase(abc.ABC):
         Finite element methods for flow problems.
         John Wiley & Sons.
         """
-        if self.su_diffusivity is None:
+        if not self.su_advection:
             return
 
         if (u := getattr(self, "u", self.eq_attrs.get("u"))) is None:
             raise ValueError(
-                "'u' must be included into `eq_attrs` if `su_diffusivity` is given."
+                "'u' must be included into `eq_attrs` if `su_advection` is given."
             )
 
         if not self.continuous_solution:
@@ -185,7 +187,8 @@ class GenericTransportBase(abc.ABC):
         J.interpolate(Jacobian(self.mesh))
         # Calculate grid Peclet number. Note the use of a lower bound for diffusivity if
         # a pure advection scenario is considered.
-        Pe = absv(dot(u, J)) / 2 / (self.su_diffusivity + 1e-12)
+        kappa = self.eq_attrs.get("diffusivity", 0.0)
+        Pe = absv(dot(u, J)) / 2 / (kappa + 1e-12)
         beta_Pe = as_vector([1 / tanh(Pe_i + 1e-6) - 1 / (Pe_i + 1e-6) for Pe_i in Pe])
         nubar = dot(absv(dot(u, J)), beta_Pe) / 2  # Calculate SU artificial diffusion
 
@@ -196,30 +199,38 @@ class GenericTransportBase(abc.ABC):
         """Sets up the term contributions in the equation."""
         raise NotImplementedError
 
-    def set_solver_options(self) -> None:
+    def set_solver_options(
+        self,
+        solver_preset: ConfigType | str | None,
+        solver_extras: ConfigType | None = None,
+    ) -> None:
         """Sets PETSc solver parameters."""
-        if isinstance(self.solver_parameters, dict):
+        if isinstance(solver_preset, Mapping):
+            self.add_to_solver_config(solver_preset)
+            self.add_to_solver_config(solver_extras)
+            self.register_update_callback(self.setup_solver)
             return
 
-        if self.solver_parameters is not None:
-            match self.solver_parameters:
+        if solver_preset is not None:
+            match solver_preset:
                 case "direct":
-                    self.solver_parameters = direct_energy_solver_parameters.copy()
+                    self.add_to_solver_config(direct_energy_solver_parameters)
                 case "iterative":
-                    self.solver_parameters = iterative_energy_solver_parameters.copy()
+                    self.add_to_solver_config(iterative_energy_solver_parameters)
                 case _:
-                    raise ValueError(
-                        f"Solver type '{self.solver_parameters}' not implemented."
-                    )
+                    raise ValueError("Solver type must be 'direct' or 'iterative'.")
         elif self.mesh.topological_dimension() == 2:
-            self.solver_parameters = direct_energy_solver_parameters.copy()
+            self.add_to_solver_config(direct_energy_solver_parameters)
         else:
-            self.solver_parameters = iterative_energy_solver_parameters.copy()
+            self.add_to_solver_config(iterative_energy_solver_parameters)
 
         if DEBUG >= log_level:
-            self.solver_parameters["ksp_monitor"] = None
+            self.add_to_solver_config({"ksp_monitor": None})
         elif INFO >= log_level:
-            self.solver_parameters["ksp_converged_reason"] = None
+            self.add_to_solver_config({"ksp_converged_reason": None})
+
+        self.add_to_solver_config(solver_extras)
+        self.register_update_callback(self.setup_solver)
 
     def setup_solver(self) -> None:
         """Sets up the timestepper using specified parameters."""
@@ -232,19 +243,12 @@ class GenericTransportBase(abc.ABC):
             strong_bcs=self.strong_bcs,
         )
 
-        self._solver_ready = True
-
     def solver_callback(self) -> None:
         """Optional instructions to execute right after a solve."""
         pass
 
-    def solve(
-        self, update_forcings: Callable | None = None, t: float | None = None
-    ) -> None:
+    def solve(self, update_forcings: Callable | None = None, t: float | None = None) -> None:
         """Advances solver in time."""
-        if not self._solver_ready:
-            self.setup_solver()
-
         self.ts.advance(update_forcings, t)
 
         self.solver_callback()
@@ -285,9 +289,9 @@ class GenericTransportSolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
-      su_diffusivity:
-        Float activating the streamline-upwind stabilisation scheme and specifying the
-        corresponding diffusivity
+      su_advection:
+        Boolean activating the streamline-upwind stabilisation scheme when using
+        continuous finite elements
 
     """
 
@@ -340,9 +344,9 @@ class EnergySolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
-      su_diffusivity:
-        Float activating the streamline-upwind stabilisation scheme and specifying the
-        corresponding diffusivity
+      su_advection:
+        Boolean activating the streamline-upwind stabilisation scheme when using
+        continuous finite elements
 
     """
 

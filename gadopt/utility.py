@@ -8,7 +8,7 @@ from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, Ja
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import op2, VectorElement, DirichletBC, utils
-from firedrake.__future__ import Interpolator
+from firedrake.__future__ import interpolate
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import time
@@ -21,6 +21,11 @@ from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
+
+try:
+    from firedrake import MeshSequenceGeometry
+except ImportError:
+    MeshSequenceGeometry = None
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -71,7 +76,7 @@ class TimestepAdaptor:
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
+        self.ref_vel_interpolate = interpolate(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -79,7 +84,7 @@ class TimestepAdaptor:
             max_ts = min(max_ts, self.maximum_timestep)
 
         # need to reset ref_vel to avoid taking max with previous values
-        ref_vel = assemble(self.ref_vel_interpolator.interpolate())
+        ref_vel = assemble(self.ref_vel_interpolate)
         local_maxrefvel = ref_vel.dat.data.max()
         max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
         # NOTE; we're incorparating max_ts here before dividing by max. ref. vel. as it may be zero
@@ -92,8 +97,15 @@ class TimestepAdaptor:
         return float(self.dt_const)
 
 
+def is_cartesian(mesh):
+    if MeshSequenceGeometry is not None and isinstance(mesh, MeshSequenceGeometry):
+        return mesh.unique().cartesian
+    else:
+        return mesh.cartesian
+
+
 def upward_normal(mesh):
-    if mesh.cartesian:
+    if is_cartesian(mesh):
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
@@ -105,7 +117,7 @@ def upward_normal(mesh):
 def vertical_component(u):
     mesh = extract_unique_domain(u)
 
-    if mesh.cartesian:
+    if is_cartesian(mesh):
         return u[u.ufl_shape[0]-1]
     else:
         n = upward_normal(mesh)
@@ -303,7 +315,7 @@ class LayerAveraging:
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if mesh.cartesian:
+        if is_cartesian(mesh):
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))
@@ -450,14 +462,18 @@ def step_func(r, centre, mag, increasing=True, sharpness=50):
     )
 
 
-def node_coordinates(function):
-    """Extract mesh coordinates and interpolate them onto the relevant function space"""
-    func_space = function.function_space()
-    mesh_coords = SpatialCoordinate(func_space.mesh())
+def node_coordinates(function: Function) -> Function:
+    """Interpolates mesh coordinates at each node of the provided function.
 
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]
+    Args:
+      function: A Firedrake function
+
+    Returns:
+      A Firedrake function for the interpolated mesh coordinates
+    """
+    vec_space = VectorFunctionSpace(function.ufl_domain(), function.ufl_element())
+
+    return Function(vec_space).interpolate(SpatialCoordinate(function))
 
 
 def interpolate_1d_profile(function: Function, one_d_filename: str):
@@ -508,13 +524,13 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
     # in its own mesh creation functions.
 
     if mesh.topology_dm.hasLabel("Face Sets"):
-        axis_extremes_order = [["left", "right"], ["bottom", "top"], ["front", "back"]]
+        axis_extremes_order = [["left", "right"], ["bottom", "top"]]
         dim = mesh.geometric_dimension()
         plex_dim = mesh.topology_dm.getCoordinateDim()  # In an extruded mesh, this is different to the
         # firedrake-assigned geometric_dimension
-        if dim == 3 and plex_dim == 2:
-            # For extruded 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
-            axis_extremes_order = [["left", "right"], ["front", "back"], ["bottom", "top"]]
+        if dim == 3:
+            # For 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
+            axis_extremes_order.insert(1, ["front", "back"])
         bounding_box = mesh.topology_dm.getBoundingBox()
         boundary_tol = [abs(dim[1] - dim[0]) * 1e-6 for dim in bounding_box]
         if dim > 3:

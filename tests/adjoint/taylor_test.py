@@ -10,13 +10,13 @@ import numpy as np
 import sys
 from pathlib import Path
 
-from cases import cases
+from cases import cases, schedules
 
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
 
 
-def rectangle_taylor_test(case):
+def rectangle_taylor_test(case, scheduler_name):
     """
     Perform a second-order Taylor remainder convergence test
     for one term in the objective functional for the rectangular case
@@ -32,6 +32,17 @@ def rectangle_taylor_test(case):
     # the adjoint reflects the forward problem we solve here
     tape = get_working_tape()
     tape.clear_tape()
+
+    # If we are not annotating, let's switch on taping
+    if not annotate_tape():
+        continue_annotation()
+
+    if scheduler_name == "fullstorage":
+        enable_disk_checkpointing()
+
+    # Schedulers are needed only for timestepping
+    if case in ["Tobs", "uobs", "uimposed"] and schedules[scheduler_name] is not None:
+        tape.enable_checkpointing(schedules[scheduler_name])
 
     with CheckpointFile(str(checkpoint_filename), "r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
@@ -75,9 +86,10 @@ def rectangle_taylor_test(case):
 
     # Followed by boundary conditions, noting that all boundaries are free slip, whilst the domain is
     # heated from below (T = 1) and cooled from above (T = 0).
+    uobs = Function(V, name="Observed_Velocity")
     stokes_bcs = {
         boundary.bottom: {"uy": 0},
-        boundary.top: {"uy": 0},
+        boundary.top: {"uy": 0} if case != "uimposed" else {"u": uobs},
         boundary.left: {"ux": 0},
         boundary.right: {"ux": 0},
     }
@@ -88,11 +100,17 @@ def rectangle_taylor_test(case):
 
     # Setup Energy and Stokes solver
     energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 constant_jacobian=True)
+    stokes_solver = StokesSolver(
+        z,
+        approximation,
+        T,
+        bcs=stokes_bcs,
+        constant_jacobian=True,
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+    )
 
-    initial_timestep = 0
+    initial_timestep = 0 if case in ["Tobs", "uobs"] else timesteps - 1
 
     # Define control function space:
     Q1 = FunctionSpace(mesh, "CG", 1)
@@ -101,7 +119,7 @@ def rectangle_taylor_test(case):
     # guess is set to the 1-D average of the forward model. We first load that, at the relevant timestep.
     # Note that this layer average will later be used for the smoothing term in our objective functional.
     with CheckpointFile(str(checkpoint_filename), "r") as f:
-        Taverage = f.load_function(mesh, "Average_Temperature", idx=initial_timestep)
+        Taverage = f.load_function(mesh, "Average_Temperature", idx=0)
     Tic = Function(Q1, name="Initial_Condition_Temperature").assign(Taverage)
 
     # Given Tic is updated during the optimisation, we also create a function to store our initial guess,
@@ -123,13 +141,15 @@ def rectangle_taylor_test(case):
     u_misfit = 0.0
 
     # Next populate the tape by running the forward simulation.
-    for time_idx in range(initial_timestep, timesteps):
-        stokes_solver.solve()
-        energy_solver.solve()
+    for time_idx in tape.timestepper(iter(range(initial_timestep, timesteps))):
         # Update the accumulated surface velocity misfit using the observed value.
         with CheckpointFile(str(checkpoint_filename), "r") as f:
-            uobs = f.load_function(mesh, name="Velocity", idx=time_idx)
-        u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
+            uobs.assign(f.load_function(mesh, name="Velocity", idx=time_idx))
+
+        stokes_solver.solve()
+        energy_solver.solve()
+        if case == "uobs":
+            u_misfit += assemble(dot(u - uobs, u - uobs) * ds_t)
 
     # Define component terms of overall objective functional and their normalisation terms:
     damping = assemble((T0 - Taverage) ** 2 * dx)
@@ -142,7 +162,7 @@ def rectangle_taylor_test(case):
     # Define temperature misfit between final state solution and observation:
     t_misfit = assemble((T - Tobs) ** 2 * dx)
 
-    if case == "Tobs":
+    if case in ["Tobs", "uimposed"]:
         objective = t_misfit
     elif case == "uobs":
         objective = norm_obs * u_misfit / timesteps / norm_u_surface
@@ -175,9 +195,9 @@ if __name__ == "__main__":
             minconv = rectangle_taylor_test(case_name)
             print(f"case: {case_name}, result: {minconv}")
     else:
-        case_name = sys.argv[1]
-        minconv = rectangle_taylor_test(case_name)
+        case_name, scheduler_name = sys.argv[1].split("_")
+        minconv = rectangle_taylor_test(case_name, scheduler_name)
 
         if MPI.COMM_WORLD.Get_rank() == 0:
-            with open(f"{case_name}.conv", "w") as f:
+            with open(f"{case_name}_{scheduler_name}.conv", "w") as f:
                 f.write(f"{minconv}")

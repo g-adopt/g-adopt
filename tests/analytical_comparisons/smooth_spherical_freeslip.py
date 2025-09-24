@@ -75,12 +75,19 @@ def model(level, l, mm, k, do_write=False):
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
     Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
     # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-10
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-9
+    solver_params_extra = {"fieldsplit_0": {"ksp_rtol": 1e-10}, "fieldsplit_1": {"ksp_rtol": 1e-9}}
+
+    stokes_solver = StokesSolver(
+        z,
+        approximation,
+        T,
+        bcs=stokes_bcs,
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+        near_nullspace=Z_near_nullspace,
+        solver_parameters_extra=solver_params_extra,
+    )
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
     # and the RHS == 0.
@@ -102,6 +109,9 @@ def model(level, l, mm, k, do_write=False):
     coef = assemble(p_ * dx)/assemble(Constant(1.0)*dx(domain=mesh))
     p_.project(p_ - coef, solver_parameters=_project_solver_parameters)
 
+    # calculating surface normal stress given the solution of the stokes problem
+    ns_ = stokes_solver.force_on_boundary(boundary.top)
+
     # compute u analytical and error
     uxzy = Function(V).interpolate(as_vector((X[0], X[1], X[2])))
     u_anal = Function(V, name="AnalyticalVelocity")
@@ -114,20 +124,30 @@ def model(level, l, mm, k, do_write=False):
     p_anal.dat.data[:] = [solution.pressure_cartesian(xyzi) for xyzi in pxyz.dat.data]
     p_error = Function(W, name="PressureError").assign(p_-p_anal)
 
+    # compute ns analytical and error
+    ns_anal = Function(W, name="AnalyticalSurfaceNormalStress")
+    ns_anal.dat.data[:] = [-solution.radial_stress_cartesian(xyzi) for xyzi in pxyz.dat.data]
+    ns_error = Function(W, name="SurfaceNormalStressError").assign(ns_-ns_anal)
+
     if do_write:
         # Write output files in VTK format:
         u_.rename("Velocity")
         p_.rename("Pressure")
+        ns_.rename("SurfaceNormalStress")
         u_file = VTKFile("fs_velocity_{}.pvd".format(level))
         p_file = VTKFile("fs_pressure_{}.pvd".format(level))
+        ns_file = VTKFile("fs_surface_normal_stress_{}.pvd".format(level))
 
         # Write output:
         u_file.write(u_, u_anal, u_error)
         p_file.write(p_, p_anal, p_error)
+        ns_file.write(ns_, ns_anal, ns_error)
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*dx))
+    l2anal_ns = numpy.sqrt(assemble(dot(ns_anal, ns_anal) * ds_t))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*dx))
+    l2error_ns = numpy.sqrt(assemble(dot(ns_error, ns_error) * ds_t))
 
-    return l2error_u, l2error_p, l2anal_u, l2anal_p
+    return l2error_u, l2error_p, l2error_ns, l2anal_u, l2anal_p, l2anal_ns

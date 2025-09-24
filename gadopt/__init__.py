@@ -11,16 +11,19 @@ from .approximations import (
 from .diagnostics import GeodynamicalDiagnostics
 from .level_set_tools import (
     LevelSetSolver,
-    Material,
-    density_RaB,
-    entrainment,
-    field_interface,
+    assign_level_set_values,
+    interface_thickness,
+    material_entrainment,
+    material_field,
+    min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
+from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
     StokesSolver,
     ViscoelasticStokesSolver,
+    BoundaryNormalStressSolver,
     create_stokes_nullspace,
 )
 from .time_stepper import (

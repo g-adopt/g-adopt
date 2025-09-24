@@ -42,9 +42,13 @@ class CylindricalImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
 
     def setup_bcs(self):
         self.stokes_bcs = {
-            self.boundary.top: {'free_surface': {}},  # Free surface boundary conditions are applied automatically in stokes_integrators and momentum_equation for implicit free surface coupling
-            self.boundary.bottom: {'un': 0}
+            self.boundary.top: {"free_surface": {"RaFS": 1}},
+            self.boundary.bottom: {"un": 0},
         }
+
+    def setup_solver(self):
+        self.solver_parameters_extra = {"fieldsplit_0": {"ksp_rtol": 1e-6}, "fieldsplit_1": {"ksp_rtol": 1e-5}}
+        super().setup_solver()
 
     def setup_nullspaces(self):
         # Nullspaces and near-nullspaces:

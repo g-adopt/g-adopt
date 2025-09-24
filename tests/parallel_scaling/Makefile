@@ -9,11 +9,11 @@ longtest: $(levels)
 SHELL = /bin/bash
 profile_%.txt: scaling.py stokes_cubed_sphere.py
 	echo "running parallel scaling on level $*"
-	mkdir -p pbs_output
-	python3 scaling.py submit -t "qsub -v GADOPT_CHECKOUT=$(gadopt_checkout),GADOPT_PREFIX_IMAGE=$(gadopt_prefix_image) -W block=true -N scaling_{level} -l storage=gdata/xd2+scratch/xd2,ncpus={cores},walltime=04:00:00,mem={mem}GB,wd,jobfs=200GB -q normalsr -P $(project) -o pbs_output/l{level}.out -e pbs_output/l{level}.err -- ./run_gadi.sh {level}" $*
+	mkdir -p batch_output
+	gadopt_hpcrun --debug -n $$( python3 scaling.py get_ncpus $* ) -v LEVEL=$* -N scaling_$* -o batch_output/l$*.out -e batch_output/l$*.err --template-file ./run.template python3 scaling.py run $*
 
 clean:
-	rm -rf pbs_output profile_*.txt level_*.out level_*.err
+	rm -rf batch_output profile_*.txt level_*.out level_*.err
 
 longtest_output:
 	tail -n +1 level_*.{err,out}

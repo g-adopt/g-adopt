@@ -104,16 +104,24 @@ def model(level, k, nn, do_write=False):
     dt = Constant(tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, free_surface_dt=dt,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
-
     # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-11
+    solver_params_extra = {"fieldsplit_0": {"ksp_rtol": 1e-11}, "fieldsplit_1": {"ksp_rtol": 1e-10}}
+
+    stokes_solver = StokesSolver(
+        z,
+        approximation,
+        T,
+        dt=dt,
+        bcs=stokes_bcs,
+        solver_parameters="iterative",
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+        near_nullspace=Z_near_nullspace,
+        solver_parameters_extra=solver_params_extra,
+    )
 
     time = Constant(0.0)
-    max_timesteps = round(20*tau0/dt)  # Simulation runs for 10 characteristic time scales so end state is close to being fully relaxed
+    max_timesteps = round(20*tau0/dt)  # Simulation runs for 20 characteristic time scales so end state is close to being fully relaxed
     log("max_timesteps", max_timesteps)
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
@@ -158,7 +166,7 @@ def model(level, k, nn, do_write=False):
     eta_error = Function(W, name="EtaError").assign(eta_-eta_anal)
 
     # Now perform the time loop:
-    for timestep in range(1, 20):
+    for timestep in range(1, max_timesteps):
 
         # Solve Stokes sytem:
         stokes_solver.solve()
@@ -190,9 +198,9 @@ def model(level, k, nn, do_write=False):
 
     l2anal_u = numpy.sqrt(assemble(dot(u_anal, u_anal)*_dx))
     l2anal_p = numpy.sqrt(assemble(dot(p_anal, p_anal)*_dx))
-    l2anal_eta = numpy.sqrt(assemble(dot(eta_anal, eta_anal)*ds(top_id)))
+    l2anal_eta = numpy.sqrt(assemble(dot(eta_anal, eta_anal)*ds(boundary.top)))
     l2error_u = numpy.sqrt(assemble(dot(u_error, u_error)*_dx))
     l2error_p = numpy.sqrt(assemble(dot(p_error, p_error)*_dx))
-    l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error)*ds(top_id)))
+    l2error_eta = numpy.sqrt(assemble(dot(eta_error, eta_error)*ds(boundary.top)))
 
     return l2error_u, l2error_p, l2error_eta, l2anal_u, l2anal_p, l2anal_eta

@@ -1,5 +1,5 @@
 - [Tutorials](index.md)
-- Mantle convection
+- [Mantle convection](mantle_convection/index.md)
     - Base case
         - [base_case](mantle_convection/base_case.ipynb)
     - Physical approximation (rheology)
@@ -19,10 +19,12 @@
     - Adjoint
         - [adjoint_forward](mantle_convection/adjoint_forward.ipynb)
         - [adjoint](mantle_convection/adjoint.ipynb)
+    - Dynamic topography
+        - [dynamic_topography](mantle_convection/dynamic_topography.ipynb)
 - Multi-material
     - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
     - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)
-- Glacial isostatic adjustment
+- [Glacial isostatic adjustment](glacial_isostatic_adjustment/index.md)
     - [base_case](glacial_isostatic_adjustment/base_case.ipynb)
     - [2d_cylindrical](glacial_isostatic_adjustment/2d_cylindrical.ipynb)
 - PDE-constrained optimisation

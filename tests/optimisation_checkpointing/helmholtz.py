@@ -1,3 +1,4 @@
+from pathlib import Path
 from gadopt import *
 from gadopt.inverse import *
 
@@ -75,13 +76,17 @@ optimiser.restore(5)
 run(optimiser, rf, mesh.comm.rank, f"restored_optimisation_from_it_5_np{num_processes}.dat")
 
 # re-initialise optimiser, and restore from last stored checkpoint
+# but also rename the directory
+new_checkpoint_dir = checkpoint_dir + "_restart"
+if mesh.comm.rank == 0:
+    Path(checkpoint_dir).rename(new_checkpoint_dir)
 
 minimisation_parameters["Status Test"]["Iteration Limit"] = 15
 optimiser = LinMoreOptimiser(
     minimisation_problem,
     minimisation_parameters,
-    checkpoint_dir=checkpoint_dir,
-    auto_checkpoint=False,
+    checkpoint_dir=new_checkpoint_dir,
+    auto_checkpoint=True,
 )
 optimiser.restore()
 run(optimiser, rf, mesh.comm.rank, f"restored_optimisation_from_last_it_np{num_processes}.dat")
