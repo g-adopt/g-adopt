@@ -8,7 +8,7 @@ from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, Ja
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import op2, VectorElement, DirichletBC, utils
-from firedrake.__future__ import Interpolator
+from firedrake.__future__ import interpolate
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import time
@@ -21,6 +21,11 @@ from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
+
+try:
+    from firedrake import MeshSequenceGeometry
+except ImportError:
+    MeshSequenceGeometry = None
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -71,7 +76,7 @@ class TimestepAdaptor:
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
+        self.ref_vel_interpolate = interpolate(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -79,7 +84,7 @@ class TimestepAdaptor:
             max_ts = min(max_ts, self.maximum_timestep)
 
         # need to reset ref_vel to avoid taking max with previous values
-        ref_vel = assemble(self.ref_vel_interpolator.interpolate())
+        ref_vel = assemble(self.ref_vel_interpolate)
         local_maxrefvel = ref_vel.dat.data.max()
         max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
         # NOTE; we're incorparating max_ts here before dividing by max. ref. vel. as it may be zero
@@ -92,8 +97,15 @@ class TimestepAdaptor:
         return float(self.dt_const)
 
 
+def is_cartesian(mesh):
+    if MeshSequenceGeometry is not None and isinstance(mesh, MeshSequenceGeometry):
+        return mesh.unique().cartesian
+    else:
+        return mesh.cartesian
+
+
 def upward_normal(mesh):
-    if mesh.cartesian:
+    if is_cartesian(mesh):
         n = mesh.geometric_dimension()
         return as_vector([0]*(n-1) + [1])
     else:
@@ -105,7 +117,7 @@ def upward_normal(mesh):
 def vertical_component(u):
     mesh = extract_unique_domain(u)
 
-    if mesh.cartesian:
+    if is_cartesian(mesh):
         return u[u.ufl_shape[0]-1]
     else:
         n = upward_normal(mesh)
@@ -303,7 +315,7 @@ class LayerAveraging:
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if mesh.cartesian:
+        if is_cartesian(mesh):
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))

@@ -25,27 +25,21 @@ jobs:
     steps:
       - name: Install Git LFS
         run: |
-          sudo apt update
-          sudo apt install -y git-lfs
+          apt update
+          apt install -y git-lfs
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        env:
-          S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
-          sudo apt install -y xvfb gmsh gh s3cmd unzip
-
-          mkdir -p $HOME/.s3cfg
-          echo "${S3CONFIG}" > $HOME/.s3cfg/config
-          chmod 600 $HOME/.s3cfg/config
+          apt install -y xvfb gmsh gh unzip
 
           uv venv --system-site-packages
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
-          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
+          curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
       - name: Install Firedrake kernel
@@ -55,11 +49,11 @@ jobs:
 
       - name: Set up for network namespacing
         run: |
-          sudo apt install -y uidmap iproute2
+          apt install -y uidmap iproute2
           . .venv/bin/activate
-          jupytext_location="$(which jupytext)"
-          cp .testing/jupytext "$jupytext_location"
-          chmod +x "$jupytext_location"
+          nbconvert_location="$(which jupyter-nbconvert)"
+          cp .testing/jupyter-nbconvert "$nbconvert_location"
+          chmod +x "$nbconvert_location"
 
       - name: Convert notebooks
         run: |

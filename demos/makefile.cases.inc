@@ -23,3 +23,5 @@ extra_cases := PDE_constrained_optimisation
 all_cases := $(sort $(mc_demos) $(mc_cases) $(mm_demos) $(mm_cases) $(gia_demos) $(gia_cases) $(extra_cases))
 
 notebook_files := $(foreach case,$(mc_demos) $(mm_demos) $(gia_demos),$(case)/$(notdir $(case)).ipynb) $(mc_dir)/adjoint/adjoint_forward.ipynb PDE_constrained_optimisation/PDE_constrained_boundary.ipynb PDE_constrained_optimisation/PDE_constrained_field.ipynb
+
+diagram_files := mantle_convection/.diagram.mermaid glacial_isostatic_adjustment/.diagram.mermaid

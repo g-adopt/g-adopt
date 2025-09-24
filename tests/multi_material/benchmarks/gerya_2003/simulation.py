@@ -13,10 +13,6 @@ from mpi4py import MPI
 from .materials import buoyant_material, dense_material
 
 
-def initialise_temperature(temperature):
-    pass
-
-
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     level_set = diag_vars["level_set"][0]
 
@@ -52,7 +48,7 @@ def plot_diagnostics(output_path):
         plt.close(fig)
 
 
-# A simulation name tag
+# Simulation name tag
 tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
@@ -62,10 +58,7 @@ checkpoint_restart = 0
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
 domain_dims = (5e5, 5e5)
 mesh_gen = "firedrake"
-mesh_elements = (64, 64)
-
-# Degree of the function space on which the level-set function is defined.
-level_set_func_space_deg = 2
+mesh_elements = (128, 128)
 
 # Parameters to initialise level set
 callable_args = (ref_vertex_coords := (2e5, 3.5e5), edge_sizes := (1e5, 1e5))
@@ -90,15 +83,10 @@ materials = [buoyant_material, dense_material]
 
 # Approximation parameters
 dimensional = True
-Ra, g = 1, 9.8
+g = 9.8
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
-temp_bcs = {}
 stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
-
-# Stokes solver options
-stokes_nullspace_args = {}
-stokes_solver_params = None
 
 # Timestepping objects
 initial_timestep = 1e11

@@ -2,7 +2,7 @@ import firedrake as fd
 from modelTypes import relativePermeability, waterRetention, moistureContent
 
 
-def ProblemDefinitionNonlinear(h, hOld, hStar, timeConstant, timeStep, theta_diff, theta_mid, V, modelParameters, setBoundaryConditions, mesh, dx, ds):
+def ProblemDefinitionNonlinear(h, hOld, hStar, timeConstant, timeStep, V, modelParameters, timeParameters, setBoundaryConditions, mesh):
 
     # Returns the variational problem for solving Richards equation
 
@@ -10,29 +10,40 @@ def ProblemDefinitionNonlinear(h, hOld, hStar, timeConstant, timeStep, theta_dif
     x = fd.SpatialCoordinate(mesh)
     v = fd.TestFunction(V)
 
-    boundaryCondition = setBoundaryConditions(timeConstant, x)
-
-    hBar = theta_mid*h + (1 - theta_mid)*hOld
-    hDiff = theta_diff*h + (1 - theta_diff)*hOld
-
-    C = waterRetention(modelParameters, hBar, x, timeConstant)
-    K = relativePermeability(modelParameters, hBar, x, timeConstant)
-
-    gravity = K*fd.as_vector(fd.grad(x[dimen-1]))
-    normalVector = fd.FacetNormal(mesh)
-
+    # Unpack some parameters
     Ss = modelParameters["Ss"]
     thetaR = modelParameters["thetaR"]
     thetaS = modelParameters["thetaS"]
+    epsilon = timeParameters["epsilon"]
+
+    # get IMEX parameters
+    theta_diff = float(timeParameters["theta_diff"])
+    theta_mid = float(timeParameters["theta_nonlin"])
+    hBar = theta_mid*h + (1 - theta_mid)*hOld
+    hDiff = theta_diff*h + (1 - theta_diff)*hOld
+
+    timeParameters.setdefault('quadratureDegree', 4)
+    quadratureDegree = timeParameters["quadratureDegree"]
+    dx = fd.Measure("dx", domain=mesh, metadata={"quadrature_degree": quadratureDegree})
+    if dimen == 2:
+        ds = fd.Measure("ds", domain=mesh, metadata={"quadrature_degree": quadratureDegree})
+    else:
+        ds_t = fd.Measure("ds_t", domain=mesh, metadata={"quadrature_degree": quadratureDegree})
+        ds_b = fd.Measure("ds_b", domain=mesh, metadata={"quadrature_degree": quadratureDegree})
+        ds_v = fd.Measure("ds_v", domain=mesh, metadata={"quadrature_degree": quadratureDegree})
+
     theta = moistureContent(modelParameters, hBar, x, timeConstant)
     S = (theta - thetaR) / (thetaS - thetaR)
+    C = waterRetention(modelParameters, hBar, x, timeConstant)
+    K = relativePermeability(modelParameters, hBar, x, timeConstant)
+
+    boundaryCondition = setBoundaryConditions(timeConstant, x, K, theta)
 
     # Define problem
-    F = (fd.inner((Ss*S + C)*(h - hOld)/timeStep, v) + fd.inner(K*fd.grad(hDiff + x[dimen-1]), fd.grad(v)))*dx
+    F = (fd.inner((Ss*S + C)*(h - hOld)/timeStep, v) + fd.inner(K*fd.grad(hDiff + x[dimen-1]), fd.grad(v)) + epsilon*fd.inner(fd.grad(h - hOld), fd.grad(v)))*dx
 
     # Impose boundary conditions
     strongBCS = []
-
     if "top" in boundaryCondition:
         boundaryInfo = boundaryCondition.get('top')
         boundaryType = next(iter(boundaryInfo))
@@ -41,7 +52,7 @@ def ProblemDefinitionNonlinear(h, hOld, hStar, timeConstant, timeStep, theta_dif
         if boundaryType == "h":
             strongBCS.append(fd.DirichletBC(V, boundaryValue, "top"))
         else:
-            F = F - (-(fd.dot(normalVector, gravity) - boundaryValue)) * v * fd.ds_t
+            F = F - boundaryValue * v * ds_t
 
     if "bottom" in boundaryCondition:
         boundaryInfo = boundaryCondition.get('bottom')
@@ -51,9 +62,9 @@ def ProblemDefinitionNonlinear(h, hOld, hStar, timeConstant, timeStep, theta_dif
         if boundaryType == "h":
             strongBCS.append(fd.DirichletBC(V, boundaryValue, "bottom"))
         else:
-            F = F - (-(fd.dot(normalVector, gravity) - boundaryValue)) * v * fd.ds_b
+            F = F - boundaryValue * v * ds_b
 
-    for index in range(10):
+    for index in range(20):
 
         if index in boundaryCondition:
 
@@ -64,36 +75,33 @@ def ProblemDefinitionNonlinear(h, hOld, hStar, timeConstant, timeStep, theta_dif
             if boundaryType == "h":
                 strongBCS.append(fd.DirichletBC(V, boundaryValue, index))
             else:
-                F = F - boundaryValue * v * ds(index)
+                if dimen == 2:
+                    F = F - boundaryValue * v * ds(index)
+                else:
+                    F = F - boundaryValue * v * ds_v(index)
 
     problem = fd.NonlinearVariationalProblem(F, h, bcs=strongBCS)
 
-    # Use direct solvers
-    if dimen <= 2:
-
-        solverRichardsNonlinear = fd.NonlinearVariationalSolver(problem,
-            solver_parameters={
-                'mat_type': 'aij',
-                'snes_type': 'newtonls',
-                'ksp_type': 'gmres',
-                'pc_type': 'jacobi',
-                })
-
-    # Use iterative solvers
+    if float(theta_mid) == 0 and float(theta_diff) == 1:
+        snesType = 'ksponly'
     else:
+        snesType = 'newtonls'
 
-        if theta_mid == 0:
-            snesType = 'ksponly'
-        else:
-            snesType = 'newtonls'
+    # Use direct solvers for 2D and iterative for 3d
+    if dimen <= 2:
+        ksp_type = 'preonly'
+        pc_type = 'lu'
+    else:
+        ksp_type = 'bcgs'
+        pc_type = 'bjacobi'
 
-        solverRichardsNonlinear = fd.NonlinearVariationalSolver(problem,
-                                    solver_parameters={
-                                        'mat_type': 'aij',
-                                        'snes_type': snesType,
-                                        'ksp_type': 'bcgs',
-                                        "ksp_rtol": 1e-5,
-                                        'pc_type': 'none',
-                                    })
+    solverRichardsNonlinear = fd.NonlinearVariationalSolver(problem,
+                                solver_parameters={
+                                    'mat_type': 'aij',
+                                    'snes_type': snesType,
+                                    'ksp_type': ksp_type,
+                                    "pc_type": pc_type,
+                                })
+#                                    'ksp_converged_reason': None,
 
     return solverRichardsNonlinear
