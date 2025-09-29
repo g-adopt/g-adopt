@@ -23,9 +23,10 @@ from ufl.core.expr import Expr
 
 from .equations import Equation, interior_penalty_factor
 from .scalar_equation import mass_term
+from .solver_options_manager import SolverConfigurationMixin
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import node_coordinates, vertical_component
+from .utility import is_cartesian, node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -40,15 +41,18 @@ __all__ = [
 adv_params_default = {
     "time_integrator": eSSPRKs10p3,
     "bcs": {},
-    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "subcycles": 1,
 }
+
 # Default parameters for level-set reinitialisation
 reini_params_default = {
     "timestep": 0.02,
     "time_integrator": eSSPRKs3p3,
-    "solver_params": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "steps": 1,
+}
+solver_params_default = {
+    "adv": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+    "reini": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
 }
 
 
@@ -394,7 +398,7 @@ reinitialisation_term.required_attrs = {"epsilon"}
 reinitialisation_term.optional_attrs = set()
 
 
-class LevelSetSolver:
+class LevelSetSolver(SolverConfigurationMixin):
     """Solver for the conservative level-set approach.
 
     Advects and reinitialises a level-set field.
@@ -473,12 +477,14 @@ class LevelSetSolver:
 
         self.set_gradient_solver()
 
+        solver_extra = {}
         if isinstance(adv_kwargs, dict):
             if not all(param in adv_kwargs for param in ["u", "timestep"]):
                 raise KeyError("'u' and 'timestep' must be present in 'adv_kwargs'")
 
             self.advection = True
             self.adv_kwargs = adv_params_default | adv_kwargs
+            solver_extra["adv"] = adv_kwargs.get("solver_params", {})
 
         if isinstance(reini_kwargs, dict):
             if "epsilon" not in reini_kwargs:
@@ -486,13 +492,17 @@ class LevelSetSolver:
 
             self.reinitialisation = True
             self.reini_kwargs = reini_params_default | reini_kwargs
+            solver_extra["reini"] = reini_kwargs.get("solver_params", {})
             if "frequency" not in self.reini_kwargs:
                 self.reini_kwargs["frequency"] = self.reinitialisation_frequency()
 
         if not any([self.advection, self.reinitialisation]):
             raise ValueError("Advection or reinitialisation must be initialised")
 
-        self._solvers_ready = False
+        self.add_to_solver_config(solver_params_default)
+        self.add_to_solver_config(solver_extra)
+        self.register_update_callback(self.set_up_solvers)
+        self.set_up_solvers()
 
     def reinitialisation_frequency(self) -> int:
         """Implements default strategy for the reinitialisation frequency.
@@ -507,7 +517,7 @@ class LevelSetSolver:
         if isinstance(epsilon, fd.Function):
             epsilon = self.mesh.comm.allreduce(epsilon.dat.data.min(), MPI.MIN)
 
-        if self.mesh.cartesian:
+        if is_cartesian(self.mesh):
             max_coords = self.mesh.coordinates.dat.data.max(axis=0)
             min_coords = self.mesh.coordinates.dat.data.min(axis=0)
             for i in range(len(max_coords)):
@@ -567,7 +577,7 @@ class LevelSetSolver:
                 solution_old=self.solution_old,
                 eq_attrs={"u": self.adv_kwargs["u"]},
                 bcs=self.adv_kwargs["bcs"],
-                solver_parameters=self.adv_kwargs["solver_params"],
+                solver_parameters=self.solver_parameters["adv"],
             )
 
         if self.reinitialisation:
@@ -584,11 +594,10 @@ class LevelSetSolver:
                 self.solution,
                 self.reini_kwargs["timestep"],
                 solution_old=self.solution_old,
-                solver_parameters=self.reini_kwargs["solver_params"],
+                solver_parameters=self.solver_parameters["reini"],
             )
 
         self.step = 0
-        self._solvers_ready = True
 
     def update_gradient(self, *args, **kwargs) -> None:
         """Calls the gradient solver.
@@ -615,8 +624,6 @@ class LevelSetSolver:
           disable_reinitialisation:
             A boolean to disable the reinitialisation solve.
         """
-        if not self._solvers_ready:
-            self.set_up_solvers()
 
         if self.advection and not disable_advection:
             for _ in range(self.adv_kwargs["subcycles"]):
@@ -852,7 +859,7 @@ def min_max_height(
         case _:
             raise ValueError("'mode' must be 'min' or 'max'")
 
-    if not level_set.ufl_domain().cartesian:
+    if not is_cartesian(level_set.ufl_domain()):
         raise ValueError("Only Cartesian meshes are currently supported")
 
     coords = node_coordinates(level_set)

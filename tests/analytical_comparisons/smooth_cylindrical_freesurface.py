@@ -104,23 +104,24 @@ def model(level, k, nn, do_write=False):
     dt = Constant(tau0)  # timestep (dimensionless)
     log("dt (dimensionless)", dt)
 
+    # use tighter tolerances than default to ensure convergence:
+    solver_params_extra = {"fieldsplit_0": {"ksp_rtol": 1e-11}, "fieldsplit_1": {"ksp_rtol": 1e-10}}
+
     stokes_solver = StokesSolver(
         z,
-        T,
         approximation,
+        T,
+        dt=dt,
         bcs=stokes_bcs,
-        coupled_tstep=dt,
+        solver_parameters="iterative",
         nullspace=Z_nullspace,
         transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace,
+        solver_parameters_extra=solver_params_extra,
     )
 
-    # use tighter tolerances than default to ensure convergence:
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-13
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-11
-
     time = Constant(0.0)
-    max_timesteps = round(20*tau0/dt)  # Simulation runs for 10 characteristic time scales so end state is close to being fully relaxed
+    max_timesteps = round(20*tau0/dt)  # Simulation runs for 20 characteristic time scales so end state is close to being fully relaxed
     log("max_timesteps", max_timesteps)
 
     # Solve system - configured for solving non-linear systems, where everything is on the LHS (as above)
@@ -165,7 +166,7 @@ def model(level, k, nn, do_write=False):
     eta_error = Function(W, name="EtaError").assign(eta_-eta_anal)
 
     # Now perform the time loop:
-    for timestep in range(1, 20):
+    for timestep in range(1, max_timesteps):
 
         # Solve Stokes sytem:
         stokes_solver.solve()
