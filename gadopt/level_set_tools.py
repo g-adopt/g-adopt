@@ -384,6 +384,7 @@ def reinitialisation_term(
 
     return weak_form
 
+
 reinitialisation_term.required_attrs = {"epsilon"}
 reinitialisation_term.optional_attrs = set()
 
