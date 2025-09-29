@@ -21,7 +21,7 @@ from mpi4py import MPI
 from numpy.testing import assert_allclose
 from ufl.core.expr import Expr
 
-from .equations import Equation, interior_penalty_factor
+from .equations import Equation
 from .scalar_equation import mass_term
 from .solver_options_manager import SolverConfigurationMixin
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
@@ -372,27 +372,17 @@ def reinitialisation_term(
     method.
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
-    sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
+    grad_norm = fd.sqrt(fd.dot(fd.grad(trial), fd.grad(trial)) + 1e-12)
 
-    grad_norm = fd.sqrt(fd.inner(fd.grad(trial), fd.grad(trial)))
-    balance_term = eq.epsilon * (1 - 2 * trial) * grad_norm * eq.test * eq.dx
+    sharpening = -trial * (1.0 - trial) * (1.0 - 2.0 * trial)
+    balance = eq.epsilon * (1.0 - 2.0 * trial) * grad_norm
+    weak_form = eq.test * (sharpening + balance) * eq.dx
 
-    h = fd.avg(fd.CellVolume(eq.mesh)) / fd.FacetArea(eq.mesh)
-    sigma = interior_penalty_factor(eq)
+    penalty_factor = 1e-4 * (trial.ufl_element().degree() + 1) ** 2
+    penalty_factor *= fd.avg(eq.epsilon) / fd.avg(fd.CellDiameter(eq.mesh))
+    weak_form += fd.jump(eq.test) * penalty_factor * fd.jump(trial) * eq.dS
 
-    alpha = h / sigma
-    beta = 1
-    gamma = h / sigma
-
-    grad_flux = beta * fd.jump(trial, eq.n) / h + fd.avg(fd.grad(trial))
-    grad_flux_norm = fd.sqrt(fd.inner(grad_flux, grad_flux))
-    balance_flux = fd.avg(eq.epsilon) * (1 - 2 * fd.avg(trial)) * grad_flux_norm
-    flux_term = alpha * balance_flux * fd.avg(eq.test) * eq.dS
-
-    penalty_term = gamma * fd.jump(trial) * fd.jump(eq.test) * eq.dS
-
-    return sharpen_term + balance_term + flux_term + penalty_term
-
+    return weak_form
 
 reinitialisation_term.required_attrs = {"epsilon"}
 reinitialisation_term.optional_attrs = set()
