@@ -12,7 +12,7 @@ import ROL
 from firedrake import CheckpointFile, Function
 from firedrake.adjoint import *  # noqa: F401
 from mpi4py import MPI
-from pyadjoint import MinimizationProblem, Block
+from pyadjoint import MinimizationProblem
 
 # emulate the previous behaviour of firedrake_adjoint by automatically
 # starting the tape
@@ -377,39 +377,3 @@ minimisation_parameters = {
         "Iteration Limit": 100,
     },
 }
-
-
-class DiagnosticBlock(Block):
-    """
-    Writes sensitivity with respect to a function for diagnostic purposes.
-
-    Useful for outputting gradients in time dependent simulations
-    or inversions
-    """
-
-    def __init__(self, f, function, riesz_options={'riesz_representation': 'L2'}):
-        """Initialises the Diagnostic block.
-
-        Args:
-          f:
-            Filename of VTK pvd file to write to.
-          function:
-            Calculate gradient of reduced functional wrt to this function.
-          riesz_options:
-            Dictionary specifying riesz represenation (defaults to L2).
-        """
-        super().__init__()
-        self.add_dependency(function)
-        self.add_output(function.block_variable)
-        self.f = f
-        self.f_name = function.name()
-        self.riesz_options = riesz_options
-
-    def recompute_component(self, inputs, block_variable, idx, prepared):
-        return block_variable.checkpoint
-
-    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
-        out = inputs[0]._ad_convert_type(adj_inputs[0], options=self.riesz_options)
-        out.rename('adjoint_'+self.f_name)
-        self.f.write(out)
-        return 0
