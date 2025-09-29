@@ -210,8 +210,12 @@ def advection_hydrostatic_prestress_term(
         F = 0
     else:
         # change ds for extruded mesh? maybe not a good idea?
+        # assumes mesh is aligned in the vertical so that jump
+        # only occurs across horionztal layers
         if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
             dS = dS_h
+        else:
+            dS = eq.dS
         F = Vi("+") * jump(rho0) * u_r("+") * g("+") * dot(eq.test("+"), eq.n("+")) * dS
     if eq.approximation.compressible_adv_hyd_pre:
         # Include body integral after i.b.p of hydrostatic prestress advection term
