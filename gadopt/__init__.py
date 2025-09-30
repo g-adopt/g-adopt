@@ -20,6 +20,7 @@ from .level_set_tools import (
     min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
+from .nullspaces import create_stokes_nullspace, create_u_nullspace
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
@@ -27,7 +28,6 @@ from .stokes_integrators import (
     InternalVariableSolver,
     StokesSolver,
     ViscoelasticStokesSolver,
-    create_stokes_nullspace,
 )
 from .time_stepper import (
     BackwardEuler,
