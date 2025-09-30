@@ -3,7 +3,7 @@
 #
 # In this tutorial, we examine an idealised 2-D loading problem in a square box.
 # Here we will focus purely on viscoelastic deformation by a surface load, i.e. a synthetic
-# ice sheet!
+# ice sheet! The setup is similar to a 2-D version of the test case presented in Weerdesteijn et al. (2023), but we include compressiblity.
 #
 # You may already have seen how G-ADOPT can be applied to mantle convection problems in our
 # other tutorials. Generally the setup of the G-ADOPT model should be familiar but the equations
