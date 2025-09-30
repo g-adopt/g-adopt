@@ -8,6 +8,7 @@ from firedrake import (
     Constant, DirichletBC, FacetNormal, Function,
     assemble, dot, ds, dx, grad, norm, sqrt,
 )
+from firedrake.functionspaceimpl import MixedFunctionSpace
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
 
@@ -51,7 +52,17 @@ class GeodynamicalDiagnostics:
     ):
         mesh = extract_unique_domain(z)
 
-        self.u, self.p = z.subfunctions[:2]
+        # Allows sub-iv solver (just disp no mixed space)
+        # to use same diagnostics. Would be better to separate
+        # out into Base classes
+        is_mixed_space = isinstance(
+            z.function_space().topological, MixedFunctionSpace
+        )
+        if is_mixed_space:
+            self.u, self.p = z.subfunctions[:2]
+        else:
+            self.u = z
+
         self.T = T
 
         self.dx = dx(domain=mesh, degree=quad_degree)

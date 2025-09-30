@@ -676,8 +676,9 @@ output_file.write(u, *m_list, velocity)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
+    "timestep time dt u_rms u_rms_surf ux_max"
 )
+gd = GeodynamicalDiagnostics(u, 0, boundary.bottom, boundary.top)
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 # -
@@ -692,6 +693,10 @@ for timestep in range(max_timesteps):
     time.assign(time+dt)
     stokes_solver.solve()
 
+    # Log diagnostics:
+    plog.log_str(f"{timestep} {time} {float(dt)} {gd.u_rms()} "
+                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)}")
+
     if timestep % output_frequency == 0:
         log("timestep", timestep)
         velocity.interpolate((u - disp_old)/dt)
@@ -704,6 +709,7 @@ for timestep in range(max_timesteps):
                 checkpoint.save_function(m_i, name=f"internal_variable_{i}")
 
 
+plog.close()
 # Let's use the python package *PyVista* to plot the magnitude of the
 # displacement field through time. We will use the calculated displacement to
 # artifically scale the mesh. We have exaggerated the stretching by a factor of
