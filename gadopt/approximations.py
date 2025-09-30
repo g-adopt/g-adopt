@@ -498,8 +498,8 @@ class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximatio
         density: Function | Number,
         shear_modulus: Function | Number,
         viscosity: Function | Number,
-        **kwargs
-        ):
+        **kwargs,
+    ):
         super().__init__(density, shear_modulus, viscosity, **kwargs)
         self.maxwell_time = self.viscosity / self.shear_modulus
 
