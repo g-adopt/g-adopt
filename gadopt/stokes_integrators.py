@@ -659,7 +659,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         # Prestress advection term in the GIA literature.
         u, p = self.solution_split
         normal_stress, _ = self.approximation.free_surface_terms(
-            p, 0.0, vertical_component(u + self.displacement), **params_fs
+            vertical_component(u + self.displacement), **params_fs
         )
 
         return normal_stress
@@ -671,7 +671,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         source = self.approximation.buoyancy(self.displacement) * self.k
         eqs_attrs = [
             {"p": p, "stress": stress, "source": source},
-            {"u": u, "rho_mass": self.rho_continuity},
+            {"u": u, "rho_continuity": self.rho_continuity},
         ]
 
         for i in range(len(stokes_terms)):

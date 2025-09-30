@@ -493,8 +493,14 @@ class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximatio
 
     compressible = False
 
-    def __init__(self):
-        super().__init__()
+    def __init__(
+        self,
+        density: Function | Number,
+        shear_modulus: Function | Number,
+        viscosity: Function | Number,
+        **kwargs
+        ):
+        super().__init__(density, shear_modulus, viscosity, **kwargs)
         self.maxwell_time = self.viscosity / self.shear_modulus
 
     def effective_viscosity(self, dt):
