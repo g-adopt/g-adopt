@@ -11,8 +11,6 @@ from gadopt.utility import CombinedSurfaceMeasure
 from gadopt.utility import vertical_component as vc
 import argparse
 import numpy as np
-import scipy
-import math
 from mpi4py import MPI
 parser = argparse.ArgumentParser()
 parser.add_argument("--reflevel", default=5, type=float, help="Horizontal refinement level of surface cubed sphere mesh", required=False)
