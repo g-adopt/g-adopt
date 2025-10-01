@@ -175,7 +175,7 @@ def create_u_nullspace(
 
     """
     X = fd.SpatialCoordinate(V.mesh())
-    dim = len(X)
+    dim = V.mesh().geometric_dimension()
 
     if rotational:
         if dim == 2:
