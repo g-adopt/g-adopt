@@ -4,11 +4,7 @@ parameters and call individual class methods to compute associated diagnostics.
 
 """
 
-from firedrake import (
-    Constant, DirichletBC, FacetNormal, Function,
-    assemble, dot, ds, dx, grad, norm, sqrt,
-)
-from firedrake.functionspaceimpl import MixedFunctionSpace
+from firedrake import Constant, DirichletBC, FacetNormal, Function, assemble, dot, ds, dx, grad, norm, sqrt
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
 import numpy as np
@@ -16,7 +12,62 @@ import numpy as np
 from .utility import CombinedSurfaceMeasure, vertical_component
 
 
-class GeodynamicalDiagnostics:
+class FunctionAttributeHolder:
+    def __init__(self, quad_degree: int, func: Function):
+        self.mesh = extract_unique_domain(func)
+        self.function_space = func.function_space()
+        self.dx = dx(domain=self.mesh, degree=quad_degree)
+        self.ds = CombinedSurfaceMeasure(self.mesh, quad_degree) if self.function_space.extruded else ds(self.mesh)
+        self.normal = FacetNormal(self.mesh)
+        self.volume = assemble(Constant(1) * self.dx)
+        # Fill in as necessary
+        self.boundary_nodes: dict[int, list[int]] = {}
+
+    def get_boundary_nodes(self, boundary_id: int) -> list[int]:
+        if boundary_id not in self.boundary_nodes:
+            bc = DirichletBC(self.function_space, 0, boundary_id)
+            tmp = Function(self.function_space)
+            self.boundary_nodes[boundary_id] = [n for n in bc.nodes if n < len(tmp.dat.data_ro)]
+        return self.boundary_nodes[boundary_id]
+
+
+class BaseDiagnostics:
+    def __init__(self, quad_degree: int, **funcs: Function):
+        self._attrs: dict[Function, FunctionAttributeHolder] = {}
+
+        for name, func in funcs.items():
+            if len(func.subfunctions) == 1:
+                setattr(self, name, func)
+                self._init_single_func(quad_degree, func)
+            else:
+                for i, subfunc in enumerate(func.subfunctions):
+                    setattr(self, f"{name}_{i}", func)
+                    self._init_single_func(quad_degree, subfunc)
+
+    def _init_single_func(self, quad_degree: int, func: Function):
+        self._attrs[func] = FunctionAttributeHolder(quad_degree, func)
+
+    def _function_max(self, f: Function, boundary_id: int | None = None):
+        if boundary_id:
+            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id), 0]
+        else:
+            f_data = f.dat.data_ro
+
+        return f.comm.allreduce(f_data.max(), MPI.MAX)
+
+    def _function_min(self, f: Function, boundary_id: int | None = None):
+        if boundary_id:
+            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id), 0]
+        else:
+            f_data = f.dat.data_ro
+
+        return f.comm.allreduce(f_data.min(), MPI.MIN)
+
+    def _function_avg(self, f: Function):
+        return assemble(f * self._attrs[f].dx) / self._attrs[f].volume
+
+
+class GeodynamicalDiagnostics(BaseDiagnostics):
     """Typical simulation diagnostics used in geodynamical simulations.
 
     Arguments:
@@ -52,80 +103,41 @@ class GeodynamicalDiagnostics:
         *,
         quad_degree: int = 4,
     ):
-        mesh = extract_unique_domain(z)
+        u, p = z.subfunctions[:2]
+        T = T
 
-        # Allows InternalVariableSolver in stokes_integrators.py
-        # (just disp no mixed space) to use same diagnostics.
-        # Would be better to separate out into Base classes
-        is_mixed_space = isinstance(
-            z.function_space().topological, MixedFunctionSpace
-        )
-        if is_mixed_space:
-            self.u, self.p = z.subfunctions[:2]
+        if isinstance(T, Function):
+            super().__init__(quad_degree, u=u, p=p, T=T)
         else:
-            self.u = z
-
-        # vertical component of vel/disp
-        self.uv = Function(self.u.function_space().sub(0))
-
-        self.T = T
-
-        self.dx = dx(domain=mesh, degree=quad_degree)
-        self.domain_volume = assemble(Constant(1) * self.dx)
-
-        if self.u.function_space().extruded:
-            self.ds = CombinedSurfaceMeasure(mesh, quad_degree)
-        else:
-            self.ds = ds(mesh)
+            super().__init__(quad_degree, u=u, p=p)
 
         if bottom_id:
-            self.ds_b = self.ds(bottom_id)
+            self.ds_b = self._attrs[self.u].ds(bottom_id)
             self.bottom_surface = assemble(Constant(1) * self.ds_b)
         if top_id:
-            self.ds_t = self.ds(top_id)
+            self.ds_t = self._attrs[self.u].ds(top_id)
             self.top_surface = assemble(Constant(1) * self.ds_t)
 
-        self.n = FacetNormal(mesh)
-
     def u_rms(self):
-        return norm(self.u) / sqrt(self.domain_volume)
+        return norm(self.u) / sqrt(self._attrs[self.u].volume)
 
     def u_rms_top(self) -> float:
         return sqrt(assemble(dot(self.u, self.u) * self.ds_t))
 
     def Nu_top(self):
-        return -assemble(dot(grad(self.T), self.n) * self.ds_t) / self.top_surface
+        return -assemble(dot(grad(self.T), self._attrs[self.T].normal) * self.ds_t) / self.top_surface
 
     def Nu_bottom(self):
-        return assemble(dot(grad(self.T), self.n) * self.ds_b) / self.bottom_surface
+        return assemble(dot(grad(self.T), self._attrs[self.T].normal) * self.ds_b) / self.bottom_surface
 
     def T_avg(self):
-        return assemble(self.T * self.dx) / self.domain_volume
+        return assemble(self.T * self._attrs[self.T].dx) / self._attrs[self.T].volume
 
     def T_min(self):
-        T_data = self.T.dat.data_ro
-        return self.T.comm.allreduce(T_data.min(), MPI.MIN)
+        return self._function_min(self.T)
 
     def T_max(self):
-        T_data = self.T.dat.data_ro
-        return self.T.comm.allreduce(T_data.max(), MPI.MAX)
+        return self._function_max(self.T)
 
-    def ux_max(self, boundary_id=None) -> float:
-        if boundary_id:
-            bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
-            ux_data = self.u.dat.data_ro_with_halos[bcu.nodes, 0]
-        else:
-            ux_data = self.u.dat.data_ro[:, 0]
-
-        return self.u.comm.allreduce(ux_data.max(), MPI.MAX)
-
-    def uv_min(self, boundary_id=None) -> float:
-        "Minimum value of vertical component of velocity/displacement"
-        self.uv.interpolate(vertical_component(self.u))
-        if boundary_id:
-            bcu = DirichletBC(self.uv.function_space(), 0, boundary_id)
-            uv_data = self.uv.dat.data_ro_with_halos[bcu.nodes]
-        else:
-            uv_data = self.uv.dat.data_ro[:]
-
-        return self.uv.comm.allreduce(uv_data.min(initial=np.inf), MPI.MIN)
+    def ux_max(self, boundary_id: int | None = None) -> float:
+        return self._function_max(self.u, boundary_id)
