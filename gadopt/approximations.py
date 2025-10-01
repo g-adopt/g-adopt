@@ -550,6 +550,18 @@ class CompressibleInternalVariableApproximation(
         self.bulk_shear_ratio = ensure_constant(bulk_shear_ratio)
         self.compressible_buoyancy = compressible_buoyancy
         self.compressible_adv_hyd_pre = compressible_adv_hyd_pre
+
+        # Convert viscosity and shear modulus to lists in the case
+        # for Maxwell Rheology where there is only one internal variable
+        # and hence only one pair of viscosity and shear modulus fields
+        if not isinstance(shear_modulus, list):
+            shear_modulus = [shear_modulus]
+        if not isinstance(viscosity, list):
+            viscosity = [viscosity]
+
+        if len(viscosity) != len(shear_modulus):
+            raise ValueError("Length of viscosity and shear modulus lists must be consistent")
+
         super().__init__(density, shear_modulus, viscosity, **kwargs)
         self.maxwell_times = [ensure_constant(visc / mu) for visc, mu in zip(self.viscosity, self.shear_modulus)]
         self.mu0 = ensure_constant(sum(self.shear_modulus))

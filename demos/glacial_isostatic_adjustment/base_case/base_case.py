@@ -643,8 +643,8 @@ stokes_bcs = {
 approximation = CompressibleInternalVariableApproximation(
     bulk_modulus=bulk_modulus,
     density=density,
-    shear_modulus=[shear_modulus],
-    viscosity=[viscosity],
+    shear_modulus=shear_modulus,
+    viscosity=viscosity,
     Vi=Vi)
 
 # We finally come to solving the variational problem, with solver

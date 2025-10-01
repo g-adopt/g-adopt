@@ -739,6 +739,9 @@ class InternalVariableSolver(StokesSolverBase):
     def set_equations(self) -> None:
         self.strain = self.approximation.deviatoric_strain(self.solution)
 
+        if len(self.m_list) != len(self.approximation.maxwell_times):
+            raise ValueError("Number of internal variables and corresponding Maxwell times must be consistent")
+
         m_new_list = [self.update_m(m, alpha) for m, alpha in zip(self.m_list, self.approximation.maxwell_times)]
 
         stress = self.approximation.stress(self.solution, m_new_list)
