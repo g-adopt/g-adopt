@@ -400,16 +400,12 @@ from gadopt.utility import vertical_component as vc
 # specifically, not Firedrake. By contrast, a non-Cartesian geometry is assumed
 # to have gravity pointing in the radially inward direction.
 #
-
 # Boundaries are automatically tagged by the built-in meshes supported by
-# Firedrake. For the `RectangleMesh` being used here, tag 1 corresponds to the
-# plane $x=0$; 2 to the $x=L$ plane; 3 to the $y=0$ plane; and 4 to the $y=D$
-# plane. The `get_boundary_ids` function will inspect the mesh to detect this
-# and allow the boundaries to be referred to more intuitively
+# Firedrake. We can use G-ADOPT's `get_boundary_ids` function to inspect
+# the mesh to detect this and allow the boundaries to be referred to more intuitively
 # (e.g. `boundary.left`, `boundary.top`, etc.).
 
 # +
-# Set up geometry:
 L = 1500e3  # Length of the domain in m
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 D = radius_values[0]-radius_values[-1]
@@ -419,7 +415,6 @@ layer_height_list = []
 
 DG0_layers = 5
 nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
-
 for j in range(len(radius_values_tilde)-1):
     i = len(radius_values_tilde)-2 - j  # want to start at the bottom
     r = radius_values_tilde[i]
@@ -439,13 +434,14 @@ mesh = ExtrudedMesh(
     layer_height=layer_height_list,
 )
 
-vertical_component = 1
-mesh.coordinates.dat.data[:, vertical_component] -= 1
+# Shift top of domain to z = 0
+mesh.coordinates.dat.data[:, 1] -= 1
 
 mesh.cartesian = True
 
 boundary = get_boundary_ids(mesh)
 # -
+
 # We now need to choose finite element function spaces. `V` , `W`, `S` and `R`
 # are symbolic variables representing function spaces. They also contain the
 # function space's computational implementation, recording the
@@ -456,7 +452,7 @@ boundary = get_boundary_ids(mesh)
 # internal variable as the gradient of the continous displacement field will be
 # discontinuous. Given that we have purely radial variations in density,
 # viscosity and shear modulus, we choose the DG0 space (i.e., constant within a
-# finite element cell but discontinuous between cells),
+# finite element cell but discontinuous between cells).
 
 # Set up function spaces
 V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space
@@ -482,7 +478,6 @@ R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 # We now specify a function to store our displacement solution. We also need to
 # initialise a function to store the old value of the internal variable. Since
 # we are assuming Maxwell rheology we only need one internal variable.
-#
 
 # +
 u = Function(V, name="displacement")  # field to hold our displacement solution
@@ -630,7 +625,6 @@ ice_load = ramp * Vi * rho_ice * g * Hice * disc
 # For the top surface we need to specify a normal stress, i.e. the weight of
 # the ice load, as well as indicating this is a free surface.
 
-# +
 # Setup boundary conditions
 stokes_bcs = {
     boundary.bottom: {'uy': 0},
@@ -639,12 +633,8 @@ stokes_bcs = {
     boundary.right: {'ux': 0},
 }
 
-# gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
-# -
-
 # We also need to specify a G-ADOPT approximation which sets up the various
 # parameters and fields needed for the viscoelastic loading problem.
-
 
 approximation = CompressibleInternalVariableApproximation(
     bulk_modulus=bulk_modulus,
@@ -678,7 +668,7 @@ plog = ParameterLog("params.log", mesh)
 plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max"
 )
-gd = GeodynamicalDiagnostics(u, 0, boundary.bottom, boundary.top)
+gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 # -
@@ -689,6 +679,7 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 # displacement at the surface and stress values accounting for the time
 # dependent Maxwell consitutive equation.
 
+# +
 for timestep in range(max_timesteps):
     time.assign(time+dt)
     stokes_solver.solve()
@@ -710,6 +701,8 @@ for timestep in range(max_timesteps):
 
 
 plog.close()
+# -
+
 # Let's use the python package *PyVista* to plot the magnitude of the
 # displacement field through time. We will use the calculated displacement to
 # artifically scale the mesh. We have exaggerated the stretching by a factor of
@@ -782,6 +775,7 @@ plog.close()
 # # Closes and finalizes movie
 # plotter.close()
 # -
+
 # Looking at the animation, we can see that as the weight of the ice load builds
 # up the mantle deforms, pushing up material away from the ice load. If we kept
 # the ice load fixed this forebulge will eventually grow enough that it balances
