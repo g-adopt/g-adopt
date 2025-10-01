@@ -722,7 +722,7 @@ class InternalVariableSolver(StokesSolverBase):
     def __init__(
         self,
         solution: fd.Function,
-        approximation: BaseApproximation,
+        approximation: SmallDisplacementViscoelasticApproximation,
         /,
         *,
         m_list: list,
@@ -773,8 +773,21 @@ class InternalVariableSolver(StokesSolverBase):
 
         return normal_stress
 
-    def update_m(self, m, alpha):
-        # Return updated internal variable using Backward Euler formula
+    def update_m(
+        self, m: fd.Function, alpha: fd.Function | Expr
+    ) -> Expr:
+        """Calculates updated internal variable using Backward Euler formula
+
+        Args:
+          m:
+            Firedrake function representing the current value of the internal variable
+          alpha:
+            Firedrake function or UFL expression for Maxwell time associated with m
+            terms in the system of equations
+
+        Returns:
+            UFL expression for the updated internal variable using Backward Euler
+        """
         m_new = (m + self.dt / alpha * self.strain) / (1 + self.dt / alpha)
         return m_new
 
