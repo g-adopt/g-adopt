@@ -1,11 +1,10 @@
-"""Helper functions to generate nullspaces for stokes problems
+"""Helper functions to generate null spaces for stokes problems
 
-The module contains a function, `create_stokes_nullspace`,
-to automatically generate null spaces compatible with PETSc
-solvers for the mixed velocity-pressure Stokes system
-as well as the function `create_u_nullspace' which isolates
-the translational and rotational nullspaces associated with
-the velocity (or displacement) field.
+`ala_right_nullspace` computes the pressure null space for the Anelastic Liquid
+Approximation. `create_stokes_nullspace`, automatically generates null spaces
+for the mixed velocity-pressure Stokes system. `create_u_nullspace' returns the
+translational and rotational null spaces associated with the velocity
+(or displacement) field.
 """
 
 import firedrake as fd
@@ -18,7 +17,7 @@ def ala_right_nullspace(
     approximation: AnelasticLiquidApproximation,
     top_subdomain_id: str | int,
 ):
-    r"""Compute pressure nullspace for Anelastic Liquid Approximation.
+    r"""Compute pressure null space for Anelastic Liquid Approximation.
 
     Arguments:
       W: pressure function space
@@ -26,10 +25,11 @@ def ala_right_nullspace(
       top_subdomain_id: boundary id of top surface
 
     Returns:
-      pressure nullspace solution
+      pressure null space solution
 
-    To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
-    which includes a pressure-dependent buoyancy term, we try to solve the equation:
+    To obtain the pressure null space solution for the Stokes equation in
+    Anelastic Liquid Approximation, which includes a pressure-dependent buoyancy term,
+    we try to solve the equation:
 
     $$
       -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
@@ -55,24 +55,28 @@ def ala_right_nullspace(
         int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
     $$
 
-    This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
-    all boundary terms:
+    This elliptic equation can be solved with natural boundary conditions by imposing our
+    original equation above, which eliminates all boundary terms:
 
     $$
       int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
     $$
 
-    However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
-    we ended up merely testing the original equation with $nabla q$). Instead we use the fact that the gradient of the null mode
-    is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
-    any nonzero constant for this surface fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
-    and apply it as a Dirichlet boundary condition.
+    However, if we do so on all boundaries we end up with a system that has the same
+    null space, as the one we are after (note that we ended up merely testing the
+    original equation with $nabla q$). Instead we use the fact that the gradient of
+    the null mode is always vertical, and thus the null mode is constant at any
+    horizontal level (geoid), specifically the top surface. Choosing any nonzero
+    constant for this surface fixes the arbitrary scalar multiplier of the null
+    mode. We choose the value of one and apply it as a Dirichlet boundary condition.
 
-    Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
-    since not every test function $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
-    pressure test space, the two terms do not necessarily exactly cancel when tested with $v$ instead of $nabla q$ as in our
-    final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
-    an improved convergence of the iterative Stokes solver.
+    Note that this procedure does not necessarily compute the exact null space of the
+    *discretised* Stokes system. In particular, since not every test function
+    $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$,
+    the pressure test space, the two terms do not necessarily exactly cancel when
+    tested with $v$ instead of $nabla q$ as in our final equation. However, in
+    practice the discrete error appears to be small enough, and providing this
+    null space gives an improved convergence of the iterative Stokes solver.
     """
     W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
     q = fd.TestFunction(W)
@@ -109,7 +113,8 @@ def create_stokes_nullspace(
       closed: Whether to include a constant pressure null space
       rotational: Whether to include all rotational modes
       translations: List of translations to include
-      ala_approximation: AnelasticLiquidApproximation for calculating (non-constant) right nullspace
+      ala_approximation: AnelasticLiquidApproximation for calculating (non-constant)
+                         right null space
       top_subdomain_id: Boundary id of top surface. Required when providing
                         ala_approximation.
 
@@ -117,7 +122,8 @@ def create_stokes_nullspace(
       A Firedrake mixed vector space basis incorporating the null space components
 
     """
-    # ala_approximation and top_subdomain_id are both needed when calculating right nullspace for ala
+    # ala_approximation and top_subdomain_id are both needed when calculating right
+    # null space for ala
     if (ala_approximation is None) != (top_subdomain_id is None):
         raise ValueError(
             "Both ala_approximation and top_subdomain_id must be provided, or both must be None."
@@ -146,7 +152,7 @@ def create_stokes_nullspace(
 
     null_space = [V_nullspace, p_nullspace]
 
-    # If free surface unknowns, add dummy free surface nullspace
+    # If free surface unknowns, add dummy free surface null space
     null_space += stokes_subspaces[2:]
 
     return fd.MixedVectorSpaceBasis(Z, null_space)
