@@ -201,7 +201,7 @@ def advection_hydrostatic_prestress_term(
 ) -> Form:
     # Advection of background hydrostatic pressure used in linearised
     # GIA simulations where
-    Vi = eq.approximation.Vi
+    B_mu = eq.approximation.B_mu
     rho0 = eq.approximation.density
     g = eq.approximation.g
     u_r = vertical_component(trial)
@@ -217,13 +217,13 @@ def advection_hydrostatic_prestress_term(
             dS = dS_h
         else:
             dS = eq.dS
-        F = Vi("+") * jump(rho0) * u_r("+") * g("+") * dot(eq.test("+"), eq.n("+")) * dS
+        F = B_mu("+") * jump(rho0) * u_r("+") * g("+") * dot(eq.test("+"), eq.n("+")) * dS
     if eq.approximation.compressible_adv_hyd_pre:
         # Include body integral after i.b.p of hydrostatic prestress advection term
         # Analytical solution from Cathles 2024 Eq 2b doesn't include prestress
         # so we neglect this term but keep the free surface term that accounts for
         # viscous feedback at isostatic equibrium
-        F -= div(eq.test) * Vi * rho0 * g * u_r * eq.dx
+        F -= div(eq.test) * B_mu * rho0 * g * u_r * eq.dx
 
     return -F
 

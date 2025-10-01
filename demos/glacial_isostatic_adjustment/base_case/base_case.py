@@ -518,8 +518,7 @@ shear_modulus_scale = 1e11
 viscosity_scale = 1e21
 characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 gravity_scale = 9.81
-# Below is Beta_mu nondimensional parameter
-Vi = Constant(density_scale * D * gravity_scale / shear_modulus_scale)
+B_mu = Constant(density_scale * D * gravity_scale / shear_modulus_scale)
 
 density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
@@ -619,7 +618,7 @@ disc_dx = 5e3 / D
 k_disc = 2*pi/(8*disc_dx)  # wavenumber for disk 2pi / lambda
 r = X[0]
 disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-ice_load = ramp * Vi * rho_ice * g * Hice * disc
+ice_load = ramp * B_mu * rho_ice * g * Hice * disc
 
 # We can now define the boundary conditions to be used in this simulation.
 # Let's set the bottom and side boundaries to be free slip with no normal
@@ -645,7 +644,7 @@ approximation = CompressibleInternalVariableApproximation(
     density=density,
     shear_modulus=shear_modulus,
     viscosity=viscosity,
-    Vi=Vi)
+    B_mu=B_mu)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `u` and
