@@ -162,8 +162,6 @@ def create_u_nullspace(
     V: fd.functionspaceimpl.WithGeometry,
     rotational: bool = False,
     translations: list[int] | None = None,
-    ala_approximation: AnelasticLiquidApproximation | None = None,
-    top_subdomain_id: str | int | None = None,
 ) -> fd.nullspace.VectorSpaceBasis:
     """Create a null space for the velocity (or displacement) in a Stokes system
 
@@ -197,7 +195,7 @@ def create_u_nullspace(
             )
             basis = [x_rotV, y_rotV, z_rotV]
         else:
-            raise ValueError("Unknown dimension")
+            raise ValueError("Can only handle 2 or 3 dimensional spaces")
     else:
         basis = []
 
