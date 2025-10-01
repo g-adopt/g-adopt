@@ -1,4 +1,4 @@
-"""Helper functions to generate null spaces for stokes problems
+"""Helper functions to generate null spaces for Stokes problems
 
 `ala_right_nullspace` computes the pressure null space for the Anelastic Liquid
 Approximation. `create_stokes_nullspace`, automatically generates null spaces
