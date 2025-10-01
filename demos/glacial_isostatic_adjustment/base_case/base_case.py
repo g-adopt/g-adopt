@@ -308,22 +308,25 @@
 #     H  = \sum_i \left(\int_{K_i} -\nabla \cdot \boldsymbol{\phi}~   B_{\mu} \rho_0 g u_k  \, dx  + \int_{\partial K_i} \boldsymbol{\phi} \cdot \hat{\boldsymbol{n}}  B_{\mu} \rho_0 g u_k \, ds  \right).
 # \end{equation}
 #
-# Since we allow density and gravity discontinuities through the $DG0$
-# discretisation, we need to also account for the contribution of surface
-# integrals along interior facets, denoted by $\Gamma$, using
+# Since our $DG0$ discretisation allows density and gravity discontinuities,
+# we can no longer assume that integrating along both sides of interior
+# boundaries in the mesh will cancel out. As such, we have to write an
+# additional term accounting for the 'jumps' in material properties
+# along interior boundaries (also referred to as interior facets).
+#
+# The hydrostatic pre-stress term now becomes
 #
 # \begin{equation}
 #     H  = -\int_{\Omega} \nabla \cdot \boldsymbol{\phi} B_{\mu} \rho_0 g u_k \, dx  + \int_{\Gamma} \boldsymbol{\phi} \cdot B_{\mu} u_k [[\rho_0 g \hat{\boldsymbol{n}}]]  \, ds  + \int_{\partial \Omega_\textrm{top}} \boldsymbol{\phi} \cdot \hat{\boldsymbol{n}} B_{\mu} \rho_0 g u_k \, ds  ,
 # \end{equation}
 #
-# where the jump term is given by
+# where the jump term along internal boundaries, $\Gamma$, is given by
 # \begin{equation}
 #     [[\rho_0 g \hat{\boldsymbol{n}}]] = \hat{\boldsymbol{n}}^+ \rho_0^+ g^+ + \hat{\boldsymbol{n}}^- \rho_0^- g^-.
 # \end{equation}
 #
 # The (arbitrary) labels $+$ and $-$ mark contributions from either side of
 # the cell edge and  $\hat{\boldsymbol{n}}^+ = -\hat{\boldsymbol{n}}^-$. Note
-
 # that the interior facet term is only non zero across layers with material
 # density and gravity jumps and is similar to the Winkler foundations as
 # described in Wu (2004). The last term in is similar to a free surface
