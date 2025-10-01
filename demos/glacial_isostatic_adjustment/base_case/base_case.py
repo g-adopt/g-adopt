@@ -445,7 +445,7 @@ mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
 # -
 
-# We now need to choose finite element function spaces. `V` , `W`, `S` and `R`
+# We now need to choose finite element function spaces. `V` , `S`, `DG0` and `R`
 # are symbolic variables representing function spaces. They also contain the
 # function space's computational implementation, recording the
 # association of degrees of freedom with the mesh and pointing to the
@@ -463,7 +463,7 @@ S = TensorFunctionSpace(mesh, "DQ", 1)  # Stress tensor function space
 DG0 = FunctionSpace(mesh, "DQ", 0)  # Density/viscosity/shear modulus function space
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
-# We can now visualise the resulting mesh.
+# Let's use the python package *PyVista* to visualise the resulting mesh.
 
 # + tags=["active-ipynb"]
 # import pyvista as pv
@@ -492,7 +492,7 @@ m_list = [m]
 # We can output function space information, for example the number of degrees
 # of freedom (DOF) using `log`, a utility provided by
 # G-ADOPT. (N.b. `log` is equivalent to python's `print` function, except that
-# it simplifies outputs when running simulations in parallel.)
+# it simplifies outputs for parallel simulations.)
 
 # Output function space information:
 log("Number of Displacement DOF:", V.dim())
@@ -518,7 +518,8 @@ shear_modulus_scale = 1e11
 viscosity_scale = 1e21
 characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 gravity_scale = 9.81
-Vi = Constant(density_scale * D * gravity_scale / shear_modulus_scale)  # This is Beta_mu nondimensional parameter
+# Below is Beta_mu nondimensional parameter
+Vi = Constant(density_scale * D * gravity_scale / shear_modulus_scale)
 
 density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
@@ -706,16 +707,13 @@ for timestep in range(max_timesteps):
 plog.close()
 # -
 
-# Let's use the python package *PyVista* to plot the magnitude of the
-# displacement field through time. We will use the calculated displacement to
-# artifically scale the mesh. We have exaggerated the stretching by a factor of
-# 500, **BUT...** it is important to remember this is just for ease of
-# visualisation - the mesh is not moving in reality!
+# We can use *PyVista* to create an animation of the displacement through time.
+# We will use the calculated displacement to artifically scale the mesh.
+# We have exaggerated the stretching by a factor of 500, **BUT...** it is
+# important to remember this is just for ease of visualisation - the mesh
+# is not moving in reality!
 
 # + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
-# import pyvista as pv
-#
 # # Read the PVD file
 # reader = pv.get_reader("output.pvd")
 # data = reader.read()[0]  # MultiBlock mesh with only 1 block
@@ -794,16 +792,19 @@ plog.close()
 # ----------
 # Cathles L.M. (1975). *Viscosity of the Earth's Mantle*, Princeton University Press.
 #
-# Dahlen F. A. and Tromp J. (1998). *Theoretical Global Seismology*, Princeton University Press.
+# Dahlen F. A. and Tromp J. (1998). *Theoretical Global Seismology*, Princeton
+# University Press.
 #
 # Ranalli, G. (1995). Rheology of the Earth. Springer Science & Business Media.
 #
-# Weerdesteijn, M. F., Naliboff, J. B., Conrad, C. P., Reusen, J. M., Steffen, R., Heister, T., &
-# Zhang, J. (2023). *Modeling viscoelastic solid earth deformation due to ice age and contemporary
-# glacial mass changes in ASPECT*. Geochemistry, Geophysics, Geosystems.
+# Weerdesteijn, M. F., Naliboff, J. B., Conrad, C. P., Reusen, J. M., Steffen, R.,
+# Heister, T., & Zhang, J. (2023). *Modeling viscoelastic solid earth deformation
+# due to ice age and contemporary glacial mass changes in ASPECT*. Geochemistry,
+# Geophysics, Geosystems.
 #
-# Wu P., Peltier W. R. (1982). *Viscous gravitational relaxation*, Geophysical Journal International.
+# Wu P., Peltier W. R. (1982). *Viscous gravitational relaxation*, Geophysical Journal
+# International.
 #
-# Zhong, S., Paulson, A., & Wahr, J. (2003). Three-dimensional finite-element modelling of Earth’s
-# viscoelastic deformation: effects of lateral variations in lithospheric thickness. Geophysical
-# Journal International.
+# Zhong, S., Paulson, A., & Wahr, J. (2003). Three-dimensional finite-element
+# modelling of Earth’s viscoelastic deformation: effects of lateral variations in
+# lithospheric thickness. Geophysical Journal International.
