@@ -8,14 +8,16 @@ from animate import RiemannianMetric, adapt
 nx, ny = 10, 10
 mesh = UnitSquareMesh(nx, ny, quadrilateral=False)  # Square mesh generated via firedrake
 
-timestep = 0
-
+time = 0.0  # initial time
+timestep = 0  # initial timestep
 timesteps_per_adapt = 10
+delta_t = Constant(1e-6)  # Initial time-step
 
 # Create output file and select output_frequency:
 # ADAPTIVITY NOTE: need adaptive=True with multiple meshes in pvd series
 output_file = VTKFile("output.pvd", adaptive=True)
 output_frequency = 1
+
 
 
 # Open file for logging diagnostic output:
@@ -71,14 +73,12 @@ def run_interval(mesh, timestep, Nt, T_init, u_init, p_init):
     # remind me, did we do this in Fluidity?
     p.interpolate(p_init)
 
-    delta_t = Constant(1e-6)  # Initial time-step
     t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
     # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
     Ra = Constant(1e5)  # Rayleigh number
     approximation = BoussinesqApproximation(Ra)
 
-    time = 0.0
     steady_state_tolerance = 1e-9
 
     # Nullspaces and near-nullspaces:
