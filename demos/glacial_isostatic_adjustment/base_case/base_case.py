@@ -593,8 +593,8 @@ log(f"Simulation start time: {Tstart} years")
 # run for a further 10 thousand years to allow the system to relax towards
 # isostatic equilibrium. This is approximately the length of an
 # interglacial-glacial cycle. The width of the ice sheet is 100 km and we have
-# used a tanh function again to smooth out the transition from ice to ice-free
-# regions.
+# used a tanh function again to smooth out the transition from ice to
+# ice-free regions.
 #
 # As the loading and unloading cycle only varies linearly in time, let's write
 # the ice load as a symbolic expression.
