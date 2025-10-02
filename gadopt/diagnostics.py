@@ -25,6 +25,24 @@ from .utility import CombinedSurfaceMeasure, vertical_component
 
 
 class FunctionAttributeHolder:
+    """Hold Firedrake Function attributes
+
+    This class gathers function attributes and calculates quantities based on those
+    functions that will remain constant for the duration of a simulation. The set of
+    attributes stored is the mesh, function_space, dx and ds measures, the FacetNormal
+    of the mesh (as the `.normal` attribute) and the volume of the domain. An empty
+    dict is also created to hold boundary nodes, however, this is only constructed
+    on as needed by the simulation. Note that the function itself is not stored in by
+    this class. Functions are hashable and can therefore be used as dict keys in to
+    reference a FunctionAttributeHolder object.
+
+    Args:
+      quad_degree:
+        The quadrature degree for the measures held by this object
+      func:
+        The Firedrake function these attributes belong to
+    """
+
     def __init__(self, quad_degree: int, func: Function):
         self.mesh = extract_unique_domain(func)
         self.function_space = func.function_space()
@@ -40,6 +58,22 @@ class FunctionAttributeHolder:
         self.boundary_nodes: dict[int, list[int]] = {}
 
     def get_boundary_nodes(self, boundary_id: int) -> list[int]:
+        """Return the list of nodes on the boundary owned by this process
+
+        Creates a `DirichletBC` object, then uses the `.nodes` attribute for that
+        object to provide a list of indices that reside on the boundary of the domain
+        of the function associated with this `FunctionAttributeHolder` object. The
+        `dof_dset.size` parameter of the `FunctionSpace` is used to exclude nodes in
+        the halo region of the domain. The result is cached for reuse.
+
+        Args:
+          boundary_id:
+            Integer ID of the domain boundary
+
+        Returns:
+          List of integers corresponding to nodes on the boundary identified by
+          `boundary_id`
+        """
         if boundary_id not in self.boundary_nodes:
             bc = DirichletBC(self.function_space, 0, boundary_id)
             self.boundary_nodes[boundary_id] = [
@@ -49,6 +83,32 @@ class FunctionAttributeHolder:
 
 
 class BaseDiagnostics:
+    """A base class containing useful operations for diagnostics
+
+    For each Firedrake function passed as a keyword argument in the `funcs` parameter,
+    store that function as an attibute of the class accessible by its keyword, e.g.:
+
+      `diag = BaseDiagnostics(quad_degree, z=z)`
+
+    sets the Firedrake function `z` to the `diag.z` parameter.
+    If the function is a `MixedFunction`, the subfunctions will be accessible by an
+    index, e.g.:
+
+      `diag = BaseDiagnostics(quad_degree, z=z)`
+
+    sets the subfunctions of `z` to `diag.z_0`, `diag.z_1`, etc. A
+    `FunctionAttributeHolder` is created for each function. These attributes are
+    accessed by the `diag._attrs` dict.
+
+    Args:
+      quad_degree:
+        The quadrature degree for the measures held by this object
+
+      **funcs:
+        key-value pairs of Firedrake functions and the class member that will be used
+        to reference that function.
+    """
+
     def __init__(self, quad_degree: int, **funcs: Function):
         self._attrs: dict[Function, FunctionAttributeHolder] = {}
 
@@ -70,6 +130,21 @@ class BaseDiagnostics:
         boundary_id: int | None = None,
         dim: int | None = None,
     ):
+        """Calculate the minimum value of a function
+
+        Args:
+          f:
+            Firedrake function
+          boundary_id:
+            Optional, if passed the minimum will be calculated on the specified
+            boundary, otherwise it will be the minimum over the whole domain
+          dim:
+            Optional, if passed, will calculate the minimum only for the `dim`
+            component of a vector function.
+
+        Returns:
+          Minimum value of f across the specified domain/component
+        """
         if boundary_id:
             f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
         else:
@@ -84,6 +159,21 @@ class BaseDiagnostics:
         boundary_id: int | None = None,
         dim: int | None = None,
     ):
+        """Calculate the maximum value of a function
+
+        Args:
+          f:
+            Firedrake function
+          boundary_id:
+            Optional, if passed the maximum will be calculated on the specified
+            boundary, otherwise it will be the maximum over the whole domain
+          dim:
+            Optional, if passed, will calculate the maximum only for the `dim`
+            component of a vector function.
+
+        Returns:
+          Maximum value of f across the specified domain/component
+        """
         if boundary_id:
             f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
         else:
@@ -93,6 +183,15 @@ class BaseDiagnostics:
         return f.comm.allreduce(f_data.max(), MPI.MAX)
 
     def _function_avg(self, f: Function):
+        """Calculate the average value of a function
+
+        Args:
+          f:
+            Firedrake function
+
+        Returns:
+          Average value of f across the entire domain associated with it
+        """
         return assemble(f * self._attrs[f].dx) / self._attrs[f].volume
 
 
