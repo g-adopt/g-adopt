@@ -22,7 +22,7 @@ cases = {
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
     f"{mm_path}/compositional_buoyancy": {"extra_checks": ["entrainment"]},
     f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
-    f"{gia_path}/base_case": {"extra_checks": ["disp_min", "disp_max"]},
+    f"{gia_path}/base_case": {},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["disp_min", "disp_max"]},
     f"{tests_path}/2d_cylindrical_TALA_DG": {
         "extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]

@@ -96,7 +96,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     log("dt in years", float(dt/year_in_seconds))
     log("maxwell time in years", float(maxwell_time/year_in_seconds))
 
-    approximation = SmallDisplacementViscoelasticApproximation(rho0, shear_modulus, viscosity, g=g)
+    approximation = MaxwellDisplacementApproximation(rho0, shear_modulus, viscosity, g=g)
 
     # Create output file
     if args.output:
