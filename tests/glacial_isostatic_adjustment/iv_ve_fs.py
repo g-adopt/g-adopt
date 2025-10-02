@@ -121,8 +121,8 @@ def viscoelastic_model(
     dump_period = 1
     log("dump_period", dump_period)
 
-    Vi = rho0 * D * g / shear_modulus
-    log("Vi = rho0*g*D/mu", float(Vi))
+    B_mu = rho0 * D * g / shear_modulus
+    log("B_mu = rho0*g*D/mu", float(B_mu))
     bulk_shear_ratio = bulk_modulus / shear_modulus
     log("k/mu", float(bulk_shear_ratio))
 
@@ -142,7 +142,7 @@ def viscoelastic_model(
         shear_modulus=shear_nondim,
         viscosity=visc_nondim,
         g=1,
-        Vi=Vi,
+        B_mu=B_mu,
         bulk_shear_ratio=bulk_shear_ratio,
         compressible_buoyancy=False,
         compressible_adv_hyd_pre=compressible_adv_hyd_pre,
@@ -157,7 +157,7 @@ def viscoelastic_model(
     # Setup boundary conditions
     stokes_bcs = {
         bottom_id: {"uy": 0},
-        top_id: {"free_surface": {"normal_stress": Vi * eta}},
+        top_id: {"free_surface": {"normal_stress": B_mu * eta}},
         left_id: {"ux": 0},
         right_id: {"ux": 0},
     }
