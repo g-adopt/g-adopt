@@ -734,8 +734,6 @@ class InternalVariableSolver(StokesSolverBase):
         approximation.mu = approximation.viscosity[0]/(approximation.maxwell_times[0]+dt)
         super().__init__(solution, approximation, dt=dt, **kwargs)
 
-        print('hello gadopt')
-
     def set_equations(self) -> None:
         self.strain = self.approximation.deviatoric_strain(self.solution)
 
