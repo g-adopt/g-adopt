@@ -546,6 +546,27 @@ viscosity = Function(DG0, name="viscosity")
 initialise_background_field(viscosity, viscosity_values_tilde)
 # -
 
+# We can also plot the viscosity field using *PyVista*.
+
+VTKFile("viscosity.pvd").write(viscosity)
+visc_data = pv.read("viscosity/viscosity_0.vtu")
+plotter = pv.Plotter(notebook=True)
+plotter.add_mesh(visc_data,
+                 log_scale=True,
+                 scalar_bar_args={
+                     "title": 'log10(Viscosity)',
+                     "position_x": 0.8,
+                     "position_y": 0.2,
+                     "vertical": True,
+                     "title_font_size": 20,
+                     "label_font_size": 16,
+                     "fmt": "%.0f",
+                     "font_family": "arial",
+                 }
+                 )
+plotter.camera_position = "xy"
+plotter.show(jupyter_backend="static", interactive=False)
+
 # Next let's define the length of our time step. If we want to accurately
 # resolve the elastic response we should choose a timestep lower than the
 # Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for
@@ -650,7 +671,6 @@ approximation = CompressibleInternalVariableApproximation(
 # objects for the Stokes system created. We pass in the solution fields `u` and
 # various fields needed for the solve along with the approximation, timestep,
 # list of internal variables and boundary conditions.
-#
 
 stokes_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs)
 
@@ -787,6 +807,25 @@ plog.close()
 
 # ![SegmentLocal](displacement_warp.gif "segment")
 
+# + [markdown] tags=["exercise"]
+# Exercises
+# --------------
+# Now some exercises for you to try!
+# 1. Try making the width of the ice load larger - how does this change the
+# resulting displacement field?
+# 2. By default G-ADOPT includes fully compressible effects but we can approximate
+# an incompressible simulation by setting the parameter `bulk_shear_ratio` in
+# the `approximation` to a large number e.g. 1000. How much does this effect the
+# # solution?
+# 3. Try varying the viscosity values and thickness of the rheological model. What
+# happens if we remove the lithosphere by decreasing the effective viscosity in the
+# top layer? Can you find the tradeoff between viscosity jumps, layer thickness and
+# load wavelength based on the 'Cathles parameter' by $Ct = \eta*(D/\lambda)^3$,
+# where $\eta*$ is the viscosity contrast, $D$ is the thickness of the Low Viscosity
+# Zone, and $\lambda$ is the flow wavelength. For more details see Richards and
+# Lenardic, 2018)
+# -
+
 # References
 # ----------
 # Cathles L.M. (1975). *Viscosity of the Earth's Mantle*, Princeton University Press.
@@ -795,6 +834,10 @@ plog.close()
 # University Press.
 #
 # Ranalli, G. (1995). Rheology of the Earth. Springer Science & Business Media.
+#
+# Richards, M. A., & Lenardic, A. (2018). *The Cathles parameter (Ct): A geodynamic
+# definition of the asthenosphere and implications for the nature of plate tectonics.*
+# Geochemistry, Geophysics, Geosystems.
 #
 # Weerdesteijn, M. F., Naliboff, J. B., Conrad, C. P., Reusen, J. M., Steffen, R.,
 # Heister, T., & Zhang, J. (2023). *Modeling viscoelastic solid earth deformation
