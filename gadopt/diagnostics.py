@@ -32,11 +32,9 @@ class FunctionAttributeHolder:
     This class gathers function attributes and calculates quantities based on those
     functions that will remain constant for the duration of a simulation. The set of
     attributes stored is the mesh, function_space, dx and ds measures, the FacetNormal
-    of the mesh (as the `.normal` attribute) and the volume of the domain. An empty
-    dict is also created to hold boundary nodes, however, this is only constructed
-    on as needed by the simulation. Note that the function itself is not stored in by
-    this class. Functions are hashable and can therefore be used as dict keys in to
-    reference a FunctionAttributeHolder object.
+    of the mesh (as the `.normal` attribute) and the volume of the domain. Note that the
+    function itself is not stored in by this class. Functions are hashable and can
+    therefore be used as dict keys in to reference a FunctionAttributeHolder object.
 
     Args:
       quad_degree:
@@ -56,9 +54,8 @@ class FunctionAttributeHolder:
         )
         self.normal = FacetNormal(self.mesh)
         self.volume = assemble(Constant(1) * self.dx)
-        # Fill in as necessary
-        self.boundary_nodes: dict[int, list[int]] = {}
 
+    @lru_cache
     def get_boundary_nodes(self, boundary_id: int) -> list[int]:
         """Return the list of nodes on the boundary owned by this process
 
@@ -66,7 +63,7 @@ class FunctionAttributeHolder:
         object to provide a list of indices that reside on the boundary of the domain
         of the function associated with this `FunctionAttributeHolder` object. The
         `dof_dset.size` parameter of the `FunctionSpace` is used to exclude nodes in
-        the halo region of the domain. The result is cached for reuse.
+        the halo region of the domain.
 
         Args:
           boundary_id:
@@ -76,12 +73,8 @@ class FunctionAttributeHolder:
           List of integers corresponding to nodes on the boundary identified by
           `boundary_id`
         """
-        if boundary_id not in self.boundary_nodes:
-            bc = DirichletBC(self.function_space, 0, boundary_id)
-            self.boundary_nodes[boundary_id] = [
-                n for n in bc.nodes if n < self.function_space.dof_dset.size
-            ]
-        return self.boundary_nodes[boundary_id]
+        bc = DirichletBC(self.function_space, 0, boundary_id)
+        return [n for n in bc.nodes if n < self.function_space.dof_dset.size]
 
 
 class BaseDiagnostics:
