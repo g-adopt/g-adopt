@@ -548,24 +548,26 @@ initialise_background_field(viscosity, viscosity_values_tilde)
 
 # We can also plot the viscosity field using *PyVista*.
 
-VTKFile("viscosity.pvd").write(viscosity)
-visc_data = pv.read("viscosity/viscosity_0.vtu")
-plotter = pv.Plotter(notebook=True)
-plotter.add_mesh(visc_data,
-                 log_scale=True,
-                 scalar_bar_args={
-                     "title": 'log10(Viscosity)',
-                     "position_x": 0.8,
-                     "position_y": 0.2,
-                     "vertical": True,
-                     "title_font_size": 20,
-                     "label_font_size": 16,
-                     "fmt": "%.0f",
-                     "font_family": "arial",
-                 }
-                 )
-plotter.camera_position = "xy"
-plotter.show(jupyter_backend="static", interactive=False)
+# + tags=["active-ipynb"]
+# VTKFile("viscosity.pvd").write(viscosity)
+# visc_data = pv.read("viscosity/viscosity_0.vtu")
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(visc_data,
+#                  log_scale=True,
+#                  scalar_bar_args={
+#                      "title": 'log10(Viscosity)',
+#                      "position_x": 0.8,
+#                      "position_y": 0.2,
+#                      "vertical": True,
+#                      "title_font_size": 20,
+#                      "label_font_size": 16,
+#                      "fmt": "%.0f",
+#                      "font_family": "arial",
+#                  }
+#                  )
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
+# -
 
 # Next let's define the length of our time step. If we want to accurately
 # resolve the elastic response we should choose a timestep lower than the
