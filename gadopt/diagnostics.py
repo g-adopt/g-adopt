@@ -4,7 +4,19 @@ relevant parameters and call individual class methods to compute associated diag
 
 """
 
-from firedrake import Constant, DirichletBC, FacetNormal, Function, assemble, dot, ds, dx, grad, norm, sqrt
+from firedrake import (
+    Constant,
+    DirichletBC,
+    FacetNormal,
+    Function,
+    assemble,
+    dot,
+    ds,
+    dx,
+    grad,
+    norm,
+    sqrt,
+)
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
 from functools import cache
@@ -19,7 +31,11 @@ class FunctionAttributeHolder:
         self.mesh = extract_unique_domain(func)
         self.function_space = func.function_space()
         self.dx = dx(domain=self.mesh, degree=quad_degree)
-        self.ds = CombinedSurfaceMeasure(self.mesh, quad_degree) if self.function_space.extruded else ds(self.mesh)
+        self.ds = (
+            CombinedSurfaceMeasure(self.mesh, quad_degree)
+            if self.function_space.extruded
+            else ds(self.mesh)
+        )
         self.normal = FacetNormal(self.mesh)
         self.volume = assemble(Constant(1) * self.dx)
         # Fill in as necessary
@@ -28,8 +44,9 @@ class FunctionAttributeHolder:
     def get_boundary_nodes(self, boundary_id: int) -> list[int]:
         if boundary_id not in self.boundary_nodes:
             bc = DirichletBC(self.function_space, 0, boundary_id)
-            tmp = Function(self.function_space)
-            self.boundary_nodes[boundary_id] = [n for n in bc.nodes if n < len(tmp.dat.data_ro)]
+            self.boundary_nodes[boundary_id] = [
+                n for n in bc.nodes if n < self.function_space.dof_dset.size
+            ]
         return self.boundary_nodes[boundary_id]
 
 
@@ -49,21 +66,33 @@ class BaseDiagnostics:
     def _init_single_func(self, quad_degree: int, func: Function):
         self._attrs[func] = FunctionAttributeHolder(quad_degree, func)
 
-    def _function_max(self, f: Function, boundary_id: int | None = None):
+    def _function_min(
+        self,
+        f: Function,
+        boundary_id: int | None = None,
+        dim: int | None = None,
+    ):
         if boundary_id:
-            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id), 0]
+            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
         else:
             f_data = f.dat.data_ro
-
-        return f.comm.allreduce(f_data.max(), MPI.MAX)
-
-    def _function_min(self, f: Function, boundary_id: int | None = None):
-        if boundary_id:
-            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id), 0]
-        else:
-            f_data = f.dat.data_ro
-
+        if dim:
+            f_data = f_data[:, dim]
         return f.comm.allreduce(f_data.min(), MPI.MIN)
+
+    def _function_max(
+        self,
+        f: Function,
+        boundary_id: int | None = None,
+        dim: int | None = None,
+    ):
+        if boundary_id:
+            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
+        else:
+            f_data = f.dat.data_ro
+        if dim:
+            f_data = f_data[:, dim]
+        return f.comm.allreduce(f_data.max(), MPI.MAX)
 
     def _function_avg(self, f: Function):
         return assemble(f * self._attrs[f].dx) / self._attrs[f].volume
@@ -126,14 +155,22 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
     def u_rms_top(self) -> float:
         return fd.sqrt(fd.assemble(fd.dot(self.u, self.u) * self.ds_t))
 
-    def Nu_top(self):
-        return -assemble(dot(grad(self.T), self._attrs[self.T].normal) * self.ds_t) / self.top_surface
+    def Nu_top(self, scale: float = 1.0):
+        return (
+            -scale
+            * assemble(dot(grad(self.T), self._attrs[self.T].normal) * self.ds_t)
+            / self.top_surface
+        )
 
-    def Nu_bottom(self):
-        return assemble(dot(grad(self.T), self._attrs[self.T].normal) * self.ds_b) / self.bottom_surface
+    def Nu_bottom(self, scale: float = 1.0):
+        return (
+            scale
+            * assemble(dot(grad(self.T), self._attrs[self.T].normal) * self.ds_b)
+            / self.bottom_surface
+        )
 
     def T_avg(self):
-        return assemble(self.T * self._attrs[self.T].dx) / self._attrs[self.T].volume
+        return self._function_avg(self.T)
 
     def T_min(self):
         return self._function_min(self.T)
@@ -142,4 +179,4 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         return self._function_max(self.T)
 
     def ux_max(self, boundary_id: int | None = None) -> float:
-        return self._function_max(self.u, boundary_id)
+        return self._function_max(self.u, boundary_id, 0)
