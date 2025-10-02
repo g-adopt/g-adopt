@@ -19,7 +19,7 @@ from firedrake import (
 )
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
-import numpy as np
+from functools import lru_cache
 
 from .utility import CombinedSurfaceMeasure, vertical_component
 
@@ -124,6 +124,20 @@ class BaseDiagnostics:
     def _init_single_func(self, quad_degree: int, func: Function):
         self._attrs[func] = FunctionAttributeHolder(quad_degree, func)
 
+    @lru_cache
+    def __contains__(self, item: Function) -> bool:
+        if item not in self._attrs:
+            raise KeyError(f"Function {item} is not present in this diagnostic object")
+        return True
+
+    @lru_cache
+    def dim_valid(self, f: Function) -> bool:
+        if len(f.dat.shape) < 2:
+            raise KeyError(
+                "Requested a min/max over function dimension for a scalar function"
+            )
+        return True
+
     def _function_min(
         self,
         f: Function,
@@ -145,13 +159,14 @@ class BaseDiagnostics:
         Returns:
           Minimum value of f across the specified domain/component
         """
-        if boundary_id:
-            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
-        else:
-            f_data = f.dat.data_ro
-        if dim:
-            f_data = f_data[:, dim]
-        return f.comm.allreduce(f_data.min(), MPI.MIN)
+        if f in self:
+            if boundary_id:
+                f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
+            else:
+                f_data = f.dat.data_ro
+            if dim is not None and self.dim_valid(f):
+                f_data = f_data[:, dim]
+            return f.comm.allreduce(f_data.min(), MPI.MIN)
 
     def _function_max(
         self,
@@ -174,13 +189,14 @@ class BaseDiagnostics:
         Returns:
           Maximum value of f across the specified domain/component
         """
-        if boundary_id:
-            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
-        else:
-            f_data = f.dat.data_ro
-        if dim:
-            f_data = f_data[:, dim]
-        return f.comm.allreduce(f_data.max(), MPI.MAX)
+        if f in self:
+            if boundary_id:
+                f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
+            else:
+                f_data = f.dat.data_ro
+            if dim is not None and self.dim_valid(f):
+                f_data = f_data[:, dim]
+            return f.comm.allreduce(f_data.max(), MPI.MAX)
 
     def _function_avg(self, f: Function):
         """Calculate the average value of a function
@@ -192,7 +208,8 @@ class BaseDiagnostics:
         Returns:
           Average value of f across the entire domain associated with it
         """
-        return assemble(f * self._attrs[f].dx) / self._attrs[f].volume
+        if f in self:
+            return assemble(f * self._attrs[f].dx) / self._attrs[f].volume
 
 
 class GeodynamicalDiagnostics(BaseDiagnostics):
