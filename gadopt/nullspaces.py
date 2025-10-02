@@ -2,7 +2,7 @@
 
 `ala_right_nullspace` computes the pressure null space for the Anelastic Liquid
 Approximation. `create_stokes_nullspace`, automatically generates null spaces
-for the mixed velocity-pressure Stokes system. `create_u_nullspace' returns the
+for the mixed velocity-pressure Stokes system. `rigid_body_modes' returns the
 translational and rotational null spaces associated with the velocity
 (or displacement) field.
 """
@@ -112,7 +112,9 @@ def create_stokes_nullspace(
       Z: Firedrake mixed function space associated with the Stokes system
       closed: Whether to include a constant pressure null space
       rotational: Whether to include all rotational modes
-      translations: List of translations to include
+      translations: List of translations to include i.e for all components in
+                    2D: [0, 1] and 3D: [0, 1, 2]. For example, see
+                    3d_cartesian.py and 3d_spherical.py mantle convection demos.
       ala_approximation: AnelasticLiquidApproximation for calculating (non-constant)
                          right null space
       top_subdomain_id: Boundary id of top surface. Required when providing
@@ -131,7 +133,7 @@ def create_stokes_nullspace(
 
     stokes_subspaces = Z.subspaces
 
-    V_nullspace = create_u_nullspace(
+    V_nullspace = rigid_body_modes(
         stokes_subspaces[0],
         rotational=rotational,
         translations=translations)
@@ -158,17 +160,20 @@ def create_stokes_nullspace(
     return fd.MixedVectorSpaceBasis(Z, null_space)
 
 
-def create_u_nullspace(
+def rigid_body_modes(
     V: fd.functionspaceimpl.WithGeometry,
     rotational: bool = False,
     translations: list[int] | None = None,
 ) -> fd.nullspace.VectorSpaceBasis:
-    """Create a null space for the velocity (or displacement) in a Stokes system
+    """Create a null space for the rigid body modes associated with velocity
+       (or displacement) in a Stokes system
 
     Arguments:
       V: Firedrake function space associated with the velocity or displacement
       rotational: Whether to include all rotational modes
-      translations: List of translations to include
+      translations: List of translations to include i.e for all components in
+                    2D: [0, 1] and 3D: [0, 1, 2]. For example, see
+                    3d_cartesian.py and 3d_spherical.py mantle convection demos.
 
     Returns:
       A Firedrake vector space basis incorporating the null space components
