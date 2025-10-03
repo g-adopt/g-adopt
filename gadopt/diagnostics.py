@@ -9,6 +9,7 @@ from firedrake import (
     DirichletBC,
     FacetNormal,
     Function,
+    Measure,
     assemble,
     dot,
     ds,
@@ -17,11 +18,37 @@ from firedrake import (
     norm,
     sqrt,
 )
-from firedrake.ufl_expr import extract_unique_domain
+import numpy as np
 from mpi4py import MPI
-from functools import lru_cache
+from functools import cache
 
 from .utility import CombinedSurfaceMeasure, vertical_component
+
+__all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics"]
+
+
+@cache
+def get_dx(mesh, quad_degree: int) -> Measure:
+    return dx(domain=mesh, degree=quad_degree)
+
+
+@cache
+def get_ds(mesh, function_space, quad_degree: int) -> Measure:
+    return (
+        CombinedSurfaceMeasure(mesh, quad_degree)
+        if function_space.extruded
+        else ds(mesh)
+    )
+
+
+@cache
+def get_normal(mesh):
+    return FacetNormal(mesh)
+
+
+@cache
+def get_volume(dx):
+    return assemble(Constant(1) * dx)
 
 
 class FunctionAttributeHolder:
@@ -42,18 +69,14 @@ class FunctionAttributeHolder:
     """
 
     def __init__(self, quad_degree: int, func: Function):
-        self.mesh = extract_unique_domain(func)
         self.function_space = func.function_space()
-        self.dx = dx(domain=self.mesh, degree=quad_degree)
-        self.ds = (
-            CombinedSurfaceMeasure(self.mesh, quad_degree)
-            if self.function_space.extruded
-            else ds(self.mesh)
-        )
-        self.normal = FacetNormal(self.mesh)
-        self.volume = assemble(Constant(1) * self.dx)
+        self.mesh = self.function_space.mesh().unique()
+        self.dx = get_dx(self.mesh, quad_degree)
+        self.ds = get_ds(self.mesh, self.function_space, quad_degree)
+        self.normal = get_normal(self.mesh)
+        self.volume = get_volume(get_dx(self.mesh, quad_degree))
 
-    @lru_cache
+    @cache
     def get_boundary_nodes(self, boundary_id: int) -> list[int]:
         """Return the list of nodes on the boundary owned by this process
 
@@ -117,19 +140,17 @@ class BaseDiagnostics:
     def _init_single_func(self, quad_degree: int, func: Function):
         self._attrs[func] = FunctionAttributeHolder(quad_degree, func)
 
-    @lru_cache
-    def __contains__(self, item: Function) -> bool:
-        if item not in self._attrs:
-            raise KeyError(f"Function {item} is not present in this diagnostic object")
-        return True
+    @cache
+    def _check_present(self, func: Function) -> None:
+        if func not in self._attrs:
+            raise KeyError(f"Function {func} is not present in this diagnostic object")
 
-    @lru_cache
-    def dim_valid(self, f: Function) -> bool:
+    @cache
+    def _check_dim_valid(self, f: Function) -> None:
         if len(f.dat.shape) < 2:
             raise KeyError(
                 "Requested a min/max over function dimension for a scalar function"
             )
-        return True
 
     def _function_min(
         self,
@@ -152,14 +173,15 @@ class BaseDiagnostics:
         Returns:
           Minimum value of f across the specified domain/component
         """
-        if f in self:
-            if boundary_id:
-                f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
-            else:
-                f_data = f.dat.data_ro
-            if dim is not None and self.dim_valid(f):
-                f_data = f_data[:, dim]
-            return f.comm.allreduce(f_data.min(), MPI.MIN)
+        self._check_present(f)
+        if boundary_id:
+            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
+        else:
+            f_data = f.dat.data_ro
+        if dim is not None:
+            self._check_dim_valid(f)
+            f_data = f_data[:, dim]
+        return f.comm.allreduce(f_data.min(initial=np.inf), MPI.MIN)
 
     def _function_max(
         self,
@@ -182,14 +204,15 @@ class BaseDiagnostics:
         Returns:
           Maximum value of f across the specified domain/component
         """
-        if f in self:
-            if boundary_id:
-                f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
-            else:
-                f_data = f.dat.data_ro
-            if dim is not None and self.dim_valid(f):
-                f_data = f_data[:, dim]
-            return f.comm.allreduce(f_data.max(), MPI.MAX)
+        self._check_present(f)
+        if boundary_id:
+            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
+        else:
+            f_data = f.dat.data_ro
+        if dim is not None:
+            self._check_dim_valid(f)
+            f_data = f_data[:, dim]
+        return f.comm.allreduce(f_data.max(initial=-np.inf), MPI.MAX)
 
     def _function_avg(self, f: Function):
         """Calculate the average value of a function
@@ -201,8 +224,8 @@ class BaseDiagnostics:
         Returns:
           Average value of f across the entire domain associated with it
         """
-        if f in self:
-            return assemble(f * self._attrs[f].dx) / self._attrs[f].volume
+        self._check_present(f)
+        return assemble(f * self._attrs[f].dx) / self._attrs[f].volume
 
 
 class GeodynamicalDiagnostics(BaseDiagnostics):
@@ -234,7 +257,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
     def __init__(
         self,
         z: Function,
-        T: Function = 0.0,
+        T: Function | None = None,
         /,
         bottom_id: int | str | None = None,
         top_id: int | str | None = None,
@@ -244,10 +267,11 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         u, p = z.subfunctions[:2]
         T = T
 
-        if isinstance(T, Function):
-            super().__init__(quad_degree, u=u, p=p, T=T)
-        else:
+        if T is None:
+            self.T = 0.0
             super().__init__(quad_degree, u=u, p=p)
+        else:
+            super().__init__(quad_degree, u=u, p=p, T=T)
 
         if bottom_id:
             self.ds_b = self._attrs[self.u].ds(bottom_id)
