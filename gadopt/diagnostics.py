@@ -22,7 +22,8 @@ import numpy as np
 from mpi4py import MPI
 from functools import cache
 
-from .utility import CombinedSurfaceMeasure, vertical_component
+from firedrake.ufl_expr import extract_unique_domain
+from .utility import CombinedSurfaceMeasure
 
 __all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics"]
 
@@ -69,8 +70,8 @@ class FunctionAttributeHolder:
     """
 
     def __init__(self, quad_degree: int, func: Function):
+        self.mesh = extract_unique_domain(func)
         self.function_space = func.function_space()
-        self.mesh = self.function_space.mesh().unique()
         self.dx = get_dx(self.mesh, quad_degree)
         self.ds = get_ds(self.mesh, self.function_space, quad_degree)
         self.normal = get_normal(self.mesh)
@@ -138,15 +139,25 @@ class BaseDiagnostics:
                     self._init_single_func(quad_degree, subfunc)
 
     def _init_single_func(self, quad_degree: int, func: Function):
+        """
+        Create a FunctionAttributeHolder for a single function
+        """
         self._attrs[func] = FunctionAttributeHolder(quad_degree, func)
 
     @cache
     def _check_present(self, func: Function) -> None:
+        """
+        Determine if a function is present in this BaseDiagnostics object
+        """
         if func not in self._attrs:
             raise KeyError(f"Function {func} is not present in this diagnostic object")
 
     @cache
     def _check_dim_valid(self, f: Function) -> None:
+        """
+        Determine if the 'dim' argument can be used when searching for a function
+        min/max (i.e. the f is a vector/tensor function).
+        """
         if len(f.dat.shape) < 2:
             raise KeyError(
                 "Requested a min/max over function dimension for a scalar function"
