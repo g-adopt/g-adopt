@@ -358,7 +358,7 @@ for timestep in range(1, max_timesteps+1):
     displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
     displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
     log("Greatest (+ve) displacement", displacement_max)
-    displacement_min_array.append([float(characteristic_maxwell_time*time/year_in_seconds), displacement_min])
+    displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds), displacement_min])
 
     disp_norm_L2surf = assemble((u[vertical_component])**2 * ds(boundary.top))
     log("L2 surface norm displacement", disp_norm_L2surf)
