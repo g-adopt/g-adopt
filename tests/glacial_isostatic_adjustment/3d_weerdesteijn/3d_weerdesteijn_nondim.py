@@ -279,8 +279,8 @@ log(f"Simulation end time: {float(Tend * characteristic_maxwell_time / year_in_s
 # Initialise ice loading
 rho_ice = 931 / density_scale
 g = 9.815
-Vi = Constant(density_scale * D * g / shear_modulus_scale)
-log("Ratio of buoyancy/shear = rho g D / mu = ", float(Vi))
+B_mu = Constant(density_scale * D * g / shear_modulus_scale)
+log("Ratio of buoyancy/shear = rho g D / mu = ", float(B_mu))
 
 if args.short_simulation:
     Hice = 100 / D
@@ -301,7 +301,7 @@ disc_dx = 1e3 / D
 k_disc = 1/disc_dx  # wavenumber for disk 2pi / lambda
 r = pow(pow(X[0], 2) + pow(X[1], 2), 0.5)
 disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
-ice_load = ramp * Vi * rho_ice * Hice * disc
+ice_load = ramp * B_mu * rho_ice * Hice * disc
 
 if args.lateral_viscosity:
     upper_depth = -70e3 / D
@@ -343,7 +343,7 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus], viscosity=[viscosity], Vi=Vi, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus], viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `z` and various fields
@@ -377,7 +377,7 @@ iterative_parameters = {"mat_type": "matfree",
                         }
 
 Z_nullspace = None  # Default: don't add nullspace for now
-Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=args.gamg_near_null_rot, translations=[0, 1, 2])
+Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot, translations=[0, 1, 2])
 
 coupled_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs,
                                         solver_parameters=iterative_parameters,
