@@ -85,7 +85,7 @@ def viscoelastic_model(
     log("Number of Temperature DOF:", Q.dim())
 
     # timestepping
-    rho0 = Function(R).assign(Constant(4500))  # density in kg/m^3
+    rho0 = Constant(4500)  # density in kg/m^3
     g = 10  # gravitational acceleration in m/s^2
     viscosity = Constant(viscosity)  # Viscosity Pa s
     shear_modulus = Constant(shear_modulus)  # Shear modulus in Pa
