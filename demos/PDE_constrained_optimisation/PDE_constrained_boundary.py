@@ -174,7 +174,7 @@ reduced_functional(T_wrong)
 # In unstructured mesh optimisation problems, it is important to work in the L2 Riesz representation
 # to ensure a grid-independent result:
 
-gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
+gradJ = reduced_functional.derivative(apply_riesz=True)
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
