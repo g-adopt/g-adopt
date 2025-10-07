@@ -344,7 +344,7 @@ for timestep in range(1, max_timesteps+1):
     with coupled_stage: coupled_solver.solve()
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(dt)} {gd.u_rms()} "
+    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
                  f"{gd.uz_min(boundary.top)}")
     # Compute diagnostics:
