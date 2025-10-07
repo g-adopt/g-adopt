@@ -277,18 +277,6 @@ stokes_bcs = {
 
 approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus], viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
 
-# We finally come to solving the variational problem, with solver
-# objects for the Stokes system created. We pass in the solution fields `z` and various fields
-# needed for the solve along with the approximation, timestep and boundary conditions.
-#
-
-direct_stokes_solver_parameters = {
-    "snes_monitor": None,
-    "mat_type": "aij",
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-}
 iterative_parameters = {"mat_type": "matfree",
                         "snes_monitor": None,
                         "snes_converged_reason": None,
