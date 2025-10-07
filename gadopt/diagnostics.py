@@ -11,6 +11,7 @@ from firedrake import (
 from firedrake.functionspaceimpl import MixedFunctionSpace
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
+import numpy as np
 
 from .utility import CombinedSurfaceMeasure
 
@@ -37,6 +38,7 @@ class GeodynamicalDiagnostics:
       T_min: Minimum temperature in domain
       T_max: Maximum temperature in domain
       ux_max: Maximum velocity (first component, optionally over a given boundary)
+      uz_min: Minimum velocity (final component, optionally over a given boundary)
 
     """
 
@@ -113,3 +115,12 @@ class GeodynamicalDiagnostics:
             ux_data = self.u.dat.data_ro[:, 0]
 
         return self.u.comm.allreduce(ux_data.max(), MPI.MAX)
+
+    def uz_min(self, boundary_id=None) -> float:
+        if boundary_id:
+            bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
+            uz_data = self.u.dat.data_ro_with_halos[bcu.nodes, -1]
+        else:
+            uz_data = self.u.dat.data_ro[:, -1]
+
+        return self.u.comm.allreduce(uz_data.min(initial=np.inf), MPI.MIN)

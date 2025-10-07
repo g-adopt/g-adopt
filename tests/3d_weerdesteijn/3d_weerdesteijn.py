@@ -13,7 +13,7 @@ import argparse
 import numpy as np
 from mpi4py import MPI
 parser = argparse.ArgumentParser()
-parser.add_argument("--dx", default=50, type=float, help="Horizontal resolution in km", required=False)
+parser.add_argument("--dx", default=20, type=float, help="Horizontal resolution in km", required=False)
 parser.add_argument("--refined_surface", action='store_true', help="Use refined surface mesh")
 parser.add_argument("--const_aspect", action='store_true', help="Also scale farfield dx for parallel scaling test to keep same aspect ratio")
 parser.add_argument("--structured_dz", action='store_true', help="Use constant vertical resolution")
