@@ -44,7 +44,7 @@ def assert_function_space(
         ufl_elem = ufl_elem.sub_elements[0]
 
     if ufl_elem.family() == 'TensorProductElement':  # extruded mesh
-        A, B = ufl_elem.sub_elements
+        A, B = ufl_elem.factor_elements
         assert A.family() in fam_list, 'horizontal space must be one of {0:s}'.format(fam_list)
         assert B.family() in fam_list, 'vertical space must be {0:s}'.format(fam_list)
         assert A.degree() == degree, 'degree of horizontal space must be {0:d}'.format(degree)
@@ -144,7 +144,14 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         self.mesh = self.P0.mesh()
         self.dim = self.mesh.geometric_dimension()
         self.extruded = hasattr(self.mesh.ufl_cell(), 'sub_cells')
-        assert not self.extruded or len(p1dg_space.ufl_element().sub_elements) > 0, \
+
+        if self.extruded:
+            if self.is_vector:
+                sub_element_count = p1dg_space.ufl_element().num_sub_elements
+            else:
+                sub_element_count = p1dg_space.ufl_element().num_factor_elements
+
+        assert not self.extruded or sub_element_count > 0, \
             "Extruded mesh requires extruded function space"
         assert not self.extruded or all(e.variant() == 'equispaced' for e in p1dg_space.ufl_element().sub_elements), \
             "Extruded function space must be equivariant"
