@@ -26,6 +26,8 @@ parser.add_argument("--bulk_shear_ratio", default=100, type=float, help="Ratio o
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
 parser.add_argument("--short_simulation", action='store_true', help="Run simulation with short ice history from Weerdesteijn et a. 2023 testcase")
 parser.add_argument("--lateral_viscosity", action='store_true', help="Include low viscosity cylinder from Weerdesteijn et a. 2023 testcase")
+parser.add_argument("--burgers", action='store_true', help="Use a burgers rheology")
+parser.add_argument("--viscosity_ratio", default=1, type=float, help="Ratio of viscosity 2 / viscosity 1", required=False)
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
 parser.add_argument("--output_path", default="./", type=str, help="Optional output path", required=False)
@@ -33,7 +35,7 @@ parser.add_argument("--gamg_threshold", default=0.01, type=float, help="Gamg thr
 parser.add_argument("--gamg_near_null_rot", action='store_true', help="Use rotational gamg near nullspace")
 args = parser.parse_args()
 
-name = f"weerdesteijn-3d-internalvariable-{args.optional_name}"
+name = f"weerdesteijn-3d-iv-burgers{args.burgers}-{args.optional_name}"
 
 # +
 # Set up geometry:
@@ -112,11 +114,16 @@ Z = MixedFunctionSpace([V, S])  # Mixed function space.
 # +
 u = Function(V, name='displacement')  # A field over the mixed function space Z.
 m = Function(S, name='internal variable 1')  # A field over the mixed function space Z.
+m_list = [m]
+
+if args.burgers:
+    m2 = Function(S, name='internal variable 2')  # A field over the internal variable space.
+    m_list.append(m2)
+
 stress = Function(S, name='deviatoric stress')  # A field over the mixed function space Z.
 power_factor = Function(DG1, name='viscosity factor')  # A field over the mixed function space Z.
 dev_stress_2 = Function(DG1, name='2nd stress invariant')  # A field over the mixed function space Z.
 
-m_list = [m]
 
 # Output function space information:
 log("Number of Displacement DOF:", V.dim())
@@ -137,8 +144,15 @@ shear_modulus_scale = 1e11
 viscosity_scale = 1e21
 
 density_values_tilde = np.array(density_values)/density_scale
-shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
-viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
+
+if args.burgers:
+    shear_modulus_values_1_tilde = 0.5*np.array(shear_modulus_values)/shear_modulus_scale
+    shear_modulus_values_2_tilde = 0.5*np.array(shear_modulus_values)/shear_modulus_scale
+    viscosity_values_1_tilde = 0.5*np.array(viscosity_values)/viscosity_scale
+    viscosity_values_2_tilde = args.viscosity_ratio*0.5*np.array(viscosity_values)/viscosity_scale
+else:
+    shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
+    viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
 
 
 def initialise_background_field(field, background_values):
@@ -151,8 +165,17 @@ def initialise_background_field(field, background_values):
 density = Function(DG0, name="density")
 initialise_background_field(density, density_values_tilde)
 
-shear_modulus = Function(DG0, name="shear modulus")
-initialise_background_field(shear_modulus, shear_modulus_values_tilde)
+if args.burgers:
+    shear_modulus_1 = Function(DG0, name="shear modulus 1")
+    initialise_background_field(shear_modulus_1, shear_modulus_values_1_tilde)
+
+    shear_modulus_2 = Function(DG0, name="shear modulus 2")
+    initialise_background_field(shear_modulus_2, shear_modulus_values_2_tilde)
+    shear_mod_list = [shear_modulus_1, shear_modulus_2]
+else:
+    shear_modulus = Function(DG0, name="shear modulus")
+    initialise_background_field(shear_modulus, shear_modulus_values_tilde)
+    shear_mod_list = [shear_modulus]
 
 # if Pseudo incompressible set bulk modulus to a constant...
 # Otherwise use same jumps from shear modulus multiplied by a factor
@@ -163,13 +186,21 @@ if args.bulk_shear_ratio > 10:
     compressible_adv_hyd_pre = False
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
-    initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
+    if args.burgers:
+        initialise_background_field(bulk_modulus, 2*shear_modulus_values_1_tilde)
+    else:
+        initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
     compressible_buoyancy = True
     compressible_adv_hyd_pre = True
 
-viscosity = Function(DG0, name="viscosity")
-initialise_background_field(viscosity, viscosity_values_tilde)
-
+if args.burgers:
+    viscosity_1 = Function(DG0, name="viscosity 1")
+    initialise_background_field(viscosity_1, viscosity_values_1_tilde)
+    viscosity_2 = Function(DG0, name="viscosity 2")
+    initialise_background_field(viscosity_2, viscosity_values_2_tilde)
+else:
+    viscosity = Function(DG0, name="viscosity")
+    initialise_background_field(viscosity, viscosity_values_tilde)
 
 # Next let's define the length of our time step. If we want to accurately resolve the elastic response we should choose a
 # timestep lower than the Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation
@@ -254,9 +285,17 @@ if args.lateral_viscosity:
     )
     low_visc = 1e19 / viscosity_scale
     cylinder_mask = Function(DG0).interpolate(cylinder_thickness * disc)
-    viscosity.interpolate(cylinder_mask * low_visc + (1-cylinder_mask) * viscosity)
+    if args.burgers:
+        low_visc *= 0.5
+        viscosity_1.interpolate(cylinder_mask * low_visc + (1-cylinder_mask) * viscosity_1)
+        viscosity_2.interpolate(cylinder_mask * low_visc + (1-cylinder_mask) * viscosity_2)
+    else:
+        viscosity.interpolate(cylinder_mask * low_visc + (1-cylinder_mask) * viscosity)
 
-
+if args.burgers:
+    visc_list = [viscosity_1, viscosity_2]
+else:
+    visc_list = [viscosity]
 # +
 # Setup boundary conditions
 stokes_bcs = {
@@ -275,7 +314,7 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus], viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_mod_list, viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
 
 iterative_parameters = {"mat_type": "matfree",
                         "snes_monitor": None,
