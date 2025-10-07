@@ -23,36 +23,17 @@ parser.add_argument("--dt_years", default=1e3, type=float, help="Timestep in yea
 parser.add_argument("--dt_out_years", default=10e3, type=float, help="Output timestep in years", required=False)
 parser.add_argument("--Tend", default=110e3, type=float, help="Simulation end time in years", required=False)
 parser.add_argument("--bulk_shear_ratio", default=100, type=float, help="Ratio of Bulk modulus / Shear modulus", required=False)
-parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
-parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
 parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
 parser.add_argument("--short_simulation", action='store_true', help="Run simulation with short ice history from Weerdesteijn et a. 2023 testcase")
 parser.add_argument("--lateral_viscosity", action='store_true', help="Include low viscosity cylinder from Weerdesteijn et a. 2023 testcase")
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
-parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_weerdesteijn_displacement/", type=str, help="Optional output path", required=False)
+parser.add_argument("--output_path", default="./", type=str, help="Optional output path", required=False)
 parser.add_argument("--gamg_threshold", default=0.01, type=float, help="Gamg threshold")
 parser.add_argument("--gamg_near_null_rot", action='store_true', help="Use rotational gamg near nullspace")
 args = parser.parse_args()
 
 name = f"weerdesteijn-3d-internalvariable-{args.optional_name}"
-# Next we need to create a mesh of the mantle region we want to simulate. The Weerdesteijn test case is a 3D box 1500 km wide horizontally and
-# 2891 km deep. To speed up things for this first demo, we consider a 2D domain, i.e. taking a vertical cross section through the 3D box.
-#
-# For starters let's use one of the default meshes provided by Firedrake, `RectangleMesh`. We have chosen 40 quadrilateral elements in the $x$
-# direction and 40 quadrilateral elements in the $y$ direction. It is worth emphasising that the setup has coarse grid resolution so that the
-# demo is quick to run! For real simulations we can use fully unstructured meshes to accurately resolve important features in the model, for
-# instance near coastlines or sharp discontinuities in mantle properties.  We can print out the grid resolution using `log`, a utility provided by
-# G-ADOPT. (N.b. `log` is equivalent to python's `print` function, except that it simplifies outputs when running simulations in parallel.)
-#
-# On the mesh, we also denote that our geometry is Cartesian, i.e. gravity points
-# in the negative z-direction. This attribute is used by G-ADOPT specifically, not
-# Firedrake. By contrast, a non-Cartesian geometry is assumed to have gravity
-# pointing in the radially inward direction.
-#
-# Boundaries are automatically tagged by the built-in meshes supported by Firedrake. For the `RectangleMesh` being used here, tag 1
-# corresponds to the plane $x=0$; 2 to the $x=L$ plane; 3 to the $y=0$ plane; and 4 to the $y=D$ plane. For convenience, we can
-# rename these to `left_id`, `right_id`, `bottom_id` and `boundary.top`.
 
 # +
 # Set up geometry:
@@ -116,14 +97,6 @@ log("Area of front side: ", assemble(Constant(1) * ds(boundary.front, domain=mes
 log("Area of back side: ", assemble(Constant(1) * ds(boundary.back, domain=mesh)))
 
 # -
-# We now need to choose finite element function spaces. `V` , `W`, `S` and `R` are symbolic
-# variables representing function spaces. They also contain the
-# function space's computational implementation, recording the
-# association of degrees of freedom with the mesh and pointing to the
-# finite element basis. We will choose Q2-Q1 for the mixed incremental displacement-pressure similar to our mantle convection demos.
-# This is a Taylor-Hood element pair which has good properties for Stokes modelling. We also initialise a discontinuous tensor function
-# space that wil store our previous values of the deviatoric stress, as the gradient of the continous incremental displacement field will
-# be discontinuous.
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
 V = VectorFunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (vector)
@@ -132,18 +105,9 @@ DG0 = FunctionSpace(mesh, "DG", 0)  # DG0 for 1d radial profiles
 DG1 = FunctionSpace(mesh, "DG", 1)  # DG0 for 1d radial profiles
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
-# Function spaces can be combined in the natural way to create mixed
-# function spaces, combining the incremental displacement and pressure spaces to form
-# a function space for the mixed Stokes problem, `Z`.
 
 Z = MixedFunctionSpace([V, S])  # Mixed function space.
 
-# We also specify functions to hold our solutions: `z` in the mixed
-# function space, noting that a symbolic representation of the two
-# parts – incremental displacement and pressure – is obtained with `split`. For later
-# visualisation, we rename the subfunctions of `z` to *Incremental Displacement* and *Pressure*.
-#
-# We also need to initialise two functions `displacement` and `stress_old` that are used when timestepping the constitutive equation.
 
 # +
 u = Function(V, name='displacement')  # A field over the mixed function space Z.
@@ -153,15 +117,6 @@ power_factor = Function(DG1, name='viscosity factor')  # A field over the mixed 
 dev_stress_2 = Function(DG1, name='2nd stress invariant')  # A field over the mixed function space Z.
 
 m_list = [m]
-# Function to store the solutions:
-# u, m = split(z)  # Returns symbolic UFL expression for u and m
-# Next rename for output:
-# z.subfunctions[0].rename("Displacement")
-# z.subfunctions[1].rename("Internal variable")
-# -
-
-# We can output function space information, for example the number of degrees
-# of freedom (DOF).
 
 # Output function space information:
 log("Number of Displacement DOF:", V.dim())
@@ -172,15 +127,7 @@ log("Number of Velocity and internal variable DOF:", V.dim()+S.dim())
 
 X = SpatialCoordinate(mesh)
 
-# Now we can set up the background profiles for the material properties.
-# In this case the density, shear modulus and viscosity only vary in the vertical direction.
-# We will approximate the series of layers using a smooth tanh function with a width of 20 km.
-# The layer properties specified are from spada et al. (2011).
-# N.b. that we have modified the viscosity of the Lithosphere viscosity from
-# Spada et al. (2011) because we are using coarse grid resolution.
 
-
-# +
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [1e40, 1e21, 1e21, 2e21]
@@ -236,11 +183,6 @@ for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
     log(f"Maxwell time: {float(layer_visc/layer_mu/year_in_seconds):.0f} years")
     log(f"Ratio to characteristic maxwell time: {float(layer_visc/layer_mu/characteristic_maxwell_time)}")
 
-# As we can see the shortest Maxwell time is given by the lower mantle and is about 280 years, i.e. it will take about 280
-# years for the viscous deformation in that layer to catch up any instantaneous elastic deformation. Conversely the top layer,
-# our lithosphere, has a Maxwell time of 6 million years. Given that our simulations only run for 110000 years the viscous
-# deformation over the course of the simulation will always be negligible compared with the elastic deformation. For now let's
-# choose a timestep of 250 years and an output frequency of 2000 years.
 
 # +
 # Timestepping parameters
@@ -315,16 +257,6 @@ if args.lateral_viscosity:
     viscosity.interpolate(cylinder_mask * low_visc + (1-cylinder_mask) * viscosity)
 
 
-# We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and
-# side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing
-# the string `ux` and `uy`, G-ADOPT knows to specify these as Strong Dirichlet boundary conditions.
-#
-# For the top surface we need to specify a normal stress, i.e. the weight of the ice load, as well as
-# indicating this is a free surface.
-#
-# The `delta_rho_fs` option accounts for the density contrast across the free surface whether there
-# is ice or air above a particular region of the mantle.
-
 # +
 # Setup boundary conditions
 stokes_bcs = {
@@ -396,10 +328,11 @@ if OUTPUT:
     output_file = VTKFile(args.output_path+f"output_{name}.pvd")
     output_file.write(u, m)
 
-plog = ParameterLog(args.output_path+"params.log", mesh)
+plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
+    "timestep time dt u_rms u_rms_surf ux_max uz_min"
 )
+gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
 checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim-chk.h5"
 
@@ -423,6 +356,9 @@ for timestep in range(1, max_timesteps+1):
     with coupled_stage: coupled_solver.solve()
 
     # Log diagnostics:
+    plog.log_str(f"{timestep} {time} {float(dt)} {gd.u_rms()} "
+                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+                 f"{gd.uz_min(boundary.top)}")
     # Compute diagnostics:
     # output dimensional vertical displacement
     vertical_displacement.interpolate(vc(u)*D)
@@ -430,6 +366,7 @@ for timestep in range(1, max_timesteps+1):
     displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
     displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
     log("Greatest (-ve) displacement", displacement_min)
+    log("check Greatest (-ve) gd.log", D*gd.uz_min(boundary.top))
     displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
     displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
     log("Greatest (+ve) displacement", displacement_max)
@@ -457,103 +394,4 @@ for timestep in range(1, max_timesteps+1):
         if MPI.COMM_WORLD.rank == 0:
             np.savetxt(displacement_filename, displacement_min_array)
 
-        # plog.log_str(f"{timestep} {float(time)} {float(dt)} "
-        #             f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-        #             )
-
-# Let's use the python package *PyVista* to plot the magnitude of the displacement field through time.
-# We will use the calculated displacement to artifically scale the mesh. We have exaggerated the stretching
-# by a factor of 1500, **BUT...** it is important to remember this is just for ease of visualisation -
-# the mesh is not moving in reality!
-
-# + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
-# import pyvista as pv
-#
-# # Read the PVD file
-# reader = pv.get_reader("output.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
-#
-# # Create a plotter object
-# plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
-#
-# # Open a gif
-# plotter.open_gif("displacement_warp.gif")
-#
-# # Make a colour map
-# boring_cmap = plt.get_cmap("viridis", 25)
-#
-# for i in range(len(reader.time_values)):
-#     reader.set_active_time_point(i)
-#     data = reader.read()[0]
-#
-#     # Artificially warp the output data in the vertical direction by the free surface height
-#     # Note the mesh is not really moving!
-#     warped = data.warp_by_vector(vectors="displacement", factor=1500)
-#     arrows = data.glyph(orient="Incremental Displacement", scale="Incremental Displacement", factor=400000, tolerance=0.05)
-#     plotter.add_mesh(arrows, color="white", lighting=False)
-#
-#     # Add the warped displacement field to the frame
-#     plotter.add_mesh(
-#         warped,
-#         scalars="displacement",
-#         component=None,
-#         lighting=False,
-#         show_edges=False,
-#         clim=[0, 70],
-#         cmap=boring_cmap,
-#         scalar_bar_args={
-#             "title": 'Displacement (m)',
-#             "position_x": 0.8,
-#             "position_y": 0.2,
-#             "vertical": True,
-#             "title_font_size": 20,
-#             "label_font_size": 16,
-#             "fmt": "%.0f",
-#             "font_family": "arial",
-#         }
-#     )
-#
-#     # Fix camera in default position otherwise mesh appears to jump around!
-#     plotter.camera_position = [(750000.0, 1445500.0, 6291991.008627122),
-#                         (750000.0, 1445500.0, 0.0),
-#                         (0.0, 1.0, 0.0)]
-#     plotter.add_text(f"Time: {i*2000:6} years", name='time-label')
-#     plotter.write_frame()
-#
-#     if i == len(reader.time_values)-1:
-#         # Write end frame multiple times to give a pause before gif starts again!
-#         for j in range(20):
-#             plotter.write_frame()
-#
-#     plotter.clear()
-#
-# # Closes and finalizes movie
-# plotter.close()
-# -
-# Looking at the animation, we can see that as the weight of the ice load builds up the mantle deforms,
-# pushing up material away from the ice load. If we kept the ice load fixed this forebulge will
-# eventually grow enough that it balances the weight of the ice, i.e the mantle is in isostatic
-# equilbrium and the deformation due to the ice load stops. At 100 thousand years when the ice is removed
-# the topographic highs associated with forebulges are now out of equilibrium so the flow of material
-# in the mantle reverses back towards the previously glaciated region.
-
-# ![SegmentLocal](displacement_warp.gif "segment")
-
-# References
-# ----------
-# Cathles L.M. (1975). *Viscosity of the Earth's Mantle*, Princeton University Press.
-#
-# Dahlen F. A. and Tromp J. (1998). *Theoretical Global Seismology*, Princeton University Press.
-#
-# Ranalli, G. (1995). Rheology of the Earth. Springer Science & Business Media.
-#
-# Weerdesteijn, M. F., Naliboff, J. B., Conrad, C. P., Reusen, J. M., Steffen, R., Heister, T., &
-# Zhang, J. (2023). *Modeling viscoelastic solid earth deformation due to ice age and contemporary
-# glacial mass changes in ASPECT*. Geochemistry, Geophysics, Geosystems.
-#
-# Wu P., Peltier W. R. (1982). *Viscous gravitational relaxation*, Geophysical Journal International.
-#
-# Zhong, S., Paulson, A., & Wahr, J. (2003). Three-dimensional finite-element modelling of Earth’s
-# viscoelastic deformation: effects of lateral variations in lithospheric thickness. Geophysical
-# Journal International.
+plog.close()
