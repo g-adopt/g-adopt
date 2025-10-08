@@ -146,7 +146,6 @@ temp_bcs = {
 
 # +
 output_file = VTKFile("output.pvd")
-ref_file = VTKFile('reference_state.pvd')
 output_frequency = 50
 
 plog = ParameterLog('params.log', mesh)
@@ -163,9 +162,10 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
+    solver_parameters="iterative",
     constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,

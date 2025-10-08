@@ -4,8 +4,8 @@ include makefile.cases.inc
 
 all: $(mc_cases) $(mm_cases) $(gia_cases) $(extra_cases)
 
-convert_demos: $(notebook_files) .pages .diagram.mermaid
-	tar --transform='s/.pages/CONTENTS.md/' --create --file artifact.tar .pages .diagram.mermaid
+convert_demos: $(notebook_files) .pages $(diagram_files)
+	tar --transform='s/.pages/CONTENTS.md/' --create --file artifact.tar .pages $(diagram_files)
 	tar --transform='s|/.*/|/|' --append --file artifact.tar $(notebook_files)
 	tar --append --file artifact.tar $(mc_dir)/free_surface/temperature_warp.gif
 	tar --append --file artifact.tar $(gia_dir)/base_case/displacement_warp.gif

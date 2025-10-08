@@ -13,14 +13,10 @@ class BuoyancyTopBottomImplicitFreeSurfaceModel(TopBottomImplicitFreeSurfaceMode
     iterative = True
 
     def __init__(self, dt_factor, nx=320, **kwargs):
+        if kwargs["iterative_2d"]:
+            self.solver_parameters_extra = {"fieldsplit_0": {"ksp_rtol": 1e-6}, "fieldsplit_1": {"ksp_rtol": 1e-5}}
 
         super().__init__(dt_factor, nx=nx, **kwargs)
-
-    def setup_solver(self):
-        super().setup_solver()
-        if self.solver_parameters == 'iterative':
-            self.stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-6
-            self.stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
 
     def initialise_wavenumber(self):
         lam_dimensional = self.D  # wavelength of load in m
