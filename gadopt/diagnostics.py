@@ -13,7 +13,7 @@ from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
 import numpy as np
 
-from .utility import CombinedSurfaceMeasure
+from .utility import CombinedSurfaceMeasure, vertical_component
 
 
 class GeodynamicalDiagnostics:
@@ -39,6 +39,7 @@ class GeodynamicalDiagnostics:
       T_max: Maximum temperature in domain
       ux_max: Maximum velocity (first component, optionally over a given boundary)
       uz_min: Minimum velocity (final component, optionally over a given boundary)
+      uk_min: Minimum velocity (vertical component, optionally over a given boundary)
 
     """
 
@@ -64,6 +65,9 @@ class GeodynamicalDiagnostics:
             self.u, self.p = z.subfunctions[:2]
         else:
             self.u = z
+
+        # vertical component of vel/disp
+        self.uk = Function(self.u.function_space().sub(0))
 
         self.T = T
 
@@ -124,3 +128,14 @@ class GeodynamicalDiagnostics:
             uz_data = self.u.dat.data_ro[:, -1]
 
         return self.u.comm.allreduce(uz_data.min(initial=np.inf), MPI.MIN)
+
+    def uk_min(self, boundary_id=None) -> float:
+        "Minimum value of vertical component of velocity/displacement"
+        self.uk.interpolate(vertical_component(self.u))
+        if boundary_id:
+            bcu = DirichletBC(self.uk.function_space(), 0, boundary_id)
+            uk_data = self.uk.dat.data_ro_with_halos[bcu.nodes]
+        else:
+            uk_data = self.uk.dat.data_ro[:]
+
+        return self.uk.comm.allreduce(uk_data.min(initial=np.inf), MPI.MIN)

@@ -25,7 +25,7 @@ parser.add_argument("--geometric_dt_steps", default=0, type=int, help="No. of st
 parser.add_argument("--split_dt_steps", default=0, type=int, help="No. of steps used for a split timestep approach nsteps before and after characteristic maxwell time")
 parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
-parser.add_argument("--output_path", default="/g/data/xd2/ws9229/viscoelastic/3d_spada_displacement/", type=str, help="Optional output path", required=False)
+parser.add_argument("--output_path", default="./", type=str, help="Optional output path", required=False)
 args = parser.parse_args()
 
 name = f"spada-3d-{args.optional_name}"
@@ -280,8 +280,8 @@ log(f"Simulation end time: {float(Tend * characteristic_maxwell_time / year_in_s
 # Initialise ice loading
 rho_ice = 931 / density_scale
 g = 9.815
-Vi = Constant(density_scale * D * g / shear_modulus_scale)
-log("Ratio of buoyancy/shear = rho g D / mu = ", float(Vi))
+B_mu = Constant(density_scale * D * g / shear_modulus_scale)
+log("Ratio of buoyancy/shear = rho g D / mu = ", float(B_mu))
 Hice = 1000 / D
 
 # Disc ice load but with a smooth transition given by a tanh profile
@@ -294,6 +294,7 @@ colatitude = atan2(distance_from_rotation_axis, X[2])
 disc1_centre = 0  # centre of disc1
 disc = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surface_resolution_radians)))
 
+ice_load = B_mu * rho_ice * Hice * disc
 
 OUTPUT = args.write_output
 
@@ -303,7 +304,7 @@ if OUTPUT:
     discfile = VTKFile(f"{args.output_path}discfile.pvd").write(discfunc)
     viscfile = VTKFile(f"{args.output_path}viscfile.pvd").write(viscosity)
 
-ice_load = Vi * rho_ice * Hice * disc
+
 
 # We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and
 # side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing
@@ -329,7 +330,7 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus], viscosity=[viscosity], Vi=Vi, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus], viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `z` and various fields
 # needed for the solve along with the approximation, timestep and boundary conditions.
@@ -361,13 +362,13 @@ iterative_parameters = {"mat_type": "matfree",
                         "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
                         }
 
-Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
-Z_near_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True, translations=[0, 1, 2])
+V_nullspace = rigid_body_modes(V, rotational=True)
+V_near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1, 2])
 
 coupled_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs,
                                         solver_parameters=iterative_parameters,
-                                        nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                        near_nullspace=Z_near_nullspace)
+                                        nullspace=V_nullspace, transpose_nullspace=V_nullspace,
+                                        near_nullspace=V_near_nullspace)
 
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
@@ -382,10 +383,12 @@ if OUTPUT:
     output_file = VTKFile(f"{args.output_path}{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.pvd")
     output_file.write(u, *m_list, vertical_displacement, velocity)
 
-# plog = ParameterLog(args.output_path+"params.log", mesh)
-# plog.log_str(
-#    "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
-# )
+plog = ParameterLog("params.log", mesh)
+plog.log_str(
+    "timestep time dt u_rms u_rms_surf ux_max uk_min"
+)
+gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
+
 
 checkpoint_filename = f"{args.output_path}{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
 
@@ -411,6 +414,9 @@ for timestep in range(1, max_timesteps+1):
     coupled_solver.solve()
 
     # Log diagnostics:
+    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+                 f"{gd.uk_min(boundary.top)}")
     # Compute diagnostics:
 
     velocity.interpolate((u-old_disp)/dt)
@@ -422,10 +428,11 @@ for timestep in range(1, max_timesteps+1):
     displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
     displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
     log("Greatest (-ve) displacement", displacement_min)
+    log(f"check gd log: {gd.uk_min(boundary.top)*D}")
     displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
     displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
     log("Greatest (+ve) displacement", displacement_max)
-    displacement_min_array.append([float(characteristic_maxwell_time*time/year_in_seconds), displacement_min])
+    displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds), displacement_min])
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)
