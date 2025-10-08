@@ -124,15 +124,20 @@ tape = get_working_tape()
 tape.clear_tape()
 
 T0.project(T_wrong)
+# -
 
 # At this stage we need to define the control variable for the adjoint-based optimisation problem
-# by wrapping T0 in a Control object.
-# This registers T0 as the optimisation variable with pyadjoint's automatic differentiation framework.
+# by wrapping `T0` in a Control object.
+# This registers `T0` as the optimisation variable with pyadjoint's automatic differentiation framework.
 # Furthermore, the L2 Riesz map specification is crucial for two reasons:
 # 1. It defines the inner product structure on the control space, ensuring that gradients are computed
 #    in the $L^2$ Hilbert space with respect to the inner product.
 # 2. It guarantees mesh-independent gradient representations, which is essential for consistent
 #    optimisation convergence across different mesh refinements in finite element discretisations.
+#
+# Note that L2 is the default Riesz map if none is explicitly specified.
+
+# +
 m = Control(T0, riesz_map="L2")
 
 J = AdjFloat(0.0)  # Initialise functional
@@ -179,8 +184,10 @@ print(reduced_functional(T0_ref))
 T_wrong.assign(0.0)
 reduced_functional(T_wrong)
 
-# Here we calculate the derivative by calling the derivative method of the reduced functional.
-# We need to apply the L2 Riesz map to the gradient to ensure a grid-independent result.
+# Here we calculate the gradient by calling the derivative method of
+# the reduced functional with the L2 Riesz map applied to ensure a
+# grid-independent result.
+
 gradJ = reduced_functional.derivative(apply_riesz=True)
 
 # + tags=["active-ipynb"]
