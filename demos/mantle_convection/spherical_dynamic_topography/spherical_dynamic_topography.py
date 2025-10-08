@@ -1,17 +1,17 @@
 from gadopt import *
 from gadopt.gplates import *
-from mpi4py import MPI
-import pandas as pd
 from pathlib import Path
 
 
 def main():
-    # Set up geometry:
-    mesh_parameters = get_mesh_parameters()
-    path_to_mesh = Path("./initial_condition_mat_prop/Final_State.h5")
+    # Get all checkpoint files first
+    all_checkpoints = get_all_snapshot_checkpoints("/scratch/xd2/sg8812/untar_simulations")
+    if not all_checkpoints:
+        raise ValueError("No checkpoint files found!")
 
-    # Construct a CubedSphere mesh and then extrude into a sphere (or load from checkpoint):
-    with CheckpointFile(path_to_mesh.as_posix(), mode="r") as f:
+    # Load mesh from the first checkpoint
+    first_checkpoint = all_checkpoints[0]
+    with CheckpointFile(first_checkpoint.as_posix(), mode="r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
 
     mesh.cartesian = False
@@ -35,20 +35,19 @@ def main():
     X = SpatialCoordinate(mesh)
     r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 
-    approximation_sources = get_approximation_profiles()
+    # Get approximation profiles with the correct directory
+    approximation_sources = get_approximation_profiles(first_checkpoint.parent)
 
     approximation_profiles = {}
     for func, details in approximation_sources.items():
         f = Function(Q, name=details["name"])
         interpolate_1d_profile(function=f, one_d_filename=details["filename"])
         f.assign(details["scaling"](f))
-
         approximation_profiles[func] = f
 
-    Tbar = approximation_profiles["Tbar"]
     # We next prepare our viscosity, starting with a radial profile.
     mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
-    radial_viscosity_filename = "initial_condition_mat_prop/visc/mu_1e20_asthenosphere_linear_increase_7e22_LM.visc"
+    radial_viscosity_filename = (first_checkpoint.parent / "initial_condition_mat_prop/visc/mu_1e20_asthenosphere_linear_increase_7e22_LM.visc").as_posix()
     interpolate_1d_profile(function=mu_rad, one_d_filename=radial_viscosity_filename)
 
     # Visualisation Fields
@@ -80,6 +79,7 @@ def main():
         Z, closed=False, rotational=True, translations=[0, 1, 2]
     )
 
+    # Set up GPlates reconstruction
     zahirovic_2022_files = ensure_reconstruction("Zahirovic 2022", "../gplates_files")
     plate_reconstruction_model = pyGplatesConnector(
         rotation_filenames=zahirovic_2022_files["rotation_filenames"],
@@ -116,12 +116,10 @@ def main():
     stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 2.0e-2
 
     # Set up fields for visualisation on CG meshes - DG is overkill for output.
-    FullT_CG = Function(Q_CG, name="FullTemperature_CG").interpolate(FullT)
-    T_CG = Function(Q_CG, name='Temperature_CG').interpolate(T)
-    T_dev_CG = Function(Q_CG, name='Temperature_Deviation_CG').interpolate(T_dev)
-    mu_field_CG = Function(Q_CG, name="Viscosity_CG").interpolate(mu)
-
-    all_checkpoints = get_all_snapshot_checkpoints("/scratch/xd2/sg8812/untar_simulations")
+    FullT_CG = Function(Q_CG, name="FullTemperature_CG")
+    T_CG = Function(Q_CG, name='Temperature_CG')
+    T_dev_CG = Function(Q_CG, name='Temperature_Deviation_CG')
+    mu_field_CG = Function(Q_CG, name="Viscosity_CG")
 
     # Create Function objects for dynamic topography
     # i.e., (Thermal Expansivity) x (Background Earth's Mantle Density) x (Thickness of mantle) / (Ra number)
@@ -132,19 +130,22 @@ def main():
     # Compute dynamic topography values
     delta_rho_top = Constant(1.0)  # i.e., \Delta \rho_top = 1.0 \times \rho_mantle
     g_top = Constant(1.0)
-
-
+    delta_rho_bottom = Constant(-2.5)  # i.e., \Delta \rho_CMB = (\rho_mantle - \rho_outer_core) / \rho_mantle
+    g_bottom = Constant(1.0)
 
     output_file = VTKFile("output.pvd")
 
     # We now initiate the time loop:
-    for checkpoint in all_checkpoints[-2:-1]:
+    for checkpoint in all_checkpoints[-2:-1]:  # Process last 2 checkpoints for testing
+        print(f"Processing checkpoint: {checkpoint}")
+
         with CheckpointFile(checkpoint.as_posix(), mode="r") as f:
             T.assign(f.load_function(mesh, "Temperature"))
             z.assign(f.load_function(mesh, "Stokes"))
 
         # Get the time of the checkpoint
         time = get_time(checkpoint.parent / "params.log")
+        print(f"Time: {time}")
 
         # Assigning FullT
         FullT.assign(T + approximation_profiles["Tbar"])
@@ -160,19 +161,23 @@ def main():
         # Solve Stokes sytem:
         stokes_solver.solve()
 
+        # Compute normal stresses at boundaries
         ns_top = stokes_solver.force_on_boundary(boundary.top)
         ns_bottom = stokes_solver.force_on_boundary(boundary.bottom)
 
-dynamic_topography_top.interpolate(ns_top / (delta_rho_top * g_top) * dimensionalisation_factor)
-
-
+        # Compute dynamic topography
+        dynamic_topography_top.interpolate(ns_top / (delta_rho_top * g_top) * dimensionalisation_factor)
+        dynamic_topography_bottom.interpolate(ns_bottom / (delta_rho_bottom * g_bottom) * dimensionalisation_factor)
 
         # Write output and interpolate to CG:
         mu_field_CG.interpolate(mu)
         FullT_CG.interpolate(FullT)
         T_CG.interpolate(T)
         T_dev_CG.interpolate(T_dev)
-        output_file.write(*z.subfunctions, vr, FullT_CG, T_CG, T_dev_CG, mu_field_CG)
+
+        # Write all fields to output
+        output_file.write(*z.subfunctions, FullT_CG, T_CG, T_dev_CG, mu_field_CG,
+                          dynamic_topography_top, dynamic_topography_bottom)
 
 
 def get_all_snapshot_checkpoints(directory_to_params: Path):
@@ -190,7 +195,7 @@ def get_time(filename):
         for line in f:
             try:
                 last_ndtime = line.split()[1]
-            except:
+            except (IndexError, ValueError):
                 pass
 
     return float(last_ndtime)
@@ -249,3 +254,7 @@ def get_mesh_parameters():
         "ref_level": 7,
         "nlayers": 64,
     }
+
+
+if __name__ == "__main__":
+    main()
