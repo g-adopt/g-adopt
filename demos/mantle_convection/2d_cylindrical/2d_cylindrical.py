@@ -118,7 +118,7 @@ T.interpolate(rmax - r + 0.02*cos(4*atan2(X[1], X[0])) * sin((r - rmin) * pi))
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
 
 # Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative
-# solver parameters. As noted in our previous 3-D Cartesian tutorial, G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
+# solver parameters. As noted in our [previous 3-D Cartesian tutorial](../3d_cartesian), G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
 # for the velocity block of the Stokes system, to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
 # translational modes.
 

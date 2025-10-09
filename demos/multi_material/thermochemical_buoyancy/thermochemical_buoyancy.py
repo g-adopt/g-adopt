@@ -1,10 +1,10 @@
 # Thermochemical convection
-# ---
+# =
 
 # Rationale
 # -
 
-# Our previous tutorial introduced multi-material simulations in G-ADOPT by
+# Our [previous tutorial](../compositional_buoyancy) introduced multi-material simulations in G-ADOPT by
 # investigating compositional effects on buoyancy. We extend that tutorial to include
 # thermal effects, thereby simulating thermochemical convection, which is, for example,
 # essential to modelling Earth's mantle evolution.
@@ -134,7 +134,7 @@ assign_level_set_values(psi, epsilon, signed_distance)
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # from numpy import linspace
-
+#
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
 # contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="PiYG")
@@ -283,7 +283,6 @@ entrainment_height = 0.2  # Height above which entrainment diagnostic is calcula
 # Finally, we initiate the time loop, which runs until the simulation end time is
 # attained.
 
-# +
 step = 0  # A counter to keep track of looping
 output_counter = 1  # A counter to keep track of outputting
 time_end = 0.03  # Will be changed to 0.05 once mesh adaptivity is available
@@ -335,7 +334,6 @@ while True:
 
         log("Reached end of simulation -- exiting time-step loop")
         break
-# -
 
 # Let us finally examine the location of the material interface and the temperature
 # field at the end of the simulation.
@@ -346,4 +344,3 @@ while True:
 # contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="inferno")
 # tricontour(psi, axes=axes, levels=[0.5])
 # fig.colorbar(contours, label="Temperature")
-# -
