@@ -42,7 +42,7 @@ def tape_generation_staggered_solves(scheduler):
     # Storing the diagnostics
     ret = {}
     ret["J1"] = reduced_functional(u_0)
-    ret["dJdm1"] = reduced_functional.derivative().dat.data_ro.copy()
+    ret["dJdm1"] = reduced_functional.derivative(apply_riesz=True).dat.data_ro.copy()
 
     return ret
 
@@ -78,7 +78,7 @@ def tape_generation_control_invariant_assign(scheduler):
     reduced_functional = ReducedFunctional(J, Control(u_0))
 
     J = reduced_functional(u_0)
-    dJdm = reduced_functional.derivative()
+    dJdm = reduced_functional.derivative(apply_riesz=True)
 
     ret = {}
     ret["djdm_0"] = dJdm.dat.data_ro
@@ -96,13 +96,13 @@ def tape_generation_control_invariant_assign(scheduler):
     Jm = reduced_functional(u_0)
     ret["j_1"] = Jm
 
-    dJdm = reduced_functional.derivative()
+    dJdm = reduced_functional.derivative(apply_riesz=True)
     dJdm = dtemp._ad_dot(dJdm)
     ret["djdm_2"] = dJdm
 
     Jm = reduced_functional(u_0)
     ret["j_2"] = Jm
-    dJdm = reduced_functional.derivative()
+    dJdm = reduced_functional.derivative(apply_riesz=True)
     dJdm = dtemp._ad_dot(dJdm)
     ret["djdm_3"] = dJdm
 
