@@ -2,9 +2,9 @@ import warnings
 import firedrake as fd
 import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
-from pyadjoint.tape import annotate_tape
+from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
-from ..utility import log
+from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
 
 import pygplates
 
@@ -41,8 +41,12 @@ class GPlatesFunctionalityMixin:
                 self.boundary_coords, ndtime)
         )
 
-        # At this point the values are updated.
-        # So we have to make sure it is shown correctly on tape if we are annotating
+        # Remove radial component of surface velocities. If annotation is on, do not
+        # put this on tape, as we will manually create a block variable for this (see below)
+        with stop_annotating():
+            self.remove_radial_component()
+
+        # Create block variable only if annotating
         if annotate_tape():
             self.create_block_variable()
 
@@ -54,7 +58,8 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
     `GplatesVelocityFunction` is designed to associate a Firedrake function with a GPlates
     connector, allowing the integration of plate tectonics reconstructions. This is particularly
     useful when setting "top" boundary condition for the Stokes systems when performing
-    data assimilation (sequential or adjoint).
+    data assimilation (sequential or adjoint). Note that we subtract the radial component of the velocity
+    field to ensure that the velocity field is tangential to the surface in a FEM sense.
 
     Attributes:
         dbc (firedrake.DirichletBC): A Dirichlet boundary condition that applies the function
@@ -72,6 +77,8 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         val (optional): Initial values for the function. Defaults to None.
         name (str, optional): Name for the function. Defaults to None.
         dtype (data type, optional): Data type for the function. Defaults to ScalarType.
+        kwargs (dict, optional): Additional keyword arguments, inlcuding `solver_parameters`
+            (dict, optional), and `ds_kwargs` (dict, optional) for the ds measure.
 
     Methods:
         update_plate_reconstruction(ndtime):
@@ -86,6 +93,30 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         ...                                    name="GplateVelocity")
         >>> gplates_function.update_plate_reconstruction(ndtime=0.0)
     """
+    # We use the default BaseProjector solver parameters.
+    tangential_project_solver_parameters = {
+        "ksp_type": "cg",
+        "pc_type": "bjacobi",
+        "sub_pc_type": "icc",
+        "ksp_rtol": 1e-9,
+        "ksp_atol": 1e-12,
+        "ksp_max_it": 20,
+    }
+
+    # Deciding on the right level of verbosity
+    # for the tangential projection solver
+    if DEBUG >= log_level:
+        # GADOPT_LOGLEVEL=DEBUG: Show convergence reason and monitor
+        tangential_project_solver_parameters |= {
+            "ksp_converged_reason": None,
+            "ksp_monitor": None
+        }
+    elif INFO >= log_level:
+        # GADOPT_LOGLEVEL=INFO: Show only convergence reason
+        tangential_project_solver_parameters |= {
+            "ksp_converged_reason": None
+        }
+
     def __new__(cls, *args, **kwargs):
         # Ensure compatibility with Firedrake Function's __new__ method
         return super().__new__(cls, *args, **kwargs)
@@ -97,11 +128,14 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         # Cache all the necessary information that will be used to assign surface velocities
         # the marker for surface boundary. This is typically "top" in extruded mesh.
         self.top_boundary_marker = top_boundary_marker
+
         # establishing the DirichletBC that will be used to find surface nodes
+        # Note: If one day we are moving towards adaptive mesh, we need to be dynamic with this.
         self.dbc = fd.DirichletBC(
             self.function_space(),
             self,
             sub_domain=self.top_boundary_marker)
+
         # coordinates of surface points
         self.boundary_coords = fd.Function(
             self.function_space(),
@@ -112,6 +146,91 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
 
         # Store the GPlates connector
         self.gplates_connector = gplates_connector
+
+        # Store the kwargs in case we need to change solver parameters or surface measure
+        self.kwargs = kwargs
+
+        # Set up the solver for tangential projection
+        self.setup_solver()
+
+    def setup_solver(self):
+        """Set up the linear variational solver for removing radial component."""
+        # Define the solution in the velocity function space
+        # If velocity is discontinuous, we need to use a continuous equivalent
+        if not is_continuous(self):
+            raise ValueError(
+                "GplatesVelocityFunction: Velocity field is discontinuous."
+                "Removing the radial component of discontinuous velocity fields is not supported."
+            )
+        else:
+            V = fd.FunctionSpace(self.function_space().mesh(), self.ufl_element())
+
+        self.tangential_velocity = fd.Function(V, name="tangential_velocity")
+
+        # Normal vector (radial direction for spherical geometry)
+        r = fd.FacetNormal(self.function_space().mesh())
+
+        # Define the test and trial functions for a projection solve
+        phi = fd.TestFunction(V)
+        v = fd.TrialFunction(V)
+
+        # Define the tangential projection: v_tangential = v - (v·r)r
+        tangential_expr = self - fd.inner(self, r) * r
+
+        # Getting ds measure: this can be set by the user through kwargs
+        # We are only looking at the surface measure at the top boundary
+        ds_kwargs = {
+            "domain": self.function_space().mesh(),
+            "degree": 2 * V.ufl_element().degree()[0] + 1
+        }
+
+        # Update the ds_kwargs with the kwargs (only if key already exists in
+        # ds_kwargs, we don't want to add non-relevant keys)
+        ds_kwargs.update({k: v for k, v in self.kwargs.items() if k in ds_kwargs})
+
+        if ds_kwargs["domain"].extruded:
+            self.ds = fd.ds_t(**ds_kwargs)
+        else:
+            ds_kwargs["subdomain_id"] = self.top_boundary_marker
+            self.ds = fd.ds(**ds_kwargs)
+
+        # Setting up a manual projection
+        # Project onto the tangential space: solve for tangential component
+        a = fd.inner(phi, v) * self.ds
+        L = fd.inner(phi, tangential_expr) * self.ds
+
+        # Setting up boundary condition, problem and solver
+        # The field is only meaningful on the boundary, so set zero everywhere else
+        self.interior_null_bc = InteriorBC(V, 0., [self.top_boundary_marker])
+
+        self.problem = fd.LinearVariationalProblem(a, L, self.tangential_velocity,
+                                                   bcs=self.interior_null_bc,
+                                                   constant_jacobian=True)
+        self.solver = fd.LinearVariationalSolver(
+            self.problem,
+            solver_parameters=self.kwargs.get("solver_parameters", self.tangential_project_solver_parameters),
+            options_prefix="gplates_projection"
+        )
+        self._solver_is_set_up = True
+
+    def remove_radial_component(self):
+        """
+        Project velocity to tangent plane by removing radial component using linear variational solver.
+
+        This method uses a pre-built linear variational solver for efficiency, avoiding the overhead
+        of rebuilding the projection operator each time.
+        """
+        # Use the a linear variational solver for removing the radial component
+        if not hasattr(self, '_solver_is_set_up') or not self._solver_is_set_up:
+            self.setup_solver()
+
+        # Project the velocity to the tangential plane
+        self.solver.solve()
+
+        # Copy the tangential velocity back to self
+        self.dat.data_with_halos[self.dbc.nodes, :] = (
+            self.tangential_velocity.dat.data_with_halos[self.dbc.nodes, :]
+        )
 
 
 class pyGplatesConnector(object):
@@ -127,6 +246,9 @@ class pyGplatesConnector(object):
     # minimum distance, bellow which we do not interpolate
     #   this is just to avoid division by zero when weighted averaging
     epsilon_distance = 1e-8
+    # minimum magnitude, bellow which we do not scale the velocities
+    # This is to avoid division by zero when scaling the velocities
+    eps_rel = 1e-10
 
     def __init__(self,
                  rotation_filenames,
@@ -383,6 +505,26 @@ class pyGplatesConnector(object):
         close_points_mask = dists[:, 0] < pyGplatesConnector.epsilon_distance
         # Now handle the case where points are too close to each other:
         res_u[close_points_mask, :] = seeds_u[non_nan_values][idx[close_points_mask, 0]]
+
+        # Calculate radial component for res_u: res_u · e_r where e_r is the normalised radial unit vector
+        radial_velocity_res = np.sum(res_u * target_coords, axis=1)  # Dot product for each point
+
+        # Store original magnitudes before projection
+        original_magnitudes = np.linalg.norm(res_u, axis=1)
+
+        # Project res_u onto tangent plane to remove radial component
+        # res_u_tangential = res_u - (res_u · e_r) * e_r
+        res_u_tangential = res_u - radial_velocity_res[:, np.newaxis] * target_coords
+
+        # Calculate new magnitudes after projection
+        tangential_magnitudes = np.linalg.norm(res_u_tangential, axis=1)
+
+        # Rescale to preserve original magnitude (avoid division by zero)
+        scale_factor = np.divide(original_magnitudes, tangential_magnitudes,
+                                 out=np.ones_like(tangential_magnitudes),
+                                 where=tangential_magnitudes > pyGplatesConnector.eps_rel)
+
+        res_u = res_u_tangential * scale_factor[:, np.newaxis]
 
         return res_u
 
