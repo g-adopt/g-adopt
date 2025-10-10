@@ -2,10 +2,9 @@ from gadopt import *
 from gadopt.gplates import *
 from gadopt.stokes_integrators import iterative_stokes_solver_parameters
 from pathlib import Path
-import argparse
 
 
-def main(free_slip=False):
+def main():
     # Get all checkpoint files first
     all_checkpoints = get_all_snapshot_checkpoints("/scratch/xd2/sg8812/untar_simulations")
     if not all_checkpoints:
@@ -36,7 +35,7 @@ def main(free_slip=False):
     z.subfunctions[1].rename("Pressure")
 
     X = SpatialCoordinate(mesh)
-    r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
+    # r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 
     # Get approximation profiles with the correct directory
     approximation_sources = get_approximation_profiles(first_checkpoint.parent)
@@ -62,7 +61,7 @@ def main(free_slip=False):
     averager = LayerAveraging(mesh, quad_degree=6)
 
     #  building viscosity field
-    mu = mu_rad * exp(-ln(activation_energy(r)) * T_dev)
+    mu = mu_rad  # * exp(-ln(activation_energy(r)) * T_dev)
 
     # These fields are used to set up our Truncated Anelastic Liquid Approximation.
     # Pass the Function objects explicitly instead of using **approximation_profiles
@@ -87,48 +86,19 @@ def main(free_slip=False):
     Z_near_nullspace = create_stokes_nullspace(
         Z, closed=False, rotational=True, translations=[0, 1, 2]
     )
-
-    # Set up GPlates reconstruction
-    zahirovic_2022_files = ensure_reconstruction("Zahirovic 2022", "./")
-    plate_reconstruction_model = pyGplatesConnector(
-        rotation_filenames=zahirovic_2022_files["rotation_filenames"],
-        topology_filenames=zahirovic_2022_files["topology_filenames"],
-        oldest_age=410,
-        nseeds=1e4,
-        nneighbours=4,
-        scaling_factor=1.0,
-        kappa=1e-6,
-    )
-
-    # Top velocity boundary condition
-    gplates_velocities = GplatesVelocityFunction(
-        V,
-        gplates_connector=plate_reconstruction_model,
-        top_boundary_marker=boundary.top,
-        name="GPlates_Velocity"
-    )
-
-    # Followed by boundary conditions for velocity and temperature.
-    if free_slip:
-        # Free slip boundary conditions: normal component zero at both boundaries
-        stokes_bcs = {
-            boundary.bottom: {'un': 0},
-            boundary.top: {'un': 0},
-        }
-    else:
-        # Plate velocity boundary conditions
-        stokes_bcs = {
-            boundary.bottom: {'un': 0},
-            boundary.top: {'u': gplates_velocities},
-        }
+    # Free slip boundary conditions: normal component zero at both boundaries
+    stokes_bcs = {
+        boundary.bottom: {'un': 0},
+        boundary.top: {'un': 0},
+    }
 
     my_solver_parameters = iterative_stokes_solver_parameters
-    my_solver_parameters['snes_rtol'] = 1e-2
-    my_solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    my_solver_parameters['fieldsplit_0']['ksp_rtol'] = 2.5e-5
-    my_solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
-    my_solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    my_solver_parameters['fieldsplit_1']['ksp_rtol'] = 2.0e-4
+    # my_solver_parameters['snes_rtol'] = 1e-2
+    # my_solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+    # my_solver_parameters['fieldsplit_0']['ksp_rtol'] = 2.5e-5
+    # my_solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
+    # my_solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+    # my_solver_parameters['fieldsplit_1']['ksp_rtol'] = 2.0e-4
 
     # Set up Stokes Solver with my iterative solver parameters
     stokes_solver = StokesSolver(
@@ -137,74 +107,23 @@ def main(free_slip=False):
         near_nullspace=Z_near_nullspace, solver_parameters=my_solver_parameters
     )
 
-    # Set up fields for visualisation on CG meshes - DG is overkill for output.
-    FullT_CG = Function(Q_CG, name="FullTemperature_CG")
-    T_CG = Function(Q_CG, name='Temperature_CG')
-    T_dev_CG = Function(Q_CG, name='Temperature_Deviation_CG')
-    mu_field_CG = Function(Q_CG, name="Viscosity_CG")
-
-    # Create Function objects for dynamic topography
-    # i.e., (Thermal Expansivity) x (Background Earth's Mantle Density) x (Thickness of mantle) / (Ra number)
-    dimensionalisation_factor = Constant(3e-5 * 4e3 * 3e6) / approximation.Ra
-    dynamic_topography_top = Function(W, name="Dynamic_Topography_Top")
-    dynamic_topography_bottom = Function(W, name="Dynamic_Topography_Bottom")
-
-    # Compute dynamic topography values
-    delta_rho_top = Constant(1.0)  # i.e., \Delta \rho_top = 1.0 \times \rho_mantle
-    g_top = Constant(1.0)
-    delta_rho_bottom = Constant(-2.5)  # i.e., \Delta \rho_CMB = (\rho_mantle - \rho_outer_core) / \rho_mantle
-    g_bottom = Constant(1.0)
-
-    # Set output filename based on boundary condition type
-    output_filename = "output_free_slip.pvd" if free_slip else "output_plates.pvd"
-    output_file = VTKFile(output_filename)
-
-    log(f"Calculating dynamic topography with {'free slip' if free_slip else 'plate velocity'} boundary conditions")
-
     # We now initiate the time loop:
-    for checkpoint in all_checkpoints[-2:-1]:  # Process last 2 checkpoints for testing
-        log(f"Processing checkpoint: {checkpoint}")
+    checkpoint = all_checkpoints[-1]
+    log(f"Processing checkpoint: {checkpoint}")
 
-        with CheckpointFile(checkpoint.as_posix(), mode="r") as f:
-            T.assign(f.load_function(mesh, "Temperature"))
-            z.assign(f.load_function(mesh, "Stokes"))
+    with CheckpointFile(checkpoint.as_posix(), mode="r") as f:
+        T.assign(f.load_function(mesh, "Temperature"))
 
-        # Get the time of the checkpoint
-        time = get_time(checkpoint.parent / "params.log")
-        log(f"Time: {time}")
+    # Assigning FullT
+    FullT.interpolate(T + approximation_profiles["Tbar"])
+    # Average temperature field
+    averager.extrapolate_layer_average(T_avg, averager.get_layer_average(FullT))
 
-        # Assigning FullT
-        FullT.interpolate(T + approximation_profiles["Tbar"])
-        # Average temperature field
-        averager.extrapolate_layer_average(T_avg, averager.get_layer_average(FullT))
+    # Compute deviation from layer average
+    T_dev.interpolate(FullT-T_avg)
 
-        # Compute deviation from layer average
-        T_dev.interpolate(FullT-T_avg)
-
-        # Update plate velocities (only needed for plate boundary conditions, also for visualisation):
-        gplates_velocities.update_plate_reconstruction(time)
-
-        # Solve Stokes sytem:
-        stokes_solver.solve()
-
-        # Compute normal stresses at boundaries
-        ns_top = stokes_solver.force_on_boundary(boundary.top)
-        ns_bottom = stokes_solver.force_on_boundary(boundary.bottom)
-
-        # Compute dynamic topography
-        dynamic_topography_top.interpolate(ns_top / (delta_rho_top * g_top) * dimensionalisation_factor)
-        dynamic_topography_bottom.interpolate(ns_bottom / (delta_rho_bottom * g_bottom) * dimensionalisation_factor)
-
-        # Write output and interpolate to CG:
-        mu_field_CG.interpolate(mu)
-        FullT_CG.interpolate(FullT)
-        T_CG.interpolate(T)
-        T_dev_CG.interpolate(T_dev)
-
-        # Write all fields to output
-        output_file.write(
-            *z.subfunctions, FullT_CG, T_CG, T_dev_CG, mu_field_CG,
-            dynamic_topography_top, dynamic_topography_bottom, gplates_velocities)
+    # Solve Stokes sytem:
+    stokes_solver.solve()
 
 
 def get_all_snapshot_checkpoints(directory_to_params: Path):
@@ -284,14 +203,4 @@ def get_mesh_parameters():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Spherical dynamic topography calculation with G-ADOPT",
-    )
-    parser.add_argument(
-        "--freeslip",
-        action="store_true",
-        help="Use free slip boundary conditions instead of plate velocity boundary conditions"
-    )
-
-    args = parser.parse_args()
-    main(free_slip=args.freeslip)
+    main()
