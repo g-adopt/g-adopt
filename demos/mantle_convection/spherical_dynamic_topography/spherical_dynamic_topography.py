@@ -6,14 +6,11 @@ from pathlib import Path
 
 def main():
     # Get all checkpoint files first
-    all_checkpoints = get_all_snapshot_checkpoints("/scratch/xd2/sg8812/untar_simulations")
-    if not all_checkpoints:
-        raise ValueError("No checkpoint files found!")
+    checkpoint_file = Path("/scratch/xd2/sg8812/untar_simulations/C51/C51/Final_State.h5")
 
     # Load mesh from the first checkpoint
-    first_checkpoint = all_checkpoints[-1]
-    with CheckpointFile(first_checkpoint.as_posix(), mode="r") as f:
-        log(f"Loading mesh from {first_checkpoint}")
+    with CheckpointFile(checkpoint_file.as_posix(), mode="r") as f:
+        log(f"Loading mesh from {checkpoint_file}")
         mesh = f.load_mesh("firedrake_default_extruded")
 
     mesh.cartesian = False
@@ -34,11 +31,11 @@ def main():
     z.subfunctions[0].rename("Velocity")
     z.subfunctions[1].rename("Pressure")
 
-    X = SpatialCoordinate(mesh)
+    # X = SpatialCoordinate(mesh)
     # r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 
     # Get approximation profiles with the correct directory
-    approximation_sources = get_approximation_profiles(first_checkpoint.parent)
+    approximation_sources = get_approximation_profiles(checkpoint_file.parent)
 
     approximation_profiles = {}
     for func, details in approximation_sources.items():
@@ -49,7 +46,7 @@ def main():
 
     # We next prepare our viscosity, starting with a radial profile.
     mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
-    radial_viscosity_filename = (first_checkpoint.parent / "initial_condition_mat_prop/visc/mu_1e20_asthenosphere_linear_increase_7e22_LM.visc").as_posix()
+    radial_viscosity_filename = (checkpoint_file.parent / "initial_condition_mat_prop/visc/mu_1e20_asthenosphere_linear_increase_7e22_LM.visc").as_posix()
     interpolate_1d_profile(function=mu_rad, one_d_filename=radial_viscosity_filename)
 
     # Visualisation Fields
@@ -81,7 +78,7 @@ def main():
     # Nullspaces and near-nullspace objects are next set up,
     # For free slip, we need rotational=True to handle the additional rotational modes
     Z_nullspace = create_stokes_nullspace(
-        Z, closed=True, rotational=free_slip
+        Z, closed=True, rotational=False
     )
     Z_near_nullspace = create_stokes_nullspace(
         Z, closed=False, rotational=True, translations=[0, 1, 2]
@@ -89,7 +86,7 @@ def main():
     # Free slip boundary conditions: normal component zero at both boundaries
     stokes_bcs = {
         boundary.bottom: {'un': 0},
-        boundary.top: {'un': 0},
+        boundary.top: {'u': 0},
     }
 
     my_solver_parameters = iterative_stokes_solver_parameters
@@ -108,7 +105,7 @@ def main():
     )
 
     # We now initiate the time loop:
-    checkpoint = all_checkpoints[-1]
+    checkpoint = checkpoint_file[-1]
     log(f"Processing checkpoint: {checkpoint}")
 
     with CheckpointFile(checkpoint.as_posix(), mode="r") as f:
@@ -124,27 +121,6 @@ def main():
 
     # Solve Stokes sytem:
     stokes_solver.solve()
-
-
-def get_all_snapshot_checkpoints(directory_to_params: Path):
-    """ Return the list of all snapshot checkpoints."""
-    directory_to_params = Path(directory_to_params)
-    all_checkpoints = [f for f in directory_to_params.glob("C*/C*/Final_State.h5")]
-    all_checkpoints.sort()
-    return all_checkpoints
-
-
-def get_time(filename):
-    """ Return the last time in the parameter log file. """
-    with open(filename, "r") as f:
-        f.readline()
-        for line in f:
-            try:
-                last_ndtime = line.split()[1]
-            except (IndexError, ValueError):
-                pass
-
-    return float(last_ndtime)
 
 
 def get_approximation_profiles(directory_to_params: Path):
