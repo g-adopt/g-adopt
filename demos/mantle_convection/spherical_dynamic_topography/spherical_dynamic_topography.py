@@ -20,7 +20,6 @@ def main():
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
     W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
     Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (DG scalar)
-    Q_CG = FunctionSpace(mesh, "CG", 2)  # CG Temperature function space for visualisation.
     Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
     T = Function(Q, name="Temperature")
@@ -30,9 +29,6 @@ def main():
     u, p = split(z)  # Returns symbolic UFL expression for u and p
     z.subfunctions[0].rename("Velocity")
     z.subfunctions[1].rename("Pressure")
-
-    # X = SpatialCoordinate(mesh)
-    # r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
 
     # Get approximation profiles with the correct directory
     approximation_sources = get_approximation_profiles(checkpoint_file.parent)
@@ -49,17 +45,9 @@ def main():
     radial_viscosity_filename = (checkpoint_file.parent / "initial_condition_mat_prop/visc/mu_1e20_asthenosphere_linear_increase_7e22_LM.visc").as_posix()
     interpolate_1d_profile(function=mu_rad, one_d_filename=radial_viscosity_filename)
 
-    # Visualisation Fields
-    FullT = Function(Q_CG, name="FullTemperature")
-    T_avg = Function(Q, name='Layer_Averaged_Temp')
-    T_dev = Function(Q, name='Temperature_Deviation')
-
-    # The averager tool
-    averager = LayerAveraging(mesh, quad_degree=6)
-
     #  building viscosity field
-    mu = mu_rad  # * exp(-ln(activation_energy(r)) * T_dev)
- 
+    mu = mu_rad
+
     # These fields are used to set up our Truncated Anelastic Liquid Approximation.
     # Pass the Function objects explicitly instead of using **approximation_profiles
     approximation = TruncatedAnelasticLiquidApproximation(
@@ -107,14 +95,6 @@ def main():
     with CheckpointFile(checkpoint_file.as_posix(), mode="r") as f:
         T.assign(f.load_function(mesh, "Temperature"))
 
-    # Assigning FullT
-    FullT.interpolate(T + approximation_profiles["Tbar"])
-    # Average temperature field
-    averager.extrapolate_layer_average(T_avg, averager.get_layer_average(FullT))
-
-    # Compute deviation from layer average
-    T_dev.interpolate(FullT-T_avg)
-
     # Solve Stokes sytem:
     stokes_solver.solve()
 
@@ -149,30 +129,6 @@ def get_approximation_profiles(directory_to_params: Path):
             "filename": (directory_to_params / "initial_condition_mat_prop/gbar.txt").as_posix(),
             "scaling": lambda x: x / 9.8267,
         },
-    }
-
-
-def activation_energy(r):
-    # Now that we have the average T profile, we add lateral viscosity variation due to temperature variations.
-    # These variations are stronger in the upper mantle than the lower mantle.
-    UM_val = 100000.
-    LM_val = 10000.
-    r0 = 1.9916262975778547
-    taper_thickness = 0.07
-    r_mid = r0 - taper_thickness / 2
-    smoothing_width = taper_thickness / 10
-
-    # Define delta_mu_T as a pure UFL expression
-    delta_mu_T = LM_val + (UM_val - LM_val) * 0.5 * (1 + tanh((r - r_mid) / smoothing_width))
-    return delta_mu_T
-
-
-def get_mesh_parameters():
-    return {
-        "rmin": 1.208,
-        "rmax": 2.208,
-        "ref_level": 7,
-        "nlayers": 64,
     }
 
 
