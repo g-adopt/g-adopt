@@ -59,7 +59,7 @@ def main():
 
     #  building viscosity field
     mu = mu_rad  # * exp(-ln(activation_energy(r)) * T_dev)
-
+ 
     # These fields are used to set up our Truncated Anelastic Liquid Approximation.
     # Pass the Function objects explicitly instead of using **approximation_profiles
     approximation = TruncatedAnelasticLiquidApproximation(
@@ -90,12 +90,12 @@ def main():
     }
 
     my_solver_parameters = iterative_stokes_solver_parameters
-    # my_solver_parameters['snes_rtol'] = 1e-2
-    # my_solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    # my_solver_parameters['fieldsplit_0']['ksp_rtol'] = 2.5e-5
+    my_solver_parameters['snes_rtol'] = 1e-2
+    my_solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
+    my_solver_parameters['fieldsplit_0']['ksp_rtol'] = 2.5e-5
     # my_solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
-    # my_solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    # my_solver_parameters['fieldsplit_1']['ksp_rtol'] = 2.0e-4
+    my_solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
+    my_solver_parameters['fieldsplit_1']['ksp_rtol'] = 2.0e-4
 
     # Set up Stokes Solver with my iterative solver parameters
     stokes_solver = StokesSolver(
@@ -104,11 +104,7 @@ def main():
         near_nullspace=Z_near_nullspace, solver_parameters=my_solver_parameters
     )
 
-    # We now initiate the time loop:
-    checkpoint = checkpoint_file[-1]
-    log(f"Processing checkpoint: {checkpoint}")
-
-    with CheckpointFile(checkpoint.as_posix(), mode="r") as f:
+    with CheckpointFile(checkpoint_file.as_posix(), mode="r") as f:
         T.assign(f.load_function(mesh, "Temperature"))
 
     # Assigning FullT
@@ -121,6 +117,8 @@ def main():
 
     # Solve Stokes sytem:
     stokes_solver.solve()
+
+    log("Done!")
 
 
 def get_approximation_profiles(directory_to_params: Path):
