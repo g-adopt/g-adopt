@@ -86,7 +86,7 @@
 # modellers adopting Laplace transform methods. The idea behind this is to convert the time
 # dependent *viscoelastic* problem to a time independent *elastic* problem by the correspondence principle.
 #
-# From an elastic wave theory point of view, Dahlen and Tromp (1998) make the point that it is the
+# From an elastic wave theory point of view, [Dahlen and Tromp (1998)](https://doi.org/10.1515/9780691216157) make the point that it is the
 # Lagrangian perturbation in stress not the Eulerian perturbation that is related to the displacement
 # gradient by the elastic parameters. Transforming between the Lagrangian perturbation in stress and
 # the Eulerian description is given by
@@ -98,13 +98,14 @@
 # This is effectively accounting for an advection of a background quantity when translating between the Eulerian
 # and Lagrangian frames of reference through a first order Taylor series expansion.
 #
-# This advection of prestress can be important for very long wavelength loads. Cathles (1975) estimates that the
+# This advection of prestress can be important for very long wavelength loads. [Cathles (1975)](
+# https://doi.org/10.1515/9781400867684) estimates that the
 # term becomes leading order when the wavelength is greater than 30000 km for typical Earth parameters, i.e. only
 # when the wavelength is the same order of magnitude as the circumference of the Earth.
 #
 # For the viscoelastic problem, however, this term is crucial because it acts as a restoring force to
 # isostatic equilibrium. If the Laplace transform methods do not include this term a load placed on the surface
-# of the Earth will keep sinking (Wu and Peltier, 1982)!
+# of the Earth will keep sinking ([Wu and Peltier, 1982](https://doi.org/10.1111/j.1365-246X.1982.tb04976.x))!
 #
 # Subbing into the stress balance gives
 #
@@ -118,7 +119,7 @@
 # ----------------
 #
 # The GIA community generally model the mantle as an incompressible Maxwell solid. The conceptual picture is a
-# spring and a dashpot connected together in series (Ranalli, 1995). For this viscoelastic model the elastic and
+# spring and a dashpot connected together in series ([Ranalli, 1995](https://link.springer.com/book/9780412546709)). For this viscoelastic model the elastic and
 # viscous stresses are the same but the total displacements combine.
 #
 # The viscous constitutive relationship is
@@ -168,7 +169,7 @@
 # -------------------
 #
 # One of the key differences with the mantle convection demos is that the constitutive equation now depends on time.
-# G-ADOPT implements the method of Zhong et al. (2003) where deviatoric stress is accounted for via an
+# G-ADOPT implements the method of [Zhong et al. (2003)](https://doi.org/10.1046/j.1365-246X.2003.02084.x) where deviatoric stress is accounted for via an
 # 'incremental displacement', thus recasting the problem in terms of $\textbf{u}_{inc}^n = \textbf{u}^n - \textbf{u}^{n-1}$,
 # where subscripts refer to time levels $t$ and $t - \Delta t$ respectively.
 # The incremental strain $\Delta \boldsymbol{\epsilon}$ is
@@ -202,7 +203,7 @@
 
 # This example
 # -------------
-# We will simulate a viscoelastic loading and unloading problem based on a 2D version of the test case presented in Weerdesteijn et al. (2023).
+# We will simulate a viscoelastic loading and unloading problem based on a 2D version of the test case presented in [Weerdesteijn et al. (2023)](https://doi.org/10.1029/2022GC010813).
 #
 # Let's get started! The first step is to import the `gadopt` module, which
 # provides access to Firedrake and associated functionality.
@@ -299,8 +300,8 @@ X = SpatialCoordinate(mesh)
 # Now we can set up the background profiles for the material properties.
 # In this case the density, shear modulus and viscosity only vary in the vertical direction.
 # We will approximate the series of layers using a smooth tanh function with a width of 20 km.
-# The layer properties specified are from spada et al. (2011).
-# N.b. that we have modified the viscosity of the Lithosphere viscosity from
+# The layer properties specified are from [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x).
+# N.b. we have modified the viscosity of the Lithosphere viscosity from
 # Spada et al. (2011) because we are using coarse grid resolution.
 
 
@@ -370,7 +371,7 @@ log(f"dt: {float(dt / year_in_seconds)} years")
 log(f"Simulation start time: {Tstart} years")
 # -
 
-# Next let's setup our ice load. Following the long test from Weeredesteijn et al 2023,
+# Next let's setup our ice load. Following the long test from Weeredesteijn et al. (2023),
 # during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km.
 # The ice thickness will rapidly shrink to ice free conditions in the next 10 thousand years. Finally,
 # the simulation will run for a further 10 thousand years to allow the system to relax towards
