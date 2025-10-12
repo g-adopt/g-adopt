@@ -41,7 +41,7 @@ def main():
         approximation_profiles[func] = f
 
     # We next prepare our viscosity, starting with a radial profile.
-    mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
+    mu_rad = Function(W, name="Viscosity_Radial")  # Depth dependent component of viscosity
     radial_viscosity_filename = (checkpoint_file.parent / "initial_condition_mat_prop/visc/mu_1e20_asthenosphere_linear_increase_7e22_LM.visc").as_posix()
     interpolate_1d_profile(function=mu_rad, one_d_filename=radial_viscosity_filename)
 
