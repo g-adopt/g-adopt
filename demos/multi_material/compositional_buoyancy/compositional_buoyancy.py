@@ -1,5 +1,5 @@
-# # Rayleigh-Taylor instability
-# ---
+# Rayleigh-Taylor instability
+# =
 
 # Rationale
 # -
