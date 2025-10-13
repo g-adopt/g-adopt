@@ -6,8 +6,8 @@ from .approximations import (
     BoussinesqApproximation,
     CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
+    IncompressibleMaxwellApproximation,
     SmallDisplacementViscoelasticApproximation,
-    MaxwellDisplacementApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics

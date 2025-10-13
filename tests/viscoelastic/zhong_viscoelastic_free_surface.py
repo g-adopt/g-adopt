@@ -101,7 +101,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     # 'ValueError: Cannot determine geometric dimension from expression.'
     density = Function(R).assign(rho0)
 
-    approximation = MaxwellDisplacementApproximation(density, shear_modulus, viscosity, g=g)
+    approximation = IncompressibleMaxwellApproximation(density, shear_modulus, viscosity, g=g)
 
     # Create output file
     if args.output:

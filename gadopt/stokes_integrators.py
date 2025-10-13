@@ -658,7 +658,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         # free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
         u, p = self.solution_split
-        normal_stress, _ = self.approximation.free_surface_terms(
+        normal_stress = self.approximation.free_surface_terms(
             vertical_component(u + self.displacement), **params_fs
         )
 
@@ -765,11 +765,11 @@ class InternalVariableSolver(StokesSolverBase):
         normal_stress = params_fs.get("normal_stress", 0.0)
         # Add free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
-        normal_stress += self.approximation.hydrostatic_prestress_advection(
+        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
             vertical_component(self.solution)
         )
 
-        return normal_stress
+        return combined_normal_stress
 
     def update_m(
         self, m: fd.Function, alpha: fd.Function | Expr
