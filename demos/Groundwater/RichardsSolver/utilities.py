@@ -28,6 +28,22 @@ def data_2_function(mesh_coords, file_name):
     return elevation
 
 
+def penaltyParameter(V):
+    
+    # Returns the penalty parameter for SIPG when using a discontinuous function space V
+
+    degree = ufl_elem.degree()  # Get info about function space
+
+    if degree == 0:
+        sigmaF = fd.Constant(2)
+    if degree == 1:
+        sigmaF = fd.Constant(5)
+    else:
+        sigmaF = fd.Constant(9)
+
+    return sigmaF
+
+
 def updateTimeStep(h, hOld, timeStep, timeParameters, V):
 
     if timeParameters["timeStepType"] == 'constant':
