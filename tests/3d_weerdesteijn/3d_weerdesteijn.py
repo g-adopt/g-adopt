@@ -307,9 +307,6 @@ stokes_bcs = {
     boundary.back: {'uy': 0},
 }
 
-# gd = GeodynamicalDiagnostics([u,u], density, boundary.bottom, boundary.top)
-# -
-
 
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
@@ -357,7 +354,7 @@ if OUTPUT:
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max uz_min"
+    "timestep time dt u_rms u_rms_surf ux_max uk_min"
 )
 gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
@@ -385,7 +382,7 @@ for timestep in range(1, max_timesteps+1):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uz_min(boundary.top)}")
+                 f"{gd.uk_min(boundary.top)}")
     # Compute diagnostics:
     # output dimensional vertical displacement
     vertical_displacement.interpolate(vc(u)*D)
@@ -393,7 +390,7 @@ for timestep in range(1, max_timesteps+1):
     displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
     displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
     log("Greatest (-ve) displacement", displacement_min)
-    log("check Greatest (-ve) gd.log", D*gd.uz_min(boundary.top))
+    log("check Greatest (-ve) gd.log", D*gd.uk_min(boundary.top))
     displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
     displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
     log("Greatest (+ve) displacement", displacement_max)

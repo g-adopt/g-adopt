@@ -28,7 +28,7 @@ cases = {
         "extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]
     },
     f"{tests_path}/viscoplastic_case_DG": {"extra_checks": ["nu_top", "avg_t"]},
-    f"{tests_path}/3d_weerdesteijn": {"extra_checks": ["uz_min"]},
+    f"{tests_path}/3d_weerdesteijn": {"extra_checks": ["uk_min"]},
     f"{tests_path}/3d_spada": {"extra_checks": ["uk_min"]},
 }
 
