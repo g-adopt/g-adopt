@@ -145,14 +145,6 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         self.dim = self.mesh.geometric_dimension()
         self.extruded = hasattr(self.mesh.ufl_cell(), 'sub_cells')
 
-        if self.extruded:
-            if self.is_vector:
-                sub_element_count = p1dg_space.ufl_element().num_sub_elements
-            else:
-                sub_element_count = p1dg_space.ufl_element().num_factor_elements
-
-        assert not self.extruded or sub_element_count > 0, \
-            "Extruded mesh requires extruded function space"
         assert not self.extruded or all(e.variant() == 'equispaced' for e in p1dg_space.ufl_element().sub_elements), \
             "Extruded function space must be equivariant"
 
