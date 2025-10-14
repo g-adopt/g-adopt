@@ -125,8 +125,6 @@ def viscosity_term(
             F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
 
             if hasattr(eq.approximation, 'bulk_modulus'):
-                # Add bulk compressibility part of un bc
-                # is this physics or discretisation?
                 trial_tensor_jump = identity * (dot(eq.n, trial) - bc["un"])
                 trial_tensor_jump += transpose(trial_tensor_jump)
                 bulk = eq.approximation.bulk_modulus * eq.approximation.bulk_shear_ratio
@@ -138,9 +136,6 @@ def viscosity_term(
                     * eq.ds(bc_id)
                 )
                 F -= inner(bulk * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
-                # We only keep the normal part of stress; the tangential part is assumed to
-                # be zero stress (i.e. free slip) or prescribed via "stress".
-                F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
 
         if "stress" in bc:  # a momentum flux, a.k.a. "force"
             # Here we need only the third term because we assume jump_u = 0
@@ -200,19 +195,24 @@ def advection_hydrostatic_prestress_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     # Advection of background hydrostatic pressure used in linearised
-    # GIA simulations where
+    # GIA simulations. This method implements the body integral and
+    # jump terms (if density space is discontinuous) after integration
+    # by parts. The boundary integral on the Earth's surface is
+    # applied through the `normal_stress` boundary condition tag of
+    # the `viscosity_term`. This is turned on by specifiying a
+    # `free_surface` in the boundary conditions of the solver.
     B_mu = eq.approximation.B_mu
     rho0 = eq.approximation.density
     g = eq.approximation.g
     u_r = vertical_component(trial)
 
-    # Only include jump term for discontinuous density spaces?
+    # Only include jump term for discontinuous density spaces
     if is_continuous(rho0.function_space()):
         F = 0
     else:
-        # change ds for extruded mesh? maybe not a good idea?
+        # change surface measure for extruded mesh.
         # assumes mesh is aligned in the vertical so that jump
-        # only occurs across horionztal layers
+        # only occurs across horizontal layers
         if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
             dS = dS_h
         else:
@@ -236,7 +236,7 @@ divergence_term.required_attrs = {"u", "rho_continuity"}
 divergence_term.optional_attrs = set()
 momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
-advection_hydrostatic_prestress_term.required_attrs = {"source"}
+advection_hydrostatic_prestress_term.required_attrs = set()
 advection_hydrostatic_prestress_term.optional_attrs = set()
 
 momentum_terms = [momentum_source_term, pressure_gradient_term, viscosity_term]
