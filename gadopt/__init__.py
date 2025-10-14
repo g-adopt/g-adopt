@@ -4,7 +4,10 @@ from firedrake.output import VTKFile
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
+    CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
+    IncompressibleMaxwellApproximation,
+    MaxwellApproximation,
     SmallDisplacementViscoelasticApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
@@ -22,9 +25,10 @@ from .nullspaces import create_stokes_nullspace, rigid_body_modes
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
+    BoundaryNormalStressSolver,
+    InternalVariableSolver,
     StokesSolver,
     ViscoelasticStokesSolver,
-    BoundaryNormalStressSolver,
 )
 from .time_stepper import (
     BackwardEuler,
