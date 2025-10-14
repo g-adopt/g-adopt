@@ -592,7 +592,7 @@ class StokesSolver(StokesSolverBase):
 
 
 class ViscoelasticStokesSolver(StokesSolverBase):
-    """Solves the Stokes system assuming a Maxwell viscoelastic rheology.
+    """Solves the Stokes system assuming an incompressible Maxwell viscoelastic rheology.
 
     Args:
       solution:
@@ -715,6 +715,29 @@ class InternalVariableSolver(StokesSolverBase):
         G-ADOPT approximation defining terms in the system of equations
       m_list:
         List of internal variables
+      dt:
+        Float quantifying the time step used for time integration
+      additional_forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      quad_degree:
+        Integer denoting the quadrature degree
+      solver_parameters:
+        Dictionary of PETSc solver options or string matching one of the default sets
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
+      J:
+        Firedrake function representing the Jacobian of the mixed Stokes system
+      constant_jacobian:
+        Boolean specifying whether the Jacobian of the system is constant
+      nullspace:
+        A `MixedVectorSpaceBasis` for the operator's kernel
+      transpose_nullspace:
+        A `MixedVectorSpaceBasis` for the kernel of the operator's transpose
+      near_nullspace:
+        A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
+        body modes)
     """
 
     name = "InternalVariable"
