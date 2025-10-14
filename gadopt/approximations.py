@@ -448,8 +448,8 @@ class SmallDisplacementViscoelasticApproximation:
     def __init__(
         self,
         density: Function | Number,
-        shear_modulus: Function | Number,
-        viscosity: Function | Number,
+        shear_modulus: Function | Number | list,
+        viscosity: Function | Number | list,
         *,
         g: Function | Number = 1,
         B_mu: Function | Number = 1,
@@ -588,13 +588,14 @@ class CompressibleInternalVariableApproximation(
 
     def __init__(
         self,
-        bulk_modulus,
-        density,
-        shear_modulus,
-        viscosity,
-        bulk_shear_ratio=1,
-        compressible_buoyancy=True,
-        compressible_adv_hyd_pre=True,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number | list,
+        viscosity: Function | Number | list,
+        *,
+        bulk_shear_ratio: Function | Number = 1,
+        compressible_buoyancy: bool = True,
+        compressible_adv_hyd_pre: bool = True,
         **kwargs,
     ):
         self.bulk_modulus = ensure_constant(bulk_modulus)
@@ -617,16 +618,16 @@ class CompressibleInternalVariableApproximation(
         self.maxwell_times = [ensure_constant(visc / mu) for visc, mu in zip(self.viscosity, self.shear_modulus)]
         self.mu0 = ensure_constant(sum(self.shear_modulus))
 
-    def div_u(self, u):
+    def div_u(self, u: Function) -> ufl.core.expr.Expr:
         dim = len(u)
         return div(u) * Identity(dim)
 
-    def deviatoric_strain(self, u):
+    def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         dim = len(u)
         e = sym(grad(u))
         return e - 1 / 3 * tr(e) * Identity(dim)
 
-    def stress(self, u, m_list):
+    def stress(self, u: Function, m_list: list) -> ufl.core.expr.Expr:
         div_u = self.div_u(u)
         d = self.deviatoric_strain(u)
 
@@ -636,7 +637,7 @@ class CompressibleInternalVariableApproximation(
             stress -= 2 * mu * m
         return stress
 
-    def buoyancy(self, displacement):
+    def buoyancy(self, displacement: Function) -> ufl.core.expr.Expr:
         # Compressible part of buoyancy term due to the density perturbation
         # written on rhs of equations
         buoyancy = super().buoyancy(displacement)
@@ -648,7 +649,8 @@ class CompressibleInternalVariableApproximation(
             buoyancy += -self.B_mu * self.g * -self.density * div(displacement)
         return buoyancy
 
-    def hydrostatic_prestress_advection(self, u_r):
+    def hydrostatic_prestress_advection(
+            self, u_r: Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         # Hydrostatic prestress advection term which is applied
         # as a `normal_stress` boundary condition when the `free_surface` tag is
         # specified in the `bcs` dictionary of the `InternalVariableSolver`
