@@ -4,7 +4,7 @@
 # In this tutorial, we examine an idealised 2-D loading problem in a square box.
 # Here we will focus purely on viscoelastic deformation by a surface load, i.e.
 # a synthetic ice sheet! The setup is similar to a 2-D version of the test case
-# presented in Weerdesteijn et al. (2023), but we include compressiblity.
+# presented in Weerdesteijn et al. (2023), but we include compressibility.
 #
 # You may already have seen how G-ADOPT can be applied to mantle convection
 # problems in our other tutorials. Generally the setup of the G-ADOPT model
@@ -58,7 +58,7 @@
 #
 # assuming a vanishing initial displacement, $\boldsymbol{u}(t=0) = \textbf{0}$.
 # The density perturbation $\rho_1$ is often referred to as the
-# *Eulerian density pertubation* by the GIA community.
+# *Eulerian density perturbation* by the GIA community.
 #
 # The full GIA equations include rotational and gravitational effects arising
 # from changes in the surface load as water is redistributed between ice and
@@ -505,7 +505,7 @@ X = SpatialCoordinate(mesh)
 
 # Now we can set up the background profiles for the material properties.
 # In this case the density, shear modulus and viscosity only vary in the vertical
-# direction. The layer properties specified are from spada et al. (2011).
+# direction. The layer properties specified are from Spada et al. (2011).
 
 # +
 density_values = [3037, 3438, 3871, 4978]
@@ -702,7 +702,7 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 # the `ramp` parameter. At each step we call `solve` to calculate the
 # incremental displacement and pressure fields. This will update the
 # displacement at the surface and stress values accounting for the time
-# dependent Maxwell consitutive equation.
+# dependent Maxwell constitutive equation.
 
 # +
 for timestep in range(max_timesteps):
@@ -801,7 +801,7 @@ plog.close()
 # Looking at the animation, we can see that as the weight of the ice load builds
 # up the mantle deforms, pushing up material away from the ice load. If we kept
 # the ice load fixed this forebulge will eventually grow enough that it balances
-# the weight of the ice, i.e the mantle is in isostatic equilbrium and the
+# the weight of the ice, i.e the mantle is in isostatic equilibrium and the
 # deformation due to the ice load stops. At 100 thousand years when the ice is
 # removed the topographic highs associated with forebulges are now out of
 # equilibrium so the flow of material in the mantle reverses back towards the
