@@ -7,6 +7,7 @@ from .approximations import (
     CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
     IncompressibleMaxwellApproximation,
+    MaxwellApproximation,
     SmallDisplacementViscoelasticApproximation,
     TruncatedAnelasticLiquidApproximation,
 )

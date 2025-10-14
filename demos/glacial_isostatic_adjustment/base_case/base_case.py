@@ -662,7 +662,7 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various
 # parameters and fields needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(
+approximation = MaxwellApproximation(
     bulk_modulus=bulk_modulus,
     density=density,
     shear_modulus=shear_modulus,

@@ -644,6 +644,11 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         **kwargs,
     ) -> None:
 
+        warn(
+            '''This solver is being phased out of G-ADOPT. We recommend using
+        `InternalVariableSolver` for viscoelastic applications in G-ADOPT.
+        ''')
+
         self.stress_old = stress_old  # Deviatoric stress from previous time step
         self.displacement = displacement  # Total displacement
         # Replace approximation's viscosity with effective viscosity

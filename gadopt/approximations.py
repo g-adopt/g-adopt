@@ -9,6 +9,7 @@ G-ADOPT queries variables and methods from the approximation.
 import abc
 from numbers import Number
 from typing import Optional
+from warnings import warn
 
 from firedrake import Function, Identity, div, grad, inner, sym, tr, ufl
 
@@ -22,6 +23,7 @@ __all__ = [
     "SmallDisplacementViscoelasticApproximation",
     "IncompressibleMaxwellApproximation",
     "CompressibleInternalVariableApproximation",
+    "MaxwellApproximation",
 ]
 
 
@@ -510,6 +512,13 @@ class IncompressibleMaxwellApproximation(SmallDisplacementViscoelasticApproximat
         viscosity: Function | Number,
         **kwargs,
     ):
+
+        warn(
+            '''The IncompressibleMaxwellApproximation is being phased out of G-ADOPT.
+            We recommend using `MaxwellApproximation` together with the
+            `InternalVariableSolver` for viscoelastic applications in G-ADOPT.
+        ''')
+
         super().__init__(density, shear_modulus, viscosity, **kwargs)
         self.maxwell_time = self.viscosity / self.shear_modulus
 
@@ -656,3 +665,70 @@ class CompressibleInternalVariableApproximation(
         # specified in the `bcs` dictionary of the `InternalVariableSolver`
         # through the `set_free_surface_boundary` method.
         return self.B_mu * self.density * self.g * u_r
+
+
+class MaxwellApproximation(
+    CompressibleInternalVariableApproximation
+):
+    """Maxwell viscoelastic rheology.
+
+    This is a helper class to simplify setting up (compressible) Maxwell rheology.
+    G-ADOPT implements compressible viscoelasticity following the internal variable
+    formulation adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018),
+    see Scott et al. 2025 for more details.
+
+    For Maxwell rheology, there is just one relaxation timescale (and hence one
+    internal variable), so we setup one unique viscosity and shear modulus field.
+
+    Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
+    based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
+
+    Crawford, O., Al-Attar, D., Tromp, J., & Mitrovica, J. X. (2016). Forward and
+    inverse modelling of post-seismic deformation. Geophysical Journal International,
+    ggw414.
+
+    Crawford, O., Al-Attar, D., Tromp, J., Mitrovica, J. X., Austermann, J., &
+    Lau, H. C. (2018). Quantifying the sensitivity of post-glacial sea level change
+    to laterally varying viscosity. Geophysical journal international, 214(2), 1324-1363.
+
+    Automated forward and adjoint modelling of viscoelastic deformation of the solid
+    Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
+    Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
+
+    Arguments:
+      bulk_modulus:  bulk modulus
+      density:       background density
+      shear_modulus: shear modulus
+      viscosity:     viscosity
+      bulk_shear_ratio: Ratio of bulk to shear modulus
+      compressible_buoyancy: Include compressible buoyancy effects
+      compressible_adv_hyd_pre: Include compressible hydrostatic prestress advection
+      g:             gravitational acceleration
+      B_mu:          Nondimensional number describing ratio of buoyancy to elastic
+                     shear strength used for nondimensionalisation.
+                     $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                     where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                     $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                     $L$ is a characteristic length scale, often Mantle depth (m),
+                     $\\mu$ is a characteristic shear modulus (Pa).
+
+    """
+
+    compressible = True
+
+    def __init__(
+        self,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number,
+        viscosity: Function | Number,
+        **kwargs,
+    ):
+
+        # Convert viscosity and shear modulus to lists since for
+        # Maxwell Rheology where there is only one internal variable
+        # and hence only one pair of viscosity and shear modulus fields
+        shear_modulus = [shear_modulus]
+        viscosity = [viscosity]
+
+        super().__init__(bulk_modulus, density, shear_modulus, viscosity, **kwargs)
