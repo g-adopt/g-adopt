@@ -1,7 +1,12 @@
-# Test case based on simplified spada 2011 benchmark
+# Test case based on simplified Spada et al. 2011 benchmark
 # without gravity. A 10 deg ice load is placed on the
 # North Pole instantaneously at the start of the simulation
 # and the mantle evolves towards isostatic equilibrium.
+
+# Spada, G., Barletta, V. R., Klemann, V., Riva, R. E. M.,
+# Martinec, Z., Gasperini, P., ... & King, M. A. (2011).
+# A benchmark study for glacial isostatic adjustment codes.
+# Geophysical Journal International, 185(1), 106-132.
 
 from gadopt import *
 from gadopt.utility import CombinedSurfaceMeasure
@@ -10,19 +15,32 @@ import argparse
 import numpy as np
 from mpi4py import MPI
 parser = argparse.ArgumentParser()
-parser.add_argument("--reflevel", default=5, type=float, help="Horizontal refinement level of surface cubed sphere mesh", required=False)
-parser.add_argument("--DG0_layers", default=5, type=int, help="Number of cells per layer for DG0 discretisation of background profiles", required=False)
+parser.add_argument("--reflevel", default=5, type=float,
+                    help="Horizontal refinement level of surface cubed sphere mesh",
+                    required=False)
+parser.add_argument("--DG0_layers", default=5, type=int,
+                    help="Number of cells per layer for DG0 discretisation of background profiles",
+                    required=False)
 parser.add_argument("--dt_years", default=1e3, type=float, help="Timestep in years", required=False)
 parser.add_argument("--Tend", default=10e3, type=float, help="Simulation end time in years", required=False)
-parser.add_argument("--bulk_shear_ratio", default=1.94, type=float, help="Ratio of Bulk modulus / Shear modulus", required=False)
-parser.add_argument("--load_checkpoint", action='store_true', help="Load simulation data from a checkpoint file")
-parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
-parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
-parser.add_argument("--geometric_dt_steps", default=0, type=int, help="No. of steps used for a geometric progression for increasing dt")
-parser.add_argument("--split_dt_steps", default=0, type=int, help="No. of steps used for a split timestep approach nsteps before and after characteristic maxwell time")
-parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
-parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
-parser.add_argument("--output_path", default="./", type=str, help="Optional output path", required=False)
+parser.add_argument("--bulk_shear_ratio", default=1.94, type=float,
+                    help="Ratio of Bulk modulus / Shear modulus", required=False)
+parser.add_argument("--load_checkpoint", action='store_true',
+                    help="Load simulation data from a checkpoint file")
+parser.add_argument("--checkpoint_file", default=None, type=str,
+                    help="Checkpoint file name", required=False)
+parser.add_argument("--Tstart", default=0, type=float,
+                    help="Simulation start time in years", required=False)
+parser.add_argument("--geometric_dt_steps", default=0, type=int,
+                    help="No. of steps used for a geometric progression for increasing dt")
+parser.add_argument("--split_dt_steps", default=0, type=int,
+                    help="No. of steps used for a split timestep approach nsteps before and after characteristic maxwell time")
+parser.add_argument("--write_output", action='store_true',
+                    help="Write out Paraview VTK files")
+parser.add_argument("--optional_name", default="", type=str,
+                    help="Optional string to add to simulation name for outputs", required=False)
+parser.add_argument("--output_path", default="./", type=str,
+                    help="Optional output path", required=False)
 args = parser.parse_args()
 
 name = f"spada-3d-{args.optional_name}"
@@ -52,7 +70,8 @@ for j in range(len(radius_values_tilde)-1):
 # Construct a circle mesh and then extrude into a cylinder:
 ncells = 8*2**(args.reflevel-1)
 rmin = radius_values_tilde[-1]
-surface_mesh = CubedSphereMesh(rmin, refinement_level=args.reflevel, degree=2, name='surface_mesh')
+surface_mesh = CubedSphereMesh(rmin, refinement_level=args.reflevel, degree=2,
+                               name='surface_mesh')
 
 
 mesh = ExtrudedMesh(
@@ -74,17 +93,16 @@ log("Area of bottom: ", assemble(Constant(1) * ds(boundary.bottom, domain=mesh))
 
 # Set up function spaces
 V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space (vector)
-S = TensorFunctionSpace(mesh, "DQ", 1)  # (Discontinuous) Stress tensor function space (tensor)
-DG0 = FunctionSpace(mesh, "DG", 0)  # (Discontinuous) function space (tensor)
-DG1 = FunctionSpace(mesh, "DG", 1)  # (Discontinuous)  function space (tensor)
+S = TensorFunctionSpace(mesh, "DQ", 1)  # (Discontinuous) Stress tensor function space
+DG0 = FunctionSpace(mesh, "DG", 0)  # (Discontinuous) function space
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 P1 = FunctionSpace(mesh, "CG", 1)
 
 
 # Function to store the solutions:
-u = Function(V, name='displacement')  # A field over the displacement space.
-m = Function(S, name='internal variable 1')  # A field over the internal variable space.
-stress = Function(S, name='deviatoric stress')  # A field over the mixed function space Z.
+u = Function(V, name='displacement')
+m = Function(S, name='internal variable 1')
+stress = Function(S, name='deviatoric stress')
 
 m_list = [m]
 # -
@@ -97,13 +115,12 @@ log("Number of Displacement DOF:", V.dim())
 log("Number of Internal variable  DOF:", S.dim())
 log("Number of Velocity and internal variable DOF:", V.dim()+S.dim())
 
-# Let's start initialising some parameters. First of all Firedrake has a helpful function to give a symbolic representation of the mesh coordinates.
 
 X = SpatialCoordinate(mesh)
 
 # Now we can set up the background profiles for the material properties.
-# In this case the density, shear modulus and viscosity only vary in the vertical direction.
-# The layer properties specified are from spada et al. (2011).
+# In this case the density, shear modulus and viscosity only vary in the vertical
+# direction. The layer properties specified are from Spada et al. (2011).
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [1e40, 1e21, 1e21, 2e21]
@@ -148,25 +165,12 @@ viscosity = Function(DG0, name="viscosity")
 initialise_background_field(viscosity, viscosity_values_tilde)
 
 
-# -
-
-# Next let's define the length of our time step. If we want to accurately resolve the elastic response we should choose a
-# timestep lower than the Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation
-# to 'catch up' with the initial, instantaneous elastic deformation.
-#
-# Let's print out the Maxwell time for each layer
-
 year_in_seconds = 8.64e4 * 365.25
 characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
     log(f"Maxwell time: {float(layer_visc/layer_mu/year_in_seconds):.0f} years")
     log(f"Ratio to characteristic maxwell time: {float(layer_visc/layer_mu/characteristic_maxwell_time)}")
 
-# As we can see the shortest Maxwell time is given by the lower mantle and is about 280 years, i.e. it will take about 280
-# years for the viscous deformation in that layer to catch up any instantaneous elastic deformation. Conversely the top layer,
-# our lithosphere, has a Maxwell time of 6 million years. Given that our simulations only run for 110000 years the viscous
-# deformation over the course of the simulation will always be negligible compared with the elastic deformation. For now let's
-# choose a timestep of 250 years and an output frequency of 2000 years.
 
 # +
 # Timestepping parameters
@@ -216,16 +220,6 @@ log(f"Simulation end time: {Tend} maxwell times")
 log(f"Simulation end time: {float(Tend * characteristic_maxwell_time / year_in_seconds)} years")
 # -
 
-# Next let's setup our ice load. Following the long test from Weeredesteijn et al 2023,
-# during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km.
-# The ice thickness will rapidly shrink to ice free conditions in the next 10 thousand years. Finally,
-# the simulation will run for a further 10 thousand years to allow the system to relax towards
-# isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The
-# width of the ice sheet is 100 km and we have used a tanh function again to smooth out the
-# transition from ice to ice-free regions.
-#
-# As the loading and unloading cycle only varies linearly in time, let's write the ice load as a symbolic expression.
-
 # Initialise ice loading
 rho_ice = 931 / density_scale
 g = 9.815
@@ -254,16 +248,6 @@ if OUTPUT:
     viscfile = VTKFile(f"{args.output_path}viscfile.pvd").write(viscosity)
 
 
-# We can now define the boundary conditions to be used in this simulation.  Let's set the bottom and
-# side boundaries to be free slip with no normal flow $\textbf{u} \cdot \textbf{n} =0$. By passing
-# the string `ux` and `uy`, G-ADOPT knows to specify these as Strong Dirichlet boundary conditions.
-#
-# For the top surface we need to specify a normal stress, i.e. the weight of the ice load, as well as
-# indicating this is a free surface.
-#
-# The `delta_rho_fs` option accounts for the density contrast across the free surface whether there
-# is ice or air above a particular region of the mantle.
-
 # +
 # Setup boundary conditions
 stokes_bcs = {
@@ -274,7 +258,12 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus], viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+approximation = CompressibleInternalVariableApproximation(
+    bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus],
+    viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio,
+    compressible_buoyancy=compressible_buoyancy,
+    compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields and various fields
 # needed for the solve along with the approximation, timestep and boundary conditions.
@@ -336,9 +325,6 @@ displacement_min_array = [[0.0, 0.0]]
 # -
 
 # Now let's run the simulation!
-# At each step we call `solve` to calculate the incremental displacement and pressure fields. This
-# will update the displacement at the surface and stress values accounting for the time dependent
-# Maxwell consitutive equation.
 
 for timestep in range(1, max_timesteps+1):
     # update time first so that ice load begins
@@ -362,13 +348,16 @@ for timestep in range(1, max_timesteps+1):
     vertical_displacement.interpolate(vc(u)*D)
     bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
     displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
-    displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
+    # Minimum displacement at surface (should be top left corner with
+    # greatest (-ve) deflection due to ice loading
+    displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)
     log("Greatest (-ve) displacement", displacement_min)
-    log(f"check gd log: {gd.uk_min(boundary.top)*D}")
     displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
-    displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
+    displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)
     log("Greatest (+ve) displacement", displacement_max)
-    displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds), displacement_min])
+    displacement_min_array.append(
+        [float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds),
+            displacement_min])
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)

@@ -1,5 +1,18 @@
-import argparse
+# Test case based on simple harmonic loading and unloading problems
+# from `Viscosity of the Earth's Mantle' by Cathles (1975). The specific
+# analytic solution is actually based off of Equation 2 in `On calculating
+# glacial isostatic adjustment', Cathles (2024). The decay time is the viscous
+# relaxation timescale plus the maxwell time, including the elastic buoyancy
+# effects. Note that we are solving a loading problem not an unloading problem.
+# There are three default tests:
+# 1) elastic-compressible case limit (dt << maxwell time, 1 step)
+# 2) viscoelastic-compressible (dt ~ maxwell time)
+# 3) viscous limit-compressible-burger (as above but with burgers rheology)
 
+# Additionally there are quasi-incompressible elastic and viscoelastic cases
+# with different values of bulk/shear modulus ratio.
+
+import argparse
 import numpy as np
 import pandas as pd
 from mpi4py import MPI
@@ -40,7 +53,7 @@ def viscoelastic_model(
     L_tilde = L / D
     mesh = RectangleMesh(
         nx, nz, L_tilde, D_tilde
-    )  # Rectangle mesh generated via firedrake
+    )
     mesh.cartesian = True
 
     # Squash mesh to refine near top boundary modified from the ocean model
@@ -202,7 +215,6 @@ def viscoelastic_model(
     )
     error_nondim = 0  # Initialise error
 
-    # FIXME really should provide list of coupled bcs? but stokes integrators only expects 1 set of bcs...
     solver = InternalVariableSolver(
         u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs, solver_parameters="direct"
     )
@@ -320,38 +332,12 @@ params = {
         "compressible_adv_hyd_pre": False,
         "burgers_test": True,
     },
-    "viscoelastic-compressible-visc1e21-shear5e9-bulk1e11-lam128": {
-        "dtf_start": 0.1,  # relative to tau0
-        "nx": 640,
-        "sim_time": "long",
-        "viscosity": 1e21,
-        "shear_modulus": 5e9,
-        "bulk_modulus": 1e11,
-        "lam_factor": 128,
-    },
     "elastic-compressible": {
         "dtf_start": 0.1,
         "nx": 320,
         "sim_time": "short",
         "viscosity": 1e21,
         "shear_modulus": 1e11,
-        "bulk_modulus": 2e11,
-        "lam_factor": 8,
-        "compressible_adv_hyd_pre": False,
-    },
-    "elastic-compressible-old": {
-        "dtf_start": 0.001,  # old relative to tau0
-        "nx": 320,
-        "sim_time": "short",
-        "shear_modulus": 1e11,
-        "bulk_modulus": 10e11,
-    },
-    "viscous-compressible-visc1e21-shear1e13-bulk2e11-lam8-compahpFalse": {
-        "dtf_start": 0.1,  # old relative to tau0
-        "nx": 640,
-        "sim_time": "long",
-        "viscosity": 1e21,
-        "shear_modulus": 1e13,
         "bulk_modulus": 2e11,
         "lam_factor": 8,
         "compressible_adv_hyd_pre": False,
@@ -396,14 +382,6 @@ params = {
         "lam_factor": 8,
         "compressible_adv_hyd_pre": False,
     },
-    "viscoelastic-incompressible-visc1e21-shear1e10-bulk1e15": {
-        "dtf_start": 0.1,  # old relative to tau0
-        "nx": 1280,
-        "sim_time": "long",
-        "viscosity": 1e21,
-        "shear_modulus": 1e10,
-        "bulk_modulus": 1e15,
-    },
     "elastic-incompressible-visc1e21-shear1e11-bulk1e15-lam8-compahpFalse": {
         "dtf_start": 0.1,
         "nx": 320,
@@ -423,30 +401,6 @@ params = {
         "bulk_modulus": 1e14,
         "lam_factor": 8,
         "compressible_adv_hyd_pre": False,
-    },
-    "elastic-incompressible-1e15": {
-        "dtf_start": 0.001,
-        "nx": 320,
-        "sim_time": "short",
-        "shear_modulus": 1e11,
-        "bulk_modulus": 1e15,
-    },
-    "viscous-incompressible-visc1e21-shear1e13-bulk1e15-lam8-compahpFalse": {
-        "dtf_start": 0.1,
-        "nx": 640,
-        "sim_time": "long",
-        "viscosity": 1e21,
-        "shear_modulus": 1e13,
-        "bulk_modulus": 1e15,
-        "lam_factor": 8,
-        "compressible_adv_hyd_pre": False,
-    },
-    "viscous-incompressible-visc1e21-shear1e13-bulk1e15": {
-        "dtf_start": 0.1,
-        "nx": 1280,
-        "sim_time": "long",
-        "shear_modulus": 1e13,
-        "bulk_modulus": 1e15,
     },
 }
 
@@ -470,4 +424,3 @@ def run_benchmark(case_name):
 
 if __name__ == "__main__":
     run_benchmark(args.case)
-#    viscoelastic_model(nx=320, dt_factor=0.025, sim_time="long", viscosity=1e21, shear_modulus=1e11, bulk_modulus=1e15,lam_factor=8, compressible_adv_hyd_pre=False)
