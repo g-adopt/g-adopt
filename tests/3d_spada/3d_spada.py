@@ -124,11 +124,11 @@ X = SpatialCoordinate(mesh)
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [1e40, 1e21, 1e21, 2e21]
-characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 
 density_scale = 4500
 shear_modulus_scale = 1e11
 viscosity_scale = 1e21
+characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 
 density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
