@@ -423,7 +423,7 @@ for timestep in range(1, max_timesteps+1):
     vertical_displacement.interpolate(vc(u)*D)
     bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
     displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
-    # Minimum displacement at surface (should be top left corner with 
+    # Minimum displacement at surface (should be top left corner with
     # greatest (-ve) deflection due to ice loading
     displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)
     log("Greatest (-ve) displacement", displacement_min)
