@@ -85,12 +85,11 @@ def viscosity_term(
             )
 
         if "u" in bc:
-            trial_tensor_jump = outer(eq.n, trial - bc["u"])
+            trial_tensor_jump = 2 * sym(outer(eq.n, trial - bc["u"]))
             if compressible_stress:
                 trial_tensor_jump -= (
                     2 / 3 * identity * (dot(eq.n, trial) - dot(eq.n, bc["u"]))
                 )
-            trial_tensor_jump += transpose(trial_tensor_jump)
             # Terms below are similar to the above terms for the DG dS integrals.
             F += (
                 2
@@ -102,10 +101,9 @@ def viscosity_term(
             F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
 
         if "un" in bc:
-            trial_tensor_jump = outer(eq.n, eq.n) * (dot(eq.n, trial) - bc["un"])
+            trial_tensor_jump = 2 * outer(eq.n, eq.n) * (dot(eq.n, trial) - bc["un"])
             if compressible_stress:
                 trial_tensor_jump -= 2 / 3 * identity * (dot(eq.n, trial) - bc["un"])
-            trial_tensor_jump += transpose(trial_tensor_jump)
             # Terms below are similar to the above terms for the DG dS integrals.
             F += (
                 2
