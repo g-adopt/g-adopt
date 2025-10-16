@@ -55,39 +55,39 @@ class SoilCurve(ABC):
     @abstractmethod
     def moisture_content(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
-        Calculate volumetric moisture content θ(h).
+        Calculate volumetric moisture content $\theta(h)$.
 
         Args:
-            h: Hydraulic pressure head [L]
+            h: Hydraulic pressure head $[L]$
 
         Returns:
-            Volumetric moisture content θ [L³/L³]
+            Volumetric moisture content $\theta$ $[L^3/L^3]$
         """
         pass
 
     @abstractmethod
     def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
-        Calculate relative hydraulic conductivity K(h).
+        Calculate relative hydraulic conductivity $K(h)$.
 
         Args:
-            h: Hydraulic pressure head [L]
+            h: Hydraulic pressure head $[L]$
 
         Returns:
-            Hydraulic conductivity K [L/T]
+            Hydraulic conductivity $K$ $[L/T]$
         """
         pass
 
     @abstractmethod
     def water_retention(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
-        """
-        Calculate specific moisture capacity C(h) = dθ/dh.
+        f"""
+        Calculate specific moisture capacity $ C(h) = d\theta/dh $.
 
         Args:
-            h: Hydraulic pressure head [L]
+            h: Hydraulic pressure head $[ L ]$
 
         Returns:
-            Specific moisture capacity C [L⁻¹]
+            Specific moisture capacity C $ [ L^{-1} ] $
         """
         pass
 
@@ -101,11 +101,11 @@ class HaverkampCurve(SoilCurve):
 
     Parameters:
         theta_r: Residual water content $[L^3/L^3]$
-        theta_s: Saturated water content $[L^3/L^]3
-        alpha: Fitting parameter [L⁻ᵝ]
+        theta_s: Saturated water content $[L^3/L^3]$
+        alpha: Fitting parameter $[L^{-\\beta}]$
         beta: Fitting parameter [dimensionless]
-        Ks: Saturated hydraulic conductivity [L/T]
-        A: Fitting parameter [Lᵞ]
+        Ks: Saturated hydraulic conductivity $[L/T]$
+        A: Fitting parameter $[L^{\\gamma}]$
         gamma: Fitting parameter [dimensionless]
     """
 
@@ -122,7 +122,7 @@ class HaverkampCurve(SoilCurve):
         """
         Haverkamp moisture content relationship.
 
-        θ(h) = θᵣ + α(θₛ - θᵣ) / (α + |h|^β)
+        $\theta(h) = \theta_r + \alpha(\theta_s - \theta_r) / (\alpha + |h|^{\beta})$
         """
         theta_r = self.parameters['theta_r']
         theta_s = self.parameters['theta_s']
@@ -136,7 +136,7 @@ class HaverkampCurve(SoilCurve):
         """
         Haverkamp relative permeability relationship.
 
-        K(h) = Kₛ * A / (A + |h|^γ)
+        $K(h) = K_s \\cdot A / (A + |h|^{\\gamma})$
         """
         Ks = self.parameters['Ks']
         A = self.parameters['A']
@@ -149,7 +149,7 @@ class HaverkampCurve(SoilCurve):
         """
         Haverkamp specific moisture capacity.
 
-        C(h) = -sign(h) * α * β * (θₛ - θᵣ) * |h|^(β-1) / (α + |h|^β)²
+        $C(h) = -\\text{sign}(h) \\cdot \\alpha \\cdot \\beta \\cdot (\\theta_s - \\theta_r) \\cdot |h|^{(\\beta-1)} / (\\alpha + |h|^{\\beta})^2$
         """
         alpha = self.parameters['alpha']
         beta = self.parameters['beta']
@@ -170,11 +170,11 @@ class VanGenuchtenCurve(SoilCurve):
     curves with good physical interpretation.
 
     Parameters:
-        theta_r: Residual water content [L³/L³]
-        theta_s: Saturated water content [L³/L³]
-        alpha: Inverse of air-entry pressure [L⁻¹]
+        theta_r: Residual water content $[L^3/L^3]$
+        theta_s: Saturated water content $[L^3/L^3]$
+        alpha: Inverse of air-entry pressure $[L^{-1}]$
         n: Pore-size distribution parameter [dimensionless]
-        Ks: Saturated hydraulic conductivity [L/T]
+        Ks: Saturated hydraulic conductivity $[L/T]$
     """
 
     def _validate_parameters(self) -> None:
@@ -194,8 +194,8 @@ class VanGenuchtenCurve(SoilCurve):
         """
         van Genuchten moisture content relationship.
 
-        θ(h) = θᵣ + (θₛ - θᵣ) / (1 + |αh|^n)^m
-        where m = 1 - 1/n
+        $\theta(h) = \theta_r + (\theta_s - \theta_r) / (1 + |\alpha h|^n)^m$
+        where $m = 1 - 1/n$
         """
         theta_r = self.parameters['theta_r']
         theta_s = self.parameters['theta_s']
@@ -210,8 +210,8 @@ class VanGenuchtenCurve(SoilCurve):
         """
         van Genuchten relative permeability relationship.
 
-        K(h) = Kₛ * (1 - |αh|^(n-1) * (1 + |αh|^n)^(-m))² / (1 + |αh|^n)^(m/2)
-        where m = 1 - 1/n
+        $K(h) = K_s \\cdot (1 - |\\alpha h|^{(n-1)} \\cdot (1 + |\\alpha h|^n)^{(-m)})^2 / (1 + |\\alpha h|^n)^{(m/2)}$
+        where $m = 1 - 1/n$
         """
         Ks = self.parameters['Ks']
         alpha = self.parameters['alpha']
@@ -227,8 +227,8 @@ class VanGenuchtenCurve(SoilCurve):
         """
         van Genuchten specific moisture capacity.
 
-        C(h) = -(θₛ - θᵣ) * n * m * h * α^n * |h|^(n-2) * (α^n * |h|^n + 1)^(-m-1)
-        where m = 1 - 1/n
+        $C(h) = -(\\theta_s - \\theta_r) \\cdot n \\cdot m \\cdot h \\cdot \\alpha^n \\cdot |h|^{(n-2)} \\cdot (\\alpha^n \\cdot |h|^n + 1)^{(-m-1)}$
+        where $m = 1 - 1/n$
         """
         alpha = self.parameters['alpha']
         n = self.parameters['n']
@@ -251,10 +251,10 @@ class ExponentialCurve(SoilCurve):
     data is not available.
 
     Parameters:
-        theta_r: Residual water content [L³/L³]
-        theta_s: Saturated water content [L³/L³]
-        alpha: Exponential decay parameter [L⁻¹]
-        Ks: Saturated hydraulic conductivity [L/T]
+        theta_r: Residual water content $[L^3/L^3]$
+        theta_s: Saturated water content $[L^3/L^3]$
+        alpha: Exponential decay parameter $[L^{-1}]$
+        Ks: Saturated hydraulic conductivity $[L/T]$
     """
 
     def _validate_parameters(self) -> None:
@@ -270,7 +270,7 @@ class ExponentialCurve(SoilCurve):
         """
         Exponential moisture content relationship.
 
-        θ(h) = θᵣ + (θₛ - θᵣ) * exp(αh)
+        $\\theta(h) = \\theta_r + (\\theta_s - \\theta_r) \\cdot \\exp(\\alpha h)$
         """
         theta_r = self.parameters['theta_r']
         theta_s = self.parameters['theta_s']
@@ -283,7 +283,7 @@ class ExponentialCurve(SoilCurve):
         """
         Exponential relative permeability relationship.
 
-        K(h) = Kₛ * exp(αh)
+        $K(h) = K_s \\cdot \\exp(\\alpha h)$
         """
         Ks = self.parameters['Ks']
         alpha = self.parameters['alpha']
@@ -295,7 +295,7 @@ class ExponentialCurve(SoilCurve):
         """
         Exponential specific moisture capacity.
 
-        C(h) = (θₛ - θᵣ) * α * exp(αh)
+        $C(h) = (\\theta_s - \\theta_r) \\cdot \\alpha \\cdot \\exp(\\alpha h)$
         """
         alpha = self.parameters['alpha']
         theta_r = self.parameters['theta_r']
