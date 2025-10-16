@@ -221,7 +221,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         of rebuilding the projection operator each time.
         """
         # Use the a linear variational solver for removing the radial component
-        if not hasattr(self, '_solver_is_set_up') or not self._solver_is_set_up:
+        if not getattr(self, "_solver_is_set_up", False):
             self.setup_solver()
 
         # Project the velocity to the tangential plane
