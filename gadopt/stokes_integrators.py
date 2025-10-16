@@ -967,10 +967,10 @@ class BoundaryNormalStressSolver(SolverConfigurationMixin):
                 "BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element."
             )
             Q = fd.FunctionSpace(
-                self.mesh, "Lagrange", self.p.function_space().ufl_element().degree()
+                self.mesh.unique(), "Lagrange", self.p.function_space().ufl_element().degree()
             )
         else:
-            Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
+            Q = fd.FunctionSpace(self.mesh.unique(), self.p.ufl_element())
 
         self.force = fd.Function(Q, name=f"force_{self.subdomain_id}")
 
