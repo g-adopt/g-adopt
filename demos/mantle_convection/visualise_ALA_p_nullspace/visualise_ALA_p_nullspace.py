@@ -79,9 +79,9 @@
 
 from gadopt import *
 
-# For directly accessing the pressure nullspace we import `ala_right_nullspace` withing G-ADOPT's stokes_integrators submodule.
+# For directly accessing the pressure nullspace we import `ala_right_nullspace` within G-ADOPT's nullspaces submodule.
 
-from gadopt.stokes_integrators import ala_right_nullspace
+from gadopt.nullspaces import ala_right_nullspace
 
 # From here on, the setup will be exactly as the demo for the Anelastic-Liquid Approximation case.
 

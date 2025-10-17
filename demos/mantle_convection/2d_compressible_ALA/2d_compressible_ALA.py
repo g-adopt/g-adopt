@@ -1,7 +1,7 @@
 # Compressible (ALA) 2-D mantle convection problem in a square box
 # ================================================================
 #
-# Our previous tutorial, which examined convection under the Truncated Anelastic Liquid
+# Our [previous tutorial](../2d_compressible_TALA), which examined convection under the Truncated Anelastic Liquid
 # Approximation (TALA), can be easily modified to use an Anelastic Liquic Approximation (ALA),
 # as we demonstrate here.
 #
@@ -138,9 +138,15 @@ gd = GeodynamicalDiagnostics(z, FullT, boundary.bottom, boundary.top)
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace_transpose,
-                             constant_jacobian=True)
+stokes_solver = StokesSolver(
+    z,
+    approximation,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace_transpose,
+)
 # -
 
 # Next initiate the time loop, which runs until a steady-state solution has been attained:

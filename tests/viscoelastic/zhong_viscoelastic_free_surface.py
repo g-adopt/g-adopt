@@ -66,7 +66,8 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     log("Number of Velocity and Pressure DOF:", V.dim()+W.dim())
 
     # timestepping
-    rho0 = Function(R).assign(Constant(4500))  # density in kg/m^3
+    rho0 = Constant(4500)  # density in kg/m^3
+
     g = 10  # gravitational acceleration in m/s^2
     viscosity = Constant(1e21)  # Viscosity Pa s
     shear_modulus = Constant(shear_modulus)  # Shear modulus in Pa
@@ -96,7 +97,12 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     log("dt in years", float(dt/year_in_seconds))
     log("maxwell time in years", float(maxwell_time/year_in_seconds))
 
-    approximation = SmallDisplacementViscoelasticApproximation(rho0, shear_modulus, viscosity, g=g)
+    # Density needs to be represented on a real space since there is a
+    # grad(density) term in the assembled form. Using a constant returns
+    # 'ValueError: Cannot determine geometric dimension from expression.'
+    density = Function(R).assign(rho0)
+
+    approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
 
     # Create output file
     if args.output:
@@ -118,8 +124,14 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     eta_analytical.interpolate(((F0 - h_elastic) * (1-exp(-(time)/(tau0+maxwell_time)))+h_elastic) * cos(kk * X[0]))
     error = 0  # Initialise error
 
-    stokes_solver = ViscoelasticStokesSolver(z, stress_old, displacement, approximation,
-                                             dt, bcs=stokes_bcs,)
+    stokes_solver = ViscoelasticStokesSolver(
+        z,
+        approximation,
+        stress_old,
+        displacement,
+        dt=dt,
+        bcs=stokes_bcs,
+    )
 
     if args.output:
         output_file.write(*z.subfunctions, displacement, eta_analytical, stress_old)

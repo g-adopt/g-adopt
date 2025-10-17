@@ -4,9 +4,9 @@
 # We next highlight the ease at which simulations can be updated to
 # incorporate more realistic physical approximations. We first account
 # for compressibility, under the Truncated Anelastic Liquid Approximation (TALA),
-# simulating a well-established 2-D benchmark case from King et al. (2010).
+# simulating a well-established 2-D benchmark case from [King et al. (2010)](https://doi.org/10.1111/j.1365-246X.2009.04413.x).
 # Boundary conditions and material properties are otherwise identical to the
-# previous tutorial.
+# [previous tutorial](../base_case).
 #
 # Governing equations
 # -------------------
@@ -203,9 +203,15 @@ gd = GeodynamicalDiagnostics(z, FullT, boundary.bottom, boundary.top)
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                             constant_jacobian=True)
+stokes_solver = StokesSolver(
+    z,
+    approximation,
+    T,
+    bcs=stokes_bcs,
+    constant_jacobian=True,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+)
 # -
 
 # Next initiate the time loop, which runs until a steady-state solution has been attained:

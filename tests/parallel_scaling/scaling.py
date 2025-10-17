@@ -1,8 +1,6 @@
 import argparse
 import numpy as np
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 cases = {
@@ -87,42 +85,32 @@ def get_data(level, base_path=None):
 def run_subcommand(args):
     from stokes_cubed_sphere import model
 
-    model(args.level, args.layers, args.timestep, steps=args.steps)
+    layers = cases[args.level]["layers"]
+    timestep = cases[args.level]["timestep"]
+    model(args.level, layers, timestep, steps=args.steps)
 
 
-def submit_subcommand(args):
-    config = cases[args.level]
-    cores = config.pop("cores")
-    command = args.template.format(cores=cores, mem=4*cores, level=args.level)
-
-    proc = subprocess.Popen(
-        [
-            *command.split(), sys.executable, sys.argv[0],
-            "run", str(args.level), *[str(v) for v in config.values()],
-        ],
-    )
-    if proc.wait() != 0:
-        print(f"level {args.level} failed: {proc.returncode}")
-        sys.exit(1)
+def get_ncpus_subcommand(args):
+    print(cases[args.level]["cores"])
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="scaling",
-        description="Run/submit parallel scaling test casse",
+        description="Run/submit parallel scaling test case",
     )
     subparsers = parser.add_subparsers(title="subcommands")
 
-    parser_run = subparsers.add_parser("run", help="run a specific configuration of a case (usually not manually invoked)")
+    parser_run = subparsers.add_parser(
+        "run", help="run a specific configuration of a case (usually not manually invoked)"
+    )
     parser_run.add_argument("level", type=int)
-    parser_run.add_argument("layers", type=int)
-    parser_run.add_argument("timestep", type=float)
     parser_run.add_argument("-n", "--steps", type=int, help="number of timesteps to run")
     parser_run.set_defaults(func=run_subcommand)
-    parser_submit = subparsers.add_parser("submit", help="submit a PBS job to run a specific case")
-    parser_submit.add_argument("-t", "--template", default="mpiexec -np {cores}", help="template command for running commands under MPI")
+    parser_submit = subparsers.add_parser("get_ncpus", help="get core count for a specific configuration")
     parser_submit.add_argument("level", type=int)
-    parser_submit.set_defaults(func=submit_subcommand)
+    parser_submit.set_defaults(func=get_ncpus_subcommand)
 
     args = parser.parse_args()
+
     args.func(args)

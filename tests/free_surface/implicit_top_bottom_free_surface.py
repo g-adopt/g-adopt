@@ -15,14 +15,9 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
     def __init__(self, dt_factor, **kwargs):
         self.rho_bottom = 2
         self.zeta_error = 0
-        super().__init__(dt_factor, **kwargs)
+        self.absorption_penalty(dt_factor)
 
-        if self.solver_parameters == 'iterative':
-            # Schur complement splitting leads to a nullspace in the velocity block.
-            # Adding a small absorption term bringing the vertical velocity to zero removes this nullspace
-            # and does not affect convergence provided that this term is small compared with the overall numerical error.
-            self.absorption_penalty(dt_factor)
-            self.stokes_solver.F += self.penalty * self.stokes_solver.test[0][1] * (self.stokes_solver.solution[1] - 0)*dx
+        super().__init__(dt_factor, **kwargs)
 
     def setup_function_space(self):
         self.Z = MixedFunctionSpace([self.V, self.W, self.W, self.W])  # Mixed function space with bottom free surface.
@@ -45,6 +40,22 @@ class TopBottomImplicitFreeSurfaceModel(ImplicitFreeSurfaceModel):
         # their order is fraught and not considered pythonic. At the moment let's consider having more than one free surface
         # a bit of a niche case for now, and leave it as is...
         self.stokes_bcs[self.boundary.bottom] = {"free_surface": {"RaFS": -1}}
+
+    def setup_solver(self):
+        super().setup_solver()
+
+        if self.solver_parameters == "iterative":
+            # Schur complement splitting leads to a nullspace in the velocity block.
+            # Adding a small absorption term bringing the vertical velocity to zero
+            # removes this nullspace and does not affect convergence provided that this
+            # term is small compared with the overall numerical error.
+            self.stokes_solver.additional_forcing_term = (
+                self.penalty
+                * self.stokes_solver.tests[0][1]
+                * self.stokes_solver.solution_split[0][1]
+                * dx
+            )
+            self.stokes_solver.set_solver()
 
     def update_analytical_free_surfaces(self):
         super().update_analytical_free_surfaces()

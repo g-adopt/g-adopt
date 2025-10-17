@@ -113,12 +113,9 @@ u = Function(V, name="Velocity").interpolate(as_vector((-y + 0.5, x - 0.5)))
 
 approximation = BoussinesqApproximation(Ra=1, kappa=2e-2)
 delta_t = 0.1
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
-
-# Make our solver output a little less verbose, aiding interpretation of optimisation output below:
-if "ksp_converged_reason" in energy_solver.solver_parameters:
-    del energy_solver.solver_parameters["ksp_converged_reason"]
-# -
+energy_solver = EnergySolver(
+    T, u, approximation, delta_t, ImplicitMidpoint, solver_parameters_extra={"ksp_converged_reason": DeleteParam}
+)
 
 # This time, however, we don't want to use the known initial condition. Instead we will start with
 # the final state from our synthetic forward model, which will then be further rotated and diffused. After
@@ -138,9 +135,13 @@ tape.clear_tape()
 
 T0.project(T_target)
 
-# We want to optimise this initial temperature state, T0, and so we specify this as the *control*:
+# We want to optimise this initial temperature state, T0, and so we
+# specify this as the *control*: Here we specify the L2 as the Riesz
+# map, which defines the inner product structure on the control space,
+# ensuring that gradients are computed in the $L^2$ Hilbert space with
+# respect to the inner product.
 
-m = Control(T0)
+m = Control(T0, riesz_map="L2")
 
 # Based on our guess for the initial temperature, we run the model for a specified number of timesteps:
 
@@ -213,7 +214,7 @@ reduced_functional(T_target)
 # We note that in unstructured mesh optimisation problems, it is important to work in the L2 Riesz
 # representation to ensure a grid-independent result:
 
-gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
+gradJ = reduced_functional.derivative(apply_riesz=True)
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()

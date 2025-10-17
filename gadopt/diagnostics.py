@@ -35,37 +35,41 @@ class GeodynamicalDiagnostics:
       T_avg: Average temperature in the domain
       T_min: Minimum temperature in domain
       T_max: Maximum temperature in domain
-      ux_max: Maximum velocity (optionally over a given boundary)
+      ux_max: Maximum velocity (first component, optionally over a given boundary)
 
     """
 
     def __init__(
         self,
         z: Function,
-        T: Function,
-        bottom_id: int,
-        top_id: int,
+        T: Function = 0.0,
+        /,
+        bottom_id: int | str | None = None,
+        top_id: int | str | None = None,
+        *,
         quad_degree: int = 4,
     ):
         mesh = extract_unique_domain(z)
 
-        self.u, self.p, *_ = z.subfunctions
+        self.u, self.p = z.subfunctions[:2]
         self.T = T
 
         self.dx = dx(domain=mesh, degree=quad_degree)
-        self.ds = (
-            CombinedSurfaceMeasure(mesh, quad_degree)
-            if T.function_space().extruded
-            else ds(mesh)
-        )
-        self.ds_t = self.ds(top_id)
-        self.ds_b = self.ds(bottom_id)
+        self.domain_volume = assemble(Constant(1) * self.dx)
+
+        if self.u.function_space().extruded:
+            self.ds = CombinedSurfaceMeasure(mesh, quad_degree)
+        else:
+            self.ds = ds(mesh)
+
+        if bottom_id:
+            self.ds_b = self.ds(bottom_id)
+            self.bottom_surface = assemble(Constant(1) * self.ds_b)
+        if top_id:
+            self.ds_t = self.ds(top_id)
+            self.top_surface = assemble(Constant(1) * self.ds_t)
 
         self.n = FacetNormal(mesh)
-
-        self.domain_volume = assemble(Constant(1) * self.dx)
-        self.top_surface = assemble(Constant(1) * self.ds_t)
-        self.bottom_surface = assemble(Constant(1) * self.ds_b)
 
     def u_rms(self):
         return norm(self.u) / sqrt(self.domain_volume)
@@ -83,18 +87,18 @@ class GeodynamicalDiagnostics:
         return assemble(self.T * self.dx) / self.domain_volume
 
     def T_min(self):
-        T_data = self.T.dat.data_ro_with_halos[:]
+        T_data = self.T.dat.data_ro
         return self.T.comm.allreduce(T_data.min(), MPI.MIN)
 
     def T_max(self):
-        T_data = self.T.dat.data_ro_with_halos[:]
+        T_data = self.T.dat.data_ro
         return self.T.comm.allreduce(T_data.max(), MPI.MAX)
 
     def ux_max(self, boundary_id=None) -> float:
-        ux_data = self.u.dat.data_ro_with_halos[:, 0]
-
         if boundary_id:
             bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
-            ux_data = ux_data[bcu.nodes]
+            ux_data = self.u.dat.data_ro_with_halos[bcu.nodes, 0]
+        else:
+            ux_data = self.u.dat.data_ro[:, 0]
 
-        return self.u.comm.allreduce(ux_data.max(initial=0), MPI.MAX)
+        return self.u.comm.allreduce(ux_data.max(), MPI.MAX)

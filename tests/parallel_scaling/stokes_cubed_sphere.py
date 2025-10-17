@@ -74,22 +74,34 @@ def model(ref_level, nlayers, delta_t, steps=None):
         boundary.top: {'un': 0},
     }
 
-    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-    energy_solver.solver_parameters['ksp_converged_reason'] = None
-    energy_solver.solver_parameters['ksp_view'] = None
-    energy_solver.solver_parameters['ksp_rtol'] = 1e-7
+    energy_solver_extra_params = {
+        "ksp_converged_reason": None,
+        "ksp_view": None,
+        "ksp_rtol": 1e-7,
+    }
+    energy_solver = EnergySolver(
+        T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs, solver_parameters_extra=energy_solver_extra_params
+    )
 
-    stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs,
-                                 nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                 near_nullspace=Z_near_nullspace)
-
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_monitor_true_residual'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_view'] = None
-    stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-7
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_view'] = None
-    stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-5
+    stokes_solver_extra_params = {
+        "fieldsplit_0": {
+            "ksp_converged_reason": None,
+            "ksp_monitor_true_residual": None,
+            "ksp_view": None,
+            "ksp_rtol": 1e-7,
+        },
+        "fieldsplit_1": {"ksp_view": None, "ksp_rtol": 1e-5, "ksp_converged_reason": None},
+    }
+    stokes_solver = StokesSolver(
+        z,
+        approximation,
+        T,
+        bcs=stokes_bcs,
+        solver_parameters_extra=stokes_solver_extra_params,
+        nullspace=Z_nullspace,
+        transpose_nullspace=Z_nullspace,
+        near_nullspace=Z_near_nullspace,
+    )
 
     # Now perform the time loop:
     for timestep in range(0, max_timesteps):
@@ -97,7 +109,9 @@ def model(ref_level, nlayers, delta_t, steps=None):
         time += dt
 
         # Solve Stokes sytem:
-        with stokes_stage: stokes_solver.solve()
+        with stokes_stage:
+            stokes_solver.solve()
 
         # Temperature system:
-        with energy_stage: energy_solver.solve()
+        with energy_stage:
+            energy_solver.solve()

@@ -1,10 +1,10 @@
 # Generating reference fields for adjoint inversion
 # =================================================
 #
-# This tutorial explains how to run the forward portion of the adjoint test case to generate the reference final
+# This tutorial explains how to run the forward portion of the [adjoint test case](../adjoint) to generate the reference final
 # condition and synthetic forcing (surface velocity observations).
 #
-# We will follow a similar structure to the base demo, focusing on generating the necessary fields for the adjoint
+# We will follow a similar structure to the [base demo](../base_case), focusing on generating the necessary fields for the adjoint
 # inversion. Let's get started.
 
 # Setting Up the Domain
@@ -28,12 +28,14 @@ boundary = get_boundary_ids(mesh)
 
 # Defining Function Spaces
 # ------------------------
-# We set up the function spaces for velocity (Q2), pressure (Q1), and temperature (Q2). These function spaces will be
-# used to define the solution fields for our simulation.
+# We set up the function spaces for velocity (Q2), pressure (Q1), and temperature (Q2-DG). These function spaces will be
+# used to define the solution fields for our simulation. Note that we choose to use a DG function space for temperature here
+# relative to the CG discretisation in our base case because DG handles sharp gradients and advective transport more robustly,
+# offering better stability and reduced spurious oscillations—especially in under-resolved or highly convective regimes.
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+Q = FunctionSpace(mesh, "DQ", 2)  # Temperature function space (scalar)
 Q1 = FunctionSpace(mesh, "CG", 1)  # Average temperature function space (scalar, P1)
 Z = MixedFunctionSpace([V, W])  # Mixed function space for Stokes problem.
 
@@ -57,13 +59,11 @@ T = Function(Q, name="Temperature")
 # thermal boundary layers, and a Gaussian anomaly close to the mantle. This initial state is chosen, such that after 80
 # time steps we would have a temperature field representing a plume-like structure in the domain.
 
-# +
 X = SpatialCoordinate(mesh)
 T.interpolate(
     0.5 * (erf((1 - X[1]) * 3.0) + erf(-X[1] * 3.0) + 1) +
     0.1 * exp(-0.5 * ((X - as_vector((0.5, 0.2))) / Constant(0.1)) ** 2)
 )
-# -
 
 # Configuring Layer Average Calculation
 # -------------------------------------
@@ -135,12 +135,12 @@ energy_solver = EnergySolver(
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
+    constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
-    constant_jacobian=True,
 )
 # -
 

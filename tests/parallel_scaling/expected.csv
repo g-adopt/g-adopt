@@ -1,4 +1,4 @@
-level,velocity_iterations,pressure_iterations,energy_iterations,pc_setup,solve_time
-5,25.911504424778762,9.3,11.9,84.917,2160.0
-6,25.356828193832598,9.35,12.9,115.11,2464.0
-7,27.110132158590307,9.3,12.9,122.76,2649.0
+level,velocity_iterations,pressure_iterations,energy_iterations
+5,25.911504424778762,9.3,11.9
+6,25.356828193832598,9.35,12.9
+7,27.110132158590307,9.3,12.9
