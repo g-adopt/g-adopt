@@ -7,8 +7,9 @@ depending on what they would like to achieve.
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement, DirichletBC, utils
-from firedrake.__future__ import interpolate
+from firedrake import op2, VectorElement, DirichletBC, utils, TrialFunction, TestFunction, inner, grad, FacetNormal
+from firedrake import LinearVariationalProblem, LinearVariationalSolver
+from firedrake.__future__ import Interpolator
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import time
@@ -20,12 +21,8 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
-from types import SimpleNamespace
-
-try:
-    from firedrake import MeshSequenceGeometry
-except ImportError:
-    MeshSequenceGeometry = None
+from typing import Optional, SimpleNamespace
+from numbers import Number
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
