@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - release
   pull_request:
   workflow_dispatch:
     inputs:
@@ -45,7 +46,8 @@ jobs:
     name: Run smoke test
     runs-on: ubuntu-latest
     container:
-      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref }}
+      # Prefer specific branch, then PR base, then actual branch
+      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
 
     needs: check_commit
     if: ${{ needs.check_commit.outputs.skip != 'true' }}
@@ -72,7 +74,8 @@ jobs:
     name: Benchmark regression test
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref }}
+      # Prefer specific branch, then PR base, then actual branch
+      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
       options: --cap-add SYS_NICE
 
     concurrency:
