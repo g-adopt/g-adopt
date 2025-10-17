@@ -180,7 +180,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
         self.tangential_velocity = fd.Function(V, name="tangential_velocity")
 
         # Normal vector (radial direction for spherical geometry)
-        r = fd.FacetNormal(V)
+        r = fd.FacetNormal(V.mesh())
 
         # Define the test and trial functions for a projection solve
         phi = fd.TestFunction(V)
