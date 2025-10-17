@@ -1,28 +1,34 @@
 """
 Test case for smoothing
 """
-import pytest
-import numpy as np
+
 from pathlib import Path
+
+import numpy as np
+import pytest
+
 from gadopt import *
+from gadopt.utility import upward_normal
 
 
 # Fixture for loading cylindrical field data
 @pytest.fixture
 def load_field():
-    checkpoint_base = Path(__file__).parent / "../demos/adjoint_2d_cylindrical"
-    # Start with a previously-initialised temperature field
-    with CheckpointFile(str(checkpoint_base.resolve() / "Checkpoint230.h5"), mode="r") as f:
+    checkpoint_base = (
+        Path(__file__).parent.parent / "demos/mantle_convection/adjoint_2d_cylindrical"
+    )
+    # Start with a previously initialised temperature field
+    with CheckpointFile(str(checkpoint_base / "Checkpoint230.h5"), mode="r") as f:
         mesh = f.load_mesh("firedrake_default_extruded")
+        mesh.cartesian = False
+
         T = f.load_function(mesh, "Temperature")
 
-    temp_bcs = {
-        "bottom": {'T': 1.0},
-        "top": {'T': 0.0},
-    }
+    temp_bcs = {"bottom": {"g": 1.0}, "top": {"g": 0.0}}
+
     # Compute layer average for initial stage:
-    T_avg = Function(T.function_space(), name='Layer_Averaged_Temp')
-    averager = LayerAveraging(mesh, cartesian=False, quad_degree=6)
+    T_avg = Function(T, name="Temperature (layer average)")
+    averager = LayerAveraging(mesh, quad_degree=6)
     averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
     return T, T_avg, temp_bcs
@@ -30,46 +36,56 @@ def load_field():
 
 def test_isotropic_smoothing(load_field):
     # load field and its average for comparison
-    T, T_avg, temp_bcs = load_field
+    T, _, temp_bcs = load_field
 
-    smooth_solution = Function(T.function_space(), name="smooth temperature")
+    solution = Function(T, name="Temperature (smoothed)")
 
-    smoother = DiffusiveSmoothingSolver(
-        function_space=T.function_space(),
-        wavelength=.1,
-        bcs=temp_bcs)
+    kappa = Constant(1)
+    wavelength = 0.1
+    delta_t = wavelength**2 / 4 / kappa
 
-    smooth_solution.assign(smoother.action(T))
-    expected_value = 0.06243541054145882
-    result = assemble((smooth_solution - T) ** 2 * dx)
-    assert np.isclose(result, expected_value, rtol=1e-5), f"Expected {expected_value}, got {result}"
+    smoother = GenericTransportSolver(
+        "diffusion",
+        solution,
+        delta_t,
+        BackwardEuler,
+        eq_attrs={"diffusivity": kappa},
+        bcs=temp_bcs,
+    )
+    smoother.solve()
+
+    result = assemble((solution - T) ** 2 * dx)
+    np.testing.assert_allclose(result, 0.06243541054145882)
 
 
 def test_anisotropic_smoothing(load_field):
     # load field and its average for comparison
     T, T_avg, temp_bcs = load_field
 
-    smooth_solution = Function(T.function_space(), name="smooth temperature")
+    solution = Function(T, name="Temperature (smoothed)")
 
-    # Define the radial and tangential conductivity values
-    kr = Constant(0.0)  # Radial conductivity
-    kt = Constant(1.0)  # Tangential conductivity
-
-    # Function to compute radial and tangential components of the conductivity tensor
-    # Compute radial vector components
-    X = SpatialCoordinate(T.function_space().mesh())
-    r = sqrt(X[0]**2 + X[1]**2)
     # Unit radial and tangential vectors
-    er = as_vector((X[0]/r, X[1]/r))
-    et = as_vector((-X[1]/r, X[0]/r))
-    # Construct the anisotropic conductivity tensor
-    K = kr * outer(er, er) + kt * outer(et, et)
+    mesh = T.function_space().mesh()
+    e_r = upward_normal(mesh)
+    e_t = as_vector((-e_r[1], e_r[0]))
+    # Define the radial and tangential diffusivity values
+    kappa_r = Constant(0.0)  # Radial diffusivity
+    kappa_t = Constant(1.0)  # Tangential diffusivity
+    # Construct the anisotropic diffusivity tensor
+    kappa = kappa_r * outer(e_r, e_r) + kappa_t * outer(e_t, e_t)
 
-    smoother = DiffusiveSmoothingSolver(
-        function_space=T.function_space(),
-        wavelength=1e3,
+    wavelength = 1e3
+    kappa_avg = assemble(sqrt(inner(kappa, kappa)) * dx(mesh)) / assemble(1 * dx(mesh))
+    delta_t = wavelength**2 / 4 / kappa_avg
+
+    smoother = GenericTransportSolver(
+        "diffusion",
+        solution,
+        delta_t,
+        BackwardEuler,
+        eq_attrs={"diffusivity": kappa},
         bcs=temp_bcs,
-        K=K)
+    )
+    smoother.solve()
 
-    smooth_solution.assign(smoother.action(T))
-    assert (assemble((T_avg - smooth_solution) ** 2 * dx) < 1e-7)
+    np.testing.assert_array_less(assemble((T_avg - solution) ** 2 * dx), 1e-7)

@@ -318,6 +318,7 @@ class GenericTransportSolver(GenericTransportBase):
             mass_term=scalar_eq.mass_term,
             eq_attrs=self.eq_attrs,
             bcs=self.weak_bcs,
+            quad_degree=self.quad_degree,
         )
 
 
@@ -389,4 +390,5 @@ class EnergySolver(GenericTransportBase):
             eq_attrs=self.eq_attrs,
             approximation=self.approximation,
             bcs=self.weak_bcs,
+            quad_degree=self.quad_degree,
         )
