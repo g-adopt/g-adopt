@@ -35,11 +35,10 @@ def get_dx(mesh, quad_degree: int) -> Measure:
 
 @cache
 def get_ds(mesh, function_space, quad_degree: int) -> Measure:
-    return (
-        CombinedSurfaceMeasure(mesh, quad_degree)
-        if function_space.extruded
-        else ds(mesh)
-    )
+    if function_space.extruded:
+        return CombinedSurfaceMeasure(mesh, quad_degree)
+    else:
+        return ds(domain=mesh, degree=quad_degree)
 
 
 @cache
@@ -52,15 +51,14 @@ def get_volume(dx):
     return assemble(Constant(1) * dx)
 
 
-class FunctionAttributeHolder:
-    """Hold Firedrake Function attributes
+class FunctionContext:
+    """Hold objects that can be derived from a Firedrake Function
 
-    This class gathers function attributes and calculates quantities based on those
-    functions that will remain constant for the duration of a simulation. The set of
-    attributes stored is the mesh, function_space, dx and ds measures, the FacetNormal
-    of the mesh (as the `.normal` attribute) and the volume of the domain. Note that the
-    function itself is not stored in by this class. Functions are hashable and can
-    therefore be used as dict keys in to reference a FunctionAttributeHolder object.
+    This class gathers references to objects that can be pulled from a Firedrake
+    Function object and calculates quantities based on those objects that will remain
+    constant for the duration of a simulation. The set of objects/quantities stored
+    are: mesh, function_space, dx and ds measures, the FacetNormal of the mesh
+    (as the `.normal` attribute) and the volume of the domain.
 
     Args:
       quad_degree:
@@ -70,6 +68,7 @@ class FunctionAttributeHolder:
     """
 
     def __init__(self, quad_degree: int, func: Function):
+        self.function = func
         self.mesh = extract_unique_domain(func)
         self.function_space = func.function_space()
         self.dx = get_dx(self.mesh, quad_degree)
@@ -83,7 +82,7 @@ class FunctionAttributeHolder:
 
         Creates a `DirichletBC` object, then uses the `.nodes` attribute for that
         object to provide a list of indices that reside on the boundary of the domain
-        of the function associated with this `FunctionAttributeHolder` object. The
+        of the function associated with this `FunctionContext` object. The
         `dof_dset.size` parameter of the `FunctionSpace` is used to exclude nodes in
         the halo region of the domain.
 
@@ -103,7 +102,7 @@ class BaseDiagnostics:
     """A base class containing useful operations for diagnostics
 
     For each Firedrake function passed as a keyword argument in the `funcs` parameter,
-    store that function as an attibute of the class accessible by its keyword, e.g.:
+    store that function as an attribute of the class accessible by its keyword, e.g.:
 
       `diag = BaseDiagnostics(quad_degree, z=z)`
 
@@ -113,9 +112,9 @@ class BaseDiagnostics:
 
       `diag = BaseDiagnostics(quad_degree, z=z)`
 
-    sets the subfunctions of `z` to `diag.z_0`, `diag.z_1`, etc. A
-    `FunctionAttributeHolder` is created for each function. These attributes are
-    accessed by the `diag._attrs` dict.
+    sets the subfunctions of `z` to `diag.z_0`, `diag.z_1`, etc. A `FunctionContext`
+    is created for each function. These attributes are accessed by the
+    `diag._function_contexts` dict.
 
     Args:
       quad_degree:
@@ -127,7 +126,7 @@ class BaseDiagnostics:
     """
 
     def __init__(self, quad_degree: int, **funcs: Function):
-        self._attrs: dict[Function, FunctionAttributeHolder] = {}
+        self._function_contexts: dict[Function, FunctionContext] = {}
 
         for name, func in funcs.items():
             if len(func.subfunctions) == 1:
@@ -140,23 +139,23 @@ class BaseDiagnostics:
 
     def _init_single_func(self, quad_degree: int, func: Function):
         """
-        Create a FunctionAttributeHolder for a single function
+        Create a FunctionContext for a single function
         """
-        self._attrs[func] = FunctionAttributeHolder(quad_degree, func)
+        self._function_contexts[func] = FunctionContext(quad_degree, func)
 
     @cache
     def _check_present(self, func: Function) -> None:
         """
         Determine if a function is present in this BaseDiagnostics object
         """
-        if func not in self._attrs:
+        if func not in self._function_contexts:
             raise KeyError(f"Function {func} is not present in this diagnostic object")
 
     @cache
     def _check_dim_valid(self, f: Function) -> None:
         """
         Determine if the 'dim' argument can be used when searching for a function
-        min/max (i.e. the f is a vector/tensor function).
+        min/max (i.e. if f is a vector/tensor function).
         """
         if len(f.dat.shape) < 2:
             raise KeyError(
@@ -186,7 +185,9 @@ class BaseDiagnostics:
         """
         self._check_present(f)
         if boundary_id:
-            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
+            f_data = f.dat.data_ro[
+                self._function_contexts[f].get_boundary_nodes(boundary_id)
+            ]
         else:
             f_data = f.dat.data_ro
         if dim is not None:
@@ -217,7 +218,9 @@ class BaseDiagnostics:
         """
         self._check_present(f)
         if boundary_id:
-            f_data = f.dat.data_ro[self._attrs[f].get_boundary_nodes(boundary_id)]
+            f_data = f.dat.data_ro[
+                self._function_contexts[f].get_boundary_nodes(boundary_id)
+            ]
         else:
             f_data = f.dat.data_ro
         if dim is not None:
@@ -236,7 +239,10 @@ class BaseDiagnostics:
           Average value of f across the entire domain associated with it
         """
         self._check_present(f)
-        return assemble(f * self._attrs[f].dx) / self._attrs[f].volume
+        return (
+            assemble(f * self._function_contexts[f].dx)
+            / self._function_contexts[f].volume
+        )
 
 
 class GeodynamicalDiagnostics(BaseDiagnostics):
@@ -276,7 +282,6 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         quad_degree: int = 4,
     ):
         u, p = z.subfunctions[:2]
-        T = T
 
         if T is None:
             self.T = 0.0
@@ -285,14 +290,14 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
             super().__init__(quad_degree, u=u, p=p, T=T)
 
         if bottom_id:
-            self.ds_b = self._attrs[self.u].ds(bottom_id)
+            self.ds_b = self._function_contexts[self.u].ds(bottom_id)
             self.bottom_surface = assemble(Constant(1) * self.ds_b)
         if top_id:
-            self.ds_t = self._attrs[self.u].ds(top_id)
+            self.ds_t = self._function_contexts[self.u].ds(top_id)
             self.top_surface = assemble(Constant(1) * self.ds_t)
 
     def u_rms(self):
-        return norm(self.u) / sqrt(self._attrs[self.u].volume)
+        return norm(self.u) / sqrt(self._function_contexts[self.u].volume)
 
     def u_rms_top(self) -> float:
         return fd.sqrt(fd.assemble(fd.dot(self.u, self.u) * self.ds_t))
@@ -300,14 +305,18 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
     def Nu_top(self, scale: float = 1.0):
         return (
             -scale
-            * assemble(dot(grad(self.T), self._attrs[self.T].normal) * self.ds_t)
+            * assemble(
+                dot(grad(self.T), self._function_contexts[self.T].normal) * self.ds_t
+            )
             / self.top_surface
         )
 
     def Nu_bottom(self, scale: float = 1.0):
         return (
             scale
-            * assemble(dot(grad(self.T), self._attrs[self.T].normal) * self.ds_b)
+            * assemble(
+                dot(grad(self.T), self._function_contexts[self.T].normal) * self.ds_b
+            )
             / self.bottom_surface
         )
 
