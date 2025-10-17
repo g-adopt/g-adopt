@@ -62,7 +62,7 @@ def main(free_slip=False):
     averager = LayerAveraging(mesh, quad_degree=6)
 
     #  building viscosity field
-    mu = mu_rad * exp(-ln(activation_energy(r)) * T_dev)
+    mu = mu_rad # * exp(-ln(activation_energy(r)) * T_dev)
 
     # These fields are used to set up our Truncated Anelastic Liquid Approximation.
     # Pass the Function objects explicitly instead of using **approximation_profiles
@@ -125,16 +125,16 @@ def main(free_slip=False):
     my_solver_parameters = iterative_stokes_solver_parameters
     my_solver_parameters['snes_rtol'] = 1e-2
     my_solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    my_solver_parameters['fieldsplit_0']['ksp_rtol'] = 2.5e-5
-    my_solver_parameters['fieldsplit_0']['assembled_pc_gamg_threshold'] = -1
+    my_solver_parameters['fieldsplit_0']['ksp_rtol'] = 2.5e-4
     my_solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    my_solver_parameters['fieldsplit_1']['ksp_rtol'] = 2.0e-4
+    my_solver_parameters['fieldsplit_1']['ksp_rtol'] = 2.0e-3
 
     # Set up Stokes Solver with my iterative solver parameters
     stokes_solver = StokesSolver(
         z, approximation, T, bcs=stokes_bcs,
         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-        near_nullspace=Z_near_nullspace, solver_parameters=my_solver_parameters
+        near_nullspace=Z_near_nullspace, solver_parameters=my_solver_parameters,
+        constant_jacobian=True,
     )
 
     # Set up fields for visualisation on CG meshes - DG is overkill for output.
@@ -162,16 +162,17 @@ def main(free_slip=False):
     log(f"Calculating dynamic topography with {'free slip' if free_slip else 'plate velocity'} boundary conditions")
 
     # We now initiate the time loop:
-    for checkpoint in all_checkpoints[-2:-1]:  # Process last 2 checkpoints for testing
+    for checkpoint in all_checkpoints[-5:-1]:  # Process last 2 checkpoints for testing
         log(f"Processing checkpoint: {checkpoint}")
 
         with CheckpointFile(checkpoint.as_posix(), mode="r") as f:
             T.assign(f.load_function(mesh, "Temperature"))
-            z.assign(f.load_function(mesh, "Stokes"))
+            # z.assign(f.load_function(mesh, "Stokes"))
+
 
         # Get the time of the checkpoint
         time = get_time(checkpoint.parent / "params.log")
-        log(f"Time: {time}")
+        log(f"Time: {time:.2e}, {plate_reconstruction_model.ndtime2age(time):.2f} Ma")
 
         # Assigning FullT
         FullT.interpolate(T + approximation_profiles["Tbar"])
@@ -262,8 +263,8 @@ def get_approximation_profiles(directory_to_params: Path):
 def activation_energy(r):
     # Now that we have the average T profile, we add lateral viscosity variation due to temperature variations.
     # These variations are stronger in the upper mantle than the lower mantle.
-    UM_val = 100000.
-    LM_val = 10000.
+    UM_val = 1000.
+    LM_val = 100.
     r0 = 1.9916262975778547
     taper_thickness = 0.07
     r_mid = r0 - taper_thickness / 2
