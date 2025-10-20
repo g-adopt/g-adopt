@@ -114,7 +114,7 @@ jobs:
       - name: Reinstall pyadjoint from master
         run: |
           uv venv --system-site-packages
-          uv pip uninstall pyadjoint -- -y
+          uv pip uninstall pyadjoint --yes
           uv pip install git+https://github.com/dolfin-adjoint/pyadjoint.git@master
 
       - name: Install Python dependencies
