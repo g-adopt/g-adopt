@@ -145,7 +145,6 @@ def test_custom_integration_quad_degree(cartesian_field):
     T, temp_bcs = cartesian_field
 
     # Create tensor diffusivity to trigger quadrature degree usage
-    mesh = T.function_space().mesh()
     # For Cartesian mesh, create a simple anisotropic tensor
     kappa = as_matrix([[2.0, 0.5], [0.5, 1.0]])
 
