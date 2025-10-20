@@ -2,7 +2,6 @@
 Test case for smoothing using DiffusiveSmoothingSolver
 """
 
-import numpy as np
 import pytest
 
 from gadopt import *
