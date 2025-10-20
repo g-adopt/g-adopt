@@ -5,7 +5,7 @@
 # at a Rayleigh number of $Ra = 7 \times 10^{3}$, with free-slip velocity boundary conditions at both boundaries. Temperature boundary conditions are set to 1
 # at the base of the domain ($r_{\text{min}} = 1.22$) and 0 at the surface ($r_{\text{max}}=2.22$), with the initial temperature
 # distribution approximating a conductive profile with superimposed perturbations triggering tetrahedral symmetry at spherical harmonic
-# degree $l=3$ and order $m=2$ (for further details, see Zhong et al. 2008, or Davies et al. 2022).
+# degree $l=3$ and order $m=2$ (for further details, see [Zhong et al. 2008](https://doi.org/10.1029/2008GC002048), or [Davies et al. 2022](https://doi.org/10.5194/gmd-15-5127-2022)).
 #
 # This example focusses on differences between running simulations in a 2-D annulus and a 3-D sphere. These are
 # 1. The geometry of the problem - i.e. the computational mesh.
@@ -203,4 +203,3 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
-# -
