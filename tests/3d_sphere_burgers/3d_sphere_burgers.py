@@ -178,11 +178,13 @@ initialise_background_field(shear_modulus_2, shear_modulus_values_2_tilde)
 
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
+    approx = IncompressibleCompressibleInternalVariableApproximation
     compressible_buoyancy = False
     compressible_adv_hyd_pre = False
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     initialise_background_field(bulk_modulus, 2*shear_modulus_values_1_tilde)
+    approx = CompressibleInternalVariableApproximation
     compressible_buoyancy = True
     compressible_adv_hyd_pre = True
 
@@ -305,13 +307,11 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(
+approximation = approx(
     bulk_modulus=bulk_modulus, density=density,
     shear_modulus=[shear_modulus_1, shear_modulus_2],
     viscosity=[viscosity_1, viscosity_2], B_mu=B_mu,
-    bulk_shear_ratio=args.bulk_shear_ratio,
-    compressible_buoyancy=compressible_buoyancy,
-    compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+    bulk_shear_ratio=args.bulk_shear_ratio)
 
 
 iterative_parameters = {"mat_type": "matfree",

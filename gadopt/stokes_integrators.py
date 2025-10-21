@@ -19,10 +19,7 @@ from warnings import warn
 import firedrake as fd
 from ufl.core.expr import Expr
 
-from .approximations import (
-    BaseApproximation,
-    SmallDisplacementViscoelasticApproximation,
-)
+from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
@@ -635,7 +632,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
     def __init__(
         self,
         solution: fd.Function,
-        approximation: SmallDisplacementViscoelasticApproximation,
+        approximation: BaseGIAApproximation,
         stress_old: fd.Function,
         displacement: fd.Function,
         /,
@@ -672,7 +669,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
     def set_equations(self) -> None:
         """Sets up UFL forms for the viscoelastic Stokes equations residual."""
         u, p = self.solution_split
-        stress = self.approximation.stress(u, self.stress_old, self.dt)
+        stress = self.approximation.stress(u, stress_old=self.stress_old, dt=self.dt)
         source = self.approximation.buoyancy(self.displacement) * self.k
         eqs_attrs = [
             {"p": p, "stress": stress, "source": source},
@@ -750,7 +747,7 @@ class InternalVariableSolver(StokesSolverBase):
     def __init__(
         self,
         solution: fd.Function,
-        approximation: SmallDisplacementViscoelasticApproximation,
+        approximation: BaseGIAApproximation,
         /,
         *,
         m_list: list,
@@ -770,7 +767,7 @@ class InternalVariableSolver(StokesSolverBase):
 
         m_new_list = [self.update_m(m, alpha) for m, alpha in zip(self.m_list, self.approximation.maxwell_times)]
 
-        stress = self.approximation.stress(self.solution, m_new_list)
+        stress = self.approximation.stress(self.solution, m_list=m_new_list)
         source = self.approximation.buoyancy(self.solution) * self.k
 
         eqs_attrs = {"stress": stress, "source": source}

@@ -154,11 +154,13 @@ initialise_background_field(shear_modulus, shear_modulus_values_tilde)
 
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
+    approx = IncompressibleCompressibleInternalVariableApproximation
     compressible_buoyancy = False
     compressible_adv_hyd_pre = False
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
+    approx = CompressibleInternalVariableApproximation
     compressible_buoyancy = True
     compressible_adv_hyd_pre = True
 
@@ -258,11 +260,9 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(
+approximation = approx(
     bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus],
-    viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio,
-    compressible_buoyancy=compressible_buoyancy,
-    compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+    viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields and various fields
