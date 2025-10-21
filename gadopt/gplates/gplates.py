@@ -121,13 +121,12 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
             "ksp_converged_reason": None
         }
 
-    def __new__(cls, *args, **kwargs):
-        # Always return a regular Function, not GplatesVelocityFunction
-        return fd.Function.__new__(fd.Function, *args, **kwargs)
-
     def __init__(self, function_space, *args, gplates_connector=None, top_boundary_marker="top", quad_degree=None, solver_parameters=None, **kwargs):
         # Initialise as a Firedrake Function
         super().__init__(function_space, *args, **kwargs)
+
+        # Set the class name required by SolverConfigurationMixin
+        self._class_name = self.__class__.__name__
 
         # Cache all the necessary information that will be used to assign surface velocities
         # the marker for surface boundary. This is typically "top" in extruded mesh.
