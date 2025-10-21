@@ -475,7 +475,7 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
         if hasattr(K, 'ufl_shape') and len(K.ufl_shape) > 0:
             # Tensor diffusivity
             K_avg = (
-                assemble(dot(inner(K, K)) * dx(mesh, degree=integration_quad_degree)) /
+                assemble(sqrt(inner(K, K)) * dx(mesh, degree=integration_quad_degree)) /
                 assemble(Constant(1) * dx(mesh, degree=integration_quad_degree))
             )
         else:
