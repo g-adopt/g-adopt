@@ -476,7 +476,7 @@ def node_coordinates(function: Function) -> Function:
     return Function(vec_space).interpolate(SpatialCoordinate(function))
 
 
-def interpolate_1d_profile(function: Function, one_d_filename: str):
+def interpolate_1d_profile(function: Function, one_d_filename: str, quad_degree: int | None = None):
     """
     Assign a one-dimensional profile to a Function `function` from a file.
 
@@ -487,6 +487,7 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
     Args:
         function: The function onto which the 1D profile will be assigned
         one_d_filename: The path to the file containing the 1D radial profile
+        quad_degree: Quadrature degree for integration. If None, defaults to 2p+1 where p is the polynomial degree.
 
     Note:
         - This is designed to read a file with one process and distribute in parallel with MPI.
@@ -514,7 +515,7 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
 
     rad = Function(function.function_space()).interpolate(upward_coord)
 
-    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
+    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, quad_degree=quad_degree)
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
 
