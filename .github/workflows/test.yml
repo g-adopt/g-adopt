@@ -111,14 +111,9 @@ jobs:
         run: |
           mv tsp_build/tsp-hpc /usr/local/bin/tsp
 
-      - name: Reinstall pyadjoint from master
-        run: |
-          uv venv --system-site-packages
-          uv pip uninstall pyadjoint
-          uv pip install git+https://github.com/dolfin-adjoint/pyadjoint.git@master
-
       - name: Install Python dependencies
         run: |
+          uv venv --system-site-packages
           uv pip install .[demos,optimisation] pygplates
 
       - name: Get Muller et al 2022 plate reconstructions
