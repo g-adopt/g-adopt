@@ -144,7 +144,7 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # directory. Below, we verify the required paths in this directory and
 # ensure they exist:
 
-zahirovic_2022_files = ensure_reconstruction("Zahirovic 2022", ".")
+muller_2022_files = ensure_reconstruction("Muller 2022 SE v1.2", ".")
 
 # + tags=["active-ipynb"]
 # # These are the files that needs to be passed on to pyGPlates
@@ -170,8 +170,8 @@ zahirovic_2022_files = ensure_reconstruction("Zahirovic 2022", ".")
 # scaling_factor.
 
 plate_reconstruction_model = pyGplatesConnector(
-    rotation_filenames=zahirovic_2022_files["rotation_filenames"],
-    topology_filenames=zahirovic_2022_files["topology_filenames"],
+    rotation_filenames=muller_2022_files["rotation_filenames"],
+    topology_filenames=muller_2022_files["topology_filenames"],
     oldest_age=1000,
     nseeds=1e5,
     nneighbours=4,
