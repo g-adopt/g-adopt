@@ -2,22 +2,21 @@
 # ===============================================
 #
 # This tutorial demonstrates the application of **isotropic** and **anisotropic**
-# diffusive smoothing techniques on a cylindrical temperature field using G-ADOPT.
+# diffusive smoothing on a cylindrical temperature field using G-ADOPT.
 # The purpose is to illustrate how different diffusion properties can affect the
-# smoothing behavior in geodynamic simulations.
+# smoothing behaviour, and how to potentially use them in geodynamic simulations.
 #
 # Smoothing is a critical technique in geodynamics for:
-# - Removing numerical noise from solutions
-# - Stabilizing simulations with sharp gradients
-# - Preparing initial conditions for time-dependent problems
-# - Post-processing results for visualization
+# - Sometimes removing numerical noise from data and maybe simulations.
+# - Post-processing results for visualisation.
+# - A self-consistent way of applying smooth properties on derivative information.
 #
 # We demonstrate two types of smoothing:
 # 1. **Isotropic smoothing**: uniform diffusion in all directions
 # 2. **Anisotropic smoothing**: directionally-dependent diffusion
 #
 # The checkpoint file used in this tutorial contains a cylindrical temperature field
-# from a 2D adjoint simulation. We use the same checkpoint file as the adjoint tutorial
+# from a 2D adjoint simulation. We use the same checkpoint file as an adjoint simulation
 # to demonstrate smoothing techniques on a realistic geodynamic field.
 # To download the checkpoint file if it doesn't already exist, execute the following command:
 
@@ -25,7 +24,7 @@
 # ![ ! -f adjoint-demo-checkpoint-state.h5 ] && wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5
 # -
 
-# Implementation in G-ADOPT
+# How to do smoothing  in G-ADOPT
 # -------------------------
 #
 # The first step is to import the gadopt module, which provides access to
@@ -39,8 +38,9 @@ from gadopt import *
 # import pyvista as pv
 # -
 
-# Load the cylindrical temperature field from a checkpoint file.
+# Next, load the cylindrical temperature field from a checkpoint file.
 # This field serves as our test case for demonstrating smoothing techniques.
+# If you are not familiar with these steps, the base case tutorial is a good place to start.
 
 # +
 input_file = "smoothing-example.h5"
@@ -53,7 +53,7 @@ mesh.cartesian = False
 boundaries = get_boundary_ids(mesh)
 # -
 
-# Let's visualize the original temperature field to understand what we're working with.
+# Let's visualise the original temperature field to understand what we are working with.
 
 # + tags=["active-ipynb"]
 # VTKFile("original_temperature.pvd").write(T)
@@ -64,8 +64,11 @@ boundaries = get_boundary_ids(mesh)
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
 
-# Define boundary conditions for the temperature field during smoothing.
+# The visualisation above shows the temperature field with sharp well-defined structures.
+# Now to continue, we define boundary conditions for the temperature field during smoothing.
 # These ensure that the smoothing operation respects the physical boundaries.
+# Note that by removing these boundary conditions, the smooth properties would extend to
+# the boundaries, however, the boundary values would not be conserved.
 
 temp_bcs = {
     boundaries.bottom: {'T': 1.0},  # Fixed temperature at the bottom
@@ -73,14 +76,14 @@ temp_bcs = {
 }
 
 # Compute layer average of the temperature for comparison purposes.
-# This helps visualize the deviation from the mean state before and after smoothing.
+# This helps visualise the deviation from the mean state before and after smoothing.
 
 # +
 T_avg = Function(T.function_space(), name='Layer_Averaged_Temp')
 averager = LayerAveraging(mesh, quad_degree=6)
 averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
-# Create a deviation field for better visualization
+# Create a deviation field for better visualisation
 T_deviation = Function(T.function_space(), name='Temperature_Deviation')
 T_deviation.assign(T - T_avg)
 # -
@@ -88,28 +91,62 @@ T_deviation.assign(T - T_avg)
 # Isotropic Smoothing
 # -------------------
 # In isotropic smoothing, the diffusion coefficient is the same in all directions.
-# This simplifies the diffusion tensor to a scalar value, promoting uniform
-# smoothing across all spatial directions.
+# This simplifies the diffusion tensor to a scalar value, providing a  uniform
+# smoothing across all spatial directions. In gadopt, the smoothing is performed by
+# the DiffusiveSmoothingSolver class. Here by providing the wavelength that we want to smooth,
+# plus the function space we want to have the solution in, we will have the DiffusiveSmoothingSolver.
+# This DiffusiveSmoothingSolver will then be used to apply the smoothing to any scalar field.
+# Below we use a wavelength of 0.2.
 
 # +
 smooth_solution_isotropic = Function(T.function_space(), name="Smooth_Temperature_Isotropic")
 smoother_isotropic = DiffusiveSmoothingSolver(
     function_space=T.function_space(),
-    wavelength=0.1,  # Smoothing wavelength parameter
+    wavelength=0.2,  # Smoothing wavelength parameter
     bcs=temp_bcs)
 
 # Apply isotropic smoothing
 smooth_solution_isotropic.assign(smoother_isotropic.action(T))
 
-# Compute the smoothed deviation for visualization
+# Compute the smoothed deviation for visualisation
 smooth_deviation_isotropic = Function(T.function_space(), name='Smooth_Deviation_Isotropic')
 smooth_deviation_isotropic.assign(smooth_solution_isotropic - T_avg)
 # -
 
+# Now to see the result, we visualise the isotropic smoothing results
+
+# + tags=["active-ipynb"]
+# # Create visualisation comparing original vs isotropic smoothed deviation
+# VTKFile("isotropic_results.pvd").write(T_deviation, smooth_solution_isotropic, smooth_deviation_isotropic)
+#
+# # Load the data for visualisation
+# isotropic_data = pv.read("isotropic_results/isotropic_results_0.vtu")
+#
+# # Create a two-panel comparison: original vs isotropic smoothed deviation
+# iso_plotter = pv.Plotter(shape=(1, 2), notebook=True)
+#
+# # Original temperature deviation
+# iso_plotter.subplot(0, 0)
+# mesh_copy_orig = isotropic_data.copy()
+# iso_plotter.add_mesh(mesh_copy_orig, scalars="Temperature_Deviation", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
+# iso_plotter.add_title("Original Deviation", font_size=10)
+# iso_plotter.camera_position = "xy"
+#
+# # Isotropic smoothed deviation
+# iso_plotter.subplot(0, 1)
+# mesh_copy_iso = isotropic_data.copy()
+# iso_plotter.add_mesh(mesh_copy_iso, scalars="Smooth_Deviation_Isotropic", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
+# iso_plotter.add_title("Isotropic Smoothed Deviation", font_size=10)
+# iso_plotter.camera_position = "xy"
+#
+# iso_plotter.show(jupyter_backend="static", interactive=False)
+# -
+
 # Anisotropic Smoothing
 # ---------------------
-# Anisotropic smoothing allows different diffusion rates in different directions.
-# This is critical in scenarios where material properties vary spatially or by direction.
+# Anisotropic smoothing allows different diffusion rates in different directions. This
+# is in particular useful for mantle studies where vertical and horizontal properties
+# might have different resolutions.
 # Here, we model zero radial diffusion and full tangential diffusion, which is
 # physically relevant for layered structures in geodynamics.
 
@@ -134,23 +171,24 @@ K = kr * outer(er, er) + kt * outer(et, et)
 smooth_solution_anisotropic = Function(T.function_space(), name="Smooth_Temperature_Anisotropic")
 smoother_anisotropic = DiffusiveSmoothingSolver(
     function_space=T.function_space(),
-    wavelength=0.1,
+    wavelength=0.3,
     bcs=temp_bcs,
     K=K)
 
 # Apply anisotropic smoothing
 smooth_solution_anisotropic.assign(smoother_anisotropic.action(T))
 
-# Compute the smoothed deviation for visualization
+# Compute the smoothed deviation for visualisation
 smooth_deviation_anisotropic = Function(T.function_space(), name='Smooth_Deviation_Anisotropic')
 smooth_deviation_anisotropic.assign(smooth_solution_anisotropic - T_avg)
 # -
 
-# Output results for visualization and analysis
-# We write out multiple fields to compare the effects of different smoothing approaches
+# Comparison and Final visualisation
+# ===================================
+# Now we compare the effects of both smoothing approaches and visualise the results.
 
 # +
-# Write original and smoothed temperature fields
+# Write original and smoothed temperature fields for comparison
 VTKFile("output.pvd").write(
     T, T_avg, T_deviation,
     smooth_solution_isotropic, smooth_deviation_isotropic,
@@ -159,51 +197,50 @@ VTKFile("output.pvd").write(
 
 # Create a parameter log to record key metrics
 parameter_log = ParameterLog('params.log', mesh)
-parameter_log.log_str("original_rms isotropic_rms anisotropic_rms")
+parameter_log.log_str("u_rms original_rms isotropic_rms anisotropic_rms")
 
 # Calculate RMS values for comparison
+
 original_rms = sqrt(assemble(T_deviation**2 * dx))
 isotropic_rms = sqrt(assemble(smooth_deviation_isotropic**2 * dx))
 anisotropic_rms = sqrt(assemble(smooth_deviation_anisotropic**2 * dx))
 
-parameter_log.log_str(f"{original_rms} {isotropic_rms} {anisotropic_rms}")
+# Note: by default gadopts demos are testing for the u_rms values in the demos.
+# So to keep this demo consistent with other demos, we set u_rms to 1.0 as a
+# placeholder since smoothing doesn't involve velocity
+parameter_log.log_str(f"{1.0:.6f} {original_rms:.6f} {isotropic_rms:.6f} {anisotropic_rms:.6f}")
 parameter_log.close()
+
+print("RMS Comparison:")
+print(f"Original deviation RMS: {original_rms:.6f}")
+print(f"Isotropic smoothed RMS: {isotropic_rms:.6f}")
+print(f"Anisotropic smoothed RMS: {anisotropic_rms:.6f}")
 # -
 
-# Visualize the comparison between original and smoothed fields
+# Visualise the comprehensive comparison between all smoothing approaches
 
 # + tags=["active-ipynb"]
-# # Load the output data for visualization
+# # Load the output data for visualisation
 # output_data = pv.read("output/output_0.vtu")
 #
-# # Create a comparison plot
-# plotter = pv.Plotter(shape=(2, 2), notebook=True)
+# # Create a two-panel comparison: isotropic vs anisotropic smoothed deviations
+# comparison_plotter = pv.Plotter(shape=(1, 2), notebook=True)
 #
-# # Original temperature deviation
-# plotter.subplot(0, 0)
-# plotter.add_mesh(output_data, scalars="Temperature_Deviation", cmap="RdBu_r", clim=[-0.5, 0.5])
-# plotter.add_title("Original Temperature Deviation")
-# plotter.camera_position = "xy"
+# # Isotropic smoothing deviation
+# comparison_plotter.subplot(0, 0)
+# mesh_copy_iso = output_data.copy()
+# comparison_plotter.add_mesh(mesh_copy_iso, scalars="Smooth_Deviation_Isotropic", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
+# comparison_plotter.add_title("Isotropic Smoothed Deviation", font_size=10)
+# comparison_plotter.camera_position = "xy"
 #
-# # Layer average
-# plotter.subplot(0, 1)
-# plotter.add_mesh(output_data, scalars="Layer_Averaged_Temp", cmap="coolwarm")
-# plotter.add_title("Layer Average Temperature")
-# plotter.camera_position = "xy"
+# # Anisotropic smoothing deviation
+# comparison_plotter.subplot(0, 1)
+# mesh_copy_aniso = output_data.copy()
+# comparison_plotter.add_mesh(mesh_copy_aniso, scalars="Smooth_Deviation_Anisotropic", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
+# comparison_plotter.add_title("Anisotropic Smoothed Deviation", font_size=10)
+# comparison_plotter.camera_position = "xy"
 #
-# # Isotropic smoothing result
-# plotter.subplot(1, 0)
-# plotter.add_mesh(output_data, scalars="Smooth_Deviation_Isotropic", cmap="RdBu_r", clim=[-0.5, 0.5])
-# plotter.add_title("Isotropic Smoothing")
-# plotter.camera_position = "xy"
-#
-# # Anisotropic smoothing result
-# plotter.subplot(1, 1)
-# plotter.add_mesh(output_data, scalars="Smooth_Deviation_Anisotropic", cmap="RdBu_r", clim=[-0.5, 0.5])
-# plotter.add_title("Anisotropic Smoothing")
-# plotter.camera_position = "xy"
-#
-# plotter.show(jupyter_backend="static", interactive=False)
+# comparison_plotter.show(jupyter_backend="static", interactive=False)
 # -
 
 # This tutorial has demonstrated how to:
@@ -211,11 +248,8 @@ parameter_log.close()
 # - Apply isotropic smoothing with uniform diffusion
 # - Apply anisotropic smoothing with directional diffusion control
 # - Compare the effects of different smoothing approaches
-# - Visualize and quantify smoothing results
+# - Visualise and quantify smoothing results
 #
 # The key difference between isotropic and anisotropic smoothing is evident:
 # - Isotropic smoothing reduces variations uniformly in all directions
 # - Anisotropic smoothing preserves radial structure while smoothing tangentially
-#
-# These techniques are essential for preprocessing data, stabilizing numerical
-# simulations, and post-processing results in geodynamic modeling.
