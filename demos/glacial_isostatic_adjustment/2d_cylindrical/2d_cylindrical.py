@@ -95,8 +95,8 @@ X = SpatialCoordinate(mesh)
 # Now we can set up the background profiles for the material properties.
 # In this case the density and shear modulus vary in the vertical direction.
 # We will approximate the series of layers using a smooth tanh function with a width of 40 km.
-# The layer properties specified are from spada et al. (2011).
-# N.b. that we have modified the viscosity of the Lithosphere viscosity from
+# The layer properties specified are from [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x).
+# N.b. we have modified the viscosity of the Lithosphere viscosity from
 # Spada et al. (2011) because we are using coarse grid resolution.
 
 
@@ -414,9 +414,7 @@ stokes_bcs = {boundary.top: {'normal_stress': ice_load, 'free_surface': {'delta_
               boundary.bottom: {'un': 0}
               }
 
-
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields needed for the viscoelastic loading problem.
-
 
 approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
 
@@ -430,7 +428,7 @@ approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulu
 Z_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True)
 
 # Given the increased computational expense (typically requiring more degrees of freedom) in a 2-D annulus domain,
-# G-ADOPT defaults to iterative solver parameters. As noted in our previous 3-D Cartesian tutorial, G-ADOPT's
+# G-ADOPT defaults to iterative solver parameters. As noted in [our 3-D Cartesian tutorial](../../mantle_convection/3d_cartesian), G-ADOPT's
 # iterative solver setup is configured to use the GAMG preconditioner for the velocity block of the Stokes system,
 # to which we must provide near-nullspace information, which, in 2-D, consists of two rotational and two
 # translational modes.
@@ -444,11 +442,12 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 
 stokes_solver = ViscoelasticStokesSolver(
     z,
+    approximation,
     stress_old,
     displacement,
-    approximation,
-    dt,
+    dt=dt,
     bcs=stokes_bcs,
+    solver_parameters="iterative",
     constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
@@ -472,7 +471,7 @@ plog.log_str(
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
-gd = GeodynamicalDiagnostics(z, density, boundary.bottom, boundary.top)
+gd = GeodynamicalDiagnostics(z, bottom_id=boundary.bottom, top_id=boundary.top)
 
 # Initialise a (scalar!) function for logging vertical displacement
 U = FunctionSpace(mesh, "CG", 2)  # (Incremental) Displacement function space (scalar)

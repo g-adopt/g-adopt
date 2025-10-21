@@ -2,13 +2,13 @@
 # =======================================================
 #
 # In this tutorial we highlight the ease at which simulations can be examined in different
-# dimensions by modifying the 2-D case presented in our first tutorial. We simulate
+# dimensions by modifying the 2-D case presented in our [first tutorial](../base_case). We simulate
 # a benchmark case that is well-known within the geodynamical community.
 #
 # This example
 # ------------
 #
-# We examine a low Rayleigh number isoviscous case: specifically Case 1a from Busse et al. (1994).
+# We examine a low Rayleigh number isoviscous case: specifically Case 1a from [Busse et al. (1994)](https://doi.org/10.1080/03091929408203646).
 # The domain is a box of dimensions $1.0079 \times 0.6283 \times 1$. The initial temperature distribution,
 # chosen to produce a single ascending and descending flow, at $x = y = 0$ and $(x = 1.0079, y = 0.6283)$,
 # respectively, is prescribed as:
@@ -16,7 +16,7 @@
 # $$    T(x,y,z) = \Bigl[ \frac{\mbox{erf}(4(1-z)) + \mbox{erf}(-4z)+1}{2} \Bigr] + A [\cos(\pi x/1.0079) + \cos(\pi y/0.6283)]\sin(\pi z) $$
 #
 # where $A=0.2$ is the amplitude of the initial perturbation. We note that this initial condition differs to that
-# specified in Busse et al. (1994), through the addition of boundary layers at the bottom and top of the domain (through the $\mbox{erf}$ terms),
+# specified in [Busse et al. (1994)](https://doi.org/10.1080/03091929408203646), through the addition of boundary layers at the bottom and top of the domain (through the $\mbox{erf}$ terms),
 # although it more consistently drives solutions towards the final published steady-state results. Boundary conditions for
 # temperature are T = 0 at the surface (z = 1) and T = 1 at the base (z = 0), with insulating (homogeneous Neumann) sidewalls.
 # No‐slip velocity boundary conditions are specified at the top surface and base of the domain, with free‐slip boundary conditions on all
@@ -95,12 +95,12 @@ T.interpolate(0.5*(erf((1-X[2])*4)+erf(-X[2]*4)+1) + 0.2*(cos(pi*X[0]/a)+cos(pi*
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
 # Aside from differences in the computational geometry and temperature initial condition, the first major change between
-# our initial 2-D tutorial and this example occurs in our solution strategy, although most of this is taken care of under the hood by G-ADOPT.
+# our [initial 2-D tutorial](../base_case) and this example occurs in our solution strategy, although most of this is taken care of under the hood by G-ADOPT.
 # By default, G-ADOPT uses direct solvers in 2-D. However, in 3-D, we default to iterative solvers. Although the user need not
 # alter these, some key information is provided here, for context. Later in the tutorial, we also expose some of these solver
 # options to the user, to showcase how our default parameters can be modified.
 #
-# For the Stokes system, we configure the Schur complement approach as described in Section of 4.3 of Davies et al. (2022),
+# For the Stokes system, we configure the Schur complement approach as described in Section of 4.3 of [Davies et al. (2022)](https://doi.org/10.5194/gmd-15-5127-2022),
 # using PETSc's fieldsplit preconditioner type, which provides a class of preconditioners for mixed problems that allows a user
 # to apply different preconditioners to different blocks of the system. The *fieldsplit\_0* entries configure solver options for the velocity block.
 # The linear systems associated with this matrix are solved using a combination of the Conjugate Gradient method and an algebraic multigrid preconditioner (GAMG).
@@ -140,7 +140,6 @@ temp_bcs = {
 
 # +
 output_file = VTKFile("output.pvd")
-ref_file = VTKFile('reference_state.pvd')
 output_frequency = 50
 
 plog = ParameterLog('params.log', mesh)
@@ -153,26 +152,32 @@ gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 # passing in the approximation, nullspace and near-nullspace information configured above.
 
 # +
+# For all iterative solves, G-ADOPT utilises convergence criterion based on the relative
+# reduction of the preconditioned residual, *ksp\_rtol*. By default, these are set to
+# 1e-5 for the *fieldsplit\_0* and 1e-4 for *fieldsplit\_1*. We can change these default
+# values by creating an appropriate dict for the solver_parameters_extra argument for
+# any of the Solver classes G-ADOPT provides. In this case, we are relaxing the
+# tolerances used by the StokesSolver in order to reduce the run time of this demo.
+# +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+
+solver_settings = {
+    "fieldsplit_0": {"ksp_rtol": 1e-4},
+    "fieldsplit_1": {"ksp_rtol": 1e-3},
+}
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
     constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
+    solver_parameters_extra=solver_settings,
 )
 # -
-
-# For all iterative solves, G-ADOPT utilises convergence criterion based on the relative reduction of the
-# preconditioned residual, *ksp\_rtol*. These are set to 1e-5 for the *fieldslip\_0* and 1e-4 for *fieldsplit\_1*.
-# We can change these default values, by accessing the solver_parameters dictionary, as follows.
-
-stokes_solver.solver_parameters['fieldsplit_0']['ksp_rtol'] = 1e-4
-stokes_solver.solver_parameters['fieldsplit_1']['ksp_rtol'] = 1e-3
 
 # We now initiate the time loop, which runs until a steady-state solution has been attained.
 

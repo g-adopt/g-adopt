@@ -2,7 +2,7 @@
 # =======================================================
 #
 # In this tutorial we show how to include a free surface boundary condition
-# by modifying the 2-D case presented in our first tutorial.
+# by modifying the 2-D case presented in our [first tutorial](../base_case).
 #
 # Free Surface
 # ------------
@@ -33,7 +33,7 @@
 #
 # Note that long wavelengths decay fastest, so it is the longest waves that dictate the maximum stable timestep for an explicit free surface implementation. Usually, the timestep is controlled by an advection CFL condition calculated from the energy equation, however, a stable free surface timestep might be much lower than this estimate. This means that a free surface simulation with explicit timestepping may be an order of magnitude slower than an equivalent free-slip simulation.
 #
-# A way around this problem is to solve for the free surface height implicitly, i.e. at the same time as the velocity and pressure during the Stokes solve. By coupling the solution of velocity, pressure and the free surface together, there is no longer a timestep constraint. The decay of the (long) wavelengths with decay times shorter than the timestep are effectively damped by numerical diffusion. The upshot is we can take longer timesteps, so the simulation time is similar to a free-slip simulation, whilst being able to investigate time dependent short wavelength changes of the free surface. We have implemented the second order $\theta$ timestepping method from Kramer et al. (2012) and we point the reader to this paper for a longer discussion of the different approaches and their implementation.
+# A way around this problem is to solve for the free surface height implicitly, i.e. at the same time as the velocity and pressure during the Stokes solve. By coupling the solution of velocity, pressure and the free surface together, there is no longer a timestep constraint. The decay of the (long) wavelengths with decay times shorter than the timestep are effectively damped by numerical diffusion. The upshot is we can take longer timesteps, so the simulation time is similar to a free-slip simulation, whilst being able to investigate time dependent short wavelength changes of the free surface. We have implemented the second order $\theta$ timestepping method from [Kramer et al. (2012)](https://doi.org/10.1016/j.pepi.2012.01.001) and we point the reader to this paper for a longer discussion of the different approaches and their implementation.
 #
 # ### References
 # *Kramer, S. C., Wilson, C. R., & Davies, D. R. (2012).* ***An implicit free surface algorithm for geodynamical simulations.*** *Physics of the Earth and Planetary Interiors, 194, 25-37.*
@@ -42,8 +42,7 @@
 # This example
 # ------------
 #
-# We are going to extend the basic mantle dynamics problem from Blankenbach et al.
-# (1989) to include a free surface on the top.
+# We are going to extend the basic mantle dynamics problem from [Blankenbach et al. (1989)](https://doi.org/10.1111/j.1365-246X.1989.tb05511.x) to include a free surface on the top.
 #
 # As with all examples, the first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
@@ -171,7 +170,7 @@ energy_solver = EnergySolver(
 )
 
 stokes_solver = StokesSolver(
-    z, T, approximation, bcs=stokes_bcs, constant_jacobian=False, coupled_tstep=delta_t
+    z, approximation, T, dt=delta_t, bcs=stokes_bcs, constant_jacobian=False
 )
 
 # -
@@ -353,4 +352,4 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 
 # As you can see this matches the final free surface height that our example converges towards.
 #
-# A final point for this tutorial is that more rigorous tests check the order of convergence to an analytical solution as the timestep or gridsize are refined. The interested reader can take a look at the free surface test directory where we have confirmed this behaviour for a number of test cases (including top and bottom free surfaces) from Kramer et al. (2012).
+# A final point for this tutorial is that more rigorous tests check the order of convergence to an analytical solution as the timestep or gridsize are refined. The interested reader can take a look at the free surface test directory where we have confirmed this behaviour for a number of test cases (including top and bottom free surfaces) from [Kramer et al. (2012)](https://doi.org/10.1016/j.pepi.2012.01.001).

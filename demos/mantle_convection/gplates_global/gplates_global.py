@@ -7,7 +7,8 @@
 # velocity boundary condition.  This type of simulation has been
 # extensively used over recent decades to study the spatial and
 # temporal evolution of mantle flow.  This tutorial builds on the
-# *idealised 3-D spherical shell geometry simulation* and a user
+# [idealised 3-D spherical
+# shell geometry simulation](../3d_spherical) and you
 # should follow that tutorial prior to this.
 #
 # This example focuses on:
@@ -89,7 +90,7 @@ averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 # Earth's physical properties are primarily characterised by
 # spherically symmetric (depth-dependent) features influenced
 # predominantly by hydrostatic pressure variations. Here, we load a
-# 1-D viscosity profile, as utilised by Ghelichkhan et al. (2021) in
+# 1-D viscosity profile, as utilised by [Ghelichkhan et al. (2021)](https://doi.org/10.1093/gji/ggab108) in
 # *Geophysical Journal International* to model Earth's evolution
 # during the Cenozoic era. We first set up our viscosity function
 # space. The 1-D profile data is located in the file
@@ -136,10 +137,10 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # interface provided by G-ADOPT for pyGPlates. Similar to pyGPlates,
 # the G-ADOPT interface requires specific files for loading and
 # processing surface velocities from a reconstruction model. For this
-# tutorial, we will use the study published by Muller et al., 2022.
-# The files can be downloaded from gadopt's server at:
-# https://data.gadopt.org/demos/Zahirovic_2022.tar.gz
-# Download and untar this file into the current
+# tutorial, we will use the study published by [Muller et al., 2022](https://doi.org/10.5194/se-13-1127-2022).
+# The files can be downloaded from EarthByte's server at:
+# https://earthbyte.org/webdav/ftp/Data_Collections/Muller_etal_2022_SE/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
+# Download and unzip this file into the current
 # directory. Below, we verify the required paths in this directory and
 # ensure they exist:
 
@@ -276,8 +277,8 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
     constant_jacobian=True,
     nullspace=Z_nullspace,
@@ -352,4 +353,3 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
-# -

@@ -142,7 +142,7 @@
 # basic mantle dynamics problem - isoviscous, incompressible
 # convection, heated from below (T=1), cooled from the top (T=0) in an
 # enclosed 2-D Cartesian box (i.e. free-slip mechanical boundary
-# conditions on all boundaries), from Blankenbach et al. (1989).
+# conditions on all boundaries), from [Blankenbach et al. (1989)](https://doi.org/10.1111/j.1365-246X.1989.tb05511.x).
 #
 # Let's get started! The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
@@ -332,8 +332,8 @@ energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
     constant_jacobian=True,
     nullspace=Z_nullspace,

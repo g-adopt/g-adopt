@@ -8,6 +8,7 @@ from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSo
 from firedrake import max_value, min_value, Function
 from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement, FiniteElement
 from firedrake.functionspaceimpl import WithGeometry
+from ufl import triangle
 import numpy as np
 from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
 from pyop2 import op2
@@ -43,7 +44,7 @@ def assert_function_space(
         ufl_elem = ufl_elem.sub_elements[0]
 
     if ufl_elem.family() == 'TensorProductElement':  # extruded mesh
-        A, B = ufl_elem.sub_elements
+        A, B = ufl_elem.factor_elements
         assert A.family() in fam_list, 'horizontal space must be one of {0:s}'.format(fam_list)
         assert B.family() in fam_list, 'vertical space must be {0:s}'.format(fam_list)
         assert A.degree() == degree, 'degree of horizontal space must be {0:d}'.format(degree)
@@ -132,7 +133,10 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         self.is_vector = p1dg_space.value_size > 1
         if self.is_vector:
-            p1dg_scalar_space = FunctionSpace(p1dg_space.mesh(), 'DG', 1)
+            mesh = p1dg_space.mesh()
+            mesh_cell = mesh.ufl_cell()
+            element = "DG" if mesh_cell == triangle else "DQ"
+            p1dg_scalar_space = FunctionSpace(mesh, element, 1)
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_scalar_space)
         else:
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_space)
@@ -140,8 +144,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         self.mesh = self.P0.mesh()
         self.dim = self.mesh.geometric_dimension()
         self.extruded = hasattr(self.mesh.ufl_cell(), 'sub_cells')
-        assert not self.extruded or len(p1dg_space.ufl_element().sub_elements) > 0, \
-            "Extruded mesh requires extruded function space"
+
         assert not self.extruded or all(e.variant() == 'equispaced' for e in p1dg_space.ufl_element().sub_elements), \
             "Extruded function space must be equivariant"
 
@@ -202,7 +205,13 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         boundary_dofs = entity_support_dofs(self.P1DG.finat_element, entity_dim)
         local_facet_nodes = np.array([boundary_dofs[e] for e in sorted(boundary_dofs.keys())])
         n_bnd_nodes = local_facet_nodes.shape[1]
-        local_facet_idx = op2.Global(local_facet_nodes.shape, local_facet_nodes, dtype=np.int32, name='local_facet_idx')
+        local_facet_idx = op2.Global(
+            local_facet_nodes.shape,
+            local_facet_nodes,
+            dtype=np.int32,
+            name="local_facet_idx",
+            comm=field.comm,
+        )
         code = """
             void my_kernel(double *qmax, double *qmin, double *field, unsigned int *facet, unsigned int *local_facet_idx)
             {
@@ -231,8 +240,20 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
             # NOTE calling firedrake par_loop with measure=ds_t raises an error
             bottom_nodes = get_facet_mask(self.P1CG, 'bottom')
             top_nodes = get_facet_mask(self.P1CG, 'top')
-            bottom_idx = op2.Global(len(bottom_nodes), bottom_nodes, dtype=np.int32, name='node_idx')
-            top_idx = op2.Global(len(top_nodes), top_nodes, dtype=np.int32, name='node_idx')
+            bottom_idx = op2.Global(
+                len(bottom_nodes),
+                bottom_nodes,
+                dtype=np.int32,
+                name="node_idx",
+                comm=field.comm,
+            )
+            top_idx = op2.Global(
+                len(top_nodes),
+                top_nodes,
+                dtype=np.int32,
+                name="node_idx",
+                comm=field.comm,
+            )
             code = """
                 void my_kernel(double *qmax, double *qmin, double *field, int *idx) {
                     double face_mean = 0;

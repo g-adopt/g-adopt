@@ -2,7 +2,7 @@
 # ===========================================================
 #
 # In this tutorial, we undertake an inversion for an (unknown) initial condition, to match given
-# time-dependent boundary values. This differs to our previous tutorial, where our goal was to
+# time-dependent boundary values. This differs to our [previous tutorial](../PDE_constrained_field), where our goal was to
 # match a given final state.
 #
 # We start with our usual imports:
@@ -100,11 +100,9 @@ u = Function(V, name="Velocity").interpolate(as_vector((-y, x)))
 
 approximation = BoussinesqApproximation(Ra=1, kappa=5e-2)
 delta_t = 0.1
-energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint)
-
-# Make our solver output a little less verbose:
-if "ksp_converged_reason" in energy_solver.solver_parameters:
-    del energy_solver.solver_parameters["ksp_converged_reason"]
+energy_solver = EnergySolver(
+    T, u, approximation, delta_t, ImplicitMidpoint, solver_parameters_extra={"ksp_converged_reason": DeleteParam}
+)
 # -
 
 # As a first guess we use a Gaussian that is in the wrong place: centred around $(0.7, 0.7)$
@@ -126,8 +124,21 @@ tape = get_working_tape()
 tape.clear_tape()
 
 T0.project(T_wrong)
+# -
 
-m = Control(T0)
+# At this stage we need to define the control variable for the adjoint-based optimisation problem
+# by wrapping `T0` in a Control object.
+# This registers `T0` as the optimisation variable with pyadjoint's automatic differentiation framework.
+# Furthermore, the L2 Riesz map specification is crucial for two reasons:
+# 1. It defines the inner product structure on the control space, ensuring that gradients are computed
+#    in the $L^2$ Hilbert space with respect to the inner product.
+# 2. It guarantees mesh-independent gradient representations, which is essential for consistent
+#    optimisation convergence across different mesh refinements in finite element discretisations.
+#
+# Note that L2 is the default Riesz map if none is explicitly specified.
+
+# +
+m = Control(T0, riesz_map="L2")
 
 J = AdjFloat(0.0)  # Initialise functional
 factor = AdjFloat(0.5)  # First & final boundary integral weighted by 0.5 to implement mid-point rule time-integration.
@@ -173,10 +184,11 @@ print(reduced_functional(T0_ref))
 T_wrong.assign(0.0)
 reduced_functional(T_wrong)
 
-# In unstructured mesh optimisation problems, it is important to work in the L2 Riesz representation
-# to ensure a grid-independent result:
+# Here we calculate the gradient by calling the derivative method of
+# the reduced functional with the L2 Riesz map applied to ensure a
+# grid-independent result.
 
-gradJ = reduced_functional.derivative(options={"riesz_representation": "L2"})
+gradJ = reduced_functional.derivative(apply_riesz=True)
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()

@@ -15,10 +15,6 @@ from gadopt import min_max_height
 from .materials import air, lithosphere, mantle
 
 
-def initialise_temperature(temperature):
-    pass
-
-
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     height = min_max_height(
         diag_vars["level_set"][1], diag_vars["epsilon"], side=1, mode="min"
@@ -104,7 +100,7 @@ def plot_diagnostics(output_path):
         plt.close(fig)
 
 
-# A simulation name tag
+# Simulation name tag
 tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
@@ -115,17 +111,18 @@ checkpoint_restart = 0
 domain_dims = (3e6, 7.5e5)
 mesh_gen = "gmsh"
 
-# Degree of the function space on which the level-set function
-# is defined.
-level_set_func_space_deg = 2
-
 # Parameters to initialise surface level set
-interface_coords_x = np.array([0.0, domain_dims[0]])
-callable_args = (surface_slope := 0, surface_coord_y := 7e5)
+callable_args = (
+    curve_parameter := np.array([0.0, domain_dims[0]]),
+    surface_slope := 0,
+    surface_coord_y := 7e5,
+)
+boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, surface_coord_y)]
 surface_signed_distance_kwargs = {
     "interface_geometry": "curve",
     "interface_callable": "line",
-    "interface_args": (interface_coords_x, *callable_args),
+    "interface_args": callable_args,
+    "boundary_coordinates": boundary_coordinates,
 }
 # Parameters to initialise slab level set
 slab_interface_coords = [
@@ -161,19 +158,14 @@ materials = [mantle, air, lithosphere]
 
 # Approximation parameters
 dimensional = True
-Ra, g = 1, 9.81
+g = 9.81
 
 # Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
-temp_bcs = {}
 stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
-
-# Stokes solver options
-stokes_nullspace_args = {}
-stokes_solver_params = None
 
 # Timestepping objects
 initial_timestep = 1e11
-dump_period = 8e5 * 365.25 * 8.64e4
+dump_period = 6e5 * 365.25 * 8.64e4
 checkpoint_period = 5
 time_end = 6e7 * 365.25 * 8.64e4
 

@@ -1,0 +1,57 @@
+graph TD
+  base[Base]
+
+  subgraph model_diagnostics[Model Diagnostics]
+  dynamic_topography[Dynamic Topography]
+  end
+
+  subgraph adjoint[Adjoint]
+  adjoint_forward[Forward] --> inverse[Inverse]
+  end
+
+  subgraph geometry[Geometry]
+  cylindrical_2d[2D Cylindrical] --> spherical_3d[3D Spherical]
+  end
+
+  subgraph gplates[GPlates]
+  gplates_global["Global GPlates"]
+  end
+
+  subgraph dimension[Dimension]
+  cartesian_3d[3D Cartesian]
+  end
+
+  subgraph bcs[Boundary Conditions]
+  free_surface[Free Surface]
+  end
+
+  subgraph compressibility[Compressibility]
+  tala[TALA] --> ala[ALA] --> visualise_ala[ALA Nullspace]
+  end
+
+  subgraph rheology[Rheology]
+  viscoplastic[Viscoplastic]
+  end
+
+  base --> dimension
+  base --> compressibility
+  base --> rheology
+  base --> geometry
+  base --> bcs
+  base --> adjoint
+  base --> model_diagnostics
+  geometry --> gplates
+
+  click base "base_case"
+  click tala "2d_compressible_TALA"
+  click ala "2d_compressible_ALA"
+  click visualise_ala "visualise_ALA_p_nullspace"
+  click viscoplastic "viscoplastic_case"
+  click cartesian_3d "3d_cartesian"
+  click cylindrical_2d "2d_cylindrical"
+  click spherical_3d "3d_spherical"
+  click gplates_global "gplates_global"
+  click adjoint_forward "adjoint_forward"
+  click inverse "adjoint"
+  click free_surface "free_surface"
+  click dynamic_topography "dynamic_topography"

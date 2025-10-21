@@ -3,9 +3,19 @@ name: Run regression tests
 on:
   push:
     branches:
-      - master
+      - main
+      - release
   pull_request:
   workflow_dispatch:
+    inputs:
+      target_container:
+        description: The target container with which to run the suite
+        type: choice
+        options:
+          - main
+          - release
+        required: true
+        default: main
 
 jobs:
   check_commit:
@@ -36,7 +46,8 @@ jobs:
     name: Run smoke test
     runs-on: ubuntu-latest
     container:
-      image: firedrakeproject/firedrake-vanilla-default:latest
+      # Prefer specific branch, then PR base, then actual branch
+      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
 
     needs: check_commit
     if: ${{ needs.check_commit.outputs.skip != 'true' }}
@@ -63,7 +74,8 @@ jobs:
     name: Benchmark regression test
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake-vanilla-default:latest
+      # Prefer specific branch, then PR base, then actual branch
+      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
       options: --cap-add SYS_NICE
 
     concurrency:
@@ -78,14 +90,9 @@ jobs:
 
     steps:
       - name: Install prerequisites
-        env:
-          S3CONFIG: ${{ secrets.S3CONFIG }}
         run: |
           apt update
-          apt install -y time s3cmd unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
-          mkdir -p $HOME/.s3cfg
-          echo "${S3CONFIG}" > $HOME/.s3cfg/config
-          chmod 600 $HOME/.s3cfg/config
+          apt install -y time unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
           git config --global safe.directory '*'
 
       - name: Install uv
@@ -123,7 +130,7 @@ jobs:
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
-          s3cmd --config=$HOME/.s3cfg/config get s3://gadopt/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip .
+          curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
       - name: Check out repository linked to Trim et al. (2023)

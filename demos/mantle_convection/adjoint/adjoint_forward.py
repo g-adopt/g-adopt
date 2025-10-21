@@ -1,10 +1,10 @@
 # Generating reference fields for adjoint inversion
 # =================================================
 #
-# This tutorial explains how to run the forward portion of the adjoint test case to generate the reference final
+# This tutorial explains how to run the forward portion of the [adjoint test case](../adjoint) to generate the reference final
 # condition and synthetic forcing (surface velocity observations).
 #
-# We will follow a similar structure to the base demo, focusing on generating the necessary fields for the adjoint
+# We will follow a similar structure to the [base demo](../base_case), focusing on generating the necessary fields for the adjoint
 # inversion. Let's get started.
 
 # Setting Up the Domain
@@ -59,13 +59,11 @@ T = Function(Q, name="Temperature")
 # thermal boundary layers, and a Gaussian anomaly close to the mantle. This initial state is chosen, such that after 80
 # time steps we would have a temperature field representing a plume-like structure in the domain.
 
-# +
 X = SpatialCoordinate(mesh)
 T.interpolate(
     0.5 * (erf((1 - X[1]) * 3.0) + erf(-X[1] * 3.0) + 1) +
     0.1 * exp(-0.5 * ((X - as_vector((0.5, 0.2))) / Constant(0.1)) ** 2)
 )
-# -
 
 # Configuring Layer Average Calculation
 # -------------------------------------
@@ -137,8 +135,8 @@ energy_solver = EnergySolver(
 
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
     constant_jacobian=True,
     nullspace=Z_nullspace,

@@ -5,7 +5,7 @@
 # ------------
 # In this tutorial, we will demonstrate how to perform an inversion to recover the initial temperature field of an
 # idealised mantle convection simulation using G-ADOPT. This tutorial is published as the first synthetic experiment in
-# *Ghelichkhan et al. (2024)*. The full inversion showcased in the publication involves a total number of 80 timesteps.
+# [*Ghelichkhan et al. (2024)*](https://doi.org/10.5194/gmd-17-5057-2024). The full inversion showcased in the publication involves a total number of 80 timesteps.
 # For the tutorial here we start with only 5 timesteps to go through the basics.
 #
 # The tutorial involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the
@@ -148,8 +148,8 @@ temp_bcs = {
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(
     z,
-    T,
     approximation,
+    T,
     bcs=stokes_bcs,
     constant_jacobian=True,
     nullspace=Z_nullspace,
@@ -367,9 +367,9 @@ minimisation_problem = MinimizationProblem(reduced_functional, bounds=(T_lb, T_u
 # Using the Lin-Moré optimiser
 # ----------------------------
 #
-# In this tutorial, we employ the trust region method of Lin and Moré (1999) implemented in ROL (Rapid Optimization Library).
+# In this tutorial, we employ the trust region method of [Lin and Moré (1999)](https://doi.org/10.1137/S1052623498345075) implemented in [ROL (Rapid Optimization Library)](https://trilinos.github.io/rol.html).
 # Lin-Moré is a truncated Newton method, which involves the repeated application of an iterative algorithm to approximately
-# solve Newton’s equations (Dembo and Steihaug, 1983).
+# solve Newton’s equations ([Dembo and Steihaug, 1983](https://doi.org/10.1007/BF02592055)).
 #
 # Lin-Moré effectively handles provided bound constraints by ensuring that variables remain within their specified bounds.
 # During each iteration, variables are classified into "active" and "inactive" sets. Variables at their bounds that do not

@@ -43,8 +43,7 @@ def initialise_temperature(temperature):
 
 
 def internal_heating_rate(int_heat_rate, simu_time):
-    # flib can be obtained from
-    # https://github.com/seantrim/exact-thermochem-solution
+    # flib can be obtained from https://github.com/seantrim/exact-thermochem-solution
     analytical_values = []
     for x, y in node_coordinates(int_heat_rate).dat.data:
         analytical_values.append(
@@ -113,7 +112,7 @@ def plot_diagnostics(output_path):
         plt.close(fig)
 
 
-# A simulation name tag
+# Simulation name tag
 tag = "reference"
 # 0 indicates the initial run and positive integers corresponding restart runs.
 checkpoint_restart = 0
@@ -125,16 +124,18 @@ domain_dims = (1, 1)
 mesh_gen = "firedrake"
 mesh_elements = (128, 128)
 
-# Degree of the function space on which the level-set function is defined.
-level_set_func_space_deg = 2
-
 # Parameters to initialise level set
-interface_coords_x = np.array([0.0, domain_dims[0]])
-callable_args = (interface_slope := 0, interface_coord_y := 0.5)
+callable_args = (
+    curve_parameter := np.array([0.0, domain_dims[0]]),
+    interface_slope := 0,
+    interface_coord_y := 0.5,
+)
+boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, interface_coord_y)]
 signed_distance_kwargs = {
     "interface_geometry": "curve",
     "interface_callable": "line",
-    "interface_args": (interface_coords_x, *callable_args),
+    "interface_args": callable_args,
+    "boundary_coordinates": boundary_coordinates,
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
@@ -152,10 +153,10 @@ materials = [bottom_material, top_material]
 
 # Approximation parameters
 dimensional = False
-Ra, g = 1e5, 1
+Ra = 1e5
 B = 0.5
 
-# Parameters to initialise temperature
+# Temperature parameters
 a = 100
 b = 100
 k = 35
@@ -166,15 +167,11 @@ temp_bc_top = B * C0(1)
 temp_bcs = {3: {"T": temp_bc_bot}, 4: {"T": temp_bc_top}}
 stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
 
-# Stokes solver options
-stokes_nullspace_args = {}
-stokes_solver_params = None
-
 # Timestepping objects
 initial_timestep = 1e-6
-dump_period = 1e-4
+dump_period = 5e-5
 checkpoint_period = 5
-time_end = 0.01
+time_end = 0.0025
 
 # Diagnostic objects
 diag_fields = {
