@@ -42,7 +42,7 @@
 # number describing the ratio of buoyancy to elastic shear strength,
 # $\bar{\rho}$ is a characteristic density scale, $g$ is
 # the non-dimensional gravity relative to a characteristic gravity scale, $\bar{g}$,
-# $L$ is a characteristic length scale and $\mu$ is a characteristic shear
+# $L$ is a characteristic length scale and $\bar{\mu}$ is a characteristic shear
 # modulus. Note that $\boldsymbol{\hat{e}}_k$ is aligned with either
 # the $z$-axis or radial direction in Cartesian or spherical coordinates,
 # respectively.
@@ -88,7 +88,7 @@
 #     \partial_t \rho_1 + \nabla \cdot (\rho_0\, \boldsymbol{v}) = 0,
 # \end{equation}
 #
-# where $\textbf{v}$ is the velocity and we have neglected the
+# where $\boldsymbol{v}$ is the velocity and we have neglected the
 # $\nabla \cdot (\rho_1\, \boldsymbol{v})$ term, by assuming that
 # perturbations in density are small compared with background
 # values.
@@ -243,7 +243,7 @@
 #    0 =  \int_\Omega \boldsymbol{\phi} \cdot \left(\nabla \cdot \boldsymbol{\sigma}_1^L -  B_{\mu} \nabla \left( \rho_0 g u_k\right) -  B_{\mu} \rho_1 g \, \boldsymbol{\hat{e}}_k \right) dx .
 # \end{equation}
 #
-# A this stage, it becomes necessary to define the finite element spaces that
+# At this stage, it becomes necessary to define the finite element spaces that
 # will be used for spatial discretisation. Generally, for each component of
 # displacement, we use $Q2$ finite elements on hexahedral meshes (i.e., the
 # piecewise continuous tri-quadratic tensor product of quadratic continuous
@@ -409,6 +409,9 @@ X = SpatialCoordinate(mesh)
 # In this case the density, shear modulus and viscosity only vary in the vertical
 # direction. The layer properties specified are from
 # [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x).
+# We set the bulk to shear ratio to 2, which approximately represents mantle
+# conditions. In more realistic scenarios we could initialise the elastic
+# properties via PREM.
 
 # +
 density_values = [3037, 3438, 3871, 4978]
@@ -426,7 +429,8 @@ B_mu = Constant(density_scale * D * gravity_scale / shear_modulus_scale)
 density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
 viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
-bulk_modulus_values_tilde = 2 * shear_modulus_values_tilde
+bulk_shear_ratio = 2
+bulk_modulus_values_tilde = shear_modulus_values_tilde
 
 density = Function(DG0, name="density")
 initialise_background_field(
@@ -449,16 +453,16 @@ initialise_background_field(
     shift=radius_values_tilde[-1])
 # -
 
-# We can also plot the viscosity field using *PyVista*.
+# We can also plot the density field using *PyVista*.
 
 # + tags=["active-ipynb"]
-# VTKFile("viscosity.pvd").write(viscosity)
-# visc_data = pv.read("viscosity/viscosity_0.vtu")
+# VTKFile("density.pvd").write(density)
+# dens_data = pv.read("density/density_0.vtu")
+# dens_data['density'] *= density_scale
 # plotter = pv.Plotter(notebook=True)
-# plotter.add_mesh(visc_data,
-#                  log_scale=True,
+# plotter.add_mesh(dens_data,
 #                  scalar_bar_args={
-#                      "title": 'log10(Viscosity)',
+#                      "title": 'Density (kg / m^3)',
 #                      "position_x": 0.8,
 #                      "position_y": 0.2,
 #                      "vertical": True,
@@ -570,7 +574,8 @@ approximation = MaxwellApproximation(
     density=density,
     shear_modulus=shear_modulus,
     viscosity=viscosity,
-    B_mu=B_mu)
+    B_mu=B_mu,
+    bulk_shear_ratio=bulk_shear_ratio)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `u` and
@@ -594,7 +599,7 @@ output_file.write(u, *internal_variables, velocity)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max"
+    "timestep time dt u_rms u_rms_surf ux_max uk_min"
 )
 gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
@@ -613,8 +618,9 @@ for timestep in range(max_timesteps):
     stokes_solver.solve()
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(dt)} {gd.u_rms()} "
-                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)}")
+    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+                 f"{gd.uk_min(boundary.top)} ")
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)
@@ -684,8 +690,8 @@ plog.close()
 #     )
 #
 #     # Fix camera in default position otherwise mesh appears to jump around!
-#     plotter.camera_position = [(L_tilde/2, -0.5, 2.3),
-#                         (L_tilde/2, -0.5, 0.0),
+#     plotter.camera_position = [(L_tilde/2, 0.5, 2.3),
+#                         (L_tilde/2, 0.5, 0.0),
 #                         (0.0, 1.0, 0.0)]
 #     plotter.add_text(f"Time: {i*2000:6} years", name='time-label')
 #     plotter.write_frame()
@@ -711,6 +717,20 @@ plog.close()
 # previously glaciated region.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
+
+# We can also plot the peak negative displacement through time in the corner of the box under the ice load.
+
+# + tags=["active-ipynb"]
+# # Convert back to dimensional units
+# logfile = np.loadtxt('params.log', skiprows=1)
+# times = logfile[:, 1] * characteristic_maxwell_time / year_in_seconds / 1000
+# peak_disp = logfile[:, -1] * D
+#
+# plt.plot(times, peak_disp)
+# plt.xlabel('Time (kyr)')
+# plt.ylabel('Peak displacement (m)')
+# plt.grid()
+# -
 
 # + [markdown] tags=["exercise"]
 # Exercises
