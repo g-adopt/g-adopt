@@ -85,6 +85,10 @@ diagnostics = {
             4e1,
         )
     ],
+    "woidt_1978": [
+        (lambda data: abs(max(data["rms_velocity"]) - 1.76e-11), operator.le, 1e-13),
+        (lambda data: abs(max(data["entrainment"]) - 0.237), operator.le, 1e-3),
+    ],
 }
 
 
