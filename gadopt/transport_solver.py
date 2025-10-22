@@ -425,34 +425,17 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
         # Calculate diffusive time step
         dt = self._calculate_diffusive_time_step(function_space, wavelength, K, integration_quad_degree)
 
-        # Convert boundary conditions to the format expected by GenericTransportSolver
-        converted_bcs = self._convert_bcs(bcs or {})
-
-        # Initialize the parent GenericTransportSolver
+        # Initialise the parent GenericTransportSolver
         super().__init__(
             "diffusion",
             solution,
             dt,
             BackwardEuler,
             eq_attrs={"diffusivity": ensure_constant(K)},
-            bcs=converted_bcs,
+            bcs=bcs,
             solver_parameters=solver_parameters,
             **kwargs
         )
-
-    def _convert_bcs(self, bcs: dict[int, dict[str, int | float]]) -> dict[int, dict[str, int | float]]:
-        """Convert boundary conditions to the format expected by GenericTransportSolver."""
-        transport_bcs = {}
-
-        for subdomain_id, bc in bcs.items():
-            for bc_type, value in bc.items():
-                if bc_type == 'T':
-                    # GenericTransportSolver expects "g" for Dirichlet boundary conditions
-                    transport_bcs[subdomain_id] = {"g": value}
-                else:
-                    raise ValueError("Boundary conditions other than Dirichlet are not supported.")
-
-        return transport_bcs
 
     def _calculate_diffusive_time_step(
         self,
@@ -476,7 +459,7 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
             # Tensor diffusivity
             K_avg = (
                 assemble(sqrt(inner(K, K)) * dx(mesh, degree=integration_quad_degree)) /
-                assemble(dx(mesh, degree=integration_quad_degree))
+                assemble(Constant(1) * dx(mesh, degree=integration_quad_degree))
             )
         else:
             # Scalar diffusivity

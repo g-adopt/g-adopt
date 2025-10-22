@@ -24,7 +24,7 @@ def cartesian_field():
     T.interpolate(sin(4*pi*x[0]) * cos(4*pi*x[1]) + 0.5*(x[0] + x[1]))
 
     # Boundary conditions
-    temp_bcs = {4: {"T": 0.0}, 3: {"T": 1.0}}  # Bottom and top boundaries
+    temp_bcs = {4: {"g": 0.0}, 3: {"g": 1.0}}  # Bottom and top boundaries
 
     return T, temp_bcs
 
@@ -49,7 +49,7 @@ def cylindrical_field():
     T.interpolate(0.5 + 0.3*sin(3*theta) + 0.2*(r - 1.5))
 
     # Boundary conditions for cylindrical geometry
-    temp_bcs = {"bottom": {"T": 1.0}, "top": {"T": 0.0}}
+    temp_bcs = {"bottom": {"g": 1.0}, "top": {"g": 0.0}}
 
     # Create a layer-averaged version for comparison
     T_avg = Function(V, name="Temperature (layer average)")

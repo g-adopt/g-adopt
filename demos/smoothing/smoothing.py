@@ -70,10 +70,13 @@ boundaries = get_boundary_ids(mesh)
 # These ensure that the smoothing operation respects the physical boundaries.
 # Note that by removing these boundary conditions, the smooth properties would extend to
 # the boundaries, however, the boundary values would not be conserved.
+# For our field tags, we use 'g' to denote a general field. We typically use a
+# Dirichlet boundary condition for smoothing, as other types like a Neumann
+# boundary conditions are not necessary for smoothing.
 
 temp_bcs = {
-    boundaries.bottom: {'T': 1.0},  # Fixed temperature at the bottom
-    boundaries.top: {'T': 0.0},     # Fixed temperature at the top
+    boundaries.bottom: {'g': 1.0},  # Fixed temperature at the bottom
+    boundaries.top: {'g': 0.0},     # Fixed temperature at the top
 }
 
 # Compute layer average of the temperature for comparison purposes.
