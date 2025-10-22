@@ -3,9 +3,19 @@ name: Run regression tests
 on:
   push:
     branches:
-      - master
+      - main
+      - release
   pull_request:
   workflow_dispatch:
+    inputs:
+      target_container:
+        description: The target container with which to run the suite
+        type: choice
+        options:
+          - main
+          - release
+        required: true
+        default: main
 
 jobs:
   check_commit:
@@ -36,7 +46,8 @@ jobs:
     name: Run smoke test
     runs-on: ubuntu-latest
     container:
-      image: firedrakeproject/firedrake-vanilla-default:latest
+      # Prefer specific branch, then PR base, then actual branch
+      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
 
     needs: check_commit
     if: ${{ needs.check_commit.outputs.skip != 'true' }}
@@ -63,7 +74,8 @@ jobs:
     name: Benchmark regression test
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake-vanilla-default:latest
+      # Prefer specific branch, then PR base, then actual branch
+      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
       options: --cap-add SYS_NICE
 
     concurrency:

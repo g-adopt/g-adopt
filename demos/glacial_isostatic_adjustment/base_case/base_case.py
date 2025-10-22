@@ -4,7 +4,8 @@
 # In this tutorial, we examine an idealised 2-D loading problem in a square box.
 # Here we will focus purely on viscoelastic deformation by a surface load, i.e.
 # a synthetic ice sheet! The setup is similar to a 2-D version of the test case
-# presented in Weerdesteijn et al. (2023), but we include compressibility.
+# presented in [Weerdesteijn et al. (2023)](https://doi.org/10.1029/2022GC010813),
+# but we include compressibility.
 #
 # You may already have seen how G-ADOPT can be applied to mantle convection
 # problems in our other tutorials. Generally the setup of the G-ADOPT model
@@ -78,7 +79,7 @@
 # this term is crucial because it acts as a restoring force to isostatic
 # equilibrium. If the Laplace transform methods do not include this term
 # a load placed on the surface of the Earth will keep sinking
-# (Wu and Peltier, 1982)!
+# ([Wu and Peltier, 1982](https://doi.org/10.1111/j.1365-246X.1982.tb04976.x))!
 #
 # We obtain the non-dimensional linearised density perturbation, $\rho_1$,
 # by linearising the conservation of mass equation
@@ -149,8 +150,9 @@
 #
 # The GIA community generally model the mantle as a Maxwell solid. The
 # conceptual picture is a spring and a dashpot connected together in series
-# (Ranalli, 1995). For this viscoelastic model the elastic and viscous stresses
-# are the same but the total displacements combine.
+# ([Ranalli, 1995](https://link.springer.com/book/9780412546709)).
+# For this viscoelastic model the elastic and viscous stresses are the same
+# but the total displacements combine.
 #
 #
 # We follow the internal variable formulation adopted by Al-Attar and
@@ -405,7 +407,8 @@ X = SpatialCoordinate(mesh)
 
 # Now we can set up the background profiles for the material properties.
 # In this case the density, shear modulus and viscosity only vary in the vertical
-# direction. The layer properties specified are from Spada et al. (2011).
+# direction. The layer properties specified are from
+# [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x).
 
 # +
 density_values = [3037, 3438, 3871, 4978]
@@ -513,7 +516,7 @@ log(f"Simulation start time: {Tstart} years")
 # -
 
 # Next let's setup our ice load. Following the long test from Weeredesteijn et
-# al 2023, during the first 90 thousand years of the simulation the ice sheet
+# al. (2023), during the first 90 thousand years of the simulation the ice sheet
 # will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice
 #  free conditions in the next 10 thousand years. Finally, the simulation will
 # run for a further 10 thousand years to allow the system to relax towards
@@ -748,7 +751,3 @@ plog.close()
 #
 # Wu P., Peltier W. R. (1982). *Viscous gravitational relaxation*, Geophysical Journal
 # International.
-#
-# Zhong, S., Paulson, A., & Wahr, J. (2003). Three-dimensional finite-element
-# modelling of Earth’s viscoelastic deformation: effects of lateral variations in
-# lithospheric thickness. Geophysical Journal International.

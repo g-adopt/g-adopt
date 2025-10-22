@@ -2,7 +2,7 @@
 # ===========================================================
 #
 # In this tutorial, we undertake an inversion for an (unknown) initial condition, to match given
-# time-dependent boundary values. This differs to our previous tutorial, where our goal was to
+# time-dependent boundary values. This differs to our [previous tutorial](../PDE_constrained_field), where our goal was to
 # match a given final state.
 #
 # We start with our usual imports:

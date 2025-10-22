@@ -1,5 +1,5 @@
-# Tutorial: Computing Normal Stresses and Dynamic Topography in G-ADOPT
-# ====================================================================
+# Computing Normal Stresses and Dynamic Topography in G-ADOPT
+# ===========================================================
 #
 # One of the most commonly studied geodynamic observables is **dynamic topography**
 # surface or lithospheric deflection caused by vertical stresses from mantle flow. This means that
@@ -14,7 +14,7 @@
 # Specifically, we will compute the vertical stress $\sigma_{yy}$ on the boundaries of a
 # 2-D square domain, and use them to calculate dynamic topography. We examine a time-independent
 # simulation with free-slip boundary conditions, where the internal structure is loaded
-# from a checkpoint file from our tutorials' base case. Note that given the lack of time-dependence,
+# from a checkpoint file from our tutorials' [base case](../base_case). Note that given the lack of time-dependence,
 # we do not solve an energy equation, and deal with the Stokes system only.
 #
 # Theory Refresher
@@ -40,9 +40,7 @@
 # provides access to Firedrake and associated functionality.
 # We also import pyvista and matplotlib, which are used for plotting purposes.
 
-# +
 from gadopt import *
-# -
 
 # We also import pyvista for doing file visualisations for this notebook.
 
@@ -146,10 +144,8 @@ stokes_solver.solve()
 # Next, the global solutions is used to compute normal stresses at both
 # top and bottom boundaries, via the `force_on_boundary` method.
 
-# +
 ns_top = stokes_solver.force_on_boundary(boundaries.top)
 ns_bottom = stokes_solver.force_on_boundary(boundaries.bottom)
-# -
 
 # With these normal stresses, we can now calculate the dynamic topography at both the surface and bottom boundaries (CMB) using:
 #
@@ -161,7 +157,7 @@ ns_bottom = stokes_solver.force_on_boundary(boundaries.bottom)
 #   - $g$ is gravitational acceleration.
 #
 # Since the Stokes system in G-ADOPT is non-dimensionalized, we use non-dimensional values for density and gravity at the top boundary (both set to Constant(1.0)).
-# For the CMB, we assume the outer core is 2.5 times denser than the mantle (\Delta \rho_CMB = Constant(2.5)), and set gravity to Constant(1.0).
+# For the CMB, we assume the outer core is 2.5 times denser than the mantle ($\Delta \rho_{CMB}$ = Constant(2.5)), and set gravity to Constant(1.0).
 # To further normalise, you can multiply the non-dimensional normal stress by the mantle depth,  $ L = 2.89 \times 10^6 $  m.
 # Below, we also log the average velocity of the domain, and dynamic topography at the top and bottom boundaries for our checks.
 
