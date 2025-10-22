@@ -10,6 +10,7 @@ from firedrake import (
 )
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
+from numpy import array, inf
 
 from .utility import CombinedSurfaceMeasure
 
@@ -98,6 +99,8 @@ class GeodynamicalDiagnostics:
         if boundary_id:
             bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
             ux_data = self.u.dat.data_ro_with_halos[bcu.nodes, 0]
+            if ux_data.size == 0:
+                ux_data = array([-inf])
         else:
             ux_data = self.u.dat.data_ro[:, 0]
 
