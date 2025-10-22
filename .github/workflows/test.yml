@@ -114,8 +114,6 @@ jobs:
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
-          uv pip uninstall pyadjoint
-          uv pip install git+https://github.com/dolfin-adjoint/pyadjoint.git@master
           uv pip install .[demos,optimisation] pygplates
 
       - name: Get Muller et al 2022 plate reconstructions
