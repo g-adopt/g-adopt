@@ -154,15 +154,13 @@ initialise_background_field(shear_modulus, shear_modulus_values_tilde)
 
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
-    approx = IncompressibleCompressibleInternalVariableApproximation
+    approx = QuasiCompressibleInternalVariableApproximation
     compressible_buoyancy = False
-    compressible_adv_hyd_pre = False
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
     approx = CompressibleInternalVariableApproximation
     compressible_buoyancy = True
-    compressible_adv_hyd_pre = True
 
 viscosity = Function(DG0, name="viscosity")
 initialise_background_field(viscosity, viscosity_values_tilde)
@@ -290,10 +288,17 @@ iterative_parameters = {"mat_type": "matfree",
 V_nullspace = rigid_body_modes(V, rotational=True)
 V_near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1, 2])
 
-coupled_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs,
-                                        solver_parameters=iterative_parameters,
-                                        nullspace=V_nullspace, transpose_nullspace=V_nullspace,
-                                        near_nullspace=V_near_nullspace)
+coupled_solver = InternalVariableSolver(
+    u,
+    approximation,
+    dt=dt,
+    internal_variables=m_list,
+    bcs=stokes_bcs,
+    solver_parameters=iterative_parameters,
+    nullspace=V_nullspace,
+    transpose_nullspace=V_nullspace,
+    near_nullspace=V_near_nullspace,
+)
 
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.

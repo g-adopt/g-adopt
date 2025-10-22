@@ -148,7 +148,7 @@ def viscoelastic_model(
         visc_nondim = [1]
         shear_nondim = [1]
 
-    approximation = IncompressibleCompressibleInternalVariableApproximation(
+    approximation = QuasiCompressibleInternalVariableApproximation(
         bulk_modulus=1,
         density=Function(R).assign(Constant(1)),
         shear_modulus=shear_nondim,
@@ -213,7 +213,12 @@ def viscoelastic_model(
     error_nondim = 0  # Initialise error
 
     solver = InternalVariableSolver(
-        u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs, solver_parameters="direct"
+        u,
+        approximation,
+        dt=dt,
+        internal_variables=m_list,
+        bcs=stokes_bcs,
+        solver_parameters="direct",
     )
 
     if OUTPUT:

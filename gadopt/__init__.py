@@ -4,7 +4,7 @@ from firedrake.output import VTKFile
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
-    IncompressibleCompressibleInternalVariableApproximation,
+    QuasiCompressibleInternalVariableApproximation,
     CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
     IncompressibleMaxwellApproximation,

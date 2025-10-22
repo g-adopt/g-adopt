@@ -221,9 +221,8 @@ else:
 
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
-    approx = IncompressibleCompressibleInternalVariableApproximation
+    approx = QuasiCompressibleInternalVariableApproximation
     compressible_buoyancy = False
-    compressible_adv_hyd_pre = False
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     if args.burgers:
@@ -232,7 +231,6 @@ else:
         initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
     approx = CompressibleInternalVariableApproximation
     compressible_buoyancy = True
-    compressible_adv_hyd_pre = True
 
 if args.burgers:
     viscosity_1 = Function(DG0, name="viscosity 1")
@@ -370,10 +368,17 @@ Z_nullspace = None  # Default: don't add nullspace for now
 Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot,
                                     translations=[0, 1, 2])
 
-coupled_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs,
-                                        solver_parameters=iterative_parameters,
-                                        nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                        near_nullspace=Z_near_nullspace)
+coupled_solver = InternalVariableSolver(
+    u,
+    approximation,
+    dt=dt,
+    internal_variables=m_list,
+    bcs=stokes_bcs,
+    solver_parameters=iterative_parameters,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+    near_nullspace=Z_near_nullspace,
+)
 
 
 coupled_stage = PETSc.Log.Stage("coupled_solve")

@@ -21,6 +21,7 @@ __all__ = [
     "TruncatedAnelasticLiquidApproximation",
     "AnelasticLiquidApproximation",
     "IncompressibleMaxwellApproximation",
+    "QuasiCompressibleInternalVariableApproximation",
     "CompressibleInternalVariableApproximation",
     "MaxwellApproximation",
 ]
@@ -480,9 +481,7 @@ class BaseGIAApproximation:
     def prefactor_prestress(self, dt):
         return 1
 
-    def stress(
-        self, u, stress_old=None, dt=None, m_list: list | None = None
-    ) -> ufl.core.expr.Expr:
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
         return 0
 
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
@@ -553,16 +552,24 @@ class IncompressibleMaxwellApproximation(BaseGIAApproximation):
     def prefactor_prestress(self, dt):
         return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
 
-    def stress(
-        self, u, stress_old=None, dt=None, m_list: list | None = None
-    ) -> ufl.core.expr.Expr:
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        dt = kwargs.get("dt", None)
+        stress_old = kwargs.get("stress_old", None)
+        if dt is None:
+            raise KeyError(
+                f"The dt kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
+        if stress_old is None:
+            raise KeyError(
+                f"The stress_old kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
         return 2 * self.effective_viscosity(dt) * sym(grad(u)) + stress_old
 
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
         return delta_rho_fs * self.g * eta
 
 
-class IncompressibleCompressibleInternalVariableApproximation(BaseGIAApproximation):
+class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     compressible = True
 
     def __init__(
@@ -603,15 +610,19 @@ class IncompressibleCompressibleInternalVariableApproximation(BaseGIAApproximati
         e = sym(grad(u))
         return e - 1 / 3 * tr(e) * Identity(dim)
 
-    def stress(
-        self, u, stress_old=None, dt=None, m_list: list | None = None
-    ) -> ufl.core.expr.Expr:
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        internal_variables = kwargs.get("internal_variables", None)
+        if internal_variables is None:
+            raise KeyError(
+                f"The internal_variables kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
+
         div_u = div(u) * Identity(len(u))
         d = self.deviatoric_strain(u)
 
         stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
         stress += 2 * self.mu0 * d
-        for mu, m in zip(self.shear_modulus, m_list):
+        for mu, m in zip(self.shear_modulus, internal_variables):
             stress -= 2 * mu * m
         return stress
 
@@ -625,7 +636,7 @@ class IncompressibleCompressibleInternalVariableApproximation(BaseGIAApproximati
         return self.B_mu * self.density * self.g * u_r
 
 
-class CompressibleInternalVariableApproximation(IncompressibleCompressibleInternalVariableApproximation):
+class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariableApproximation):
     """Compressible viscoelastic rheology via the internal variable formulation.
 
     This class implements compressible viscoelasticity following the formulation

@@ -701,7 +701,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         # Update history stress term to form RHS explicit forcing in the next timestep
         self.stress_old.interpolate(
             self.stress_scale
-            * self.approximation.stress(u_sub, self.stress_old, self.dt)
+            * self.approximation.stress(u_sub, stress_old=self.stress_old, dt=self.dt)
         )
         # Increment total displacement
         self.displacement.interpolate(self.displacement + u_sub)
@@ -715,7 +715,7 @@ class InternalVariableSolver(StokesSolverBase):
         Firedrake function representing the displacement solution
       approximation:
         G-ADOPT approximation defining terms in the system of equations
-      m_list:
+      internal_variables:
         List of internal variables
       dt:
         Float quantifying the time step used for time integration
@@ -750,11 +750,11 @@ class InternalVariableSolver(StokesSolverBase):
         approximation: BaseGIAApproximation,
         /,
         *,
-        m_list: list,
+        internal_variables: list,
         dt: float,
         **kwargs,
     ) -> None:
-        self.m_list = m_list
+        self.internal_variables = internal_variables
         # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
         approximation.mu = approximation.viscosity[0]/(approximation.maxwell_times[0]+dt)
         super().__init__(solution, approximation, dt=dt, **kwargs)
@@ -762,12 +762,21 @@ class InternalVariableSolver(StokesSolverBase):
     def set_equations(self) -> None:
         self.strain = self.approximation.deviatoric_strain(self.solution)
 
-        if len(self.m_list) != len(self.approximation.maxwell_times):
-            raise ValueError("Number of internal variables and corresponding Maxwell times must be consistent")
+        if len(self.internal_variables) != len(self.approximation.maxwell_times):
+            raise ValueError(
+                "Number of internal variables and corresponding Maxwell times must be consistent"
+            )
 
-        m_new_list = [self.update_m(m, alpha) for m, alpha in zip(self.m_list, self.approximation.maxwell_times)]
+        internal_variables_update = [
+            self.update_m(m, alpha)
+            for m, alpha in zip(
+                self.internal_variables, self.approximation.maxwell_times
+            )
+        ]
 
-        stress = self.approximation.stress(self.solution, m_list=m_new_list)
+        stress = self.approximation.stress(
+            self.solution, internal_variables=internal_variables_update
+        )
         source = self.approximation.buoyancy(self.solution) * self.k
 
         eqs_attrs = {"stress": stress, "source": source}
@@ -817,7 +826,7 @@ class InternalVariableSolver(StokesSolverBase):
     def solve(self) -> None:
         super().solve()
         # Update internal variable term for using as a RHS explicit forcing in the next timestep
-        for m, alpha in zip(self.m_list, self.approximation.maxwell_times):
+        for m, alpha in zip(self.internal_variables, self.approximation.maxwell_times):
             m.interpolate(self.update_m(m, alpha))
 
 

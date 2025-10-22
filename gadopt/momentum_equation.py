@@ -218,11 +218,11 @@ def advection_hydrostatic_prestress_term(
         else:
             dS = eq.dS
         F = B_mu("+") * jump(rho0) * u_r("+") * g("+") * dot(eq.test("+"), eq.n("+")) * dS
-        # Include body integral after i.b.p of hydrostatic prestress advection term
-        # Analytical solution from Cathles 2024 Eq 2b doesn't include prestress
-        # so we neglect this term but keep the free surface term that accounts for
-        # viscous feedback at isostatic equibrium
-        F -= div(eq.test) * eq.approximation.compressible_adv_hyd_pre(u_r) * eq.dx
+    # Include body integral after i.b.p of hydrostatic prestress advection term
+    # Analytical solution from Cathles 2024 Eq 2b doesn't include prestress
+    # so we neglect this term but keep the free surface term that accounts for
+    # viscous feedback at isostatic equibrium
+    F -= div(eq.test) * eq.approximation.compressible_adv_hyd_pre(u_r) * eq.dx
 
     return -F
 
