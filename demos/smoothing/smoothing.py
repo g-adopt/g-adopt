@@ -21,7 +21,7 @@
 # To download the checkpoint file if it doesn't already exist, execute the following command:
 
 # + tags=["active-ipynb"]
-# ![ ! -f adjoint-demo-checkpoint-state.h5 ] && wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5
+# ![ ! -f adjoint-demo-checkpoint-state.h5 ] && wget https://data.gadopt.org/demos/smoothing-example.h5
 # -
 
 # How to do smoothing in G-ADOPT
@@ -60,7 +60,7 @@ boundaries = get_boundary_ids(mesh)
 # VTKFile("original_temperature.pvd").write(T)
 # temp_data = pv.read("original_temperature/original_temperature_0.vtu")
 # plotter = pv.Plotter(notebook=True)
-# plotter.add_mesh(temp_data, scalars="Temperature", cmap="coolwarm")
+# plotter.add_mesh(temp_data, scalars="Temperature", cmap="coolwarm", scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
 # plotter.camera_position = "xy"
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
@@ -83,12 +83,12 @@ temp_bcs = {
 # This helps visualise the deviation from the mean state before and after smoothing.
 
 # +
-T_avg = Function(T.function_space(), name='Layer_Averaged_Temp')
+T_avg = Function(T.function_space(), name='Temperature (Layer Averaged)')
 averager = LayerAveraging(mesh, quad_degree=6)
 averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
 # Create a deviation field for better visualisation
-T_deviation = Function(T.function_space(), name='Temperature_Deviation')
+T_deviation = Function(T.function_space(), name='Temperature (Deviation)')
 T_deviation.assign(T - T_avg)
 # -
 
@@ -97,23 +97,23 @@ T_deviation.assign(T - T_avg)
 # In isotropic smoothing, the diffusion coefficient is the same in all directions.
 # This simplifies the diffusion tensor to a scalar value, providing a uniform
 # smoothing across all spatial directions. In gadopt, the smoothing is performed by
-# the DiffusiveSmoothingSolver class. Here by providing the wavelength that we want to smooth,
-# plus the function space we want to have the solution in, we will have the DiffusiveSmoothingSolver.
+# the DiffusiveSmoothingSolver class. Here by providing the solution function where we want to store
+# the smoothed result, plus the wavelength that we want to smooth, we will have the DiffusiveSmoothingSolver.
 # This DiffusiveSmoothingSolver will then be used to apply the smoothing to any scalar field.
 # Below we use a wavelength of 0.2.
 
 # +
-smooth_solution_isotropic = Function(T.function_space(), name="Smooth_Temperature_Isotropic")
+smooth_solution_isotropic = Function(T.function_space(), name="Temperature (Isotropic Smoothed)")
 smoother_isotropic = DiffusiveSmoothingSolver(
-    function_space=T.function_space(),
+    smooth_solution_isotropic,
     wavelength=0.2,  # Smoothing wavelength parameter
     bcs=temp_bcs)
 
 # Apply isotropic smoothing
-smooth_solution_isotropic.assign(smoother_isotropic.action(T))
+smoother_isotropic.action(T)
 
 # Compute the smoothed deviation for visualisation
-smooth_deviation_isotropic = Function(T.function_space(), name='Smooth_Deviation_Isotropic')
+smooth_deviation_isotropic = Function(T.function_space(), name='Temperature (Isotropic Smoothed Deviation)')
 smooth_deviation_isotropic.assign(smooth_solution_isotropic - T_avg)
 # -
 
@@ -132,14 +132,14 @@ smooth_deviation_isotropic.assign(smooth_solution_isotropic - T_avg)
 # # Original temperature deviation
 # iso_plotter.subplot(0, 0)
 # mesh_copy_orig = isotropic_data.copy()
-# iso_plotter.add_mesh(mesh_copy_orig, scalars="Temperature_Deviation", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
+# iso_plotter.add_mesh(mesh_copy_orig, scalars="Temperature (Deviation)", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
 # iso_plotter.add_title("Original Deviation", font_size=10)
 # iso_plotter.camera_position = "xy"
 #
 # # Isotropic smoothed deviation
 # iso_plotter.subplot(0, 1)
 # mesh_copy_iso = isotropic_data.copy()
-# iso_plotter.add_mesh(mesh_copy_iso, scalars="Smooth_Deviation_Isotropic", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
+# iso_plotter.add_mesh(mesh_copy_iso, scalars="Temperature (Isotropic Smoothed Deviation)", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
 # iso_plotter.add_title("Isotropic Smoothed Deviation", font_size=10)
 # iso_plotter.camera_position = "xy"
 #
@@ -172,18 +172,18 @@ K = kr * outer(er, er) + kt * outer(et, et)
 # -
 
 # +
-smooth_solution_anisotropic = Function(T.function_space(), name="Smooth_Temperature_Anisotropic")
+smooth_solution_anisotropic = Function(T.function_space(), name="Temperature (Anisotropic Smoothed)")
 smoother_anisotropic = DiffusiveSmoothingSolver(
-    function_space=T.function_space(),
+    smooth_solution_anisotropic,
     wavelength=0.3,
     bcs=temp_bcs,
     K=K)
 
 # Apply anisotropic smoothing
-smooth_solution_anisotropic.assign(smoother_anisotropic.action(T))
+smoother_anisotropic.action(T)
 
 # Compute the smoothed deviation for visualisation
-smooth_deviation_anisotropic = Function(T.function_space(), name='Smooth_Deviation_Anisotropic')
+smooth_deviation_anisotropic = Function(T.function_space(), name='Temperature (Anisotropic Smoothed Deviation)')
 smooth_deviation_anisotropic.assign(smooth_solution_anisotropic - T_avg)
 # -
 
@@ -233,14 +233,14 @@ print(f"Anisotropic smoothed RMS: {anisotropic_rms:.6f}")
 # # Isotropic smoothing deviation
 # comparison_plotter.subplot(0, 0)
 # mesh_copy_iso = output_data.copy()
-# comparison_plotter.add_mesh(mesh_copy_iso, scalars="Smooth_Deviation_Isotropic", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
+# comparison_plotter.add_mesh(mesh_copy_iso, scalars="Temperature (Isotropic Smoothed Deviation)", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
 # comparison_plotter.add_title("Isotropic Smoothed Deviation", font_size=10)
 # comparison_plotter.camera_position = "xy"
 #
 # # Anisotropic smoothing deviation
 # comparison_plotter.subplot(0, 1)
 # mesh_copy_aniso = output_data.copy()
-# comparison_plotter.add_mesh(mesh_copy_aniso, scalars="Smooth_Deviation_Anisotropic", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
+# comparison_plotter.add_mesh(mesh_copy_aniso, scalars="Temperature (Anisotropic Smoothed Deviation)", cmap="RdBu_r", clim=[-0.4, 0.4], scalar_bar_args={"width": 0.6, "height": 0.05, "position_x": 0.2, "position_y": 0.05})
 # comparison_plotter.add_title("Anisotropic Smoothed Deviation", font_size=10)
 # comparison_plotter.camera_position = "xy"
 #
