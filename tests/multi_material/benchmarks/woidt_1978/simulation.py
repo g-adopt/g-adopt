@@ -8,7 +8,7 @@ import gmsh
 import matplotlib.pyplot as plt
 import numpy as np
 from mpi4py import MPI
-from scipy.constants import g as g
+from scipy.constants import g as g  # noqa: F401
 
 from gadopt import material_entrainment
 
@@ -116,6 +116,7 @@ def symmetric_cubic(
     curve = np.where(abs(t - centre) > support / 2.0, 0.0, cubic) + vertical_shift
 
     return np.column_stack((t, curve))
+
 
 # Simulation name tag
 tag = "reference"
