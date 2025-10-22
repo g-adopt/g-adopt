@@ -137,14 +137,12 @@ initialise_background_field(
 
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
-    compressible_buoyancy = False
-    compressible_adv_hyd_pre = False
+    approx = QuasiCompressibleInternalVariableApproximation
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     initialise_background_field(
         bulk_modulus, shear_modulus_values_tilde, X, radius_values_tilde)
-    compressible_buoyancy = True
-    compressible_adv_hyd_pre = True
+    approx = CompressibleInternalVariableApproximation
 
 viscosity = Function(DG0, name="viscosity")
 initialise_background_field(
@@ -243,11 +241,9 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(
+approximation = approx(
     bulk_modulus=bulk_modulus, density=density, shear_modulus=[shear_modulus],
-    viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio,
-    compressible_buoyancy=compressible_buoyancy,
-    compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+    viscosity=[viscosity], B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields and various fields
@@ -275,10 +271,17 @@ iterative_parameters = {"mat_type": "matfree",
 V_nullspace = rigid_body_modes(V, rotational=True)
 V_near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1, 2])
 
-coupled_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs,
-                                        solver_parameters=iterative_parameters,
-                                        nullspace=V_nullspace, transpose_nullspace=V_nullspace,
-                                        near_nullspace=V_near_nullspace)
+coupled_solver = InternalVariableSolver(
+    u,
+    approximation,
+    dt=dt,
+    internal_variables=m_list,
+    bcs=stokes_bcs,
+    solver_parameters=iterative_parameters,
+    nullspace=V_nullspace,
+    transpose_nullspace=V_nullspace,
+    near_nullspace=V_near_nullspace,
+)
 
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.

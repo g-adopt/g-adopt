@@ -20,8 +20,8 @@ __all__ = [
     "ExtendedBoussinesqApproximation",
     "TruncatedAnelasticLiquidApproximation",
     "AnelasticLiquidApproximation",
-    "SmallDisplacementViscoelasticApproximation",
     "IncompressibleMaxwellApproximation",
+    "QuasiCompressibleInternalVariableApproximation",
     "CompressibleInternalVariableApproximation",
     "MaxwellApproximation",
 ]
@@ -420,7 +420,7 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         return pressure_part + temperature_part
 
 
-class SmallDisplacementViscoelasticApproximation:
+class BaseGIAApproximation:
     """Base class for viscoelasticity assuming small displacements.
 
     By assuming a small displacement with respect to mantle depth
@@ -475,8 +475,32 @@ class SmallDisplacementViscoelasticApproximation:
         # code for the incompressible viscous mantle convection in StokesSolverBase.
         return 1
 
+    def effective_viscosity(self, dt):
+        return 1
 
-class IncompressibleMaxwellApproximation(SmallDisplacementViscoelasticApproximation):
+    def prefactor_prestress(self, dt):
+        return 1
+
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        return 0
+
+    def free_surface_terms(self, eta, *, delta_rho_fs=1):
+        return 0
+
+    def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
+        return 0
+
+    def compressible_adv_hyd_pre(
+        self, u_r: Function | ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
+        # Hydrostatic prestress advection term which is applied
+        # as a `normal_stress` boundary condition when the `free_surface` tag is
+        # specified in the `bcs` dictionary of the `InternalVariableSolver`
+        # through the `set_free_surface_boundary` method.
+        return 0
+
+
+class IncompressibleMaxwellApproximation(BaseGIAApproximation):
     """Incompressible maxwell rheology via the incremental displacement formulation.
 
     This class implements incompressible Maxwell rheology similar to the approach
@@ -528,16 +552,91 @@ class IncompressibleMaxwellApproximation(SmallDisplacementViscoelasticApproximat
     def prefactor_prestress(self, dt):
         return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
 
-    def stress(self, u, stress_old, dt):
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        dt = kwargs.get("dt", None)
+        stress_old = kwargs.get("stress_old", None)
+        if dt is None:
+            raise KeyError(
+                f"The dt kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
+        if stress_old is None:
+            raise KeyError(
+                f"The stress_old kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
         return 2 * self.effective_viscosity(dt) * sym(grad(u)) + stress_old
 
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
         return delta_rho_fs * self.g * eta
 
 
-class CompressibleInternalVariableApproximation(
-    SmallDisplacementViscoelasticApproximation
-):
+class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
+    compressible = True
+
+    def __init__(
+        self,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number | list,
+        viscosity: Function | Number | list,
+        *,
+        bulk_shear_ratio: Function | Number = 1,
+        **kwargs,
+    ):
+        self.bulk_modulus = ensure_constant(bulk_modulus)
+        self.bulk_shear_ratio = ensure_constant(bulk_shear_ratio)
+
+        # Convert viscosity and shear modulus to lists in the case
+        # for Maxwell Rheology where there is only one internal variable
+        # and hence only one pair of viscosity and shear modulus fields
+        if not isinstance(shear_modulus, list):
+            shear_modulus = [shear_modulus]
+        if not isinstance(viscosity, list):
+            viscosity = [viscosity]
+
+        if len(viscosity) != len(shear_modulus):
+            raise ValueError(
+                "Length of viscosity and shear modulus lists must be consistent"
+            )
+
+        super().__init__(density, shear_modulus, viscosity, **kwargs)
+        self.maxwell_times = [
+            ensure_constant(visc / mu)
+            for visc, mu in zip(self.viscosity, self.shear_modulus)
+        ]
+        self.mu0 = ensure_constant(sum(self.shear_modulus))
+
+    def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
+        dim = len(u)
+        e = sym(grad(u))
+        return e - 1 / 3 * tr(e) * Identity(dim)
+
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        internal_variables = kwargs.get("internal_variables", None)
+        if internal_variables is None:
+            raise KeyError(
+                f"The internal_variables kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
+
+        div_u = div(u) * Identity(len(u))
+        d = self.deviatoric_strain(u)
+
+        stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
+        stress += 2 * self.mu0 * d
+        for mu, m in zip(self.shear_modulus, internal_variables):
+            stress -= 2 * mu * m
+        return stress
+
+    def hydrostatic_prestress_advection(
+        self, u_r: Function | ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
+        # Hydrostatic prestress advection term which is applied
+        # as a `normal_stress` boundary condition when the `free_surface` tag is
+        # specified in the `bcs` dictionary of the `InternalVariableSolver`
+        # through the `set_free_surface_boundary` method.
+        return self.B_mu * self.density * self.g * u_r
+
+
+class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariableApproximation):
     """Compressible viscoelastic rheology via the internal variable formulation.
 
     This class implements compressible viscoelasticity following the formulation
@@ -599,67 +698,35 @@ class CompressibleInternalVariableApproximation(
         self,
         bulk_modulus: Function | Number,
         density: Function | Number,
-        shear_modulus: Function | Number | list,
-        viscosity: Function | Number | list,
+        shear_modulus: Function | Number | list[Function | Number],
+        viscosity: Function | Number | list[Function | Number],
         *,
         bulk_shear_ratio: Function | Number = 1,
-        compressible_buoyancy: bool = True,
-        compressible_adv_hyd_pre: bool = True,
         **kwargs,
     ):
-        self.bulk_modulus = ensure_constant(bulk_modulus)
-        self.bulk_shear_ratio = ensure_constant(bulk_shear_ratio)
-        self.compressible_buoyancy = compressible_buoyancy
-        self.compressible_adv_hyd_pre = compressible_adv_hyd_pre
-
-        # Convert viscosity and shear modulus to lists in the case
-        # for Maxwell Rheology where there is only one internal variable
-        # and hence only one pair of viscosity and shear modulus fields
-        if not isinstance(shear_modulus, list):
-            shear_modulus = [shear_modulus]
-        if not isinstance(viscosity, list):
-            viscosity = [viscosity]
-
-        if len(viscosity) != len(shear_modulus):
-            raise ValueError("Length of viscosity and shear modulus lists must be consistent")
-
-        super().__init__(density, shear_modulus, viscosity, **kwargs)
-        self.maxwell_times = [ensure_constant(visc / mu) for visc, mu in zip(self.viscosity, self.shear_modulus)]
-        self.mu0 = ensure_constant(sum(self.shear_modulus))
-
-    def div_u(self, u: Function) -> ufl.core.expr.Expr:
-        dim = len(u)
-        return div(u) * Identity(dim)
-
-    def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
-        dim = len(u)
-        e = sym(grad(u))
-        return e - 1 / 3 * tr(e) * Identity(dim)
-
-    def stress(self, u: Function, m_list: list) -> ufl.core.expr.Expr:
-        div_u = self.div_u(u)
-        d = self.deviatoric_strain(u)
-
-        stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
-        stress += 2 * self.mu0 * d
-        for mu, m in zip(self.shear_modulus, m_list):
-            stress -= 2 * mu * m
-        return stress
+        super().__init__(
+            bulk_modulus,
+            density,
+            shear_modulus,
+            viscosity,
+            bulk_shear_ratio=bulk_shear_ratio,
+            **kwargs,
+        )
 
     def buoyancy(self, displacement: Function) -> ufl.core.expr.Expr:
         # Compressible part of buoyancy term due to the density perturbation
         # written on rhs of equations
         buoyancy = super().buoyancy(displacement)
-        if self.compressible_buoyancy:
-            # By default this term is included but in some cases e.g. to reproduce
-            # simplified analytical cases such as the Cathles 2024 benchmark in
-            # /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
-            # this effect.
-            buoyancy += -self.B_mu * self.g * -self.density * div(displacement)
+        # By default this term is included but in some cases e.g. to reproduce
+        # simplified analytical cases such as the Cathles 2024 benchmark in
+        # /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
+        # this effect.
+        buoyancy += -self.B_mu * self.g * -self.density * div(displacement)
         return buoyancy
 
-    def hydrostatic_prestress_advection(
-            self, u_r: Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def compressible_adv_hyd_pre(
+        self, u_r: Function | ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
         # Hydrostatic prestress advection term which is applied
         # as a `normal_stress` boundary condition when the `free_surface` tag is
         # specified in the `bcs` dictionary of the `InternalVariableSolver`
@@ -667,9 +734,7 @@ class CompressibleInternalVariableApproximation(
         return self.B_mu * self.density * self.g * u_r
 
 
-class MaxwellApproximation(
-    CompressibleInternalVariableApproximation
-):
+class MaxwellApproximation(CompressibleInternalVariableApproximation):
     """Maxwell viscoelastic rheology.
 
     This is a helper class to simplify setting up (compressible) Maxwell rheology.
@@ -724,11 +789,4 @@ class MaxwellApproximation(
         viscosity: Function | Number,
         **kwargs,
     ):
-
-        # Convert viscosity and shear modulus to lists since for
-        # Maxwell Rheology where there is only one internal variable
-        # and hence only one pair of viscosity and shear modulus fields
-        shear_modulus = [shear_modulus]
-        viscosity = [viscosity]
-
         super().__init__(bulk_modulus, density, shear_modulus, viscosity, **kwargs)

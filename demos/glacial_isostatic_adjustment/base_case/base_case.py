@@ -388,7 +388,7 @@ R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 u = Function(V, name="displacement")  # field to hold our displacement solution
 
 m = Function(S, name="Internal variable")  # Lagged internal variable at previous timestep
-m_list = [m]
+internal_variables = [m]
 # -
 
 # We can output function space information, for example the number of degrees
@@ -577,7 +577,7 @@ approximation = MaxwellApproximation(
 # various fields needed for the solve along with the approximation, timestep,
 # list of internal variables and boundary conditions.
 
-stokes_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs)
+stokes_solver = InternalVariableSolver(u, approximation, dt=dt, internal_variables=internal_variables, bcs=stokes_bcs)
 
 # We next set up our output, in VTK format. This format can be read by programs
 # like pyvista and Paraview. We also create a function to store the velocity
@@ -590,7 +590,7 @@ disp_old = Function(u, name="old_disp").assign(u)
 
 # Create output file
 output_file = VTKFile("output.pvd")
-output_file.write(u, *m_list, velocity)
+output_file.write(u, *internal_variables, velocity)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
@@ -620,11 +620,11 @@ for timestep in range(max_timesteps):
         log("timestep", timestep)
         velocity.interpolate((u - disp_old)/dt)
         disp_old.assign(u)
-        output_file.write(u, *m_list, velocity)
+        output_file.write(u, *internal_variables, velocity)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(u, name="displacement")
-            for i, m_i in enumerate(m_list):
+            for i, m_i in enumerate(internal_variables):
                 checkpoint.save_function(m_i, name=f"internal_variable_{i}")
 
 

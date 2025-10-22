@@ -211,8 +211,7 @@ else:
 
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
-    compressible_buoyancy = False
-    compressible_adv_hyd_pre = False
+    approx = QuasiCompressibleInternalVariableApproximation
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     if args.burgers:
@@ -223,8 +222,7 @@ else:
         initialise_background_field(
             bulk_modulus, shear_modulus_values_tilde, X, radius_values_tilde,
             shift=radius_values_tilde[-1])
-    compressible_buoyancy = True
-    compressible_adv_hyd_pre = True
+    approx = CompressibleInternalVariableApproximation
 
 if args.burgers:
     viscosity_1 = Function(DG0, name="viscosity 1")
@@ -339,11 +337,9 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(
+approximation = approx(
     bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_mod_list,
-    viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio,
-    compressible_buoyancy=compressible_buoyancy,
-    compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+    viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio)
 
 iterative_parameters = {"mat_type": "matfree",
                         "snes_monitor": None,
@@ -368,10 +364,17 @@ Z_nullspace = None  # Default: don't add nullspace for now
 Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot,
                                     translations=[0, 1, 2])
 
-coupled_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs,
-                                        solver_parameters=iterative_parameters,
-                                        nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                        near_nullspace=Z_near_nullspace)
+coupled_solver = InternalVariableSolver(
+    u,
+    approximation,
+    dt=dt,
+    internal_variables=m_list,
+    bcs=stokes_bcs,
+    solver_parameters=iterative_parameters,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+    near_nullspace=Z_near_nullspace,
+)
 
 
 coupled_stage = PETSc.Log.Stage("coupled_solve")
