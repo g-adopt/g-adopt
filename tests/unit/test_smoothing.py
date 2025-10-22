@@ -24,7 +24,7 @@ def cartesian_field():
     T.interpolate(sin(4*pi*x[0]) * cos(4*pi*x[1]) + 0.5*(x[0] + x[1]))
 
     # Boundary conditions
-    temp_bcs = {1: {"T": 0.0}, 2: {"T": 1.0}}  # Bottom and top boundaries
+    temp_bcs = {4: {"T": 0.0}, 3: {"T": 1.0}}  # Bottom and top boundaries
 
     return T, temp_bcs
 

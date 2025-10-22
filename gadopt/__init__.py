@@ -33,7 +33,7 @@ from .time_stepper import (
     eSSPRKs3p3,
     eSSPRKs10p3,
 )
-from .transport_solver import EnergySolver, GenericTransportSolver, DiffusiveSmoothingSolver
+from .transport_solver import DiffusiveSmoothingSolver, EnergySolver, GenericTransportSolver
 from .utility import (
     InteriorBC,
     LayerAveraging,

@@ -17,8 +17,8 @@ from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
-from .time_stepper import RungeKuttaTimeIntegrator, BackwardEuler
-from .utility import DEBUG, INFO, absv, is_continuous, log, log_level, ensure_constant
+from .time_stepper import BackwardEuler, RungeKuttaTimeIntegrator
+from .utility import DEBUG, INFO, absv, ensure_constant, is_continuous, log, log_level
 
 __all__ = [
     "GenericTransportSolver",
@@ -476,7 +476,7 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
             # Tensor diffusivity
             K_avg = (
                 assemble(sqrt(inner(K, K)) * dx(mesh, degree=integration_quad_degree)) /
-                assemble(Constant(1) * dx(mesh, degree=integration_quad_degree))
+                assemble(dx(mesh, degree=integration_quad_degree))
             )
         else:
             # Scalar diffusivity

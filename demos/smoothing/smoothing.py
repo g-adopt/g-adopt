@@ -13,7 +13,7 @@
 #
 # We demonstrate two types of smoothing:
 # 1. **Isotropic smoothing**: uniform diffusion in all directions
-# 2. **Anisotropic smoothing**: directionally-dependent diffusion
+# 2. **Anisotropic smoothing**: direction-dependent diffusion
 #
 # The checkpoint file used in this tutorial contains a cylindrical temperature field
 # from a 2D adjoint simulation. We use the same checkpoint file as an adjoint simulation
@@ -24,7 +24,7 @@
 # ![ ! -f adjoint-demo-checkpoint-state.h5 ] && wget https://data.gadopt.org/demos/adjoint-demo-checkpoint-state.h5
 # -
 
-# How to do smoothing  in G-ADOPT
+# How to do smoothing in G-ADOPT
 # -------------------------
 #
 # The first step is to import the gadopt module, which provides access to
@@ -40,7 +40,8 @@ from gadopt import *
 
 # Next, load the cylindrical temperature field from a checkpoint file.
 # This field serves as our test case for demonstrating smoothing techniques.
-# If you are not familiar with these steps, the base case tutorial is a good place to start.
+# If you are not familiar with these steps, the
+# [base case for mantle convection](../mantle_convection/base_case) is a good place to start.
 
 # +
 input_file = "smoothing-example.h5"
@@ -91,7 +92,7 @@ T_deviation.assign(T - T_avg)
 # Isotropic Smoothing
 # -------------------
 # In isotropic smoothing, the diffusion coefficient is the same in all directions.
-# This simplifies the diffusion tensor to a scalar value, providing a  uniform
+# This simplifies the diffusion tensor to a scalar value, providing a uniform
 # smoothing across all spatial directions. In gadopt, the smoothing is performed by
 # the DiffusiveSmoothingSolver class. Here by providing the wavelength that we want to smooth,
 # plus the function space we want to have the solution in, we will have the DiffusiveSmoothingSolver.
@@ -156,7 +157,7 @@ kr = Constant(0.0)  # Radial conductivity is zero, preventing diffusion in the r
 kt = Constant(1.0)  # Tangential conductivity is one, allowing diffusion in the tangential direction
 
 # Compute radial vector components for cylindrical coordinates
-X = SpatialCoordinate(T.function_space().mesh())
+X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2)
 er = as_vector((X[0]/r, X[1]/r))  # Unit radial vector
 et = as_vector((-X[1]/r, X[0]/r))  # Unit tangential vector
@@ -252,4 +253,5 @@ print(f"Anisotropic smoothed RMS: {anisotropic_rms:.6f}")
 #
 # The key difference between isotropic and anisotropic smoothing is evident:
 # - Isotropic smoothing reduces variations uniformly in all directions
-# - Anisotropic smoothing preserves radial structure while smoothing tangentially
+# - Anisotropic smoothing, the way we used it only in the tangential direction,
+#   preserves radial structure while smoothing tangentially
