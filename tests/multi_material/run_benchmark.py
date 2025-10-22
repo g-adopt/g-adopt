@@ -167,7 +167,7 @@ if simulation.dimensional:
     rho_material = ga.material_field(
         level_set,
         [material.rho for material in simulation.materials],
-        interface="sharp",
+        interface="arithmetic" if benchmark == "woidt_1978" else "sharp",
     )
     density = fd.Function(func_space_output, name="Density")
     output_fields.append(density)
