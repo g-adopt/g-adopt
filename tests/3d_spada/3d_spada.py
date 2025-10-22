@@ -10,6 +10,8 @@
 
 from gadopt import *
 from gadopt.utility import CombinedSurfaceMeasure
+from gadopt.utility import extruded_layer_heights
+from gadopt.utility import initialise_background_field
 from gadopt.utility import vertical_component as vc
 import argparse
 import numpy as np
@@ -53,19 +55,6 @@ radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 D = radius_values[0]-radius_values[-1]
 radius_values_tilde = np.array(radius_values)/D
 
-layer_height_list = []
-DG0_layers = args.DG0_layers
-nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
-
-for j in range(len(radius_values_tilde)-1):
-    i = len(radius_values_tilde)-2 - j  # want to start at the bottom
-    r = radius_values_tilde[i]
-    h = r - radius_values_tilde[i+1]
-    nz = nz_layers[i]
-    dz = h / nz
-
-    for i in range(nz):
-        layer_height_list.append(dz)
 
 # Construct a circle mesh and then extrude into a cylinder:
 ncells = 8*2**(args.reflevel-1)
@@ -73,17 +62,18 @@ rmin = radius_values_tilde[-1]
 surface_mesh = CubedSphereMesh(rmin, refinement_level=args.reflevel, degree=2,
                                name='surface_mesh')
 
+layer_heights = extruded_layer_heights(args.DG0_layers, radius_values_tilde)
 
 mesh = ExtrudedMesh(
     surface_mesh,
-    layers=len(layer_height_list),
-    layer_height=layer_height_list,
+    layers=len(layer_heights),
+    layer_height=layer_heights,
     extrusion_type='radial'
 )
 
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
-nz = f"{DG0_layers}perlayer"
+nz = f"{args.DG0_layers}perlayer"
 
 ds = CombinedSurfaceMeasure(mesh, degree=6)
 
@@ -134,20 +124,13 @@ density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
 viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
 
-
-def initialise_background_field(field, background_values):
-    for i in range(0, len(background_values)):
-        field.interpolate(conditional(vc(X) >= radius_values_tilde[i+1],
-                          conditional(vc(X) <= radius_values_tilde[i],
-                          background_values[i], field), field))
-
-
 density = Function(DG0, name="density")
-initialise_background_field(density, density_values_tilde)
+initialise_background_field(
+    density, density_values_tilde, X, radius_values_tilde)
 
 shear_modulus = Function(DG0, name="shear modulus")
-initialise_background_field(shear_modulus, shear_modulus_values_tilde)
-
+initialise_background_field(
+    shear_modulus, shear_modulus_values_tilde, X, radius_values_tilde)
 
 # if Pseudo incompressible set bulk modulus to a constant...
 # Otherwise use same jumps from shear modulus multiplied by a factor
@@ -158,12 +141,14 @@ if args.bulk_shear_ratio > 10:
     compressible_adv_hyd_pre = False
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
-    initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
+    initialise_background_field(
+        bulk_modulus, shear_modulus_values_tilde, X, radius_values_tilde)
     compressible_buoyancy = True
     compressible_adv_hyd_pre = True
 
 viscosity = Function(DG0, name="viscosity")
-initialise_background_field(viscosity, viscosity_values_tilde)
+initialise_background_field(
+    viscosity, viscosity_values_tilde, X, radius_values_tilde)
 
 
 year_in_seconds = 8.64e4 * 365.25

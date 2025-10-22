@@ -7,7 +7,7 @@ depending on what they would like to achieve.
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement, DirichletBC, utils
+from firedrake import op2, VectorElement, DirichletBC, utils, conditional
 from firedrake.__future__ import interpolate
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
@@ -15,6 +15,7 @@ import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
 from mpi4py import MPI
+from numbers import Number
 import numpy as np
 import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
@@ -589,3 +590,49 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
     else:
         kwargs = {"bottom": "bottom", "top": "top"}
     return SimpleNamespace(**kwargs)
+
+
+def extruded_layer_heights(
+        DG0_layers: int | list[int], radii: list[Number]) -> list[Number]:
+
+    """Calculates layer heights for extruded mesh using rheological boundary
+
+    Args:
+      DG0_layers:
+        Number of layers per rheological layer
+      radii:
+        Radii of rheological boundaries to match when extruding the mesh
+
+    Returns:
+        list of layer heights
+        """
+
+    layer_heights = []
+
+    if isinstance(DG0_layers, int):
+        nz_layers = [DG0_layers for i in range(len(radii))]
+    else:
+        nz_layers = DG0_layers
+
+    assert len(nz_layers) == len(radii)
+
+    for j in range(len(radii)-1):
+        i = len(radii)-2 - j  # want to start at the bottom
+        r = radii[i]
+        h = r - radii[i+1]
+        nz = nz_layers[i]
+        dz = h / nz
+
+        for i in range(nz):
+            layer_heights.append(dz)
+
+    return layer_heights
+
+
+def initialise_background_field(field, background_values, X, radii, shift=0):
+    '''Initialises discontinuous field with sharp jumps at rheological boundaries'''
+    for i in range(0, len(background_values)):
+        field.interpolate(
+            conditional(vertical_component(X) + shift >= radii[i+1],
+                        conditional(vertical_component(X) + shift <= radii[i],
+                                    background_values[i], field), field))

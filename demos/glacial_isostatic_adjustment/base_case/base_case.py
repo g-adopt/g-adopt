@@ -297,7 +297,8 @@
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
-from gadopt.utility import vertical_component as vc
+from gadopt.utility import extruded_layer_heights
+from gadopt.utility import initialise_background_field
 
 # Next we need to create a mesh of the mantle region we want to simulate. The
 # Weerdesteijn test case is a 3D box 1500 km wide horizontally and 2891 km deep.
@@ -327,31 +328,17 @@ radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 D = radius_values[0]-radius_values[-1]
 L_tilde = L / D
 radius_values_tilde = np.array(radius_values)/D
-layer_height_list = []
-
-DG0_layers = 5
-nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
-for j in range(len(radius_values_tilde)-1):
-    i = len(radius_values_tilde)-2 - j  # want to start at the bottom
-    r = radius_values_tilde[i]
-    h = r - radius_values_tilde[i+1]
-    nz = nz_layers[i]
-    dz = h / nz
-
-    for i in range(nz):
-        layer_height_list.append(dz)
-
 nx = 60
+
 surface_mesh = IntervalMesh(nx, L_tilde)
+
+layer_heights = extruded_layer_heights(5, radius_values_tilde)
 
 mesh = ExtrudedMesh(
     surface_mesh,
-    layers=len(layer_height_list),
-    layer_height=layer_height_list,
+    layers=len(layer_heights),
+    layer_height=layer_heights,
 )
-
-# Shift top of domain to z = 0
-mesh.coordinates.dat.data[:, 1] -= 1
 
 mesh.cartesian = True
 
@@ -438,25 +425,25 @@ shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
 viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
 bulk_modulus_values_tilde = 2 * shear_modulus_values_tilde
 
-
-def initialise_background_field(field, background_values):
-    for i in range(0, len(background_values)):
-        field.interpolate(conditional(vc(X) >= radius_values_tilde[i+1] - radius_values_tilde[0],
-                          conditional(vc(X) <= radius_values_tilde[i] - radius_values_tilde[0],
-                          background_values[i], field), field))
-
-
 density = Function(DG0, name="density")
-initialise_background_field(density, density_values_tilde)
+initialise_background_field(
+    density, density_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 
 shear_modulus = Function(DG0, name="shear modulus")
-initialise_background_field(shear_modulus, shear_modulus_values_tilde)
+initialise_background_field(
+    shear_modulus, shear_modulus_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 
 bulk_modulus = Function(DG0, name="bulk modulus")
-initialise_background_field(bulk_modulus, bulk_modulus_values_tilde)
+initialise_background_field(
+    bulk_modulus, bulk_modulus_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 
 viscosity = Function(DG0, name="viscosity")
-initialise_background_field(viscosity, viscosity_values_tilde)
+initialise_background_field(
+    viscosity, viscosity_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 # -
 
 # We can also plot the viscosity field using *PyVista*.
