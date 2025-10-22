@@ -394,9 +394,9 @@ plog.log_str(
 )
 gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
-checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim-chk.h5"
+checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
 
-displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim.dat"
+displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.dat"
 
 # Initial displacement at time zero is zero
 displacement_min_array = [[0.0, 0.0]]
