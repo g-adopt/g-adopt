@@ -7,7 +7,7 @@
 # There are three default tests:
 # 1) elastic-compressible case limit (dt << maxwell time, 1 step)
 # 2) viscoelastic-compressible (dt ~ maxwell time)
-# 3) viscous limit-compressible-burger (as above but with burgers rheology)
+# 3) viscous limit-compressible-burgers (as above but with burgers rheology)
 
 # Additionally there are quasi-incompressible elastic and viscoelastic cases
 # with different values of bulk/shear modulus ratio.

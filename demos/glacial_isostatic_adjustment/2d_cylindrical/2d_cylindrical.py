@@ -514,7 +514,7 @@ output_file.write(u, m, velocity)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf uk_min"
+    "timestep time dt u_rms u_rms_surf uv_min"
 )
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
@@ -538,7 +538,7 @@ for timestep in range(1, max_timesteps+1):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uk_min(boundary.top)}"
+                 f"{gd.uv_min(boundary.top)}"
                  )
 
     velocity.interpolate((u - disp_old)/dt)
