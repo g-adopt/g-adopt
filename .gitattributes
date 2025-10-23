@@ -1,2 +1,2 @@
-demos/mantle_convection/adjoint_2d_cylindrical/Checkpoint230.h5 filter=lfs diff=lfs merge=lfs -text
+tests/adjoint_2d_cylindrical/adjoint_2d_cylindrical/Checkpoint230.h5 filter=lfs diff=lfs merge=lfs -text
 tests/2d_cylindrical_TALA_DG/initial_condition_mat_prop/Final_State.h5 filter=lfs diff=lfs merge=lfs -text

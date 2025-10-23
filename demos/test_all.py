@@ -24,6 +24,7 @@ cases = {
     f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
     f"{gia_path}/base_case": {"extra_checks": ["disp_min", "disp_max"]},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["disp_min", "disp_max"]},
+    "smoothing": {"extra_checks": ["isotropic_rms", "anisotropic_rms"]},
     f"{tests_path}/2d_cylindrical_TALA_DG": {
         "extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]
     },
