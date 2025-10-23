@@ -16,7 +16,6 @@
 
 # The example is configured at $Ra = 1e5$. Boundary conditions are free-slip at the surface and base of the domain.
 
-
 # The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
 # We also import pyvista, which is used for plotting vtk output.
@@ -30,12 +29,13 @@ from gadopt import *
 # We next set up the mesh, function spaces, and specify functions to hold our solutions,
 # as with our previous tutorials.
 
-# We generate a circular manifold mesh (with 128 elements) and extrude in the radial direction,
-# using the optional keyword argument `extrusion_type`, forming 32 layers. To better represent the
-# curvature of the domain and ensure accuracy of our quadratic representation of velocity, we
-# approximate the curved cylindrical shell domain quadratically, using the optional keyword argument `degree`$=2$.
-# Because this problem is not formulated in a Cartesian geometry, we set the `mesh.cartesian`
-# attribute to False. This ensures the correct configuration of a radially inward vertical direction.
+# We generate a circular manifold mesh (with 128 elements) and extrude in the radial
+# direction (using the optional keyword argument `extrusion_type`) to produce 32 layers.
+# To better represent the curvature of the domain and ensure accuracy of our quadratic
+# velocity representation, we approximate the curved cylindrical shell domain
+# quadratically, using the optional keyword argument `degree`$=2$. Because this problem
+# is not formulated in a Cartesian geometry, we set the `mesh.cartesian` attribute to
+# `False`. This ensures the gravity direction points radially inward.
 
 # +
 rmin, rmax = 1.22, 2.22  # Annulus radii
@@ -47,7 +47,7 @@ boundary = get_boundary_ids(mesh)
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "Q", 2)  # Temperature function space (scalar)
-Z = MixedFunctionSpace([V, W])  # Mixed function space.
+Z = MixedFunctionSpace([V, W])  # Mixed function space
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space (constants across the domain)
 
@@ -119,10 +119,13 @@ assign_level_set_values(psi, epsilon, signed_distance)
 
 # +
 Ra = 1e5  # Thermal Rayleigh number
+RaB_buoyant, RaB_dense = 0.0, 3e4
 # Compositional Rayleigh number, defined based on each material value and location
-RaB = material_field(psi, [RaB_buoyant := 0.0, RaB_dense := 3e4], interface="sharp")
+RaB = material_field(psi, [RaB_buoyant, RaB_dense], interface="arithmetic")
+# Viscosity defined as a material field
+mu = material_field(psi, [mu_buoyant := 1.0, mu_dense := 2.0], interface="arithmetic")
 
-approximation = BoussinesqApproximation(Ra, RaB=RaB)
+approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
 # -
 
 # Let us now verify that the material fields have been correctly initialised. We plot
