@@ -72,7 +72,6 @@ class TimeIntegrator(TimeIntegratorBase):
         self.equation = equation
         self.test = firedrake.TestFunction(solution.function_space())
         self.solution = solution
-        self.dt = float(dt)
         self.dt_const = ensure_constant(dt)
         self.solution_old = solution_old or firedrake.Function(solution, name='Old'+solution.name())
 
@@ -198,7 +197,7 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         """Evaluates the tendency of i-th stage"""
         if self._nontrivial:
             if update_forcings is not None and t is not None:
-                update_forcings(t + self.c[i_stage] * self.dt)
+                update_forcings(t + self.c[i_stage] * self.dt_const.dat.data_ro.item())
             elif update_forcings is not None:
                 update_forcings()
 
@@ -323,7 +322,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
             raise ValueError('Time integrator {:} is not initialized'.format(self.name))
 
         if update_forcings is not None and t is not None:
-            update_forcings(t + self.c[i_stage] * self.dt)
+            update_forcings(t + self.c[i_stage] * self.dt_const.dat.data_ro.item())
         elif update_forcings is not None:
             update_forcings()
 
