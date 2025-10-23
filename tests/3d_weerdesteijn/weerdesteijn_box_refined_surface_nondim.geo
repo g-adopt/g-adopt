@@ -88,5 +88,3 @@ Mesh.MeshSizeFromCurvature = 0;
 // fields better - in particular size fields with large element size gradients:
 
 Mesh.Algorithm = 5;
-Mesh 2;
-Save Sprintf("weerdesteijn_box_refined_surface_%gkm_nondim.msh", refined_dx);

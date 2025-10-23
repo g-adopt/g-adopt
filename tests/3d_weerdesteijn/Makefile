@@ -5,7 +5,7 @@ include ../../rules.mk
 all: params.log
 
 weerdesteijn_box_refined_surface_20km_nondim.msh: weerdesteijn_box_refined_surface_nondim.geo
-	gmsh - weerdesteijn_box_refined_surface_nondim.geo -setnumber refined_dx 20
+	gmsh -2 weerdesteijn_box_refined_surface_nondim.geo -setnumber refined_dx 20 -o weerdesteijn_box_refined_surface_20km_nondim.msh
 
 params.log : category := tests
 params.log : ncpus := 8
@@ -14,7 +14,7 @@ params.log: 3d_weerdesteijn.py weerdesteijn_box_refined_surface_20km_nondim.msh
 	$(run-python)
 
 clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 *.msh params.log
+	rm -f *.pvd *.vtu *.pvtu *.h5 *.msh *.dat params.log
 	rm -rf output reference_state __pycache__
 
 check: params.log
