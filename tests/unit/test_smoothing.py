@@ -67,15 +67,17 @@ def test_isotropic_smoothing(cartesian_field):
     kappa = Constant(1.0)
     wavelength = 0.1
 
+    # Create solution function for smoothed result
+    result_field = Function(T.function_space(), name="smoothed_result")
     smoother = DiffusiveSmoothingSolver(
-        T.function_space(),
+        result_field,
         wavelength=wavelength,
         K=kappa,
         bcs=temp_bcs,
     )
 
     # Apply smoothing to the temperature field
-    result_field = smoother.action(T)
+    smoother.action(T)
 
     # Check that smoothing reduces the field variation
     original_variation = assemble((T - Constant(0.5)) ** 2 * dx)
@@ -105,28 +107,30 @@ def test_anisotropic_smoothing(cylindrical_field):
     wavelength = 0.5  # Use smaller wavelength for faster convergence in tests
 
     # Create anisotropic smoother with tensor diffusivity
+    result_field = Function(T.function_space(), name="anisotropic_result")
     smoother = DiffusiveSmoothingSolver(
-        T.function_space(),
+        result_field,
         wavelength=wavelength,
         K=kappa,
         bcs=temp_bcs,
     )
 
     # Apply smoothing to the temperature field
-    result_field = smoother.action(T)
+    smoother.action(T)
 
     # Check that anisotropic smoothing works without errors and produces different results
     # than isotropic smoothing
 
     # Compare with isotropic smoothing
     kappa_iso = Constant(1.0)
+    result_iso = Function(T.function_space(), name="isotropic_result")
     smoother_iso = DiffusiveSmoothingSolver(
-        T.function_space(),
+        result_iso,
         wavelength=wavelength,
         K=kappa_iso,
         bcs=temp_bcs,
     )
-    result_iso = smoother_iso.action(T)
+    smoother_iso.action(T)
 
     # The anisotropic and isotropic results should be different
     diff_aniso_iso = assemble((result_field - result_iso) ** 2 * dx)
@@ -151,16 +155,18 @@ def test_custom_integration_quad_degree(cartesian_field):
     wavelength = 0.2
 
     # Test with default integration quadrature degree
+    result_default = Function(T.function_space(), name="default_result")
     smoother_default = DiffusiveSmoothingSolver(
-        T.function_space(),
+        result_default,
         wavelength=wavelength,
         K=kappa,
         bcs=temp_bcs,
     )
 
     # Test with custom integration quadrature degree
+    result_custom = Function(T.function_space(), name="custom_result")
     smoother_custom = DiffusiveSmoothingSolver(
-        T.function_space(),
+        result_custom,
         wavelength=wavelength,
         K=kappa,
         bcs=temp_bcs,
@@ -168,8 +174,8 @@ def test_custom_integration_quad_degree(cartesian_field):
     )
 
     # Both should work without errors
-    result_default = smoother_default.action(T)
-    result_custom = smoother_custom.action(T)
+    smoother_default.action(T)
+    smoother_custom.action(T)
 
     # Results should be similar (both are solving the same equation)
     # but may differ slightly due to different quadrature accuracy

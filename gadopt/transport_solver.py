@@ -400,7 +400,7 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
     a scalar function, using clean inheritance from GenericTransportSolver.
 
     Args:
-        function_space (firedrake.FunctionSpace): The function space to solve the diffusion equation.
+        solution (firedrake.Function): The solution function to store the smoothed result.
         wavelength (Number): The wavelength for diffusion.
         K (Union[firedrake.Function, Number], optional): Diffusion tensor. Defaults to 1.
         bcs (dict[int, dict[str, int | float]] | None): Boundary conditions to impose on the solution.
@@ -411,7 +411,7 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
 
     def __init__(
         self,
-        function_space: FunctionSpace,
+        solution: Function,
         wavelength: Number,
         K: Function | Number = 1,
         bcs: dict[int, dict[str, int | float]] | None = None,
@@ -419,8 +419,8 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
         integration_quad_degree: int | None = None,
         **kwargs
     ):
-        # Create solution function
-        solution = Function(function_space, name="smoothed")
+        # Extract function space from solution
+        function_space = solution.function_space()
 
         # Calculate diffusive time step
         dt = self._calculate_diffusive_time_step(function_space, wavelength, K, integration_quad_degree)
@@ -467,19 +467,17 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
 
         return Constant(wavelength**2 / (4 * K_avg))
 
-    def action(self, T: Function) -> Function:
+    def action(self, T: Function) -> None:
         """Apply smoothing action to an input field.
 
         Args:
             T (firedrake.Function): The input field to be smoothed.
 
-        Returns:
-            firedrake.Function: The smoothed field.
+        Note:
+            The smoothed result is stored in the solution function passed to the constructor.
         """
         # Start with the input field
         self.solution.assign(T)
 
         # Solve the diffusion equation (inherited from GenericTransportSolver)
         self.solve()
-
-        return self.solution
