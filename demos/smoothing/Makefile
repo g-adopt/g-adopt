@@ -9,8 +9,8 @@ params.log: smoothing.py smoothing-example.h5
 	$(run-python)
 
 smoothing-example.h5:
-	@echo "Downloading checkpoint file..."
-	@[ ! -f smoothing-example.h5 ] && curl -fsSLO https://data.gadopt.org/demos/smoothing-example.h5 || true
+	@echo "Copying checkpoint file from tests directory..."
+	@[ ! -f smoothing-example.h5 ] && cp ../../tests/adjoint_2d_cylindrical/Checkpoint230.h5 smoothing-example.h5 || true
 
 clean:
 	rm -f *.pvd *.vtu *.pvtu params.log
