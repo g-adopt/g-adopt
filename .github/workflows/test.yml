@@ -102,12 +102,6 @@ jobs:
         with:
           lfs: true
 
-      - uses: actions/checkout@v4
-        with:
-          repository: angus-g/pyadjoint
-          ref: angus-g/rol-arf
-          path: ./pyadjoint-ad
-
       - name: Fetch LFS artifacts
         run: |
           git lfs checkout
@@ -132,7 +126,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
-          uv pip install .[demos,optimisation] pygplates pyadjoint-ad/
+          uv pip install .[demos,optimisation] pygplates
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
@@ -171,7 +165,7 @@ jobs:
         id: run_pytest
         run: |
           . .venv/bin/activate
-          python -m pytest -m 'not longtest' --junit-xml=test_results.xml tests/ demos/
+          python -m pytest -m 'not longtest' --junit-xml=test_results.xml
 
       - name: Pytest report
         uses: mikepenz/action-junit-report@v4
