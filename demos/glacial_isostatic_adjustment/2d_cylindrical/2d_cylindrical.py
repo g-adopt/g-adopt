@@ -19,6 +19,8 @@
 
 from gadopt import *
 from gadopt.utility import vertical_component
+from gadopt.utility import extruded_layer_heights
+from gadopt.utility import initialise_background_field
 
 # Similar to the `base_case.py` demo we create the mesh in two stages. First we create
 # a surface mesh of 180 cells using one of `Firedrake`'s utility meshes
@@ -39,30 +41,18 @@ radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 D = radius_values[0]-radius_values[-1]
 radius_values_tilde = np.array(radius_values)/D
 
-layer_height_list = []
-DG0_layers = 5
-nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
-
-# setup list of layer thicknesses for extruded mesh
-for j in range(len(radius_values_tilde)-1):
-    i = len(radius_values_tilde)-2 - j  # start at the bottom
-    r = radius_values_tilde[i]
-    h = r - radius_values_tilde[i+1]
-    nz = nz_layers[i]
-    dz = h / nz
-
-    for i in range(nz):
-        layer_height_list.append(dz)
-
 # Construct a circle mesh and then extrude into a cylinder:
 ncells = 180
 rmin = radius_values_tilde[-1]
 surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name='surface_mesh')
 
+# Ensure layers of extruded mesh coincide with rheological boundaries
+layer_heights = extruded_layer_heights(5, radius_values_tilde)
+
 mesh = ExtrudedMesh(
     surface_mesh,
-    layers=len(layer_height_list),
-    layer_height=layer_height_list,
+    layers=len(layer_heights),
+    layer_height=layer_heights,
     extrusion_type='radial'
 )
 
@@ -131,25 +121,17 @@ density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
 viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
 
-
-def initialise_background_field(field, background_values):
-    for i in range(0, len(background_values)):
-        field.interpolate(
-            conditional(vertical_component(X) >= radius_values_tilde[i+1],
-                        conditional(vertical_component(X) <= radius_values_tilde[i],
-                        background_values[i], field),
-                        field)
-        )
-
-
 density = Function(DG0, name="density")
-initialise_background_field(density, density_values_tilde)
+initialise_background_field(
+    density, density_values_tilde, X, radius_values_tilde)
 
 shear_modulus = Function(DG0, name="shear modulus")
-initialise_background_field(shear_modulus, shear_modulus_values_tilde)
+initialise_background_field(
+    shear_modulus, shear_modulus_values_tilde, X, radius_values_tilde)
 
 bulk_modulus = Function(DG0, name="bulk modulus")
-initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
+initialise_background_field(
+    bulk_modulus, shear_modulus_values_tilde, X, radius_values_tilde)
 # -
 
 # Let's have a quick look at the density field using pyvista.
@@ -201,7 +183,8 @@ initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
 
 # +
 background_viscosity = Function(DG1, name="background viscosity")
-initialise_background_field(background_viscosity, viscosity_values_tilde)
+initialise_background_field(
+    background_viscosity, viscosity_values_tilde, X, radius_values_tilde)
 
 
 # Defined lateral viscosity regions
