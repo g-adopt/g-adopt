@@ -329,15 +329,15 @@ from gadopt.utility import initialise_background_field
 # +
 L = 1500e3  # Length of the domain in m
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
-D = radius_values[0]-radius_values[-1]
-L_tilde = L / D
-radius_values_tilde = np.array(radius_values)/D
+domain_depth = radius_values[0]-radius_values[-1]
+L_nondim = L / domain_depth
+radius_values_nondim = np.array(radius_values)/domain_depth
 nx = 60
 
-surface_mesh = IntervalMesh(nx, L_tilde)
+surface_mesh = IntervalMesh(nx, L_nondim)
 
 # Ensure layers of extruded mesh coincide with rheological boundaries
-layer_heights = extruded_layer_heights(5, radius_values_tilde)
+layer_heights = extruded_layer_heights(5, radius_values_nondim)
 
 mesh = ExtrudedMesh(
     surface_mesh,
@@ -426,33 +426,33 @@ shear_modulus_scale = 1e11
 viscosity_scale = 1e21
 characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 gravity_scale = 9.81
-B_mu = Constant(density_scale * D * gravity_scale / shear_modulus_scale)
+B_mu = Constant(density_scale * domain_depth * gravity_scale / shear_modulus_scale)
 
-density_values_tilde = np.array(density_values)/density_scale
-shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
-viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
+density_values_nondim = np.array(density_values)/density_scale
+shear_modulus_values_nondim = np.array(shear_modulus_values)/shear_modulus_scale
+viscosity_values_nondim = np.array(viscosity_values)/viscosity_scale
 bulk_shear_ratio = 2
-bulk_modulus_values_tilde = shear_modulus_values_tilde
+bulk_modulus_values_nondim = shear_modulus_values_nondim
 
 density = Function(DG0, name="density")
 initialise_background_field(
-    density, density_values_tilde, X, radius_values_tilde,
-    shift=radius_values_tilde[-1])
+    density, density_values_nondim, X, radius_values_nondim,
+    shift=radius_values_nondim[-1])
 
 shear_modulus = Function(DG0, name="shear modulus")
 initialise_background_field(
-    shear_modulus, shear_modulus_values_tilde, X, radius_values_tilde,
-    shift=radius_values_tilde[-1])
+    shear_modulus, shear_modulus_values_nondim, X, radius_values_nondim,
+    shift=radius_values_nondim[-1])
 
 bulk_modulus = Function(DG0, name="bulk modulus")
 initialise_background_field(
-    bulk_modulus, bulk_modulus_values_tilde, X, radius_values_tilde,
-    shift=radius_values_tilde[-1])
+    bulk_modulus, bulk_modulus_values_nondim, X, radius_values_nondim,
+    shift=radius_values_nondim[-1])
 
 viscosity = Function(DG0, name="viscosity")
 initialise_background_field(
-    viscosity, viscosity_values_tilde, X, radius_values_tilde,
-    shift=radius_values_tilde[-1])
+    viscosity, viscosity_values_nondim, X, radius_values_nondim,
+    shift=radius_values_nondim[-1])
 # -
 
 # We can also plot the density field using *PyVista*.
@@ -537,7 +537,7 @@ log(f"Simulation start time: {Tstart} years")
 # Initialise ice loading
 rho_ice = 931 / density_scale
 g = 9.81 / gravity_scale
-Hice = 1000 / D
+Hice = 1000 / domain_depth
 t1_load = 90e3 * year_in_seconds / characteristic_maxwell_time
 t2_load = 100e3 * year_in_seconds / characteristic_maxwell_time
 ramp_after_t1 = conditional(
@@ -545,8 +545,8 @@ ramp_after_t1 = conditional(
 )
 ramp = conditional(time < t1_load, time / t1_load, ramp_after_t1)
 # Disc ice load but with a smooth transition given by a tanh profile
-disc_radius = 100e3 / D
-disc_dx = 5e3 / D
+disc_radius = 100e3 / domain_depth
+disc_dx = 5e3 / domain_depth
 k_disc = 2*pi/(8*disc_dx)  # wavenumber for disk 2pi / lambda
 r = X[0]
 disc = 0.5*(1-tanh(k_disc * (r - disc_radius)))
@@ -684,7 +684,7 @@ plog.close()
 #     arrows = data.glyph(orient="velocity", scale="velocity", factor=75000, tolerance=0.05)
 #     plotter.add_mesh(arrows, color="white", lighting=False)
 #
-#     data['displacement'] *= D  # Make displacement dimensional
+#     data['displacement'] *= domain_depth  # Make displacement dimensional
 #     # Add the warped displacement field to the frame
 #     plotter.add_mesh(
 #         warped,
@@ -707,8 +707,8 @@ plog.close()
 #     )
 #
 #     # Fix camera in default position otherwise mesh appears to jump around!
-#     plotter.camera_position = [(L_tilde/2, 0.5, 2.3),
-#                         (L_tilde/2, 0.5, 0.0),
+#     plotter.camera_position = [(L_nondim/2, 0.5, 2.3),
+#                         (L_nondim/2, 0.5, 0.0),
 #                         (0.0, 1.0, 0.0)]
 #     plotter.add_text(f"Time: {i*2000:6} years", name='time-label')
 #     plotter.write_frame()
@@ -742,7 +742,7 @@ plog.close()
 # # Convert back to dimensional units
 # logfile = np.loadtxt('params.log', skiprows=1)
 # times = logfile[:, 1] * characteristic_maxwell_time / year_in_seconds / 1000
-# peak_disp = logfile[:, -1] * D
+# peak_disp = logfile[:, -1] * domain_depth
 #
 # plt.plot(times, peak_disp)
 # plt.xlabel('Time (kyr)')
