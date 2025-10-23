@@ -82,7 +82,7 @@ P1 = FunctionSpace(mesh, "CG", 1)  # Continuous function space
 
 u = Function(V, name='displacement')
 m = Function(S, name="internal variable")
-m_list = [m]
+internal_variables = [m]
 # -
 
 # We can output function space information, for example the number of degrees
@@ -523,7 +523,7 @@ stokes_solver = InternalVariableSolver(
     u,
     approximation,
     dt=dt,
-    m_list=m_list,
+    internal_variables=internal_variables,
     bcs=stokes_bcs,
     solver_parameters=iterative_parameters,
     constant_jacobian=True,
@@ -540,7 +540,7 @@ velocity = Function(u, name="velocity")
 disp_old = Function(u, name="old_disp").assign(u)
 # Create output file
 output_file = VTKFile("output.pvd")
-output_file.write(u, *m_list, velocity)
+output_file.write(u, *internal_variables, velocity)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
@@ -579,7 +579,7 @@ for timestep in range(1, max_timesteps+1):
         # provided dt < maxwell time.
         log("timestep", timestep)
 
-        output_file.write(u, *m_list, velocity)
+        output_file.write(u, *internal_variables, velocity)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(u, name="displacement")
