@@ -716,7 +716,9 @@ class InternalVariableSolver(StokesSolverBase):
       approximation:
         G-ADOPT approximation defining terms in the system of equations
       internal_variables:
-        List of internal variables
+        Internal variable functions accounting for viscoelastic stress relaxation.
+        The number of internal variables provided must be consistent with the number
+        of viscosity and shear modulus fields provided to the approximation.
       dt:
         Float quantifying the time step used for time integration
       additional_forcing_term:
@@ -750,11 +752,17 @@ class InternalVariableSolver(StokesSolverBase):
         approximation: BaseGIAApproximation,
         /,
         *,
-        internal_variables: list,
+        internal_variables: fd.Function | list[fd.Function],
         dt: float,
         **kwargs,
     ) -> None:
+
+        # Convert `internal_variables` to a list in the case
+        # for Maxwell Rheology where there is only one internal variable
+        if not isinstance(internal_variables, list):
+            internal_variables = [internal_variables]
         self.internal_variables = internal_variables
+
         # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
         approximation.mu = approximation.viscosity[0]/(approximation.maxwell_times[0]+dt)
         super().__init__(solution, approximation, dt=dt, **kwargs)
