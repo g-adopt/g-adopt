@@ -9,6 +9,7 @@ G-ADOPT queries variables and methods from the approximation.
 import abc
 from numbers import Number
 from typing import Optional
+from warnings import warn
 
 from firedrake import Function, Identity, div, grad, inner, sym, tr, ufl
 
@@ -19,9 +20,10 @@ __all__ = [
     "ExtendedBoussinesqApproximation",
     "TruncatedAnelasticLiquidApproximation",
     "AnelasticLiquidApproximation",
-    "SmallDisplacementViscoelasticApproximation",
-    "MaxwellDisplacementApproximation",
+    "IncompressibleMaxwellApproximation",
+    "QuasiCompressibleInternalVariableApproximation",
     "CompressibleInternalVariableApproximation",
+    "MaxwellApproximation",
 ]
 
 
@@ -418,26 +420,38 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         return pressure_part + temperature_part
 
 
-class SmallDisplacementViscoelasticApproximation:
-    """Expressions for the small displacement viscoelastic approximation.
+class BaseGIAApproximation:
+    """Base class for viscoelasticity assuming small displacements.
 
-    By assuming a small displacement, we can linearise the problem, assuming a perturbation
-    away from a reference state.
-    N.b. that the implentation currently assumes all terms are dimensional.
+    By assuming a small displacement with respect to mantle depth
+    we can linearise the problem, assuming a perturbation away from a reference state.
+
+    For background and derivation of the formulation please see the equations and
+    references provided in Scott et al 2025.
+
+    Automated forward and adjoint modelling of viscoelastic deformation of the solid
+    Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
+    Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
 
     Arguments:
-      density:       background density
+      density:       density of the reference state - assumed to be hydrostatic
       shear_modulus: shear modulus
       viscosity:     viscosity
       g:             gravitational acceleration
-
+      B_mu:          Nondimensional number describing ratio of buoyancy to elastic
+                     shear strength used for nondimensionalisation.
+                     $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                     where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                     $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                     $L$ is a characteristic length scale, often Mantle depth (m),
+                     $\\mu$ is a characteristic shear modulus (Pa).
     """
 
     def __init__(
         self,
         density: Function | Number,
-        shear_modulus: Function | Number,
-        viscosity: Function | Number,
+        shear_modulus: Function | Number | list,
+        viscosity: Function | Number | list,
         *,
         g: Function | Number = 1,
         B_mu: Function | Number = 1,
@@ -449,30 +463,53 @@ class SmallDisplacementViscoelasticApproximation:
         self.B_mu = ensure_constant(B_mu)
 
     def buoyancy(self, displacement):
-        # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
-        # accounts for advection of density in the absence of an evolution equation for temperature
+        # Buoyancy term due to the advection of the background density field
         # written on RHS of equations
         return -self.B_mu * self.g * -inner(displacement, grad(self.density))
 
     def rho_continuity(self):
+        # StokesSolverBase in stokes_integrators.py currently requires rho_continuity
+        # from approximation. This is only strictly necessary for quasi-compressible
+        # approximations in Mantle convection e.g. TALA and ALA, but is used in setting up
+        # the continuity equation for the IncompressibleMaxwellApproximation to use similar
+        # code for the incompressible viscous mantle convection in StokesSolverBase.
         return 1
 
+    def effective_viscosity(self, dt):
+        return 1
+
+    def prefactor_prestress(self, dt):
+        return 1
+
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        return 0
+
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
-        free_surface_normal_stress = delta_rho_fs * self.g * eta
-        # prefactor only needed when solving eta as part of mixed system
-        return free_surface_normal_stress, None
+        return 0
 
-    def hydrostatic_prestress_advection(self, u_r):
-        return self.B_mu * self.density * self.g * u_r
+    def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
+        return 0
+
+    def compressible_adv_hyd_pre(
+        self, u_r: Function | ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
+        # Hydrostatic prestress advection term which is applied
+        # as a `normal_stress` boundary condition when the `free_surface` tag is
+        # specified in the `bcs` dictionary of the `InternalVariableSolver`
+        # through the `set_free_surface_boundary` method.
+        return 0
 
 
-class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximation):
-    """We follow the approach by Zhong et al. 2003 redefining the problem in terms
-    of incremental displacement, i.e. velocity * dt where dt is the timestep.
-    This produces a mixed stokes system for incremental displacement and pressure
-    which can be solved in the same way as mantle convection (where unknowns are
-    velocity and pressure), with a modfied viscosity and stress term accounting
-    for the deviatoric stress at the previous timestep.
+class IncompressibleMaxwellApproximation(BaseGIAApproximation):
+    """Incompressible maxwell rheology via the incremental displacement formulation.
+
+    This class implements incompressible Maxwell rheology similar to the approach
+    by Zhong et al. 2003. The linearised problem is cast in terms of incremental
+    displacement, i.e. velocity * dt where dt is the timestep. This produces a mixed
+    stokes system for incremental displacement and pressure which can be solved in
+    the same way as mantle convection (where unknowns are velocity and pressure),
+    with a modfied viscosity and stress term accounting for the deviatoric stress
+    at the previous timestep.
 
     Zhong, Shijie, Archie Paulson, and John Wahr.
     "Three-dimensional finite-element modelling of Earth’s viscoelastic
@@ -481,7 +518,6 @@ class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximatio
 
     N.b. that the implentation currently assumes all terms are dimensional.
 
-    Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state
 
     Arguments:
       density:       background density
@@ -500,6 +536,13 @@ class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximatio
         viscosity: Function | Number,
         **kwargs,
     ):
+
+        warn(
+            '''The IncompressibleMaxwellApproximation is being phased out of G-ADOPT.
+            We recommend using `MaxwellApproximation` together with the
+            `InternalVariableSolver` for viscoelastic applications in G-ADOPT.
+        ''')
+
         super().__init__(density, shear_modulus, viscosity, **kwargs)
         self.maxwell_time = self.viscosity / self.shear_modulus
 
@@ -509,47 +552,38 @@ class MaxwellDisplacementApproximation(SmallDisplacementViscoelasticApproximatio
     def prefactor_prestress(self, dt):
         return (self.maxwell_time - dt / 2) / (self.maxwell_time + dt / 2)
 
-    def stress(self, u, stress_old, dt):
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        dt = kwargs.get("dt", None)
+        stress_old = kwargs.get("stress_old", None)
+        if dt is None:
+            raise KeyError(
+                f"The dt kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
+        if stress_old is None:
+            raise KeyError(
+                f"The stress_old kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
         return 2 * self.effective_viscosity(dt) * sym(grad(u)) + stress_old
 
-
-class CompressibleInternalVariableApproximation(
-    SmallDisplacementViscoelasticApproximation
-):
-    """We follow the approach by Al attar .... redefining the stress formulation
-    in terms on a time dependent internal variable.
-    N.b. that the implentation currently assumes all terms are dimensional.
+    def free_surface_terms(self, eta, *, delta_rho_fs=1):
+        return delta_rho_fs * self.g * eta
 
 
-    Arguments:
-      bulk_modulus:  bulk modulus
-      density:       background density
-      shear_modulus: shear modulus
-      viscosity:     viscosity
-      g:             gravitational acceleration
-
-    """
-
-    """Small Displacement Viscoelastic approximation:
-
-    Small displacement linearises the problem. rho = rho0 + rho1. Perturbation about a reference state"""
+class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     compressible = True
 
     def __init__(
         self,
-        bulk_modulus,
-        density,
-        shear_modulus,
-        viscosity,
-        bulk_shear_ratio=1,
-        compressible_buoyancy=True,
-        compressible_adv_hyd_pre=True,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number | list,
+        viscosity: Function | Number | list,
+        *,
+        bulk_shear_ratio: Function | Number = 1,
         **kwargs,
     ):
         self.bulk_modulus = ensure_constant(bulk_modulus)
         self.bulk_shear_ratio = ensure_constant(bulk_shear_ratio)
-        self.compressible_buoyancy = compressible_buoyancy
-        self.compressible_adv_hyd_pre = compressible_adv_hyd_pre
 
         # Convert viscosity and shear modulus to lists in the case
         # for Maxwell Rheology where there is only one internal variable
@@ -560,37 +594,199 @@ class CompressibleInternalVariableApproximation(
             viscosity = [viscosity]
 
         if len(viscosity) != len(shear_modulus):
-            raise ValueError("Length of viscosity and shear modulus lists must be consistent")
+            raise ValueError(
+                "Length of viscosity and shear modulus lists must be consistent"
+            )
 
         super().__init__(density, shear_modulus, viscosity, **kwargs)
-        self.maxwell_times = [ensure_constant(visc / mu) for visc, mu in zip(self.viscosity, self.shear_modulus)]
+        self.maxwell_times = [
+            ensure_constant(visc / mu)
+            for visc, mu in zip(self.viscosity, self.shear_modulus)
+        ]
         self.mu0 = ensure_constant(sum(self.shear_modulus))
 
-    def div_u(self, u):
-        dim = len(u)
-        return div(u) * Identity(dim)
-
-    def deviatoric_strain(self, u):
+    def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         dim = len(u)
         e = sym(grad(u))
         return e - 1 / 3 * tr(e) * Identity(dim)
 
-    def stress(self, u, m_list):
-        div_u = self.div_u(u)
+    def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        internal_variables = kwargs.get("internal_variables", None)
+        if internal_variables is None:
+            raise KeyError(
+                f"The internal_variables kwarg must be provided for stress() in {self.__class__.__name__}"
+            )
+
+        div_u = div(u) * Identity(len(u))
         d = self.deviatoric_strain(u)
 
         stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
         stress += 2 * self.mu0 * d
-        for mu, m in zip(self.shear_modulus, m_list):
+        for mu, m in zip(self.shear_modulus, internal_variables):
             stress -= 2 * mu * m
         return stress
 
-    # analytical solution for compressibility only converges without this term...
-    def buoyancy(self, displacement):
-        # Buoyancy term rho1, coming from linearisation and integrating the continuity equation w.r.t time
-        # accounts for advection of density in the absence of an evolution equation for temperature
+    def hydrostatic_prestress_advection(
+        self, u_r: Function | ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
+        # Hydrostatic prestress advection term which is applied
+        # as a `normal_stress` boundary condition when the `free_surface` tag is
+        # specified in the `bcs` dictionary of the `InternalVariableSolver`
+        # through the `set_free_surface_boundary` method.
+        return self.B_mu * self.density * self.g * u_r
+
+
+class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariableApproximation):
+    """Compressible viscoelastic rheology via the internal variable formulation.
+
+    This class implements compressible viscoelasticity following the formulation
+    adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018), in
+    which viscoelastic constitutive equations are expressed in integral form and
+    reformulated using so-called *internal variables*. Conceptually, this approach
+    consists of a set of elements with different shear relaxation timescales,
+    arranged in parallel. This formulation provides a compact, flexible and convenient
+    means to incorporate transient rheology into viscoelastic deformation models:
+    using a single internal variable is equivalent to a simple Maxwell material;
+    two correspond to a Burgers model with two characteristic relaxation frequencies;
+    and using a series of internal variables permits approximation of a continuous
+    range of relaxation timescales for more complicated rheologies.
+
+    This class implements the substiution method where the time-dependent internal
+    variable equation is substituted into the momentum equation assuming a Backward
+    Euler time discretation. Therefore, the displacement field is the only unknown.
+    For more information regarding the specific implementation in G-ADOPT please see
+    Scott et al. 2025.
+
+    Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
+    based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
+
+    Crawford, O., Al-Attar, D., Tromp, J., & Mitrovica, J. X. (2016). Forward and
+    inverse modelling of post-seismic deformation. Geophysical Journal International,
+    ggw414.
+
+    Crawford, O., Al-Attar, D., Tromp, J., Mitrovica, J. X., Austermann, J., &
+    Lau, H. C. (2018). Quantifying the sensitivity of post-glacial sea level change
+    to laterally varying viscosity. Geophysical journal international, 214(2), 1324-1363.
+
+    Automated forward and adjoint modelling of viscoelastic deformation of the solid
+    Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
+    Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
+
+
+    Arguments:
+      bulk_modulus:  bulk modulus
+      density:       background density
+      shear_modulus: shear modulus
+      viscosity:     viscosity
+      bulk_shear_ratio: Ratio of bulk to shear modulus
+      compressible_buoyancy: Include compressible buoyancy effects
+      compressible_adv_hyd_pre: Include compressible hydrostatic prestress advection
+      g:             gravitational acceleration
+      B_mu:          Nondimensional number describing ratio of buoyancy to elastic
+                     shear strength used for nondimensionalisation.
+                     $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                     where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                     $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                     $L$ is a characteristic length scale, often Mantle depth (m),
+                     $\\mu$ is a characteristic shear modulus (Pa).
+
+    """
+
+    compressible = True
+
+    def __init__(
+        self,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number | list[Function | Number],
+        viscosity: Function | Number | list[Function | Number],
+        *,
+        bulk_shear_ratio: Function | Number = 1,
+        **kwargs,
+    ):
+        super().__init__(
+            bulk_modulus,
+            density,
+            shear_modulus,
+            viscosity,
+            bulk_shear_ratio=bulk_shear_ratio,
+            **kwargs,
+        )
+
+    def buoyancy(self, displacement: Function) -> ufl.core.expr.Expr:
+        # Compressible part of buoyancy term due to the density perturbation
         # written on rhs of equations
         buoyancy = super().buoyancy(displacement)
-        if self.compressible_buoyancy:
-            buoyancy += -self.B_mu * self.g * -self.density * div(displacement)
+        # By default this term is included but in some cases e.g. to reproduce
+        # simplified analytical cases such as the Cathles 2024 benchmark in
+        # /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
+        # this effect.
+        buoyancy += -self.B_mu * self.g * -self.density * div(displacement)
         return buoyancy
+
+    def compressible_adv_hyd_pre(
+        self, u_r: Function | ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
+        # Hydrostatic prestress advection term which is applied
+        # as a `normal_stress` boundary condition when the `free_surface` tag is
+        # specified in the `bcs` dictionary of the `InternalVariableSolver`
+        # through the `set_free_surface_boundary` method.
+        return self.B_mu * self.density * self.g * u_r
+
+
+class MaxwellApproximation(CompressibleInternalVariableApproximation):
+    """Maxwell viscoelastic rheology.
+
+    This is a helper class to simplify setting up (compressible) Maxwell rheology.
+    G-ADOPT implements compressible viscoelasticity following the internal variable
+    formulation adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018),
+    see Scott et al. 2025 for more details.
+
+    For Maxwell rheology, there is just one relaxation timescale (and hence one
+    internal variable), so we setup one unique viscosity and shear modulus field.
+
+    Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
+    based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
+
+    Crawford, O., Al-Attar, D., Tromp, J., & Mitrovica, J. X. (2016). Forward and
+    inverse modelling of post-seismic deformation. Geophysical Journal International,
+    ggw414.
+
+    Crawford, O., Al-Attar, D., Tromp, J., Mitrovica, J. X., Austermann, J., &
+    Lau, H. C. (2018). Quantifying the sensitivity of post-glacial sea level change
+    to laterally varying viscosity. Geophysical journal international, 214(2), 1324-1363.
+
+    Automated forward and adjoint modelling of viscoelastic deformation of the solid
+    Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
+    Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
+
+    Arguments:
+      bulk_modulus:  bulk modulus
+      density:       background density
+      shear_modulus: shear modulus
+      viscosity:     viscosity
+      bulk_shear_ratio: Ratio of bulk to shear modulus
+      compressible_buoyancy: Include compressible buoyancy effects
+      compressible_adv_hyd_pre: Include compressible hydrostatic prestress advection
+      g:             gravitational acceleration
+      B_mu:          Nondimensional number describing ratio of buoyancy to elastic
+                     shear strength used for nondimensionalisation.
+                     $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                     where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                     $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                     $L$ is a characteristic length scale, often Mantle depth (m),
+                     $\\mu$ is a characteristic shear modulus (Pa).
+
+    """
+
+    compressible = True
+
+    def __init__(
+        self,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number,
+        viscosity: Function | Number,
+        **kwargs,
+    ):
+        super().__init__(bulk_modulus, density, shear_modulus, viscosity, **kwargs)

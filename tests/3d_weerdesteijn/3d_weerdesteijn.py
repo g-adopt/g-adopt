@@ -1,38 +1,82 @@
-# Idealised 2-D viscoelastic loading problem in a square box
-# =======================================================
-#
-# In this tutorial, we examine an idealised 2-D loading problem in a square box.
-# Here we will focus purely on viscoelastic deformation by a surface load, i.e. a synthetic
-# ice sheet!
-#
+# Test case based on Weerdesteijn et al 2023 benchmark.
+# A 100 km thick ice sheet is placed on the corner of a
+# 1500 km x 1500 km x 2891 km box. There is a short
+# (200 yr) and long loading scenario (110 kyr).
+# The rheological properties are based on the Spada et
+# al. 2011 testcases. There is also a case with a low
+# viscosity region situated under the ice sheet.
+# results within G-ADOPT see Scott et al. 2025.
+
+# Weerdesteijn, M. F., Naliboff, J. B., Conrad,
+# C. P., Reusen, J. M., Steffen, R., Heister, T., &
+# Zhang, J. (2023). Modeling viscoelastic solid
+# earth deformation due to ice age and contemporary
+# glacial mass changes in ASPECT. Geochemistry,
+# Geophysics, Geosystems, 24(3), e2022GC010813.
+
+# Spada, G., Barletta, V. R., Klemann, V., Riva, R. E. M.,
+# Martinec, Z., Gasperini, P., ... & King, M. A. (2011).
+# A benchmark study for glacial isostatic adjustment codes.
+# Geophysical Journal International, 185(1), 106-132.
+
+# Automated forward and adjoint modelling of
+# viscoelastic deformation of the solid Earth.
+# Scott, W.; Hoggard, M.; Duvernay, T.;
+# Ghelichkhan, S.; Gibson, A.; Roberts, D.;
+# Kramer, S. C.; and Davies, D. R.
+# EGUsphere, 2025: 1–43. 2025.
 
 from gadopt import *
 from gadopt.utility import CombinedSurfaceMeasure
+from gadopt.utility import extruded_layer_heights
+from gadopt.utility import initialise_background_field
 from gadopt.utility import vertical_component as vc
 import argparse
 import numpy as np
 from mpi4py import MPI
 parser = argparse.ArgumentParser()
-parser.add_argument("--dx", default=20, type=float, help="Horizontal resolution in km", required=False)
-parser.add_argument("--refined_surface", action='store_true', help="Use refined surface mesh")
-parser.add_argument("--const_aspect", action='store_true', help="Also scale farfield dx for parallel scaling test to keep same aspect ratio")
-parser.add_argument("--structured_dz", action='store_true', help="Use constant vertical resolution")
-parser.add_argument("--nz", default=100, type=int, help="Number of vertical layers for structured dz")
-parser.add_argument("--DG0_layers", default=5, type=int, help="Number of cells per layer for DG0 discretisation of background profiles", required=False)
-parser.add_argument("--dt_years", default=1e3, type=float, help="Timestep in years", required=False)
-parser.add_argument("--dt_out_years", default=10e3, type=float, help="Output timestep in years", required=False)
-parser.add_argument("--Tend", default=110e3, type=float, help="Simulation end time in years", required=False)
-parser.add_argument("--bulk_shear_ratio", default=100, type=float, help="Ratio of Bulk modulus / Shear modulus", required=False)
-parser.add_argument("--Tstart", default=0, type=float, help="Simulation start time in years", required=False)
-parser.add_argument("--short_simulation", action='store_true', help="Run simulation with short ice history from Weerdesteijn et a. 2023 testcase")
-parser.add_argument("--lateral_viscosity", action='store_true', help="Include low viscosity cylinder from Weerdesteijn et a. 2023 testcase")
-parser.add_argument("--burgers", action='store_true', help="Use a burgers rheology")
-parser.add_argument("--viscosity_ratio", default=1, type=float, help="Ratio of viscosity 2 / viscosity 1", required=False)
-parser.add_argument("--write_output", action='store_true', help="Write out Paraview VTK files")
-parser.add_argument("--optional_name", default="", type=str, help="Optional string to add to simulation name for outputs", required=False)
-parser.add_argument("--output_path", default="./", type=str, help="Optional output path", required=False)
-parser.add_argument("--gamg_threshold", default=0.01, type=float, help="Gamg threshold")
-parser.add_argument("--gamg_near_null_rot", action='store_true', help="Use rotational gamg near nullspace")
+parser.add_argument("--dx", default=20, type=float,
+                    help="Horizontal resolution in km", required=False)
+parser.add_argument("--refined_surface", action='store_true',
+                    help="Use refined surface mesh")
+parser.add_argument("--const_aspect", action='store_true',
+                    help="Also scale farfield dx for parallel scaling test to keep same aspect ratio")
+parser.add_argument("--structured_dz", action='store_true',
+                    help="Use constant vertical resolution")
+parser.add_argument("--nz", default=100, type=int,
+                    help="Number of vertical layers for structured dz")
+parser.add_argument("--DG0_layers", default=5, type=int,
+                    help="Number of cells per layer for DG0 discretisation of background profiles",
+                    required=False)
+parser.add_argument("--dt_years", default=1e3, type=float,
+                    help="Timestep in years", required=False)
+parser.add_argument("--dt_out_years", default=10e3, type=float,
+                    help="Output timestep in years", required=False)
+parser.add_argument("--Tend", default=110e3, type=float,
+                    help="Simulation end time in years", required=False)
+parser.add_argument("--bulk_shear_ratio", default=100, type=float,
+                    help="Ratio of Bulk modulus / Shear modulus", required=False)
+parser.add_argument("--Tstart", default=0, type=float,
+                    help="Simulation start time in years", required=False)
+parser.add_argument("--short_simulation", action='store_true',
+                    help="Run simulation with short ice history from Weerdesteijn et a. 2023 testcase")
+parser.add_argument("--lateral_viscosity", action='store_true',
+                    help="Include low viscosity cylinder from Weerdesteijn et a. 2023 testcase")
+parser.add_argument("--burgers", action='store_true',
+                    help="Use a burgers rheology")
+parser.add_argument("--viscosity_ratio", default=1, type=float,
+                    help="Ratio of viscosity 2 / viscosity 1", required=False)
+parser.add_argument("--write_output", action='store_true',
+                    help="Write out Paraview VTK files")
+parser.add_argument("--optional_name", default="", type=str,
+                    help="Optional string to add to simulation name for outputs",
+                    required=False)
+parser.add_argument("--output_path", default="./", type=str,
+                    help="Optional output path", required=False)
+parser.add_argument("--gamg_threshold", default=0.01, type=float,
+                    help="Gamg threshold")
+parser.add_argument("--gamg_near_null_rot", action='store_true',
+                    help="Use rotational gamg near nullspace")
 args = parser.parse_args()
 
 name = f"weerdesteijn-3d-iv-burgers{args.burgers}-{args.optional_name}"
@@ -44,28 +88,17 @@ radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 D = radius_values[0]-radius_values[-1]
 L_tilde = L / D
 radius_values_tilde = np.array(radius_values)/D
-layer_height_list = []
 
 if args.structured_dz:
+    layer_heights = []
     dz = 1./args.nz
     for i in range(args.nz):
-        layer_height_list.append(dz)
+        layer_heights.append(dz)
     nz = args.nz
 
 else:
-    DG0_layers = args.DG0_layers
-    nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
-
-    for j in range(len(radius_values_tilde)-1):
-        i = len(radius_values_tilde)-2 - j  # want to start at the bottom
-        r = radius_values_tilde[i]
-        h = r - radius_values_tilde[i+1]
-        nz = nz_layers[i]
-        dz = h / nz
-
-        for i in range(nz):
-            layer_height_list.append(dz)
-    nz = f"{DG0_layers}perlayer"
+    layer_heights = extruded_layer_heights(args.DG0_layers, radius_values_tilde)
+    nz = f"{args.DG0_layers}perlayer"
 
 if args.refined_surface:
     if args.const_aspect:
@@ -78,12 +111,11 @@ else:
 
 mesh = ExtrudedMesh(
     surface_mesh,
-    layers=len(layer_height_list),
-    layer_height=layer_height_list,
+    layers=len(layer_heights),
+    layer_height=layer_heights,
 )
 
 vertical_component = 2
-mesh.coordinates.dat.data[:, vertical_component] -= 1
 
 mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
@@ -130,10 +162,7 @@ log("Number of Displacement DOF:", V.dim())
 log("Number of Internal variable  DOF:", S.dim())
 log("Number of Velocity and internal variable DOF:", V.dim()+S.dim())
 
-# Let's start initialising some parameters. First of all Firedrake has a helpful function to give a symbolic representation of the mesh coordinates.
-
 X = SpatialCoordinate(mesh)
-
 
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
@@ -154,27 +183,27 @@ else:
     shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
     viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
 
-
-def initialise_background_field(field, background_values):
-    for i in range(0, len(background_values)):
-        field.interpolate(conditional(vc(X) >= radius_values_tilde[i+1] - radius_values_tilde[0],
-                          conditional(vc(X) <= radius_values_tilde[i] - radius_values_tilde[0],
-                          background_values[i], field), field))
-
-
 density = Function(DG0, name="density")
-initialise_background_field(density, density_values_tilde)
+initialise_background_field(
+    density, density_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 
 if args.burgers:
     shear_modulus_1 = Function(DG0, name="shear modulus 1")
-    initialise_background_field(shear_modulus_1, shear_modulus_values_1_tilde)
+    initialise_background_field(
+        shear_modulus_1, shear_modulus_values_1_tilde, X, radius_values_tilde,
+        shift=radius_values_tilde[-1])
 
     shear_modulus_2 = Function(DG0, name="shear modulus 2")
-    initialise_background_field(shear_modulus_2, shear_modulus_values_2_tilde)
+    initialise_background_field(
+        shear_modulus_2, shear_modulus_values_2_tilde, X, radius_values_tilde,
+        shift=radius_values_tilde[-1])
     shear_mod_list = [shear_modulus_1, shear_modulus_2]
 else:
     shear_modulus = Function(DG0, name="shear modulus")
-    initialise_background_field(shear_modulus, shear_modulus_values_tilde)
+    initialise_background_field(
+        shear_modulus, shear_modulus_values_tilde, X, radius_values_tilde,
+        shift=radius_values_tilde[-1])
     shear_mod_list = [shear_modulus]
 
 # if Pseudo incompressible set bulk modulus to a constant...
@@ -182,28 +211,35 @@ else:
 
 if args.bulk_shear_ratio > 10:
     bulk_modulus = Constant(1)
-    compressible_buoyancy = False
-    compressible_adv_hyd_pre = False
+    approx = QuasiCompressibleInternalVariableApproximation
 else:
     bulk_modulus = Function(DG0, name="bulk modulus")
     if args.burgers:
-        initialise_background_field(bulk_modulus, 2*shear_modulus_values_1_tilde)
+        initialise_background_field(
+            bulk_modulus, 2*shear_modulus_values_1_tilde, X, radius_values_tilde,
+            shift=radius_values_tilde[-1])
     else:
-        initialise_background_field(bulk_modulus, shear_modulus_values_tilde)
-    compressible_buoyancy = True
-    compressible_adv_hyd_pre = True
+        initialise_background_field(
+            bulk_modulus, shear_modulus_values_tilde, X, radius_values_tilde,
+            shift=radius_values_tilde[-1])
+    approx = CompressibleInternalVariableApproximation
 
 if args.burgers:
     viscosity_1 = Function(DG0, name="viscosity 1")
-    initialise_background_field(viscosity_1, viscosity_values_1_tilde)
-    viscosity_2 = Function(DG0, name="viscosity 2")
     initialise_background_field(viscosity_2, viscosity_values_2_tilde)
+    viscosity_2 = Function(DG0, name="viscosity 2")
+    initialise_background_field(
+        viscosity_2, viscosity_values_2_tilde, X, radius_values_tilde,
+        shift=radius_values_tilde[-1])
 else:
     viscosity = Function(DG0, name="viscosity")
-    initialise_background_field(viscosity, viscosity_values_tilde)
+    initialise_background_field(
+        viscosity, viscosity_values_tilde, X, radius_values_tilde,
+        shift=radius_values_tilde[-1])
 
-# Next let's define the length of our time step. If we want to accurately resolve the elastic response we should choose a
-# timestep lower than the Maxwell time, $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation
+# Next let's define the length of our time step. If we want to accurately resolve the
+# elastic response we should choose a timestep lower than the Maxwell time,
+# $\alpha = \eta / \mu$. The Maxwell time is the time taken for the viscous deformation
 # to 'catch up' with the initial, instantaneous elastic deformation.
 #
 # Let's print out the Maxwell time for each layer
@@ -238,16 +274,6 @@ log(f"Simulation start time: {Tstart} maxwell times")
 log(f"Simulation end time: {Tend} maxwell times")
 log(f"Simulation end time: {float(Tend * characteristic_maxwell_time / year_in_seconds)} years")
 # -
-
-# Next let's setup our ice load. Following the long test from Weeredesteijn et al 2023,
-# during the first 90 thousand years of the simulation the ice sheet will grow to a thickness of 1 km.
-# The ice thickness will rapidly shrink to ice free conditions in the next 10 thousand years. Finally,
-# the simulation will run for a further 10 thousand years to allow the system to relax towards
-# isostatic equilibrium. This is approximately the length of an interglacial-glacial cycle. The
-# width of the ice sheet is 100 km and we have used a tanh function again to smooth out the
-# transition from ice to ice-free regions.
-#
-# As the loading and unloading cycle only varies linearly in time, let's write the ice load as a symbolic expression.
 
 # Initialise ice loading
 rho_ice = 931 / density_scale
@@ -307,14 +333,13 @@ stokes_bcs = {
     boundary.back: {'uy': 0},
 }
 
-# gd = GeodynamicalDiagnostics([u,u], density, boundary.bottom, boundary.top)
-# -
-
 
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields
 # needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_mod_list, viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio, compressible_buoyancy=compressible_buoyancy, compressible_adv_hyd_pre=compressible_adv_hyd_pre)
+approximation = approx(
+    bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_mod_list,
+    viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio)
 
 iterative_parameters = {"mat_type": "matfree",
                         "snes_monitor": None,
@@ -336,12 +361,20 @@ iterative_parameters = {"mat_type": "matfree",
                         }
 
 Z_nullspace = None  # Default: don't add nullspace for now
-Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot, translations=[0, 1, 2])
+Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot,
+                                    translations=[0, 1, 2])
 
-coupled_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs,
-                                        solver_parameters=iterative_parameters,
-                                        nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
-                                        near_nullspace=Z_near_nullspace)
+coupled_solver = InternalVariableSolver(
+    u,
+    approximation,
+    dt=dt,
+    internal_variables=m_list,
+    bcs=stokes_bcs,
+    solver_parameters=iterative_parameters,
+    nullspace=Z_nullspace,
+    transpose_nullspace=Z_nullspace,
+    near_nullspace=Z_near_nullspace,
+)
 
 
 coupled_stage = PETSc.Log.Stage("coupled_solve")
@@ -357,13 +390,13 @@ if OUTPUT:
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max uz_min"
+    "timestep time dt u_rms u_rms_surf ux_max uk_min"
 )
 gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
-checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim-chk.h5"
+checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
 
-displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-compbuoy{compressible_buoyancy}-nondim.dat"
+displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.dat"
 
 # Initial displacement at time zero is zero
 displacement_min_array = [[0.0, 0.0]]
@@ -385,17 +418,19 @@ for timestep in range(1, max_timesteps+1):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uz_min(boundary.top)}")
+                 f"{gd.uk_min(boundary.top)}")
     # Compute diagnostics:
     # output dimensional vertical displacement
     vertical_displacement.interpolate(vc(u)*D)
     bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
     displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
-    displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
+    # Minimum displacement at surface (should be top left corner with
+    # greatest (-ve) deflection due to ice loading
+    displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)
     log("Greatest (-ve) displacement", displacement_min)
-    log("check Greatest (-ve) gd.log", D*gd.uz_min(boundary.top))
+    log("check Greatest (-ve) gd.log", D*gd.uk_min(boundary.top))
     displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
-    displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)  # Minimum displacement at surface (should be top left corner with greatest (-ve) deflection due to ice loading
+    displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)
     log("Greatest (+ve) displacement", displacement_max)
     displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds), displacement_min])
 

@@ -4,10 +4,11 @@ from firedrake.output import VTKFile
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
+    QuasiCompressibleInternalVariableApproximation,
     CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
-    SmallDisplacementViscoelasticApproximation,
-    MaxwellDisplacementApproximation,
+    IncompressibleMaxwellApproximation,
+    MaxwellApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics

@@ -36,7 +36,19 @@ reconstructions = {
         },
         "directory": "1.8Ga_model_optimised_mantle_ref_frame_20240725",
     },
-
+    "Zahirovic 2022": {
+        "plate_files": {
+            "rotation_filenames": [
+                "Zahirovic2022_CombinedRotations_fixed_crossovers.rot",
+            ],
+            "topology_filenames": [
+                "Zahirovic2022_ActiveDeformation.gpmlz",
+                "Zahirovic2022_InactiveDeformation.gpmlz",
+                "Zahirovic2022_PlateBoundaries.gpmlz",
+            ],
+        },
+        "directory": "Zahirovic_2022",
+    },
 }
 
 

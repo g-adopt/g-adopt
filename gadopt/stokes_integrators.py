@@ -19,10 +19,7 @@ from warnings import warn
 import firedrake as fd
 from ufl.core.expr import Expr
 
-from .approximations import (
-    BaseApproximation,
-    SmallDisplacementViscoelasticApproximation,
-)
+from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
@@ -592,7 +589,7 @@ class StokesSolver(StokesSolverBase):
 
 
 class ViscoelasticStokesSolver(StokesSolverBase):
-    """Solves the Stokes system assuming a Maxwell viscoelastic rheology.
+    """Solves the Stokes system assuming an incompressible Maxwell viscoelastic rheology.
 
     Args:
       solution:
@@ -635,7 +632,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
     def __init__(
         self,
         solution: fd.Function,
-        approximation: SmallDisplacementViscoelasticApproximation,
+        approximation: BaseGIAApproximation,
         stress_old: fd.Function,
         displacement: fd.Function,
         /,
@@ -643,6 +640,11 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         dt: float,
         **kwargs,
     ) -> None:
+
+        warn(
+            '''This solver is being phased out of G-ADOPT. We recommend using
+        `InternalVariableSolver` for viscoelastic applications in G-ADOPT.
+        ''')
 
         self.stress_old = stress_old  # Deviatoric stress from previous time step
         self.displacement = displacement  # Total displacement
@@ -658,7 +660,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         # free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
         u, p = self.solution_split
-        normal_stress, _ = self.approximation.free_surface_terms(
+        normal_stress = self.approximation.free_surface_terms(
             vertical_component(u + self.displacement), **params_fs
         )
 
@@ -667,7 +669,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
     def set_equations(self) -> None:
         """Sets up UFL forms for the viscoelastic Stokes equations residual."""
         u, p = self.solution_split
-        stress = self.approximation.stress(u, self.stress_old, self.dt)
+        stress = self.approximation.stress(u, stress_old=self.stress_old, dt=self.dt)
         source = self.approximation.buoyancy(self.displacement) * self.k
         eqs_attrs = [
             {"p": p, "stress": stress, "source": source},
@@ -699,7 +701,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         # Update history stress term to form RHS explicit forcing in the next timestep
         self.stress_old.interpolate(
             self.stress_scale
-            * self.approximation.stress(u_sub, self.stress_old, self.dt)
+            * self.approximation.stress(u_sub, stress_old=self.stress_old, dt=self.dt)
         )
         # Increment total displacement
         self.displacement.interpolate(self.displacement + u_sub)
@@ -713,8 +715,31 @@ class InternalVariableSolver(StokesSolverBase):
         Firedrake function representing the displacement solution
       approximation:
         G-ADOPT approximation defining terms in the system of equations
-      m_list:
+      internal_variables:
         List of internal variables
+      dt:
+        Float quantifying the time step used for time integration
+      additional_forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      quad_degree:
+        Integer denoting the quadrature degree
+      solver_parameters:
+        Dictionary of PETSc solver options or string matching one of the default sets
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
+      J:
+        Firedrake function representing the Jacobian of the mixed Stokes system
+      constant_jacobian:
+        Boolean specifying whether the Jacobian of the system is constant
+      nullspace:
+        A `MixedVectorSpaceBasis` for the operator's kernel
+      transpose_nullspace:
+        A `MixedVectorSpaceBasis` for the kernel of the operator's transpose
+      near_nullspace:
+        A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
+        body modes)
     """
 
     name = "InternalVariable"
@@ -722,14 +747,14 @@ class InternalVariableSolver(StokesSolverBase):
     def __init__(
         self,
         solution: fd.Function,
-        approximation: SmallDisplacementViscoelasticApproximation,
+        approximation: BaseGIAApproximation,
         /,
         *,
-        m_list: list,
+        internal_variables: list,
         dt: float,
         **kwargs,
     ) -> None:
-        self.m_list = m_list
+        self.internal_variables = internal_variables
         # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
         approximation.mu = approximation.viscosity[0]/(approximation.maxwell_times[0]+dt)
         super().__init__(solution, approximation, dt=dt, **kwargs)
@@ -737,12 +762,21 @@ class InternalVariableSolver(StokesSolverBase):
     def set_equations(self) -> None:
         self.strain = self.approximation.deviatoric_strain(self.solution)
 
-        if len(self.m_list) != len(self.approximation.maxwell_times):
-            raise ValueError("Number of internal variables and corresponding Maxwell times must be consistent")
+        if len(self.internal_variables) != len(self.approximation.maxwell_times):
+            raise ValueError(
+                "Number of internal variables and corresponding Maxwell times must be consistent"
+            )
 
-        m_new_list = [self.update_m(m, alpha) for m, alpha in zip(self.m_list, self.approximation.maxwell_times)]
+        internal_variables_update = [
+            self.update_m(m, alpha)
+            for m, alpha in zip(
+                self.internal_variables, self.approximation.maxwell_times
+            )
+        ]
 
-        stress = self.approximation.stress(self.solution, m_new_list)
+        stress = self.approximation.stress(
+            self.solution, internal_variables=internal_variables_update
+        )
         source = self.approximation.buoyancy(self.solution) * self.k
 
         eqs_attrs = {"stress": stress, "source": source}
@@ -765,11 +799,11 @@ class InternalVariableSolver(StokesSolverBase):
         normal_stress = params_fs.get("normal_stress", 0.0)
         # Add free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
-        normal_stress += self.approximation.hydrostatic_prestress_advection(
+        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
             vertical_component(self.solution)
         )
 
-        return normal_stress
+        return combined_normal_stress
 
     def update_m(
         self, m: fd.Function, alpha: fd.Function | Expr
@@ -792,7 +826,7 @@ class InternalVariableSolver(StokesSolverBase):
     def solve(self) -> None:
         super().solve()
         # Update internal variable term for using as a RHS explicit forcing in the next timestep
-        for m, alpha in zip(self.m_list, self.approximation.maxwell_times):
+        for m, alpha in zip(self.internal_variables, self.approximation.maxwell_times):
             m.interpolate(self.update_m(m, alpha))
 
 
@@ -898,10 +932,10 @@ class BoundaryNormalStressSolver(SolverConfigurationMixin):
                 "BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element."
             )
             Q = fd.FunctionSpace(
-                self.mesh, "Lagrange", self.p.function_space().ufl_element().degree()
+                self.p.function_space().mesh(), "Lagrange", self.p.function_space().ufl_element().degree()
             )
         else:
-            Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
+            Q = fd.FunctionSpace(self.p.function_space().mesh(), self.p.ufl_element())
 
         self.force = fd.Function(Q, name=f"force_{self.subdomain_id}")
 

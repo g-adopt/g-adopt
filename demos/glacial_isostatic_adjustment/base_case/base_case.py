@@ -4,7 +4,8 @@
 # In this tutorial, we examine an idealised 2-D loading problem in a square box.
 # Here we will focus purely on viscoelastic deformation by a surface load, i.e.
 # a synthetic ice sheet! The setup is similar to a 2-D version of the test case
-# presented in Weerdesteijn et al. (2023), but we include compressiblity.
+# presented in [Weerdesteijn et al. (2023)](https://doi.org/10.1029/2022GC010813),
+# but we include compressibility.
 #
 # You may already have seen how G-ADOPT can be applied to mantle convection
 # problems in our other tutorials. Generally the setup of the G-ADOPT model
@@ -15,16 +16,83 @@
 # -------------------
 # Let's start by reviewing some equations! Similar to mantle convection, the
 # governing equations for viscoelastic loading are derived from the
-# conservation laws of mass and momentum.
+# conservation laws of mass and momentum. The full GIA equations include
+# rotational and gravitational effects arising from changes in the surface
+# load as water is redistributed between ice and ocean, which is governed
+# by the sea-level equation. For now let's neglect those terms, and
+# concentrate on viscoelastic deformation.
 #
-# The non-dimensional mass conservation equation is given by
+# We start by assuming that the mantle is in a state of isostatic equilibrium
+# before we apply any load at the Earth's surface. This allows us to split
+# fields into a time-independent background component and a small
+# time-dependent perturbation. For example, density can be written as
+# $\rho = \rho_0 + \rho_1$, where $\rho_0$ is the background state and
+# $\rho_1$ is the perturbation. Similarly, stress can be written as
+# $\boldsymbol{\sigma} = \boldsymbol{\sigma}_0 + \boldsymbol{\sigma}_1^E$,
+# where the superscript $E$ indicates an Eulerian perturbation.
+#
+# The background state of hydrostatic balance can then be written in
+# nondimensional form as
 #
 # \begin{equation}
-#     \partial_t \rho + \nabla \cdot (\rho\, \boldsymbol{v}) = 0,
+# \nabla \cdot \boldsymbol{\sigma}_0 = B_{\mu}\, \rho_0\, g\,\boldsymbol{\hat{e}}_k.
 # \end{equation}
 #
-# where $\boldsymbol{v}$ and $\rho$ denote the non-dimensional velocity and
-# density, respectively. In non-dimensionalising the velocity, we have used the
+# where $ B_{\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\mu}}$ is a non-dimensional
+# number describing the ratio of buoyancy to elastic shear strength,
+# $\bar{\rho}$ is a characteristic density scale, $g$ is
+# the non-dimensional gravity relative to a characteristic gravity scale, $\bar{g}$,
+# $L$ is a characteristic length scale and $\bar{\mu}$ is a characteristic shear
+# modulus. Note that $\boldsymbol{\hat{e}}_k$ is aligned with either
+# the $z$-axis or radial direction in Cartesian or spherical coordinates,
+# respectively.
+#
+#
+# Given the size and timescale of loads involved during GIA, the load induced
+# deformation, $\textbf{u}$, is small typically relative to the depth of the
+# mantle. As such, we can simplify our problem by linearising the equations of
+# motion and neglecting higher order terms that involve products of small
+# perturbations. We can also ignore inertial terms which will be very small.
+# Making these assumptions yields the following non-dimensional linearised
+# form of the momentum equation
+#
+# \begin{equation}
+#    \textbf{0} = \nabla \cdot \boldsymbol{\sigma}_1^L -  B_{\mu} \nabla \left( \rho_0 g u_k\right) -  B_{\mu} \rho_1 g \, \boldsymbol{\hat{e}}_k.
+# \end{equation}
+#
+# where $\boldsymbol{\sigma}_1^L$ is the incremental Lagrangian stress (see
+# Eq. 3.16 of Dahlen and Tromp, 1998) and $u_k$ is the component of
+# non-dimensional displacement in the $\boldsymbol{\hat{e}}_k$ direction.
+#
+# We write the momentum equation using $\boldsymbol{\sigma}_1^L$ because
+# viscoelastic constitutive relations that link stress to strain (and their
+# time derivatives) are fundamentally defined in a Lagrangian framework.
+# Substituting $\boldsymbol{\sigma}_1^L$ for $\boldsymbol{\sigma}_1^E$ gives
+# rise to the second term in the momentum equation above, referred to as the
+# *advection of hydrostatic prestress*. This term accounts for the change in
+# stress due to displacement of material through the background stress gradient.
+# The advection of hydrostatic prestress can be important for very long
+# wavelength loads. Cathles (1975) estimates that the term becomes leading
+# order when the wavelength is greater than 30,000 km for typical Earth
+# parameters, i.e. only when the wavelength is the same order of magnitude
+# as the circumference of the Earth. For the viscoelastic problem, however,
+# this term is crucial because it acts as a restoring force to isostatic
+# equilibrium. If the Laplace transform methods do not include this term
+# a load placed on the surface of the Earth will keep sinking
+# ([Wu and Peltier, 1982](https://doi.org/10.1111/j.1365-246X.1982.tb04976.x))!
+#
+# We obtain the non-dimensional linearised density perturbation, $\rho_1$,
+# by linearising the conservation of mass equation
+#
+# \begin{equation}
+#     \partial_t \rho_1 + \nabla \cdot (\rho_0\, \boldsymbol{v}) = 0,
+# \end{equation}
+#
+# where $\boldsymbol{v}$ is the velocity and we have neglected the
+# $\nabla \cdot (\rho_1\, \boldsymbol{v})$ term, by assuming that
+# perturbations in density are small compared with background
+# values.
+# In non-dimensionalising the velocity, we have used the
 # scale $\frac{L}{\bar{\alpha}}$, where $L$ is a characteristic length scale
 # and $\bar{\alpha}$ is a characteristic Maxwell time that describes the
 # transition between dominantly elastic and viscous behaviour
@@ -36,112 +104,55 @@
 # where $\bar{\eta}$ and $\bar{\mu}$ are characteristic dynamic viscosity and
 # shear modulus values respectively.
 #
-# The density field is decomposed into a time-independent background component,
-# $\rho_0$, and a small time-dependent perturbation, $\rho_1$, such
-# that $\rho = \rho_0 + \rho_1$. Substituting this decomposition yields the
-# linearised mass conservation equation
 #
+# Integrating the conservation of mass equation through time
+# gives
 # \begin{equation}
-#     \partial_t \rho_1 + \nabla \cdot (\rho_0\, \boldsymbol{v}) = 0,
+#     \rho_1 = - \nabla \cdot \left( \rho_0\, \boldsymbol{u} \right)
 # \end{equation}
-#
-# where we have neglected the $\nabla \cdot (\rho_1\, \boldsymbol{v})$ term,
-# by assuming that perturbations in density are small compared with background
-# values. Integrating this equation in time and using the relation
-# $\partial_t \boldsymbol{u} = \boldsymbol{v}$, where $\boldsymbol{u}$ is the
-# non-dimensional displacement vector, we obtain the following expression for
-# the density perturbation
-#
-# \begin{equation}
-#     \rho_1(t) = - \nabla \cdot \left( \rho_0\, \boldsymbol{u}(t) \right) = - \rho_0 \nabla \cdot \boldsymbol{u}(t) - \boldsymbol{u}(t) \cdot  \nabla \rho_0 ,
-# \end{equation}
-#
 # assuming a vanishing initial displacement, $\boldsymbol{u}(t=0) = \textbf{0}$.
 # The density perturbation $\rho_1$ is often referred to as the
-# *Eulerian density pertubation* by the GIA community.
+# *Eulerian density perturbation* by the GIA community.
 #
-# The full GIA equations include rotational and gravitational effects arising
-# from changes in the surface load as water is redistributed between ice and
-# ocean, which is governed by the sea-level equation.
-# Neglecting those terms for now, alongside inertial terms, yields the
-# following non-dimensional form of the momentum equation
-#
-# \begin{equation}
-#     \textbf{0} = \nabla \cdot \boldsymbol{\sigma} - B_{\mu}\, (\rho_0 + \rho_1)\,g\,\boldsymbol{\hat{e}}_{k} ,
-# \end{equation}
-#
-# where $\boldsymbol{\sigma}$ is the non-dimensional stress tensor, $g$ is
-# the non-dimensional gravity, and
-# $ B_{\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\mu}}$ is a non-dimensional
-# number describing the ratio of buoyancy to elastic shear strength. Note that
-# $\boldsymbol{\hat{e}}_k$ is aligned with either the $z$-axis or radial
-# direction in Cartesian or spherical coordinates, respectively.
 
-# Linearisation
-# -------------
-#
-# To further simplify the momentum equation, we linearise perturbations in the
-# stress field by expressing the total stress as a sum of a time-invariant
-# hydrostatic background component and a perturbation:
-# $\boldsymbol{\sigma} = \boldsymbol{\sigma}_0 + \boldsymbol{\sigma}_1^E$,
-# where the superscript $E$ indicates an Eulerian perturbation. Since
-# viscoelastic constitutive relations that link stress to strain (and their
-# time derivatives) are fundamentally defined in a Lagrangian framework, we
-# also need to transition from an Eulerian to a Lagrangian description of the
-# stress field. To capture the material response in a Lagrangian framework,
-# the perturbation must account for the change in stress due to displacement of
-# material through the background stress gradient. To first order, the
-# incremental Lagrangian stress is
-# $\boldsymbol{\sigma}_1^L = \boldsymbol{\sigma}_1^E + \boldsymbol{u} \cdot \nabla \boldsymbol{\sigma}_0$
-# see Eq. 3.16 of Dahlen and Tromp (1998). Substituting, we obtain
+# Boundary Conditions
+# --------------------
+# To complete the problem specification, we must also define the boundary
+# conditions. At the top of the domain (i.e.,  Earth's surface), normal stress
+# is balanced by the applied surface load such that
 #
 # \begin{equation}
-#     \textbf{0} = \nabla \cdot (\boldsymbol{\sigma}_0 + \boldsymbol{\sigma}_1^L - \boldsymbol{u} \cdot \nabla \boldsymbol{\sigma}_0) - B_{\mu}\,(\rho_0 + \rho_1)\,g\, \boldsymbol{\hat{e}}_k.
+#     \hat{\boldsymbol{n}} \cdot \boldsymbol{\sigma}_1^L = - B_{\mu} \, \rho_\mathrm{load} \, g \, h_\mathrm{load} \, \boldsymbol{\hat{e}}_k,
 # \end{equation}
 #
-# We assume that time-invariant components are in equilibrium, such that
-# the background stress field satisfies a hydrostatic balance with the
-# background density
+# where $\rho_\mathrm{load}$ and $h_\mathrm{load}$ are the non-dimensional
+# density and vertical thickness of the surface load, and
+# $\hat{\boldsymbol{n}}$ is the outward unit normal vector to the boundary.
+# For this tutorial we impose a no-normal-displacement condition at side walls
+# and the base of the domain (i.e., core–mantle boundary)
 #
 # \begin{equation}
-# \nabla \cdot \boldsymbol{\sigma}_0 = B_{\mu}\, \rho_0\, g\,\boldsymbol{\hat{e}}_k.
+#     \boldsymbol{u} \cdot \hat{\boldsymbol{n}} = 0.
 # \end{equation}
 #
-# Moreover, assuming that the background density $\rho_0$ varies only in the
-# radial direction, the advection of hydrostatic pre-stress simplifies to
+# Finally, we assume continuity of both displacement and traction across all
+# internal boundaries, such that
+# \begin{align}
+#     [\boldsymbol{u}]^+_- &= \boldsymbol{0}, \\
+#     [\hat{\boldsymbol{n}} \cdot \boldsymbol{\sigma}_{L1}]^+_- &= \boldsymbol{0},
+# \end{align}
 #
-# \begin{equation}
-# \boldsymbol{u} \cdot \nabla \boldsymbol{\sigma}_0 = B_{\mu}\, \rho_0\, g\,u_k\, \boldsymbol{I},
-# \end{equation}
-#
-# where $u_k$ is the component of non-dimensional displacement in the
-# $\boldsymbol{\hat{e}}_k$ direction and $\boldsymbol{I}$ is the identity
-# tensor. Substituting these expressions  leads to the final linearised form of
-# the momentum equation
-#
-# \begin{equation}
-#    \textbf{0} = \nabla \cdot \boldsymbol{\sigma}_1^L -  B_{\mu} \nabla \left( \rho_0 g u_k\right) -  B_{\mu} \rho_1 g \, \boldsymbol{\hat{e}}_k.
-# \end{equation}
-#
-# This advection of prestress can be important for very long wavelength loads.
-# Cathles (1975) estimates that the term becomes leading order when the
-# wavelength is greater than 30,000 km for typical Earth parameters, i.e. only
-# when the wavelength is the same order of magnitude as the circumference of
-# the Earth.
-#
-# For the viscoelastic problem, however, this term is crucial because it acts
-# as a restoring force to isostatic equilibrium. If the Laplace transform
-# methods do not include this term a load placed on the surface of the Earth
-# will keep sinking (Wu and Peltier, 1982)!
-#
+# where $[\cdot]^+_-$ denotes the jump in the associated property across an
+# interface.
 
 # Viscoelastic Rheology
 # ----------------
 #
 # The GIA community generally model the mantle as a Maxwell solid. The
 # conceptual picture is a spring and a dashpot connected together in series
-# (Ranalli, 1995). For this viscoelastic model the elastic and viscous stresses
-# are the same but the total displacements combine.
+# ([Ranalli, 1995](https://link.springer.com/book/9780412546709)).
+# For this viscoelastic model the elastic and viscous stresses are the same
+# but the total displacements combine.
 #
 #
 # We follow the internal variable formulation adopted by Al-Attar and
@@ -198,140 +209,6 @@
 #
 #
 
-# Boundary Conditions
-# --------------------
-# To complete the problem specification, we must also define the boundary
-# conditions. At the top of the domain (i.e.,  Earth's surface), normal stress
-# is balanced by the applied surface load such that
-#
-# \begin{equation}
-#     \hat{\boldsymbol{n}} \cdot \boldsymbol{\sigma}_1^L = - B_{\mu} \, \rho_\mathrm{load} \, g \, h_\mathrm{load} \, \boldsymbol{\hat{e}}_k,
-# \end{equation}
-#
-# where $\rho_\mathrm{load}$ and $h_\mathrm{load}$ are the non-dimensional
-# density and vertical thickness of the surface load, and
-# $\hat{\boldsymbol{n}}$ is the outward unit normal vector to the boundary.
-# For this tutorial we impose a no-normal-displacement condition at side walls
-# and the base of the domain (i.e., core–mantle boundary)
-#
-# \begin{equation}
-#     \boldsymbol{u} \cdot \hat{\boldsymbol{n}} = 0.
-# \end{equation}
-#
-# Finally, we assume continuity of both displacement and traction across all
-# internal boundaries, such that
-# \begin{align}
-#     [\boldsymbol{u}]^+_- &= \boldsymbol{0}, \\
-#     [\hat{\boldsymbol{n}} \cdot \boldsymbol{\sigma}_{L1}]^+_- &= \boldsymbol{0},
-# \end{align}
-#
-# where $[\cdot]^+_-$ denotes the jump in the associated property across an
-# interface.
-
-# Weak form
-# ----------
-# To derive the finite-element discretisation of these governing equations, we
-# first translate them into their weak form. By selecting appropriate function
-# spaces that contain both solution fields and test functions, the weak form
-# can be obtained by multiplying the equations by their test functions and
-# integrating over the domain, $\Omega$. For conservation of momentum, we use
-# the (vector) test function, $\boldsymbol{\phi}$, to give
-# \begin{equation}
-#    0 =  \int_\Omega \boldsymbol{\phi} \cdot \left(\nabla \cdot \boldsymbol{\sigma}_1^L -  B_{\mu} \nabla \left( \rho_0 g u_k\right) -  B_{\mu} \rho_1 g \, \boldsymbol{\hat{e}}_k \right) dx ,
-# \end{equation}
-#
-# which we then simplify by multiplying both sides by -1 and splitting into
-# three components
-# \begin{equation}
-#     0 = S + H + D,
-# \end{equation}
-# where
-# \begin{equation}
-#     S  = \int_\Omega -\boldsymbol{\phi} \cdot \nabla \cdot \boldsymbol{\sigma}_1^L  \, dx,
-# \end{equation}
-# \begin{equation}
-#     H  = \int_\Omega \boldsymbol{\phi} \cdot B_{\mu} \nabla \left( \rho_0 g u_k\right) \, dx,
-# \end{equation}
-# and
-# \begin{equation}
-#     D  = \int_\Omega \boldsymbol{\phi} \cdot  B_{\mu} \rho_1 g \, \boldsymbol{\hat{e}}_k  \, dx .
-# \end{equation}
-
-# Spatial Discretisation
-# ----------------------
-#
-# A this stage, it becomes necessary to define the finite element spaces that
-# will be used for spatial discretisation. Generally, for each component of
-# displacement, we use $Q2$ finite elements on hexahedral meshes (i.e., the
-# piecewise continuous tri-quadratic tensor product of quadratic continuous
-# polynomials in each direction). For the deviatoric strain tensor (and hence
-# the internal variable), since it is proportional to the gradient of
-# displacement, we choose the discontinuous $DG1$ space (i.e., linear
-# variations within each finite element cell and discontinuous jumps between
-# cells) for each component. For purely radial variations in density, viscosity
-# and shear modulus, we choose the $DG0$ space (i.e., constant within a finite
-# element cell but discontinuous between cells), while for laterally varying
-# viscosity fields, we again select $DG1$ finite element functions.
-#
-# Once these spaces have been chosen, we can integrate the divergence of the
-# incremental Lagrangian stress term by parts within each element, $K_n$, to
-# introduce weak boundary conditions and to move derivatives from the trial
-# function to the test function according to
-#
-# \begin{equation}
-#     S  = \sum_n \left(\int_{K_n} \nabla \boldsymbol{\phi} : \boldsymbol{\sigma}_1^L  \, dx - \int_{\partial K_n}  \boldsymbol{\phi} \cdot \left( \hat{\boldsymbol{n}} \cdot \boldsymbol{\sigma}_1^L  \right) \, ds \right) ,
-# \end{equation}
-#
-# where $\hat{\boldsymbol{n}}$ is the outward pointing normal vector to an
-# element edge, represented by $\partial K_n$. Given that test functions are
-# continuous across cell edges and we assume that there is no jump in stress
-# across material discontinuities this simplifies to
-#
-# \begin{equation}
-#     S  = \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( \kappa \nabla \cdot \boldsymbol{u}\, \boldsymbol{I}  + 2 \mu_0 \boldsymbol{d}(\boldsymbol{u})   - 2 \sum_i \mu_i \boldsymbol{m}_i(\boldsymbol{u})   \right) \, dx
-#      + \int_{\partial \Omega_\textrm{top}}  \boldsymbol{\phi} \cdot \left( B_{\mu} \, \rho_\mathrm{load} \, g \, h_\mathrm{load}  \hat{\boldsymbol{n}} \right) \, ds ,
-# \end{equation}
-#
-# where we have substituted the constitutive relation and the boundary
-# condition at the top of the domain, $\partial \Omega_\textrm{top}$. For
-# bottom (and side) boundaries where we specify no normal displacement, we
-# utilise two different strategies depending on domain geometry. In Cartesian
-# domains, we apply the boundary condition strongly by modifying the discrete
-# test and trial spaces, such that the surface integral vanishes. For spherical
-# domains, we implement that condition weakly using the Symmetric Interior
-# Penalty Galerkin method.
-#
-# The same approach is taken for advection of the hydrostatic pre-stress term,
-# initially integrating by parts to give
-#
-# \begin{equation}
-#     H  = \sum_i \left(\int_{K_i} -\nabla \cdot \boldsymbol{\phi}~   B_{\mu} \rho_0 g u_k  \, dx  + \int_{\partial K_i} \boldsymbol{\phi} \cdot \hat{\boldsymbol{n}}  B_{\mu} \rho_0 g u_k \, ds  \right).
-# \end{equation}
-#
-# Since our $DG0$ discretisation allows density and gravity discontinuities,
-# we can no longer assume that integrating along both sides of interior
-# boundaries in the mesh will cancel out. As such, we have to write an
-# additional term accounting for the 'jumps' in material properties
-# along interior boundaries (also referred to as interior facets).
-#
-# The hydrostatic pre-stress term now becomes
-#
-# \begin{equation}
-#     H  = -\int_{\Omega} \nabla \cdot \boldsymbol{\phi} B_{\mu} \rho_0 g u_k \, dx  + \int_{\Gamma} \boldsymbol{\phi} \cdot B_{\mu} u_k [[\rho_0 g \hat{\boldsymbol{n}}]]  \, ds  + \int_{\partial \Omega_\textrm{top}} \boldsymbol{\phi} \cdot \hat{\boldsymbol{n}} B_{\mu} \rho_0 g u_k \, ds  ,
-# \end{equation}
-#
-# where the jump term along internal boundaries, $\Gamma$, is given by
-# \begin{equation}
-#     [[\rho_0 g \hat{\boldsymbol{n}}]] = \hat{\boldsymbol{n}}^+ \rho_0^+ g^+ + \hat{\boldsymbol{n}}^- \rho_0^- g^-.
-# \end{equation}
-#
-# The (arbitrary) labels $+$ and $-$ mark contributions from either side of
-# the cell edge and  $\hat{\boldsymbol{n}}^+ = -\hat{\boldsymbol{n}}^-$. Note
-# that the interior facet term is only non zero across layers with material
-# density and gravity jumps and is similar to the Winkler foundations as
-# described in Wu (2004). The last term in is similar to a free surface
-# feedback term encountered in mantle convection.
-
 # Time discretisation
 # -------------------
 #
@@ -353,27 +230,65 @@
 # where the superscript $n$ refers to the previous timestep, $n+1$ is the next
 # timestep, and $\Delta t$ is the timestep duration.
 #
-# We then substitute this result into the stress divergence term, yielding
+
+# Weak form and spatial discretisation
+# ----------
+# To derive the finite-element discretisation of these governing equations, we
+# first translate them into their weak form. By selecting appropriate function
+# spaces that contain both solution fields and test functions, the weak form
+# can be obtained by multiplying the equations by their test functions and
+# integrating over the domain, $\Omega$. For conservation of momentum, we use
+# the (vector) test function, $\boldsymbol{\phi}$, to give
 # \begin{equation}
-#     S  = \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( \kappa \nabla \cdot \boldsymbol{u}^{n+1}\, \boldsymbol{I}  +  2 \sum_i \dfrac{\eta_i}{\alpha_i + \Delta t} \left(\boldsymbol{d}(\boldsymbol{u}^{n+1}) - \boldsymbol{m}_i^n \right)  \right) \, dx
-#      + \int_{\partial \Omega_\textrm{top}}  \boldsymbol{\phi} \cdot \left( B_{\mu} \, \rho_\mathrm{load} \, g\, h_\mathrm{load}  \hat{\boldsymbol{n}} \right) \, ds
+#    0 =  \int_\Omega \boldsymbol{\phi} \cdot \left(\nabla \cdot \boldsymbol{\sigma}_1^L -  B_{\mu} \nabla \left( \rho_0 g u_k\right) -  B_{\mu} \rho_1 g \, \boldsymbol{\hat{e}}_k \right) dx .
 # \end{equation}
-# where $\eta_i$ is the non-dimensional viscosity of the the internal variable
-# $\boldsymbol{m}_i$. Recombining the final system of equations is
 #
-# \begin{multline}
+# At this stage, it becomes necessary to define the finite element spaces that
+# will be used for spatial discretisation. Generally, for each component of
+# displacement, we use $Q2$ finite elements on hexahedral meshes (i.e., the
+# piecewise continuous tri-quadratic tensor product of quadratic continuous
+# polynomials in each direction). For the deviatoric strain tensor (and hence
+# the internal variable), since it is proportional to the gradient of
+# displacement, we choose the discontinuous $DG1$ space (i.e., linear
+# variations within each finite element cell and discontinuous jumps between
+# cells) for each component. For purely radial variations in density, viscosity
+# and shear modulus, we choose the $DG0$ space (i.e., constant within a finite
+# element cell but discontinuous between cells), while for laterally varying
+# viscosity fields, we again select $DG1$ finite element functions.
+# Once these spaces have been chosen, we can integrate various terms by parts
+# within each element to introduce weak boundary conditions and to move
+# derivatives from the trial function to the test function.
+#
+# The final system of equations is
+#
+# \begin{align}
 #     \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( \kappa \nabla \cdot \boldsymbol{u}^{n+1}\, \boldsymbol{I}  +  2 \sum_i \dfrac{\eta_i}{\alpha_i + \Delta t} \boldsymbol{d}(\boldsymbol{u}^{n+1})  \right) \, dx  \\
 #     - \int_{\Omega} \nabla \cdot \boldsymbol{\phi} B_{\mu} \rho_0 g u_k^{n+1} \, dx  + \int_{\Gamma} \boldsymbol{\phi} \cdot B_{\mu} u_k^{n+1} [[\rho_0 g \hat{\boldsymbol{n}}]]  \, ds  + \int_{\partial \Omega_\textrm{top}} \boldsymbol{\phi} \cdot \hat{\boldsymbol{n}} B_{\mu} \rho_0 g u_k^{n+1} \, ds \\
 #     - \int_\Omega \boldsymbol{\phi} \cdot  B_{\mu}  g \left(\boldsymbol{u}^{n+1} \cdot \nabla \rho_0 +  \rho_0\, \nabla  \cdot \boldsymbol{u}^{n+1} \right) \, \boldsymbol{\hat{e}}_k  \, dx \\
-#     = - \int_{\partial \Omega_\textrm{top}}  \boldsymbol{\phi} \cdot \left( B_{\mu} \, \rho_\mathrm{load} \, g\, h_\mathrm{load}  \hat{\boldsymbol{n}} \right) \, ds + \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( 2 \sum_i \dfrac{\eta_i}{\alpha_i + \Delta t}  \boldsymbol{m}_i^n  \right) \, dx ,
-# \end{multline}
+#     = - \int_{\partial \Omega_\textrm{top}}  \boldsymbol{\phi} \cdot \left( B_{\mu} \, \rho_\mathrm{load} \, g\, h_\mathrm{load}  \hat{\boldsymbol{n}} \right) \, ds + \int_{\Omega}  \nabla \boldsymbol{\phi} : \left( 2 \sum_i \dfrac{\eta_i}{\alpha_i + \Delta t}  \boldsymbol{m}_i^n  \right) \, dx .
+# \end{align}
 #
-# where implicit terms involving the unknown displacement at the next time step,
+# Briefly, the first line corresponds to the stress term after integration
+# by parts. The second corresponds to the advection of hydrostatic prestress
+# term. Since our $DG0$ discretisation allows density and gravity
+# discontinuities, we can no longer assume that integrating along both
+# sides of interior boundaries in the mesh will cancel out. As such, we
+# have to write an additional term accounting for the 'jumps' in material
+# properties along interior boundaries, $\Gamma$, denoted by the square
+# brackets. The third line corresponds to the buoyancy term involving
+# $\rho_1$ and the final line includes the surface load boundary
+# condition at the top of the domain, $\partial \Omega_\textrm{top}$
+# and the contributibution of the internal variable from the previous
+# timestep.
+#
+# Implicit terms involving the unknown displacement at the next time step,
 #  $\boldsymbol{u}^{n+1}$, have been collected on the left-hand side and
 # explicit terms known from the current time step are on the right-hand side.
 # Finding the new values of $\boldsymbol{u}^{n+1}$ requires solving a linear
 # system at each timestep, which is solved in Firedrake through PETSc's
-# comprehensive linear algebra library.
+# comprehensive linear algebra library. For more details on the numerical
+# discretisation please refer to Scott et al. (2025).
+#
 
 # This example
 # -------------
@@ -384,7 +299,8 @@
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
-from gadopt.utility import vertical_component as vc
+from gadopt.utility import extruded_layer_heights
+from gadopt.utility import initialise_background_field
 
 # Next we need to create a mesh of the mantle region we want to simulate. The
 # Weerdesteijn test case is a 3D box 1500 km wide horizontally and 2891 km deep.
@@ -414,31 +330,17 @@ radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
 D = radius_values[0]-radius_values[-1]
 L_tilde = L / D
 radius_values_tilde = np.array(radius_values)/D
-layer_height_list = []
-
-DG0_layers = 5
-nz_layers = [DG0_layers, DG0_layers, DG0_layers, DG0_layers]
-for j in range(len(radius_values_tilde)-1):
-    i = len(radius_values_tilde)-2 - j  # want to start at the bottom
-    r = radius_values_tilde[i]
-    h = r - radius_values_tilde[i+1]
-    nz = nz_layers[i]
-    dz = h / nz
-
-    for i in range(nz):
-        layer_height_list.append(dz)
-
 nx = 60
+
 surface_mesh = IntervalMesh(nx, L_tilde)
+
+layer_heights = extruded_layer_heights(5, radius_values_tilde)
 
 mesh = ExtrudedMesh(
     surface_mesh,
-    layers=len(layer_height_list),
-    layer_height=layer_height_list,
+    layers=len(layer_heights),
+    layer_height=layer_heights,
 )
-
-# Shift top of domain to z = 0
-mesh.coordinates.dat.data[:, 1] -= 1
 
 mesh.cartesian = True
 
@@ -486,7 +388,7 @@ R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 u = Function(V, name="displacement")  # field to hold our displacement solution
 
 m = Function(S, name="Internal variable")  # Lagged internal variable at previous timestep
-m_list = [m]
+internal_variables = [m]
 # -
 
 # We can output function space information, for example the number of degrees
@@ -505,7 +407,11 @@ X = SpatialCoordinate(mesh)
 
 # Now we can set up the background profiles for the material properties.
 # In this case the density, shear modulus and viscosity only vary in the vertical
-# direction. The layer properties specified are from spada et al. (2011).
+# direction. The layer properties specified are from
+# [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x).
+# We set the bulk to shear ratio to 2, which approximately represents mantle
+# conditions. In more realistic scenarios we could initialise the elastic
+# properties via PREM.
 
 # +
 density_values = [3037, 3438, 3871, 4978]
@@ -523,39 +429,40 @@ B_mu = Constant(density_scale * D * gravity_scale / shear_modulus_scale)
 density_values_tilde = np.array(density_values)/density_scale
 shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
 viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
-bulk_modulus_values_tilde = 2 * shear_modulus_values_tilde
-
-
-def initialise_background_field(field, background_values):
-    for i in range(0, len(background_values)):
-        field.interpolate(conditional(vc(X) >= radius_values_tilde[i+1] - radius_values_tilde[0],
-                          conditional(vc(X) <= radius_values_tilde[i] - radius_values_tilde[0],
-                          background_values[i], field), field))
-
+bulk_shear_ratio = 2
+bulk_modulus_values_tilde = shear_modulus_values_tilde
 
 density = Function(DG0, name="density")
-initialise_background_field(density, density_values_tilde)
+initialise_background_field(
+    density, density_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 
 shear_modulus = Function(DG0, name="shear modulus")
-initialise_background_field(shear_modulus, shear_modulus_values_tilde)
+initialise_background_field(
+    shear_modulus, shear_modulus_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 
 bulk_modulus = Function(DG0, name="bulk modulus")
-initialise_background_field(bulk_modulus, bulk_modulus_values_tilde)
+initialise_background_field(
+    bulk_modulus, bulk_modulus_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 
 viscosity = Function(DG0, name="viscosity")
-initialise_background_field(viscosity, viscosity_values_tilde)
+initialise_background_field(
+    viscosity, viscosity_values_tilde, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
 # -
 
-# We can also plot the viscosity field using *PyVista*.
+# We can also plot the density field using *PyVista*.
 
 # + tags=["active-ipynb"]
-# VTKFile("viscosity.pvd").write(viscosity)
-# visc_data = pv.read("viscosity/viscosity_0.vtu")
+# VTKFile("density.pvd").write(density)
+# dens_data = pv.read("density/density_0.vtu")
+# dens_data['density'] *= density_scale
 # plotter = pv.Plotter(notebook=True)
-# plotter.add_mesh(visc_data,
-#                  log_scale=True,
+# plotter.add_mesh(dens_data,
 #                  scalar_bar_args={
-#                      "title": 'log10(Viscosity)',
+#                      "title": 'Density (kg / m^3)',
 #                      "position_x": 0.8,
 #                      "position_y": 0.2,
 #                      "vertical": True,
@@ -613,7 +520,7 @@ log(f"Simulation start time: {Tstart} years")
 # -
 
 # Next let's setup our ice load. Following the long test from Weeredesteijn et
-# al 2023, during the first 90 thousand years of the simulation the ice sheet
+# al. (2023), during the first 90 thousand years of the simulation the ice sheet
 # will grow to a thickness of 1 km. The ice thickness will rapidly shrink to ice
 #  free conditions in the next 10 thousand years. Finally, the simulation will
 # run for a further 10 thousand years to allow the system to relax towards
@@ -662,19 +569,20 @@ stokes_bcs = {
 # We also need to specify a G-ADOPT approximation which sets up the various
 # parameters and fields needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(
+approximation = MaxwellApproximation(
     bulk_modulus=bulk_modulus,
     density=density,
     shear_modulus=shear_modulus,
     viscosity=viscosity,
-    B_mu=B_mu)
+    B_mu=B_mu,
+    bulk_shear_ratio=bulk_shear_ratio)
 
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution fields `u` and
 # various fields needed for the solve along with the approximation, timestep,
 # list of internal variables and boundary conditions.
 
-stokes_solver = InternalVariableSolver(u, approximation, dt=dt, m_list=m_list, bcs=stokes_bcs)
+stokes_solver = InternalVariableSolver(u, approximation, dt=dt, internal_variables=internal_variables, bcs=stokes_bcs)
 
 # We next set up our output, in VTK format. This format can be read by programs
 # like pyvista and Paraview. We also create a function to store the velocity
@@ -687,11 +595,11 @@ disp_old = Function(u, name="old_disp").assign(u)
 
 # Create output file
 output_file = VTKFile("output.pvd")
-output_file.write(u, *m_list, velocity)
+output_file.write(u, *internal_variables, velocity)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max"
+    "timestep time dt u_rms u_rms_surf ux_max uk_min"
 )
 gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
@@ -702,7 +610,7 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 # the `ramp` parameter. At each step we call `solve` to calculate the
 # incremental displacement and pressure fields. This will update the
 # displacement at the surface and stress values accounting for the time
-# dependent Maxwell consitutive equation.
+# dependent Maxwell constitutive equation.
 
 # +
 for timestep in range(max_timesteps):
@@ -710,18 +618,19 @@ for timestep in range(max_timesteps):
     stokes_solver.solve()
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(dt)} {gd.u_rms()} "
-                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)}")
+    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+                 f"{gd.uk_min(boundary.top)} ")
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)
         velocity.interpolate((u - disp_old)/dt)
         disp_old.assign(u)
-        output_file.write(u, *m_list, velocity)
+        output_file.write(u, *internal_variables, velocity)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(u, name="displacement")
-            for i, m_i in enumerate(m_list):
+            for i, m_i in enumerate(internal_variables):
                 checkpoint.save_function(m_i, name=f"internal_variable_{i}")
 
 
@@ -781,8 +690,8 @@ plog.close()
 #     )
 #
 #     # Fix camera in default position otherwise mesh appears to jump around!
-#     plotter.camera_position = [(L_tilde/2, -0.5, 2.3),
-#                         (L_tilde/2, -0.5, 0.0),
+#     plotter.camera_position = [(L_tilde/2, 0.5, 2.3),
+#                         (L_tilde/2, 0.5, 0.0),
 #                         (0.0, 1.0, 0.0)]
 #     plotter.add_text(f"Time: {i*2000:6} years", name='time-label')
 #     plotter.write_frame()
@@ -801,13 +710,27 @@ plog.close()
 # Looking at the animation, we can see that as the weight of the ice load builds
 # up the mantle deforms, pushing up material away from the ice load. If we kept
 # the ice load fixed this forebulge will eventually grow enough that it balances
-# the weight of the ice, i.e the mantle is in isostatic equilbrium and the
+# the weight of the ice, i.e the mantle is in isostatic equilibrium and the
 # deformation due to the ice load stops. At 100 thousand years when the ice is
 # removed the topographic highs associated with forebulges are now out of
 # equilibrium so the flow of material in the mantle reverses back towards the
 # previously glaciated region.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
+
+# We can also plot the peak negative displacement through time in the corner of the box under the ice load.
+
+# + tags=["active-ipynb"]
+# # Convert back to dimensional units
+# logfile = np.loadtxt('params.log', skiprows=1)
+# times = logfile[:, 1] * characteristic_maxwell_time / year_in_seconds / 1000
+# peak_disp = logfile[:, -1] * D
+#
+# plt.plot(times, peak_disp)
+# plt.xlabel('Time (kyr)')
+# plt.ylabel('Peak displacement (m)')
+# plt.grid()
+# -
 
 # + [markdown] tags=["exercise"]
 # Exercises
@@ -848,7 +771,3 @@ plog.close()
 #
 # Wu P., Peltier W. R. (1982). *Viscous gravitational relaxation*, Geophysical Journal
 # International.
-#
-# Zhong, S., Paulson, A., & Wahr, J. (2003). Three-dimensional finite-element
-# modelling of Earth’s viscoelastic deformation: effects of lateral variations in
-# lithospheric thickness. Geophysical Journal International.

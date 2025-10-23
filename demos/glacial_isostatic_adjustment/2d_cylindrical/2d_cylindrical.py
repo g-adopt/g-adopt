@@ -113,7 +113,8 @@ X = SpatialCoordinate(mesh)
 
 # Now we can set up the background profiles for the material properties.
 # In this case the density and shear modulus vary in the vertical direction.
-# The layer properties specified are from spada et al. (2011).
+# The layer properties specified are from
+# [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x)
 
 # +
 density_values = [3037, 3438, 3871, 4978]
@@ -478,7 +479,7 @@ stokes_bcs = {boundary.top: {'free_surface': {'normal_stress': ice_load}},
 # We also need to specify a G-ADOPT approximation which sets up the various parameters
 # and fields needed for the viscoelastic loading problem.
 
-approximation = CompressibleInternalVariableApproximation(
+approximation = MaxwellApproximation(
     bulk_modulus=bulk_modulus,
     density=density,
     shear_modulus=shear_modulus,
@@ -495,12 +496,6 @@ approximation = CompressibleInternalVariableApproximation(
 # to be True.
 
 V_nullspace = rigid_body_modes(V, rotational=True)
-
-# Given the increased computational expense (typically requiring more degrees of
-# freedom) in a 2-D annulus domain, G-ADOPT defaults to iterative solver parameters.
-# G-ADOPT's iterative solver setup is configured to use the GAMG preconditioner
-# to which we must provide near-nullspace information, which, in 2-D, consists of
-# two rotational and two translational modes.
 
 V_near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1])
 

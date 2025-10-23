@@ -22,14 +22,15 @@ cases = {
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
     f"{mm_path}/compositional_buoyancy": {"extra_checks": ["entrainment"]},
     f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
-    f"{gia_path}/base_case": {},
+    f"{gia_path}/base_case": {"extra_checks": ["uk_min"]},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["uk_min"]},
     f"{tests_path}/2d_cylindrical_TALA_DG": {
         "extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]
     },
     f"{tests_path}/viscoplastic_case_DG": {"extra_checks": ["nu_top", "avg_t"]},
-    f"{tests_path}/3d_weerdesteijn": {"extra_checks": ["uz_min"]},
+    f"{tests_path}/3d_weerdesteijn": {"extra_checks": ["uk_min"]},
     f"{tests_path}/3d_spada": {"extra_checks": ["uk_min"]},
+    f"{tests_path}/3d_sphere_burgers": {"extra_checks": ["uk_min"]},
 }
 
 
