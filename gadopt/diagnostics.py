@@ -54,9 +54,9 @@ class GeodynamicalDiagnostics:
     ):
         mesh = extract_unique_domain(z)
 
-        # Allows sub-iv solver (just disp no mixed space)
-        # to use same diagnostics. Would be better to separate
-        # out into Base classes
+        # Allows InternalVariableSolver in stokes_integrators.py
+        # (just disp no mixed space) to use same diagnostics.
+        # Would be better to separate out into Base classes
         is_mixed_space = isinstance(
             z.function_space().topological, MixedFunctionSpace
         )
