@@ -298,7 +298,7 @@ if OUTPUT:
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max uk_min"
+    "timestep time dt u_rms u_rms_surf ux_max uv_min"
 )
 gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
@@ -326,7 +326,7 @@ for timestep in range(1, max_timesteps+1):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uk_min(boundary.top)}")
+                 f"{gd.uv_min(boundary.top)}")
     # Compute diagnostics:
 
     velocity.interpolate((u-old_disp)/dt)

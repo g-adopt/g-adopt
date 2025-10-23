@@ -38,7 +38,7 @@ class GeodynamicalDiagnostics:
       T_min: Minimum temperature in domain
       T_max: Maximum temperature in domain
       ux_max: Maximum velocity (first component, optionally over a given boundary)
-      uk_min: Minimum velocity (vertical component, optionally over a given boundary)
+      uv_min: Minimum velocity (vertical component, optionally over a given boundary)
 
     """
 
@@ -66,7 +66,7 @@ class GeodynamicalDiagnostics:
             self.u = z
 
         # vertical component of vel/disp
-        self.uk = Function(self.u.function_space().sub(0))
+        self.uv = Function(self.u.function_space().sub(0))
 
         self.T = T
 
@@ -119,13 +119,13 @@ class GeodynamicalDiagnostics:
 
         return self.u.comm.allreduce(ux_data.max(), MPI.MAX)
 
-    def uk_min(self, boundary_id=None) -> float:
+    def uv_min(self, boundary_id=None) -> float:
         "Minimum value of vertical component of velocity/displacement"
-        self.uk.interpolate(vertical_component(self.u))
+        self.uv.interpolate(vertical_component(self.u))
         if boundary_id:
-            bcu = DirichletBC(self.uk.function_space(), 0, boundary_id)
-            uk_data = self.uk.dat.data_ro_with_halos[bcu.nodes]
+            bcu = DirichletBC(self.uv.function_space(), 0, boundary_id)
+            uv_data = self.uv.dat.data_ro_with_halos[bcu.nodes]
         else:
-            uk_data = self.uk.dat.data_ro[:]
+            uv_data = self.uv.dat.data_ro[:]
 
-        return self.uk.comm.allreduce(uk_data.min(initial=np.inf), MPI.MIN)
+        return self.uv.comm.allreduce(uv_data.min(initial=np.inf), MPI.MIN)

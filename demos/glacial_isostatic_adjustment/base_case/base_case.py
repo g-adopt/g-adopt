@@ -618,7 +618,7 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 # +
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max uk_min"
+    "timestep time dt u_rms u_rms_surf ux_max uv_min"
 )
 
 gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
@@ -638,7 +638,7 @@ for timestep in range(max_timesteps):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uk_min(boundary.top)} ")
+                 f"{gd.uv_min(boundary.top)} ")
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)
