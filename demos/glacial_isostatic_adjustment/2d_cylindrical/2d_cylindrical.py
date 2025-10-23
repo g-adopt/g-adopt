@@ -4,12 +4,14 @@
 # In this tutorial, we examine an idealised 2-D loading problem in an annulus domain.
 #
 # This example focusses on differences between running simulations in a 2-D annulus
-# and 2-D Cartesian domain. These can be summarised as follows:
+# and a 2-D Cartesian domain in our [previous tutorial](../base_case). These can be summarised
+# as follows:
 # 1. The geometry of the problem - i.e. the computational mesh.
 # 2. The radial direction of gravity (as opposed to the vertical direction in a
 # Cartesian domain).
-# 3. Solving a problem with laterally varying viscosity.
-# 4. Accounting for a (rotational) nullspace.
+# 3. Solving a problem with laterally varying viscosity, noting that the viscosity
+# in our [previous tutorial](../base_case) varied as a function of depth only.
+# 4. Accounting for a (rotational) nullspace in the displacement field.
 
 # This example
 # -------------
@@ -22,32 +24,34 @@ from gadopt.utility import vertical_component
 from gadopt.utility import extruded_layer_heights
 from gadopt.utility import initialise_background_field
 
-# Similar to the `base_case.py` demo we create the mesh in two stages. First we create
-# a surface mesh of 180 cells using one of `Firedrake`'s utility meshes
-# `CircleManifoldMesh` and then we extrude this in the radial direction by choosing
-# the optional keyword argument `extrusion_type`. As before, we specify 5 cells per
-# rheological layer so 20 layers in total. To better represent the curvature of the
-# domain and ensure accuracy of our quadratic representation of displacement, we
-# approximate the curved cylindrical shell domain quadratically, using the optional
-# keyword argument `degree`$=2$.
+# Similar to our [previous tutorial](../base_case) demo we create the mesh in two
+# stages. First we create a surface mesh of 180 cells using one of `Firedrake`'s
+# utility meshes `CircleManifoldMesh` and then we extrude this in the radial
+# direction by choosing the optional keyword argument `extrusion_type`. As before,
+# the layer properties specified are from
+# [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x).
+# We specify 5 cells per rheological layer so 20 layers in total. To better
+# represent the curvature of the domain and ensure accuracy of our quadratic
+# representation of displacement, we approximate the curved cylindrical shell
+# domain quadratically, using the optional keyword argument `degree`$=2$.
 #
 # As this problem is not formulated in a Cartesian geometry we set the `mesh.cartesian`
 # attribute to `False`. This ensures the correct configuration of a radially inward
-# vertical direction.
+# gravitational direction.
 
 # +
 # Set up geometry:
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
-D = radius_values[0]-radius_values[-1]
-radius_values_tilde = np.array(radius_values)/D
+domain_depth = radius_values[0]-radius_values[-1]
+radius_values_nondim = np.array(radius_values)/domain_depth
 
 # Construct a circle mesh and then extrude into a cylinder:
 ncells = 180
-rmin = radius_values_tilde[-1]
+rmin = radius_values_nondim[-1]
 surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name='surface_mesh')
 
 # Ensure layers of extruded mesh coincide with rheological boundaries
-layer_heights = extruded_layer_heights(5, radius_values_tilde)
+layer_heights = extruded_layer_heights(5, radius_values_nondim)
 
 mesh = ExtrudedMesh(
     surface_mesh,
@@ -65,10 +69,9 @@ boundary = get_boundary_ids(mesh)
 # +
 V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space
 S = TensorFunctionSpace(mesh, "DQ", 1)  # Stress tensor function space
-DG0 = FunctionSpace(mesh, "DQ", 0)  # Density/shear modulus function space
+DG0 = FunctionSpace(mesh, "DQ", 0)  # Density and shear modulus function space
 DG1 = FunctionSpace(mesh, "DQ", 1)  # Viscosity function space
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
-P1 = FunctionSpace(mesh, "CG", 1)  # Continuous function space
 
 u = Function(V, name='displacement')
 m = Function(S, name="internal variable")
@@ -102,7 +105,7 @@ log("Number of Internal variable DOF:", S.dim())
 X = SpatialCoordinate(mesh)
 
 # Now we can set up the background profiles for the material properties.
-# In this case the density and shear modulus vary in the vertical direction.
+# In this case the density and shear modulus vary in the radial direction.
 # The layer properties specified are from
 # [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x)
 
@@ -117,21 +120,21 @@ shear_modulus_scale = 1e11
 viscosity_scale = 1e21
 characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 
-density_values_tilde = np.array(density_values)/density_scale
-shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
-viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
+density_values_nondim = np.array(density_values)/density_scale
+shear_modulus_values_nondim = np.array(shear_modulus_values)/shear_modulus_scale
+viscosity_values_nondim = np.array(viscosity_values)/viscosity_scale
 
 density = Function(DG0, name="density")
 initialise_background_field(
-    density, density_values_tilde, X, radius_values_tilde)
+    density, density_values_nondim, X, radius_values_nondim)
 
 shear_modulus = Function(DG0, name="shear modulus")
 initialise_background_field(
-    shear_modulus, shear_modulus_values_tilde, X, radius_values_tilde)
+    shear_modulus, shear_modulus_values_nondim, X, radius_values_nondim)
 
 bulk_modulus = Function(DG0, name="bulk modulus")
 initialise_background_field(
-    bulk_modulus, shear_modulus_values_tilde, X, radius_values_tilde)
+    bulk_modulus, shear_modulus_values_nondim, X, radius_values_nondim)
 # -
 
 # Let's have a quick look at the density field using pyvista.
@@ -182,7 +185,7 @@ initialise_background_field(
 # +
 background_viscosity = Function(DG1, name="background viscosity")
 initialise_background_field(
-    background_viscosity, viscosity_values_tilde, X, radius_values_tilde)
+    background_viscosity, viscosity_values_nondim, X, radius_values_nondim)
 
 
 # Defined lateral viscosity regions
@@ -198,41 +201,47 @@ def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=
 
 def setup_heterogenous_viscosity(viscosity):
     heterogenous_viscosity_field = Function(viscosity.function_space(), name='viscosity')
-    antarctica_x, antarctica_y = -2e6/D, -5.5e6/D
+    southpole_x, southpole_y = -2e6/domain_depth, -5.5e6/domain_depth
 
     low_visc = 1e20/viscosity_scale
     high_visc = 1e22/viscosity_scale
 
-    low_viscosity_antarctica = bivariate_gaussian(X[0], X[1],
-                                                  antarctica_x, antarctica_y,
-                                                  1.5e6/D, 0.5e6/D, -0.4)
+    low_viscosity_southpole = bivariate_gaussian(X[0], X[1],
+                                                 southpole_x, southpole_y,
+                                                 1.5e6/domain_depth,
+                                                 0.5e6/domain_depth,
+                                                 -0.4)
 
-    heterogenous_viscosity_field.interpolate(low_visc*low_viscosity_antarctica +
-                                             viscosity * (1-low_viscosity_antarctica)
+    heterogenous_viscosity_field.interpolate(low_visc*low_viscosity_southpole +
+                                             viscosity * (1-low_viscosity_southpole)
                                              )
 
-    llsvp1_x, llsvp1_y = 3.5e6/D, 0
-    llsvp1 = bivariate_gaussian(X[0], X[1], llsvp1_x, llsvp1_y, 0.75e6/D, 1e6/D, 0)
+    llsvp1_x, llsvp1_y = 3.5e6/domain_depth, 0
+    llsvp1 = bivariate_gaussian(X[0], X[1], llsvp1_x, llsvp1_y, 0.75e6/domain_depth,
+                                1e6/domain_depth, 0)
 
     heterogenous_viscosity_field.interpolate(low_visc*llsvp1 +
                                              heterogenous_viscosity_field * (1-llsvp1))
 
-    llsvp2_x, llsvp2_y = -3.5e6/D, 0
-    llsvp2 = bivariate_gaussian(X[0], X[1], llsvp2_x, llsvp2_y, 0.75e6/D, 1e6/D, 0)
+    llsvp2_x, llsvp2_y = -3.5e6/domain_depth, 0
+    llsvp2 = bivariate_gaussian(X[0], X[1], llsvp2_x, llsvp2_y, 0.75e6/domain_depth,
+                                1e6/domain_depth, 0)
 
     heterogenous_viscosity_field.interpolate(low_visc*llsvp2 +
                                              heterogenous_viscosity_field * (1-llsvp2))
 
-    slab_x, slab_y = 3e6/D, 4.5e6/D
-    slab = bivariate_gaussian(X[0], X[1], slab_x, slab_y, 0.7e6/D, 0.35e6/D, 0.7)
+    slab_x, slab_y = 3e6/domain_depth, 4.5e6/domain_depth
+    slab = bivariate_gaussian(X[0], X[1], slab_x, slab_y, 0.7e6/domain_depth,
+                              0.35e6/domain_depth, 0.7)
 
     heterogenous_viscosity_field.interpolate(high_visc*slab +
                                              heterogenous_viscosity_field * (1-slab))
 
-    high_viscosity_craton_x, high_viscosity_craton_y = 0, 6.2e6/D
+    high_viscosity_craton_x, high_viscosity_craton_y = 0, 6.2e6/domain_depth
     high_viscosity_craton = bivariate_gaussian(X[0], X[1], high_viscosity_craton_x,
-                                               high_viscosity_craton_y, 1.5e6/D,
-                                               0.5e6/D, 0.2)
+                                               high_viscosity_craton_y,
+                                               1.5e6/domain_depth,
+                                               0.5e6/domain_depth, 0.2)
 
     heterogenous_viscosity_field.interpolate(
         high_visc*high_viscosity_craton +
@@ -240,7 +249,7 @@ def setup_heterogenous_viscosity(viscosity):
     )
 
     heterogenous_viscosity_field.interpolate(
-        conditional(vertical_component(X) > radius_values_tilde[1],
+        conditional(vertical_component(X) > radius_values_nondim[1],
                     viscosity,
                     heterogenous_viscosity_field))
 
@@ -308,10 +317,10 @@ viscosity = setup_heterogenous_viscosity(background_viscosity)
 # Initialise ice loading
 rho_ice = 931 / density_scale
 g = 9.815
-B_mu = Constant(density_scale * D * g / shear_modulus_scale)
+B_mu = Constant(density_scale * domain_depth * g / shear_modulus_scale)
 log("Ratio of buoyancy/shear = rho g D / mu = ", float(B_mu))
-Hice1 = 1000 / D
-Hice2 = 2000 / D
+Hice1 = 1000 / domain_depth
+Hice2 = 2000 / domain_depth
 # Disc ice load but with a smooth transition given by a tanh profile
 disc_halfwidth1 = (2*pi/360) * 10  # Disk half width in radians
 disc_halfwidth2 = (2*pi/360) * 20  # Disk half width in radians
@@ -335,7 +344,7 @@ ice_load = B_mu * rho_ice * (Hice1 * disc1 + Hice2 * disc2)
 #
 # def make_ice_ring(reader):
 #     data = reader.read()[0]
-#     data['Ice thickness'] *= D
+#     data['Ice thickness'] *= domain_depth
 #     surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
 #                                       feature_edges=False, manifold_edges=False)
 #     sphere = pv.Sphere(radius=0.8*radius)
@@ -380,6 +389,7 @@ ice_load = B_mu * rho_ice * (Hice1 * disc1 + Hice2 * disc2)
 #
 #
 # # Write ice thicknesss .pvd file
+# P1 = FunctionSpace(mesh, "CG", 1)  # Continuous function space
 # ice_thickness = Function(P1, name="Ice thickness").interpolate(Hice1 * disc1 + Hice2 * disc2)
 # zero_ice_thickness = Function(P1, name="zero").assign(0)  # Used for plotting later
 # ice_thickness_file = VTKFile('ice.pvd').write(ice_thickness, zero_ice_thickness)
@@ -469,7 +479,7 @@ approximation = MaxwellApproximation(
     bulk_shear_ratio=bulk_shear_ratio)
 
 # As noted above, with a free-slip boundary condition on both boundaries, one can add
-# an arbitrary rotation of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity
+# an arbitrary rotation of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the displacement
 # solution. These lead to null-modes (eigenvectors) for the linear system, rendering
 # the resulting matrix singular. In preconditioned Krylov methods these null-modes
 # must be subtracted from the approximate solution at every iteration. We do that
@@ -596,7 +606,7 @@ plog.close()
 #     plotter.add_mesh(arrows, color="grey", lighting=False)
 #
 #
-#     data['displacement'] *= D
+#     data['displacement'] *= domain_depth
 #     # Add the warped displacement field to the frame
 #     plotter.add_mesh(
 #         warped,
@@ -619,7 +629,7 @@ plog.close()
 #     )
 #
 #
-#     plotter.camera_position = [(0, 0, radius_values_tilde[0]*5),
+#     plotter.camera_position = [(0, 0, radius_values_nondim[0]*5),
 #                                  (0.0, 0.0, 0.0),
 #                                  (0.0, 1.0, 0.0)]
 #
