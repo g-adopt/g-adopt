@@ -334,6 +334,7 @@ nx = 60
 
 surface_mesh = IntervalMesh(nx, L_tilde)
 
+# Ensure layers of extruded mesh coincide with rheological boundaries
 layer_heights = extruded_layer_heights(5, radius_values_tilde)
 
 mesh = ExtrudedMesh(
