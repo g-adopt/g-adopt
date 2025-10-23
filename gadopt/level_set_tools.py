@@ -568,7 +568,7 @@ class LevelSetSolver(SolverConfigurationMixin):
             self.adv_solver = GenericTransportSolver(
                 "advection",
                 self.solution,
-                float(self.adv_kwargs["timestep"]) / self.adv_kwargs["subcycles"],
+                self.adv_kwargs["timestep"] / self.adv_kwargs["subcycles"],
                 self.adv_kwargs["time_integrator"],
                 solution_old=self.solution_old,
                 eq_attrs={"u": self.adv_kwargs["u"]},
