@@ -308,7 +308,7 @@ while True:
         psi,
         material_size=material_area,
         entrainment_height=entrainment_height,
-        side=1.0,
+        side=1,
         direction="above",
         skip_material_size_check=True,
     )
