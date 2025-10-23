@@ -21,7 +21,7 @@
 # To download the checkpoint file if it doesn't already exist, execute the following command:
 
 # + tags=["active-ipynb"]
-# ![ ! -f adjoint-demo-checkpoint-state.h5 ] && wget https://data.gadopt.org/demos/smoothing-example.h5
+# ![ ! -f smoothing-example.h5 ] && wget https://data.gadopt.org/demos/smoothing-example.h5
 # -
 
 # How to do smoothing in G-ADOPT
