@@ -254,7 +254,7 @@ print(f"Anisotropic smoothed RMS: {anisotropic_rms:.6f}")
 # - Compare the effects of different smoothing approaches
 # - Visualise and quantify smoothing results
 #
-# The key difference between isotropic and anisotropic smoothing is evident:
-# - Isotropic smoothing reduces variations uniformly in all directions
+# The key difference between isotropic and tangential anisotropic smoothing in our example is evident:
+# - Our isotropic smoothing reduced variations uniformly in all directions
 # - Anisotropic smoothing, the way we used it only in the tangential direction,
 #   preserves radial structure while smoothing tangentially
