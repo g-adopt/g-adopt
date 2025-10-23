@@ -497,27 +497,10 @@ approximation = MaxwellApproximation(
 
 V_nullspace = rigid_body_modes(V, rotational=True)
 
-V_near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1])
-
 # We finally come to solving the variational problem, with solver
 # objects for the Stokes system created. We pass in the solution field `u` and
 # various fields needed for the solve along with the approximation, timestep,
 # list of internal variables, boundary conditions and nullspaces.
-
-iterative_parameters = {"mat_type": "matfree",
-                        "snes_type": "ksponly",
-                        "ksp_type": "gmres",
-                        "ksp_rtol": 1e-5,
-                        "ksp_converged_reason": None,
-                        "pc_type": "python",
-                        "pc_python_type": "firedrake.AssembledPC",
-                        "assembled_pc_type": "gamg",
-                        "assembled_mg_levels_pc_type": "sor",
-                        "assembled_pc_gamg_threshold": 0.01,
-                        "assembled_pc_gamg_square_graph": 100,
-                        "assembled_pc_gamg_coarse_eq_limit": 1000,
-                        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-                        }
 
 stokes_solver = InternalVariableSolver(
     u,
@@ -525,11 +508,8 @@ stokes_solver = InternalVariableSolver(
     dt=dt,
     internal_variables=internal_variables,
     bcs=stokes_bcs,
-    solver_parameters=iterative_parameters,
     constant_jacobian=True,
     nullspace=V_nullspace,
-    transpose_nullspace=V_nullspace,
-    near_nullspace=V_near_nullspace,
 )
 
 # We next set up our output, in VTK format.
