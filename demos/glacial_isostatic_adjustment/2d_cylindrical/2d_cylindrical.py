@@ -145,15 +145,13 @@ initialise_background_field(
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
 #
-# # Make a colour map
-# boring_cmap = plt.get_cmap("viridis_r", 25)
 # # Add the warped displacement field to the frame
 # plotter.add_mesh(
 #     data,
 #     component=None,
 #     lighting=False,
 #     show_edges=False,
-#     cmap=boring_cmap,
+#     cmap="viridis_r",
 #     scalar_bar_args={
 #         "title": 'Density (kg / m^3)',
 #         "position_x": 0.8,
