@@ -308,8 +308,10 @@ from gadopt.utility import initialise_background_field
 # a vertical cross section through the 3D box.
 #
 # We have chosen a mesh with 60 elements in the $x$ direction and 5 elements
-# per rheological layer in the $y$ direction. It is worth emphasising that the
-# setup has coarse grid resolution so that the demo is quick to run! For real
+# per rheological layer in the $y$ direction.  We are using a G-ADOPT helper
+# function `extruded_layer_heights` to ensure that the layers of the mesh
+# match the rheological boundaries. It is worth emphasising that the setup
+# has coarse grid resolution so that the demo is quick to run! For real
 # simulations we can use fully unstructured meshes to accurately resolve
 # important features in the model, for instance near coastlines or sharp
 # discontinuities in mantle properties.
@@ -582,7 +584,12 @@ approximation = MaxwellApproximation(
 # various fields needed for the solve along with the approximation, timestep,
 # internal variable and boundary conditions.
 
-stokes_solver = InternalVariableSolver(u, approximation, dt=dt, internal_variables=m, bcs=stokes_bcs)
+stokes_solver = InternalVariableSolver(
+    u,
+    approximation,
+    dt=dt,
+    internal_variables=m,
+    bcs=stokes_bcs)
 
 # We next set up our output, in VTK format. This format can be read by programs
 # like pyvista and Paraview. We also create a function to store the velocity
@@ -597,13 +604,24 @@ disp_old = Function(u, name="old_disp").assign(u)
 output_file = VTKFile("output.pvd")
 output_file.write(u, m, velocity)
 
+checkpoint_filename = "viscoelastic_loading-chk.h5"
+# -
+
+# Next, we open a file for logging diagnostic output and provide the header. We will
+# be outputting the timestep number, the time, the timestep size, the RMS displacement,
+# the RMS displacement at the surface of the domain, the maximum x-component of
+# displacement at the domains surface, the minimum vertical component of displacement
+# at the surface of the domain. These are computed using the GeodynamicalDiagnostics
+# class, which takes in the displacement function and density alongside bottom and
+# top boundary IDs.
+
+# +
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max uk_min"
 )
-gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 
-checkpoint_filename = "viscoelastic_loading-chk.h5"
+gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
 # -
 
 # Now let's run the simulation! We are going to control the ice thickness using
@@ -717,7 +735,8 @@ plog.close()
 
 # ![SegmentLocal](displacement_warp.gif "segment")
 
-# We can also plot the peak negative displacement through time in the corner of the box under the ice load.
+# We can also plot the peak negative displacement through time in the corner of the
+# box under the ice load.
 
 # + tags=["active-ipynb"]
 # # Convert back to dimensional units
