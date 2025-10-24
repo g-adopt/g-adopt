@@ -776,8 +776,8 @@ class InternalVariableSolver(StokesSolverBase):
             )
 
         internal_variables_update = [
-            self.update_m(m, alpha)
-            for m, alpha in zip(
+            self.update_m(m, maxwell_time)
+            for m, maxwell_time in zip(
                 self.internal_variables, self.approximation.maxwell_times
             )
         ]
@@ -787,14 +787,14 @@ class InternalVariableSolver(StokesSolverBase):
         )
         source = self.approximation.buoyancy(self.solution) * self.k
 
-        eqs_attrs = {"stress": stress, "source": source}
+        eq_attrs = {"stress": stress, "source": source}
 
         self.equations.append(
             Equation(
                 self.test,
                 self.solution_space,
                 compressible_viscoelastic_terms,
-                eq_attrs=eqs_attrs,
+                eq_attrs=eq_attrs,
                 approximation=self.approximation,
                 bcs=self.weak_bcs,
                 quad_degree=self.quad_degree,
@@ -814,21 +814,21 @@ class InternalVariableSolver(StokesSolverBase):
         return combined_normal_stress
 
     def update_m(
-        self, m: fd.Function, alpha: fd.Function | Expr
+        self, m: fd.Function, maxwell_time: fd.Function | Expr
     ) -> Expr:
         """Calculates updated internal variable using Backward Euler formula
 
         Args:
           m:
             Firedrake function representing the current value of the internal variable
-          alpha:
+          maxwell_time:
             Firedrake function or UFL expression for Maxwell time associated with m
             terms in the system of equations
 
         Returns:
             UFL expression for the updated internal variable using Backward Euler
         """
-        m_new = (m + self.dt / alpha * self.strain) / (1 + self.dt / alpha)
+        m_new = (m + self.dt / maxwell_time * self.strain) / (1 + self.dt / maxwell_time)
         return m_new
 
     def solve(self) -> None:

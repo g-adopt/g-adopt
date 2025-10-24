@@ -213,7 +213,7 @@ def advection_hydrostatic_prestress_term(
         # change surface measure for extruded mesh.
         # assumes mesh is aligned in the vertical so that jump
         # only occurs across horizontal layers
-        if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
+        if isinstance(eq.mesh, ExtrudedMeshTopology):
             dS = dS_h
         else:
             dS = eq.dS
