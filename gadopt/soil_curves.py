@@ -38,21 +38,33 @@ class SoilCurve(ABC):
     All models require a specific storage coefficient Ss parameter.
     """
 
-    def __init__(self, parameters: Dict[str, Any]):
+    def __init__(self, theta_r, theta_s, Ks, Ss, **kwargs):
         """
         Initialise soil curve with model parameters.
 
         Args:
-            parameters: Dictionary containing model-specific parameters.
-                       Must include 'Ss' (specific storage coefficient).
-        """
-        # Convert all parameters to fd.Constant for UFL compatibility
-        self.parameters = {key: fd.Constant(value) for key, value in parameters.items()}
-        self._validate_parameters()
+            theta_r: Residual water content [-]
+            theta_s: Saturated water content [-]
+            Ks: Saturated hydraulic conductivity [L/T]
+            Ss: Specific storage coefficient [1/L]
+            **kwargs: Additional model-specific parameters
 
-        # Ensure Ss is provided
-        if 'Ss' not in self.parameters:
-            raise ValueError("Parameter 'Ss' (specific storage coefficient) is required")
+        Example:
+            soil_curve = ExponentialCurve(theta_r=0.15, theta_s=0.45, Ks=1e-5,
+                                         Ss=0.0, alpha=0.328)
+        """
+        # Build parameters dictionary from positional and keyword arguments
+        params = {
+            'theta_r': theta_r,
+            'theta_s': theta_s,
+            'Ks': Ks,
+            'Ss': Ss
+        }
+        params.update(kwargs)
+
+        # Convert all parameters to fd.Constant for UFL compatibility
+        self.parameters = {key: fd.Constant(value) for key, value in params.items()}
+        self._validate_parameters()
 
     @property
     def theta_r(self):

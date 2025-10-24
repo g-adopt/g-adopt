@@ -52,7 +52,7 @@ __all__ = [
 
 
 def richards_mass_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function, solution_old: Function
 ) -> Form:
     r"""Richards equation mass term with nonlinear capacity.
 
@@ -76,17 +76,17 @@ def richards_mass_term(
     """
     soil_curve = eq.soil_curve
 
-    # Evaluate nonlinear coefficients at trial function
-    theta = soil_curve.moisture_content(trial)
-    C = soil_curve.water_retention(trial)
+    # Evaluate nonlinear coefficients at PREVIOUS solution (explicit treatment)
+    theta = soil_curve.moisture_content(solution_old)
+    C = soil_curve.water_retention(solution_old)
 
     # Effective saturation
     S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
 
-    # Mass term: (Ss*S + C) * trial
+    # Mass coefficient from previous timestep
     mass_coeff = soil_curve.Ss * S + C
 
-    return dot(eq.test, mass_coeff * trial) * eq.dx
+    return inner(eq.test, mass_coeff * trial) * eq.dx
 
 
 def richards_diffusion_term(

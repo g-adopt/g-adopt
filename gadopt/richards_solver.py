@@ -48,6 +48,7 @@ iterative_richards_solver_parameters: dict[str, Any] = {
     "ksp_type": "bcgs",
     "pc_type": "bjacobi",
     "ksp_rtol": 1e-5,
+    "snes_view": None,
 }
 """Default iterative solver parameters for solution of Richards equation.
 
@@ -61,6 +62,7 @@ Note:
 
 direct_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
+    "snes_monitor": None,
     "snes_type": "newtonls",
     "ksp_type": "preonly",
     "pc_type": "lu",
@@ -155,6 +157,9 @@ class RichardsSolver(SolverConfigurationMixin):
         self.mesh = self.solution_space.mesh()
         self.test = TestFunction(self.solution_space)
 
+        # Store previous solution for IMEX treatment (explicit nonlinearity)
+        self.solution_old = solution.copy(deepcopy=True)
+
         self.continuous_solution = is_continuous(self.solution)
 
         self.set_boundary_conditions()
@@ -198,6 +203,14 @@ class RichardsSolver(SolverConfigurationMixin):
             'soil_curve': self.soil_curve,
         }
 
+        # Create wrapper functions that have required_attrs and optional_attrs
+        def mass_wrapper(eq, trial):
+            return richards_eq.richards_mass_term(
+                eq, trial, self.solution_old
+            )
+        mass_wrapper.required_attrs = richards_eq.richards_mass_term.required_attrs
+        mass_wrapper.optional_attrs = richards_eq.richards_mass_term.optional_attrs
+
         self.equation = Equation(
             self.test,
             self.solution_space,
@@ -205,7 +218,7 @@ class RichardsSolver(SolverConfigurationMixin):
                 richards_eq.richards_diffusion_term,
                 richards_eq.richards_gravity_term,
             ],
-            mass_term=richards_eq.richards_mass_term,
+            mass_term=mass_wrapper,
             eq_attrs=eq_attrs,
             bcs=self.weak_bcs,
             quad_degree=self.quad_degree,
@@ -263,4 +276,8 @@ class RichardsSolver(SolverConfigurationMixin):
           t:
             Current simulation time (optional)
         """
+        # Update solution_old BEFORE solving (for IMEX treatment)
+        self.solution_old.assign(self.solution)
+
+        # Solve (now with coefficients from previous timestep)
         self.ts.advance(update_forcings, t)
