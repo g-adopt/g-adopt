@@ -14,7 +14,6 @@ import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
 from mpi4py import MPI
-from numbers import Number
 import numpy as np
 import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
@@ -592,7 +591,7 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
 
 
 def extruded_layer_heights(
-        DG0_layers: int | list[int], radii: list[Number]) -> list[Number]:
+        DG0_layers: int | list[int], radii: list[float]) -> list[float]:
 
     """Calculates layer heights for extruded mesh using rheological boundary
 
@@ -600,7 +599,8 @@ def extruded_layer_heights(
       DG0_layers:
         Number of layers per rheological layer
       radii:
-        Radii of rheological boundaries to match when extruding the mesh
+        Radii of rheological boundaries to match when extruding the mesh.
+        Assumes sequence starts with outer radii -> inner radii.
 
     Returns:
         list of layer heights
@@ -608,30 +608,42 @@ def extruded_layer_heights(
 
     layer_heights = []
 
-    if isinstance(DG0_layers, int):
-        nz_layers = [DG0_layers for i in range(len(radii))]
-    else:
-        nz_layers = DG0_layers
-
+    nz_layers = [DG0_layers] * len(radii) if isinstance(DG0_layers, int) else DG0_layers
     assert len(nz_layers) == len(radii)
 
-    for j in range(len(radii)-1):
-        i = len(radii)-2 - j  # want to start at the bottom
-        r = radii[i]
-        h = r - radii[i+1]
-        nz = nz_layers[i]
-        dz = h / nz
-
-        for i in range(nz):
+    # starting at the bottom radius, work outwards
+    for i in range(len(radii) - 2, -1, -1):
+        dz = (radii[i] - radii[i + 1]) / nz_layers[i]
+        for _ in range(nz_layers[i]):
             layer_heights.append(dz)
-
     return layer_heights
 
 
-def initialise_background_field(field, background_values, X, radii, shift=0):
-    '''Initialises discontinuous field with sharp jumps at rheological boundaries'''
-    for i in range(0, len(background_values)):
-        field.interpolate(
-            conditional(vertical_component(X) + shift >= radii[i+1],
+def initialise_background_field(
+        f: Function,
+        background_values: list[float],
+        X: ufl.geometry.SpatialCoordinate,
+        radii: list[float],
+        shift: float = 0.0,):
+    """Initialises discontinuous field with sharp jumps at rheological boundaries
+
+    Args:
+      f:
+        Function to interpolate background values into. N.b. `f` is modified in place.
+      background_values:
+        Discrete values to interpolate into `f`
+      X:
+        Spatial coordinates associated with function `f`
+      radii:
+        Radii of rheological discontinuities. N.b. length of `background_values` must be one less
+        than length of `radii`.
+      shift:
+        Shift vertical radii by a constant, e.g. when mesh is offset from `radii` values.
+    """
+
+    assert len(background_values) == len(radii)-1
+    for i in range(len(background_values)):
+        f.interpolate(
+            conditional(vertical_component(X) + shift > radii[i+1],
                         conditional(vertical_component(X) + shift <= radii[i],
-                                    background_values[i], field), field))
+                                    background_values[i], f), f))
