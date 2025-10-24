@@ -11,7 +11,7 @@ from numbers import Number
 from typing import Optional
 from warnings import warn
 
-from firedrake import Function, Identity, div, grad, inner, sym, tr, ufl
+from firedrake import Function, Identity, div, grad, inner, sym, ufl, dev
 
 from .utility import ensure_constant, vertical_component
 
@@ -423,8 +423,8 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
 class BaseGIAApproximation:
     """Base class for viscoelasticity assuming small displacements.
 
-    By assuming a small displacement with respect to mantle depth
-    we can linearise the problem, assuming a perturbation away from a reference state.
+    By assuming a small displacement with respect to mantle thickness
+    we can linearise the problem, introducing a perturbation away from a reference state.
 
     For background and derivation of the formulation please see the equations and
     references provided in Scott et al 2025.
@@ -465,7 +465,7 @@ class BaseGIAApproximation:
     def buoyancy(self, displacement):
         # Buoyancy term due to the advection of the background density field
         # written on RHS of equations
-        return -self.B_mu * self.g * -inner(displacement, grad(self.density))
+        return self.B_mu * self.g * inner(displacement, grad(self.density))
 
     def rho_continuity(self):
         # StokesSolverBase in stokes_integrators.py currently requires rho_continuity
@@ -501,12 +501,12 @@ class BaseGIAApproximation:
 
 
 class IncompressibleMaxwellApproximation(BaseGIAApproximation):
-    """Incompressible maxwell rheology via the incremental displacement formulation.
+    """Incompressible Maxwell rheology via the incremental displacement formulation.
 
     This class implements incompressible Maxwell rheology similar to the approach
     by Zhong et al. 2003. The linearised problem is cast in terms of incremental
     displacement, i.e. velocity * dt where dt is the timestep. This produces a mixed
-    stokes system for incremental displacement and pressure which can be solved in
+    Stokes system for incremental displacement and pressure which can be solved in
     the same way as mantle convection (where unknowns are velocity and pressure),
     with a modfied viscosity and stress term accounting for the deviatoric stress
     at the previous timestep.
@@ -606,9 +606,7 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
         self.mu0 = ensure_constant(sum(self.shear_modulus))
 
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
-        dim = len(u)
-        e = sym(grad(u))
-        return e - 1 / 3 * tr(e) * Identity(dim)
+        return dev(sym(grad(u)))
 
     def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
         internal_variables = kwargs.get("internal_variables", None)
@@ -653,7 +651,7 @@ class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariabl
 
     This class implements the substiution method where the time-dependent internal
     variable equation is substituted into the momentum equation assuming a Backward
-    Euler time discretation. Therefore, the displacement field is the only unknown.
+    Euler time discretisation. Therefore, the displacement field is the only unknown.
     For more information regarding the specific implementation in G-ADOPT please see
     Scott et al. 2025.
 
