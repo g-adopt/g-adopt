@@ -514,7 +514,7 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
 
     rad = Function(function.function_space()).interpolate(upward_coord)
 
-    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
+    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None, quad_degree=6)
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
     averager.extrapolate_layer_average(function, interpolated_visc)
 

@@ -16,7 +16,7 @@ def test_obtain_muller_2022_se():
             assert Path(file_path).exists(), f"{file_path} does not exist."
 
 
-def test_gplates(should_visualise=False):
+def test_gplates(write_pvd=False):
     gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
 
     # Set up geometry:
@@ -50,14 +50,14 @@ def test_gplates(should_visualise=False):
     surface_rms = []
 
     # Create a VTK file if needed
-    if should_visualise:
+    if write_pvd:
         vtkfile = VTKFile("gplates_velocity.pvd")
 
     for t in np.arange(409, 0, -50):
         gplates_function.update_plate_reconstruction(rec_model.age2ndtime(t))
 
         # Visualise the velocity field
-        if should_visualise:
+        if write_pvd:
             vtkfile.write(gplates_function)
 
         # Calculate and test radial component

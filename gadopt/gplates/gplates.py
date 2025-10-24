@@ -5,6 +5,7 @@ from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
 from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
+from ..solver_options_manager import SolverConfigurationMixin
 
 import pygplates
 
@@ -29,7 +30,7 @@ class GPlatesFunctionalityMixin:
         """
 
         # Print ndtime translated to geological age
-        log(f"pyGplates: Updating surface velocities for {self.gplates_connector.ndtime2age(ndtime):.2f} Ma.")
+        log(f"PyGPlates: Updating surface velocities for {self.gplates_connector.ndtime2age(ndtime):.2f} Ma.")
         # Check if we need to update plate velocities at all
         if self.gplates_connector.reconstruction_age is not None:
             if abs(self.gplates_connector.ndtime2age(ndtime) - self.gplates_connector.reconstruction_age) < self.gplates_connector.delta_t:
@@ -51,9 +52,9 @@ class GPlatesFunctionalityMixin:
             self.create_block_variable()
 
 
-class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
+class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixin, fd.Function):
     """Extends `firedrake.Function` to incorporate velocities calculated by
-    Gplates, coming from plate tectonics reconstion.
+    Gplates, coming from plate tectonics reconstruction.
 
     `GplatesVelocityFunction` is designed to associate a Firedrake function with a GPlates
     connector, allowing the integration of plate tectonics reconstructions. This is particularly
@@ -65,7 +66,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         dbc (firedrake.DirichletBC): A Dirichlet boundary condition that applies the function
             only to the top boundary.
         boundary_coords (numpy.ndarray): The coordinates of the function located at the
-            "top" boundary, normalised, so that it is meaningful for pygplates.
+            "top" boundary, normalised, so that it is meaningful for PyGPlates.
         gplates_connector: The GPlates connector instance used for fetching plate
             tectonics data.
 
@@ -77,8 +78,11 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         val (optional): Initial values for the function. Defaults to None.
         name (str, optional): Name for the function. Defaults to None.
         dtype (data type, optional): Data type for the function. Defaults to ScalarType.
-        kwargs (dict, optional): Additional keyword arguments, inlcuding `solver_parameters`
-            (dict, optional), and `ds_kwargs` (dict, optional) for the ds measure.
+        quad_degree (int, optional): Quadrature degree for the surface measure. If None,
+            defaults to 2 * element_degree + 1.
+        solver_parameters (dict, optional): Solver parameters for the tangential projection solver.
+            If provided, these will be merged with the default parameters. If None, uses default parameters.
+        kwargs (dict, optional): Additional keyword arguments passed to the Firedrake Function.
 
     Methods:
         update_plate_reconstruction(ndtime):
@@ -117,13 +121,12 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
             "ksp_converged_reason": None
         }
 
-    def __new__(cls, *args, **kwargs):
-        # Ensure compatibility with Firedrake Function's __new__ method
-        return super().__new__(cls, *args, **kwargs)
-
-    def __init__(self, function_space, *args, gplates_connector=None, top_boundary_marker="top", **kwargs):
-        # Initialize as a Firedrake Function
+    def __init__(self, function_space, *args, gplates_connector=None, top_boundary_marker="top", quad_degree=None, solver_parameters=None, **kwargs):
+        # Initialise as a Firedrake Function
         super().__init__(function_space, *args, **kwargs)
+
+        # Set the class name required by SolverConfigurationMixin
+        self._class_name = self.__class__.__name__
 
         # Cache all the necessary information that will be used to assign surface velocities
         # the marker for surface boundary. This is typically "top" in extruded mesh.
@@ -147,8 +150,16 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         # Store the GPlates connector
         self.gplates_connector = gplates_connector
 
-        # Store the kwargs in case we need to change solver parameters or surface measure
+        # Store the kwargs and the quad_degree for surface measure
         self.kwargs = kwargs
+        self.quad_degree = quad_degree
+
+        # Initialise solver configuration
+        self.reset_solver_config(
+            default_config=self.tangential_project_solver_parameters,
+            extra_config=solver_parameters
+        )
+        self.register_update_callback(self.setup_solver)
 
         # Set up the solver for tangential projection
         self.setup_solver()
@@ -163,36 +174,33 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
                 "Removing the radial component of discontinuous velocity fields is not supported."
             )
         else:
-            V = fd.FunctionSpace(self.function_space().mesh(), self.ufl_element())
+            V = self.function_space()
 
         self.tangential_velocity = fd.Function(V, name="tangential_velocity")
 
         # Normal vector (radial direction for spherical geometry)
-        r = fd.FacetNormal(self.function_space().mesh())
+        r = fd.FacetNormal(V.mesh())
 
         # Define the test and trial functions for a projection solve
         phi = fd.TestFunction(V)
         v = fd.TrialFunction(V)
 
         # Define the tangential projection: v_tangential = v - (v·r)r
-        tangential_expr = self - fd.inner(self, r) * r
+        tangential_expr = self - fd.dot(self, r) * r
 
-        # Getting ds measure: this can be set by the user through kwargs
+        # Getting ds measure: this can be set by the user through quad_degree parameter
         # We are only looking at the surface measure at the top boundary
-        ds_kwargs = {
-            "domain": self.function_space().mesh(),
-            "degree": 2 * V.ufl_element().degree()[0] + 1
-        }
-
-        # Update the ds_kwargs with the kwargs (only if key already exists in
-        # ds_kwargs, we don't want to add non-relevant keys)
-        ds_kwargs.update({k: v for k, v in self.kwargs.items() if k in ds_kwargs})
-
-        if ds_kwargs["domain"].extruded:
-            self.ds = fd.ds_t(**ds_kwargs)
+        if self.quad_degree is not None:
+            degree = self.quad_degree
         else:
-            ds_kwargs["subdomain_id"] = self.top_boundary_marker
-            self.ds = fd.ds(**ds_kwargs)
+            degree = 2 * V.ufl_element().degree()[0] + 1
+
+        domain = self.function_space().mesh()
+
+        if domain.extruded:
+            self.ds = fd.ds_t(domain=domain, degree=degree)
+        else:
+            self.ds = fd.ds(domain=domain, degree=degree, subdomain_id=self.top_boundary_marker)
 
         # Setting up a manual projection
         # Project onto the tangential space: solve for tangential component
@@ -208,7 +216,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
                                                    constant_jacobian=True)
         self.solver = fd.LinearVariationalSolver(
             self.problem,
-            solver_parameters=self.kwargs.get("solver_parameters", self.tangential_project_solver_parameters),
+            solver_parameters=self.solver_parameters,
             options_prefix="gplates_projection"
         )
         self._solver_is_set_up = True
@@ -221,15 +229,15 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, fd.Function):
         of rebuilding the projection operator each time.
         """
         # Use the a linear variational solver for removing the radial component
-        if not hasattr(self, '_solver_is_set_up') or not self._solver_is_set_up:
+        if not getattr(self, "_solver_is_set_up", False):
             self.setup_solver()
 
         # Project the velocity to the tangential plane
         self.solver.solve()
 
         # Copy the tangential velocity back to self
-        self.dat.data_with_halos[self.dbc.nodes, :] = (
-            self.tangential_velocity.dat.data_with_halos[self.dbc.nodes, :]
+        self.dat.data_wo_with_halos[self.dbc.nodes, :] = (
+            self.tangential_velocity.dat.data_ro_with_halos[self.dbc.nodes, :]
         )
 
 
@@ -246,7 +254,7 @@ class pyGplatesConnector(object):
     # minimum distance, bellow which we do not interpolate
     #   this is just to avoid division by zero when weighted averaging
     epsilon_distance = 1e-8
-    # minimum magnitude, bellow which we do not scale the velocities
+    # minimum magnitude, below which we do not scale the velocities
     # This is to avoid division by zero when scaling the velocities
     eps_rel = 1e-10
 
@@ -259,26 +267,26 @@ class pyGplatesConnector(object):
                  nseeds=1e5,
                  nneighbours=4,
                  kappa=1e-6):
-        """An interface to pygplates, used for updating top Dirichlet boundary conditions
+        """An interface to PyGPlates, used for updating top Dirichlet boundary conditions
         using plate tectonic reconstructions.
 
         This class provides functionality to assign plate velocities at different geological
         ages to the boundary conditions specified with dbc. Due to potential challenges in
-        identifying the plate id for a given point with pygplates, especially in high-resolution
+        identifying the plate id for a given point with PyGPlates, especially in high-resolution
         simulations, this interface employs a method of calculating velocities at a number
         of equidistant points on a sphere. It then interpolates these velocities for points
         assigned a plate id. A warning is raised for any point not assigned a plate id.
 
         Arguments:
-            rotation_filenames (Union[str, List[str]]): Collection of rotation file names for pygplates.
-            topology_filenames (Union[str, List[str]]): Collection of topology file names for pygplates.
+            rotation_filenames (Union[str, List[str]]): Collection of rotation file names for PyGPlates.
+            topology_filenames (Union[str, List[str]]): Collection of topology file names for PyGPlates.
             oldest_age (float): The oldest age present in the plate reconstruction model.
             delta_t (Optional[float]): The t window range outside which plate velocities are updated.
             scaling_factor (Optional[float]): Scaling factor for surface velocities.
             nseeds (Optional[int]): Number of seed points used in the Fibonacci sphere generation. Higher
                     seed point numbers result in finer representation of boundaries in pygpaltes. Notice that
                     the finer velocity variations will then result in more challenging Stokes solves.
-            nneighbours (Optional[int]): Number of neighboring points when interpolating velocity for each grid point. Default is 4.
+            nneighbours (Optional[int]): Number of neighbouring points when interpolating velocity for each grid point. Default is 4.
             kappa: (Optional[float]): Diffusion constant used for don-dimensionalising time. Default is 1e-6.
 
         Examples:
@@ -307,7 +315,7 @@ class pyGplatesConnector(object):
         # number of neighbouring points that will be used for interpolation
         self.nneighbours = nneighbours
 
-        # pyGplates velocity features
+        # PyGPlates velocity features
         self.velocity_domain_features = (
             self._make_GPML_velocity_feature(
                 self.seeds
@@ -328,7 +336,7 @@ class pyGplatesConnector(object):
     # setting the time that we are interested in
     def get_plate_velocities(self, target_coords, ndtime):
         """Returns plate velocities for the specified target coordinates at the top boundary of a sphere,
-        for a given non-dimensional time, by integrating plate tectonic reconstructions from pyGplates.
+        for a given non-dimensional time, by integrating plate tectonic reconstructions from PyGPlates.
 
         This method calculates new plate velocities.
         It utilizes the cKDTree data structure for efficient nearest neighbor
@@ -338,7 +346,7 @@ class pyGplatesConnector(object):
             target_coords (array-like): Coordinates of the points at the top of the sphere.
             ndtime (float): The non-dimensional time for which plate velocities are to be calculated and assigned.
                 This time is converted to geological age and used to extract relevant plate motions
-                from the pyGplates model.
+                from the PyGPlates model.
 
         Raises:
             Exception: If the requested ndt ime is a negative age (in the future), indicating an issue with
@@ -449,7 +457,7 @@ class pyGplatesConnector(object):
         # Create a feature containing the multipoint feature, and defined as MeshNode type
         meshnode_feature = pygplates.Feature(pygplates.FeatureType.create_from_qualified_string('gpml:MeshNode'))
         meshnode_feature.set_geometry(multi_point)
-        meshnode_feature.set_name('Velocity Mesh Nodes from pygplates')
+        meshnode_feature.set_name('Velocity Mesh Nodes from PyGPlates')
 
         output_feature_collection = pygplates.FeatureCollection(meshnode_feature)
 
@@ -481,7 +489,7 @@ class pyGplatesConnector(object):
         seeds_u = np.array([i.to_xyz() for i in seeds_u])
         seeds_u *= self.velocity_dimDcmyr / self.scaling_factor
 
-        # if pyGplates does not find a plate id for a point, assings NaN to the velocity
+        # if PyGPlates does not find a plate id for a point, assings NaN to the velocity
         # here we make sure we only use velocities that are not NaN.
         non_nan_values = ~np.isnan(seeds_u[:, 0])
 
@@ -521,7 +529,6 @@ class pyGplatesConnector(object):
 
         # Rescale to preserve original magnitude (avoid division by zero)
         scale_factor = np.divide(original_magnitudes, tangential_magnitudes,
-                                 out=np.ones_like(tangential_magnitudes),
                                  where=tangential_magnitudes > pyGplatesConnector.eps_rel)
 
         res_u = res_u_tangential * scale_factor[:, np.newaxis]
@@ -532,7 +539,7 @@ class pyGplatesConnector(object):
         """Calculates velocity vectors for domain points at a specific geological age (Myrs before present day).
 
         This method calculates the velocities for all points in the velocity domain
-        at the specified geological age, using pyGplates to account for tectonic plate
+        at the specified geological age, using PyGPlates to account for tectonic plate
         motions. It utilizes a plate partitioner to determine the tectonic plate each
         point belongs to and computes the velocity based on the rotation model and
         the change over the specified time interval.
@@ -558,7 +565,7 @@ class pyGplatesConnector(object):
         age_rounded = round(age, 0)
 
         # Partition our velocity domain features into our topological plate polygons at the current 'age'.
-        # Note: pygplates can only deal with rounded ages in million years
+        # Note: PyGPlates can only deal with rounded ages in million years
         plate_partitioner = pygplates.PlatePartitioner(topology_features, rotation_model, age_rounded)
 
         for velocity_domain_feature in velocity_domain_features:
@@ -578,7 +585,7 @@ class pyGplatesConnector(object):
                         partitioning_plate_id = partitioning_plate.get_feature().get_reconstruction_plate_id()
 
                         # Get the stage rotation of partitioning plate from 'age + delta_t' to 'age'.
-                        # Note: pygplates can only deal with rounded ages in million years
+                        # Note: PyGPlates can only deal with rounded ages in million years
                         equivalent_stage_rotation = rotation_model.get_rotation(age_rounded, partitioning_plate_id, age_rounded + delta_t)
 
                         # Calculate velocity at the velocity domain point.
@@ -592,7 +599,7 @@ class pyGplatesConnector(object):
                         # add it to the list
                         all_velocities.extend(velocity_vectors)
                     else:
-                        warnings.warn("pygplates couldn't assign plate IDs to some seeds due to irregularities in the reconstruction model. G-ADOPT will interpolate the nearest values.", category=RuntimeWarning)
+                        warnings.warn("PyGPlates couldn't assign plate IDs to some seeds due to irregularities in the reconstruction model. G-ADOPT will interpolate the nearest values.", category=RuntimeWarning)
                         all_velocities.extend([pygplates.Vector3D(np.nan, np.nan, np.nan)])
 
         return all_velocities
