@@ -180,7 +180,7 @@ def rigid_body_modes(
 
     """
     X = fd.SpatialCoordinate(V.mesh())
-    dim = V.mesh().geometric_dimension()
+    dim = V.mesh().geometric_dimension
 
     if rotational:
         if dim == 2:

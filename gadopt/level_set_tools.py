@@ -96,7 +96,7 @@ def interface_thickness(
     epsilon = fd.Function(level_set_space, name="Interface thickness")
 
     if not min_cell_edge_length:
-        scale /= fd.sqrt(level_set_space.mesh().geometric_dimension())
+        scale /= fd.sqrt(level_set_space.mesh().geometric_dimension)
         epsilon.interpolate(scale * level_set_space.mesh().cell_sizes)
     else:
         if level_set_space.extruded:

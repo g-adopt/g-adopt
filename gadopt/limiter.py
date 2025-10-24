@@ -142,7 +142,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_space)
 
         self.mesh = self.P0.mesh()
-        self.dim = self.mesh.geometric_dimension()
+        self.dim = self.mesh.geometric_dimension
         self.extruded = hasattr(self.mesh.ufl_cell(), 'sub_cells')
 
         assert not self.extruded or all(e.variant() == 'equispaced' for e in p1dg_space.ufl_element().sub_elements), \
