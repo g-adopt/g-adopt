@@ -14,7 +14,7 @@ from warnings import warn
 
 import firedrake as fd
 
-from .approximations import BaseApproximation
+from .approximations import BaseApproximation, BaseGIAApproximation
 from .utility import CombinedSurfaceMeasure
 
 __all__ = ["Equation"]
@@ -56,7 +56,7 @@ class Equation:
     _: KW_ONLY
     mass_term: Callable | None = None
     eq_attrs: InitVar[dict[str, Any]] = {}
-    approximation: BaseApproximation | None = None
+    approximation: BaseApproximation | BaseGIAApproximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[int | None] = None
     scaling_factor: Number | fd.Constant = 1
