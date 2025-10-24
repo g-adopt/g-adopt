@@ -16,7 +16,7 @@ timeParameters = {
     "timeStepType": "constant",
     "timeStepSize": 5000,
     "theta_diff": 1.0,
-    "theta_nonlin": 0.00,
+    "theta_nonlin": 1.00,
     "epsilon": 0,
     "quadratureDegree": 3,
     "Cf": 50
@@ -36,7 +36,7 @@ solverParameters = {
     "numberPlots": 0
 }
 
-for nodes in [26, 26, 36, 51, 76, 101, 126, 151, 176, 201, 251, 301, 351, 401]:
+for nodes in [36]:
 
     L = 15.24
     mesh = RectangleMesh(nodes, nodes, L, L, name="mesh", quadrilateral=False)
@@ -120,7 +120,9 @@ for nodes in [26, 26, 36, 51, 76, 101, 126, 151, 176, 201, 251, 301, 351, 401]:
     hInitial.interpolate(exactSolutionSpecifiedHead(alpha, x, offset))
 
     start = time.time()
+    VTKFile("output.pvd").write(hInitial)
     h, theta, q, K = RichardsSolver(hInitial, V, mesh, solverParameters, modelParameters, timeParameters, setBoundaryConditions)
+    VTKFile("output_f.pvd").write(h, theta, K, q)
     end = time.time()
     PETSc.Sys.Print(f"Simulation time: {end - start}")
 

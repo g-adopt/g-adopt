@@ -51,7 +51,7 @@ def RichardsSolver(h0, V, mesh, solverParameters, modelParameters, timeParameter
     totalFlux   = 0
 
     # Save the solution
-    outfile = fd.VTKFile(solverParameters["fileName"]+".pvd")
+    outfile = fd.VTKFile("/Users/sghelichkhani/Workplace/g-adopt/demos/gw-to-be-removed/demos/TwoDimensions/output.pvd")
 
     if solverParameters['numberPlots'] == 0:
         tNext = 2*finalTime
@@ -62,7 +62,6 @@ def RichardsSolver(h0, V, mesh, solverParameters, modelParameters, timeParameter
 
     totalIterations = 0
     massError = 0
-
     # Main time loop
     while float(currentTime) <= finalTime:
 
@@ -71,19 +70,18 @@ def RichardsSolver(h0, V, mesh, solverParameters, modelParameters, timeParameter
         qOld = q
         thetaOld = theta
         massOld = fd.assemble(theta*dx)
+        # Timestep
+        PETSc.Sys.Print(f"ts: {float(currentTime)}")
 
         # Save the solution
-        if float(currentTime) >= tNext:
 
-            PETSc.Sys.Print("Time: " + str(float(currentTime)))
-            outfile.write(h, theta, K, q, div_vel, time=float(currentTime))
-
-            plotIdx += 1
-            tNext += tInterval
+        PETSc.Sys.Print("Time: " + str(float(currentTime)))
+        outfile.write(h, theta, K, q, div_vel, time=float(currentTime))
 
         hOld.assign(h)
         solverRichardsEqn.solve()
         PressureHead.interpolate(h)
+
         #solverMassConservation.solve()
 
         hBar = timeParameters["theta_nonlin"]*h + (1 - timeParameters["theta_nonlin"])*hOld
@@ -105,8 +103,7 @@ def RichardsSolver(h0, V, mesh, solverParameters, modelParameters, timeParameter
         totalIterations += solverRichardsEqn.snes.ksp.getIterationNumber()
         currentTime.assign(currentTime + timeStep)
         iterations += 1
-
-        if float(currentTime + timeStep) > finalTime:
+        if float(currentTime) + float(timeStep) > finalTime:
             timeStepNew = finalTime - float(currentTime)
             timeStepNew = np.maximum(timeStepNew, 1)
             timeStep.assign(timeStepNew)
