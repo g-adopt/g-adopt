@@ -269,7 +269,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         if is_cartesian(self.mesh):
             bc_map["ux"] = bc_map["u"].sub(0)
             bc_map["uy"] = bc_map["u"].sub(1)
-            if self.mesh.geometric_dimension() == 3:
+            if self.mesh.geometric_dimension == 3:
                 bc_map["uz"] = bc_map["u"].sub(2)
 
         for bc_id, bc in self.bcs.items():
@@ -365,7 +365,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                     self.add_to_solver_config(iterative_stokes_solver_parameters)
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
-        elif self.mesh.topological_dimension() == 2:
+        elif self.mesh.topological_dimension == 2:
             self.add_to_solver_config(direct_stokes_solver_parameters)
         else:
             self.add_to_solver_config(iterative_stokes_solver_parameters)
@@ -744,7 +744,7 @@ class BoundaryNormalStressSolver(SolverConfigurationMixin):
 
         # geometry
         self.mesh = stokes_solver.mesh
-        self.dim = self.mesh.geometric_dimension()
+        self.dim = self.mesh.geometric_dimension
 
         # approximation tells us if we need to consider compressible formulation or not
         self.approximation = stokes_solver.approximation
