@@ -4,20 +4,7 @@ relevant parameters and call individual class methods to compute associated diag
 
 """
 
-from firedrake import (
-    Constant,
-    DirichletBC,
-    FacetNormal,
-    Function,
-    Measure,
-    assemble,
-    dot,
-    ds,
-    dx,
-    grad,
-    norm,
-    sqrt,
-)
+import firedrake as fd
 import numpy as np
 from mpi4py import MPI
 from functools import cache
@@ -29,26 +16,26 @@ __all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics"]
 
 
 @cache
-def get_dx(mesh, quad_degree: int) -> Measure:
-    return dx(domain=mesh, degree=quad_degree)
+def get_dx(mesh, quad_degree: int) -> fd.Measure:
+    return fd.dx(domain=mesh, degree=quad_degree)
 
 
 @cache
-def get_ds(mesh, function_space, quad_degree: int) -> Measure:
+def get_ds(mesh, function_space, quad_degree: int) -> fd.Measure:
     if function_space.extruded:
         return CombinedSurfaceMeasure(mesh, quad_degree)
     else:
-        return ds(domain=mesh, degree=quad_degree)
+        return fd.ds(domain=mesh, degree=quad_degree)
 
 
 @cache
 def get_normal(mesh):
-    return FacetNormal(mesh)
+    return fd.FacetNormal(mesh)
 
 
 @cache
 def get_volume(dx):
-    return assemble(Constant(1) * dx)
+    return fd.assemble(fd.Constant(1) * dx)
 
 
 class FunctionContext:
@@ -67,7 +54,7 @@ class FunctionContext:
         The Firedrake function these attributes belong to
     """
 
-    def __init__(self, quad_degree: int, func: Function):
+    def __init__(self, quad_degree: int, func: fd.Function):
         self.function = func
         self.mesh = extract_unique_domain(func)
         self.function_space = func.function_space()
@@ -94,7 +81,7 @@ class FunctionContext:
           List of integers corresponding to nodes on the boundary identified by
           `boundary_id`
         """
-        bc = DirichletBC(self.function_space, 0, boundary_id)
+        bc = fd.DirichletBC(self.function_space, 0, boundary_id)
         return [n for n in bc.nodes if n < self.function_space.dof_dset.size]
 
 
@@ -125,8 +112,8 @@ class BaseDiagnostics:
         to reference that function.
     """
 
-    def __init__(self, quad_degree: int, **funcs: Function):
-        self._function_contexts: dict[Function, FunctionContext] = {}
+    def __init__(self, quad_degree: int, **funcs: fd.Function):
+        self._function_contexts: dict[fd.Function, FunctionContext] = {}
 
         for name, func in funcs.items():
             if len(func.subfunctions) == 1:
@@ -137,14 +124,14 @@ class BaseDiagnostics:
                     setattr(self, f"{name}_{i}", func)
                     self._init_single_func(quad_degree, subfunc)
 
-    def _init_single_func(self, quad_degree: int, func: Function):
+    def _init_single_func(self, quad_degree: int, func: fd.Function):
         """
         Create a FunctionContext for a single function
         """
         self._function_contexts[func] = FunctionContext(quad_degree, func)
 
     @cache
-    def _check_present(self, func: Function) -> None:
+    def _check_present(self, func: fd.Function) -> None:
         """
         Determine if a function is present in this BaseDiagnostics object
         """
@@ -152,7 +139,7 @@ class BaseDiagnostics:
             raise KeyError(f"Function {func} is not present in this diagnostic object")
 
     @cache
-    def _check_dim_valid(self, f: Function) -> None:
+    def _check_dim_valid(self, f: fd.Function) -> None:
         """
         Determine if the 'dim' argument can be used when searching for a function
         min/max (i.e. if f is a vector/tensor function).
@@ -164,7 +151,7 @@ class BaseDiagnostics:
 
     def _function_min(
         self,
-        f: Function,
+        f: fd.Function,
         boundary_id: int | None = None,
         dim: int | None = None,
     ):
@@ -197,7 +184,7 @@ class BaseDiagnostics:
 
     def _function_max(
         self,
-        f: Function,
+        f: fd.Function,
         boundary_id: int | None = None,
         dim: int | None = None,
     ):
@@ -228,7 +215,7 @@ class BaseDiagnostics:
             f_data = f_data[:, dim]
         return f.comm.allreduce(f_data.max(initial=-np.inf), MPI.MAX)
 
-    def _function_avg(self, f: Function):
+    def _function_avg(self, f: fd.Function):
         """Calculate the average value of a function
 
         Args:
@@ -240,7 +227,7 @@ class BaseDiagnostics:
         """
         self._check_present(f)
         return (
-            assemble(f * self._function_contexts[f].dx)
+            fd.assemble(f * self._function_contexts[f].dx)
             / self._function_contexts[f].volume
         )
 
@@ -273,8 +260,8 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
 
     def __init__(
         self,
-        z: Function,
-        T: Function | None = None,
+        z: fd.Function,
+        T: fd.Function | None = None,
         /,
         bottom_id: int | str | None = None,
         top_id: int | str | None = None,
@@ -291,13 +278,13 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
 
         if bottom_id:
             self.ds_b = self._function_contexts[self.u].ds(bottom_id)
-            self.bottom_surface = assemble(Constant(1) * self.ds_b)
+            self.bottom_surface = fd.assemble(fd.Constant(1) * self.ds_b)
         if top_id:
             self.ds_t = self._function_contexts[self.u].ds(top_id)
-            self.top_surface = assemble(Constant(1) * self.ds_t)
+            self.top_surface = fd.assemble(fd.Constant(1) * self.ds_t)
 
     def u_rms(self):
-        return norm(self.u) / sqrt(self._function_contexts[self.u].volume)
+        return fd.norm(self.u) / fd.sqrt(self._function_contexts[self.u].volume)
 
     def u_rms_top(self) -> float:
         return fd.sqrt(fd.assemble(fd.dot(self.u, self.u) * self.ds_t))
@@ -305,8 +292,8 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
     def Nu_top(self, scale: float = 1.0):
         return (
             -scale
-            * assemble(
-                dot(grad(self.T), self._function_contexts[self.T].normal) * self.ds_t
+            * fd.assemble(
+                fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal) * self.ds_t
             )
             / self.top_surface
         )
@@ -314,8 +301,8 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
     def Nu_bottom(self, scale: float = 1.0):
         return (
             scale
-            * assemble(
-                dot(grad(self.T), self._function_contexts[self.T].normal) * self.ds_b
+            * fd.assemble(
+                fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal) * self.ds_b
             )
             / self.bottom_surface
         )
