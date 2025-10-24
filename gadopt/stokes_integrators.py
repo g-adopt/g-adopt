@@ -763,8 +763,12 @@ class InternalVariableSolver(StokesSolverBase):
             internal_variables = [internal_variables]
         self.internal_variables = internal_variables
 
-        # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
-        approximation.mu = approximation.viscosity[0]/(approximation.maxwell_times[0]+dt)
+        # provide an `effective viscosity' to the approximation used
+        # for SIPG terms in the viscosity term of momentum_equation.py
+        # N.b. the potential for confusion as GIA modellers often use
+        # mu to represent the shear modulus.
+        approximation.mu = approximation.effective_viscosity(dt)
+
         super().__init__(solution, approximation, dt=dt, **kwargs)
 
     def set_equations(self) -> None:

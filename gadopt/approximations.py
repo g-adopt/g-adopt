@@ -608,6 +608,16 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         return dev(sym(grad(u)))
 
+    def effective_viscosity(self, dt: float) -> ufl.core.expr.Expr:
+        """Effective viscosity used to impose boundary conditions on displacement
+        weakly through a Nitsche penalty term in the viscosity_term of
+        momentum_equation.py"""
+
+        eta_eff = 0
+        for eta, maxwell_time in zip(self.viscosity, self.maxwell_times):
+            eta_eff += eta / (maxwell_time + dt)
+        return eta_eff
+
     def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
         internal_variables = kwargs.get("internal_variables", None)
         if internal_variables is None:
