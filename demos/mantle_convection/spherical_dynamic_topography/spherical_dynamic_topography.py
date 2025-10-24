@@ -162,7 +162,7 @@ def main(free_slip=False):
     log(f"Calculating dynamic topography with {'free slip' if free_slip else 'plate velocity'} boundary conditions")
 
     # We now initiate the time loop:
-    for checkpoint in all_checkpoints[-5:-1]:  # Process last 2 checkpoints for testing
+    for checkpoint in all_checkpoints:  # Process last 2 checkpoints for testing
         log(f"Processing checkpoint: {checkpoint}")
 
         with CheckpointFile(checkpoint.as_posix(), mode="r") as f:
