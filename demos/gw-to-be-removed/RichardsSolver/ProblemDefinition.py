@@ -62,7 +62,7 @@ def ProblemDefinitionNonlinear(h, hOld, timeConstant, timeStep, V, modelParamete
 
     F = (fd.inner((Ss*S + C)*(h - hOld)/timeStep, v) + fd.inner(K*fd.grad(hDiff), fd.grad(v)) + fd.inner(K, v.dx(dimen-1)))*dx \
             - fd.jump(v)*(qn('+') - qn('-'))*dS
-    
+
     if ("D" in family_name):
         F -= fd.dot(fd.avg(K*fd.grad(h)), fd.jump(v, n))*dS
         F -= fd.dot(fd.jump(h, n), fd.avg(K*fd.grad(v)))*dS
@@ -134,6 +134,10 @@ def ProblemDefinitionNonlinear(h, hOld, timeConstant, timeStep, V, modelParamete
                                     'snes_type': snesType,
                                     'ksp_type': ksp_type,
                                     "pc_type": pc_type,
+                                    "snes_converged_reason": None,
+                                    "ksp_converged_reason": None,
+                                    "snes_monitor": None,
+                                    "ksp_monitor": None,
                                 })
 
     return solverRichardsNonlinear
