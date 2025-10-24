@@ -11,7 +11,7 @@ from numbers import Number
 from typing import Optional
 from warnings import warn
 
-from firedrake import Function, Identity, div, grad, inner, sym, ufl, dev
+from firedrake import Function, Identity, div, grad, inner, sym, ufl, tr
 
 from .utility import ensure_constant, vertical_component
 
@@ -606,7 +606,12 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
         self.mu0 = ensure_constant(sum(self.shear_modulus))
 
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
-        return dev(sym(grad(u)))
+        dim = len(u)
+        e = sym(grad(u))
+        # N.b. for 2d simulations dividing by 1/3 (instead of 1/2) may be slightly
+        # inconsistent but analytical tests in tests/viscoelastic_internal_variable/
+        # are setup assuming 3D geometry.
+        return e - 1 / 3 * tr(e) * Identity(dim)
 
     def effective_viscosity(self, dt: float) -> ufl.core.expr.Expr:
         """Effective viscosity used to impose boundary conditions on displacement
