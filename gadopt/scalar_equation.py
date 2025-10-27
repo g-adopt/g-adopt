@@ -79,7 +79,7 @@ def diffusion_term(
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
     kappa = eq.diffusivity
-    dim = eq.mesh.geometric_dimension()
+    dim = eq.mesh.geometric_dimension
     diff_tensor = kappa if len(kappa.ufl_shape) == 2 else kappa * Identity(dim)
 
     reference_for_diffusion = getattr(eq, "reference_for_diffusion", 0)

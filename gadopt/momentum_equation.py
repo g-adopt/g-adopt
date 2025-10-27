@@ -54,7 +54,7 @@ def viscosity_term(
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    dim = eq.mesh.geometric_dimension()
+    dim = eq.mesh.geometric_dimension
     identity = Identity(dim)
     compressible_stress = eq.approximation.compressible
 
