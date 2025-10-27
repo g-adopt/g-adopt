@@ -79,6 +79,8 @@ def richards_mass_term(
     # Evaluate nonlinear coefficients at PREVIOUS solution (explicit treatment)
     theta = soil_curve.moisture_content(solution_old)
     C = soil_curve.water_retention(solution_old)
+    # theta = soil_curve.moisture_content(trial)
+    # C = soil_curve.water_retention(trial)
 
     # Effective saturation
     S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
