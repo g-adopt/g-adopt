@@ -39,7 +39,7 @@ __all__ = [
 
 # Default parameters for level-set advection
 adv_params_default = {
-    "time_integrator": eSSPRKs10p3,
+    "time_integrator": eSSPRKs10p3,  # Back to explicit SSP
     "bcs": {},
     "subcycles": 1,
 }
@@ -47,7 +47,7 @@ adv_params_default = {
 # Default parameters for level-set reinitialisation
 reini_params_default = {
     "timestep": 0.02,
-    "time_integrator": eSSPRKs3p3,
+    "time_integrator": eSSPRKs3p3,  # Back to explicit SSP
     "steps": 1,
 }
 solver_params_default = {

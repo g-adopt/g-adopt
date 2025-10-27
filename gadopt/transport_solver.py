@@ -234,14 +234,27 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
 
     def setup_solver(self) -> None:
         """Sets up the timestepper using specified parameters."""
-        self.ts = self.timestepper(
-            self.equation,
-            self.solution,
-            self.delta_t,
-            solution_old=self.solution_old,
-            solver_parameters=self.solver_parameters,
-            strong_bcs=self.strong_bcs,
-        )
+        # Check if timestepper is Irksome-based
+        if hasattr(self.timestepper, 'butcher_tableau'):
+            # Irksome path - create the stepper directly
+            self.ts = self.timestepper(
+                self.equation,
+                self.solution,
+                self.delta_t,
+                solution_old=self.solution_old,
+                solver_parameters=self.solver_parameters,
+                strong_bcs=self.strong_bcs,
+            )
+        else:
+            # Legacy path - for backward compatibility during transition
+            self.ts = self.timestepper(
+                self.equation,
+                self.solution,
+                self.delta_t,
+                solution_old=self.solution_old,
+                solver_parameters=self.solver_parameters,
+                strong_bcs=self.strong_bcs,
+            )
 
     def solver_callback(self) -> None:
         """Optional instructions to execute right after a solve."""

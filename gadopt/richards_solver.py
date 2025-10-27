@@ -203,13 +203,27 @@ class RichardsSolver(SolverConfigurationMixin):
             'soil_curve': self.soil_curve,
         }
 
-        # Create wrapper functions that have required_attrs and optional_attrs
-        def mass_wrapper(eq, trial):
-            return richards_eq.richards_mass_term(
-                eq, trial, self.solution_old
-            )
-        mass_wrapper.required_attrs = richards_eq.richards_mass_term.required_attrs
-        mass_wrapper.optional_attrs = richards_eq.richards_mass_term.optional_attrs
+        # The mass term is handled implicitly by Irksome's Dt() operator
+        # We need to create a custom mass term that works with Dt()
+        def richards_mass_term_for_irksome(eq, trial):
+            """Richards mass term compatible with Irksome's Dt() operator."""
+            soil_curve = eq.soil_curve
+
+            # Evaluate nonlinear coefficients at current solution
+            theta = soil_curve.moisture_content(trial)
+            C = soil_curve.water_retention(trial)
+
+            # Effective saturation
+            S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
+
+            # Mass coefficient evaluated at current solution
+            mass_coeff = soil_curve.Ss * S + C
+
+            return inner(eq.test, mass_coeff * trial) * eq.dx
+
+        # Set required attributes for the mass term
+        richards_mass_term_for_irksome.required_attrs = {'soil_curve'}
+        richards_mass_term_for_irksome.optional_attrs = set()
 
         self.equation = Equation(
             self.test,
@@ -218,7 +232,7 @@ class RichardsSolver(SolverConfigurationMixin):
                 richards_eq.richards_diffusion_term,
                 richards_eq.richards_gravity_term,
             ],
-            mass_term=mass_wrapper,
+            mass_term=richards_mass_term_for_irksome,  # Custom mass term for Irksome
             eq_attrs=eq_attrs,
             bcs=self.weak_bcs,
             quad_degree=self.quad_degree,

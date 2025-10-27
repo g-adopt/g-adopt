@@ -128,6 +128,30 @@ class Equation:
             term(self, trial) for term in self.residual_terms
         )
 
+    def build_irksome_form(self, solution: fd.Function) -> fd.Form:
+        """Build semi-discrete form for Irksome: Dt(solution) + residual = 0
+
+        This method constructs the semi-discrete form that Irksome can process.
+        The mass term is handled implicitly by Irksome's Dt() operator, so we
+        only need to include the residual terms.
+
+        Args:
+            solution: Current solution function (not trial function)
+
+        Returns:
+            Semi-discrete UFL form for Irksome
+        """
+        try:
+            from irksome import Dt
+        except ImportError:
+            raise ImportError("Irksome is required to use build_irksome_form()")
+
+        # Build semi-discrete form: Dt(solution) + residual = 0
+        # The mass term is handled implicitly by Dt(solution)
+        F = fd.inner(self.test, Dt(solution)) * self.dx + self.residual(solution)
+
+        return F
+
 
 def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     r"""

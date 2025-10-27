@@ -34,13 +34,31 @@ from .stokes_integrators import (
     BoundaryNormalStressSolver,
 )
 from .time_stepper import (
+    # Implicit methods
     BackwardEuler,
     CrankNicolsonRK,
     DIRK22,
+    DIRK23,
     DIRK33,
+    DIRK43,
     ImplicitMidpoint,
+    # Explicit methods
+    ERKEuler,
+    ERKMidpoint,
+    SSPRK33,
     eSSPRKs3p3,
+    eSSPRKs4p3,
+    eSSPRKs5p3,
+    eSSPRKs6p3,
+    eSSPRKs7p3,
+    eSSPRKs8p3,
+    eSSPRKs9p3,
     eSSPRKs10p3,
+    # Level set methods
+    ERKLSPUM2,
+    ERKLPUM2,
+    DIRKLSPUM2,
+    DIRKLPUM2,
 )
 from .transport_solver import EnergySolver, GenericTransportSolver
 from .utility import (
