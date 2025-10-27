@@ -279,7 +279,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         if is_cartesian(self.mesh):
             bc_map["ux"] = bc_map["u"].sub(0)
             bc_map["uy"] = bc_map["u"].sub(1)
-            if self.mesh.geometric_dimension() == 3:
+            if self.mesh.geometric_dimension == 3:
                 bc_map["uz"] = bc_map["u"].sub(2)
 
         for bc_id, bc in self.bcs.items():
@@ -375,7 +375,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                     self.add_to_solver_config(iterative_stokes_solver_parameters)
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
-        elif self.mesh.topological_dimension() == 2:
+        elif self.mesh.topological_dimension == 2:
             self.add_to_solver_config(direct_stokes_solver_parameters)
         else:
             self.add_to_solver_config(iterative_stokes_solver_parameters)
@@ -763,8 +763,12 @@ class InternalVariableSolver(StokesSolverBase):
             internal_variables = [internal_variables]
         self.internal_variables = internal_variables
 
-        # Effective viscosity THIS IS A HACK. need to update SIPG terms for compressibility?
-        approximation.mu = approximation.viscosity[0]/(approximation.maxwell_times[0]+dt)
+        # provide an `effective viscosity' to the approximation used
+        # for SIPG terms in the viscosity term of momentum_equation.py
+        # N.b. the potential for confusion as GIA modellers often use
+        # mu to represent the shear modulus.
+        approximation.mu = approximation.effective_viscosity(dt)
+
         super().__init__(solution, approximation, dt=dt, **kwargs)
 
     def set_equations(self) -> None:
@@ -776,8 +780,8 @@ class InternalVariableSolver(StokesSolverBase):
             )
 
         internal_variables_update = [
-            self.update_m(m, alpha)
-            for m, alpha in zip(
+            self.update_m(m, maxwell_time)
+            for m, maxwell_time in zip(
                 self.internal_variables, self.approximation.maxwell_times
             )
         ]
@@ -787,14 +791,14 @@ class InternalVariableSolver(StokesSolverBase):
         )
         source = self.approximation.buoyancy(self.solution) * self.k
 
-        eqs_attrs = {"stress": stress, "source": source}
+        eq_attrs = {"stress": stress, "source": source}
 
         self.equations.append(
             Equation(
                 self.test,
                 self.solution_space,
                 compressible_viscoelastic_terms,
-                eq_attrs=eqs_attrs,
+                eq_attrs=eq_attrs,
                 approximation=self.approximation,
                 bcs=self.weak_bcs,
                 quad_degree=self.quad_degree,
@@ -814,21 +818,21 @@ class InternalVariableSolver(StokesSolverBase):
         return combined_normal_stress
 
     def update_m(
-        self, m: fd.Function, alpha: fd.Function | Expr
+        self, m: fd.Function, maxwell_time: fd.Function | Expr
     ) -> Expr:
         """Calculates updated internal variable using Backward Euler formula
 
         Args:
           m:
             Firedrake function representing the current value of the internal variable
-          alpha:
+          maxwell_time:
             Firedrake function or UFL expression for Maxwell time associated with m
             terms in the system of equations
 
         Returns:
             UFL expression for the updated internal variable using Backward Euler
         """
-        m_new = (m + self.dt / alpha * self.strain) / (1 + self.dt / alpha)
+        m_new = (m + self.dt / maxwell_time * self.strain) / (1 + self.dt / maxwell_time)
         return m_new
 
     def solve(self) -> None:
@@ -890,7 +894,7 @@ class BoundaryNormalStressSolver(SolverConfigurationMixin):
 
         # geometry
         self.mesh = stokes_solver.mesh
-        self.dim = self.mesh.geometric_dimension()
+        self.dim = self.mesh.geometric_dimension
 
         # approximation tells us if we need to consider compressible formulation or not
         self.approximation = stokes_solver.approximation

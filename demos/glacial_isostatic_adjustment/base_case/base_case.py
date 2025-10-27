@@ -154,9 +154,10 @@
 # For this viscoelastic model the elastic and viscous stresses are the same
 # but the total displacements combine.
 #
-#
-# We follow the internal variable formulation adopted by Al-Attar and
-# Tromp (2014) and Crawford et al. (2017, 2018), in which viscoelastic
+# We follow the internal variable formulation adopted by [Al-Attar and
+# Tromp (2014)](https://doi.org/10.1093/gji/ggt395) and Crawford et al.
+# ([2016](https://doi.org/10.1093/gji/ggw414),
+# [2018](https://doi.org/10.1093/gji/ggy184)), in which viscoelastic
 # constitutive equations are expressed in integral form and reformulated using
 # so-called *internal variables*. Conceptually, this approach consists of a set
 # of elements with different shear relaxation timescales, arranged in parallel.
@@ -216,9 +217,9 @@
 # constitutive equation now depends on time. We discretise the internal
 # variable evolution equation in time using the implicit Backward Euler (BE)
 # scheme. This choice allows us to take timesteps larger than the characteristic
-#  Maxwell time without compromising numerical stability. Such flexibility is
+# Maxwell time without compromising numerical stability. Such flexibility is
 # particularly advantageous when the timescale of glacial loading is
-# substantially slower than the Maxwell time -- as is often the case in
+# substantially shorter than the Maxwell time -- as is often the case in
 # low-viscosity regions -- thereby avoiding having to take prohibitively small
 # timesteps in realistic simulations of glacial cycles. Applying the BE scheme,
 # the evolution of each internal variable becomes
@@ -249,12 +250,12 @@
 # piecewise continuous tri-quadratic tensor product of quadratic continuous
 # polynomials in each direction). For the deviatoric strain tensor (and hence
 # the internal variable), since it is proportional to the gradient of
-# displacement, we choose the discontinuous $DG1$ space (i.e., linear
+# displacement, we choose the discontinuous $DQ1$ space (i.e., linear
 # variations within each finite element cell and discontinuous jumps between
 # cells) for each component. For purely radial variations in density, viscosity
-# and shear modulus, we choose the $DG0$ space (i.e., constant within a finite
+# and shear modulus, we choose the $DQ0$ space (i.e., constant within a finite
 # element cell but discontinuous between cells), while for laterally varying
-# viscosity fields, we again select $DG1$ finite element functions.
+# viscosity fields, we again select $DQ1$ finite element functions.
 # Once these spaces have been chosen, we can integrate various terms by parts
 # within each element to introduce weak boundary conditions and to move
 # derivatives from the trial function to the test function.
@@ -287,20 +288,21 @@
 # Finding the new values of $\boldsymbol{u}^{n+1}$ requires solving a linear
 # system at each timestep, which is solved in Firedrake through PETSc's
 # comprehensive linear algebra library. For more details on the numerical
-# discretisation please refer to Scott et al. (2025).
+# discretisation please refer to
+# [Scott et al. (2025)](https://doi.org/10.5194/egusphere-2025-4168).
 #
 
 # This example
 # -------------
 # We will simulate a viscoelastic loading and unloading problem based on a 2D
-# version of the test case presented in Weerdesteijn et al. (2023).
+# version of the test case presented in
+# [Weerdesteijn et al. (2023)](https://doi.org/10.1029/2022GC010813).
 #
 # Let's get started! The first step is to import the `gadopt` module, which
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
-from gadopt.utility import extruded_layer_heights
-from gadopt.utility import initialise_background_field
+from gadopt.utility import extruded_layer_heights, initialise_background_field
 
 # Next we need to create a mesh of the mantle region we want to simulate. The
 # Weerdesteijn test case is a 3D box 1500 km wide horizontally and 2891 km deep.
@@ -598,7 +600,7 @@ stokes_solver = InternalVariableSolver(
 # +
 # initialise velocity and old displacement functions for plotting
 velocity = Function(u, name="velocity")
-disp_old = Function(u, name="old_disp").assign(u)
+disp_old = Function(u, name="old_disp")
 
 # Create output file
 output_file = VTKFile("output.pvd")
@@ -771,16 +773,31 @@ plog.close()
 
 # References
 # ----------
+# Al-Attar, David, and Jeroen Tromp. *Sensitivity kernels for viscoelastic loading
+# based on adjoint methods.* Geophysical Journal International 196.1 (2014): 34-77.
+#
 # Cathles L.M. (1975). *Viscosity of the Earth's Mantle*, Princeton University Press.
+#
+# Crawford, O., Al-Attar, D., Tromp, J., & Mitrovica, J. X. (2016). *Forward and
+# inverse modelling of post-seismic deformation.* Geophysical Journal International,
+# ggw414.
+#
+# Crawford, O., Al-Attar, D., Tromp, J., Mitrovica, J. X., Austermann, J., &
+# Lau, H. C. (2018). *Quantifying the sensitivity of post-glacial sea level change
+# to laterally varying viscosity.* Geophysical journal international, 214(2), 1324-1363.
 #
 # Dahlen F. A. and Tromp J. (1998). *Theoretical Global Seismology*, Princeton
 # University Press.
 #
-# Ranalli, G. (1995). Rheology of the Earth. Springer Science & Business Media.
+# Ranalli, G. (1995). *Rheology of the Earth.* Springer Science & Business Media.
 #
 # Richards, M. A., & Lenardic, A. (2018). *The Cathles parameter (Ct): A geodynamic
 # definition of the asthenosphere and implications for the nature of plate tectonics.*
 # Geochemistry, Geophysics, Geosystems.
+#
+# Scott, W., Hoggard, M., Duvernay, T., Ghelichkhan, S., Gibson, A.,
+# Roberts, D., Kramer, S. C., and Davies, D. R. *Automated forward and adjoint modelling
+# of viscoelastic deformation of the solid Earth*.  EGUsphere, 2025: 1–43. 2025.
 #
 # Weerdesteijn, M. F., Naliboff, J. B., Conrad, C. P., Reusen, J. M., Steffen, R.,
 # Heister, T., & Zhang, J. (2023). *Modeling viscoelastic solid earth deformation

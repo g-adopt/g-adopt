@@ -54,7 +54,7 @@ def viscosity_term(
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    dim = eq.mesh.geometric_dimension()
+    dim = eq.mesh.geometric_dimension
     identity = Identity(dim)
     compressible_stress = eq.approximation.compressible
 
@@ -213,7 +213,7 @@ def advection_hydrostatic_prestress_term(
         # change surface measure for extruded mesh.
         # assumes mesh is aligned in the vertical so that jump
         # only occurs across horizontal layers
-        if type(rho0.function_space()._mesh) is ExtrudedMeshTopology:
+        if isinstance(eq.mesh, ExtrudedMeshTopology):
             dS = dS_h
         else:
             dS = eq.dS
