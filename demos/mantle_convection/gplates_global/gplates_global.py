@@ -323,8 +323,8 @@ for timestep in range(0, timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    nusselt_number_top = gd.Nu_top() * (rmax*(rmin-rmax)/rmin) * -1.
-    nusselt_number_base = gd.Nu_bottom() * (rmin*(rmax-rmin)/rmax)
+    nusselt_number_top = gd.Nu_top(scale=(rmax * (rmin - rmax) / rmin) * -1.0)
+    nusselt_number_base = gd.Nu_bottom(scale=(rmin * (rmax - rmin) / rmax))
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
     # Calculate L2-norm of change in temperature:

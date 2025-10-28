@@ -197,8 +197,8 @@ for timestep in range(0, timesteps):
     f_ratio = rmin/rmax
     top_scaling = 1.3290170684486309  # log(f_ratio) / (1.- f_ratio)
     bot_scaling = 0.7303607313096079  # (f_ratio * log(f_ratio)) / (1.- f_ratio)
-    nusselt_number_top = gd.Nu_top() * top_scaling
-    nusselt_number_base = gd.Nu_bottom() * bot_scaling
+    nusselt_number_top = gd.Nu_top(scale=top_scaling)
+    nusselt_number_base = gd.Nu_bottom(scale=bot_scaling)
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
     # Calculate L2-norm of change in temperature:
