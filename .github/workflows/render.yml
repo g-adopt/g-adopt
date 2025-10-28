@@ -37,6 +37,12 @@ jobs:
           uv venv --system-site-packages
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
 
+      - name: Install Irksome
+        run: |
+          . .venv/bin/activate
+          git clone https://github.com/firedrakeproject/Irksome.git
+          pip install --editable ./Irksome
+
       - name: Get Muller et al 2022 plate reconstructions
         run: |
           curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
