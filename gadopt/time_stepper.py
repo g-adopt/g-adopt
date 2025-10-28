@@ -7,7 +7,6 @@ providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
 This module now includes Irksome integration.
 """
 
-import operator
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Optional
 
@@ -23,7 +22,6 @@ from irksome import (
     RadauIIA, GaussLegendre, LobattoIIIA, LobattoIIIC,
     BackwardEuler as IrksomeBackwardEuler, Alexander, QinZhang, PareschiRusso)
 from irksome.ButcherTableaux import ButcherTableau
-
 
 
 class TimeIntegratorBase(ABC):
@@ -251,8 +249,10 @@ def gadopt_to_irksome_tableau(scheme_class):
     }
 
     # Get the mapping function or use default
-    mapping_func = scheme_mappings.get(scheme_class,
-                                     lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "deriv"))
+    mapping_func = scheme_mappings.get(
+        scheme_class,
+        lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "deriv")
+    )
 
     return mapping_func()
 
@@ -1079,6 +1079,7 @@ class DIRKLSPUM2(DIRKGeneric, DIRKLSPUM2Abstract):
 
 class DIRKLPUM2(DIRKGeneric, DIRKLPUM2Abstract):
     pass
+
 
 class IrksomeRadauIIA(IrksomeIntegrator):
     """Direct access to Irksome's RadauIIA scheme for use with EnergySolver."""
