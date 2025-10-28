@@ -19,7 +19,6 @@
 
 from gadopt import *
 from gadopt.utility import (
-    vertical_component,
     extruded_layer_heights,
     initialise_background_field
 )
