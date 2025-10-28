@@ -3,7 +3,7 @@
 #
 # In this tutorial, we examine an idealised 2-D loading problem in an annulus domain.
 #
-# This example focusses on differences between running simulations in a 2-D annulus
+# This example focuses on differences between running simulations in a 2-D annulus
 # and a 2-D Cartesian domain in our [previous tutorial](../base_case). These can be summarised
 # as follows:
 # 1. The geometry of the problem - i.e. the computational mesh.
@@ -23,6 +23,13 @@ from gadopt import *
 from gadopt.utility import vertical_component
 from gadopt.utility import extruded_layer_heights
 from gadopt.utility import initialise_background_field
+
+# We also import some helper functions for plotting and making animations associated
+# with this demo.
+
+# + tags=["active-ipynb"]
+# from gadopt.gia_demo_utilities import plot_ice_ring, plot_viscosity, plot_animation
+# -
 
 # Similar to our [previous tutorial](../base_case) demo we create the mesh in two
 # stages. First we create a surface mesh of 180 cells using one of `Firedrake`'s
@@ -136,41 +143,6 @@ initialise_background_field(
     bulk_modulus, shear_modulus_values_nondim, X, radius_values_nondim)
 # -
 
-# Let's have a quick look at the density field using pyvista.
-
-# + tags=["active-ipynb"]
-# # Read the PVD file
-# density_file = VTKFile('density.pvd').write(density)
-# reader = pv.get_reader("density.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
-# data['density'] *= density_scale
-# # Create a plotter object
-# plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
-#
-# # Add the warped displacement field to the frame
-# plotter.add_mesh(
-#     data,
-#     component=None,
-#     lighting=False,
-#     show_edges=False,
-#     cmap="viridis_r",
-#     scalar_bar_args={
-#         "title": 'Density (kg / m^3)',
-#         "position_x": 0.8,
-#         "position_y": 0.2,
-#         "vertical": True,
-#         "title_font_size": 20,
-#         "label_font_size": 16,
-#         "fmt": "%.0f",
-#         "font_family": "arial",
-#     }
-# )
-# plotter.camera_position = 'xy'
-# plotter.show(jupyter_backend="static", interactive=False)
-# # Closes and finalizes movie
-# plotter.close()
-# -
-
 # Next let's initialise the viscosity field. In this tutorial we are
 # going to make things a bit more interesting by using a laterally
 # varying viscosity field. We'll put some regions of low viscosity
@@ -265,43 +237,10 @@ viscosity = setup_heterogenous_viscosity(background_viscosity)
 # + tags=["active-ipynb"]
 # # Read the PVD file
 # visc_file = VTKFile('viscosity.pvd').write(viscosity)
-# reader = pv.get_reader("viscosity.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
-# data['viscosity'] *= viscosity_scale
-#
-# surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
-#                                       feature_edges=False, manifold_edges=False)
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
-#
-# # add outline of domain
-# lw = 5
-# plotter.add_mesh(surf, color='black',line_width=lw, lighting=False,show_scalar_bar=False)
-#
-# # Make a colour map
-# boring_cmap = plt.get_cmap("inferno_r", 25)
-# plotter.add_mesh(
-#     data,
-#     component=None,
-#     lighting=False,
-#     show_edges=False,
-#     cmap=boring_cmap,
-#     clim=[1e20, 1e25],
-#     log_scale=True,
-#     scalar_bar_args={
-#         "title": 'Viscosity (Pa s)',
-#         "position_x": 0.8,
-#         "position_y": 0.2,
-#         "vertical": True,
-#         "title_font_size": 20,
-#         "label_font_size": 16,
-#         "fmt": "%.0e",
-#         "font_family": "arial",
-#         "n_labels": 6,
-#     },
-#     #show_scalar_bar=False
-# )
+# plot_viscosity(plotter)
 # plotter.camera_position = 'xy'
 # plotter.show(jupyter_backend="static", interactive=False)
 # plotter.close()
@@ -337,100 +276,18 @@ ice_load = B_mu * rho_ice * (Hice1 * disc1 + Hice2 * disc2)
 # synthetic Earth.
 
 # + tags=["active-ipynb"]
-# # camera setting
-# radius = 2.2
-# zoom = 4.25
-#
-# def make_ice_ring(reader):
-#     data = reader.read()[0]
-#     data['Ice thickness'] *= domain_depth
-#     surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
-#                                       feature_edges=False, manifold_edges=False)
-#     sphere = pv.Sphere(radius=0.8*radius)
-#     clipped_surf = surf.clip_surface(sphere, invert=False)
-#
-#     # Stretch line by 20%
-#     stretch = 1.15
-#     transform_matrix = np.array(
-#         [
-#             [stretch, 0, 0, 0],
-#             [0, stretch, 0, 0],
-#             [0, 0, stretch, 0],
-#             [0, 0, 0, 1],
-#         ])
-#     transformed_surf = clipped_surf.transform(transform_matrix)
-#
-#     return transformed_surf
-#
-#
-# def plot_ice_ring(plotter, ice_ring, scalar="Ice thickness"):
-#     ice_cmap = plt.get_cmap("Blues", 25)
-#     ice_lw = 20
-#     plotter.add_mesh(ice_ring,color='black', line_width=ice_lw+2, lighting=False,
-#                      show_scalar_bar=False)
-#     plotter.add_mesh(
-#         ice_ring,
-#         scalars=scalar,
-#         line_width=ice_lw,
-#         cmap=ice_cmap,
-#         clim=[0, 2000],
-#         scalar_bar_args={
-#             "title": 'Ice thickness (m)',
-#             "position_x": 0.05,
-#             "position_y": 0.3,
-#             "vertical": True,
-#             "title_font_size": 20,
-#             "label_font_size": 16,
-#             "fmt": "%.0f",
-#             "font_family": "arial",
-#         }
-#     )
-#
-#
 # # Write ice thicknesss .pvd file
 # P1 = FunctionSpace(mesh, "CG", 1)  # Continuous function space
 # ice_thickness = Function(P1, name="Ice thickness").interpolate(Hice1 * disc1 + Hice2 * disc2)
 # zero_ice_thickness = Function(P1, name="zero").assign(0)  # Used for plotting later
 # ice_thickness_file = VTKFile('ice.pvd').write(ice_thickness, zero_ice_thickness)
 #
-# ice_reader = pv.get_reader("ice.pvd")
-# ice_ring = make_ice_ring(ice_reader)
-#
-# reader = pv.get_reader("viscosity.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
-# data['viscosity'] *= viscosity_scale
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
-#
-# plotter.add_mesh(surf, color='black',line_width=lw, lighting=False,show_scalar_bar=False)
-#
-# plotter.add_mesh(
-#     data,
-#     component=None,
-#     lighting=False,
-#     show_edges=False,
-#     cmap=boring_cmap,
-#     clim=[1e20, 1e25],
-#     log_scale=True,
-#     scalar_bar_args={
-#         "title": 'Viscosity',
-#         "position_x": 0.8,
-#         "position_y": 0.2,
-#         "vertical": True,
-#         "title_font_size": 20,
-#         "label_font_size": 16,
-#         "fmt": "%.0f",
-#         "font_family": "arial",
-#     },
-#     show_scalar_bar=False
-# )
-#
-# plot_ice_ring(plotter, ice_ring)
-#
+# plot_ice_ring(plotter)
+# plot_viscosity(plotter)
 # plotter.camera_position = 'xy'
-#
 # plotter.show(jupyter_backend="static", interactive=False)
-# # Closes and finalizes movie
 # plotter.close()
 # -
 
@@ -502,7 +359,7 @@ stokes_solver = InternalVariableSolver(
     nullspace=V_nullspace,
 )
 
-# We next set up our output, in VTK format.
+# We next set up our output in VTK format and the the logging file using `GeodynamicalDiagnostics` as before.
 
 # +
 # Create a velocity function for plotting
@@ -520,16 +377,13 @@ plog.log_str(
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
 gd = GeodynamicalDiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
-
-# Initialise a (scalar!) function for logging vertical displacement
-U = FunctionSpace(mesh, "CG", 2)  # Displacement function space (scalar)
-vertical_displacement = Function(U, name="Vertical displacement")
 # -
 
 # Now let's run the simulation! At each step we call `solve` to calculate the
 # displacement pressure field and update the internal variable accounting for
-# the stress relaxation in the time dependent viscoelastic consitutive equation.
+# the stress relaxation in the time dependent viscoelastic constitutive equation.
 
+# +
 for timestep in range(1, max_timesteps+1):
 
     time.assign(time+dt)
@@ -555,104 +409,19 @@ for timestep in range(1, max_timesteps+1):
             checkpoint.save_function(u, name="displacement")
             checkpoint.save_function(m, name="internal variable")
 
-    vertical_displacement.interpolate(vertical_component(u))
-
-
 plog.close()
+# -
+
+# Let's use the python package *PyVista* to plot the magnitude of the displacement
+# field through time. We will use the calculated displacement to artifically scale
+# the mesh. We have exaggerated the stretching by a factor of 1500, **BUT...**
+# it is important to remember this is just for ease of visualisation - the mesh
+# is not moving in reality!
 
 # + tags=["active-ipynb"]
-# # Let's use the python package *PyVista* to plot the magnitude of the displacement
-# # field through time. We will use the calculated displacement to artifically scale
-# # the mesh. We have exaggerated the stretching by a factor of 1500, **BUT...**
-# # it is important to remember this is just for ease of visualisation - the mesh
-# # is not moving in reality!
-#
-# import matplotlib.pyplot as plt
-# import pyvista as pv
-#
-# # Read the PVD file
-# reader = pv.get_reader("output.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
-#
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
-#
-# # Open a gif
-# plotter.open_gif("displacement_warp.gif")
-#
-# # Make a colour map
-# boring_cmap = plt.get_cmap("inferno_r", 25)
-#
-# # Fix camera in default position otherwise mesh appears to jumpy around!
-# #plotter.camera_position = 'xy'
-#
-# # Make a list of output times (non-uniform because also
-# # outputing first (quasi-elastic) solve
-# times = [0]
-# for i in range(len(reader.time_values)):
-#     times.append((i+1)*dt_out_years )
-#
-#
-# for i in range(len(reader.time_values)):
-#     print("Step: ", i)
-#     reader.set_active_time_point(i)
-#     data = reader.read()[0]
-#
-#     # Artificially warp the output data in the vertical direction by the free surface
-#     # height. Note the mesh is not really moving!
-#     warped = data.warp_by_vector(vectors="displacement", factor=1500)
-#     arrows = warped.glyph(orient="velocity", scale="velocity", factor=5e4, tolerance=0.01)
-#     plotter.add_mesh(arrows, color="grey", lighting=False)
-#
-#
-#     data['displacement'] *= domain_depth
-#     # Add the warped displacement field to the frame
-#     plotter.add_mesh(
-#         warped,
-#         scalars="displacement",
-#         component=None,
-#         lighting=False,
-#        # show_edges=True,
-#         clim=[0, 600],
-#         cmap=boring_cmap,
-#         scalar_bar_args={
-#             "title": 'Displacement (m)',
-#             "position_x": 0.85,
-#             "position_y": 0.3,
-#             "vertical": True,
-#             "title_font_size": 20,
-#             "label_font_size": 16,
-#             "fmt": "%.0f",
-#             "font_family": "arial",
-#         }
-#     )
-#
-#
-#     plotter.camera_position = [(0, 0, radius_values_nondim[0]*5),
-#                                  (0.0, 0.0, 0.0),
-#                                  (0.0, 1.0, 0.0)]
-#
-#     plotter.add_text(f"Time: {times[i]:6} years", name='time-label')
-#
-#     if i == 0:
-#         plot_ice_ring(plotter, ice_ring, scalar="zero")
-#         for j in range(10):
-#             plotter.write_frame()
-#
-#     plot_ice_ring(plotter, ice_ring)
-#
-#     # Write end frame multiple times to give a pause before gif starts again!
-#     for j in range(10):
-#         plotter.write_frame()
-#
-#     if i == len(reader.time_values)-1:
-#         # Write end frame multiple times to give a pause before gif starts again!
-#         for j in range(20):
-#             plotter.write_frame()
-#
-#     plotter.clear()
-#
-# # Closes and finalizes movie
+# plot_animation(plotter)
 # plotter.close()
 # -
 
@@ -663,7 +432,7 @@ plog.close()
 # velocity occurs within the first timestep and gradually decays as the simulation
 # goes on, though there is still a small amount of deformation ongoing after
 # 10,000 years. We can also clearly see that the lateral viscosity variations
-# give rise to assymetrical displacement patterns. This is especially true near
+# give rise to asymmetrical displacement patterns. This is especially true near
 # the South Pole, where the low viscosity region has enabled the isostatic
 # relaxation to happen faster than the surrounding regions.
 
