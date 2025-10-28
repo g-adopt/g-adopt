@@ -403,8 +403,6 @@ for timestep in range(1, max_timesteps+1):
     disp_old.assign(u)
 
     if timestep % output_frequency == 0:
-        # First output step is after one solve i.e. roughly elastic displacement
-        # provided dt < maxwell time.
         log("timestep", timestep)
 
         output_file.write(u, m, velocity)
