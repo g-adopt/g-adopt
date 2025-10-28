@@ -6,18 +6,67 @@ fields and animations with artificially warped meshes based on the
 displacement field.
 
 """
+from firedrake import atan2, conditional, pi, tanh
 import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 from pyvista.core.pointset import PolyData
 from pyvista.core.utilities.reader import PVDReader
 from pyvista.plotting.plotter import Plotter
-
+import ufl
 
 # camera settings
 radius = 2.2
 zoom = 4.25
 lw = 5
+
+
+def ice_sheet_disc(
+        X: ufl.geometry.SpatialCoordinate,
+        disc_centre: float,
+        disc_halfwidth: float,
+        radius: float = 6371e3,
+        surface_dx_smooth: float = 200e3
+) -> ufl.core.expr.Expr:
+    '''Initialises ice sheet disc with a smooth transition given
+    by a tanh profile
+
+    Args:
+      X:
+        Spatial coordinate associated with the mesh
+      disc_centre:
+        centre of disc in radians (assumed to be between -pi to pi)
+      disc_halfwidth:
+        Half width of disc in radians
+      radius:
+        Radius of domain in m
+      surface_dx_smooth:
+        characteristic length scale for tanh smoothing in m
+
+    Returns:
+      Expression for ice sheet disc with tanh smoothing
+    '''
+
+    # Setup lengthscales for tanh smoothing
+    ncells_smooth = 2*pi*radius / surface_dx_smooth
+    surface_resolution_radians_smooth = 2 * pi / ncells_smooth
+
+    # Colatitude defined between -pi -> pi radians with zero at 'north pole'
+    # and -pi / pi transition at 'south pole' (x,y) = (0, -R)
+    colatitude = atan2(X[0], X[1])
+
+    # Position opposite disc centre in radians
+    opp = disc_centre - pi if disc_centre >= 0 else disc_centre + pi
+
+    # Angular distance accounting for discontinuity at 'south pole'
+    angular_distance = conditional(abs(colatitude - disc_centre) < pi,
+                                   abs(colatitude-disc_centre),
+                                   pi - abs(colatitude-opp)
+                                   )
+
+    arg = angular_distance - disc_halfwidth
+    disc = 0.5*(1-tanh(arg / (2*surface_resolution_radians_smooth)))
+    return disc
 
 
 def make_ice_ring(

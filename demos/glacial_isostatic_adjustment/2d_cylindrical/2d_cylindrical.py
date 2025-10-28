@@ -20,15 +20,22 @@
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
-from gadopt.utility import vertical_component
-from gadopt.utility import extruded_layer_heights
-from gadopt.utility import initialise_background_field
+from gadopt.utility import (
+    vertical_component,
+    extruded_layer_heights,
+    initialise_background_field
+)
+from gadopt.gia_demo_utilities import ice_sheet_disc
 
 # We also import some helper functions for plotting and making animations associated
 # with this demo.
 
 # + tags=["active-ipynb"]
-# from gadopt.gia_demo_utilities import plot_ice_ring, plot_viscosity, plot_animation
+# from gadopt.gia_demo_utilities import (
+#     plot_ice_ring,
+#     plot_viscosity,
+#     plot_animation
+# )
 # -
 
 # Similar to our [previous tutorial](../base_case) demo we create the mesh in two
@@ -252,6 +259,7 @@ viscosity = setup_heterogenous_viscosity(background_viscosity)
 # North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify
 # things let's keep the ice load fixed in time.
 
+# +
 # Initialise ice loading
 rho_ice = 931 / density_scale
 g = 9.815
@@ -259,18 +267,16 @@ B_mu = Constant(density_scale * domain_depth * g / shear_modulus_scale)
 log("Ratio of buoyancy/shear = rho g D / mu = ", float(B_mu))
 Hice1 = 1000 / domain_depth
 Hice2 = 2000 / domain_depth
-# Disc ice load but with a smooth transition given by a tanh profile
-disc_halfwidth1 = (2*pi/360) * 10  # Disk half width in radians
-disc_halfwidth2 = (2*pi/360) * 20  # Disk half width in radians
-surface_dx_smooth = 200*1e3
-ncells_smooth = 2*pi*radius_values[0] / surface_dx_smooth
-surface_resolution_radians_smooth = 2*pi / ncells_smooth
-colatitude = atan2(X[0], X[1])
-disc1_centre = (2*pi/360) * 25  # centre of disc1
-disc2_centre = pi  # centre of disc2
-disc1 = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surface_resolution_radians_smooth)))
-disc2 = 0.5*(1-tanh((abs(abs(colatitude)-disc2_centre) - disc_halfwidth2) / (2*surface_resolution_radians_smooth)))
+
+# Setup a disc ice load but with a smooth transition given by a tanh profile
+disc_centre1 = (2*pi/360) * 25  # Centre of disc 1 in radians
+disc_centre2 = pi  # Centre of disc 2 in radians
+disc_halfwidth1 = (2*pi/360) * 10  # Disc 1 half width in radians
+disc_halfwidth2 = (2*pi/360) * 20  # Disc 2 half width in radians
+disc1 = ice_sheet_disc(X, disc_centre1, disc_halfwidth1)
+disc2 = ice_sheet_disc(X, disc_centre2, disc_halfwidth2)
 ice_load = B_mu * rho_ice * (Hice1 * disc1 + Hice2 * disc2)
+# -
 
 # Let's visualise the ice thickness using pyvista, by plotting a ring outside our
 # synthetic Earth.
@@ -308,16 +314,14 @@ dt_out_years = 1e3
 dt_out = Constant(dt_out_years * year_in_seconds/characteristic_maxwell_time)
 
 max_timesteps = round((Tend - Tstart * year_in_seconds/characteristic_maxwell_time) / dt)
-log("max timesteps: ", max_timesteps)
 
 output_frequency = round(dt_out / dt)
-log("output_frequency:", output_frequency)
 # -
 
 # We can now define the boundary conditions to be used in this simulation. For the
 # top surface we need to specify a normal stress, i.e. the weight of the ice load,
 # as well as indicating this is a free surface.
-#
+
 # Setup boundary conditions
 stokes_bcs = {boundary.top: {'free_surface': {'normal_stress': ice_load}},
               boundary.bottom: {'un': 0}
