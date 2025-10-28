@@ -185,7 +185,7 @@ def plot_viscosity(
         clim=[1e20, 1e25],
         log_scale=True,
         scalar_bar_args={
-            "title": 'Viscosity',
+            "title": 'Viscosity (Pa s)',
             "position_x": 0.8,
             "position_y": 0.3,
             "vertical": True,
