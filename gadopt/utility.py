@@ -7,7 +7,7 @@ depending on what they would like to achieve.
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement, DirichletBC, utils, interpolate
+from firedrake import op2, VectorElement, DirichletBC, utils, interpolate, conditional
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import time
@@ -588,3 +588,62 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
     else:
         kwargs = {"bottom": "bottom", "top": "top"}
     return SimpleNamespace(**kwargs)
+
+
+def extruded_layer_heights(
+        DG0_layers: int | list[int], radii: list[float]) -> list[float]:
+
+    """Calculates layer heights for extruded mesh using rheological boundary
+
+    Args:
+      DG0_layers:
+        Number of layers per rheological layer
+      radii:
+        Radii of rheological boundaries to match when extruding the mesh.
+        Assumes sequence starts with outer radii -> inner radii.
+
+    Returns:
+        list of layer heights
+        """
+
+    layer_heights = []
+
+    nz_layers = [DG0_layers] * len(radii) if isinstance(DG0_layers, int) else DG0_layers
+    assert len(nz_layers) == len(radii)
+
+    # starting at the bottom radius, work outwards
+    for i in range(len(radii) - 2, -1, -1):
+        dz = (radii[i] - radii[i + 1]) / nz_layers[i]
+        for _ in range(nz_layers[i]):
+            layer_heights.append(dz)
+    return layer_heights
+
+
+def initialise_background_field(
+        f: Function,
+        background_values: list[float],
+        X: ufl.geometry.SpatialCoordinate,
+        radii: list[float],
+        shift: float = 0.0,):
+    """Initialises discontinuous field with sharp jumps at rheological boundaries
+
+    Args:
+      f:
+        Function to interpolate background values into. N.b. `f` is modified in place.
+      background_values:
+        Discrete values to interpolate into `f`
+      X:
+        Spatial coordinates associated with function `f`
+      radii:
+        Radii of rheological discontinuities. N.b. length of `background_values` must be one less
+        than length of `radii`.
+      shift:
+        Shift vertical radii by a constant, e.g. when mesh is offset from `radii` values.
+    """
+
+    assert len(background_values) == len(radii)-1
+    for i in range(len(background_values)):
+        f.interpolate(
+            conditional(vertical_component(X) + shift > radii[i+1],
+                        conditional(vertical_component(X) + shift <= radii[i],
+                                    background_values[i], f), f))
