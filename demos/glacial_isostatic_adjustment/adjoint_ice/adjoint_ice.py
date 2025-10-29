@@ -43,6 +43,7 @@
 # We also import some G-ADOPT utilities for later use.
 
 from gadopt import *
+from gadopt.inverse import *
 from gadopt.utility import CombinedSurfaceMeasure, initialise_background_field
 from gadopt.gia_demo_utilities import ice_sheet_disc, setup_heterogenous_viscosity
 
@@ -57,7 +58,6 @@ from gadopt.gia_demo_utilities import ice_sheet_disc, setup_heterogenous_viscosi
 #
 # We first ensure that the tape is cleared of any previous operations, using the following code:
 
-from gadopt.inverse import *
 tape = get_working_tape()
 tape.clear_tape()
 
@@ -108,7 +108,7 @@ radius_values_nondim = np.array(radius_values)/domain_depth
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 bulk_shear_ratio = 1.94
-viscosity_values = [1e40, 1e21, 1e21, 2e21]
+viscosity_values = [1e25, 1e21, 1e21, 2e21]
 
 density_scale = 4500
 shear_modulus_scale = 1e11
@@ -172,7 +172,7 @@ disc2 = ice_sheet_disc(X, disc_centre2, disc_halfwidth2)
 
 # Set up geometry:
 rmax = radius_values_nondim[0]
-ncells = 180
+ncells = 360
 
 # Construct a surface mesh:
 surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh')
@@ -183,6 +183,7 @@ control = Control(control_ice_thickness_surf) #, riesz_map="L2")
 control_ice_thickness = Function(P1, name="control normalised ice thickness")
 control_ice_thickness.interpolate(control_ice_thickness_surf, allow_missing_dofs=True)
 
+visc_file = VTKFile('viscosity.pvd').write(viscosity)
 
 ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 # -
@@ -227,20 +228,16 @@ Tstart = 0
 year_in_seconds = 3600*24*365.25
 time = Function(R).assign(Tstart * year_in_seconds)
 
-dt_years = 1000
-dt = Constant(dt_years * year_in_seconds)
+dt_years = 250
+dt = Constant(dt_years * year_in_seconds/characteristic_maxwell_time)
 Tend_years = 10e3
-Tend = Constant(Tend_years * year_in_seconds)
+Tend = Constant(Tend_years * year_in_seconds/characteristic_maxwell_time)
 dt_out_years = 1e3
-dt_out = Constant(dt_out_years * year_in_seconds)
+dt_out = Constant(dt_out_years * year_in_seconds/characteristic_maxwell_time)
 
-max_timesteps = round((Tend - Tstart * year_in_seconds) / dt)
-log("max timesteps: ", max_timesteps)
+max_timesteps = round((Tend - Tstart * year_in_seconds/characteristic_maxwell_time) / dt)
 
-dump_period = round(dt_out / dt)
-log("dump_period:", dump_period)
-log(f"dt: {float(dt / year_in_seconds)} years")
-log(f"Simulation start time: {Tstart} years")
+output_frequency = round(dt_out / dt)
 # -
 
 # We also need to specify boundary conditions, a G-ADOPT approximation, nullspaces and finally the
@@ -259,7 +256,25 @@ approximation = MaxwellApproximation(
     B_mu=B_mu,
     bulk_shear_ratio=bulk_shear_ratio)
 
-V_nullspace = rigid_body_modes(V, rotational=True)
+#V_nullspace = rigid_body_modes(V, rotational=True)
+iterative_parameters = {"mat_type": "matfree",
+                        "snes_type": "ksponly",
+                        "ksp_type": "gmres",
+                        "ksp_rtol": 1e-5,
+                        "ksp_converged_reason": None,
+                        "ksp_monitor": None,
+                        "pc_type": "python",
+                        "pc_python_type": "firedrake.AssembledPC",
+                        "assembled_pc_type": "gamg",
+                        "assembled_mg_levels_pc_type": "sor",
+                        "assembled_pc_gamg_threshold": 0.01,
+                        "assembled_pc_gamg_square_graph": 100,
+                        "assembled_pc_gamg_coarse_eq_limit": 1000,
+                        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+                        }
+
+nullspace = rigid_body_modes(V, rotational=True)
+near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1])
 
 stokes_solver = InternalVariableSolver(
     u,
@@ -267,8 +282,11 @@ stokes_solver = InternalVariableSolver(
     dt=dt,
     internal_variables=m,
     bcs=stokes_bcs,
-    constant_jacobian=True,
-    nullspace=V_nullspace,
+   # constant_jacobian=True,
+    solver_parameters=iterative_parameters,
+    nullspace=nullspace,
+    transpose_nullspace=nullspace,
+    near_nullspace=near_nullspace
 )
 # -
 
@@ -341,7 +359,7 @@ for timestep in range(max_timesteps):
                  f"{gd.uv_min(boundary.top)}"
                  )
 
-    if timestep % dump_period == 0:
+    if timestep % output_frequency == 0:
         log("timestep", timestep)
 
         output_file.write(u, m, velocity)

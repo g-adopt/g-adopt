@@ -20,7 +20,7 @@ from gadopt.utility import (
     extruded_layer_heights,
     initialise_background_field
 )
-from gadopt.gia_demo_utilities import ice_sheet_disc
+from gadopt.gia_demo_utilities import ice_sheet_disc, setup_heterogenous_viscosity
 
 # We also import some helper functions for plotting and making animations associated
 # with this demo.
@@ -55,12 +55,12 @@ domain_depth = radius_values[0]-radius_values[-1]
 radius_values_nondim = np.array(radius_values)/domain_depth
 
 # Construct a circle mesh and then extrude into a cylinder:
-ncells = 180
+ncells = 360
 rmin = radius_values_nondim[-1]
 surface_mesh = CircleManifoldMesh(ncells, radius=rmin, degree=2, name='surface_mesh')
 
 # Ensure layers of extruded mesh coincide with rheological boundaries
-layer_heights = extruded_layer_heights(5, radius_values_nondim)
+layer_heights = extruded_layer_heights(20, radius_values_nondim)
 
 mesh = ExtrudedMesh(
     surface_mesh,
@@ -163,7 +163,10 @@ initialise_background_field(
 
 
 
-viscosity = setup_heterogenous_viscosity(background_viscosity)
+viscosity = setup_heterogenous_viscosity(
+        background_viscosity,
+        X,
+        viscosity_scale=viscosity_scale)
 # -
 
 # We'll keep the same ice synthetic ice sheet configuration as in the previous tutorial.
