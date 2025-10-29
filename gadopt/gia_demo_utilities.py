@@ -6,7 +6,7 @@ fields and animations with artificially warped meshes based on the
 displacement field.
 
 """
-from firedrake import atan2, conditional, pi, tanh
+from firedrake import atan2, conditional, exp, Function, pi, tanh
 import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
@@ -19,6 +19,16 @@ import ufl
 radius = 2.2
 zoom = 4.25
 lw = 5
+
+
+def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
+    arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
+    numerator = exp(-1/(2*(1-rho**2))*arg)
+    if normalised_area:
+        denominator = 2*pi*sigma_x*sigma_y*(1-rho**2)**0.5
+    else:
+        denominator = 1
+    return numerator / denominator
 
 
 def ice_sheet_disc(
@@ -285,3 +295,46 @@ def plot_animation(
                 plotter.write_frame()
 
         plotter.clear()
+
+
+def setup_heterogenous_viscosity(viscosity, X, domain_depth=2891e3, viscosity_scale=1e21):
+    heterogenous_viscosity_field = Function(viscosity.function_space(), name='viscosity')
+    southpole_x, southpole_y = -2e6/domain_depth, -5.5e6/domain_depth
+
+    low_visc = 1e20/viscosity_scale
+    high_visc = 1e22/viscosity_scale
+
+    low_viscosity_southpole = bivariate_gaussian(X[0], X[1],
+                                                 southpole_x, southpole_y,
+                                                 1.5e6/domain_depth,
+                                                 0.5e6/domain_depth,
+                                                 -0.4)
+
+    heterogenous_viscosity_field.interpolate(low_visc*low_viscosity_southpole +
+                                             viscosity * (1-low_viscosity_southpole)
+                                             )
+
+    llsvp1_x, llsvp1_y = 3.5e6/domain_depth, 0
+    llsvp1 = bivariate_gaussian(X[0], X[1], llsvp1_x, llsvp1_y, 0.75e6/domain_depth,
+                                1e6/domain_depth, 0)
+
+    heterogenous_viscosity_field.interpolate(low_visc*llsvp1 +
+                                             heterogenous_viscosity_field * (1-llsvp1))
+
+    llsvp2_x, llsvp2_y = -3.5e6/domain_depth, 0
+    llsvp2 = bivariate_gaussian(X[0], X[1], llsvp2_x, llsvp2_y, 0.75e6/domain_depth,
+                                1e6/domain_depth, 0)
+
+    heterogenous_viscosity_field.interpolate(low_visc*llsvp2 +
+                                             heterogenous_viscosity_field * (1-llsvp2))
+
+    slab_x, slab_y = 3e6/domain_depth, 4.5e6/domain_depth
+    slab = bivariate_gaussian(X[0], X[1], slab_x, slab_y, 0.7e6/domain_depth,
+                              0.35e6/domain_depth, 0.7)
+
+    heterogenous_viscosity_field.interpolate(high_visc*slab +
+                                             heterogenous_viscosity_field * (1-slab))
+
+    high_viscosity_craton_x, high_viscosity_craton_y = 0, 6.2e6/domain_depth
+
+    return heterogenous_viscosity_field

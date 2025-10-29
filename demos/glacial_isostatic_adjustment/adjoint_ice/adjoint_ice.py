@@ -17,7 +17,7 @@
 # checkpoint file on our servers. To download the reference benchmark checkpoint file if it doesn't already exist, execute the following command:
 
 # + tags=["active-ipynb"]
-# ![ ! -f forward-2d-cylindrical-disp-incdisp.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-incdisp.h5
+# ![ ! -f forward-2d-cylindrical-disp-vel.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-vel.h5
 # -
 
 # Gradient-based optimisation and the Adjoint method
@@ -43,7 +43,8 @@
 # We also import some G-ADOPT utilities for later use.
 
 from gadopt import *
-from gadopt.utility import vertical_component, CombinedSurfaceMeasure
+from gadopt.utility import CombinedSurfaceMeasure, initialise_background_field
+from gadopt.gia_demo_utilities import ice_sheet_disc, setup_heterogenous_viscosity
 
 # The novelty of using the overloading approach provided by pyadjoint is that it requires
 # minimal changes to our script to enable the inverse capabalities of G-ADOPT.
@@ -73,12 +74,12 @@ continue_annotation()
 # tutorial for our 'twin' experiment.
 
 # Set up geometry:
-checkpoint_file = "forward-2d-cylindrical-disp-incdisp.h5"
+checkpoint_file = "forward-2d-cylindrical-disp-vel.h5"
 with CheckpointFile(checkpoint_file, 'r') as afile:
     mesh = afile.load_mesh(name='surface_mesh_extruded')
 bottom_id, top_id = "bottom", "top"
 mesh.cartesian = False
-D = 2891e3  # Depth of domain in m
+boundary = get_boundary_ids(mesh)
 
 # We next set up the function spaces, and specify functions to hold our solutions.
 
@@ -87,6 +88,7 @@ V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space
 S = TensorFunctionSpace(mesh, "DQ", 1)  # Stress tensor function space
 DG0 = FunctionSpace(mesh, "DQ", 0)  # Density and shear modulus function space
 DG1 = FunctionSpace(mesh, "DQ", 1)  # Viscosity function space
+P1 = FunctionSpace(mesh, "CG", 1)  # Ice thickness function space
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 u = Function(V, name='displacement')
@@ -100,28 +102,42 @@ X = SpatialCoordinate(mesh)
 
 # Layer properties from Spada et al. (2011)
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
+domain_depth = radius_values[0]-radius_values[-1]
+radius_values_nondim = np.array(radius_values)/domain_depth
+
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
-viscosity_values = [2, -2, -2, -1.698970004]  # viscosity = 1e23 * 10**viscosity_values
-# N.b. that we have modified the viscosity of the lithosphere from
-# Spada et al. (2011) because we are using coarse grid resolution
+bulk_shear_ratio = 1.94
+viscosity_values = [1e40, 1e21, 1e21, 2e21]
 
-# import utility functions for this demo
-sys.path.append("../")
-from gia_demo_utils import initialise_background_field, setup_heterogenous_viscosity  # noqa: E402
+density_scale = 4500
+shear_modulus_scale = 1e11
+viscosity_scale = 1e21
+characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 
-density = Function(W, name="density")
-initialise_background_field(X, density, density_values, radius_values)
+density_values_nondim = np.array(density_values)/density_scale
+shear_modulus_values_nondim = np.array(shear_modulus_values)/shear_modulus_scale
+viscosity_values_nondim = np.array(viscosity_values)/viscosity_scale
 
-shear_modulus = Function(W, name="shear modulus")
-initialise_background_field(X, shear_modulus, shear_modulus_values, radius_values)
+density = Function(DG0, name="density")
+initialise_background_field(
+    density, density_values_nondim, X, radius_values_nondim)
 
-normalised_viscosity = Function(W, name="Normalised viscosity")
-initialise_background_field(X, normalised_viscosity, viscosity_values, radius_values)
-normalised_viscosity = setup_heterogenous_viscosity(X, normalised_viscosity)
+shear_modulus = Function(DG0, name="shear modulus")
+initialise_background_field(
+    shear_modulus, shear_modulus_values_nondim, X, radius_values_nondim)
 
-viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10**normalised_viscosity)
+bulk_modulus = Function(DG0, name="bulk modulus")
+initialise_background_field(
+    bulk_modulus, shear_modulus_values_nondim, X, radius_values_nondim)
 
+background_viscosity = Function(DG1, name="background viscosity")
+initialise_background_field(
+    background_viscosity, viscosity_values_nondim, X, radius_values_nondim)
+
+viscosity = setup_heterogenous_viscosity(background_viscosity, X, domain_depth=domain_depth, viscosity_scale=viscosity_scale)
+
+print(type(viscosity))
 # -
 
 # Defining the Control
@@ -134,7 +150,7 @@ viscosity = Function(normalised_viscosity, name="viscosity").interpolate(1e23*10
 #
 # Since the ice thickness is only defined at the surface of the Earth we need to tell *G-ADOPT*
 # that the interior sensitivity should always be zero. We can do this by projecting the *control* field
-# to another function, imposing a homogenous Dirichlet boundary condition at all the interior nodes, i.e. 
+# to another function, imposing a homogenous Dirichlet boundary condition at all the interior nodes, i.e.
 # fixing the interior elements to have an ice thickness of zero.
 
 # +
@@ -155,25 +171,20 @@ disc1 = ice_sheet_disc(X, disc_centre1, disc_halfwidth1)
 disc2 = ice_sheet_disc(X, disc_centre2, disc_halfwidth2)
 
 # Set up geometry:
-rmin = 3480e3
-rmax = 6371e3
-D = rmax-rmin
-nz = 32
+rmax = radius_values_nondim[0]
 ncells = 180
-dz = D / nz
 
 # Construct a surface mesh:
 surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh')
-Wcontrol = FunctionSpace(surface_mesh, "CG", 1) # control space
-control_ice_thickness_surf = Function(Wcontrol) # control
-control = Control(control_ice_thickness_surf)
+P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # control space
+control_ice_thickness_surf = Function(P1_surf)  # control
+control = Control(control_ice_thickness_surf) #, riesz_map="L2")
 # defining the control
-control_ice_thickness = Function(W, name="control normalised ice thickness")
-    
+control_ice_thickness = Function(P1, name="control normalised ice thickness")
 control_ice_thickness.interpolate(control_ice_thickness_surf, allow_missing_dofs=True)
 
 
-ice_load = rho_ice * g * Hice * control_ice_thickness_surf
+ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 # -
 
 
@@ -232,24 +243,14 @@ log(f"dt: {float(dt / year_in_seconds)} years")
 log(f"Simulation start time: {Tstart} years")
 # -
 
-# Similar to our previous example, we setup the boundary conditions, this time using the normalised
-# ice thickness to account for ice covered regions when calculating the density
-# contrast across the free surface.
-
-# Setup boundary conditions
-stokes_bcs = {
-    top_id: {
-        'normal_stress': ice_load,
-        'free_surface': {}
-    },
-    bottom_id: {'un': 0}
-}
-
-
-# We also need to specify a G-ADOPT approximation, nullspaces and finally the
+# We also need to specify boundary conditions, a G-ADOPT approximation, nullspaces and finally the
 # Stokes solver.
 
 # +
+stokes_bcs = {boundary.top: {'free_surface': {'normal_stress': ice_load}},
+              boundary.bottom: {'un': 0}
+              }
+
 approximation = MaxwellApproximation(
     bulk_modulus=bulk_modulus,
     density=density,
@@ -296,11 +297,15 @@ gd = GeodynamicalDiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # compared our reference forward simulation.
 
 # +
+# Overload surface integral measure for G-ADOPT's extruded meshes.
+ds = CombinedSurfaceMeasure(mesh, degree=6)
+
+
 def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
     with CheckpointFile(checkpoint_file, 'r') as afile:
         target_displacement = afile.load_function(mesh, name="Displacement", idx=timestep)
         target_velocity = afile.load_function(mesh, name="Velocity", idx=timestep)
-    circumference = 2 * pi * radius_values_tilde[0]
+    circumference = 2 * pi * radius_values_nondim[0]
     velocity_error = velocity - target_velocity
     velocity_scale = 1e-5
     velocity_misfit += assemble(dot(velocity_error, velocity_error) / (circumference * velocity_scale**2) * ds(boundary.top))
@@ -311,8 +316,6 @@ def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
     return velocity_misfit, displacement_misfit
 
 
-# Overload surface integral measure for G-ADOPT's extruded meshes.
-ds = CombinedSurfaceMeasure(mesh, degree=6)
 # -
 
 # Now let's run the simulation! This is the same as the previous tutorial except we are calculating the surface
@@ -326,12 +329,12 @@ for timestep in range(max_timesteps):
 
     time.assign(time+dt)
     stokes_solver.solve()
-    
+
     velocity.interpolate((u - disp_old)/dt)
-    disp_old.assign(u) 
-    
+    disp_old.assign(u)
+
     velocity_misfit, displacement_misfit = integrated_time_misfit(timestep, velocity_misfit, displacement_misfit)
-    
+
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
@@ -346,7 +349,6 @@ for timestep in range(max_timesteps):
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
             checkpoint.save_function(u, name="Displacement")
             checkpoint.save_function(m, name="Internal variable")
-    )
 # -
 
 # As we can see from the plot below there is no displacement at the final time given there is no ice load!
@@ -408,10 +410,10 @@ circumference = 2 * pi * radius_values[0]
 
 alpha_smoothing = 1
 alpha_damping = 0.1
-#damping = assemble((control_ice_thickness) ** 2 / circumference * ds(top_id))
-#smoothing = assemble(dot(grad(normalised_ice_thickness), grad(normalised_ice_thickness)) / circumference * ds(top_id))
+# damping = assemble((control_ice_thickness) ** 2 / circumference * ds(top_id))
+# smoothing = assemble(dot(grad(normalised_ice_thickness), grad(normalised_ice_thickness)) / circumference * ds(top_id))
 
-J = (displacement_misfit + velocity_misfit) / max_timesteps # + alpha_damping * damping + alpha_smoothing * smoothing
+J = (displacement_misfit + velocity_misfit) / max_timesteps  # + alpha_damping * damping + alpha_smoothing * smoothing
 log("J = ", J)
 # -
 
@@ -423,18 +425,17 @@ pause_annotation()
 # Let's setup some call backs to help us keep track of the inversion.
 
 # +
-#updated_ice_thickness = Function(normalised_ice_thickness, name="updated ice thickness")
+# updated_ice_thickness = Function(normalised_ice_thickness, name="updated ice thickness")
 updated_ice_thickness = Function(control_ice_thickness, name="updated ice thickness")
 updated_ice_thickness_file = VTKFile("updated_ice_thickness.pvd")
-updated_displacement = Function(displacement, name="updated displacement")
-updated_velocity = Function(z.subfunctions[0], name="updated velocity")
+updated_displacement = Function(V, name="updated displacement")
+updated_velocity = Function(V, name="updated velocity")
 updated_out_file = VTKFile("updated_out.pvd")
 
 with CheckpointFile(checkpoint_file, 'r') as afile:
-    final_target_incremental_displacement = afile.load_function(mesh, name="Incremental Displacement", idx=9)
-    final_target_displacement = afile.load_function(mesh, name="Displacement", idx=9)
+    final_target_displacement = afile.load_function(mesh, name="Displacement", idx=10)
+    final_target_velocity = afile.load_function(mesh, name="Velocity", idx=10)
 
-final_target_velocity = Function(V, name="target velocity").interpolate(final_target_incremental_displacement / dt_years)
 functional_values = []
 
 
@@ -449,16 +450,16 @@ def eval_cb(J, m):
     log("displacement misfit", displacement_misfit.block_variable.checkpoint / max_timesteps)
     log("velocity misfit", velocity_misfit.block_variable.checkpoint / max_timesteps)
 
-    damping = alpha_damping * assemble((normalised_ice_thickness.block_variable.checkpoint) ** 2 / circumference * ds(top_id))
-    smoothing = alpha_smoothing * assemble(dot(grad(normalised_ice_thickness.block_variable.checkpoint), grad(normalised_ice_thickness.block_variable.checkpoint)) / circumference * ds(top_id))
-    log("damping", damping)
-    log("smoothing", smoothing)
+    # damping = alpha_damping * assemble((normalised_ice_thickness.block_variable.checkpoint) ** 2 / circumference * ds(top_id))
+    # smoothing = alpha_smoothing * assemble(dot(grad(normalised_ice_thickness.block_variable.checkpoint), grad(normalised_ice_thickness.block_variable.checkpoint)) / circumference * ds(top_id))
+    # log("damping", damping)
+    # log("smoothing", smoothing)
 
     # Write out values of control and final forward model results
-    updated_ice_thickness.assign(m)
-    updated_ice_thickness_file.write(updated_ice_thickness) #, target_normalised_ice_thickness)
-    updated_displacement.interpolate(displacement.block_variable.checkpoint)
-    updated_velocity.interpolate(z.subfunctions[0].block_variable.checkpoint / dt)
+    updated_ice_thickness.assign(control_ice_thickness.block_variable.checkpoint)
+    updated_ice_thickness_file.write(updated_ice_thickness)  # , target_normalised_ice_thickness)
+    updated_displacement.interpolate(u.block_variable.checkpoint)
+    updated_velocity.interpolate(velocity.block_variable.checkpoint)
     updated_out_file.write(updated_displacement, final_target_displacement, updated_velocity, final_target_velocity)
 
 
@@ -485,8 +486,8 @@ reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 # reducted functional and print out the answer - it is good to see they are the same!
 
 log("J", J)
-#log("Replay tape RF", reduced_functional(normalised_ice_thickness))
-log("Replay tape RF", reduced_functional(control_ice_thickness))
+# log("Replay tape RF", reduced_functional(normalised_ice_thickness))
+log("Replay tape RF", reduced_functional(control_ice_thickness_surf))
 
 # ### Visualising the derivative
 #
@@ -495,7 +496,7 @@ log("Replay tape RF", reduced_functional(control_ice_thickness))
 # reduced functional.
 
 # +
-dJdm = reduced_functional.derivative(options={"riesz_representation": "L2"})
+dJdm = reduced_functional.derivative() #apply_riesz=True)
 
 grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 # -
@@ -563,9 +564,9 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 # Here is how you can perform a Taylor test in the code:
 
 # +
-h = Function(control_ice_thickness)
+h = Function(control_ice_thickness_surf)
 h.dat.data[:] = np.random.random(h.dat.data_ro.shape)
-minconv = taylor_test(reduced_functional, control_ice_thickness, h)
+minconv = taylor_test(reduced_functional, control_ice_thickness_surf, h)
 
 with open("taylor_test_minconv.txt", "w") as f:
     f.write(str(minconv))
@@ -579,8 +580,8 @@ with open("taylor_test_minconv.txt", "w") as f:
 # as we do not want negative ice thicknesses!
 
 # +
-#ice_thickness_lb = Function(normalised_ice_thickness.function_space(), name="Lower bound ice thickness")
-#ice_thickness_ub = Function(normalised_ice_thickness.function_space(), name="Upper bound ice thickness")
+# ice_thickness_lb = Function(normalised_ice_thickness.function_space(), name="Lower bound ice thickness")
+# ice_thickness_ub = Function(normalised_ice_thickness.function_space(), name="Upper bound ice thickness")
 ice_thickness_lb = Function(control_ice_thickness.function_space(), name="Lower bound ice thickness")
 ice_thickness_ub = Function(control_ice_thickness.function_space(), name="Upper bound ice thickness")
 ice_thickness_lb.assign(0.0)
