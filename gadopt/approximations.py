@@ -570,6 +570,47 @@ class IncompressibleMaxwellApproximation(BaseGIAApproximation):
 
 
 class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
+    '''Quasi compressible viscoelasticty via internal variables
+
+    This class implements compressible viscoelasticity following the formulation
+    adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018), in
+    which viscoelastic constitutive equations are expressed in integral form and
+    reformulated using so-called *internal variables*. Conceptually, this approach
+    consists of a set of elements with different shear relaxation timescales,
+    arranged in parallel. This formulation provides a compact, flexible and convenient
+    means to incorporate transient rheology into viscoelastic deformation models:
+    using a single internal variable is equivalent to a simple Maxwell material;
+    two correspond to a Burgers model with two characteristic relaxation frequencies;
+    and using a series of internal variables permits approximation of a continuous
+    range of relaxation timescales for more complicated rheologies.
+
+    This class implements the substitution method where the time-dependent internal
+    variable equation is substituted into the momentum equation assuming a Backward
+    Euler time discretisation. Therefore, the displacement field is the only unknown.
+    For more information regarding the specific implementation in G-ADOPT please see
+    Scott et al. 2025.
+
+    N.b. this class neglects two key terms: compressible buoyancy and the volume
+    integral after integrating the advection of hydrostatic prestress term by parts.
+    This allows us to reproduce simplified analytical cases such as the
+    # Cathles 2024 benchmark in /tests/glacial_isostatic_adjustment/iv_ve_fs.py
+    where we need to remove these effect.
+
+    Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
+    based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
+
+    Crawford, O., Al-Attar, D., Tromp, J., & Mitrovica, J. X. (2016). Forward and
+    inverse modelling of post-seismic deformation. Geophysical Journal International,
+    ggw414.
+
+    Crawford, O., Al-Attar, D., Tromp, J., Mitrovica, J. X., Austermann, J., &
+    Lau, H. C. (2018). Quantifying the sensitivity of post-glacial sea level change
+    to laterally varying viscosity. Geophysical journal international, 214(2), 1324-1363.
+
+    Automated forward and adjoint modelling of viscoelastic deformation of the solid
+    Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
+    Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
+    '''
     compressible = True
 
     def __init__(
@@ -652,39 +693,14 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
 class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariableApproximation):
     """Compressible viscoelastic rheology via the internal variable formulation.
 
-    This class implements compressible viscoelasticity following the formulation
-    adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018), in
-    which viscoelastic constitutive equations are expressed in integral form and
-    reformulated using so-called *internal variables*. Conceptually, this approach
-    consists of a set of elements with different shear relaxation timescales,
-    arranged in parallel. This formulation provides a compact, flexible and convenient
-    means to incorporate transient rheology into viscoelastic deformation models:
-    using a single internal variable is equivalent to a simple Maxwell material;
-    two correspond to a Burgers model with two characteristic relaxation frequencies;
-    and using a series of internal variables permits approximation of a continuous
-    range of relaxation timescales for more complicated rheologies.
 
-    This class implements the substiution method where the time-dependent internal
-    variable equation is substituted into the momentum equation assuming a Backward
-    Euler time discretisation. Therefore, the displacement field is the only unknown.
-    For more information regarding the specific implementation in G-ADOPT please see
-    Scott et al. 2025.
+    N.b. this class includes the two additional terms neglected in the
+    `QuasiCompressibleInternalVariableApproximation`: compressible buoyancy and the
+    volume integral after integrating the advection of hydrostatic prestress term by
+    parts.
 
-    Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
-    based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
-
-    Crawford, O., Al-Attar, D., Tromp, J., & Mitrovica, J. X. (2016). Forward and
-    inverse modelling of post-seismic deformation. Geophysical Journal International,
-    ggw414.
-
-    Crawford, O., Al-Attar, D., Tromp, J., Mitrovica, J. X., Austermann, J., &
-    Lau, H. C. (2018). Quantifying the sensitivity of post-glacial sea level change
-    to laterally varying viscosity. Geophysical journal international, 214(2), 1324-1363.
-
-    Automated forward and adjoint modelling of viscoelastic deformation of the solid
-    Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
-    Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
-
+    For more information on the methodology and references please see the
+    documentation of the parent class.
 
     Arguments:
       bulk_modulus:             bulk modulus
@@ -692,8 +708,6 @@ class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariabl
       shear_modulus:            shear modulus
       viscosity:                viscosity
       bulk_shear_ratio:         Ratio of bulk to shear modulus
-      compressible_buoyancy:    Include compressible buoyancy effects
-      compressible_adv_hyd_pre: Include compressible hydrostatic prestress advection
       g:                        gravitational acceleration
       B_mu:                     Nondimensional number describing ratio of buoyancy to
                                 elastic shear strength used for nondimensionalisation.
@@ -762,8 +776,6 @@ class MaxwellApproximation(CompressibleInternalVariableApproximation):
       shear_modulus:            shear modulus
       viscosity:                viscosity
       bulk_shear_ratio:         Ratio of bulk to shear modulus
-      compressible_buoyancy:    Include compressible buoyancy effects
-      compressible_adv_hyd_pre: Include compressible hydrostatic prestress advection
       g:                        gravitational acceleration
       B_mu:                     Nondimensional number describing ratio of buoyancy to
                                 elastic shear strength used for nondimensionalisation.
