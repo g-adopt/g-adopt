@@ -779,7 +779,7 @@ class InternalVariableSolver(StokesSolverBase):
                 "Number of internal variables and corresponding Maxwell times must be consistent"
             )
 
-        internal_variables_update = [
+        self.internal_variables_update = [
             self.update_m(m, maxwell_time)
             for m, maxwell_time in zip(
                 self.internal_variables, self.approximation.maxwell_times
@@ -787,7 +787,7 @@ class InternalVariableSolver(StokesSolverBase):
         ]
 
         stress = self.approximation.stress(
-            self.solution, internal_variables=internal_variables_update
+            self.solution, internal_variables=self.internal_variables_update
         )
         source = self.approximation.buoyancy(self.solution) * self.k
 
@@ -838,8 +838,8 @@ class InternalVariableSolver(StokesSolverBase):
     def solve(self) -> None:
         super().solve()
         # Update internal variable term for using as a RHS explicit forcing in the next timestep
-        for m, alpha in zip(self.internal_variables, self.approximation.maxwell_times):
-            m.interpolate(self.update_m(m, alpha))
+        for m, m_new in zip(self.internal_variables, self.internal_variables_update):
+            m.interpolate(m_new)
 
 
 class BoundaryNormalStressSolver(SolverConfigurationMixin):

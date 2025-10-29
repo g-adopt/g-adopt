@@ -516,7 +516,7 @@ class IncompressibleMaxwellApproximation(BaseGIAApproximation):
     deformation: effects of lateral variations lithospheric thickness."
     Geophysical Journal International 155.2 (2003): 679-695.
 
-    N.b. that the implentation currently assumes all terms are dimensional.
+    N.b. that the implementation currently assumes all terms are dimensional.
 
 
     Arguments:
@@ -687,21 +687,22 @@ class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariabl
 
 
     Arguments:
-      bulk_modulus:  bulk modulus
-      density:       background density
-      shear_modulus: shear modulus
-      viscosity:     viscosity
-      bulk_shear_ratio: Ratio of bulk to shear modulus
-      compressible_buoyancy: Include compressible buoyancy effects
+      bulk_modulus:             bulk modulus
+      density:                  background density
+      shear_modulus:            shear modulus
+      viscosity:                viscosity
+      bulk_shear_ratio:         Ratio of bulk to shear modulus
+      compressible_buoyancy:    Include compressible buoyancy effects
       compressible_adv_hyd_pre: Include compressible hydrostatic prestress advection
-      g:             gravitational acceleration
-      B_mu:          Nondimensional number describing ratio of buoyancy to elastic
-                     shear strength used for nondimensionalisation.
-                     $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
-                     where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
-                     $\bar{g}$ is a characteristic gravity scale (m / s^2),
-                     $L$ is a characteristic length scale, often Mantle depth (m),
-                     $\\mu$ is a characteristic shear modulus (Pa).
+      g:                        gravitational acceleration
+      B_mu:                     Nondimensional number describing ratio of buoyancy to
+                                elastic shear strength used for nondimensionalisation.
+                                $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                                where $\bar{\rho}$ is a characteristic density scale
+                                (kg / m^3), $\bar{g}$ is a characteristic gravity
+                                scale (m / s^2), $L$ is a characteristic length scale,
+                                often Mantle depth (m), $\\mu$ is a characteristic
+                                shear modulus (Pa).
 
     """
 
@@ -730,65 +731,48 @@ class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariabl
         # Compressible part of buoyancy term due to the density perturbation
         # written on rhs of equations
         buoyancy = super().buoyancy(displacement)
-        # By default this term is included but in some cases e.g. to reproduce
+        # Usually this term is included but in some cases e.g. to reproduce
         # simplified analytical cases such as the Cathles 2024 benchmark in
         # /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
         # this effect.
-        buoyancy += -self.B_mu * self.g * -self.density * div(displacement)
+        buoyancy += self.B_mu * self.g * self.density * div(displacement)
         return buoyancy
 
     def compressible_adv_hyd_pre(
         self, u_r: Function | ufl.core.expr.Expr
     ) -> ufl.core.expr.Expr:
-        # Hydrostatic prestress advection term which is applied
-        # as a `normal_stress` boundary condition when the `free_surface` tag is
-        # specified in the `bcs` dictionary of the `InternalVariableSolver`
-        # through the `set_free_surface_boundary` method.
-        return self.B_mu * self.density * self.g * u_r
+        # Compressible part of hydrostatic prestress advection after integration
+        # by parts. Usually this term is included but in some cases e.g. to
+        # reproduce simplified analytical cases such as the Cathles 2024 benchmark
+        # in /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
+        # this effect.
+        return self.hydrostatic_prestress_advection(u_r)
 
 
 class MaxwellApproximation(CompressibleInternalVariableApproximation):
     """Maxwell viscoelastic rheology.
 
-    This is a helper class to simplify setting up (compressible) Maxwell rheology.
-    G-ADOPT implements compressible viscoelasticity following the internal variable
-    formulation adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018),
-    see Scott et al. 2025 for more details.
-
-    For Maxwell rheology, there is just one relaxation timescale (and hence one
-    internal variable), so we setup one unique viscosity and shear modulus field.
-
-    Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
-    based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
-
-    Crawford, O., Al-Attar, D., Tromp, J., & Mitrovica, J. X. (2016). Forward and
-    inverse modelling of post-seismic deformation. Geophysical Journal International,
-    ggw414.
-
-    Crawford, O., Al-Attar, D., Tromp, J., Mitrovica, J. X., Austermann, J., &
-    Lau, H. C. (2018). Quantifying the sensitivity of post-glacial sea level change
-    to laterally varying viscosity. Geophysical journal international, 214(2), 1324-1363.
-
-    Automated forward and adjoint modelling of viscoelastic deformation of the solid
-    Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
-    Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
+    This is a helper class to simplify setting up (compressible) Maxwell rheology
+    using the internal variable approach. For more references on the method
+    please refer to the documentation of the parent class.
 
     Arguments:
-      bulk_modulus:  bulk modulus
-      density:       background density
-      shear_modulus: shear modulus
-      viscosity:     viscosity
-      bulk_shear_ratio: Ratio of bulk to shear modulus
-      compressible_buoyancy: Include compressible buoyancy effects
+      bulk_modulus:             bulk modulus
+      density:                  background density
+      shear_modulus:            shear modulus
+      viscosity:                viscosity
+      bulk_shear_ratio:         Ratio of bulk to shear modulus
+      compressible_buoyancy:    Include compressible buoyancy effects
       compressible_adv_hyd_pre: Include compressible hydrostatic prestress advection
-      g:             gravitational acceleration
-      B_mu:          Nondimensional number describing ratio of buoyancy to elastic
-                     shear strength used for nondimensionalisation.
-                     $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
-                     where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
-                     $\bar{g}$ is a characteristic gravity scale (m / s^2),
-                     $L$ is a characteristic length scale, often Mantle depth (m),
-                     $\\mu$ is a characteristic shear modulus (Pa).
+      g:                        gravitational acceleration
+      B_mu:                     Nondimensional number describing ratio of buoyancy to
+                                elastic shear strength used for nondimensionalisation.
+                                $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                                where $\bar{\rho}$ is a characteristic density scale
+                                (kg / m^3), $\bar{g}$ is a characteristic gravity
+                                scale (m / s^2), $L$ is a characteristic length scale,
+                                often Mantle depth (m), $\\mu$ is a characteristic
+                                shear modulus (Pa).
 
     """
 
