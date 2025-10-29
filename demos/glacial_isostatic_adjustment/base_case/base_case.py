@@ -105,15 +105,13 @@
 # shear modulus values respectively.
 #
 #
-# Integrating the conservation of mass equation through time
-# gives
+# Integrating the conservation of mass equation through time gives
 # \begin{equation}
 #     \rho_1 = - \nabla \cdot \left( \rho_0\, \boldsymbol{u} \right)
 # \end{equation}
 # assuming a vanishing initial displacement, $\boldsymbol{u}(t=0) = \textbf{0}$.
 # The density perturbation $\rho_1$ is often referred to as the
 # *Eulerian density perturbation* by the GIA community.
-#
 
 # Boundary Conditions
 # --------------------
@@ -174,7 +172,6 @@
 #     \boldsymbol{\sigma}^L_1 = \kappa \nabla \cdot \boldsymbol{u}(t)\, \boldsymbol{I} + 2 \mu_0 \boldsymbol{d}(t) - 2 \sum_i \mu_i \boldsymbol{m}_i(t),
 # \end{equation}
 #
-#
 # where $\kappa$ is the non-dimensional bulk modulus and $\mu_0$ is the
 # non-dimensional effective shear modulus given by
 # \begin{equation}
@@ -207,8 +204,6 @@
 # \begin{equation}
 #     \partial_t \boldsymbol{m}_i + \frac{1}{\alpha_i} \left( \boldsymbol{m}_i - \boldsymbol{d} \right) = \boldsymbol{0}, \quad \boldsymbol{m}_i(t_0) = \boldsymbol{0}.
 # \end{equation}
-#
-#
 
 # Time discretisation
 # -------------------
@@ -271,7 +266,7 @@
 #
 # Briefly, the first line corresponds to the stress term after integration
 # by parts. The second corresponds to the advection of hydrostatic prestress
-# term. Since our $DG0$ discretisation allows density and gravity
+# term. Since our $DQ0$ discretisation allows density and gravity
 # discontinuities, we can no longer assume that integrating along both
 # sides of interior boundaries in the mesh will cancel out. As such, we
 # have to write an additional term accounting for the 'jumps' in material
@@ -352,7 +347,7 @@ mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
 # -
 
-# We now need to choose finite element function spaces. `V` , `S`, `DG0` and `R`
+# We now need to choose finite element function spaces. `V` , `S`, `DQ0` and `R`
 # are symbolic variables representing function spaces. They also contain the
 # function space's computational implementation, recording the
 # association of degrees of freedom with the mesh and pointing to the
@@ -361,13 +356,13 @@ boundary = get_boundary_ids(mesh)
 # discontinuous tensor function space that will store our previous values of the
 # internal variable as the gradient of the continous displacement field will be
 # discontinuous. Given that we have purely radial variations in density,
-# viscosity and shear modulus, we choose the DG0 space (i.e., constant within a
+# viscosity and shear modulus, we choose the DQ0 space (i.e., constant within a
 # finite element cell but discontinuous between cells).
 
 # Set up function spaces
 V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space
 S = TensorFunctionSpace(mesh, "DQ", 1)  # Stress tensor function space
-DG0 = FunctionSpace(mesh, "DQ", 0)  # Density/viscosity/shear modulus function space
+DQ0 = FunctionSpace(mesh, "DQ", 0)  # Density/viscosity/shear modulus function space
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
 # Let's use the python package *PyVista* to visualise the resulting mesh.
@@ -436,22 +431,22 @@ viscosity_values_nondim = np.array(viscosity_values)/viscosity_scale
 bulk_shear_ratio = 2
 bulk_modulus_values_nondim = shear_modulus_values_nondim
 
-density = Function(DG0, name="density")
+density = Function(DQ0, name="density")
 initialise_background_field(
     density, density_values_nondim, X, radius_values_nondim,
     shift=radius_values_nondim[-1])
 
-shear_modulus = Function(DG0, name="shear modulus")
+shear_modulus = Function(DQ0, name="shear modulus")
 initialise_background_field(
     shear_modulus, shear_modulus_values_nondim, X, radius_values_nondim,
     shift=radius_values_nondim[-1])
 
-bulk_modulus = Function(DG0, name="bulk modulus")
+bulk_modulus = Function(DQ0, name="bulk modulus")
 initialise_background_field(
     bulk_modulus, bulk_modulus_values_nondim, X, radius_values_nondim,
     shift=radius_values_nondim[-1])
 
-viscosity = Function(DG0, name="viscosity")
+viscosity = Function(DQ0, name="viscosity")
 initialise_background_field(
     viscosity, viscosity_values_nondim, X, radius_values_nondim,
     shift=radius_values_nondim[-1])
