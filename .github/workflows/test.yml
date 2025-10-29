@@ -128,17 +128,6 @@ jobs:
           uv venv --system-site-packages
           uv pip install .[demos,optimisation] pygplates
 
-      - name: Fetch Irksome
-        uses: actions/checkout@v4
-        with:
-          repository: firedrakeproject/Irksome
-          path: ./Irksome
-
-      - name: Install Irksome
-        run: |
-          . .venv/bin/activate
-          uv pip install --editable ./Irksome
-
       - name: Get Muller et al 2022 plate reconstructions
         run: |
           curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
