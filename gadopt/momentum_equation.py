@@ -195,7 +195,7 @@ def advection_hydrostatic_prestress_term(
     eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     # Advection of background hydrostatic pressure used in linearised
-    # GIA simulations. This method implements the body integral and
+    # GIA simulations. This method implements the volume integral and
     # jump terms (if density space is discontinuous) after integration
     # by parts. The boundary integral on the Earth's surface is
     # applied through the `normal_stress` boundary condition tag of
@@ -218,7 +218,7 @@ def advection_hydrostatic_prestress_term(
         else:
             dS = eq.dS
         F = B_mu("+") * jump(rho0) * u_r("+") * g("+") * dot(eq.test("+"), eq.n("+")) * dS
-    # Include body integral after i.b.p of hydrostatic prestress advection term
+    # Include volume integral after i.b.p of hydrostatic prestress advection term
     # Analytical solution from Cathles 2024 Eq 2b doesn't include prestress
     # so we neglect this term but keep the free surface term that accounts for
     # viscous feedback at isostatic equibrium
