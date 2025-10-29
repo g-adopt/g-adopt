@@ -37,11 +37,16 @@ jobs:
           uv venv --system-site-packages
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
 
+      - name: Fetch Irksome
+        uses: actions/checkout@v4
+        with:
+          repository: firedrakeproject/Irksome
+          path: ./Irksome
+
       - name: Install Irksome
         run: |
           . .venv/bin/activate
-          git clone https://github.com/firedrakeproject/Irksome.git
-          pip install --editable ./Irksome
+          uv pip install --editable ./Irksome
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
