@@ -4,8 +4,8 @@ include ../../rules.mk
 
 all: params.log
 
-weerdesteijn_box_refined_surface_20km_nondim.msh: weerdesteijn_box_refined_surface_nondim.geo
-	gmsh -2 weerdesteijn_box_refined_surface_nondim.geo -setnumber refined_dx 20 -o weerdesteijn_box_refined_surface_20km_nondim.msh
+weerdesteijn_box_refined_surface_%km_nondim.msh: weerdesteijn_box_refined_surface_nondim.geo
+	gmsh -2 $< -setnumber refined_dx $* -o $@
 
 params.log : category := tests
 params.log : ncpus := 8
