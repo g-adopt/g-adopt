@@ -1,7 +1,7 @@
 """This module provides helper functions for plotting, associated with the
 glacial isostatic adjustment demos, via Pyvista. This includes plotting
 'ice rings' showing ice thickness offset from the surface of
-the domain. This module also default options for plotting viscosity
+the domain. This module also has default options for plotting viscosity
 fields and animations with artificially warped meshes based on the
 displacement field.
 
@@ -48,21 +48,18 @@ def ice_sheet_disc(
     '''
 
     # Setup lengthscales for tanh smoothing
-    ncells_smooth = 2*pi*radius / surface_dx_smooth
-    surface_resolution_radians_smooth = 2 * pi / ncells_smooth
+    surface_resolution_radians_smooth = surface_dx_smooth / radius
 
-    # Colatitude defined between -pi -> pi radians with zero at 'north pole'
-    # and -pi / pi transition at 'south pole' (x,y) = (0, -R)
-    colatitude = atan2(X[0], X[1])
+    # angle phi defined between -pi -> pi radians with zero at 'north pole'
+    # (x,y) = (0,R) and -pi / pi transition at 'south pole' (x,y) = (0, -R)
+    # where R is the radius of the domain
+    phi = atan2(X[0], X[1])
 
-    # Position opposite disc centre in radians
-    opp = disc_centre - pi if disc_centre >= 0 else disc_centre + pi
-
+    angular_distance_raw = abs(phi - disc_centre)
     # Angular distance accounting for discontinuity at 'south pole'
-    angular_distance = conditional(abs(colatitude - disc_centre) < pi,
-                                   abs(colatitude-disc_centre),
-                                   pi - abs(colatitude-opp)
-                                   )
+    angular_distance = conditional(
+        angular_distance_raw < pi, angular_distance_raw, 2 * pi - angular_distance_raw
+    )
 
     arg = angular_distance - disc_halfwidth
     disc = 0.5*(1-tanh(arg / (2*surface_resolution_radians_smooth)))
