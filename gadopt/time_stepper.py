@@ -165,9 +165,10 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self.t = mc.Constant(0.0)
         self.dt_mesh_const = mc.Constant(float(dt))  # Internal MeshConstant for Irksome
 
-        # Build the Irksome form: F = equation.mass(Dt(solution)) - equation.residual(solution)
-        # Note: equation.residual returns the negative of the left-hand contribution
-        F = equation.mass(Dt(solution)) - equation.residual(solution)
+        # Build the Irksome form using the unified irksome_form method
+        # This ensures solution-dependent coefficients in the mass term are
+        # correctly evaluated at the current stage solution
+        F = equation.irksome_form(solution, Dt)
 
         # Create the Irksome time stepper using MeshConstant
         self.stepper = IrksomeTimeStepper(
