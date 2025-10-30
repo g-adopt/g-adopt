@@ -163,7 +163,7 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # axes.set_aspect("equal")
 # axes.margins(0.0)
 # pcolor = tripcolor(Function(psi).interpolate(RaB), axes=axes)
-# fig.colorbar(contours, label="Compositional Rayleigh number")
+# fig.colorbar(pcolor, label="Compositional Rayleigh number")
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
