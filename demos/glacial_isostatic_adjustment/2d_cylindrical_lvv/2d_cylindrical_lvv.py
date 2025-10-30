@@ -20,13 +20,17 @@ from gadopt.utility import (
     extruded_layer_heights,
     initialise_background_field
 )
-from gadopt.gia_demo_utilities import ice_sheet_disc
+
+# We next import a helper function from the gadopt_demo_utils package
+# to set up a synthetic ice sheet later on.
+
+from gadopt_demo_utils.gia_demo_utils import ice_sheet_disc
 
 # We also import some helper functions for plotting and making animations associated
 # with this demo.
 
 # + tags=["active-ipynb"]
-# from gadopt.gia_demo_utilities import (
+# from gadopt_demo_utils.gia_demo_utils import (
 #     plot_ice_ring,
 #     plot_viscosity,
 #     plot_animation
