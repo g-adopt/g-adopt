@@ -135,8 +135,11 @@ class IrksomeIntegrator(TimeIntegratorBase):
         solution: Firedrake function representing the equation's solution
         dt: Integration time step (Firedrake Constant or float)
         butcher: Irksome Butcher tableau (e.g., GaussLegendre, RadauIIA)
-        stage_type: Type of stage formulation (e.g., "deriv") # NB: Look into this more.
+        stage_type: Type of stage formulation (e.g., "deriv")
+        solution_old: Firedrake function representing the equation's solution
+                      at the previous timestep
         strong_bcs: List of Firedrake Dirichlet boundary conditions
+        bc_type: Boundary condition type for Irksome ("DAE" or "ODE")
         solver_parameters: Dictionary of solver parameters provided to PETSc
     """
 
@@ -147,13 +150,16 @@ class IrksomeIntegrator(TimeIntegratorBase):
         dt: float,
         butcher: ButcherTableau,
         stage_type: str = "deriv",
+        solution_old: Optional[firedrake.Function] = None,
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
+        bc_type: str = "DAE",
         solver_parameters: Optional[dict[str, Any]] = None,
     ):
         super().__init__()
 
         self.equation = equation
         self.solution = solution
+        self.solution_old = solution_old or firedrake.Function(solution)
         self.dt = float(dt)
 
         # Keep reference to original dt constant for syncing
@@ -171,15 +177,24 @@ class IrksomeIntegrator(TimeIntegratorBase):
         F = equation.irksome_form(solution, Dt)
 
         # Create the Irksome time stepper using MeshConstant
+        # For stage_type="deriv", pass bc_type parameter
+        irksome_kwargs = {
+            "stage_type": stage_type,
+            "bcs": strong_bcs or (),
+            "solver_parameters": solver_parameters or {}
+        }
+
+        # Add bc_type only for stage formulations that support it
+        if stage_type == "deriv":
+            irksome_kwargs["bc_type"] = bc_type
+
         self.stepper = IrksomeTimeStepper(
             F,
             butcher,
             self.t,
             self.dt_mesh_const,  # Use MeshConstant for Irksome
             solution,
-            stage_type=stage_type,
-            bcs=strong_bcs or (),
-            solver_parameters=solver_parameters or {}
+            **irksome_kwargs
         )
 
         self.update_forcings = None
@@ -194,6 +209,10 @@ class IrksomeIntegrator(TimeIntegratorBase):
         """Advance the solution by one time step."""
         if not self._initialized:
             self.initialize(self.solution)
+
+        # Save current solution to solution_old before advancing
+        # This is needed for diagnostics like maxchange = ||T - T_old||
+        self.solution_old.assign(self.solution)
 
         # Sync dt_mesh_const with the reference dt before advancing
         self.dt_mesh_const.assign(float(self.dt_reference))
@@ -327,6 +346,7 @@ class ERKGeneric(IrksomeIntegrator):
             dt=dt,
             butcher=butcher,
             stage_type=stage_type,
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
@@ -354,6 +374,7 @@ class DIRKGeneric(IrksomeIntegrator):
             dt=dt,
             butcher=butcher,
             stage_type=stage_type,
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
@@ -1106,6 +1127,7 @@ class IrksomeRadauIIA(IrksomeIntegrator):
             dt=dt,
             butcher=butcher,
             stage_type="deriv",  # Use "deriv" for fully implicit schemes
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
@@ -1135,6 +1157,7 @@ class IrksomeGaussLegendre(IrksomeIntegrator):
             dt=dt,
             butcher=butcher,
             stage_type="deriv",  # Use "deriv" for fully implicit schemes
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
@@ -1163,6 +1186,7 @@ class IrksomeLobattoIIIA(DIRKGeneric):
             dt=dt,
             butcher=butcher,
             stage_type="dirk",
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
@@ -1191,6 +1215,7 @@ class IrksomeLobattoIIIC(IrksomeIntegrator):
             dt=dt,
             butcher=butcher,
             stage_type="deriv",  # Use "deriv" for fully implicit schemes
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
@@ -1218,6 +1243,7 @@ class IrksomeAlexander(DIRKGeneric):
             dt=dt,
             butcher=butcher,
             stage_type="dirk",
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
@@ -1245,6 +1271,7 @@ class IrksomeQinZhang(DIRKGeneric):
             dt=dt,
             butcher=butcher,
             stage_type="dirk",
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
@@ -1274,6 +1301,7 @@ class IrksomePareschiRusso(DIRKGeneric):
             dt=dt,
             butcher=butcher,
             stage_type="dirk",
+            solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
