@@ -161,7 +161,7 @@ initialise_background_field(
     background_viscosity, viscosity_values_nondim, X, radius_values_nondim)
 
 
-# Defined lateral viscosity regions
+# Define lateral viscosity regions
 def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
     arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
     numerator = exp(-1/(2*(1-rho**2))*arg)
