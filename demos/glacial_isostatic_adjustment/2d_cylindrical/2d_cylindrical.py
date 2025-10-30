@@ -3,9 +3,10 @@
 #
 # In this tutorial, we examine an idealised 2-D loading problem in an annulus domain.
 #
-# This example focuses on differences between running simulations in a 2-D annulus
-# and a 2-D Cartesian domain in our [previous tutorial](../base_case). These can be summarised
-# as follows:
+# This example focuses on differences between running simulations in a 2-D cylindrical
+# annulus and a 2-D Cartesian box, which was employed in our
+# [previous tutorial](../base_case). These can be summarised as follows:
+#
 # 1. The geometry of the problem - i.e. the computational mesh.
 # 2. The radial direction of gravity (as opposed to the vertical direction in a
 # Cartesian domain).
@@ -35,13 +36,13 @@ from gadopt.gia_demo_utilities import ice_sheet_disc
 # )
 # -
 
-# Similar to our [previous tutorial](../base_case) demo we create the mesh in two
+# Similar to our [previous tutorial](../base_case) we create the mesh in two
 # stages. First we create a surface mesh of 180 cells using one of `Firedrake`'s
 # utility meshes `CircleManifoldMesh` and then we extrude this in the radial
 # direction by choosing the optional keyword argument `extrusion_type`. As before,
 # the layer properties specified are from
 # [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x).
-# We specify 5 cells per rheological layer so 20 layers in total. To better
+# We specify 5 cells per rheological layer so 20 vertical cells in total. To better
 # represent the curvature of the domain and ensure accuracy of our quadratic
 # representation of displacement, we approximate the curved cylindrical shell
 # domain quadratically, using the optional keyword argument `degree`$=2$.
@@ -151,7 +152,7 @@ initialise_background_field(
 # -
 
 # Now let's setup the ice load. For this tutorial we will have two synthetic ice sheets.
-# Let's put one a larger one over the South Pole, with a total horizontal
+# Let's put a larger one over the South Pole, with a total horizontal
 # extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the
 # North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify
 # things let's keep the ice load fixed in time.
