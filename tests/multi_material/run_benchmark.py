@@ -1,5 +1,4 @@
 from argparse import ArgumentParser
-from functools import partial
 from importlib import import_module
 from pathlib import Path
 from subprocess import run
@@ -23,7 +22,7 @@ def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
         else:
             checkpoint_file.save_function(field, name=field_name, idx=dump_counter)
 
-    checkpoint_file.set_attr("/", "time", float(time_now))
+    checkpoint_file.set_attr("/", "time", time_now)
     checkpoint_file.set_attr("/", "timestep", float(timestep))
 
 
@@ -34,8 +33,6 @@ def write_output(output_file):
     else:
         compo_rayleigh.interpolate(RaB)
     viscosity.interpolate(mu)
-    if benchmark == "trim_2023":
-        simulation.internal_heating_rate(H, time_now)
 
     myr_to_seconds = 1e6 * 365.25 * 8.64e4
     output_file.write(
@@ -44,7 +41,7 @@ def write_output(output_file):
         *level_set,
         *level_set_grad,
         *output_fields,
-        time=float(time_now) / (myr_to_seconds if simulation.dimensional else 1.0),
+        time=time_now / (myr_to_seconds if simulation.dimensional else 1.0),
     )
 
 
@@ -85,8 +82,8 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
             except RuntimeError:
                 break
 
+        time_now = h5_check.get_attr("/", "time")
         func_space_real = fd.FunctionSpace(mesh, "R", 0)
-        time_now = fd.Function(func_space_real).assign(h5_check.get_attr("/", "time"))
         timestep = fd.Function(func_space_real)
         timestep.assign(h5_check.get_attr("/", "timestep"))
 
@@ -147,8 +144,8 @@ else:  # Initialise mesh and key functions
     for ls, kwargs in zip(level_set, simulation.signed_distance_kwargs_list):
         ga.assign_level_set_values(ls, epsilon, **kwargs)
 
+    time_now = 0.0
     func_space_real = fd.FunctionSpace(mesh, "R", 0)
-    time_now = fd.Function(func_space_real).assign(0.0)
     timestep = fd.Function(func_space_real).assign(simulation.initial_timestep)
     dump_counter = 0
 
@@ -203,6 +200,7 @@ approximation_parameters["mu"] = mu
 
 if benchmark == "trim_2023":
     H = fd.Function(temperature.function_space(), name="Internal heating rate")
+    simulation.internal_heating_rate(H, time_now)
     output_fields.append(H)
     approximation_parameters["H"] = H
 
@@ -279,24 +277,20 @@ geo_diag = ga.GeodynamicalDiagnostics(
     stokes_function, temperature, bottom_id=3, top_id=4
 )
 
-if benchmark == "trim_2023":
-    disable_reinitialisation = True  # Omit level-set reinitialisation
-    # Update time-dependent internal heating during energy solve
-    update_forcings = partial(simulation.internal_heating_rate, H, time_now)
-else:
-    disable_reinitialisation = False
-    update_forcings = None
+# Level-set reinitialisation must be excluded for Trim et al. (2023), as the level-set
+# field acts as the composition field, which is purely advected.
+disable_reinitialisation = True if benchmark == "trim_2023" else False
 
 # Perform the time loop
 has_end_time = hasattr(simulation, "time_end")
 while True:
     # Calculate simulation diagnostics
-    simulation.diagnostics(float(time_now), geo_diag, diag_vars, benchmark_path)
+    simulation.diagnostics(time_now, geo_diag, diag_vars, benchmark_path)
     if not args.without_plot:
         simulation.plot_diagnostics(benchmark_path)
 
     # Write to output file and increment dump counter
-    if float(time_now) >= dump_counter * simulation.dump_period:
+    if time_now >= dump_counter * simulation.dump_period:
         # Write to checkpoint file
         if dump_counter % simulation.checkpoint_period == 0:
             write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter)
@@ -304,13 +298,13 @@ while True:
         dump_counter += 1
 
     # Update timestep
-    if has_end_time and simulation.time_end - float(time_now) < simulation.dump_period:
-        t_adapt.maximum_timestep = simulation.time_end - float(time_now)
+    if has_end_time and simulation.time_end - time_now < simulation.dump_period:
+        t_adapt.maximum_timestep = simulation.time_end - time_now
     t_adapt.update_timestep()
 
     # Solve energy system
     if energy_solver is not None:
-        energy_solver.solve(update_forcings)
+        energy_solver.solve()
 
     # Advect each level set
     for ls_solver in level_set_solver:
@@ -320,18 +314,20 @@ while True:
     stokes_solver.solve()
 
     # Progress simulation time
-    time_now.assign(time_now + timestep)
+    time_now += float(timestep)
+    if benchmark == "trim_2023":
+        simulation.internal_heating_rate(H, time_now)
 
     # Check if simulation has completed
     if has_end_time:
-        exit_loop = float(time_now) >= simulation.time_end
+        exit_loop = time_now >= simulation.time_end
     else:
         exit_loop = fd.norm(velocity - velocity_old) < simulation.steady_state_threshold
         velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
 
     if exit_loop:
         # Calculate final simulation diagnostics
-        simulation.diagnostics(float(time_now), geo_diag, diag_vars, benchmark_path)
+        simulation.diagnostics(time_now, geo_diag, diag_vars, benchmark_path)
         # Save post-processing fields and produce graphs
         simulation.plot_diagnostics(benchmark_path)
 
