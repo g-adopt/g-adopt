@@ -79,9 +79,13 @@ def ice_sheet_disc(
     return disc
 
 
-def make_ice_ring(
+def make_ring(
         reader: PVDReader,
         domain_depth: float = 2891e3,
+        redimensionalise=True,
+        scalar='Ice thickness',
+        stretch=1.15,
+        
 ) -> PolyData:
     """Create a ring of ice thickness outside an annulus domain
 
@@ -96,7 +100,9 @@ def make_ice_ring(
     """
 
     data = reader.read()[0]
-    data['Ice thickness'] *= domain_depth  # Convert ice thickness to m
+    
+    if redimensionalise:
+        data[scalar] *= domain_depth  # Convert ice thickness to m
 
     # Isolate data on surface of sphere
     surf = data.extract_feature_edges(boundary_edges=True, non_manifold_edges=False,
@@ -104,8 +110,7 @@ def make_ice_ring(
     sphere = pv.Sphere(radius=0.8*radius)
     clipped_surf = surf.clip_surface(sphere, invert=False)
 
-    # Stretch line by 15%
-    stretch = 1.15
+    # Stretch so that ring appears outside computational domain
     transform_matrix = np.array(
         [
             [stretch, 0, 0, 0],
@@ -113,7 +118,7 @@ def make_ice_ring(
             [0, 0, stretch, 0],
             [0, 0, 0, 1],
         ])
-    transformed_surf = clipped_surf.transform(transform_matrix, inplace=True)
+    transformed_surf = clipped_surf.transform(transform_matrix, inplace=False)
     return transformed_surf
 
 
@@ -132,7 +137,7 @@ def plot_ice_ring(
         Name of scalar field to plot
     """
     ice_reader = pv.get_reader(fname)
-    ice_ring = make_ice_ring(ice_reader)
+    ice_ring = make_ring(ice_reader, scalar=scalar)
     ice_cmap = plt.get_cmap("Blues", 25)
     ice_lw = 20
 
@@ -160,6 +165,104 @@ def plot_ice_ring(
     )
 
 
+def plot_displacement(
+        plotter: Plotter,
+        fname: str = 'output.pvd',
+        disp='displacement',
+        vel='velocity',
+        domain_depth: float = 2891e3,
+        output_step=10):
+    """Add viscosity field to Pyvista plot
+
+    Args:
+      plotter:
+        Pyvista plotter
+      fname:
+        Name of VTK pvd file to read input data from
+      viscosity_scale:
+        Characteristic viscosity scale used to re-dimensionalise the viscosity field
+    """
+    reader = pv.get_reader(fname)
+    data = reader.read()[0]
+    # Artificially warp the output data by the displacement
+    # Note the mesh is not really moving!
+    warped = data.warp_by_vector(vectors=disp, factor=1500)
+    arrows = warped.glyph(orient=vel, scale=vel, factor=5e4, tolerance=0.01)
+    plotter.add_mesh(arrows, color="grey", lighting=False)
+    data[disp] *= domain_depth  # Convert displacement to m
+    inferno_cmap = plt.get_cmap("inferno_r", 25)
+    # Add the warped displacement field to the frame
+    plotter.add_mesh(
+        warped,
+        scalars=disp,
+        component=None,
+        lighting=False,
+        clim=[0, 600],
+        cmap=inferno_cmap,
+        scalar_bar_args={
+            "title": 'Displacement (m)',
+            "position_x": 0.85,
+            "position_y": 0.3,
+            "vertical": True,
+            "title_font_size": 20,
+            "label_font_size": 16,
+            "fmt": "%.0f",
+            "font_family": "arial",
+        }
+    )
+
+def plot_adj_ring(
+        plotter: Plotter,
+        fname: str = 'adj_ice.pvd',
+        scalar: str = "Ice thickness",
+        stretch: float = 1.15):
+    """Add an ice ring to Pyvista plot
+
+    Args:
+      plotter:
+        Pyvista plotter
+      fname:
+        Name of VTK pvd file to read input data from
+      scalar:
+        Name of scalar field to plot
+    """
+    reader = pv.get_reader(fname)
+    data = reader.read()[0]
+    # Stretch so that ring appears outside computational domain
+    transform_matrix = np.array(
+        [
+            [stretch, 0, 0, 0],
+            [0, stretch, 0, 0],
+            [0, 0, stretch, 0],
+            [0, 0, 0, 1],
+        ])
+    transformed_surf = data.transform(transform_matrix, inplace=True)
+    ice_cmap = plt.get_cmap("Blues", 25)
+    ice_lw = 20
+
+    # add outline of ice ring
+    plotter.add_mesh(transformed_surf, color='black', line_width=ice_lw+2, lighting=False,
+                     show_scalar_bar=False)
+    adj_cmap = plt.get_cmap("coolwarm", 25)
+    # plot ice ring
+    plotter.add_mesh(
+        transformed_surf,
+        #scalars=scalar,
+        line_width=ice_lw,
+        cmap=adj_cmap,
+        clim=[-0.5, 0.5],
+        scalar_bar_args={
+            "title": 'Adjoint sensitivity',
+            "position_x": 0.05,
+            "position_y": 0.3,
+            "vertical": True,
+            "title_font_size": 20,
+            "label_font_size": 16,
+            "fmt": "%.2f",
+            "font_family": "arial",
+        }
+    )
+    
 def plot_viscosity(
         plotter: Plotter,
         fname: str = 'viscosity.pvd',

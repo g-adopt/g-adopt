@@ -47,6 +47,16 @@ from gadopt.inverse import *
 from gadopt.utility import CombinedSurfaceMeasure, initialise_background_field
 from gadopt.gia_demo_utilities import ice_sheet_disc, setup_heterogenous_viscosity
 
+# +
+from gadopt.gia_demo_utilities import (
+    plot_adj_ring,
+    plot_displacement,    
+    plot_ice_ring,
+    plot_viscosity,
+    
+)
+# -
+
 # The novelty of using the overloading approach provided by pyadjoint is that it requires
 # minimal changes to our script to enable the inverse capabalities of G-ADOPT.
 # To turn on the adjoint, one simply imports the inverse module to
@@ -169,16 +179,17 @@ disc_halfwidth1 = (2*pi/360) * 10  # Disc 1 half width in radians
 disc_halfwidth2 = (2*pi/360) * 20  # Disc 2 half width in radians
 disc1 = ice_sheet_disc(X, disc_centre1, disc_halfwidth1)
 disc2 = ice_sheet_disc(X, disc_centre2, disc_halfwidth2)
-
+target_normalised_ice_thickness = Function(P1, name="target normalised ice thickness")
+target_normalised_ice_thickness.interpolate(Hice1 * disc1 + Hice2*disc2)
 # Set up geometry:
 rmax = radius_values_nondim[0]
-ncells = 360
+ncells = 180
 
 # Construct a surface mesh:
 surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh')
 P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # control space
 control_ice_thickness_surf = Function(P1_surf)  # control
-control = Control(control_ice_thickness_surf) #, riesz_map="L2")
+control = Control(control_ice_thickness_surf, riesz_map="L2")
 # defining the control
 control_ice_thickness = Function(P1, name="control normalised ice thickness")
 control_ice_thickness.interpolate(control_ice_thickness_surf, allow_missing_dofs=True)
@@ -194,25 +205,24 @@ ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 # + tags=["active-ipynb"]
 # import pyvista as pv
 # import matplotlib.pyplot as plt
-# from gia_demo_utils import add_ice, add_viscosity
 #
-# visc_file = VTKFile('viscosity.pvd').write(normalised_viscosity)
+# visc_file = VTKFile('viscosity.pvd').write(viscosity)
 #
-# updated_ice_file = VTKFile('ice.pvd').write(normalised_ice_thickness, target_normalised_ice_thickness)
+# updated_ice_file = VTKFile('ice.pvd').write(control_ice_thickness, target_normalised_ice_thickness)
 # reader = pv.get_reader("ice.pvd")
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
 #
 # plotter.subplot(0, 0)
-# add_ice(plotter, reader, 'target normalised ice thickness')
-# add_viscosity(plotter)
+# plot_ice_ring(plotter, scalar='target normalised ice thickness')
+# plot_viscosity(plotter)
 # plotter.add_text("Target")
 # plotter.camera_position = 'xy'
 #
 # plotter.subplot(0, 1)
-# add_ice(plotter, reader, 'normalised ice thickness')
-# add_viscosity(plotter)
+# plot_ice_ring(plotter, scalar='control normalised ice thickness')
+# plot_viscosity(plotter)
 # plotter.add_text("Initial Guess")
 # plotter.camera_position = 'xy'
 #
@@ -343,7 +353,7 @@ def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
 velocity_misfit = 0
 displacement_misfit = 0
 
-for timestep in range(max_timesteps):
+for timestep in range(1, max_timesteps+1):
 
     time.assign(time+dt)
     stokes_solver.solve()
@@ -372,17 +382,11 @@ for timestep in range(max_timesteps):
 # As we can see from the plot below there is no displacement at the final time given there is no ice load!
 
 # + tags=["active-ipynb"]
-# from gia_demo_utils import add_displacement
-# # Read the PVD file
-# reader = pv.get_reader("output.pvd")
-# data = reader.read()[0]  # MultiBlock mesh with only 1 block
-#
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
 #
 # # Plot displacement
 #
-# reader.set_active_time_point(10)  # Read last timestep
 # disp_scalar_bar_args={
 #         "title": 'Displacement (m)',
 #         "position_x": 0.85,
@@ -393,7 +397,7 @@ for timestep in range(max_timesteps):
 #         "fmt": "%.0f",
 #         "font_family": "arial",
 #     }
-# add_displacement(plotter, reader, 'displacement', scalar_bar_args=disp_scalar_bar_args)
+# plot_displacement(plotter, disp='displacement', vel='velocity') #, scalar_bar_args=disp_scalar_bar_args)
 #
 # # Plot ice ring
 # reader = pv.get_reader("ice.pvd")
@@ -407,7 +411,7 @@ for timestep in range(max_timesteps):
 #                        "font_family": "arial",
 #                        "n_labels": 5,
 #                        }
-# add_ice(plotter, reader, 'normalised ice thickness', scalar_bar_args=ice_scalar_bar_args)
+# plot_ice_ring(plotter, scalar='control normalised ice thickness') #, scalar_bar_args=ice_scalar_bar_args)
 #
 # plotter.camera_position = 'xy'
 # plotter.add_text("Time = 10 ka")
@@ -514,7 +518,7 @@ log("Replay tape RF", reduced_functional(control_ice_thickness_surf))
 # reduced functional.
 
 # +
-dJdm = reduced_functional.derivative() #apply_riesz=True)
+dJdm = reduced_functional.derivative(apply_riesz=True)
 
 grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 # -
@@ -529,22 +533,22 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 # we expect increasing the ice thickness here to reduce our surface misfit.
 
 # + tags=["active-ipynb"]
-# from gia_demo_utils import add_sensitivity_ring
+# import pyvista as pv
 # # Read the PVD file
 # reader = pv.get_reader("ice.pvd")
 # adj_reader = pv.get_reader("adj_ice.pvd")
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
 # plotter.subplot(0, 0)
-# add_ice(plotter, reader, 'target normalised ice thickness')
-# add_viscosity(plotter)
+# plot_ice_ring(plotter, scalar='target normalised ice thickness')
+# plot_viscosity(plotter)
 # plotter.add_text("Target")
 # plotter.camera_position = 'xy'
 # plotter.subplot(0, 1)
-# add_ice(plotter, reader, 'normalised ice thickness')
-# add_viscosity(plotter)
+# plot_ice_ring(plotter, scalar='control normalised ice thickness')
+# plot_viscosity(plotter)
 #
-# add_sensitivity_ring(plotter, adj_reader)
+# plot_adj_ring(plotter, fname='adj_ice.pvd')
 # plotter.camera_position = 'xy'
 # plotter.add_text("Initial Guess")
 # plotter.show(jupyter_backend="static", interactive=False)
@@ -576,7 +580,7 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 # In our implementation, we perform a second-order Taylor remainder test for each
 # term of the objective functional. The test involves
 # computing the functional and the associated gradient when randomly perturbing
-# the initial temperature field, $T_{ic}$, and subsequently
+# the ice thickness field, $I_h$, and subsequently
 # halving the perturbations at each level.
 #
 # Here is how you can perform a Taylor test in the code:
@@ -598,10 +602,8 @@ with open("taylor_test_minconv.txt", "w") as f:
 # as we do not want negative ice thicknesses!
 
 # +
-# ice_thickness_lb = Function(normalised_ice_thickness.function_space(), name="Lower bound ice thickness")
-# ice_thickness_ub = Function(normalised_ice_thickness.function_space(), name="Upper bound ice thickness")
-ice_thickness_lb = Function(control_ice_thickness.function_space(), name="Lower bound ice thickness")
-ice_thickness_ub = Function(control_ice_thickness.function_space(), name="Upper bound ice thickness")
+ice_thickness_lb = Function(control_ice_thickness_surf.function_space(), name="Lower bound ice thickness")
+ice_thickness_ub = Function(control_ice_thickness_surf.function_space(), name="Upper bound ice thickness")
 ice_thickness_lb.assign(0.0)
 ice_thickness_ub.assign(5)
 
