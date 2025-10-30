@@ -6,7 +6,7 @@ fields and animations with artificially warped meshes based on the
 displacement field.
 
 """
-from firedrake import atan2, conditional, exp, Function, pi, tanh
+from firedrake import atan2, conditional, exp, pi, tanh
 import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
@@ -85,7 +85,6 @@ def make_ring(
         redimensionalise=True,
         scalar='Ice thickness',
         stretch=1.15,
-        
 ) -> PolyData:
     """Create a ring of ice thickness outside an annulus domain
 
@@ -100,7 +99,7 @@ def make_ring(
     """
 
     data = reader.read()[0]
-    
+
     if redimensionalise:
         data[scalar] *= domain_depth  # Convert ice thickness to m
 
@@ -211,6 +210,7 @@ def plot_displacement(
         }
     )
 
+
 def plot_adj_ring(
         plotter: Plotter,
         fname: str = 'adj_ice.pvd',
@@ -237,7 +237,6 @@ def plot_adj_ring(
             [0, 0, 0, 1],
         ])
     transformed_surf = data.transform(transform_matrix, inplace=True)
-    ice_cmap = plt.get_cmap("Blues", 25)
     ice_lw = 20
 
     # add outline of ice ring
@@ -247,7 +246,6 @@ def plot_adj_ring(
     # plot ice ring
     plotter.add_mesh(
         transformed_surf,
-        #scalars=scalar,
         line_width=ice_lw,
         cmap=adj_cmap,
         clim=[-0.5, 0.5],
@@ -262,7 +260,8 @@ def plot_adj_ring(
             "font_family": "arial",
         }
     )
-    
+
+
 def plot_viscosity(
         plotter: Plotter,
         fname: str = 'viscosity.pvd',
@@ -398,5 +397,3 @@ def plot_animation(
                 plotter.write_frame()
 
         plotter.clear()
-
-

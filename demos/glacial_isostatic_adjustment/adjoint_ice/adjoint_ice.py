@@ -45,19 +45,18 @@
 from gadopt import *
 from gadopt.inverse import *
 from gadopt.utility import (
-        CombinedSurfaceMeasure,
-        initialise_background_field,
-        vertical_component)
+    CombinedSurfaceMeasure,
+    initialise_background_field,
+    vertical_component)
 from gadopt.gia_demo_utilities import ice_sheet_disc
 
-# +
-from gadopt.gia_demo_utilities import (
-    plot_adj_ring,
-    plot_displacement,    
-    plot_ice_ring,
-    plot_viscosity,
-    
-)
+# + tags=["active-ipynb"]
+# from gadopt.gia_demo_utilities import (
+#    plot_adj_ring,
+#    plot_displacement,
+#    plot_ice_ring,
+#    plot_viscosity,
+# )
 # -
 
 # The novelty of using the overloading approach provided by pyadjoint is that it requires
@@ -148,6 +147,7 @@ background_viscosity = Function(DG1, name="background viscosity")
 initialise_background_field(
     background_viscosity, viscosity_values_nondim, X, radius_values_nondim)
 
+
 def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
     arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
     numerator = exp(-1/(2*(1-rho**2))*arg)
@@ -156,6 +156,7 @@ def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=
     else:
         denominator = 1
     return numerator / denominator
+
 
 def setup_heterogenous_viscosity(
         background_viscosity: Function,
@@ -253,7 +254,6 @@ def setup_heterogenous_viscosity(
                     heterogenous_viscosity_field))
 
     return heterogenous_viscosity_field
-
 
 
 viscosity = setup_heterogenous_viscosity(background_viscosity)
@@ -377,13 +377,11 @@ approximation = MaxwellApproximation(
     B_mu=B_mu,
     bulk_shear_ratio=bulk_shear_ratio)
 
-#V_nullspace = rigid_body_modes(V, rotational=True)
 iterative_parameters = {"mat_type": "matfree",
                         "snes_type": "ksponly",
                         "ksp_type": "gmres",
                         "ksp_rtol": 1e-5,
                         "ksp_converged_reason": None,
-                        "ksp_monitor": None,
                         "pc_type": "python",
                         "pc_python_type": "firedrake.AssembledPC",
                         "assembled_pc_type": "gamg",
@@ -403,7 +401,6 @@ stokes_solver = InternalVariableSolver(
     dt=dt,
     internal_variables=m,
     bcs=stokes_bcs,
-   # constant_jacobian=True,
     solver_parameters=iterative_parameters,
     nullspace=nullspace,
     transpose_nullspace=nullspace,
@@ -578,7 +575,6 @@ def eval_cb(J, m):
     else:
         functional_values.append(J)
 
-    circumference = 2 * pi * radius_values[0]
     # Define the component terms of the overall objective functional
     log("displacement misfit", displacement_misfit.block_variable.checkpoint / max_timesteps)
     log("velocity misfit", velocity_misfit.block_variable.checkpoint / max_timesteps)
