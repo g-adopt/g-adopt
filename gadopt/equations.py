@@ -128,6 +128,47 @@ class Equation:
             term(self, trial) for term in self.residual_terms
         )
 
+    def irksome_form(
+        self,
+        solution: fd.Function,
+        dt_operator: Any
+    ) -> fd.Form:
+        """Generates the UFL form suitable for Irksome time integrators.
+
+        This method creates a unified residual form that includes both the mass term
+        (with Dt applied) and the spatial residual terms. This ensures that
+        solution-dependent coefficients in the mass term are correctly evaluated
+        at the current stage solution during implicit Runge-Kutta integration.
+
+        The form is constructed as:
+            F = mass_term(eq, Dt(solution)) - residual(solution)
+
+        which represents the equation in residual form:
+            ∂u/∂t + spatial_terms(u) = 0
+
+        Args:
+            solution: The solution function
+            dt_operator: The Irksome Dt operator for time derivatives
+
+        Returns:
+            A UFL form suitable for Irksome's TimeStepper, representing the
+            complete residual including time derivative and spatial terms.
+
+        Note:
+            The negative sign before residual is necessary because G-ADOPT's
+            residual terms return -F (RHS convention), but Irksome expects
+            everything on the LHS.
+        """
+        # Apply Dt to the solution for the mass term
+        mass_form = self.mass(dt_operator(solution))
+
+        # Get the spatial residual terms
+        residual_form = self.residual(solution)
+
+        # Combine: mass term minus residual (which is already negative)
+        # This gives us: Dt(u) + spatial_terms = 0 (in weak form)
+        return mass_form - residual_form
+
 
 def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     r"""
