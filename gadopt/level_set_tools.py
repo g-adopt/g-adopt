@@ -26,7 +26,12 @@ from .scalar_equation import mass_term
 from .solver_options_manager import SolverConfigurationMixin
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import CombinedSurfaceMeasure, is_cartesian, node_coordinates, vertical_component
+from .utility import (
+    CombinedSurfaceMeasure,
+    is_cartesian,
+    node_coordinates,
+    vertical_component,
+)
 
 __all__ = [
     "LevelSetSolver",
@@ -568,7 +573,7 @@ class LevelSetSolver(SolverConfigurationMixin):
                 solution_old=self.solution_old,
                 eq_attrs={"u": self.adv_kwargs["u"]},
                 bcs=self.adv_kwargs["bcs"],
-                solver_parameters=self.solver_parameters['adv'],
+                solver_parameters=self.solver_parameters["adv"],
             )
 
         if self.reinitialisation:
@@ -588,12 +593,12 @@ class LevelSetSolver(SolverConfigurationMixin):
                 self.solution,
                 self.reini_kwargs["timestep"],
                 solution_old=self.solution_old,
-                solver_parameters=self.solver_parameters['reini'],
+                solver_parameters=self.solver_parameters["reini"],
             )
 
         self.step = 0
 
-    def update_gradient(self, *args, **kwargs) -> None:
+    def update_gradient(self) -> None:
         """Calls the gradient solver.
 
         Can be provided as a forcing to time integrators.
@@ -603,7 +608,7 @@ class LevelSetSolver(SolverConfigurationMixin):
     def reinitialise(self) -> None:
         """Performs reinitialisation steps."""
         for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(t=0, update_forcings=self.update_gradient)
+            self.reini_integrator.advance(update_forcings=self.update_gradient)
 
     def solve(
         self,
