@@ -8,10 +8,12 @@ from firedrake import (
     Constant, DirichletBC, FacetNormal, Function,
     assemble, dot, ds, dx, grad, norm, sqrt,
 )
+from firedrake.functionspaceimpl import MixedFunctionSpace
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
+import numpy as np
 
-from .utility import CombinedSurfaceMeasure
+from .utility import CombinedSurfaceMeasure, vertical_component
 
 
 class GeodynamicalDiagnostics:
@@ -36,6 +38,7 @@ class GeodynamicalDiagnostics:
       T_min: Minimum temperature in domain
       T_max: Maximum temperature in domain
       ux_max: Maximum velocity (first component, optionally over a given boundary)
+      uv_min: Minimum velocity (vertical component, optionally over a given boundary)
 
     """
 
@@ -51,7 +54,20 @@ class GeodynamicalDiagnostics:
     ):
         mesh = extract_unique_domain(z)
 
-        self.u, self.p = z.subfunctions[:2]
+        # Allows InternalVariableSolver in stokes_integrators.py
+        # (just disp no mixed space) to use same diagnostics.
+        # Would be better to separate out into Base classes
+        is_mixed_space = isinstance(
+            z.function_space().topological, MixedFunctionSpace
+        )
+        if is_mixed_space:
+            self.u, self.p = z.subfunctions[:2]
+        else:
+            self.u = z
+
+        # vertical component of vel/disp
+        self.uv = Function(self.u.function_space().sub(0))
+
         self.T = T
 
         self.dx = dx(domain=mesh, degree=quad_degree)
@@ -102,3 +118,14 @@ class GeodynamicalDiagnostics:
             ux_data = self.u.dat.data_ro[:, 0]
 
         return self.u.comm.allreduce(ux_data.max(), MPI.MAX)
+
+    def uv_min(self, boundary_id=None) -> float:
+        "Minimum value of vertical component of velocity/displacement"
+        self.uv.interpolate(vertical_component(self.u))
+        if boundary_id:
+            bcu = DirichletBC(self.uv.function_space(), 0, boundary_id)
+            uv_data = self.uv.dat.data_ro_with_halos[bcu.nodes]
+        else:
+            uv_data = self.uv.dat.data_ro[:]
+
+        return self.uv.comm.allreduce(uv_data.min(initial=np.inf), MPI.MIN)

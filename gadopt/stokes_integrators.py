@@ -19,15 +19,11 @@ from warnings import warn
 import firedrake as fd
 from ufl.core.expr import Expr
 
-from .approximations import (
-    BaseApproximation,
-    AnelasticLiquidApproximation,
-    SmallDisplacementViscoelasticApproximation,
-)
+from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
-from .momentum_equation import residual_terms_stokes
+from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
     DEBUG,
@@ -142,97 +138,6 @@ Note:
 """
 
 
-def create_stokes_nullspace(
-    Z: fd.functionspaceimpl.WithGeometry,
-    closed: bool = True,
-    rotational: bool = False,
-    translations: list[int] | None = None,
-    ala_approximation: AnelasticLiquidApproximation | None = None,
-    top_subdomain_id: str | int | None = None,
-) -> fd.nullspace.MixedVectorSpaceBasis:
-    """Create a null space for the mixed Stokes system.
-
-    Arguments:
-      Z: Firedrake mixed function space associated with the Stokes system
-      closed: Whether to include a constant pressure null space
-      rotational: Whether to include all rotational modes
-      translations: List of translations to include
-      ala_approximation: AnelasticLiquidApproximation for calculating (non-constant) right nullspace
-      top_subdomain_id: Boundary id of top surface. Required when providing
-                        ala_approximation.
-
-    Returns:
-      A Firedrake mixed vector space basis incorporating the null space components
-
-    """
-    # ala_approximation and top_subdomain_id are both needed when calculating right nullspace for ala
-    if (ala_approximation is None) != (top_subdomain_id is None):
-        raise ValueError(
-            "Both ala_approximation and top_subdomain_id must be provided, or both must be None."
-        )
-
-    X = fd.SpatialCoordinate(Z.mesh())
-    dim = len(X)
-    stokes_subspaces = Z.subspaces
-
-    if rotational:
-        if dim == 2:
-            rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((-X[1], X[0]))
-            )
-            basis = [rotV]
-        elif dim == 3:
-            x_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((0, -X[2], X[1]))
-            )
-            y_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((X[2], 0, -X[0]))
-            )
-            z_rotV = fd.Function(stokes_subspaces[0]).interpolate(
-                fd.as_vector((-X[1], X[0], 0))
-            )
-            basis = [x_rotV, y_rotV, z_rotV]
-        else:
-            raise ValueError("Unknown dimension")
-    else:
-        basis = []
-
-    if translations:
-        for tdim in translations:
-            vec = [0] * dim
-            vec[tdim] = 1
-            basis.append(
-                fd.Function(stokes_subspaces[0]).interpolate(fd.as_vector(vec))
-            )
-
-    if basis:
-        V_nullspace = fd.VectorSpaceBasis(basis, comm=Z.mesh().comm)
-        V_nullspace.orthonormalize()
-    else:
-        V_nullspace = stokes_subspaces[0]
-
-    if closed:
-        if ala_approximation:
-            p = ala_right_nullspace(
-                W=stokes_subspaces[1],
-                approximation=ala_approximation,
-                top_subdomain_id=top_subdomain_id,
-            )
-            p_nullspace = fd.VectorSpaceBasis([p], comm=Z.mesh().comm)
-            p_nullspace.orthonormalize()
-        else:
-            p_nullspace = fd.VectorSpaceBasis(constant=True, comm=Z.mesh().comm)
-    else:
-        p_nullspace = stokes_subspaces[1]
-
-    null_space = [V_nullspace, p_nullspace]
-
-    # If free surface unknowns, add dummy free surface nullspace
-    null_space += stokes_subspaces[2:]
-
-    return fd.MixedVectorSpaceBasis(Z, null_space)
-
-
 class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
     """Solver for a system involving mass and momentum conservation.
 
@@ -334,8 +239,18 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.mesh = self.solution_space.mesh()
         self.k = upward_normal(self.mesh)
 
-        self.solution_split = fd.split(self.solution)
-        self.solution_old_split = fd.split(self.solution_old)
+        self.is_mixed_space = isinstance(
+            self.solution_space.topological, fd.functionspaceimpl.MixedFunctionSpace
+        )
+        if self.is_mixed_space:
+            self.tests = fd.TestFunctions(self.solution_space)
+            self.solution_split = fd.split(solution)
+            self.solution_old_split = fd.split(self.solution_old)
+        else:
+            self.test = fd.TestFunction(self.solution_space)
+            self.solution_split = (solution,)
+            self.solution_old_split = (self.solution_old,)
+
         self.solution_theta_split = [
             self.theta * sol + (1 - self.theta) * sol_old
             for sol, sol_old in zip(self.solution_split, self.solution_old_split)
@@ -357,11 +272,14 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.strong_bcs = []
         self.weak_bcs = {}
 
-        bc_map = {"u": self.solution_space.sub(0)}
+        if self.is_mixed_space:
+            bc_map = {"u": self.solution_space.sub(0)}
+        else:
+            bc_map = {"u": self.solution_space}
         if is_cartesian(self.mesh):
             bc_map["ux"] = bc_map["u"].sub(0)
             bc_map["uy"] = bc_map["u"].sub(1)
-            if self.mesh.geometric_dimension() == 3:
+            if self.mesh.geometric_dimension == 3:
                 bc_map["uz"] = bc_map["u"].sub(2)
 
         for bc_id, bc in self.bcs.items():
@@ -457,7 +375,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                     self.add_to_solver_config(iterative_stokes_solver_parameters)
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
-        elif self.mesh.topological_dimension() == 2:
+        elif self.mesh.topological_dimension == 2:
             self.add_to_solver_config(direct_stokes_solver_parameters)
         else:
             self.add_to_solver_config(iterative_stokes_solver_parameters)
@@ -605,12 +523,12 @@ class StokesSolver(StokesSolverBase):
             {"u": u, "rho_continuity": self.rho_continuity},
         ]
 
-        for i in range(len(residual_terms_stokes)):
+        for i in range(len(stokes_terms)):
             self.equations.append(
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    residual_terms_stokes[i],
+                    stokes_terms[i],
                     eq_attrs=eqs_attrs[i],
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
@@ -670,89 +588,8 @@ class StokesSolver(StokesSolverBase):
         return self.BoundaryNormalStressSolvers[subdomain_id].solve()
 
 
-def ala_right_nullspace(
-    W: fd.functionspaceimpl.WithGeometry,
-    approximation: AnelasticLiquidApproximation,
-    top_subdomain_id: str | int,
-):
-    r"""Compute pressure nullspace for Anelastic Liquid Approximation.
-
-    Arguments:
-      W: pressure function space
-      approximation: AnelasticLiquidApproximation with equation parameters
-      top_subdomain_id: boundary id of top surface
-
-    Returns:
-      pressure nullspace solution
-
-    To obtain the pressure nullspace solution for the Stokes equation in Anelastic Liquid Approximation,
-    which includes a pressure-dependent buoyancy term, we try to solve the equation:
-
-    $$
-      -nabla p + g "Di" rho chi c_p/(c_v gamma) hatk p = 0
-    $$
-
-    Taking the divergence:
-
-    $$
-      -nabla * nabla p + nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) = 0,
-    $$
-
-    then testing it with q:
-
-    $$
-        int_Omega -q nabla * nabla p dx + int_Omega q nabla * (g "Di" rho chi c_p/(c_v gamma) hatk p) dx = 0
-    $$
-
-    followed by integration by parts:
-
-    $$
-        int_Gamma -bb n * q nabla p ds + int_Omega nabla q cdot nabla p dx +
-        int_Gamma bb n * hatk q g "Di" rho chi c_p/(c_v gamma) p dx -
-        int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0
-    $$
-
-    This elliptic equation can be solved with natural boundary conditions by imposing our original equation above, which eliminates
-    all boundary terms:
-
-    $$
-      int_Omega nabla q * nabla p dx - int_Omega nabla q * hatk g "Di" rho chi c_p/(c_v gamma) p dx = 0.
-    $$
-
-    However, if we do so on all boundaries we end up with a system that has the same nullspace, as the one we are after (note that
-    we ended up merely testing the original equation with $nabla q$). Instead we use the fact that the gradient of the null mode
-    is always vertical, and thus the null mode is constant at any horizontal level (geoid), specifically the top surface. Choosing
-    any nonzero constant for this surface fixes the arbitrary scalar multiplier of the null mode. We choose the value of one
-    and apply it as a Dirichlet boundary condition.
-
-    Note that this procedure does not necessarily compute the exact nullspace of the *discretised* Stokes system. In particular,
-    since not every test function $v in V$, the velocity test space, can be written as $v=nabla q$ with $q in W$, the
-    pressure test space, the two terms do not necessarily exactly cancel when tested with $v$ instead of $nabla q$ as in our
-    final equation. However, in practice the discrete error appears to be small enough, and providing this nullspace gives
-    an improved convergence of the iterative Stokes solver.
-    """
-    W = fd.FunctionSpace(mesh=W.mesh(), family=W.ufl_element())
-    q = fd.TestFunction(W)
-    p = fd.Function(W, name="pressure_nullspace")
-
-    # Fix the solution at the top boundary
-    bc = fd.DirichletBC(W, 1.0, top_subdomain_id)
-
-    F = fd.inner(fd.grad(q), fd.grad(p)) * fd.dx
-
-    k = upward_normal(W.mesh())
-
-    F += (
-        -fd.inner(fd.grad(q), k * approximation.dbuoyancydp(p, fd.Constant(1.0)) * p)
-        * fd.dx
-    )
-
-    fd.solve(F == 0, p, bcs=bc)
-    return p
-
-
 class ViscoelasticStokesSolver(StokesSolverBase):
-    """Solves the Stokes system assuming a Maxwell viscoelastic rheology.
+    """Solves the Stokes system assuming an incompressible Maxwell viscoelastic rheology.
 
     Args:
       solution:
@@ -795,7 +632,7 @@ class ViscoelasticStokesSolver(StokesSolverBase):
     def __init__(
         self,
         solution: fd.Function,
-        approximation: SmallDisplacementViscoelasticApproximation,
+        approximation: BaseGIAApproximation,
         stress_old: fd.Function,
         displacement: fd.Function,
         /,
@@ -803,6 +640,11 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         dt: float,
         **kwargs,
     ) -> None:
+
+        warn(
+            '''This solver is being phased out of G-ADOPT. We recommend using
+        `InternalVariableSolver` for viscoelastic applications in G-ADOPT.
+        ''')
 
         self.stress_old = stress_old  # Deviatoric stress from previous time step
         self.displacement = displacement  # Total displacement
@@ -818,8 +660,8 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         # free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
         u, p = self.solution_split
-        normal_stress, _ = self.approximation.free_surface_terms(
-            p, 0.0, vertical_component(u + self.displacement), **params_fs
+        normal_stress = self.approximation.free_surface_terms(
+            vertical_component(u + self.displacement), **params_fs
         )
 
         return normal_stress
@@ -827,19 +669,19 @@ class ViscoelasticStokesSolver(StokesSolverBase):
     def set_equations(self) -> None:
         """Sets up UFL forms for the viscoelastic Stokes equations residual."""
         u, p = self.solution_split
-        stress = self.approximation.stress(u, self.stress_old, self.dt)
+        stress = self.approximation.stress(u, stress_old=self.stress_old, dt=self.dt)
         source = self.approximation.buoyancy(self.displacement) * self.k
         eqs_attrs = [
             {"p": p, "stress": stress, "source": source},
             {"u": u, "rho_continuity": self.rho_continuity},
         ]
 
-        for i in range(len(residual_terms_stokes)):
+        for i in range(len(stokes_terms)):
             self.equations.append(
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    residual_terms_stokes[i],
+                    stokes_terms[i],
                     eq_attrs=eqs_attrs[i],
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
@@ -859,10 +701,145 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         # Update history stress term to form RHS explicit forcing in the next timestep
         self.stress_old.interpolate(
             self.stress_scale
-            * self.approximation.stress(u_sub, self.stress_old, self.dt)
+            * self.approximation.stress(u_sub, stress_old=self.stress_old, dt=self.dt)
         )
         # Increment total displacement
         self.displacement.interpolate(self.displacement + u_sub)
+
+
+class InternalVariableSolver(StokesSolverBase):
+    """Solver for internal variable viscoelastic formulation.
+
+    Args:
+      solution:
+        Firedrake function representing the displacement solution
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations
+      internal_variables:
+        Internal variable functions accounting for viscoelastic stress relaxation.
+        The number of internal variables provided must be consistent with the number
+        of viscosity and shear modulus fields provided to the approximation.
+      dt:
+        Float quantifying the time step used for time integration
+      additional_forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      quad_degree:
+        Integer denoting the quadrature degree
+      solver_parameters:
+        Dictionary of PETSc solver options or string matching one of the default sets
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
+      J:
+        Firedrake function representing the Jacobian of the mixed Stokes system
+      constant_jacobian:
+        Boolean specifying whether the Jacobian of the system is constant
+      nullspace:
+        A `MixedVectorSpaceBasis` for the operator's kernel
+      transpose_nullspace:
+        A `MixedVectorSpaceBasis` for the kernel of the operator's transpose
+      near_nullspace:
+        A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
+        body modes)
+    """
+
+    name = "InternalVariable"
+
+    def __init__(
+        self,
+        solution: fd.Function,
+        approximation: BaseGIAApproximation,
+        /,
+        *,
+        internal_variables: fd.Function | list[fd.Function],
+        dt: float,
+        **kwargs,
+    ) -> None:
+
+        # Convert `internal_variables` to a list in the case
+        # for Maxwell Rheology where there is only one internal variable
+        if not isinstance(internal_variables, list):
+            internal_variables = [internal_variables]
+        self.internal_variables = internal_variables
+
+        # provide an `effective viscosity' to the approximation used
+        # for SIPG terms in the viscosity term of momentum_equation.py
+        # N.b. the potential for confusion as GIA modellers often use
+        # mu to represent the shear modulus.
+        approximation.mu = approximation.effective_viscosity(dt)
+
+        super().__init__(solution, approximation, dt=dt, **kwargs)
+
+    def set_equations(self) -> None:
+        self.strain = self.approximation.deviatoric_strain(self.solution)
+
+        if len(self.internal_variables) != len(self.approximation.maxwell_times):
+            raise ValueError(
+                "Number of internal variables and corresponding Maxwell times must be consistent"
+            )
+
+        self.internal_variables_update = [
+            self.update_m(m, maxwell_time)
+            for m, maxwell_time in zip(
+                self.internal_variables, self.approximation.maxwell_times
+            )
+        ]
+
+        stress = self.approximation.stress(
+            self.solution, internal_variables=self.internal_variables_update
+        )
+        source = self.approximation.buoyancy(self.solution) * self.k
+
+        eq_attrs = {"stress": stress, "source": source}
+
+        self.equations.append(
+            Equation(
+                self.test,
+                self.solution_space,
+                compressible_viscoelastic_terms,
+                eq_attrs=eq_attrs,
+                approximation=self.approximation,
+                bcs=self.weak_bcs,
+                quad_degree=self.quad_degree,
+            )
+        )
+
+    def set_free_surface_boundary(
+        self, params_fs: dict[str, int | bool], bc_id: int
+    ) -> Expr:
+        normal_stress = params_fs.get("normal_stress", 0.0)
+        # Add free surface stress term. This is also referred to as the Hydrostatic
+        # Prestress advection term in the GIA literature.
+        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
+            vertical_component(self.solution)
+        )
+
+        return combined_normal_stress
+
+    def update_m(
+        self, m: fd.Function, maxwell_time: fd.Function | Expr
+    ) -> Expr:
+        """Calculates updated internal variable using Backward Euler formula
+
+        Args:
+          m:
+            Firedrake function representing the current value of the internal variable
+          maxwell_time:
+            Firedrake function or UFL expression for Maxwell time associated with m
+            terms in the system of equations
+
+        Returns:
+            UFL expression for the updated internal variable using Backward Euler
+        """
+        m_new = (m + self.dt / maxwell_time * self.strain) / (1 + self.dt / maxwell_time)
+        return m_new
+
+    def solve(self) -> None:
+        super().solve()
+        # Update internal variable term for using as a RHS explicit forcing in the next timestep
+        for m, m_new in zip(self.internal_variables, self.internal_variables_update):
+            m.interpolate(m_new)
 
 
 class BoundaryNormalStressSolver(SolverConfigurationMixin):
@@ -925,7 +902,7 @@ class BoundaryNormalStressSolver(SolverConfigurationMixin):
 
         # geometry
         self.mesh = stokes_solver.mesh
-        self.dim = self.mesh.geometric_dimension()
+        self.dim = self.mesh.geometric_dimension
 
         # approximation tells us if we need to consider compressible formulation or not
         self.approximation = stokes_solver.approximation
@@ -975,10 +952,10 @@ class BoundaryNormalStressSolver(SolverConfigurationMixin):
                 "BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element."
             )
             Q = fd.FunctionSpace(
-                self.mesh, "Lagrange", self.p.function_space().ufl_element().degree()
+                self.p.function_space().mesh(), "Lagrange", self.p.function_space().ufl_element().degree()
             )
         else:
-            Q = fd.FunctionSpace(self.mesh, self.p.ufl_element())
+            Q = fd.FunctionSpace(self.p.function_space().mesh(), self.p.ufl_element())
 
         self.force = fd.Function(Q, name=f"force_{self.subdomain_id}")
 
