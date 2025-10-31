@@ -416,7 +416,7 @@ stokes_bcs = {boundary.top: {'normal_stress': ice_load, 'free_surface': {'delta_
 
 # We also need to specify a G-ADOPT approximation which sets up the various parameters and fields needed for the viscoelastic loading problem.
 
-approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
+approximation = IncompressibleMaxwellApproximation(density, shear_modulus, viscosity, g=g)
 
 # As noted above, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
 # of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity

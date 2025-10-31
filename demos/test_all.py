@@ -25,12 +25,15 @@ cases = {
     f"{mm_path}/2d_cylindrical": {
         "extra_checks": ["nu_top", "T_min", "T_max", "entrainment"]
     },
-    f"{gia_path}/base_case": {"extra_checks": ["disp_min", "disp_max"]},
+    f"{gia_path}/base_case": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["disp_min", "disp_max"]},
     f"{tests_path}/2d_cylindrical_TALA_DG": {
         "extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]
     },
     f"{tests_path}/viscoplastic_case_DG": {"extra_checks": ["nu_top", "avg_t"]},
+    f"{tests_path}/3d_weerdesteijn": {"extra_checks": ["uv_min"]},
+    f"{tests_path}/3d_spada": {"extra_checks": ["uv_min"]},
+    f"{tests_path}/3d_sphere_burgers": {"extra_checks": ["uv_min"]},
 }
 
 
