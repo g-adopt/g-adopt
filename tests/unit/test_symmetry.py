@@ -75,7 +75,7 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
     # cylindrical/spherical meshes only have 2 boundaries
     # if we have more, let's test some more bc types
     if len(bids) > 2:
-        dim = mesh.geometric_dimension()
+        dim = mesh.geometric_dimension
         zero_vec = fd.Constant([0] * dim)
         bcs[bids[2]] = {'stress': zero_vec}
         # note that we are only testing the weak bc terms here
