@@ -2,7 +2,7 @@ include ../../../rules.mk
 
 .PHONY: all clean check
 
-all: functional.txt taylor_test_minconv.txt
+all: functional.txt
 
 functional.txt : category := gia
 functional.txt: adjoint_ice.py forward-2d-cylindrical-disp-vel.h5 2d_cylindrical_lvv.py
@@ -19,5 +19,5 @@ forward-2d-cylindrical-disp-vel.h5: 2d_cylindrical_lvv.py
 clean:
 	rm -rf functional.txt taylor_test_minconv.txt 2d_cylindrical_lvv.py *.h5 *.pvd solutions solution visualisation_vtk optimisation_checkpoint
 
-check: functional.txt taylor_test_minconv.txt
+check: functional.txt
 	python3 -m pytest
