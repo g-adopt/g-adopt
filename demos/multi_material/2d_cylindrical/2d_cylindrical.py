@@ -1,40 +1,35 @@
-# Idealised 2-D mantle convection problem with compositional buoyancy inside an annulus
+# Idealised 2-D multi-material mantle convection problem inside an annulus
 # =
 
-# In this tutorial, we analyse mantle flow in a 2-D annulus domain. We define our domain by the radii
-# of the inner ($r_{\text{min}}$) and outer ($r_{\text{max}}$) boundaries. These are chosen such that
-# the non-dimensional depth of the mantle, $z = r_{\text{max}} - r_{\text{min}} = 1$, and the ratio of
-# the inner and outer radii, $f=r_{\text{min}} / r_{\text{max}} = 0.55$, thus approximating the ratio
-# between the radii of Earth's surface and core-mantle-boundary (CMB). Specifically, we set
-# $r_{\text{min}} = 1.22$ and $r_{\text{max}} = 2.22$.
+# In this tutorial, we analyse mantle flow in a 2-D annulus domain whereby a denser and
+# more viscous layer, which could represent some lower-mantle structures on Earth, is
+# initially defined in the lower third of the domain.
 
-# This example focusses on differences between running simulations in a 2-D annulus and 2-D Cartesian domain. These can be summarised as follows:
-# 1. The geometry of the problem - i.e. the computational mesh.
-# 2. The radial direction of gravity (as opposed to the vertical direction in a Cartesian domain).
-# 3. Initialisation of the temperature field in a different domain.
-# 4. With free-slip boundary conditions on both boundaries, this case incorporates a (rotational) velocity nullspace, as well as a pressure nullspace.
+# This example highlights the effect of the denser and more viscous layer on the global
+# mantle dynamics already presented in a
+# [previous tutorial](../../mantle_convection/2d_cylindrical). To make the comparison
+# meaningful, we use the exact same setup apart from the distinct compositional layer.
 
-# The example is configured at $Ra = 1e5$. Boundary conditions are free-slip at the surface and base of the domain.
-
-# The first step is to import the gadopt module, which
-# provides access to Firedrake and associated functionality.
-# We also import pyvista, which is used for plotting vtk output.
+# The first step is to import the gadopt module, which provides access to Firedrake and
+# associated functionality. We also import matplotlib and pyvista for plotting purposes.
 
 from gadopt import *
 
 # + tags=["active-ipynb"]
+# import matplotlib.pyplot as plt
 # import pyvista as pv
+# from numpy import linspace
 # -
 
-# We next set up the mesh, function spaces, and specify functions to hold our solutions,
-# as with our previous tutorials.
+# We next set up the mesh and function spaces and define functions to hold our solutions
+# and the simulation's time step.
 
 # We generate a circular manifold mesh (with 128 elements) and extrude in the radial
 # direction (using the optional keyword argument `extrusion_type`) to produce 32 layers.
 # To better represent the curvature of the domain and ensure accuracy of our quadratic
 # velocity representation, we approximate the curved cylindrical shell domain
-# quadratically, using the optional keyword argument `degree`$=2$. Because this problem
-# is not formulated in a Cartesian geometry, we set the `mesh.cartesian` attribute to
+# quadratically (using the optional keyword argument `degree`). Because this problem is
+# not formulated in a Cartesian geometry, we set the `mesh.cartesian` attribute to
 # `False`. This ensures the gravity direction points radially inward.
 
 # +
@@ -55,7 +50,9 @@ stokes = Function(Z)  # A field over the mixed function space Z
 stokes.subfunctions[0].rename("Velocity")  # Firedrake function for velocity
 stokes.subfunctions[1].rename("Pressure")  # Firedrake function for pressure
 u = split(stokes)[0]  # Indexed expression for velocity in the mixed space
+T = Function(Q, name="Temperature")  # Firedrake function for temperature
 psi = Function(K, name="Level set")  # Firedrake function for level set
+time_step = Function(R).assign(1e-7)  # Initial time step
 # -
 
 # We can now visualise the resulting mesh.
@@ -70,37 +67,28 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
 
-# We now initialise the level-set field. All we have to provide to G-ADOPT is a
-# mathematical description of the interface location and use the available API. In this
-# case, the interface is a curve and can be geometrically represented as a cosine
-# function. In general, specifying a mathematical function would warrant supplying a
-# callable (e.g. a function) implementing the mathematical operations, but given the
-# common use of cosines, G-ADOPT already provides it and only callable arguments are
-# required here. Additional presets are available for usual scenarios, and the API is
-# sufficiently flexible to generate most shapes. Under the hood, G-ADOPT uses the
-# `Shapely` library to determine the signed-distance function associated with the
-# interface. We use G-ADOPT's default strategy to obtain a smooth step function profile
-# from the signed-distance function.
+# We now initialise the level-set field. Usually, one has to provide a mathematical
+# description of the interface location to the G-ADOPT API, which then determines the
+# signed-distance function using the `Shapely` library. Here, however, the interface is
+# a circle, and so the signed-distance function can be calculated in a straightforward
+# way using spatial coordinates. G-ADOPT then automatically derives the smooth
+# step-function profile typical of the conservative level-set method using a default
+# strategy to determine the profile's thickness.
 
-# Initialise the level-set field according to the conservative level-set approach.
-# First, write out the mathematical description of the material-interface location.
-# Here, only arguments to the G-ADOPT cosine function are required. Then, use the
-# G-ADOPT API to generate the thickness of the hyperbolic tangent profile and update the
-# level-set field values.
+# +
 x, y = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
 r = sqrt(x**2 + y**2)  # Radial coordinate
 interface_coord_r = rmin + (rmax - rmin) / 3  # Interface location
 signed_distance = r - interface_coord_r  # Signed distance from the interface
 
 epsilon = interface_thickness(K)
-assign_level_set_values(psi, epsilon, signed_distance)
+assign_level_set_values(psi, epsilon, signed_distance)  # Populate level-set field
+# -
 
 # Let us visualise the location of the material interface that we have just initialised.
 # To this end, we use Firedrake's built-in plotting functionality.
 
 # + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
-
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
 # contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), cmap="PiYG", axes=axes)
@@ -110,19 +98,19 @@ assign_level_set_values(psi, epsilon, signed_distance)
 
 # We next define the material fields and instantiate the approximation. Here, the system
 # of equations is non-dimensional and includes compositional and thermal buoyancy terms
-# under the Boussinesq approximation. Moreover, physical parameters are constant through
-# space apart from density. As a result, the system is fully defined by the values of
-# the thermal and compositional Rayleigh numbers. We use the `material_field` function
-# to define the compositional Rayleigh number throughout the domain (including the shape
-# of the material interface transition). Both non-dimensional numbers are provided to
-# our approximation.
+# under the Boussinesq approximation. Thus, the system requires values for the thermal
+# and compositional Rayleigh numbers. We use the `material_field` function to define the
+# compositional Rayleigh number throughout the domain (including the mathematical
+# description of the material interface transition). Both non-dimensional numbers are
+# provided to our approximation. Moreover, the viscosity is material-dependent, and so
+# it must also be defined as a material field and provided to the approximation.
 
 # +
 Ra = 1e5  # Thermal Rayleigh number
 RaB_buoyant, RaB_dense = 0.0, 3e4
-# Compositional Rayleigh number, defined based on each material value and location
+# Compositional Rayleigh number defined based on each material value and location
 RaB = material_field(psi, [RaB_buoyant, RaB_dense], interface="arithmetic")
-# Viscosity defined as a material field
+# Viscosity defined based on each material value and location
 mu = material_field(psi, [mu_buoyant := 1.0, mu_dense := 2.0], interface="arithmetic")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
@@ -152,7 +140,6 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
 # allowing the simulation to exit when a steady-state has been achieved.
 
 time_now = 0.0  # Initial time
-time_step = Function(R).assign(1e-7)  # Initial time step
 output_frequency = 5e-4  # Frequency (based on simulation time) at which to output
 t_adapt = TimestepAdaptor(
     time_step, u, V, target_cfl=0.6, maximum_timestep=output_frequency
@@ -166,7 +153,6 @@ t_adapt = TimestepAdaptor(
 
 # where $A=0.02$ is the amplitude of the initial perturbation.
 
-T = Function(Q, name="Temperature")
 T.interpolate(rmax - r + 0.02 * cos(4.0 * atan2(y, x)) * sin((r - rmin) * pi))
 
 # We can plot this initial temperature field:
