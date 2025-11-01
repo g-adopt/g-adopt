@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - release
+      - Patol75/speed_up_2d_cylindrical
   pull_request:
   workflow_dispatch:
     inputs:

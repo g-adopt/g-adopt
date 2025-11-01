@@ -82,7 +82,8 @@ time = 0.0  # Initial time
 delta_t = Constant(1e-7)  # Initial time-step
 timesteps = 20000  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
-steady_state_tolerance = 1e-7  # Used to determine if solution has reached a steady state.
+# Used to determine if solution has reached a steady state.
+steady_state_tolerance = 1e-4
 
 # We next set up and initialise our Temperature field.
 # We choose the initial temperature distribution to trigger upwelling of 4 equidistant plumes.
@@ -210,7 +211,7 @@ for timestep in range(0, timesteps):
                  f"{energy_conservation} {gd.T_avg()} {gd.T_min()} {gd.T_max()} ")
 
     # Leave if steady-state has been achieved:
-    if maxchange < steady_state_tolerance:
+    if time > 1e-5 and maxchange < steady_state_tolerance:
         log("Steady-state achieved -- exiting time-step loop")
         break
 

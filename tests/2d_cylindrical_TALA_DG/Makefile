@@ -5,7 +5,7 @@ include ../../rules.mk
 all: params.log
 
 params.log : category := tests
-params.log : ncpus := 16
+params.log : ncpus := 8
 params.log: 2d_cylindrical_TALA_DG.py
 	$(run-python)
 
