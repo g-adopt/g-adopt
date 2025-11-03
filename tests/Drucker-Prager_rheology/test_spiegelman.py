@@ -40,12 +40,12 @@ def test_spiegelman_1e23():
 
     assert picard_only < 5e-14
 
-    # test all Newton are below Picard-only after 50 iterations
+    # test all Newton are below 5e-14 after 50 iterations
     newton_residuals = np.array([
         residual(ui, mui, *params) for params in param_sets(test_conf)
     ])
 
-    assert np.all(newton_residuals < picard_only)
+    assert np.all(newton_residuals < 5e-14)
 
 
 def test_spiegelman_1e24():

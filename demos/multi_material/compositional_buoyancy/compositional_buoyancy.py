@@ -1,5 +1,5 @@
-# # Rayleigh-Taylor instability
-# ---
+# Rayleigh-Taylor instability
+# =
 
 # Rationale
 # -
@@ -131,9 +131,10 @@ assign_level_set_values(
 
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
-# contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="PiYG")
-# tricontour(psi, axes=axes, levels=[0.5])
-# fig.colorbar(contours, label="Conservative level set")
+# axes.margins(0.0)
+# pcolor = tripcolor(psi, cmap="PiYG", axes=axes)
+# tricontour(psi, levels=[0.5], axes=axes)
+# fig.colorbar(pcolor, label="Conservative level set")
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -160,10 +161,9 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB)
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
-# contours = tricontourf(
-#     Function(psi).interpolate(RaB), levels=linspace(0.0, 1.0, 11), axes=axes
-# )
-# fig.colorbar(contours, label="Compositional Rayleigh number")
+# axes.margins(0.0)
+# pcolor = tripcolor(Function(psi).interpolate(RaB), axes=axes)
+# fig.colorbar(pcolor, label="Compositional Rayleigh number")
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -293,7 +293,7 @@ while True:
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
-# contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="PiYG")
-# tricontour(psi, axes=axes, levels=[0.5])
+# contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), cmap="PiYG", axes=axes)
+# tricontour(psi, levels=[0.5], axes=axes)
 # fig.colorbar(contours, label="Conservative level-set")
 # -
