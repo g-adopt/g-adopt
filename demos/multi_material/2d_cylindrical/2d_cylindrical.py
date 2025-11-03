@@ -10,15 +10,13 @@
 # [previous tutorial](../../mantle_convection/2d_cylindrical). To make the comparison
 # meaningful, we use the exact same setup apart from the distinct compositional layer.
 
-# The first step is to import the gadopt module, which provides access to Firedrake and
-# associated functionality. We also import matplotlib and pyvista for plotting purposes.
+# The first step is to import the `gadopt` module, which provides access to Firedrake
+# and associated functionality. We also import `pyvista` for plotting purposes.
 
 from gadopt import *
 
 # + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
 # import pyvista as pv
-# from numpy import linspace
 # -
 
 # We next set up the mesh and function spaces and define functions to hold our solutions
@@ -33,7 +31,7 @@ from gadopt import *
 # `False`. This ensures the gravity direction points radially inward.
 
 # +
-rmin, rmax = 1.22, 2.22  # Annulus radii
+rmin, rmax = 1.2083, 2.2083  # Annulus radii
 mesh1d = CircleManifoldMesh(ncells=128, radius=rmin, degree=2)  # Circle mesh
 mesh = ExtrudedMesh(mesh1d, layers=32, extrusion_type="radial")  # Annulus mesh
 mesh.cartesian = False
@@ -67,6 +65,29 @@ time_step = Function(R).assign(1e-7)  # Initial time step
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
 
+# We next initialise our temperature field. We choose the initial temperature
+# distribution to trigger upwelling of four equidistant plumes. This initial temperature
+# field is prescribed as:
+
+# $$T(x, y) = r_{\text{max}} - r + A\cos\left(4 \arctan\left(\frac{y}{x}\right)\right)  \sin((r - r_{\text{min}}) \pi)$$
+
+# where $A = 0.02$ is the amplitude of the initial perturbation.
+
+x, y = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
+r = sqrt(x**2 + y**2)  # Radial coordinate
+T.interpolate(rmax - r + 0.02 * cos(4.0 * atan2(y, x)) * sin((r - rmin) * pi))
+
+# We can plot this initial temperature field:
+
+# + tags=["active-ipynb"]
+# VTKFile("temp.pvd").write(T)
+# temp_data = pv.read("temp/temp_0.vtu")
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(temp_data, cmap="inferno")
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
+# -
+
 # We now initialise the level-set field. Usually, one has to provide a mathematical
 # description of the interface location to the G-ADOPT API, which then determines the
 # signed-distance function using the `Shapely` library. Here, however, the interface is
@@ -76,8 +97,6 @@ time_step = Function(R).assign(1e-7)  # Initial time step
 # strategy to determine the profile's thickness.
 
 # +
-x, y = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
-r = sqrt(x**2 + y**2)  # Radial coordinate
 interface_coord_r = rmin + (rmax - rmin) / 3  # Interface location
 signed_distance = r - interface_coord_r  # Signed distance from the interface
 
@@ -89,11 +108,12 @@ assign_level_set_values(psi, epsilon, signed_distance)  # Populate level-set fie
 # To this end, we use Firedrake's built-in plotting functionality.
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# axes.set_aspect("equal")
-# contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), cmap="PiYG", axes=axes)
-# tricontour(psi, axes=axes, levels=[0.5])
-# fig.colorbar(contours, label="Conservative level set")
+# VTKFile("level_set.pvd").write(psi)
+# level_set_data = pv.read("level_set/level_set_0.vtu")
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(level_set_data, cmap="PiYG")
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -120,24 +140,18 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
 # the compositional Rayleigh number across the domain.
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# axes.set_aspect("equal")
-# contours = tricontourf(
-#     Function(psi).interpolate(RaB), levels=linspace(0.0, 1.0, 11), axes=axes
-# )
-# fig.colorbar(contours, label="Compositional Rayleigh number")
+# VTKFile("RaB.pvd").write(Function(psi).interpolate(RaB))
+# RaB_data = pv.read("RaB/RaB_0.vtu")
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(RaB_data, cmap="BrBG")
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
-# for controlling the time-step length (via a CFL criterion) whilst the simulation
-# advances in time. We specify the initial time, initial time step $\Delta t$, and
-# output frequency (in time units).
-# As with the previous examples, we set up a *Timestep Adaptor*,
-# for controlling the time-step length (via a CFL
-# criterion) as the simulation advances in time. For the latter,
-# we specify the initial time, initial timestep $\Delta t$, and number of
-# timesteps. Given the low Rayleigh number, a steady-state tolerance is also specified,
-# allowing the simulation to exit when a steady-state has been achieved.
+# to control the time-step length (via a CFL criterion) whilst the simulation advances
+# in time. We specify the output frequency (in time units) at which fields will be
+# written for visualisation.
 
 time_now = 0.0  # Initial time
 output_frequency = 5e-4  # Frequency (based on simulation time) at which to output
@@ -145,45 +159,33 @@ t_adapt = TimestepAdaptor(
     time_step, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )  # Current level-set advection requires a CFL condition that does not exceed 0.6.
 
-# We next set up and initialise our Temperature field.
-# We choose the initial temperature distribution to trigger upwelling of 4 equidistant plumes.
-# This initial temperature field is prescribed as:
+# As noted above, with a free-slip boundary condition on both boundaries, one can add an
+# arbitrary rotation of the form $(-y, x) = r\hat{\mathbf{\theta}}$ to the velocity
+# solution (i.e. this case incorporates a velocity null space, as well as a pressure
+# null space). These lead to null modes (eigenvectors) for the linear system, rendering
+# the resulting matrix singular. In preconditioned Krylov methods these null modes must
+# be subtracted from the approximate solution at every iteration. We do that below,
+# setting up a null-space object as we did in the
+# [previous tutorial](../thermochemical_buoyancy), albeit speciying the `rotational`
+# keyword argument as `True`. This removes the requirement for a user to configure these
+# options, further simplifying the task of setting up a (valid) geodynamical simulation.
 
-# $$T(x,y) = (r_{\text{max}} - r) + A\cos(4 \; atan2\ (y,x))  \sin(r-r_{\text{min}}) \pi)$$
+stokes_nullspace = create_stokes_nullspace(Z, rotational=True)
 
-# where $A=0.02$ is the amplitude of the initial perturbation.
+# Boundary conditions are next specified. Boundary conditions for temperature are set to
+# $T = 0.0$ at the surface ($r_{\text{max}}$) and $T = 1.0$ at the base
+# ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries.
+# We incorporate these <b>weakly</b> through the <i>Nitsche</i> approximation. This
+# illustrates a key advantage of the G-ADOPT framework: the user only specifies that the
+# normal component of velocity is zero, and all required changes are handled under the
+# hood.
 
-T.interpolate(rmax - r + 0.02 * cos(4.0 * atan2(y, x)) * sin((r - rmin) * pi))
-
-# We can plot this initial temperature field:
-
-# + tags=["active-ipynb"]
-# VTKFile("temp.pvd").write(T)
-# temp_data = pv.read("temp/temp_0.vtu")
-# plotter = pv.Plotter(notebook=True)
-# plotter.add_mesh(temp_data)
-# plotter.camera_position = "xy"
-# plotter.show(jupyter_backend="static", interactive=False)
-# -
-
-# As noted above, with a free-slip boundary condition on both boundaries, one can add an arbitrary rotation
-# of the form $(-y, x)=r\hat{\mathbf{\theta}}$ to the velocity solution (i.e. this case incorporates a velocity nullspace,
-# as well as a pressure nullspace). These lead to null-modes (eigenvectors) for the linear system, rendering the resulting matrix singular.
-# In preconditioned Krylov methods these null-modes must be subtracted from the approximate solution at every iteration. We do that below,
-# setting up a nullspace object as we did in the previous tutorial, albeit speciying the `rotational` keyword argument to be True.
-# This removes the requirement for a user to configure these options, further simplifying the task of setting up a (valid) geodynamical simulation.
-
-stokes_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
-
-# Boundary conditions are next specified. Boundary conditions for temperature are set to $T = 0$ at the surface ($r_{\text{max}}$) and $T = 1$
-# at the base ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries. We incorporate these <b>weakly</b> through
-# the <i>Nitsche</i> approximation. This illustrates a key advantage of the G-ADOPT framework: the user only specifies that the normal component
-# of velocity is zero and all required changes are handled under the hood.
 stokes_bcs = {boundary.bottom: {"un": 0.0}, boundary.top: {"un": 0.0}}
 temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
 
-# We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation, nullspace and near-nullspace information configured above.
+# We can now set up the variational problem, for the energy, Stokes, and level-set
+# equations. The approximation, boundary conditions, null space, and near-null space
+# information configured above are passed to the constructors as required.
 
 # +
 # Instantiate a solver object for the energy conservation system.
@@ -225,11 +227,12 @@ output_file.write(*stokes.subfunctions, T, psi, time=time_now)
 plog = ParameterLog("params.log", mesh)
 plog.log_str("step time dt u_rms nu_base nu_top energy avg_t T_min T_max entrainment")
 
-f_ratio = rmin / rmax
-top_scaling = ln(f_ratio) / (f_ratio - 1.0)
-bot_scaling = f_ratio * ln(f_ratio) / (f_ratio - 1.0)
-
 gd = GeodynamicalDiagnostics(stokes, T, boundary.bottom, boundary.top, quad_degree=6)
+
+# Scalings used for the Nusselt numbers
+r_ratio = rmin / rmax
+top_scaling = ln(r_ratio) / (r_ratio - 1.0)
+bot_scaling = r_ratio * ln(r_ratio) / (r_ratio - 1.0)
 
 # Area of tracked material in the domain
 material_area = pi * (interface_coord_r**2 - rmin**2)
@@ -248,7 +251,7 @@ while True:
         t_adapt.maximum_timestep = time_end - time_now
     t_adapt.update_timestep()
 
-    # Advect level set
+    # Advect and reinitialise level set
     level_set_solver.solve()
     # Solve energy system
     energy_solver.solve()
@@ -304,8 +307,14 @@ while True:
 # field at the end of the simulation.
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# axes.set_aspect("equal")
-# contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="inferno")
-# tricontour(psi, axes=axes, levels=[0.5])
-# fig.colorbar(contours, label="Temperature")
+# reader = pv.get_reader("output.pvd")
+# reader.set_active_time_point(len(reader.time_values) - 1)
+# data = reader.read()[0]
+# data.set_active_scalars("Temperature")
+# contour = data.contour(isosurfaces=[0.5], scalars="Level set")
+# plotter = pv.Plotter(notebook=True)
+# plotter.add_mesh(data, cmap="inferno")
+# plotter.add_mesh(contour, color="white", line_width=3)
+# plotter.camera_position = "xy"
+# plotter.show(jupyter_backend="static", interactive=False)
+# -
