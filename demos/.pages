@@ -25,8 +25,11 @@
     - [base_case](glacial_isostatic_adjustment/base_case.ipynb)
     - [2d_cylindrical](glacial_isostatic_adjustment/2d_cylindrical.ipynb)
 - Multi-material
-    - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
-    - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)
+    - Sources of buoyancy
+        - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
+        - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)
+    - Boundary condition
+        - [free_surface](multi_material/free_surface.ipynb)
 - PDE-constrained optimisation
     - [pde_constrained_field](PDE_constrained_optimisation/PDE_constrained_field.ipynb)
     - [pde_constrained_boundary](PDE_constrained_optimisation/PDE_constrained_boundary.ipynb)
