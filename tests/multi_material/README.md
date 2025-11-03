@@ -10,6 +10,12 @@ Isostatic relaxation of a topography cosine perturbation using the sticky-air ap
 - Two material interfaces with homogeneous stratification
 - Sticky air
 
+**davies_2022**
+
+Thermal convection in an annulus with a passive material interface.
+- Thermal buoyancy
+- Passive material interface
+
 **gerya_2003**
 
 Sinking of a hard rectangular block into a lower-viscosity medium.
@@ -32,12 +38,6 @@ Spontaneous subduction driven by compositional buoyancy using the sticky-air app
 - Compositional buoyancy
 - Two material interfaces with inhomogeneous stratification
 - Sticky air
-
-**tosi_2015**
-
-Viscoplastic thermal convection with a passive material interface.
-- Thermal buoyancy
-- Passive material interface
 
 **trim_2023**
 

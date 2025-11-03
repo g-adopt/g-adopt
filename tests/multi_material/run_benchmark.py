@@ -88,6 +88,8 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if benchmark == "trim_2023":
         epsilon = 1.0 / 2.0 / simulation.k
+    elif benchmark == "davies_2022":
+        epsilon = ga.interface_thickness(level_set[0].function_space())
     else:
         epsilon = ga.interface_thickness(
             level_set[0].function_space(), min_cell_edge_length=True
@@ -107,6 +109,13 @@ else:  # Initialise mesh and key functions
         case "firedrake":
             mesh = fd.RectangleMesh(
                 *simulation.mesh_elements, *simulation.domain_dims, quadrilateral=True
+            )
+        case "extruded_annulus":
+            mesh_circle = fd.CircleManifoldMesh(
+                simulation.n_cells, radius=simulation.r_min, degree=2
+            )
+            mesh = fd.ExtrudedMesh(
+                mesh_circle, layers=simulation.n_layers, extrusion_type="radial"
             )
         case _:
             raise ValueError("'mesh_gen' must be 'firedrake' or 'gmsh'")
@@ -135,6 +144,8 @@ else:  # Initialise mesh and key functions
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if benchmark == "trim_2023":
         epsilon = 1.0 / 2.0 / simulation.k
+    elif benchmark == "davies_2022":
+        epsilon = ga.interface_thickness(func_space_ls)
     else:
         epsilon = ga.interface_thickness(func_space_ls, min_cell_edge_length=True)
 
@@ -145,17 +156,15 @@ else:  # Initialise mesh and key functions
     time_now = 0.0
     dump_counter = 0
 
-# Annotate mesh as Cartesian to inform other G-ADOPT objects
-mesh.cartesian = True
+# Annotate mesh to inform other G-ADOPT objects
+mesh.cartesian = False if simulation.mesh_gen == "extruded_annulus" else True
+boundary = ga.get_boundary_ids(mesh)  # Extract boundary id mapping
 
 # Rename Firedrake functions for velocity and pressure
 stokes_function.subfunctions[0].rename("Velocity")
 stokes_function.subfunctions[1].rename("Pressure")
 # Extract velocity indexed expression from the function defined on the mixed space
 velocity = fd.split(stokes_function)[0]
-# Copy velocity function for steady-state convergence check
-if hasattr(simulation, "steady_state_threshold"):
-    velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
 
 # Continuous function space for material field output
 finite_elem_output = fd.FiniteElement("DQ", fd.quadrilateral, 1, variant="equispaced")
@@ -222,7 +231,10 @@ if hasattr(simulation, "initialise_temperature"):
         bcs=simulation.temp_bcs,
     )
 # Set up Stokes solver
-stokes_nullspace = ga.create_stokes_nullspace(stokes_function.function_space())
+stokes_nullspace = ga.create_stokes_nullspace(
+    stokes_function.function_space(),
+    rotational=True if benchmark == "davies_2022" else False,
+)
 # Update line search algorithm to ensure convergence
 upd_ls_type = {"snes_linesearch_type": "cp"} if benchmark == "schmalholz_2011" else None
 stokes_solver = ga.StokesSolver(
@@ -239,8 +251,9 @@ stokes_solver.solve()  # Determine initial velocity and pressure fields
 # Set up level-set solvers
 adv_kwargs = {"u": velocity, "timestep": timestep}
 reini_kwargs = {"epsilon": epsilon}
-if benchmark == "tosi_2015":  # Avoid expensive frequent reinitialisation
-    reini_kwargs["frequency"] = 10
+if benchmark == "davies_2022":
+    adv_kwargs["subcycles"] = 3  # Solve level set 3 times in one time step
+    reini_kwargs["frequency"] = 10  # Avoid expensive frequent reinitialisation
 level_set_solver = [
     ga.LevelSetSolver(ls, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
     for ls in level_set
@@ -252,7 +265,7 @@ t_adapt = ga.TimestepAdaptor(
     timestep,
     velocity,
     stokes_function.subfunctions[0].function_space(),
-    target_cfl=0.6,
+    target_cfl=0.6 * adv_kwargs.get("subcycles", 1),
     maximum_timestep=simulation.dump_period,
 )
 output_file = fd.VTKFile(
@@ -273,7 +286,7 @@ checkpoint_fields = {
 # Objects used to calculate simulation diagnostics
 diag_vars = {"epsilon": epsilon, "level_set": level_set, "viscosity": viscosity}
 geo_diag = ga.GeodynamicalDiagnostics(
-    stokes_function, temperature, bottom_id=3, top_id=4
+    stokes_function, temperature, bottom_id=boundary.bottom, top_id=boundary.top
 )
 
 if benchmark == "trim_2023":
@@ -323,8 +336,11 @@ while True:
     if has_end_time:
         exit_loop = time_now >= simulation.time_end
     else:
-        exit_loop = fd.norm(velocity - velocity_old) < simulation.steady_state_threshold
-        velocity_old = stokes_function.subfunctions[0].copy(deepcopy=True)
+        steady_state = (
+            fd.assemble(fd.sqrt((temperature - energy_solver.T_old) ** 2) * fd.dx)
+            < simulation.steady_state_threshold
+        )
+        exit_loop = time_now >= 1e2 * simulation.initial_timestep and steady_state
 
     if exit_loop:
         # Calculate final simulation diagnostics

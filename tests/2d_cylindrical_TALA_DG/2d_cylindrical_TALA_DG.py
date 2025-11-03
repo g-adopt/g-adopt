@@ -24,7 +24,7 @@
 
 from gadopt import *
 
-rmin, rmax, ncells, nlayers = 1.208, 2.208, 128, 32
+rmin, rmax, ncells, nlayers = 1.208, 2.208, 512, 128
 
 # In this example, we load the mesh from a checkpoint, although the following code was used to generate
 # the original mesh. It is included here for completeness.
