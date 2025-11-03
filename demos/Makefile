@@ -10,6 +10,7 @@ convert_demos: $(notebook_files) .pages $(diagram_files)
 	tar --append --file artifact.tar $(mc_dir)/free_surface/temperature_warp.gif
 	tar --append --file artifact.tar $(gia_dir)/base_case/displacement_warp.gif
 	tar --append --file artifact.tar $(gia_dir)/2d_cylindrical/displacement_warp.gif
+	tar --append --file artifact.tar $(gia_dir)/2d_cylindrical_lvv/displacement_warp.gif
 
 # explicit dependencies between notebooks
 # adjoint uses the checkpoint from the forward run
