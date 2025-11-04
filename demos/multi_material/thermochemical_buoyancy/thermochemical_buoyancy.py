@@ -137,8 +137,8 @@ assign_level_set_values(psi, epsilon, signed_distance)
 #
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
-# contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="PiYG")
-# tricontour(psi, axes=axes, levels=[0.5])
+# contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), cmap="PiYG", axes=axes)
+# tricontour(psi, levels=[0.5], axes=axes)
 # fig.colorbar(contours, label="Conservative level-set")
 # -
 
@@ -202,8 +202,9 @@ T.interpolate(max_value(min_value(Tu + Tl + Tr + Ts - 3.0 / 2.0, 1.0), 0.0))
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
-# contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="inferno")
-# fig.colorbar(contours, label="Temperature")
+# axes.margins(0.0)
+# pcolor = tripcolor(T, cmap="inferno", axes=axes)
+# fig.colorbar(pcolor, label="Temperature")
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -341,6 +342,6 @@ while True:
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
-# contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="inferno")
-# tricontour(psi, axes=axes, levels=[0.5])
+# contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), cmap="inferno", axes=axes)
+# tricontour(psi, levels=[0.5], axes=axes)
 # fig.colorbar(contours, label="Temperature")

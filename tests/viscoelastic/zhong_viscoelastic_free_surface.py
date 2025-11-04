@@ -67,7 +67,6 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
 
     # timestepping
     rho0 = Constant(4500)  # density in kg/m^3
-
     g = 10  # gravitational acceleration in m/s^2
     viscosity = Constant(1e21)  # Viscosity Pa s
     shear_modulus = Constant(shear_modulus)  # Shear modulus in Pa
@@ -102,7 +101,7 @@ def viscoelastic_model(nx=80, dt_factor=0.1, sim_time="long", shear_modulus=1e11
     # 'ValueError: Cannot determine geometric dimension from expression.'
     density = Function(R).assign(rho0)
 
-    approximation = SmallDisplacementViscoelasticApproximation(density, shear_modulus, viscosity, g=g)
+    approximation = IncompressibleMaxwellApproximation(density, shear_modulus, viscosity, g=g)
 
     # Create output file
     if args.output:

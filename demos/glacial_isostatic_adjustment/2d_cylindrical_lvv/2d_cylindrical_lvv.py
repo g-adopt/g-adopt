@@ -3,14 +3,10 @@
 #
 # In this tutorial, we examine an idealised 2-D loading problem in an annulus domain.
 #
-# This example focuses on differences between running simulations in a 2-D cylindrical
-# annulus and a 2-D Cartesian box, which was employed in our
-# [previous tutorial](../base_case). These can be summarised as follows:
-#
-# 1. The geometry of the problem - i.e. the computational mesh.
-# 2. The radial direction of gravity (as opposed to the vertical direction in a
-# Cartesian domain).
-# 3. Accounting for a (rotational) nullspace in the displacement field.
+# This example focuses on differences between running simulations in a 2-D annulus
+# with laterally varying viscosity compared to our
+# [previous tutorial](../2d_cylindrical), where the viscosity varied as a function
+# of depth only.
 
 # This example
 # -------------
@@ -20,6 +16,7 @@
 
 from gadopt import *
 from gadopt.utility import (
+    vertical_component,
     extruded_layer_heights,
     initialise_background_field
 )
@@ -40,13 +37,13 @@ from gadopt_demo_utils.gia_demo_utils import ice_sheet_disc
 # )
 # -
 
-# Similar to our [previous tutorial](../base_case) we create the mesh in two
+# Similar to our [previous tutorial](../base_case) demo we create the mesh in two
 # stages. First we create a surface mesh of 180 cells using one of `Firedrake`'s
 # utility meshes `CircleManifoldMesh` and then we extrude this in the radial
 # direction by choosing the optional keyword argument `extrusion_type`. As before,
 # the layer properties specified are from
 # [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x).
-# We specify 5 cells per rheological layer so 20 vertical cells in total. To better
+# We specify 5 cells per rheological layer so 20 layers in total. To better
 # represent the curvature of the domain and ensure accuracy of our quadratic
 # representation of displacement, we approximate the curved cylindrical shell
 # domain quadratically, using the optional keyword argument `degree`$=2$.
@@ -120,6 +117,7 @@ log("Number of Internal variable DOF:", S.dim())
 X = SpatialCoordinate(mesh)
 
 # Now we can set up the background profiles for the material properties.
+# In this case the density and shear modulus vary in the radial direction.
 # The layer properties specified are from
 # [Spada et al. (2011)](https://doi.org/10.1111/j.1365-246X.2011.04952.x)
 
@@ -149,17 +147,141 @@ initialise_background_field(
 bulk_modulus = Function(DG0, name="bulk modulus")
 initialise_background_field(
     bulk_modulus, shear_modulus_values_nondim, X, radius_values_nondim)
-
-viscosity = Function(DG0, name="viscosity")
-initialise_background_field(
-    viscosity, viscosity_values_nondim, X, radius_values_nondim)
 # -
 
-# Now let's setup the ice load. For this tutorial we will have two synthetic ice sheets.
-# Let's put a larger one over the South Pole, with a total horizontal
+# Next let's initialise the viscosity field. In this tutorial we are
+# going to make things a bit more interesting by using a laterally
+# varying viscosity field. We'll put some regions of low viscosity
+# near the South Pole (inspired by West Antarctica) as well as in the lower mantle.
+# We've also put some relatively higher viscosity patches of mantle in the
+# northern hemisphere to represent a downgoing slab. To better represent the
+# spatially varying viscosity field lets use a linear discontinuous galerkin
+# space, i.e. the viscosity fields varies linearly within cells but can
+# have jumps in between cells.
+
+# +
+background_viscosity = Function(DG1, name="background viscosity")
+initialise_background_field(
+    background_viscosity, viscosity_values_nondim, X, radius_values_nondim)
+
+
+# Define lateral viscosity regions
+def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
+    arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
+    numerator = exp(-1/(2*(1-rho**2))*arg)
+    if normalised_area:
+        denominator = 2*pi*sigma_x*sigma_y*(1-rho**2)**0.5
+    else:
+        denominator = 1
+    return numerator / denominator
+
+
+def setup_heterogenous_viscosity(
+        background_viscosity: Function,
+        viscosity_scale: float = 1e21,
+        r_lith: float = 6301e3,
+        domain_depth: float = 2891e3,
+) -> Function:
+    '''Adds lateral variations to a background viscosity field in a 2D annulus
+
+    The synthetic lateral viscosity variations consist of 5 'blobs'
+    constructed from bivariate gaussian functions to represent interesting features
+    in the mantle. We assume the background viscosity only varies in the
+    radial direction and do not make modifications to the viscosity structure
+    in the lithosphere i.e. for r > `r_lith' where r is the radial distance.
+
+    Args:
+      background_viscosity:
+        Background radial viscosity field (N.b. this is not modified)
+      viscosity_scale:
+        Characteristc viscosity used for nondimensionalisation
+      r_lith:
+        Radius of the lithosphere-mantle boundary in m
+      domain_depth:
+        Domain depth in m used for nondimensionalisation
+
+    Returns:
+      heterogenous_viscosity_field
+        A new field containing the updated lateral viscosity variations
+    '''
+    heterogenous_viscosity_field = Function(background_viscosity.function_space(),
+                                            name='viscosity')
+
+    # Set up magnitudes of low and high viscosity regions
+    low_visc = 1e20/viscosity_scale
+    high_visc = 1e22/viscosity_scale
+
+    # Add a low viscosity region in the bottom left corner
+    # of the domain, aiming to mimic the low viscosity zone under the West
+    # Antarctic ice sheet
+    southpole_x, southpole_y = -2e6/domain_depth, -5.5e6/domain_depth
+    low_viscosity_southpole = bivariate_gaussian(X[0], X[1],
+                                                 southpole_x, southpole_y,
+                                                 1.5e6/domain_depth,
+                                                 0.5e6/domain_depth,
+                                                 -0.4)
+
+    heterogenous_viscosity_field.interpolate(
+        low_visc*low_viscosity_southpole + background_viscosity * (1-low_viscosity_southpole))
+
+    # Add two symmetrical low viscosity zones near the core-mantle boundary, inspired by
+    # Large Low-Shear-Velocity Provinces (referred to as `llsvp`) so that
+    # we can investigate sensitivity in the lower mantle.
+    llsvp1_x, llsvp1_y = 3.5e6/domain_depth, 0
+    llsvp1 = bivariate_gaussian(X[0], X[1], llsvp1_x, llsvp1_y, 0.75e6/domain_depth,
+                                1e6/domain_depth, 0)
+
+    heterogenous_viscosity_field.interpolate(low_visc*llsvp1 +
+                                             heterogenous_viscosity_field * (1-llsvp1))
+
+    llsvp2_x, llsvp2_y = -3.5e6/domain_depth, 0
+    llsvp2 = bivariate_gaussian(X[0], X[1], llsvp2_x, llsvp2_y, 0.75e6/domain_depth,
+                                1e6/domain_depth, 0)
+
+    heterogenous_viscosity_field.interpolate(low_visc*llsvp2 +
+                                             heterogenous_viscosity_field * (1-llsvp2))
+
+    # Add an elongated high viscosity region in the top right corner of the domain
+    # to represent a slab geometry
+    slab_x, slab_y = 3e6/domain_depth, 4.5e6/domain_depth
+    slab = bivariate_gaussian(X[0], X[1], slab_x, slab_y, 0.7e6/domain_depth,
+                              0.35e6/domain_depth, 0.7)
+
+    heterogenous_viscosity_field.interpolate(high_visc*slab +
+                                             heterogenous_viscosity_field * (1-slab))
+
+    # Add a high viscosity feature at the top of the domain representing a craton
+    high_viscosity_craton_x, high_viscosity_craton_y = 0, 6.2e6/domain_depth
+    high_viscosity_craton = bivariate_gaussian(X[0], X[1], high_viscosity_craton_x,
+                                               high_viscosity_craton_y,
+                                               1.5e6/domain_depth,
+                                               0.5e6/domain_depth, 0.2)
+
+    heterogenous_viscosity_field.interpolate(
+        high_visc*high_viscosity_craton +
+        heterogenous_viscosity_field * (1-high_viscosity_craton)
+    )
+
+    # We usually assume the lithosphere is purely elastic for GIA simulations,
+    # so we reset viscosity in the lithosphere to the original background viscosity
+    # value, which is assumed to be an arbitarily high constant so that the Maxwell
+    # time in this layer is much larger than the timestep and simulation duration.
+    heterogenous_viscosity_field.interpolate(
+        conditional(vertical_component(X) > r_lith/domain_depth,
+                    background_viscosity,
+                    heterogenous_viscosity_field))
+
+    return heterogenous_viscosity_field
+
+
+viscosity = setup_heterogenous_viscosity(background_viscosity)
+# -
+
+# We'll keep the same ice synthetic ice sheet configuration as in the previous tutorial.
+# Let's put one a larger one over the South Pole, with a total horizontal
 # extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the
 # North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify
-# things let's keep the ice load fixed in time.
+# things we keep the ice load fixed in time.
 
 # +
 # Initialise ice loading
@@ -180,8 +302,7 @@ disc2 = ice_sheet_disc(X, disc_centre2, disc_halfwidth2)
 ice_load = B_mu * rho_ice * (Hice1 * disc1 + Hice2 * disc2)
 # -
 
-# Let's visualise the ice thickness using pyvista, by plotting a ring outside our
-# synthetic Earth and the background viscosity field as well.
+# As before let's visualise the viscosity field and ice thickness using pyvista.
 
 # + tags=["active-ipynb"]
 # # Write ice thicknesss .pvd file
@@ -336,6 +457,9 @@ plog.close()
 # to isostatic equilibrium. As the ice load is applied instantaneously the highest
 # velocity occurs within the first timestep and gradually decays as the simulation
 # goes on, though there is still a small amount of deformation ongoing after
-# 10,000 years.
+# 10,000 years. We can also clearly see that the lateral viscosity variations
+# give rise to asymmetrical displacement patterns. This is especially true near
+# the South Pole, where the low viscosity region has enabled the isostatic
+# relaxation to happen faster than the surrounding regions.
 
 # ![SegmentLocal](displacement_warp.gif "segment")
