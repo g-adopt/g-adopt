@@ -4,31 +4,50 @@ from firedrake.output import VTKFile
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
+    CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
+    IncompressibleMaxwellApproximation,
+    MaxwellApproximation,
+    QuasiCompressibleInternalVariableApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
-from .energy_solver import EnergySolver
 from .level_set_tools import (
     LevelSetSolver,
-    Material,
-    density_RaB,
-    entrainment,
-    field_interface,
+    assign_level_set_values,
+    interface_thickness,
+    material_entrainment,
+    material_field,
+    min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
-from .momentum_equation import StokesEquations
-from .preconditioners import SPDAssembledPC
-from .scalar_equation import EnergyEquation
-from .stokes_integrators import StokesSolver, create_stokes_nullspace
-from .time_stepper import CrankNicolsonRK, ImplicitMidpoint, eSSPRKs3p3, eSSPRKs10p3
+from .nullspaces import create_stokes_nullspace, rigid_body_modes
+from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
+from .solver_options_manager import DeleteParam
+from .stokes_integrators import (
+    BoundaryNormalStressSolver,
+    InternalVariableSolver,
+    StokesSolver,
+    ViscoelasticStokesSolver,
+)
+from .time_stepper import (
+    BackwardEuler,
+    CrankNicolsonRK,
+    ImplicitMidpoint,
+    eSSPRKs3p3,
+    eSSPRKs10p3,
+)
+from .transport_solver import EnergySolver, GenericTransportSolver
 from .utility import (
+    InteriorBC,
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,
+    interpolate_1d_profile,
     log,
     node_coordinates,
     timer_decorator,
+    get_boundary_ids,
 )
 
 PETSc.Sys.popErrorHandler()

@@ -1,188 +1,180 @@
-from abc import ABC, abstractmethod
-from typing import Optional
+"""Generates the UFL form for an equation consisting of individual terms.
 
-import firedrake
+This module contains a dataclass to define the structure of mathematical equations
+within the G-ADOPT library. It provides a convenient way to generate the UFL form
+required by Firedrake solvers.
 
+"""
+
+from collections.abc import Iterable
+from dataclasses import KW_ONLY, InitVar, dataclass, field
+from numbers import Number
+from typing import Any, Callable
+from warnings import warn
+
+import firedrake as fd
+
+from .approximations import BaseApproximation, BaseGIAApproximation
 from .utility import CombinedSurfaceMeasure
 
-__all__ = ["BaseEquation", "BaseTerm"]
+__all__ = ["Equation"]
 
 
-class BaseEquation:
-    """Produces the UFL for the registered terms constituting an equation.
+@dataclass
+class Equation:
+    """Generates the UFL form for the sum of terms constituting an equation.
 
-    The equation instance is initialised given test and trial function
-    spaces.  Test and trial spaces are only used to determine the
-    employed discretisation (i.e. UFL elements); test and trial
-    functions are provided separately in the residual method.
+    The generated UFL form corresponds to a sum of implemented term forms contributing
+    to the equation's residual in the finite element discretisation.
 
-    Keyword arguments provided here are passed on to each collected equation term.
-
-    Attributes:
-      terms (list[BaseTerm]): List of equation terms defined through inheritance from BaseTerm.
-
-    Arguments:
-      test_space:  Firedrake function space of the test function
-      trial_space: Firedrake function space of the trial function
-      quad_degree:
-        Quadrature degree. Default value is `2p + 1`, where p the polynomial degree of the trial space
+    Args:
+        test:
+          Firedrake test function.
+        trial_space:
+          Firedrake function space of the trial function.
+        residual_terms:
+          Equation term or a list thereof contributing to the residual.
+        mass_term:
+          Callable returning the equation's mass term.
+        eq_attrs:
+          Dictionary of fields and parameters used in the equation's weak form.
+        approximation:
+          G-ADOPT approximation for the system of equations considered.
+        bcs:
+          Dictionary specifying weak boundary conditions (identifier, type, and value).
+        quad_degree:
+          Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
+          where p is the polynomial degree of the trial space.
+        scaling_factor:
+          A constant factor used to rescale mass and residual terms.
 
     """
-    terms = []
 
-    def __init__(
+    test: fd.Argument | fd.ufl.indexed.Indexed
+    trial_space: fd.functionspaceimpl.WithGeometry
+    residual_terms: InitVar[Callable | list[Callable]]
+    _: KW_ONLY
+    mass_term: Callable | None = None
+    eq_attrs: InitVar[dict[str, Any]] = {}
+    approximation: BaseApproximation | BaseGIAApproximation | None = None
+    bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
+    quad_degree: InitVar[int | None] = None
+    scaling_factor: Number | fd.Constant = 1
+
+    def __post_init__(
         self,
-        test_space: firedrake.functionspaceimpl.WithGeometry,
-        trial_space: firedrake.functionspaceimpl.WithGeometry,
-        quad_degree: Optional[int] = None,
-        **kwargs
-    ):
-        self.test_space = test_space
-        self.trial_space = trial_space
-        self.mesh = trial_space.mesh()
+        residual_terms: Callable | list[Callable],
+        eq_attrs: dict[str, Any],
+        quad_degree: int | None,
+    ) -> None:
+        if not isinstance(residual_terms, Iterable):
+            residual_terms = [residual_terms]
+        self.residual_terms = residual_terms
 
-        p = trial_space.ufl_element().degree()
-        if isinstance(p, int):  # isotropic element
-            if quad_degree is None:
-                quad_degree = 2*p + 1
-        else:  # tensorproduct element
-            p_h, p_v = p
-            if quad_degree is None:
-                quad_degree = 2*max(p_h, p_v) + 1
+        required_attrs = set.union(*(term.required_attrs for term in residual_terms))
+        if missing_attrs := required_attrs - eq_attrs.keys():
+            raise ValueError(
+                "Provided equation attributes do not match the requirements of "
+                f"requested equation terms.\nMissing attributes: {missing_attrs}."
+            )
 
-        if trial_space.extruded:
+        optional_attrs = set.union(*(term.optional_attrs for term in residual_terms))
+        if unused_attrs := eq_attrs.keys() - required_attrs.union(optional_attrs):
+            warn(
+                "Some unused equation attributes were provided.\nUnused attributes: "
+                f"{unused_attrs}"
+            )
+
+        for key, value in eq_attrs.items():
+            setattr(self, key, value)
+
+        if quad_degree is None:
+            p = self.trial_space.ufl_element().degree()
+            if not isinstance(p, int):  # Tensor-product element
+                p = max(p)
+
+            quad_degree = 2 * p + 1
+
+        self.mesh = self.trial_space.mesh()
+        self.n = fd.FacetNormal(self.mesh)
+
+        measure_kwargs = {"domain": self.mesh, "degree": quad_degree}
+        self.dx = fd.dx(**measure_kwargs)
+
+        if self.trial_space.extruded:
             # Create surface measures that treat the bottom and top boundaries similarly
             # to lateral boundaries. This way, integration using the ds and dS measures
             # occurs over both horizontal and vertical boundaries, and we can also use
             # "bottom" and "top" as surface identifiers, for example, ds("top").
-            self.ds = CombinedSurfaceMeasure(self.mesh, quad_degree)
-            self.dS = (
-                firedrake.dS_v(domain=self.mesh, degree=quad_degree) +
-                firedrake.dS_h(domain=self.mesh, degree=quad_degree)
-            )
+            self.ds = CombinedSurfaceMeasure(**measure_kwargs)
+            self.dS = fd.dS_v(**measure_kwargs) + fd.dS_h(**measure_kwargs)
         else:
-            self.ds = firedrake.ds(domain=self.mesh, degree=quad_degree)
-            self.dS = firedrake.dS(domain=self.mesh, degree=quad_degree)
+            self.ds = fd.ds(**measure_kwargs)
+            self.dS = fd.dS(**measure_kwargs)
 
-        self.dx = firedrake.dx(domain=self.mesh, degree=quad_degree)
+    def mass(
+        self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+    ) -> fd.Form:
+        """Generates the UFL form corresponding to the mass term."""
 
-        # self._terms stores the actual instances of the BaseTerm-classes in self.terms
-        self._terms = []
-        for TermClass in self.terms:
-            self._terms.append(TermClass(test_space, trial_space, self.dx, self.ds, self.dS, **kwargs))
-
-    def mass_term(
-        self,
-        test: firedrake.ufl_expr.Argument,
-        trial: firedrake.ufl_expr.Argument | firedrake.Function,
-    ) -> firedrake.ufl.core.expr.Expr:
-        """Typical mass term used in time discretisations.
-
-        Arguments:
-          test:  Firedrake test function
-          trial: Firedrake trial function
-
-        Returns:
-          The UFL expression associated with the mass term of the equation.
-
-        """
-        return firedrake.inner(test, trial) * self.dx
+        return self.scaling_factor * self.mass_term(self, trial)
 
     def residual(
-        self,
-        test: firedrake.ufl_expr.Argument,
-        trial: firedrake.ufl_expr.Argument | firedrake.Function,
-        trial_lagged: Optional[firedrake.ufl_expr.Argument | firedrake.Function] = None,
-        fields: Optional[dict[str, firedrake.Constant | firedrake.Function]] = None,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-    ) -> firedrake.ufl.core.expr.Expr:
-        """Finite element residual.
+        self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+    ) -> fd.Form:
+        """Generates the UFL form corresponding to the residual terms."""
 
-        The final residual is calculated as a sum of all individual term residuals.
-
-        Arguments:
-          test:         Firedrake test function
-          trial:        Firedrake trial function
-          trial_lagged: Firedrake trial function from the previous time step
-          fields:       Dictionary of physical fields from the simulation's state
-          bcs:          Dictionary of identifier-value pairs specifying boundary conditions
-
-        Returns:
-          The UFL expression associated with all equation terms except the mass term.
-
-        """
-        if trial_lagged is None:
-            trial_lagged = trial
-        if fields is None:
-            fields = {}
-        if bcs is None:
-            bcs = {}
-
-        F = 0
-        for term in self._terms:
-            F += term.residual(test, trial, trial_lagged, fields, bcs)
-
-        return F
+        return self.scaling_factor * sum(
+            term(self, trial) for term in self.residual_terms
+        )
 
 
-class BaseTerm(ABC):
-    """Defines an equation's term using an UFL expression.
+def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
+    r"""
+    Ratio C such that \int_f u^2 <= C Area(f)/Volume(e) \int_e u^2 for facets f,
+    elements e, and polynomials u of degree p.
 
-    The implemented expression describes the term's contribution to the residual in the
-    finite element discretisation.
-
-    Arguments:
-      test_space:  Firedrake function space of the test function
-      trial_space: Firedrake function space of the trial function
-      dx:          UFL measure for the domain, boundaries excluded
-      ds:          UFL measure for the domain's outer boundaries
-      dS:
-        UFL measure for the domain's inner boundaries when using a discontinuous
-        function space
-
+    See Equation (3.7), Table 3.1, and Appendix C from Hillewaert's thesis:
+    https://www.researchgate.net/publication/260085826
     """
-    def __init__(
-        self,
-        test_space: firedrake.functionspaceimpl.WithGeometry,
-        trial_space: firedrake.functionspaceimpl.WithGeometry,
-        dx: firedrake.Measure,
-        ds: firedrake.Measure,
-        dS: firedrake.Measure,
-        **kwargs,
-    ):
-        self.test_space = test_space
-        self.trial_space = trial_space
+    match cell_type := mesh.ufl_cell().cellname:
+        case "triangle":
+            return (p + 1) * (p + 2) / 2.0
+        case "quadrilateral" | "interval * interval":
+            return (p + 1) ** 2
+        case "triangle * interval":
+            return (p + 1) ** 2
+        case "quadrilateral * interval" | "hexahedron":
+            # if e is a wedge and f is a triangle: (p+1)**2
+            # if e is a wedge and f is a quad: (p+1)*(p+2)/2
+            # here we just return the largest of the the two (for p>=0)
+            return (p + 1) ** 2
+        case "tetrahedron":
+            return (p + 1) * (p + 3) / 3
+        case _:
+            raise NotImplementedError(f"Unknown cell type in mesh: {cell_type}")
 
-        self.dx = dx
-        self.ds = ds
-        self.dS = dS
 
-        self.mesh = test_space.mesh()
-        self.dim = self.mesh.geometric_dimension()
-        self.n = firedrake.FacetNormal(self.mesh)
+def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
+    """Interior Penalty method
 
-        self.term_kwargs = kwargs
+    For details on the choice of sigma, see
+    https://www.researchgate.net/publication/260085826
 
-    @abstractmethod
-    def residual(
-        self,
-        test: firedrake.ufl_expr.Argument,
-        trial: firedrake.ufl_expr.Argument | firedrake.Function,
-        trial_lagged: Optional[firedrake.ufl_expr.Argument | firedrake.Function] = None,
-        fields: Optional[dict[str, firedrake.Constant | firedrake.Function]] = None,
-        bcs: Optional[dict[int, dict[str, int | float]]] = None,
-    ) -> firedrake.ufl.core.expr.Expr:
-        """Residual associated with the equation's term.
+    We use Equations (3.20) and (3.23). Instead of getting the maximum over two adjacent
+    cells (+ and -), we just sum (i.e. 2 * avg) and have an extra 0.5 for internal
+    facets.
+    """
+    degree = eq.trial_space.ufl_element().degree()
+    if not isinstance(degree, int):
+        degree = max(degree)
 
-        Arguments:
-          test:         Firedrake test function
-          trial:        Firedrake trial function
-          trial_lagged: Firedrake trial function from the previous time step
-          fields:       Dictionary of physical fields from the simulation's state
-          bcs:          Dictionary of identifier-value pairs specifying boundary conditions
+    if degree == 0:  # probably only works for orthogonal quads and hexes
+        sigma = 1.0
+    else:
+        # safety factor: 1.0 is theoretical minimum
+        alpha = getattr(eq, "interior_penalty", 2.0)
+        num_facets = eq.mesh.ufl_cell().num_facets
+        sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
 
-        Returns:
-          A UFL expression for the term's contribution to the finite element residual.
-
-        """
-        pass
+    return sigma

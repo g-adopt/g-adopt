@@ -1,3 +1,9 @@
+r"""This module provides classes to perform an adjoint inverse optimisation and checkpoint
+intermediate results. Users instantiate the `LinMoreOptimiser` class by providing
+relevant parameters and call the `run` method to perform the optimisation.
+
+"""
+
 from pathlib import Path
 
 import firedrake.utils
@@ -153,14 +159,7 @@ class LinMoreOptimiser:
         self._add_statustest()
 
         self.rol_solver.rolvector.checkpoint_path = self.checkpoint_dir / "solution_checkpoint.h5"
-        self.rol_solver.rolvector.load(self._mesh)
-
-        # ROL algorithms run in a loop like `while (statusTest()) { ... }`
-        # so we will double up on saving the restored iteration
-        # by rolling back the iteration counter, we make sure we overwrite the checkpoint
-        # we just restored, to keep the ROL iteration count, and our checkpoint iteration
-        # count in sync
-        self.iteration -= 1
+        self.rol_solver.rolvector.load(self._mesh, self.checkpoint_dir)
 
         # The various ROLVector objects can load all their metadata, but can't actually
         # restore from the Firedrake checkpoint. They register themselves, so we can access
@@ -169,10 +168,18 @@ class LinMoreOptimiser:
         for v in _vector_registry:
             x = [p.copy(deepcopy=True) for p in vec]
             v.dat = x
-            v.load(self._mesh)
+            v.comm = x[0].comm
+            v.load(self._mesh, self.checkpoint_dir)
             v._optimiser = self
 
         _vector_registry.clear()
+
+        # ROL algorithms run in a loop like `while (statusTest()) { ... }`
+        # so we will double up on saving the restored iteration
+        # by rolling back the iteration counter, we make sure we overwrite the checkpoint
+        # we just restored, to keep the ROL iteration count, and our checkpoint iteration
+        # count in sync
+        self.iteration -= 1
 
     def run(self):
         """Runs the actual ROL optimisation.
@@ -240,6 +247,7 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
         """
         super().__init__(dat, inner_product)
 
+        self.comm = dat[0].comm
         self._optimiser = optimiser
 
     def clone(self):
@@ -263,15 +271,30 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
             for i, func in enumerate(self.dat):
                 f.save_function(func, name=f"dat_{i}")
 
-    def load(self, mesh):
+    def load(self, mesh, checkpoint_path: Path):
         """Loads the checkpointed data for this vector from disk.
 
         Called by the parent Optimiser after the ROL state has
         been deserialised. The pickling routine will register
         this vector within the registry.
+
+        The serialisation will have saved the absolute path to the
+        checkpoint directory at the time it was being saved.  However,
+        at restoration time, we might have moved this directory
+        elsewhere. Because of this, we only use the `.name` component
+        from the serialisation, and use the runtime-specified path for
+        the base of the checkpoint.
+
+        Args:
+          mesh:
+            The mesh on which the function is defined.
+          checkpoint_path:
+            The directory (as a Path) containing the checkpoint from which this
+            vector is being restored.
+
         """
 
-        with CheckpointFile(str(self.checkpoint_path), "r") as f:
+        with CheckpointFile(str(checkpoint_path / self.checkpoint_path.name), "r") as f:
             for i in range(len(self.dat)):
                 self.dat[i] = f.load_function(mesh, name=f"dat_{i}")
 
@@ -291,7 +314,8 @@ class CheckpointedROLVector(pyadjoint_rol.ROLVector):
     def __getstate__(self):
         """Returns a state tuple suitable for pickling"""
 
-        checkpoint_filename = f"vector_checkpoint_{firedrake.utils._new_uid()}.h5"
+        checkpoint_id = firedrake.utils._new_uid(self.comm)
+        checkpoint_filename = f"vector_checkpoint_{checkpoint_id}.h5"
         checkpoint_path = self._optimiser.checkpoint_dir / checkpoint_filename
         self.save(checkpoint_path)
 
@@ -345,11 +369,11 @@ minimisation_parameters = {
             "Radius Shrinking Rate (Positive rho)": 0.25,
             "Radius Growing Rate": 10.0,
             "Sufficient Decrease Parameter": 1e-2,
-            "Safeguard Size": 100,
+            "Safeguard Size": 100.0,
         },
     },
     "Status Test": {
-        "Gradient Tolerance": 0,
+        "Gradient Tolerance": 0.0,
         "Iteration Limit": 100,
     },
 }

@@ -1,12 +1,15 @@
-"""Utility functions for G-ADOPT"""
+r"""This module provides several classes and functions to perform a number of pre-, syn-,
+and post-processing tasks. Users incorporate utility as required in their code,
+depending on what they would like to achieve.
+
+"""
+
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement
-from firedrake.__future__ import Interpolator
+from firedrake import op2, VectorElement, DirichletBC, utils, interpolate, conditional
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
-import finat.ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
@@ -16,6 +19,12 @@ import logging
 from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
+from types import SimpleNamespace
+
+try:
+    from firedrake import MeshSequenceGeometry
+except ImportError:
+    MeshSequenceGeometry = None
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
@@ -43,16 +52,19 @@ class ParameterLog:
 
 
 class TimestepAdaptor:
+    """Computes timestep based on CFL condition for provided velocity field
+
+    Arguments:
+      dt_const: Constant whose value will be updated by the timestep adaptor
+      u: Velocity to base CFL condition on
+      V: FunctionSpace for reference velocity, usually velocity space
+      target_cfl: CFL number to target with chosen timestep
+      increase_tolerance: Maximum tolerance timestep is allowed to change by
+      maximum_timestep: Maximum allowable timestep
+
     """
-    Computes timestep based on CFL condition for provided velocity field"""
+
     def __init__(self, dt_const, u, V, target_cfl=1.0, increase_tolerance=1.5, maximum_timestep=None):
-        """
-        :arg dt_const:      Constant whose value will be updated by the timestep adaptor
-        :arg u:             Velocity to base CFL condition on
-        :arg V:             FunctionSpace for reference velocity, usually velocity space
-        :kwarg target_cfl:  CFL number to target with chosen timestep
-        :kwarg increase_tolerance: Maximum tolerance timestep is allowed to change by
-        :kwarg maximum_timestep:   Maximum allowable timestep"""
         self.dt_const = dt_const
         self.u = u
         self.target_cfl = target_cfl
@@ -63,7 +75,7 @@ class TimestepAdaptor:
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolator = Interpolator(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
+        self.ref_vel_interpolate = interpolate(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -71,7 +83,7 @@ class TimestepAdaptor:
             max_ts = min(max_ts, self.maximum_timestep)
 
         # need to reset ref_vel to avoid taking max with previous values
-        ref_vel = assemble(self.ref_vel_interpolator.interpolate())
+        ref_vel = assemble(self.ref_vel_interpolate)
         local_maxrefvel = ref_vel.dat.data.max()
         max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
         # NOTE; we're incorparating max_ts here before dividing by max. ref. vel. as it may be zero
@@ -84,22 +96,31 @@ class TimestepAdaptor:
         return float(self.dt_const)
 
 
-def upward_normal(mesh, cartesian):
-    if cartesian:
-        n = mesh.geometric_dimension()
+def is_cartesian(mesh):
+    if MeshSequenceGeometry is not None and isinstance(mesh, MeshSequenceGeometry):
+        return mesh.unique().cartesian
+    else:
+        return mesh.cartesian
+
+
+def upward_normal(mesh):
+    if is_cartesian(mesh):
+        n = mesh.geometric_dimension
         return as_vector([0]*(n-1) + [1])
     else:
         X = SpatialCoordinate(mesh)
-        r = sqrt(dot(X, X))
+        r = sqrt(sum([x ** 2 for x in X]))
         return X/r
 
 
-def vertical_component(u, cartesian):
-    if cartesian:
+def vertical_component(u):
+    mesh = extract_unique_domain(u)
+
+    if is_cartesian(mesh):
         return u[u.ufl_shape[0]-1]
     else:
-        n = upward_normal(extract_unique_domain(u), cartesian)
-        return dot(n, u)
+        n = upward_normal(mesh)
+        return sum([n_i * u_i for n_i, u_i in zip(n, u)])
 
 
 def ensure_constant(f):
@@ -135,6 +156,14 @@ class CombinedSurfaceMeasure(ufl.Measure):
 
 
 def _get_element(ufl_or_element):
+    if isinstance(ufl_or_element, ufl.indexed.Indexed):
+        expr, multiindex = ufl_or_element.ufl_operands
+        V = expr.ufl_function_space()
+        for i in multiindex:
+            comp_to_subspace = tuple(j for j, W in enumerate(V) for k in range(W.value_size))
+            V = V.sub(comp_to_subspace[int(i)])
+        ufl_or_element = V
+
     if isinstance(ufl_or_element, ufl.AbstractFiniteElement):
         return ufl_or_element
     else:
@@ -145,15 +174,7 @@ def is_continuous(expr):
     if isinstance(expr, ufl.tensors.ListTensor):
         return all(is_continuous(x) for x in expr.ufl_operands)
 
-    if isinstance(expr, ufl.indexed.Indexed):
-        elem = expr.ufl_operands[0].ufl_element()
-        if isinstance(elem, finat.ufl.MixedElement):
-            # the second operand is a MultiIndex
-            assert len(expr.ufl_operands[1]) == 1
-            sub_element_index, _ = elem.extract_subelement_component(int(expr.ufl_operands[1][0]))
-            elem = elem.sub_elements[sub_element_index]
-    else:
-        elem = _get_element(expr)
+    elem = _get_element(expr)
 
     return elem in ufl.H1
 
@@ -176,46 +197,19 @@ def normal_is_continuous(expr):
 
 def cell_size(mesh):
     if hasattr(mesh.ufl_cell(), 'sub_cells'):
-        return sqrt(CellVolume(mesh))
+        return CellVolume(mesh) ** (1/mesh.topological_dimension)
     else:
         return CellDiameter(mesh)
-
-
-def cell_edge_integral_ratio(mesh, p):
-    r"""
-    Ratio C such that \int_f u^2 <= C Area(f)/Volume(e) \int_e u^2
-    for facets f, elements e and polynomials u of degree p.
-
-    See eqn. (3.7) ad table 3.1 from Hillewaert's thesis: https://www.researchgate.net/publication/260085826
-    and its appendix C for derivation."""
-    cell_type = mesh.ufl_cell().cellname()
-    if cell_type == "triangle":
-        return (p+1)*(p+2)/2.
-    elif cell_type == "quadrilateral" or cell_type == "interval * interval":
-        return (p+1)**2
-    elif cell_type == "triangle * interval":
-        return (p+1)**2
-    elif cell_type == "quadrilateral * interval":
-        # if e is a wedge and f is a triangle: (p+1)**2
-        # if e is a wedge and f is a quad: (p+1)*(p+2)/2
-        # here we just return the largest of the the two (for p>=0)
-        return (p+1)**2
-    elif cell_type == "tetrahedron":
-        return (p+1)*(p+3)/3
-    else:
-        raise NotImplementedError("Unknown cell type in mesh: {}".format(cell_type))
 
 
 def tensor_jump(v, n):
     r"""
     Jump term for vector functions based on the tensor product
 
-    .. math::
-        \text{jump}(\mathbf{u}, \mathbf{n}) = (\mathbf{u}^+ \mathbf{n}^+) +
-        (\mathbf{u}^- \mathbf{n}^-)
+    $$"jump"(bb u, bb n) = (bb u^+ bb n^+) + (bb u^- bb n^-)$$
 
     This is the discrete equivalent of grad(u) as opposed to the
-    vectorial UFL jump operator :meth:`ufl.jump` which represents div(u).
+    vectorial UFL jump operator `ufl.jump` which represents div(u).
     The equivalent of nabla_grad(u) is given by tensor_jump(n, u).
     """
     return outer(v('+'), n('+')) + outer(v('-'), n('-'))
@@ -223,13 +217,13 @@ def tensor_jump(v, n):
 
 def extend_function_to_3d(func, mesh_extruded):
     """
-    Returns a 3D view of a 2D :class:`Function` on the extruded domain.
+    Returns a 3D view of a 2D `Function` on the extruded domain.
     The 3D function resides in V x R function space, where V is the function
     space of the source function. The 3D function shares the data of the 2D
     function.
     """
     fs = func.function_space()
-#    assert fs.mesh().geometric_dimension() == 2, 'Function must be in 2D space'
+#    assert fs.mesh().geometric_dimension == 2, 'Function must be in 2D space'
     ufl_elem = fs.ufl_element()
     family = ufl_elem.family()
     degree = ufl_elem.degree()
@@ -245,18 +239,19 @@ def extend_function_to_3d(func, mesh_extruded):
 
 
 class ExtrudedFunction(Function):
-    """
-    A 2D :class:`Function` that provides a 3D view on the extruded domain.
+    """A 2D `Function` that provides a 3D view on the extruded domain.
+
     The 3D function can be accessed as `ExtrudedFunction.view_3d`.
     The 3D function resides in V x R function space, where V is the function
     space of the source function. The 3D function shares the data of the 2D
-    function."""
+    function.
+
+    Arguments:
+      mesh_3d: Extruded 3D mesh where the function will be extended to.
+
+    """
 
     def __init__(self, *args, mesh_3d=None, **kwargs):
-        """
-        Create a 2D :class:`Function` with a 3D view on extruded mesh.
-        :arg mesh_3d: Extruded 3D mesh where the function will be extended to.
-        """
         # create the 2d function
         super().__init__(*args, **kwargs)
         print(*args)
@@ -290,7 +285,7 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
             v_family = h_family
         if v_degree is None:
             v_degree = h_degree
-        h_cell, v_cell = mesh.ufl_cell().sub_cells()
+        h_cell, v_cell = mesh.ufl_cell().sub_cells
         h_elt = FiniteElement(h_family, h_cell, h_degree, variant=variant)
         v_elt = FiniteElement(v_family, v_cell, v_degree, variant=v_variant)
         elt = TensorProductElement(h_elt, v_elt)
@@ -304,25 +299,22 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
 
 
 class LayerAveraging:
-    """
-    A manager for computing a vertical profile of horizontal layer averages.
-    """
+    """A manager for computing a vertical profile of horizontal layer averages.
 
-    def __init__(self, mesh, r1d=None, cartesian=True, quad_degree=None):
-        """
-        Create the :class:`LayerAveraging` manager.
-        :arg mesh: The mesh over which to compute averages.
-        :kwarg r1d: An array of either depth coordinates or radii,
+    Arguments:
+      mesh: The mesh over which to compute averages
+      r1d: An array of either depth coordinates or radii,
              at which to compute layer averages. If not provided, and
              mesh is extruded, it uses the same layer heights. If mesh
              is not extruded, r1d is required.
-        :kwarg cartesian: Determines whether `r1d` represents depths or radii.
-        """
 
+    """
+
+    def __init__(self, mesh, r1d=None, quad_degree=None):
         self.mesh = mesh
         XYZ = SpatialCoordinate(mesh)
 
-        if cartesian:
+        if is_cartesian(mesh):
             self.r = XYZ[len(XYZ)-1]
         else:
             self.r = sqrt(dot(XYZ, XYZ))
@@ -400,17 +392,17 @@ class LayerAveraging:
         self.rhs[-1] = assemble(phi * T * self.dx)
 
     def get_layer_average(self, T):
-        """
-        Compute the layer averages of :class:`Function` T at the predefined depths.
-        Returns a numpy array containing the averages.
+        """Compute the layer averages of `Function` T at the predefined depths.
+
+        Returns:
+          A numpy array containing the averages.
         """
 
         self._assemble_rhs(T)
         return solveh_banded(self.mass, self.rhs, lower=True)
 
     def extrapolate_layer_average(self, u, avg):
-        """
-        Given an array of layer averages avg, extrapolate to :class:`Function` u
+        """Given an array of layer averages avg, extrapolate to `Function` u
         """
 
         r = self.r
@@ -448,30 +440,210 @@ def timer_decorator(func):
     return wrapper
 
 
+class InteriorBC(DirichletBC):
+    """DirichletBC applied to anywhere that is *not* on the specified boundary"""
+    @utils.cached_property
+    def nodes(self):
+        return np.array(list(set(range(self._function_space.node_count)) - set(super().nodes)))
+
+
 def absv(u):
     """Component-wise absolute value of vector for SU stabilisation"""
     return as_vector([abs(ui) for ui in u])
 
 
-def su_nubar(u, J, Pe):
-    """SU stabilisation viscosity as a function of velocity, Jacobian and grid Peclet number"""
-    # SU(PG) ala Donea & Huerta:
-    # Columns of Jacobian J are the vectors that span the quad/hex
-    # which can be seen as unit-vectors scaled with the dx/dy/dz in that direction (assuming physical coordinates x,y,z aligned with local coordinates)
-    # thus u^T J is (dx * u , dy * v)
-    # and following (2.44c) Pe = u^T J / (2*nu)
-    # beta(Pe) is the xibar vector in (2.44a)
-    # then we get artifical viscosity nubar from (2.49)
-    beta_pe = as_vector([1/tanh(Pei+1e-6) - 1/(Pei+1e-6) for Pei in Pe])
-
-    return dot(absv(dot(u, J)), beta_pe)/2
+def step_func(r, centre, mag, increasing=True, sharpness=50):
+    # A step function designed to design viscosity jumps
+    # Build a step centred at "centre" with given magnitude
+    # Increase with radius if "increasing" is True
+    return mag * (
+        0.5 * (1 + tanh((1 if increasing else -1) * (r - centre) * sharpness))
+    )
 
 
-def node_coordinates(function):
-    """Extract mesh coordinates and interpolate them onto the relevant function space"""
-    func_space = function.function_space()
-    mesh_coords = SpatialCoordinate(func_space.mesh())
+def node_coordinates(function: Function) -> Function:
+    """Interpolates mesh coordinates at each node of the provided function.
 
-    return [
-        Function(func_space).interpolate(coords).dat.data for coords in mesh_coords
-    ]
+    Args:
+      function: A Firedrake function
+
+    Returns:
+      A Firedrake function for the interpolated mesh coordinates
+    """
+    vec_space = VectorFunctionSpace(function.ufl_domain(), function.ufl_element())
+
+    return Function(vec_space).interpolate(SpatialCoordinate(function))
+
+
+def interpolate_1d_profile(function: Function, one_d_filename: str):
+    """
+    Assign a one-dimensional profile to a Function `function` from a file.
+
+    The function reads a one-dimensional profile (e.g., viscosity) together with the
+    radius/height input for the profile, from a file, broadcasts the two arrays to all
+    processes, and then interpolates this array onto the function space of `function`.
+
+    Args:
+        function: The function onto which the 1D profile will be assigned
+        one_d_filename: The path to the file containing the 1D radial profile
+
+    Note:
+        - This is designed to read a file with one process and distribute in parallel with MPI.
+        - The input file should contain an array of radius/height and an array of values, separated by a comma.
+    """
+    mesh = extract_unique_domain(function)
+
+    if mesh.comm.rank == 0:
+        rshl, one_d_data = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
+        if rshl[1] < rshl[0]:
+            rshl = rshl[::-1]
+            one_d_data = one_d_data[::-1]
+        if not np.all(np.diff(rshl) > 0):
+            raise ValueError("Data must be strictly monotonous.")
+    else:
+        one_d_data = None
+        rshl = None
+
+    one_d_data = mesh.comm.bcast(one_d_data, root=0)
+    rshl = mesh.comm.bcast(rshl, root=0)
+
+    X = SpatialCoordinate(mesh)
+
+    upward_coord = vertical_component(X)
+
+    rad = Function(function.function_space()).interpolate(upward_coord)
+
+    averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
+    interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
+    averager.extrapolate_layer_average(function, interpolated_visc)
+
+
+def get_boundary_ids(mesh) -> SimpleNamespace:
+    # PETSc creates these labels when loading meshes from files, Firedrake imitates it
+    # in its own mesh creation functions.
+
+    if mesh.topology_dm.hasLabel("Face Sets"):
+        axis_extremes_order = [["left", "right"], ["bottom", "top"]]
+        dim = mesh.geometric_dimension
+        plex_dim = mesh.topology_dm.getCoordinateDim()  # In an extruded mesh, this is different to the
+        # firedrake-assigned geometric_dimension
+        if dim == 3:
+            # For 3D meshes, we label dim[1] (y) as "front", "back" and dim[2] (z) as "bottom","top"
+            axis_extremes_order.insert(1, ["front", "back"])
+        bounding_box = mesh.topology_dm.getBoundingBox()
+        boundary_tol = [abs(dim[1] - dim[0]) * 1e-6 for dim in bounding_box]
+        if dim > 3:
+            raise ValueError(f"Cannot handle {dim} dimensional mesh")
+        # Recover the boundary ids Firedrake has inserted
+        coords = mesh.topology_dm.getCoordinatesLocal()
+        coord_sec = mesh.topology_dm.getCoordinateSection()
+        mesh.topology_dm.markBoundaryFaces("TEMP_LABEL", 1)
+        if mesh.topology_dm.getStratumSize("TEMP_LABEL", 1) > 0:
+            boundary_cells = [
+                (i, mesh.topology_dm.getLabelValue("Face Sets", i))
+                for i in mesh.topology_dm.getStratumIS("TEMP_LABEL", 1).getIndices()
+            ]
+        else:
+            boundary_cells = []
+        identified = dict.fromkeys([i[1] for i in boundary_cells])
+        nvert = -1
+        for cell, face_id in boundary_cells:
+            if identified[face_id] is None:
+                face_coords = mesh.topology_dm.vecGetClosure(coord_sec, coords, cell)
+                if nvert == -1:
+                    nvert = len(face_coords) // plex_dim
+                # Flattened version of axis_extremes_order
+                tmp_bdys = [
+                    axis_extremes_order[idim][ibdy]
+                    for idim in range(plex_dim)
+                    for ibdy in range(2)
+                    if all(
+                        abs(face_coords[idim + plex_dim * i] - bounding_box[idim][ibdy]) < boundary_tol[idim]
+                        for i in range(nvert)
+                    )
+                ]
+                # Found a cell unambiguously on one boundary
+                if len(tmp_bdys) == 1:
+                    identified[face_id] = tmp_bdys[0]
+        # Not every MPI rank has every boundary of the mesh, gather all boundaries
+        # seen by all MPI ranks
+        gathered_boundaries = mesh.comm.allgather(identified)
+        mesh.topology_dm.removeLabel("TEMP_LABEL")
+        kwargs = dict(
+            [
+                (proc_bdy.get(face_id), face_id)  # invert boundary mapping
+                for proc_bdy in reversed(gathered_boundaries)  # keep value on lowest comm rank
+                for face_id in set().union(*gathered_boundaries)  # all gathered face_ids
+            ]
+        )
+        kwargs.pop(None, None)  # remove None entry
+        # Get remaining dimensions (if any)
+        for idim in range(plex_dim, dim):
+            for axis_label in axis_extremes_order[idim]:
+                kwargs[axis_label] = axis_label
+    # Integer subdomain meshes are only assigned by petsc or the firedrake utility mesh
+    # module. If the "Face Sets" label is missing from the mesh, it was not created by
+    # either of these and therefore will only have the "bottom" and "top" labels
+    # utilised by 'CombinedSurfaceMeasure' above
+    else:
+        kwargs = {"bottom": "bottom", "top": "top"}
+    return SimpleNamespace(**kwargs)
+
+
+def extruded_layer_heights(
+        DG0_layers: int | list[int], radii: list[float]) -> list[float]:
+
+    """Calculates layer heights for extruded mesh using rheological boundary
+
+    Args:
+      DG0_layers:
+        Number of layers per rheological layer
+      radii:
+        Radii of rheological boundaries to match when extruding the mesh.
+        Assumes sequence starts with outer radii -> inner radii.
+
+    Returns:
+        list of layer heights
+        """
+
+    layer_heights = []
+
+    nz_layers = [DG0_layers] * len(radii) if isinstance(DG0_layers, int) else DG0_layers
+    assert len(nz_layers) == len(radii)
+
+    # starting at the bottom radius, work outwards
+    for i in range(len(radii) - 2, -1, -1):
+        dz = (radii[i] - radii[i + 1]) / nz_layers[i]
+        for _ in range(nz_layers[i]):
+            layer_heights.append(dz)
+    return layer_heights
+
+
+def initialise_background_field(
+        f: Function,
+        background_values: list[float],
+        X: ufl.geometry.SpatialCoordinate,
+        radii: list[float],
+        shift: float = 0.0,):
+    """Initialises discontinuous field with sharp jumps at rheological boundaries
+
+    Args:
+      f:
+        Function to interpolate background values into. N.b. `f` is modified in place.
+      background_values:
+        Discrete values to interpolate into `f`
+      X:
+        Spatial coordinates associated with function `f`
+      radii:
+        Radii of rheological discontinuities. N.b. length of `background_values` must be one less
+        than length of `radii`.
+      shift:
+        Shift vertical radii by a constant, e.g. when mesh is offset from `radii` values.
+    """
+
+    assert len(background_values) == len(radii)-1
+    for i in range(len(background_values)):
+        f.interpolate(
+            conditional(vertical_component(X) + shift > radii[i+1],
+                        conditional(vertical_component(X) + shift <= radii[i],
+                                    background_values[i], f), f))

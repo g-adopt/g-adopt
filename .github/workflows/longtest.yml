@@ -2,49 +2,93 @@ name: Run long regression tests
 
 on:
   workflow_dispatch:
+    inputs:
+      system:
+        description: "Select a system to test on"
+        required: true
+        type: choice
+        options:
+          - all
+          - gadi
+          - setonix
 
-concurrency: longtest_environment
+  schedule:
+    - cron: "5 19 * * 0"
 
 jobs:
-  build:
+  setup:
     runs-on: ubuntu-latest
+    outputs:
+      system_matrix: ${{ steps.build_matrix.outputs.system_matrix }}
+    env:
+      SYSTEM: ${{ inputs.system || 'all' }}
+    steps:
+    - id: build_matrix
+      run: |
+        if [[ "${SYSTEM}" == "all" ]]; then
+          export SYSTEMS='[ "gadi", "setonix" ]'
+        else
+          export SYSTEMS='[ "${{ inputs.system }}" ]'
+        fi
+        echo system_matrix=$( jq -cn --argjson sys "$SYSTEMS" '{system: $sys}' ) >> $GITHUB_OUTPUT
+
+  build:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.system_matrix) }}
+    concurrency: longtest-${{ matrix.system }}
+    env:
+      REPO_PATH: ${{ secrets[format('{0}_REPO_PATH',matrix.system)] }}
+      GADOPT_SETUP: ${{ secrets[format('{0}_GADOPT_SETUP',matrix.system)] }}
     steps:
       - uses: actions/checkout@v4
-      - name: Sync repository to Gadi
-        uses: up9cloud/action-rsync@v1.4
-        env:
-          HOST: gadi.nci.org.au
-          TARGET: ${{secrets.GADI_REPO_PATH}}
-          KEY: ${{secrets.GADI_TESTING_KEY}}
-          USER: ${{secrets.GADI_USER}}
+      - name: Get system FQDN
+        id: get_fqdn
+        shell: bash
+        run: |
+          fqdn=$( grep ${{matrix.system}}: .github/workflows/systems.txt )
+          echo "fqdn=${fqdn//${{matrix.system}}:/}" >> $GITHUB_OUTPUT
+
       - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets[format('{0}_TESTING_KEY',matrix.system)] }}
+          HOST_KEY: ${{ secrets[format('{0}_HOST_KEY',matrix.system)] }}
+          USER: ${{ secrets[format('{0}_USER',matrix.system)] }}
         run: |
           mkdir -p ~/.ssh/
-          echo "${{secrets.GADI_TESTING_KEY}}" > ~/.ssh/gadi.key
-          chmod 600 ~/.ssh/gadi.key
-          echo "${{secrets.GADI_HOST_KEY}}" >> ~/.ssh/known_hosts
+          echo "$SSH_KEY" > ~/.ssh/${{ matrix.system }}.key
+          chmod 600 ~/.ssh/${{ matrix.system }}.key
+          echo "$HOST_KEY" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
           cat >>~/.ssh/config <<EOF
-          Host gadi
-            Hostname gadi.nci.org.au
-            User ${{secrets.GADI_USER}}
-            IdentityFile ~/.ssh/gadi.key
+          Host ${{ matrix.system }}
+            Hostname ${{ steps.get_fqdn.outputs.fqdn }}
+            User "$USER"
+            IdentityFile ~/.ssh/${{ matrix.system }}.key
+            ServerAliveInterval 120
           EOF
+
+      - name: Sync repository to ${{matrix.system}}
+        shell: bash
+        run: |
+          rsync -avz --delete --exclude=/.git/ --exclude=/.github/ ./ ${{matrix.system}}:"$REPO_PATH"
 
       - name: Run test cases
         id: run_tests
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && make -j longtest gadopt_checkout=${{secrets.GADI_REPO_PATH}} gadopt_prefix_image=${{secrets.GADI_PREFIX_IMAGE}} project=${{secrets.GADI_PROJECT}}"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && make -j longtest"
 
       - name: Test results
         if: ${{ success() }}
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && module load python3/3.10.4 && python3 -m pytest -m longtest --junit-xml=test_results.xml demos"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && python3 -m pytest -m longtest --junit-xml=test_results.xml --ignore=tests/unit tests"
 
       - name: Retrieve test results
         if: ${{ !cancelled() }}
         run: |
-          scp gadi:${{secrets.GADI_REPO_PATH}}/test_results.xml .
+          scp ${{ matrix.system }}:"$REPO_PATH/test_results.xml" .
 
       - name: Pytest report
         uses: mikepenz/action-junit-report@v4
@@ -58,4 +102,4 @@ jobs:
       - name: Get error output
         if: ${{ failure() }}
         run: |
-          ssh gadi "cd ${{secrets.GADI_REPO_PATH}} && make longtest_output"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && make longtest_output"

@@ -1,13 +1,19 @@
-"""Timestepper implementation, mostly copied from Thetis."""
+r"""This module provides several classes to perform integration of time-dependent
+equations. Users choose if they require an explicit or implicit time integrator, and
+they instantiate one of the implemented algorithm class, for example, `ERKEuler`, by
+providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
+`DIRKGeneric`). Then, they call the `advance` method to request a solver update.
+
+"""
+
 import operator
-from abc import ABC, abstractmethod, abstractproperty
-from numbers import Number
-from typing import Any, Optional
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Optional
 
 import firedrake
 import numpy as np
 
-from .equations import BaseEquation
+from .equations import Equation
 from .utility import ensure_constant
 
 
@@ -15,12 +21,14 @@ class TimeIntegratorBase(ABC):
     """Defines the API for all time integrators."""
 
     @abstractmethod
-    def advance(self, t: float, update_forcings: Optional[firedrake.Function] = None):
+    def advance(self, update_forcings: Callable | None = None, t: float | None = None):
         """Advances equations for one time step.
 
-        Arguments:
-          t: Current simulation time
-          update_forcings: Firedrake function used to update any time-dependent boundary conditions
+        Args:
+          update_forcings:
+            Callable updating any time-dependent equation forcings
+          t:
+            Current simulation time
 
         """
         pass
@@ -42,7 +50,6 @@ class TimeIntegrator(TimeIntegratorBase):
     Args:
       equation: G-ADOPT equation to integrate
       solution: Firedrake function representing the equation's solution
-      fields: Dictionary of Firedrake fields passed to the equation
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
@@ -53,9 +60,8 @@ class TimeIntegrator(TimeIntegratorBase):
 
     def __init__(
         self,
-        equation: BaseEquation,
+        equation: Equation,
         solution: firedrake.Function,
-        fields: dict[str, firedrake.Function | firedrake.Constant],
         dt: float,
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = None,
@@ -66,7 +72,6 @@ class TimeIntegrator(TimeIntegratorBase):
         self.equation = equation
         self.test = firedrake.TestFunction(solution.function_space())
         self.solution = solution
-        self.fields = fields
         self.dt = float(dt)
         self.dt_const = ensure_constant(dt)
         self.solution_old = solution_old or firedrake.Function(solution, name='Old'+solution.name())
@@ -80,7 +85,7 @@ class TimeIntegrator(TimeIntegratorBase):
             self.solver_parameters.update(solver_parameters)
 
         self.strong_bcs = strong_bcs or []
-        self.hom_bcs = [firedrake.DirichletBC(bci.function_space(), 0, bci.sub_domain) for bci in self.strong_bcs]
+        self.hom_bcs = [bci.__class__(bci.function_space(), 0, bci.sub_domain) for bci in self.strong_bcs]
 
 
 class RungeKuttaTimeIntegrator(TimeIntegrator):
@@ -100,12 +105,15 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         """
         pass
 
-    def advance(self, t, update_forcings=None):
+    def advance(
+        self, update_forcings: Callable | None = None, t: float | None = None
+    ) -> None:
         """Advances equations for one time step."""
         if not self._initialized:
             self.initialize(self.solution)
         for i in range(self.n_stages):
-            self.solve_stage(i, t, update_forcings)
+            self.solve_stage(i, update_forcings, t)
+
         self.get_final_solution()
 
 
@@ -117,28 +125,25 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
     Arguments:
       equation: G-ADOPT equation to solve
       solution: Firedrake function reperesenting the equation's solution
-      fields: Dictionary of Firedrake fields passed to the equation
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
-      bnd_conditions: Dictionary of boundary conditions passed to the equation
       solver_parameters: Dictionary of solver parameters provided to PETSc
       strong_bcs: List of Firedrake Dirichlet boundary conditions
 
     """
     def __init__(
-            self,
-            equation: BaseEquation,
-            solution: firedrake.Function,
-            fields: dict[str, firedrake.Function | firedrake.Constant],
-            dt: float,
-            solution_old: Optional[firedrake.Function] = None,
-            bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
-            solver_parameters: Optional[dict[str, Any]] = {},
-            strong_bcs: Optional[list[firedrake.DirichletBC]] = None
+        self,
+        equation: Equation,
+        solution: firedrake.Function,
+        dt: float,
+        solution_old: Optional[firedrake.Function] = None,
+        solver_parameters: Optional[dict[str, Any]] = {},
+        strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
     ):
-        super(ERKGeneric, self).__init__(equation, solution, fields, dt,
-                                         solution_old, solver_parameters, strong_bcs)
+        super(ERKGeneric, self).__init__(
+            equation, solution, dt, solution_old, solver_parameters, strong_bcs
+        )
         self._initialized = False
         V = solution.function_space()
         assert V == equation.trial_space
@@ -150,8 +155,8 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
 
         # fully explicit evaluation
         trial = firedrake.TrialFunction(V)
-        self.a_rk = self.equation.mass_term(self.test, trial)
-        self.l_rk = self.dt_const*self.equation.residual(self.test, self.solution, self.solution, self.fields, bnd_conditions)
+        self.a_rk = self.equation.mass(trial)
+        self.l_rk = self.dt_const * self.equation.residual(self.solution)
 
         self._nontrivial = self.l_rk != 0
 
@@ -189,11 +194,14 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
         if self._nontrivial and i_stage > 0:
             self.solution += self.sol_expressions[i_stage]
 
-    def solve_tendency(self, i_stage, t, update_forcings=None):
+    def solve_tendency(self, i_stage, update_forcings, t) -> None:
         """Evaluates the tendency of i-th stage"""
         if self._nontrivial:
-            if update_forcings is not None:
-                update_forcings(t + self.c[i_stage]*self.dt)
+            if update_forcings is not None and t is not None:
+                update_forcings(t + self.c[i_stage] * self.dt)
+            elif update_forcings is not None:
+                update_forcings()
+
             self.solver[i_stage].solve()
 
     def get_final_solution(self):
@@ -202,9 +210,9 @@ class ERKGeneric(RungeKuttaTimeIntegrator):
             self.solution += self.final_sol_expr
         self.solution_old.assign(self.solution)
 
-    def solve_stage(self, i_stage, t, update_forcings=None):
+    def solve_stage(self, i_stage, update_forcings, t) -> None:
         self.update_solution(i_stage)
-        self.solve_tendency(i_stage, t, update_forcings)
+        self.solve_tendency(i_stage, update_forcings, t)
 
 
 class DIRKGeneric(RungeKuttaTimeIntegrator):
@@ -216,32 +224,25 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
     Arguments:
       equation: G-ADOPT equation to solve
       solution: Firedrake function reperesenting the equation's solution
-      fields: Dictionary of Firedrake fields passed to the equation
       dt: Integration time step
       solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
-      bnd_conditions: Dictionary of boundary conditions passed to the equation
       solver_parameters: Dictionary of solver parameters provided to PETSc
       strong_bcs: List of Firedrake Dirichlet boundary conditions
-      terms_to_add: Defines which terms of the equation are to be
-                      added to this solver.
-                      Default 'all' implies ['implicit', 'explicit', 'source'].
 
     """
     def __init__(
-            self,
-            equation: BaseEquation,
-            solution: firedrake.Function,
-            fields: dict[str, firedrake.Function | firedrake.Constant],
-            dt: float,
-            solution_old: Optional[firedrake.Function] = None,
-            bnd_conditions: Optional[dict[int, dict[str, Number]]] = None,
-            solver_parameters: Optional[dict[str, Any]] = {},
-            strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-            terms_to_add: Optional[str | list[str]] = 'all'
+        self,
+        equation: Equation,
+        solution: firedrake.Function,
+        dt: float,
+        solution_old: Optional[firedrake.Function] = None,
+        solver_parameters: Optional[dict[str, Any]] = {},
+        strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
     ):
-        super(DIRKGeneric, self).__init__(equation, solution, fields, dt,
-                                          solution_old, solver_parameters, strong_bcs)
+        super(DIRKGeneric, self).__init__(
+            equation, solution, dt, solution_old, solver_parameters, strong_bcs
+        )
         self.solver_parameters.setdefault('snes_type', 'newtonls')
         self._initialized = False
 
@@ -265,8 +266,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                         u = self.solution_old + self.a[i][j]*self.dt_const*self.k[j]
                     else:
                         u += self.a[i][j]*self.dt_const*self.k[j]
-                self.F.append(self.equation.mass_term(self.test, self.k[i]) -
-                              self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
+                self.F.append(self.equation.mass(self.k[i]) - self.equation.residual(u))
         else:
             # solution must be split before computing sum
             # pass components to equation in a list
@@ -279,8 +279,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
                     else:
                         for l, k in enumerate(firedrake.split(self.k[j])):
                             u[l] += self.a[i][j]*self.dt_const*k
-                self.F.append(self.equation.mass_term(self.test, self.k[i]) -
-                              self.equation.residual(self.test, u, self.solution_old, fields, bnd_conditions))
+                self.F.append(self.equation.mass(self.k[i]) - self.equation.residual(u))
         self.update_solver()
 
         # construct expressions for stage solutions
@@ -313,7 +312,7 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
         """
         self.solution.assign(self.solution_old + self.sol_expressions[i_stage])
 
-    def solve_tendency(self, i_stage, t, update_forcings=None):
+    def solve_tendency(self, i_stage, update_forcings, t) -> None:
         """Evaluates the tendency of i-th stage"""
         if i_stage == 0:
             # NOTE solution may have changed in coupled system
@@ -322,15 +321,19 @@ class DIRKGeneric(RungeKuttaTimeIntegrator):
             self.solution_old.assign(self.solution)
         if not self._initialized:
             raise ValueError('Time integrator {:} is not initialized'.format(self.name))
-        if update_forcings is not None:
-            update_forcings(t + self.c[i_stage]*self.dt)
+
+        if update_forcings is not None and t is not None:
+            update_forcings(t + self.c[i_stage] * self.dt)
+        elif update_forcings is not None:
+            update_forcings()
+
         self.solver[i_stage].solve()
 
     def get_final_solution(self):
         self.solution.assign(self.final_sol_expr)
 
-    def solve_stage(self, i_stage, t, update_forcings=None):
-        self.solve_tendency(i_stage, t, update_forcings)
+    def solve_stage(self, i_stage, update_forcings, t) -> None:
+        self.solve_tendency(i_stage, update_forcings, t)
         self.update_solution(i_stage)
 
 
@@ -346,22 +349,26 @@ class AbstractRKScheme(ABC):
     Currently only explicit or diagonally implicit schemes are supported.
     """
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def a(self):
         """Runge-Kutta matrix :math:`a_{i,j}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def b(self):
         """weights :math:`b_{i}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def c(self):
         """nodes :math:`c_{i}` of the Butcher tableau"""
         pass
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def cfl_coeff(self):
         """CFL number of the scheme
 

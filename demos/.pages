@@ -1,0 +1,32 @@
+- [Tutorials](index.md)
+- [Mantle convection](mantle_convection/index.md)
+    - Base case
+        - [base_case](mantle_convection/base_case.ipynb)
+    - Physical approximation (rheology)
+        - [viscoplastic_case](mantle_convection/viscoplastic_case.ipynb)
+    - Physical approximation (compressibility)
+        - [2d_compressible_TALA](mantle_convection/2d_compressible_TALA.ipynb)
+        - [2d_compressible_ALA](mantle_convection/2d_compressible_ALA.ipynb)
+        - [visualise_ALA_p_nullspace](mantle_convection/visualise_ALA_p_nullspace.ipynb)
+    - Boundary conditions
+        - [free_surface](mantle_convection/free_surface.ipynb)
+    - Dimension
+        - [3d_cartesian](mantle_convection/3d_cartesian.ipynb)
+    - Geometry
+        - [2d_cylindrical](mantle_convection/2d_cylindrical.ipynb)
+        - [3d_spherical](mantle_convection/3d_spherical.ipynb)
+        - [gplates_global](mantle_convection/gplates_global.ipynb)
+    - Adjoint
+        - [adjoint_forward](mantle_convection/adjoint_forward.ipynb)
+        - [adjoint](mantle_convection/adjoint.ipynb)
+    - Dynamic topography
+        - [dynamic_topography](mantle_convection/dynamic_topography.ipynb)
+- [Glacial isostatic adjustment](glacial_isostatic_adjustment/index.md)
+    - [base_case](glacial_isostatic_adjustment/base_case.ipynb)
+    - [2d_cylindrical](glacial_isostatic_adjustment/2d_cylindrical.ipynb)
+- Multi-material
+    - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
+    - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)
+- PDE-constrained optimisation
+    - [pde_constrained_field](PDE_constrained_optimisation/PDE_constrained_field.ipynb)
+    - [pde_constrained_boundary](PDE_constrained_optimisation/PDE_constrained_boundary.ipynb)

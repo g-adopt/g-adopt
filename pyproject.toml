@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "setuptools_scm[toml]"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gadopt"
-version = "2.0.0"
 authors = [
   { name = "G-ADOPT Contributors" }
 ]
 description = "A computational platform for inverse geodynamics"
+dynamic = ["version"]
 readme = "README.md"
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -16,12 +16,16 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
-  "vtk>=9.0.1"
+  "pandas",
+  "shapely",
+  "vtk",
 ]
 
 [project.optional-dependencies]
-testing = ["assess", "gmsh", "openpyxl", "pandas", "shapely"]
+demos = ["assess", "gadopt-demo-utils @ git+https://github.com/g-adopt/gadopt-demo-utils.git", "gmsh", "imageio", "jupytext", "openpyxl", "pyvista"]
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]
-packages = ["gadopt"]
+packages = ["gadopt", "gadopt.gplates"]
+
+[tool.setuptools_scm]

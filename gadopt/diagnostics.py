@@ -1,25 +1,33 @@
+r"""This module provides a class to simplify computing of diagnostics typically encountered
+in geodynamical simulations. Users instantiate the class by providing relevant
+parameters and call individual class methods to compute associated diagnostics.
+
+"""
+
 from firedrake import (
     Constant, DirichletBC, FacetNormal, Function,
     assemble, dot, ds, dx, grad, norm, sqrt,
 )
+from firedrake.functionspaceimpl import MixedFunctionSpace
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
+import numpy as np
 
-from .utility import CombinedSurfaceMeasure
+from .utility import CombinedSurfaceMeasure, vertical_component
 
 
 class GeodynamicalDiagnostics:
     """Typical simulation diagnostics used in geodynamical simulations.
 
     Arguments:
-      z:         Firedrake function for the mixed Stokes function space
-      T:         Firedrake function for the temperature
-      bottom_id: bottom boundary identifier
-      top_id:    top boundary identifier
-      degree:    degree of the polynomial approximation
+      z:            Firedrake function for mixed Stokes function space (velocity, pressure)
+      T:            Firedrake function for temperature
+      bottom_id:    Bottom boundary identifier
+      top_id:       Top boundary identifier
+      quad_degree:  Degree of polynomial quadrature approximation
 
     Note:
-      All the diagnostics are returned as a float value.
+      All diagnostics are returned as floats.
 
     Functions:
       u_rms: Root-mean squared velocity
@@ -27,37 +35,57 @@ class GeodynamicalDiagnostics:
       Nu_top: Nusselt number at the top boundary
       Nu_bottom: Nusselt number at the bottom boundary
       T_avg: Average temperature in the domain
-      ux_max: Maximum velocity (optionally over a given boundary)
+      T_min: Minimum temperature in domain
+      T_max: Maximum temperature in domain
+      ux_max: Maximum velocity (first component, optionally over a given boundary)
+      uv_min: Minimum velocity (vertical component, optionally over a given boundary)
 
     """
 
     def __init__(
         self,
         z: Function,
-        T: Function,
-        bottom_id: int,
-        top_id: int,
-        degree: int = 4,
+        T: Function = 0.0,
+        /,
+        bottom_id: int | str | None = None,
+        top_id: int | str | None = None,
+        *,
+        quad_degree: int = 4,
     ):
         mesh = extract_unique_domain(z)
 
-        self.u, self.p, *_ = z.subfunctions
+        # Allows InternalVariableSolver in stokes_integrators.py
+        # (just disp no mixed space) to use same diagnostics.
+        # Would be better to separate out into Base classes
+        is_mixed_space = isinstance(
+            z.function_space().topological, MixedFunctionSpace
+        )
+        if is_mixed_space:
+            self.u, self.p = z.subfunctions[:2]
+        else:
+            self.u = z
+
+        # vertical component of vel/disp
+        self.uv = Function(self.u.function_space().sub(0))
+
         self.T = T
 
-        self.dx = dx(domain=mesh, degree=degree)
-        self.ds = (
-            CombinedSurfaceMeasure(mesh, degree)
-            if T.function_space().extruded
-            else ds(mesh)
-        )
-        self.ds_t = self.ds(top_id)
-        self.ds_b = self.ds(bottom_id)
+        self.dx = dx(domain=mesh, degree=quad_degree)
+        self.domain_volume = assemble(Constant(1) * self.dx)
+
+        if self.u.function_space().extruded:
+            self.ds = CombinedSurfaceMeasure(mesh, quad_degree)
+        else:
+            self.ds = ds(mesh)
+
+        if bottom_id:
+            self.ds_b = self.ds(bottom_id)
+            self.bottom_surface = assemble(Constant(1) * self.ds_b)
+        if top_id:
+            self.ds_t = self.ds(top_id)
+            self.top_surface = assemble(Constant(1) * self.ds_t)
 
         self.n = FacetNormal(mesh)
-
-        self.domain_volume = assemble(Constant(1) * self.dx)
-        self.top_surface = assemble(Constant(1) * self.ds_t)
-        self.bottom_surface = assemble(Constant(1) * self.ds_b)
 
     def u_rms(self):
         return norm(self.u) / sqrt(self.domain_volume)
@@ -74,11 +102,30 @@ class GeodynamicalDiagnostics:
     def T_avg(self):
         return assemble(self.T * self.dx) / self.domain_volume
 
-    def ux_max(self, boundary_id=None) -> float:
-        ux_data = self.u.dat.data_ro_with_halos[:, 0]
+    def T_min(self):
+        T_data = self.T.dat.data_ro
+        return self.T.comm.allreduce(T_data.min(), MPI.MIN)
 
+    def T_max(self):
+        T_data = self.T.dat.data_ro
+        return self.T.comm.allreduce(T_data.max(), MPI.MAX)
+
+    def ux_max(self, boundary_id=None) -> float:
         if boundary_id:
             bcu = DirichletBC(self.u.function_space(), 0, boundary_id)
-            ux_data = ux_data[bcu.nodes]
+            ux_data = self.u.dat.data_ro_with_halos[bcu.nodes, 0]
+        else:
+            ux_data = self.u.dat.data_ro[:, 0]
 
-        return self.u.comm.allreduce(ux_data.max(initial=0), MPI.MAX)
+        return self.u.comm.allreduce(ux_data.max(), MPI.MAX)
+
+    def uv_min(self, boundary_id=None) -> float:
+        "Minimum value of vertical component of velocity/displacement"
+        self.uv.interpolate(vertical_component(self.u))
+        if boundary_id:
+            bcu = DirichletBC(self.uv.function_space(), 0, boundary_id)
+            uv_data = self.uv.dat.data_ro_with_halos[bcu.nodes]
+        else:
+            uv_data = self.uv.dat.data_ro[:]
+
+        return self.uv.comm.allreduce(uv_data.min(initial=np.inf), MPI.MIN)

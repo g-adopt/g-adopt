@@ -1,0 +1,7 @@
+{header}
+
+{prescript}
+
+{executor} {command} -n 1 2> level_${LEVEL}_warmup.err > level_${LEVEL}_warmup.out
+export PETSC_OPTIONS="-log_view :profile_${LEVEL}.txt"
+{executor} {command} 2> level_${LEVEL}_full.err > level_${LEVEL}_full.out
