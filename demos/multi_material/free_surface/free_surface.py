@@ -95,12 +95,18 @@ assign_level_set_values(
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots(figsize=(20, 7))
 # axes.set_aspect("equal")
+
+# level_set_levels = [-0.01, *linspace(0.0, 1.0, 11), 1.01]
 # contourf = tricontourf(
-#     psi, levels=linspace(-0.01, 1.01, 11), cmap="PiYG", extend="both", axes=axes
+#     psi, levels=level_set_levels, cmap="PiYG", extend="both", axes=axes
 # )
 # tricontour(psi, levels=[0.5], axes=axes)
 # fig.colorbar(
-#     contourf, orientation="horizontal", aspect=30, label="Conservative level set"
+#     contourf,
+#     orientation="horizontal",
+#     aspect=30,
+#     label="Conservative level set",
+#     spacing="proportional",
 # )
 # -
 
@@ -282,7 +288,7 @@ while True:
 # axes[1].set_xlim((0.0, domain_dims[0]))
 
 # contourf = tricontourf(
-#     psi, levels=linspace(-0.01, 1.01, 11), cmap="PiYG", extend="both", axes=axes[0]
+#     psi, levels=level_set_levels, cmap="PiYG", extend="both", axes=axes[0]
 # )
 # tricontour(psi, levels=[0.5], axes=axes[0])
 # fig.colorbar(
@@ -291,6 +297,7 @@ while True:
 #     orientation="horizontal",
 #     aspect=30,
 #     label="Conservative level set",
+#     spacing="proportional",
 # )
 
 # reader = pv.get_reader("output.pvd")
