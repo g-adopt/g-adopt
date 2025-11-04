@@ -11,27 +11,31 @@
 # describe below how to implement this problem using G-ADOPT.
 
 # As with all examples, the first step is to import the `gadopt` package, which
-# provides access to Firedrake and associated functionality.
+# provides access to Firedrake and associated functionality. We also import `matplotlib`
+# and `pyvista` for plotting purposes.
 
 from gadopt import *
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
+# import pyvista as pv
+# from matplotlib.colors import LogNorm
+# from numpy import linspace, log10, logspace
 # -
 
 # We next set up the mesh and function spaces and define functions to hold our solutions
 # and the simulation's time step.
 
 # +
-nx, ny = 256, 64  # Number of cells in x and y directions
-lx, ly = 3e6, 7e5  # Domain dimensions in x and y directions
+domain_dims = (3e6, 7e5)  # Domain dimensions in x and y directions
+mesh_elements = (256, 64)  # Number of cells in x and y directions
 # Rectangle mesh generated via Firedrake
-mesh = RectangleMesh(nx, ny, lx, ly, quadrilateral=True)
-mesh.cartesian = True  # Tag the mesh as Cartesian to inform other G-ADOPT objects
+mesh = RectangleMesh(*mesh_elements, *domain_dims, quadrilateral=True)
+mesh.cartesian = True  # Tag the mesh as Cartesian (required by the G-ADOPT API)
 boundary = get_boundary_ids(mesh)  # Object holding references to mesh boundary IDs
 
 V = VectorFunctionSpace(mesh, "Q", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "Q", 1)  # Pressure function space (scalar)
+W = FunctionSpace(mesh, "Q", 1)  # Pressure and surface-height function space (scalar)
 Z = MixedFunctionSpace([V, W, W])  # Stokes function space (mixed)
 K = FunctionSpace(mesh, "DQ", 2)  # Level-set function space (scalar, discontinuous)
 R = FunctionSpace(mesh, "R", 0)  # Real space (constants across the domain)
@@ -45,34 +49,34 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 time_step = Function(R).assign(1e11)  # Initial time step
 # -
 
-# We now initialise the level-set field. All we have to provide to G-ADOPT is a
-# mathematical description of the interface location and use the available API. In this
-# case, the interface is a polygon representing the lithospheric outline. As such, one
-# can simply supply the coordinates of the polygon's vertices in a closed loop through
-# the `interface_coords` argument. If the polygon edges overlap the domain's boundaries,
-# one can split the closed loop between the `interface_coords` and `boundary_coords`
-# arguments, where the latter holds vertex coordinates defining segments at the boundary
-# that must be considered as material interfaces. Here, we make the top boundary of the
-# lithosphere a material interface but not its left boundary. Under the hood, G-ADOPT
-# uses the `Shapely` library to determine the signed-distance function associated with
-# the interface. We employ G-ADOPT's default strategy to obtain a smooth step function
-# profile from the signed-distance function.
+# We now initialise the level-set field. All we have to do is provide G-ADOPT with a
+# mathematical description of the interface location via the `assign_level_set_values`
+# function. In this case, the interface is a polygon representing the lithospheric
+# outline, which means one can simply supply the coordinates of the polygon's vertices
+# as a closed loop using the `interface_coords` argument. If the polygon edges overlap
+# the domain's boundaries, one can split the closed loop between the `interface_coords`
+# and `boundary_coords` arguments, where the latter holds vertex coordinates defining
+# segments at the boundary that must be considered as material interfaces. Here, we make
+# the top boundary of the lithosphere a material interface but not its right boundary.
+# Under the hood, G-ADOPT uses the `Shapely` library to determine the signed-distance
+# function associated with the interface. We employ G-ADOPT's default strategy to obtain
+# a smooth step function profile from the signed-distance function.
 
 # +
 # Initialise the level-set field according to the conservative level-set approach.
 # First, write out the mathematical description of the material-interface location.
 # Here, we supply the vertex coordinates of a polygon. Then, use the G-ADOPT API to
 # generate the thickness of the hyperbolic tangent profile and update the level-set
-# field values.
+# field values in-place.
 interface_coords = [
-    (lx, ly),
-    (1e6, ly),
+    domain_dims,
+    (1e6, domain_dims[1]),
     (1e6, 5e5),
     (1.1e6, 5e5),
     (1.1e6, 6e5),
-    (lx, 6e5),
+    (domain_dims[0], 6e5),
 ]
-boundary_coords = [(lx, ly)]
+boundary_coords = [domain_dims]
 
 epsilon = interface_thickness(K, min_cell_edge_length=True)
 assign_level_set_values(
@@ -85,17 +89,19 @@ assign_level_set_values(
 # -
 
 # Let us visualise the location of the material interface that we have just initialised.
-# To this end, we use Firedrake's built-in plotting functionality.
+# To this end, we use Firedrake's built-in plotting functionality. Notice how the right
+# boundary of the lithosphere is not a material interface.
 
 # + tags=["active-ipynb"]
-# import matplotlib.pyplot as plt
-
-# fig, axes = plt.subplots()
+# fig, axes = plt.subplots(figsize=(20, 7))
 # axes.set_aspect("equal")
-# axes.margins(0.0)
-# pcolor = tripcolor(psi, cmap="PiYG", axes=axes)
+# contourf = tricontourf(
+#     psi, levels=linspace(-0.01, 1.01, 11), cmap="PiYG", extend="both", axes=axes
+# )
 # tricontour(psi, levels=[0.5], axes=axes)
-# fig.colorbar(pcolor, label="Conservative level set")
+# fig.colorbar(
+#     contourf, orientation="horizontal", aspect=30, label="Conservative level set"
+# )
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -104,21 +110,21 @@ assign_level_set_values(
 # material to another. As a result, to define the system, we set the value of the
 # gravitational acceleration and define density and viscosity as material fields, with
 # their respective values for each individual material. To this end, we use the
-# `material_field` function, which also permits defining the shape of the physical
-# property at the material interface transition. We provide these objects to our
-# approximation.
+# `material_field` function, which also permits defining the transition of the physical
+# property at the material interface. We provide these objects to our approximation.
 
 # +
 # Material fields defined based on each material value and location
 mu = material_field(psi, [mu_mantle := 1e21, mu_slab := 1e23], interface="geometric")
 rho_material = material_field(
-    psi, [rho_mantle := 3200, rho_slab := 3300], interface="sharp"
+    psi, [rho_mantle := 3200.0, rho_slab := 3300.0], interface="sharp"
 )
 
-# We set the Rayleigh number to 0.0 to demonstrate the absence of thermal buoyancy and
-# the compositional Rayleigh number to 1.0 to enable compositional buoyancy.
+# We set the Rayleigh number to 0.0 to indicate explicitly the absence of thermal
+# buoyancy and the compositional Rayleigh number to 1.0 to enable compositional
+# buoyancy.
 approximation = BoussinesqApproximation(
-    Ra=0.0, RaB=1.0, delta_rho=rho_material, g=9.81, mu=mu, rho=rho_mantle
+    Ra=0.0, RaB=1.0, delta_rho=rho_material - rho_mantle, g=9.81, mu=mu
 )
 # -
 
@@ -126,19 +132,40 @@ approximation = BoussinesqApproximation(
 # the density and vicosity across the domain.
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots(ncols=2)
+# fig, axes = plt.subplots(nrows=2, figsize=(20, 15))
 # for ax in axes:
 #     ax.set_aspect("equal")
+
 # contours = tricontourf(
-#     Function(psi).interpolate(rho_material),
-#     levels=linspace(3200, 3300, 11),
+#     Function(W).interpolate(rho_material),
+#     levels=linspace(rho_mantle, rho_slab, 11),
+#     cmap="BrBG",
+#     extend="both",
 #     axes=axes[0],
 # )
-# fig.colorbar(contours, ax=axes[0], label="Density (kg/m^3)")
-# contours = tricontourf(
-#     Function(psi).interpolate(mu), levels=linspace(1e21, 1e23, 11), axes=axes[1]
+# fig.colorbar(
+#     contours,
+#     ax=axes[0],
+#     orientation="horizontal",
+#     aspect=30,
+#     label="Density (kg$\\cdot$m$^{-3}$)",
 # )
-# fig.colorbar(contours, ax=axes[1], label="Viscosity (Pa s)")
+
+# contours = tricontourf(
+#     Function(W).interpolate(mu),
+#     levels=logspace(log10(mu_mantle), log10(mu_slab), 11),
+#     cmap="RdBu",
+#     norm=LogNorm(),
+#     extend="both",
+#     axes=axes[1],
+# )
+# fig.colorbar(
+#     contours,
+#     ax=axes[1],
+#     orientation="horizontal",
+#     aspect=30,
+#     label="Viscosity (Pa$\\cdot$s)",
+# )
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -147,7 +174,7 @@ approximation = BoussinesqApproximation(
 # written for visualisation.
 
 myr_to_seconds = 1e6 * 365.25 * 8.64e4
-time_now = 0  # Initial time
+time_now = 0.0  # Initial time
 # Frequency (based on simulation time) at which to output
 output_frequency = 0.8 * myr_to_seconds
 t_adapt = TimestepAdaptor(
@@ -159,9 +186,10 @@ t_adapt = TimestepAdaptor(
 # advection and reinitialisation components. Subcycling is available for level-set
 # advection and is mainly useful when the problem at hand involves multiple CFL
 # conditions, with the CFL for level-set advection being the most restrictive. In terms
-# of boundary conditions, we supply the Stokes system with a free surface at the top and
-# free slip at all other boundaries, while no boundary conditions are required for
-# level-set advection, as the numerical domain is closed.
+# of boundary conditions, we supply the Stokes system with a free surface at the top
+# (assuming the density of the outside layer is 0.0) and free slip at all other
+# boundaries, while no boundary conditions are required for level-set advection, as the
+# numerical domain is closed.
 
 # +
 stokes_bcs = {
@@ -171,7 +199,8 @@ stokes_bcs = {
     boundary.right: {"ux": 0.0},
 }
 # Instantiate a solver object for the Stokes system and perform a solve to obtain
-# initial pressure and velocity.
+# initial pressure and velocity fields. Providing the simulation's time step is required
+# to solve the free-surface balance.
 stokes_solver = StokesSolver(stokes, approximation, dt=time_step, bcs=stokes_bcs)
 stokes_solver.solve()
 
@@ -184,9 +213,8 @@ level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini
 # -
 
 # We now set up our output. To do so, we create the output file as a ParaView Data file
-# that uses the XML-based VTK file format. We also open a file for logging, instantiate
-# G-ADOPT geodynamical diagnostic utility, and define some parameters specific to this
-# problem.
+# that uses the XML-based VTK file format. We also open a file for logging and
+# instantiate G-ADOPT's geodynamical diagnostic utility.
 
 # +
 output_file = VTKFile("output.pvd")
@@ -221,10 +249,10 @@ while True:
     time_now += float(time_step)
 
     # Log diagnostics
-    plog.log_str(
-        f"{step} {time_now} {float(time_step)} {gd.u_rms()} "
-        f"{(ly - min_max_height(psi, epsilon, side=1, mode='min')) / 1e3}"
-    )
+    slab_tip_depth = (
+        domain_dims[1] - min_max_height(psi, epsilon, side=1, mode="min")
+    ) / 1e3
+    plog.log_str(f"{step} {time_now} {float(time_step)} {gd.u_rms()} {slab_tip_depth}")
 
     # Write output
     if time_now >= output_counter * output_frequency - 1e-16:
@@ -245,13 +273,36 @@ while True:
         break
 # -
 
-# Let us finally examine the location of the material interface at the end of the
-# simulation.
+# Let us finally examine the location of the material interface and the free surface at
+# the end of the simulation.
 
 # + tags=["active-ipynb"]
-# fig, axes = plt.subplots()
-# axes.set_aspect("equal")
-# contours = tricontourf(psi, levels=linspace(0, 1, 11), cmap="PiYG", axes=axes)
-# tricontour(psi, levels=[0.5], axes=axes)
-# fig.colorbar(contours, label="Conservative level set")
+# fig, axes = plt.subplots(nrows=2, figsize=(20, 15))
+# axes[0].set_aspect("equal")
+# axes[1].set_xlim((0.0, domain_dims[0]))
+
+# contourf = tricontourf(
+#     psi, levels=linspace(-0.01, 1.01, 11), cmap="PiYG", extend="both", axes=axes[0]
+# )
+# tricontour(psi, levels=[0.5], axes=axes[0])
+# fig.colorbar(
+#     contourf,
+#     ax=axes[0],
+#     orientation="horizontal",
+#     aspect=30,
+#     label="Conservative level set",
+# )
+
+# reader = pv.get_reader("output.pvd")
+# reader.set_active_time_point(len(reader.time_values) - 1)
+# data = reader.read()[0]
+# sample_over_line = data.sample_over_line(
+#     [0.0, domain_dims[1], 0.0], [*domain_dims, 0.0], resolution=mesh_elements[0]
+# )
+# axes[1].plot(
+#     linspace(0.0, domain_dims[0], mesh_elements[0] + 1),
+#     sample_over_line["Free surface"],
+#     label="Free-surface height",
+# )
+# axes[1].legend()
 # -
