@@ -17,4 +17,4 @@ clean:
 	rm -rf output original_temperature
 
 check: params.log
-	python3 -m pytest $(CURDIR)/../test_all.py -k $(test_class)/$(current_dir)
+	python3 -m pytest $(CURDIR)/../test_all.py -k $(current_dir)
