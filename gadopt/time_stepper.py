@@ -238,83 +238,6 @@ class IrksomeIntegrator(TimeIntegratorBase):
         # Note: dt_mesh_const will be synced on next advance() call
 
 
-def gadopt_to_irksome_tableau(scheme_class):
-    """Convert a G-ADOPT scheme class to an Irksome Butcher tableau.
-
-    Args:
-        scheme_class: A G-ADOPT AbstractRKScheme class
-
-    Returns:
-        tuple: (ButcherTableau instance, stage_type string)
-    """
-    # Create a temporary instance to access the tableau
-    temp_scheme = scheme_class()
-
-    # Define scheme mappings
-    scheme_mappings = {
-        # Special cases with direct Irksome equivalents
-        BackwardEulerAbstract: lambda: (IrksomeBackwardEuler(), "dirk"),
-        ImplicitMidpointAbstract: lambda: (GaussLegendre(1), "dirk"),
-
-        # Explicit schemes
-        ForwardEulerAbstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        SSPRK33Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        ERKMidpointAbstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        ERKLSPUM2Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        ERKLPUM2Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs3p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs4p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs5p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs6p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs7p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs8p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs9p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs10p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-
-        # DIRK schemes
-        CrankNicolsonAbstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRK22Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRK23Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRK33Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRK43Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRKLSPUM2Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRKLPUM2Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-    }
-
-    # Get the mapping function or use default
-    mapping_func = scheme_mappings.get(
-        scheme_class,
-        lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "deriv")
-    )
-
-    return mapping_func()
-
-
-def create_irksome_integrator(equation, solution, dt, scheme_class, **kwargs):
-    """Create an IrksomeIntegrator from a G-ADOPT scheme class.
-
-    Args:
-        equation: G-ADOPT equation to integrate
-        solution: Firedrake function representing the equation's solution
-        dt: Integration time step
-        scheme_class: G-ADOPT AbstractRKScheme class
-        **kwargs: Additional arguments passed to IrksomeIntegrator
-
-    Returns:
-        IrksomeIntegrator instance
-    """
-    tableau, stage_type = gadopt_to_irksome_tableau(scheme_class)
-
-    return IrksomeIntegrator(
-        equation=equation,
-        solution=solution,
-        dt=dt,
-        butcher=tableau,
-        stage_type=stage_type,
-        **kwargs
-    )
-
-
 def create_custom_tableau(a, b, c):
     """Create a custom Irksome ButcherTableau from arrays.
 
@@ -337,8 +260,15 @@ def create_custom_tableau(a, b, c):
     )
 
 
-class ERKGeneric(IrksomeIntegrator):
-    """Generic explicit Runge-Kutta time integrator using Irksome."""
+class RKGeneric(IrksomeIntegrator):
+    """Generic Runge-Kutta time integrator using Irksome.
+
+    This base class constructs the Butcher tableau from the a, b, c class attributes
+    inherited from AbstractRKScheme subclasses. Subclasses should set the stage_type
+    class attribute to specify the formulation ("explicit", "dirk", or "deriv").
+    """
+
+    stage_type = "deriv"  # Default stage type, can be overridden in subclasses
 
     def __init__(
         self,
@@ -349,8 +279,8 @@ class ERKGeneric(IrksomeIntegrator):
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
     ):
-        # Get the Butcher tableau and stage type for this scheme
-        butcher, stage_type = gadopt_to_irksome_tableau(self.__class__.__bases__[1])
+        # Create Butcher tableau from instance attributes (inherited from Abstract class)
+        butcher = create_custom_tableau(self.a, self.b, self.c)
 
         # Initialize with Irksome backend
         super().__init__(
@@ -358,15 +288,34 @@ class ERKGeneric(IrksomeIntegrator):
             solution=solution,
             dt=dt,
             butcher=butcher,
-            stage_type=stage_type,
+            stage_type=self.stage_type,
             solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
         )
 
 
-class DIRKGeneric(IrksomeIntegrator):
+class ERKGeneric(RKGeneric):
+    """Generic explicit Runge-Kutta time integrator using Irksome."""
+    stage_type = "explicit"
+
+
+class DIRKGeneric(RKGeneric):
     """Generic diagonally implicit Runge-Kutta time integrator using Irksome."""
+    stage_type = "dirk"
+
+
+class StaticButcherTableauIntegrator(IrksomeIntegrator):
+    """Time integrator using a pre-built Irksome Butcher tableau.
+
+    This base class is for schemes that have direct Irksome equivalents.
+    Subclasses should set:
+    - butcher_tableau: An Irksome ButcherTableau instance (e.g., IrksomeBackwardEuler())
+    - stage_type: The stage formulation type (e.g., "dirk")
+    """
+
+    butcher_tableau = None  # Must be set in subclasses
+    stage_type = "dirk"  # Default stage type
 
     def __init__(
         self,
@@ -377,16 +326,18 @@ class DIRKGeneric(IrksomeIntegrator):
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
     ):
-        # Get the Butcher tableau and stage type for this scheme
-        butcher, stage_type = gadopt_to_irksome_tableau(self.__class__.__bases__[1])
+        if self.butcher_tableau is None:
+            raise NotImplementedError(
+                f"{self.__class__.__name__} must define a butcher_tableau class attribute"
+            )
 
-        # Initialize with Irksome backend
+        # Initialize with Irksome backend using the pre-built tableau
         super().__init__(
             equation=equation,
             solution=solution,
             dt=dt,
-            butcher=butcher,
-            stage_type=stage_type,
+            butcher=self.butcher_tableau,
+            stage_type=self.stage_type,
             solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
@@ -1080,12 +1031,16 @@ class eSSPRKs10p3(ERKGeneric, eSSPRKs10p3Abstract):
     pass
 
 
-class BackwardEuler(DIRKGeneric, BackwardEulerAbstract):
-    pass
+class BackwardEuler(StaticButcherTableauIntegrator, BackwardEulerAbstract):
+    """Backward Euler scheme using Irksome's built-in implementation."""
+    butcher_tableau = IrksomeBackwardEuler()
+    stage_type = "dirk"
 
 
-class ImplicitMidpoint(DIRKGeneric, ImplicitMidpointAbstract):
-    pass
+class ImplicitMidpoint(StaticButcherTableauIntegrator, ImplicitMidpointAbstract):
+    """Implicit midpoint scheme using Irksome's GaussLegendre(1) implementation."""
+    butcher_tableau = GaussLegendre(1)
+    stage_type = "dirk"
 
 
 class CrankNicolsonRK(DIRKGeneric, CrankNicolsonAbstract):
@@ -1176,7 +1131,7 @@ class IrksomeGaussLegendre(IrksomeIntegrator):
         )
 
 
-class IrksomeLobattoIIIA(DIRKGeneric):
+class IrksomeLobattoIIIA(IrksomeIntegrator):
     """Direct access to Irksome's LobattoIIIA scheme for use with EnergySolver."""
 
     def __init__(
@@ -1193,7 +1148,7 @@ class IrksomeLobattoIIIA(DIRKGeneric):
         butcher = LobattoIIIA(order)
 
         # Initialize with Irksome backend
-        super(DIRKGeneric, self).__init__(
+        super().__init__(
             equation=equation,
             solution=solution,
             dt=dt,
@@ -1234,63 +1189,19 @@ class IrksomeLobattoIIIC(IrksomeIntegrator):
         )
 
 
-class IrksomeAlexander(DIRKGeneric):
+class IrksomeAlexander(StaticButcherTableauIntegrator):
     """Direct access to Irksome's Alexander scheme for use with EnergySolver."""
-
-    def __init__(
-        self,
-        equation: Equation,
-        solution: firedrake.Function,
-        dt: float,
-        solution_old: Optional[firedrake.Function] = None,
-        solver_parameters: Optional[dict[str, Any]] = {},
-        strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-    ):
-        # Create Irksome Alexander tableau
-        butcher = Alexander()
-
-        # Initialize with Irksome backend
-        super(DIRKGeneric, self).__init__(
-            equation=equation,
-            solution=solution,
-            dt=dt,
-            butcher=butcher,
-            stage_type="dirk",
-            solution_old=solution_old,
-            strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters
-        )
+    butcher_tableau = Alexander()
+    stage_type = "dirk"
 
 
-class IrksomeQinZhang(DIRKGeneric):
+class IrksomeQinZhang(StaticButcherTableauIntegrator):
     """Direct access to Irksome's QinZhang scheme for use with EnergySolver."""
-
-    def __init__(
-        self,
-        equation: Equation,
-        solution: firedrake.Function,
-        dt: float,
-        solution_old: Optional[firedrake.Function] = None,
-        solver_parameters: Optional[dict[str, Any]] = {},
-        strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-    ):
-        # Create Irksome QinZhang tableau
-        butcher = QinZhang()
-
-        # Initialize with Irksome backend
-        super(DIRKGeneric, self).__init__(
-            equation=equation,
-            solution=solution,
-            dt=dt,
-            butcher=butcher,
-            stage_type="dirk",
-            solution_old=solution_old,
-            strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters
-        )
+    butcher_tableau = QinZhang()
+    stage_type = "dirk"
 
 
-class IrksomePareschiRusso(DIRKGeneric):
+class IrksomePareschiRusso(IrksomeIntegrator):
     """Direct access to Irksome's PareschiRusso scheme for use with EnergySolver."""
 
     def __init__(
@@ -1308,7 +1219,7 @@ class IrksomePareschiRusso(DIRKGeneric):
         butcher = PareschiRusso(x)
 
         # Initialize with Irksome backend
-        super(DIRKGeneric, self).__init__(
+        super().__init__(
             equation=equation,
             solution=solution,
             dt=dt,

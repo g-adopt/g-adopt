@@ -89,6 +89,9 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         provided to PETSc
       solver_parameters_extra:
         Dictionary of PETSc solver options used to update the default G-ADOPT options
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -114,11 +117,13 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         bcs: dict[int, dict[str, Number]] = {},
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
+        timestepper_kwargs: dict[str, Any] | None = None,
         su_advection: bool = False,
     ) -> None:
         self.solution = solution
         self.delta_t = delta_t
         self.timestepper = timestepper
+        self.timestepper_kwargs = timestepper_kwargs or {}
         self.solution_old = solution_old or Function(solution)
         self.eq_attrs = eq_attrs
         self.bcs = bcs
@@ -241,6 +246,7 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
             solution_old=self.solution_old,
             solver_parameters=self.solver_parameters,
             strong_bcs=self.strong_bcs,
+            **self.timestepper_kwargs,
         )
 
     def solver_callback(self) -> None:
@@ -289,6 +295,9 @@ class GenericTransportSolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -344,6 +353,9 @@ class EnergySolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
