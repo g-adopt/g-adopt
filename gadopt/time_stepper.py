@@ -260,12 +260,25 @@ def gadopt_to_irksome_tableau(scheme_class):
         ForwardEulerAbstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
         SSPRK33Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
         ERKMidpointAbstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        ERKLSPUM2Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        ERKLPUM2Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        eSSPRKs3p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        eSSPRKs4p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        eSSPRKs5p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        eSSPRKs6p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        eSSPRKs7p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        eSSPRKs8p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        eSSPRKs9p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
+        eSSPRKs10p3Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
 
         # DIRK schemes
+        CrankNicolsonAbstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
         DIRK22Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
         DIRK23Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
         DIRK33Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
         DIRK43Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
+        DIRKLSPUM2Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
+        DIRKLPUM2Abstract: lambda: (create_custom_tableau(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
     }
 
     # Get the mapping function or use default
