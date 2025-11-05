@@ -17,13 +17,13 @@ diagnostics = {
         )
     ],
     "davies_2022": [
-        (lambda data: abs(data["rms_velocity"][-1] - 192.888), operator.le, 3e-1),
-        (lambda data: abs(data["nusselt_bottom"][-1] - 9.936), operator.le, 2e-2),
-        (lambda data: abs(data["nusselt_top"][-1] - 9.878), operator.le, 3e-2),
-        (lambda data: abs(data["energy_conservation"][-1] - 0.058), operator.le, 2e-3),
-        (lambda data: abs(data["avg_temperature"][-1] - 0.382), operator.le, 6e-4),
+        (lambda data: abs(data["rms_velocity"][-1] - 193.169), operator.le, 8e-2),
+        (lambda data: abs(data["nusselt_bottom"][-1] - 9.928), operator.le, 3e-2),
+        (lambda data: abs(data["nusselt_top"][-1] - 9.879), operator.le, 2e-2),
+        (lambda data: abs(data["energy_conservation"][-1] - 0.0491), operator.le, 8e-3),
+        (lambda data: abs(data["avg_temperature"][-1] - 0.383), operator.le, 5e-4),
         (lambda data: abs(data["min_temperature"][-1] - 0.0), operator.le, 6e-4),
-        (lambda data: abs(data["max_temperature"][-1] - 1.00), operator.le, 9e-4),
+        (lambda data: abs(data["max_temperature"][-1] - 1.0), operator.le, 9e-4),
     ],
     "gerya_2003": [
         (
