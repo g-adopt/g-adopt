@@ -26,7 +26,7 @@ from .scalar_equation import mass_term
 from .solver_options_manager import SolverConfigurationMixin
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import CombinedSurfaceMeasure, is_cartesian, node_coordinates, vertical_component
+from .utility import is_cartesian, node_coordinates, vertical_component
 
 __all__ = [
     "LevelSetSolver",
@@ -364,7 +364,7 @@ def assign_level_set_values(
 def reinitialisation_term(
     eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
 ) -> fd.Form:
-    """Term for the conservative level set reinitialisation equation.
+    """Term for the conservative-level-set reinitialisation equation.
 
     Implements terms on the right-hand side of Equation 17 from
     Parameswaran, S., & Mandal, J. C. (2023).
@@ -372,16 +372,21 @@ def reinitialisation_term(
     method.
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
-    sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
-    balance_term = (
-        eq.epsilon
-        * (1 - 2 * trial)
-        * fd.sqrt(fd.inner(eq.level_set_grad, eq.level_set_grad))
-        * eq.test
-        * eq.dx
-    )
+    grad_norm = fd.sqrt(fd.dot(fd.grad(trial), fd.grad(trial)) + 1e-12)
 
-    return sharpen_term + balance_term
+    sharpening = -trial * (1.0 - trial) * (1.0 - 2.0 * trial)
+    balance = eq.epsilon * (1.0 - 2.0 * trial) * grad_norm
+    weak_form = eq.test * (sharpening + balance) * eq.dx
+
+    penalty_factor = 1e-4 * (trial.ufl_element().degree() + 1) ** 2
+    penalty_factor *= fd.avg(eq.epsilon) / fd.avg(fd.CellDiameter(eq.mesh))
+    weak_form += fd.jump(eq.test) * penalty_factor * fd.jump(trial) * eq.dS
+
+    return weak_form
+
+
+reinitialisation_term.required_attrs = {"epsilon"}
+reinitialisation_term.optional_attrs = set()
 
 
 class LevelSetSolver(SolverConfigurationMixin):
@@ -531,26 +536,21 @@ class LevelSetSolver(SolverConfigurationMixin):
         if number_match := re.search(r"\s#\d+$", self.solution.name()):
             grad_name += number_match.group()
 
-        grad_space_degree = self.solution.ufl_element().degree()
-        if not isinstance(grad_space_degree, int):
-            grad_space_degree = max(grad_space_degree)
-        gradient_space = fd.VectorFunctionSpace(self.mesh, "CG", grad_space_degree)
+        gradient_space = fd.VectorFunctionSpace(
+            mesh=self.mesh, family=self.solution_space.ufl_element()
+        )
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
-
-        if gradient_space.extruded:
-            ds = CombinedSurfaceMeasure(
-                domain=self.mesh, degree=2 * grad_space_degree + 1
-            )
-        else:
-            ds = fd.ds
 
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
         bilinear_form = fd.inner(test, trial) * fd.dx
         ibp_element = -self.solution * fd.div(test) * fd.dx
-        ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * ds
-        linear_form = ibp_element + ibp_boundary
+        ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * fd.ds
+        boundary_flux = (
+            fd.avg(self.solution) * fd.jump(test, fd.FacetNormal(self.mesh)) * fd.dS
+        )
+        linear_form = ibp_element + ibp_boundary + boundary_flux
 
         problem = fd.LinearVariationalProblem(
             bilinear_form, linear_form, self.solution_grad
@@ -568,7 +568,7 @@ class LevelSetSolver(SolverConfigurationMixin):
                 solution_old=self.solution_old,
                 eq_attrs={"u": self.adv_kwargs["u"]},
                 bcs=self.adv_kwargs["bcs"],
-                solver_parameters=self.solver_parameters['adv'],
+                solver_parameters=self.solver_parameters["adv"],
             )
 
         if self.reinitialisation:
@@ -577,10 +577,7 @@ class LevelSetSolver(SolverConfigurationMixin):
                 self.solution_space,
                 reinitialisation_term,
                 mass_term=mass_term,
-                eq_attrs={
-                    "level_set_grad": self.solution_grad,
-                    "epsilon": self.reini_kwargs["epsilon"],
-                },
+                eq_attrs={"epsilon": self.reini_kwargs["epsilon"]},
             )
 
             self.reini_integrator = self.reini_kwargs["time_integrator"](
@@ -588,7 +585,7 @@ class LevelSetSolver(SolverConfigurationMixin):
                 self.solution,
                 self.reini_kwargs["timestep"],
                 solution_old=self.solution_old,
-                solver_parameters=self.solver_parameters['reini'],
+                solver_parameters=self.solver_parameters["reini"],
             )
 
         self.step = 0
@@ -603,7 +600,7 @@ class LevelSetSolver(SolverConfigurationMixin):
     def reinitialise(self) -> None:
         """Performs reinitialisation steps."""
         for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(t=0, update_forcings=self.update_gradient)
+            self.reini_integrator.advance()
 
     def solve(
         self,
@@ -908,7 +905,3 @@ def min_max_height(
     height_global = level_set.comm.allreduce(height, mpi_comparison)
 
     return height_global
-
-
-reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
-reinitialisation_term.optional_attrs = set()
