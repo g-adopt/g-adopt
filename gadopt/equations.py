@@ -14,7 +14,7 @@ from warnings import warn
 
 import firedrake as fd
 
-from .approximations import BaseApproximation
+from .approximations import BaseApproximation, BaseGIAApproximation
 from .utility import CombinedSurfaceMeasure
 
 __all__ = ["Equation"]
@@ -56,7 +56,7 @@ class Equation:
     _: KW_ONLY
     mass_term: Callable | None = None
     eq_attrs: InitVar[dict[str, Any]] = {}
-    approximation: BaseApproximation | None = None
+    approximation: BaseApproximation | BaseGIAApproximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[int | None] = None
     scaling_factor: Number | fd.Constant = 1
@@ -178,7 +178,7 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     See Equation (3.7), Table 3.1, and Appendix C from Hillewaert's thesis:
     https://www.researchgate.net/publication/260085826
     """
-    match cell_type := mesh.ufl_cell().cellname():
+    match cell_type := mesh.ufl_cell().cellname:
         case "triangle":
             return (p + 1) * (p + 2) / 2.0
         case "quadrilateral" | "interval * interval":
@@ -215,7 +215,7 @@ def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
     else:
         # safety factor: 1.0 is theoretical minimum
         alpha = getattr(eq, "interior_penalty", 2.0)
-        num_facets = eq.mesh.ufl_cell().num_facets()
+        num_facets = eq.mesh.ufl_cell().num_facets
         sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
 
     return sigma

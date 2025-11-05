@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-demos = ["assess", "gmsh", "imageio", "jupytext", "openpyxl", "pyvista"]
+demos = ["assess", "gadopt-demo-utils @ git+https://github.com/g-adopt/gadopt-demo-utils.git", "gmsh", "imageio", "jupytext", "openpyxl", "pyvista"]
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]
