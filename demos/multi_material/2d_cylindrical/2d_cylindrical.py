@@ -5,10 +5,12 @@
 # more viscous layer, which could represent some lower-mantle structures on Earth, is
 # initially defined in the lower third of the domain.
 
-# This example highlights the effect of the denser and more viscous layer on the global
-# mantle dynamics already presented in a
+# This example highlights the effect of the denser and more viscous layer on the
+# dynamics already presented in a
 # [previous tutorial](../../mantle_convection/2d_cylindrical). To make the comparison
 # meaningful, we use the exact same setup apart from the distinct compositional layer.
+# The reader is encouraged to first review that other tutorial before exploring the
+# current one.
 
 # The first step is to import the `gadopt` module, which provides access to Firedrake
 # and associated functionality. We also import `pyvista` for plotting purposes.
@@ -21,14 +23,6 @@ from gadopt import *
 
 # We next set up the mesh and function spaces and define functions to hold our solutions
 # and the simulation's time step.
-
-# We generate a circular manifold mesh (with 128 elements) and extrude in the radial
-# direction (using the optional keyword argument `extrusion_type`) to produce 32 layers.
-# To better represent the curvature of the domain and ensure accuracy of our quadratic
-# velocity representation, we approximate the curved cylindrical shell domain
-# quadratically (using the optional keyword argument `degree`). Because this problem is
-# not formulated in a Cartesian geometry, we set the `mesh.cartesian` attribute to
-# `False`. This ensures the gravity direction points radially inward.
 
 # +
 rmin, rmax = 1.2083, 2.2083  # Annulus radii
@@ -126,12 +120,15 @@ assign_level_set_values(psi, epsilon, signed_distance)  # Populate level-set fie
 # it must also be defined as a material field and provided to the approximation.
 
 # +
+# For this tutorial, we use a buoyancy number of 0.4 and a viscosity contrast of 1. With
+# such a combination, we expect the deeper material to have sufficient thermal buoyancy
+# to overcome the density increase and rise towards the surface.
 Ra = 1e5  # Thermal Rayleigh number
-RaB_buoyant, RaB_dense = 0.0, 3e4
+RaB_buoyant, RaB_dense = 0.0, 4e4
 # Compositional Rayleigh number defined based on each material value and location
-RaB = material_field(psi, [RaB_buoyant, RaB_dense], interface="arithmetic")
+RaB = material_field(psi, [RaB_dense, RaB_buoyant], interface="arithmetic")
 # Viscosity defined based on each material value and location
-mu = material_field(psi, [mu_buoyant := 1.0, mu_dense := 2.0], interface="arithmetic")
+mu = material_field(psi, [mu_dense := 1.0, mu_buoyant := 1.0], interface="arithmetic")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
 # -
@@ -159,33 +156,22 @@ t_adapt = TimestepAdaptor(
     time_step, u, V, target_cfl=0.6, maximum_timestep=output_frequency
 )  # Current level-set advection requires a CFL condition that does not exceed 0.6.
 
-# As noted above, with a free-slip boundary condition on both boundaries, one can add an
-# arbitrary rotation of the form $(-y, x) = r\hat{\mathbf{\theta}}$ to the velocity
-# solution (i.e. this case incorporates a velocity null space, as well as a pressure
-# null space). These lead to null modes (eigenvectors) for the linear system, rendering
-# the resulting matrix singular. In preconditioned Krylov methods these null modes must
-# be subtracted from the approximate solution at every iteration. We do that below,
-# setting up a null-space object as we did in the
-# [previous tutorial](../thermochemical_buoyancy), albeit speciying the `rotational`
-# keyword argument as `True`. This removes the requirement for a user to configure these
-# options, further simplifying the task of setting up a (valid) geodynamical simulation.
+# The Stokes system defined here admits null modes, and we define a null-space object
+# including rigid-body (by default) and rotational modes to provide to the solver.
 
 stokes_nullspace = create_stokes_nullspace(Z, rotational=True)
 
 # Boundary conditions are next specified. Boundary conditions for temperature are set to
 # $T = 0.0$ at the surface ($r_{\text{max}}$) and $T = 1.0$ at the base
-# ($r_{\text{min}}$). For velocity, we specify free‐slip conditions on both boundaries.
-# We incorporate these <b>weakly</b> through the <i>Nitsche</i> approximation. This
-# illustrates a key advantage of the G-ADOPT framework: the user only specifies that the
-# normal component of velocity is zero, and all required changes are handled under the
-# hood.
+# ($r_{\text{min}}$). For velocity, we implicitly specify free‐slip conditions on both
+# boundaries by explicitly setting the normal velocity component to 0.
 
 stokes_bcs = {boundary.bottom: {"un": 0.0}, boundary.top: {"un": 0.0}}
 temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
 
 # We can now set up the variational problem, for the energy, Stokes, and level-set
-# equations. The approximation, boundary conditions, null space, and near-null space
-# information configured above are passed to the constructors as required.
+# equations. The approximation, boundary conditions, and null space information
+# configured above are passed to the constructors as required.
 
 # +
 # Instantiate a solver object for the energy conservation system.
@@ -267,7 +253,7 @@ while True:
     nusselt_number_base = gd.Nu_bottom() * bot_scaling
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
-    # # Calculate proportion of material entrained above a given height
+    # Calculate proportion of material entrained above a given height
     buoy_entr = material_entrainment(
         psi,
         material_size=material_area,
