@@ -1,7 +1,10 @@
 # Idealised 2-D multi-material mantle convection problem inside an annulus
 # =
 
-# In this tutorial, we analyse mantle flow in a 2-D annulus domain whereby a denser and
+# This example
+# -
+
+# In this tutorial, we analyse mantle flow in a 2-D annulus domain where a denser and
 # more viscous layer, which could represent some lower-mantle structures on Earth, is
 # initially defined in the lower third of the domain.
 
@@ -9,8 +12,8 @@
 # dynamics already presented in a
 # [previous tutorial](../../mantle_convection/2d_cylindrical). To make the comparison
 # meaningful, we use the exact same setup apart from the distinct compositional layer.
-# The reader is encouraged to first review that other tutorial before exploring the
-# current one.
+# The reader is encouraged to first review the single-material tutorial before exploring
+# the present multi-material one.
 
 # The first step is to import the `gadopt` module, which provides access to Firedrake
 # and associated functionality. We also import `pyvista` for plotting purposes.
@@ -25,7 +28,8 @@ from gadopt import *
 # and the simulation's time step.
 
 # +
-rmin, rmax = 1.2083, 2.2083  # Annulus radii
+# Annulus radii (e.g. [van Keken (2001)](https://doi.org/10.1016/S0031-9201(01)00195-9))
+rmin, rmax = 1.2083, 2.2083
 mesh1d = CircleManifoldMesh(ncells=128, radius=rmin, degree=2)  # Circle mesh
 mesh = ExtrudedMesh(mesh1d, layers=32, extrusion_type="radial")  # Annulus mesh
 mesh.cartesian = False
@@ -59,15 +63,14 @@ time_step = Function(R).assign(1e-7)  # Initial time step
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
 
-# We next initialise our temperature field. We choose the initial temperature
-# distribution to trigger upwelling of four equidistant plumes. This initial temperature
-# field is prescribed as:
+# We next initialise our temperature field. We choose a spatial distribution that will
+# enable the upwelling of four equidistant plumes, using the following equation:
 
 # $$T(x, y) = r_{\text{max}} - r + A\cos\left(4 \arctan\left(\frac{y}{x}\right)\right)  \sin((r - r_{\text{min}}) \pi)$$
 
 # where $A = 0.02$ is the amplitude of the initial perturbation.
 
-x, y = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
+x, y = SpatialCoordinate(mesh)  # UFL representation of spatial coordinates
 r = sqrt(x**2 + y**2)  # Radial coordinate
 T.interpolate(rmax - r + 0.02 * cos(4.0 * atan2(y, x)) * sin((r - rmin) * pi))
 
@@ -120,15 +123,16 @@ assign_level_set_values(psi, epsilon, signed_distance)  # Populate level-set fie
 # it must also be defined as a material field and provided to the approximation.
 
 # +
-# For this tutorial, we use a buoyancy number of 0.4 and a viscosity contrast of 1. With
+# For this tutorial, we use a buoyancy number of 0.5 and a viscosity contrast of 5. With
 # such a combination, we expect the deeper material to have sufficient thermal buoyancy
-# to overcome the density increase and rise towards the surface.
+# to overcome the density increase and rise towards the surface, despite its higher
+# viscosity.
 Ra = 1e5  # Thermal Rayleigh number
-RaB_buoyant, RaB_dense = 0.0, 4e4
 # Compositional Rayleigh number defined based on each material value and location
+RaB_buoyant, RaB_dense = 0.0, 5e4
 RaB = material_field(psi, [RaB_dense, RaB_buoyant], interface="arithmetic")
 # Viscosity defined based on each material value and location
-mu = material_field(psi, [mu_dense := 1.0, mu_buoyant := 1.0], interface="arithmetic")
+mu = material_field(psi, [mu_dense := 5.0, mu_buoyant := 1.0], interface="geometric")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
 # -
@@ -166,12 +170,14 @@ stokes_nullspace = create_stokes_nullspace(Z, rotational=True)
 # ($r_{\text{min}}$). For velocity, we implicitly specify free‐slip conditions on both
 # boundaries by explicitly setting the normal velocity component to 0.
 
-stokes_bcs = {boundary.bottom: {"un": 0.0}, boundary.top: {"un": 0.0}}
 temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
+stokes_bcs = {boundary.bottom: {"un": 0.0}, boundary.top: {"un": 0.0}}
 
 # We can now set up the variational problem, for the energy, Stokes, and level-set
 # equations. The approximation, boundary conditions, and null space information
-# configured above are passed to the constructors as required.
+# configured above are passed to the constructors as required. Critically, as the
+# viscosity is now varying in space, the Jacobian of the system is not constant anymore,
+# and the corresponding `StokesSolver` argument must not be specified.
 
 # +
 # Instantiate a solver object for the energy conservation system.
@@ -185,7 +191,6 @@ stokes_solver = StokesSolver(
     approximation,
     T,
     bcs=stokes_bcs,
-    constant_jacobian=True,
     nullspace=stokes_nullspace,
     transpose_nullspace=stokes_nullspace,
 )
@@ -215,7 +220,7 @@ plog.log_str("step time dt u_rms nu_base nu_top energy avg_t T_min T_max entrain
 
 gd = GeodynamicalDiagnostics(stokes, T, boundary.bottom, boundary.top, quad_degree=6)
 
-# Scalings used for the Nusselt numbers
+# Geometric scalings used for the Nusselt numbers
 r_ratio = rmin / rmax
 top_scaling = ln(r_ratio) / (r_ratio - 1.0)
 bot_scaling = r_ratio * ln(r_ratio) / (r_ratio - 1.0)
