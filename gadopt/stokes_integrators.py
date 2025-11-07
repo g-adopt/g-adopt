@@ -402,6 +402,11 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             self.F += self.additional_forcing_term
 
         if self.constant_jacobian:
+            warn(
+                "Constant Jacobian specified for the Stokes system; the viscosity must "
+                " not vary in time."
+            )
+
             trial = fd.TrialFunction(self.solution_space)
             F = fd.replace(self.F, {self.solution: trial})
             a, L = fd.lhs(F), fd.rhs(F)
