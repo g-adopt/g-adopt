@@ -7,7 +7,7 @@ import argparse
 
 def main(free_slip=False):
     # Get all checkpoint files first
-    all_checkpoints = get_all_snapshot_checkpoints("/scratch/xd2/sg8812/untar_simulations")
+    all_checkpoints = get_all_snapshot_checkpoints("/scratch/xd2/sg8812/untar_simulations/hamish_kappa_hyped_mu_temperature")
     if not all_checkpoints:
         raise ValueError("No checkpoint files found!")
 
@@ -50,7 +50,7 @@ def main(free_slip=False):
 
     # We next prepare our viscosity, starting with a radial profile.
     mu_rad = Function(Q, name="Viscosity_Radial")  # Depth dependent component of viscosity
-    radial_viscosity_filename = (first_checkpoint.parent / "initial_condition_mat_prop/visc/mu_1e20_asthenosphere_linear_increase_7e22_LM.visc").as_posix()
+    radial_viscosity_filename = (first_checkpoint.parent / "initial_condition_mat_prop/visc/mu_5e19_deep_asthenosphere_linear_increase_5e22.visc").as_posix()
     interpolate_1d_profile(function=mu_rad, one_d_filename=radial_viscosity_filename)
 
     # Visualisation Fields
@@ -61,13 +61,17 @@ def main(free_slip=False):
     # The averager tool
     averager = LayerAveraging(mesh, quad_degree=6)
 
-    #  building viscosity field
-    mu = mu_rad # * exp(-ln(activation_energy(r)) * T_dev)
+    # Reference viscosity for non-dimensionalization
+    ref_mu = Constant(5e19)
+
+    #  building viscosity field with temperature dependence and clipping
+    mu_unclipped = mu_rad * exp(-ln(activation_energy(r)) * T_dev)
+    mu = max_value(1e19/ref_mu, min_value(mu_unclipped, 4e23/ref_mu))
 
     # These fields are used to set up our Truncated Anelastic Liquid Approximation.
     # Pass the Function objects explicitly instead of using **approximation_profiles
     approximation = TruncatedAnelasticLiquidApproximation(
-        Ra=Constant(8.7668e8),
+        Ra=Constant(1.75336e9),
         Di=Constant(0.9492824),
         H=Constant(9.93),
         mu=mu,
@@ -125,13 +129,18 @@ def main(free_slip=False):
     my_solver_parameters = iterative_stokes_solver_parameters
     my_solver_parameters['snes_rtol'] = 1e-2
     my_solver_parameters['fieldsplit_0']['ksp_converged_reason'] = None
-    my_solver_parameters['fieldsplit_0']['ksp_rtol'] = 2.5e-4
+    my_solver_parameters['fieldsplit_0']['ksp_rtol'] = 5.0e-3
     my_solver_parameters['fieldsplit_1']['ksp_converged_reason'] = None
-    my_solver_parameters['fieldsplit_1']['ksp_rtol'] = 2.0e-3
+    my_solver_parameters['fieldsplit_1']['ksp_rtol'] = 5.0e-2
+
+
+    # Calculate radius threshold for effective temperature (outside loop since it's constant)
+    r_threshold = (6370e3 - 200e3) / 6370e3 * 2.208
+
 
     # Set up Stokes Solver with my iterative solver parameters
     stokes_solver = StokesSolver(
-        z, approximation, T, bcs=stokes_bcs,
+        z, approximation, conditional(r > r_threshold, T_avg, T), bcs=stokes_bcs,
         nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
         near_nullspace=Z_near_nullspace, solver_parameters=my_solver_parameters,
         constant_jacobian=True,
@@ -162,7 +171,7 @@ def main(free_slip=False):
     log(f"Calculating dynamic topography with {'free slip' if free_slip else 'plate velocity'} boundary conditions")
 
     # We now initiate the time loop:
-    for checkpoint in all_checkpoints:  # Process last 2 checkpoints for testing
+    for checkpoint in all_checkpoints[-2:]:  # Process last 2 checkpoints for testing
         log(f"Processing checkpoint: {checkpoint}")
 
         with CheckpointFile(checkpoint.as_posix(), mode="r") as f:
