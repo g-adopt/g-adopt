@@ -197,6 +197,10 @@ class IrksomeIntegrator(TimeIntegratorBase):
             **irksome_kwargs
         )
 
+        # Store strong_bcs for applying at initialization
+        # This ensures BC-consistency like the original G-ADOPT DIRKGeneric
+        self.strong_bcs = strong_bcs or []
+
         self.update_forcings = None
         self._initialized = False
 
@@ -209,6 +213,12 @@ class IrksomeIntegrator(TimeIntegratorBase):
         """Advance the solution by one time step."""
         if not self._initialized:
             self.initialize(self.solution)
+
+        # Apply boundary conditions to solution before advancing
+        # This replicates the behavior from G-ADOPT's original DIRKGeneric
+        # (see time_stepper.py line 319-320 on main branch)
+        for bci in self.strong_bcs:
+            bci.apply(self.solution)
 
         # Save current solution to solution_old before advancing
         # This is needed for diagnostics like maxchange = ||T - T_old||
