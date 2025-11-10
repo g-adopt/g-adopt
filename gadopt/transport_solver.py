@@ -455,29 +455,29 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
             integration_quad_degree = 2 * p + 1
 
         # For anisotropic diffusion, use average diffusivity
-        if hasattr(K, 'ufl_shape') and len(K.ufl_shape) > 0:
-            # Tensor diffusivity
+        if hasattr(K, 'ufl_shape') and len(K.ufl_shape) == 2:
+            # Tensor diffusivity (2D tensor, e.g., (2,2) or (3,3))
             K_avg = (
                 assemble(sqrt(inner(K, K)) * dx(mesh, degree=integration_quad_degree)) /
                 assemble(Constant(1) * dx(mesh, degree=integration_quad_degree))
             )
         else:
-            # Scalar diffusivity
+            # Scalar diffusivity (Number, Constant, or scalar Function)
             K_avg = K
 
         return Constant(wavelength**2 / (4 * K_avg))
 
-    def action(self, T: Function) -> None:
+    def action(self, field: Function) -> None:
         """Apply smoothing action to an input field.
 
         Args:
-            T (firedrake.Function): The input field to be smoothed.
+            field (firedrake.Function): The input field to be smoothed.
 
         Note:
             The smoothed result is stored in the solution function passed to the constructor.
         """
         # Start with the input field
-        self.solution.assign(T)
+        self.solution.assign(field)
 
         # Solve the diffusion equation (inherited from GenericTransportSolver)
         self.solve()

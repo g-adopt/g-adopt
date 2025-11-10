@@ -66,7 +66,7 @@ boundaries = get_boundary_ids(mesh)
 # -
 
 # The visualisation above shows the temperature field with sharp well-defined structures.
-# Now to continue, we define boundary conditions for the temperature field during smoothing.
+# Now to continue, we define boundary conditions for smoothing.
 # These ensure that the smoothing operation respects the physical boundaries.
 # Note that by removing these boundary conditions, the smooth properties would extend to
 # the boundaries, however, the boundary values would not be conserved.
@@ -74,9 +74,9 @@ boundaries = get_boundary_ids(mesh)
 # Dirichlet boundary condition for smoothing, as other types like a Neumann
 # boundary conditions are not necessary for smoothing.
 
-temp_bcs = {
-    boundaries.bottom: {'g': 1.0},  # Fixed temperature at the bottom
-    boundaries.top: {'g': 0.0},     # Fixed temperature at the top
+smoothing_bcs = {
+    boundaries.bottom: {'g': 1.0},  # Fixed boundary value at the bottom
+    boundaries.top: {'g': 0.0},     # Fixed boundary value at the top
 }
 
 # Compute layer average of the temperature for comparison purposes.
@@ -107,7 +107,7 @@ smooth_solution_isotropic = Function(T.function_space(), name="Temperature (Isot
 smoother_isotropic = DiffusiveSmoothingSolver(
     smooth_solution_isotropic,
     wavelength=0.2,  # Smoothing wavelength parameter
-    bcs=temp_bcs)
+    bcs=smoothing_bcs)
 
 # Apply isotropic smoothing
 smoother_isotropic.action(T)
@@ -176,7 +176,7 @@ smooth_solution_anisotropic = Function(T.function_space(), name="Temperature (An
 smoother_anisotropic = DiffusiveSmoothingSolver(
     smooth_solution_anisotropic,
     wavelength=0.3,
-    bcs=temp_bcs,
+    bcs=smoothing_bcs,
     K=K)
 
 # Apply anisotropic smoothing
