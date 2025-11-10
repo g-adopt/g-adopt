@@ -190,8 +190,9 @@ class TestDirectIrksomeSchemes:
         )
 
         # Test instantiation
-        if irksome_class in [IrksomeRadauIIA, IrksomeGaussLegendre,
-                            IrksomeLobattoIIIA, IrksomeLobattoIIIC]:
+        if irksome_class in [
+                IrksomeRadauIIA, IrksomeGaussLegendre,
+                IrksomeLobattoIIIA, IrksomeLobattoIIIC]:
             # These have order parameter
             integrator = irksome_class(equation, u, dt=0.01, order=2)
         elif irksome_class == IrksomePareschiRusso:
@@ -598,7 +599,7 @@ class TestErrorHandling:
 
         # Test with invalid order (should raise AssertionError from Irksome)
         with pytest.raises(AssertionError):
-            integrator = IrksomeRadauIIA(equation, u, dt=0.01, order=0)
+            _ = IrksomeRadauIIA(equation, u, dt=0.01, order=0)
 
     def test_very_small_time_step(self):
         """Test behavior with very small time step."""
