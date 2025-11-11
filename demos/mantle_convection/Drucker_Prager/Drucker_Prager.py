@@ -38,7 +38,7 @@ H = 30e3
 year = 86400*365
 U0 = Constant(5e-3/year)
 mu0 = 1e22
-mu1 = Constant(1e23/mu0)  # upper layer background visc.
+mu1 = Constant(1e23/mu0)  # upper layer background viscosity
 mu2 = Constant(1e21/mu0)  # lower layer visc. (isovisc.)
 
 g = Constant(9.81)
