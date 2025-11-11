@@ -5,7 +5,7 @@
 # (2016)](https://doi.org/10.1002/2015GC006228) with a Drucker-Prager
 # visco-plastic rheology that depends on dynamic pressure. As this leads to
 # nonlinear systems that can be challenging to solve, we use this case to
-# illustrate some of the strategies involved.
+# illustrate some of the strategies involved in doing so within G-ADOPT.
 #
 # Similar to the [visco-plastic tutorial](viscoplastic_case.md) which uses a
 # temperature and depth dependent von Mises rheology, the overall effective
