@@ -3,7 +3,7 @@
 #
 # In this tutorial we consider a case from [Spiegelman et al.
 # (2016)](https://doi.org/10.1002/2015GC006228) with a Drucker-Prager
-# visco-plasticity model that depends on dynamic pressure. As this leads to
+# visco-plastic rheology that depends on dynamic pressure. As this leads to
 # nonlinear systems that can be quite challenging to solve, we use this case to
 # illustrate some of the strategies involved.
 #
