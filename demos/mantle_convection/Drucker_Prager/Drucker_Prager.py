@@ -8,7 +8,7 @@
 # illustrate some of the strategies involved in doing so within G-ADOPT.
 #
 # Similar to the [visco-plastic tutorial](viscoplastic_case.md) which uses a
-# temperature and depth dependent von Mises rheology, the overall effective
+# temperature- and depth-dependent von Mises rheology, the overall effective
 # viscosity takes the following form
 #
 #
