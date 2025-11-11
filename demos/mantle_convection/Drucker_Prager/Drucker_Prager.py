@@ -39,7 +39,7 @@ year = 86400*365
 U0 = Constant(5e-3/year)
 mu0 = 1e22
 mu1 = Constant(1e23/mu0)  # upper layer background viscosity
-mu2 = Constant(1e21/mu0)  # lower layer visc. (isovisc.)
+mu2 = Constant(1e21/mu0)  # lower layer viscosity (noting that it is isoviscous)
 
 g = Constant(9.81)
 rho0 = Constant(2700)
