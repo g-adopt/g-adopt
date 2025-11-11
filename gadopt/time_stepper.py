@@ -176,6 +176,10 @@ class IrksomeIntegrator(TimeIntegratorBase):
         # correctly evaluated at the current stage solution
         F = equation.irksome_form(solution, Dt)
 
+        # Store strong_bcs for applying at initialization
+        # This ensures BC-consistency like the original G-ADOPT DIRKGeneric
+        self.strong_bcs = strong_bcs or []
+
         # Create the Irksome time stepper using MeshConstant
         # For stage_type="deriv", pass bc_type parameter
         irksome_kwargs = {
@@ -188,6 +192,9 @@ class IrksomeIntegrator(TimeIntegratorBase):
         if stage_type == "deriv":
             irksome_kwargs["bc_type"] = bc_type
 
+        # Store update_forcings callback - will be wrapped and passed to irksome
+        self.update_forcings_callback = None
+
         self.stepper = IrksomeTimeStepper(
             F,
             butcher,
@@ -197,11 +204,6 @@ class IrksomeIntegrator(TimeIntegratorBase):
             **irksome_kwargs
         )
 
-        # Store strong_bcs for applying at initialization
-        # This ensures BC-consistency like the original G-ADOPT DIRKGeneric
-        self.strong_bcs = strong_bcs or []
-
-        self.update_forcings = None
         self._initialized = False
 
     def initialize(self, init_solution):
@@ -227,13 +229,24 @@ class IrksomeIntegrator(TimeIntegratorBase):
         # Sync dt_mesh_const with the reference dt before advancing
         self.dt_mesh_const.assign(float(self.dt_reference))
 
-        # Update forcings if provided
-        if update_forcings is not None:
-            update_forcings(float(self.t))
-
         # Update time if provided
         if t is not None:
             self.t.assign(float(t))
+
+        # If stepper supports stage callbacks (DIRK/Explicit), pass update_forcings as callback
+        # Otherwise call it once before advancing (for stage-coupled methods)
+        if hasattr(self.stepper, 'stage_update_callback'):
+            # Wrap update_forcings to match irksome's callback signature: (stage_index, stage_time)
+            if update_forcings is not None:
+                def irksome_callback(stage_index, stage_time):
+                    update_forcings(stage_time)
+                self.stepper.stage_update_callback = irksome_callback
+            else:
+                self.stepper.stage_update_callback = None
+        else:
+            # For stage-coupled methods without stage callback support, call once
+            if update_forcings is not None:
+                update_forcings(float(self.t))
 
         # Advance using Irksome
         self.stepper.advance()
