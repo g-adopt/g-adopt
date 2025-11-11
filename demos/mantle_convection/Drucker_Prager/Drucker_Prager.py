@@ -1,4 +1,4 @@
-# 2D mantle convection in square box with Druker-Prager rheology
+# 2D mantle convection in square box with Drucker-Prager rheology
 # ==============================================================
 #
 # In this tutorial we consider a case from [Spiegelman et al.
