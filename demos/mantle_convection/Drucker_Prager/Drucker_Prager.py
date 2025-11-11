@@ -58,7 +58,7 @@ mesh = RectangleMesh(nx, ny, 4, 1, quadrilateral=True)  # generate rectangular m
 mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
 
-# As usual, we set up function spaces for a Q2-Q1 discretisation for velocity
+# As with our previous tutorials, we set up function spaces for a Q2-Q1 discretisation for velocity
 # and pressure, and define a combined "mixed" solution function z.
 
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
