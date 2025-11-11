@@ -65,10 +65,10 @@ V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 v, w = TestFunctions(Z)
-z = Function(Z)  # a field over the mixed function space Z.
+z = Function(Z)  # Field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
 
-# The viscosity is divided in two layers, scaled by $\mu_1$ and $\mu_2$
+# The viscosity is divided into two layers, scaled by $\mu_1$ and $\mu_2$
 # respectively, with an interface depth of $H_1$. In the middle of the domain,
 # there is small notch in the upper layer of width $w$, and height $h$, i.e.
 # the interface depth is $H_1-h$ over a width of $w$. In the description of
@@ -101,11 +101,11 @@ interface_depth -= conditional(And(dx2 > 0, dx2 < r), sqrt(r**2-dx2**2)-r, 0)
 plith = g*rho0*d*H / (U0*mu0/H)
 
 # We now have everything to define the viscosity. We do this in a particular
-# way that will come in hand later on:
+# way that will prove useful later on:
 # * we introduce a switch which, when its value is 1, produces the
 # Drucker-Prager viscosity as described above. However, if we assign a value of
-# 0 to the switch, the viscosity changes to isoviscous with value `mu1`
-# * we use a python function to supply the second invariant of the strain rate
+# 0 to the switch, the viscosity changes to isoviscous with value `mu1`.
+# * We use a python function to supply the second invariant of the strain rate
 # epsii and dynamic pressure p. This is because we will later on need a version
 # of the viscosity defined using different Firedrake Functions than we have
 # defined here.
@@ -119,16 +119,16 @@ def eta(epsii, p):  # noqa: E302
     mu1_eff = max_value(mu1_eff, mu2)
     return conditional(d < interface_depth, mu1_eff, mu2)
 
-# For now however we simply us the second invariant of strain rate and pressure
+# For now, however, we simply us the second invariant of strain rate and pressure
 # based on the already defined `u` and `p`
 
 eps = sym(grad(u))  # noqa: E305
 epsii = sqrt(0.5*inner(eps, eps))
 mu = eta(epsii, p)
 
-# As usual we now define an approximation and boundary conditions and set up
-# the solver. The boundary conditions at the top is a free stress condition
-# (the default), and free slip ${\bf u}\cdot{\bf n}=0$ at the bottom. The left
+# As with our previous tutorials, we now define an approximation and boundary conditions and set up
+# the solver. The boundary condition at the top is a free stress condition
+# (the default), with a free slip boundary condition ${\bf u}\cdot{\bf n}=0$ at the bottom. The left
 # and right boundaries both have a prescribed Dirichlet inflow condition of
 # ${\bf u}\cdot{\bf n}=-U_0$, or ${\bf u}\cdot{\bf n}=-1$ in non-dimensional
 # units. In terms of the x-component of velocity this means a value of 1 and -1
@@ -154,7 +154,7 @@ newton_solver = StokesSolver(
 
 try:
     newton_solver.solve()
-    # catch the not-converged exception and print the backtrace, so we can still run through the code
+    # Catch not-converged exception and print backtrace, so we can still run through the code.
 except ConvergenceError:
     import traceback
     print(traceback.format_exc())
@@ -216,7 +216,7 @@ picard_solver = StokesSolver(
 switch.assign(0.)  # switch to mu=mu1
 picard_solver.solve()
 
-# So far so we good, but now only we have solution $(u, p$) for the wrong
+# So far so good, but now only we have solution $(u, p$) for the wrong
 # rheology (namely $\mu=\mu_1$). To solve the equations with the actual
 # Drucker-Prager rheology, we put the switch back to 1.0, and perform the
 # Picard iteration. The assignment at the start of the iteration, copies the
@@ -236,7 +236,7 @@ for i in range(50):
 
 
 # As you can see, it takes a fair number of iterations before the changes in
-# $u$ and $p$ get sufficiently small. Note that the residuals ("SNES Function
+# $u$ and $p$ get sufficiently small (i.e. below our specified tolerance). Note that the residuals ("SNES Function
 # norm") that are being printed are the residuals of the linearized equations.
 # Only when the differences between $(u,p)$ and $(u_{\text{Picard}},
 # p_{\text{Picard}})$ are sufficiently small does this mean that we have solved
@@ -260,9 +260,9 @@ newton_solver.solve()
 # +
 z.assign(0)  # throw away our solution and start from 0 again
 
-switch.assign(0.)  # switch to mu=mu1
+switch.assign(0.)  # switch to isoviscous rheology where mu=mu1.
 picard_solver.solve()
-switch.assign(1.)  # switch back to full rheology
+switch.assign(1.)  # switch back to Drucker-Praeger rheology.
 for i in range(10):
     z_picard.assign(z)
     picard_solver.solve()
@@ -299,7 +299,7 @@ newton_solver.solve()
 # fig.tight_layout()
 # -
 
-# For testing purposes we also write some statistics to a `param.log` file:
+# For testing purposes, ensuring that our demos remain valid through various updates to G-ADOPT, we also write some statistics to a `param.log` file:
 
 gd = GeodynamicalDiagnostics(z)
 plog = ParameterLog('params.log', mesh)
@@ -311,7 +311,7 @@ plog.close()
 # --------
 # The case above still has a relatively small viscosity contrast between the
 # two layers. We can make this case more challenging by increasing $\mu_1$.
-# Increasing the inflow velocity $U_0$, also make the equations harder to
+# Increasing the inflow velocity $U_0$, also makes the equations harder to
 # solve.  Look up table 2 from [Spiegelman et al.
 # (2016)](https://doi.org/10.1002/2015GC006228) for some suggestions.
 #
@@ -319,10 +319,10 @@ plog.close()
 # --------------------
 # As also briefly discussed in [Davies et al.
 # (2022)](https://doi.org/10.5194/gmd-15-5127-2022) G-ADOPT paper, for the most
-# challenging cases the convergence of the Newton solver is not necessarily
+# challenging cases, convergence of the Newton solver is not necessarily
 # stable, even with an initial guess from the Picard iteration. To stabilize
 # it, the paper follows an approach from [Fraters et al.
 # (2019)](https://doi.org/10.1093/gji/ggz183) to modify the Jacobian used in
-# the Newton solve and demonstrates it can be implemented in a few lines of
-# code in G-ADOPT. The code is available in one of the tests:
-# `tests/Drucker-Prager_rheology/spiegelman.py` in the G-ADOPT repository.
+# the Newton solve, and demonstrates it can be implemented in a few lines of
+# code in G-ADOPT. A user wishing to use this approach is referred to the code available in one of the G-ADOPT test cases:
+# `tests/Drucker-Prager_rheology/spiegelman.py`, available in the G-ADOPT repository.
