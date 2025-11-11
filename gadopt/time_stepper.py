@@ -161,7 +161,6 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self.solution = solution
         self.solution_old = solution_old or firedrake.Function(solution)
         self.dt = float(dt)
-        self.stage_type = stage_type
 
         # Keep reference to original dt constant for syncing
         self.dt_reference = ensure_constant(dt)
@@ -211,19 +210,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self._initialized = True
 
     def advance(self, update_forcings: Callable | None = None, t: float | None = None):
-        """Advance the solution by one time step.
-
-        For DIRK and explicit schemes, `update_forcings` is called before each
-        stage solve with the stage time. For other schemes, it is called once
-        at the beginning of the time step.
-
-        Args:
-            update_forcings: Optional callable to update time-dependent forcings.
-                For DIRK/explicit schemes, called with stage time before each stage.
-                For other schemes, called with current time once per time step.
-            t: Optional current simulation time. If provided, updates the internal
-                time variable before advancing.
-        """
+        """Advance the solution by one time step."""
         if not self._initialized:
             self.initialize(self.solution)
 
@@ -240,61 +227,16 @@ class IrksomeIntegrator(TimeIntegratorBase):
         # Sync dt_mesh_const with the reference dt before advancing
         self.dt_mesh_const.assign(float(self.dt_reference))
 
+        # Update forcings if provided
+        if update_forcings is not None:
+            update_forcings(float(self.t))
+
         # Update time if provided
         if t is not None:
             self.t.assign(float(t))
 
-        # For DIRK and explicit schemes, manually implement stage loop with update_forcings callbacks
-        if self.stage_type in ("dirk", "explicit"):
-            # Check if stepper has the required attributes for manual stage control
-            if hasattr(self.stepper, 'num_stages') and hasattr(self.stepper, 'kgac'):
-                # Access DIRK stepper internals
-                k, g, a, c = self.stepper.kgac
-                ks = self.stepper.ks
-                u0 = self.stepper.u0
-                dt = self.stepper.dt
-
-                # Manual stage loop with update_forcings callbacks
-                for i in range(self.stepper.num_stages):
-                    # Compute the already-known part of the state in the variational form
-                    g.assign(sum((ks[j] * (self.stepper.AA[i, j] * dt) for j in range(i)), u0))
-
-                    # Update BC constants for the variational problem
-                    self.stepper.update_bc_constants(i, c)
-                    a.assign(self.stepper.AA[i, i])
-
-                    # Call update_forcings before solving this stage (if provided)
-                    if update_forcings is not None:
-                        # Calculate stage time: t + c[i] * dt
-                        stage_time = float(self.t) + float(c) * float(dt)
-                        try:
-                            update_forcings(stage_time)
-                        except TypeError:
-                            # Fallback: try calling without time argument
-                            update_forcings()
-
-                    # Solve the variational problem for this stage
-                    self.stepper.solver.solve()
-                    self.stepper.num_nonlinear_iterations += self.stepper.solver.snes.getIterationNumber()
-                    self.stepper.num_linear_iterations += self.stepper.solver.snes.getLinearSolveIterations()
-                    ks[i].assign(k)
-
-                # Update the solution with now-computed stage values
-                u0 += sum(ks[i] * (self.stepper.BB[i] * dt) for i in range(self.stepper.num_stages))
-                self.stepper.num_steps += 1
-            else:
-                # Fallback: stepper doesn't have expected attributes, use standard advance
-                if update_forcings is not None:
-                    update_forcings(float(self.t))
-                self.stepper.advance()
-        else:
-            # For other stepper types (deriv, value, etc.), use standard advance
-            # Update forcings once at the beginning if provided
-            if update_forcings is not None:
-                update_forcings(float(self.t))
-
-            # Advance using Irksome's standard method
-            self.stepper.advance()
+        # Advance using Irksome
+        self.stepper.advance()
 
         # Update time for next step
         self.t.assign(float(self.t) + float(self.dt_mesh_const))
