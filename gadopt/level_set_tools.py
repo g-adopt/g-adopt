@@ -53,6 +53,23 @@ reini_params_default = {
 solver_params_default = {
     "adv": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "reini": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
+    "reini_coupled": {
+        "mat_type": "aij",
+        "ksp_type": "gmres",
+        "ksp_rtol": 1e-8,
+        "pc_type": "fieldsplit",
+        "pc_fieldsplit_type": "additive",
+        "fieldsplit_0": {
+            "ksp_type": "preonly",
+            "pc_type": "bjacobi",
+            "sub_pc_type": "ilu",
+        },
+        "fieldsplit_1": {
+            "ksp_type": "cg",
+            "pc_type": "bjacobi",
+            "sub_pc_type": "ilu",
+        },
+    },
 }
 
 
@@ -384,6 +401,88 @@ def reinitialisation_term(
     return sharpen_term + balance_term
 
 
+def coupled_reinitialisation_term(
+    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+) -> fd.Form:
+    """Coupled DAE system for level-set reinitialisation with gradient reconstruction.
+
+    This formulation solves for both the level-set field $\\phi$ and its smooth
+    gradient $g$ simultaneously, avoiding the need for update_forcings callbacks.
+    The system is:
+
+    $$\\frac{\\partial \\phi}{\\partial t} = \\text{sharpen_term}(\\phi) + \\text{balance_term}(\\phi, g)$$
+    $$0 = \\text{gradient_reconstruction}(\\phi, g)$$
+
+    where the gradient reconstruction ensures $g = \\nabla \\phi$ via $L^2$ projection.
+
+    Args:
+        eq: Equation object containing test functions and attributes
+        trial: Mixed function containing $(\\phi, g)$
+
+    Returns:
+        Coupled residual form for the DAE system
+    """
+    # Split the mixed trial function: (level_set, gradient)
+    phi, g = fd.split(trial)
+
+    # Split the mixed test function
+    v_phi, v_g = fd.split(eq.test)
+
+    # ===== Reinitialisation equation for phi =====
+    sharpen_term = -phi * (1 - phi) * (1 - 2 * phi) * v_phi * eq.dx
+    balance_term = (
+        eq.epsilon
+        * (1 - 2 * phi)
+        * fd.sqrt(fd.inner(g, g))  # Use auxiliary gradient variable
+        * v_phi
+        * eq.dx
+    )
+    reinit_residual = sharpen_term + balance_term
+
+    # ===== Gradient reconstruction equation (algebraic constraint) =====
+    # Weak form of $g = \\nabla \\phi$ via $L^2$ projection:
+    # $$\\int g \\cdot v_g \\, dx = -\\int \\phi \\, \\nabla \\cdot v_g \\, dx + \\int \\phi (v_g \\cdot n) \\, ds$$
+
+    grad_lhs = fd.inner(g, v_g) * eq.dx
+    grad_rhs = (-phi * fd.div(v_g) * eq.dx
+                + phi * fd.dot(v_g, eq.n) * eq.ds)
+
+    grad_residual = grad_lhs - grad_rhs
+
+    # ===== Combined residual =====
+    return reinit_residual + grad_residual
+
+
+def coupled_reinitialisation_mass_term(
+    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+) -> fd.Form:
+    """Mass term for the coupled DAE system.
+
+    Only the level-set field $\\phi$ has a time derivative; the gradient $g$ is
+    algebraic. This creates a differential-algebraic equation (DAE) system.
+
+    Args:
+        eq: Equation object containing test functions
+        trial: Mixed function containing $(\\phi, g)$ or $Dt(\\phi, g)$
+
+    Returns:
+        Mass term form (only for $\\phi$ component)
+    """
+    # Import TimeDerivative to check if we need to unwrap
+    from irksome.deriv import TimeDerivative
+
+    # If trial is Dt(mixed_function), extract the operand
+    if isinstance(trial, TimeDerivative):
+        trial = trial.ufl_operands[0]
+
+    phi, g = fd.split(trial)
+    v_phi, v_g = fd.split(eq.test)
+
+    # Only phi has time derivative (standard mass term)
+    # g has NO time derivative (algebraic constraint)
+    return fd.inner(phi, v_phi) * eq.dx
+
+
 class LevelSetSolver(SolverConfigurationMixin):
     """Solver for the conservative level-set approach.
 
@@ -437,14 +536,15 @@ class LevelSetSolver(SolverConfigurationMixin):
         | subcycles       | False    | Advection iterations in one time step (`int`)   |
 
         Valid keys for `reini_kwargs`:
-        |    Argument     | Required |                   Description                   |
-        | :-------------- | :------: | :---------------------------------------------: |
-        | epsilon         | True     | Interface thickness (`float` or `Function`)     |
-        | timestep        | False    | Integration step in pseudo-time (`int`)         |
-        | time_integrator | False    | Time integrator (class in `time_stepper.py`)    |
-        | solver_params   | False    | Solver parameters (`dict`, PETSc API)           |
-        | steps           | False    | Pseudo-time integration steps (`int`)           |
-        | frequency       | False    | Advection steps before reinitialisation (`int`) |
+        |        Argument         | Required |                   Description                    |
+        | :------------------- | :------: | :----------------------------------------------: |
+        | epsilon              | True     | Interface thickness (`float` or `Function`)      |
+        | timestep             | False    | Integration step in pseudo-time (`int`)          |
+        | time_integrator      | False    | Time integrator (class in `time_stepper.py`)     |
+        | solver_params        | False    | Solver parameters (`dict`, PETSc API)            |
+        | steps                | False    | Pseudo-time integration steps (`int`)            |
+        | frequency            | False    | Advection steps before reinitialisation (`int`)  |
+        | use_coupled_formulation | False | Use coupled DAE formulation (avoids callbacks) (`bool`) |
 
         Args:
           level_set:
@@ -572,24 +672,86 @@ class LevelSetSolver(SolverConfigurationMixin):
             )
 
         if self.reinitialisation:
-            reinitialisation_equation = Equation(
-                fd.TestFunction(self.solution_space),
-                self.solution_space,
-                reinitialisation_term,
-                mass_term=mass_term,
-                eq_attrs={
-                    "level_set_grad": self.solution_grad,
-                    "epsilon": self.reini_kwargs["epsilon"],
-                },
-            )
+            # Check if using coupled DAE formulation (default: False for backward compatibility)
+            use_coupled = self.reini_kwargs.get("use_coupled_formulation", False)
 
-            self.reini_integrator = self.reini_kwargs["time_integrator"](
-                reinitialisation_equation,
-                self.solution,
-                self.reini_kwargs["timestep"],
-                solution_old=self.solution_old,
-                solver_parameters=self.solver_parameters['reini'],
-            )
+            if use_coupled:
+                # ===== Coupled DAE formulation =====
+                # Create mixed space for (level_set, gradient)
+                grad_space_degree = self.solution.ufl_element().degree()
+                if not isinstance(grad_space_degree, int):
+                    grad_space_degree = max(grad_space_degree)
+                gradient_space = fd.VectorFunctionSpace(self.mesh, "CG", grad_space_degree)
+
+                mixed_space = self.solution_space * gradient_space
+
+                # Create mixed function for the coupled solution
+                self.mixed_solution = fd.Function(mixed_space, name="Mixed(LevelSet, Gradient)")
+                self.phi_part, self.grad_part = self.mixed_solution.subfunctions
+
+                # Initialize with current solution and its gradient
+                self.phi_part.assign(self.solution)
+                # Compute initial gradient for better conditioning
+                self.set_gradient_solver()  # Create gradient solver
+                self.gradient_solver.solve()  # Compute initial gradient
+                self.grad_part.assign(self.solution_grad)  # Initialize grad_part
+
+                # Prepare attributes for coupled equation
+                # Need to provide n and ds for gradient reconstruction
+                if gradient_space.extruded:
+                    ds = CombinedSurfaceMeasure(
+                        domain=self.mesh, degree=2 * grad_space_degree + 1
+                    )
+                else:
+                    ds = fd.ds
+
+                # Set up coupled equation
+                coupled_equation = Equation(
+                    fd.TestFunction(mixed_space),
+                    mixed_space,
+                    coupled_reinitialisation_term,
+                    mass_term=coupled_reinitialisation_mass_term,
+                    eq_attrs={
+                        "epsilon": self.reini_kwargs["epsilon"],
+                        "n": fd.FacetNormal(self.mesh),
+                        "ds": ds,
+                    },
+                )
+
+                # Time integrator solves the coupled system
+                # Use special solver parameters for the coupled mixed system
+                coupled_solver_params = self.solver_parameters.get('reini_coupled', self.solver_parameters['reini'])
+                self.reini_integrator = self.reini_kwargs["time_integrator"](
+                    coupled_equation,
+                    self.mixed_solution,
+                    self.reini_kwargs["timestep"],
+                    solver_parameters=coupled_solver_params,
+                )
+
+                self.use_coupled = True
+
+            else:
+                # ===== Original formulation with gradient callback =====
+                reinitialisation_equation = Equation(
+                    fd.TestFunction(self.solution_space),
+                    self.solution_space,
+                    reinitialisation_term,
+                    mass_term=mass_term,
+                    eq_attrs={
+                        "level_set_grad": self.solution_grad,
+                        "epsilon": self.reini_kwargs["epsilon"],
+                    },
+                )
+
+                self.reini_integrator = self.reini_kwargs["time_integrator"](
+                    reinitialisation_equation,
+                    self.solution,
+                    self.reini_kwargs["timestep"],
+                    solution_old=self.solution_old,
+                    solver_parameters=self.solver_parameters['reini'],
+                )
+
+                self.use_coupled = False
 
         self.step = 0
 
@@ -602,8 +764,21 @@ class LevelSetSolver(SolverConfigurationMixin):
 
     def reinitialise(self) -> None:
         """Performs reinitialisation steps."""
-        for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(t=0, update_forcings=self.update_gradient)
+        if self.use_coupled:
+            # Coupled formulation: initialize phi_part from current solution
+            self.phi_part.assign(self.solution)
+
+            # Solve coupled system (no update_forcings needed!)
+            for _ in range(self.reini_kwargs["steps"]):
+                self.reini_integrator.advance(t=0)
+
+            # Extract updated level-set back to self.solution
+            self.solution.assign(self.phi_part)
+
+        else:
+            # Original formulation: use update_forcings callback
+            for _ in range(self.reini_kwargs["steps"]):
+                self.reini_integrator.advance(t=0, update_forcings=self.update_gradient)
 
     def solve(
         self,
@@ -912,3 +1087,9 @@ def min_max_height(
 
 reinitialisation_term.required_attrs = {"epsilon", "level_set_grad"}
 reinitialisation_term.optional_attrs = set()
+
+coupled_reinitialisation_term.required_attrs = {"epsilon", "n", "ds"}
+coupled_reinitialisation_term.optional_attrs = set()
+
+coupled_reinitialisation_mass_term.required_attrs = set()
+coupled_reinitialisation_mass_term.optional_attrs = set()

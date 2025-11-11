@@ -258,7 +258,7 @@ stokes_solver.solve()
 # provides default values for most arguments; we only provide those that do not have
 # one. No boundary conditions are required, as the numerical domain is closed.
 adv_kwargs = {"u": u, "timestep": time_step}
-reini_kwargs = {"epsilon": epsilon}
+reini_kwargs = {"epsilon": epsilon, "use_coupled_formulation": True, "time_integrator": ImplicitMidpoint}
 level_set_solver = LevelSetSolver(psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs)
 # -
 
