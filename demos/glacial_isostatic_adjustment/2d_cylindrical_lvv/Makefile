@@ -5,7 +5,7 @@ include ../../../rules.mk
 all: params.log
 
 params.log : category := gia
-params.log: 2d_cylindrical.py
+params.log: 2d_cylindrical_lvv.py
 	$(run-python)
 
 clean:
