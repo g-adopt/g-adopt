@@ -328,11 +328,11 @@ plog.close()
 #
 # Newton Stabilisation
 # --------------------
-# As also briefly discussed in the [Davies et al.
-# (2022)](https://doi.org/10.5194/gmd-15-5127-2022) G-ADOPT paper, for the most
-# challenging cases, convergence of the Newton solver is not necessarily
-# stable, even with an initial guess from the Picard iteration. To stabilize
-# it, the paper follows an approach from [Fraters et al.
+# As also briefly discussed in [Davies et al.
+# (2022)](https://doi.org/10.5194/gmd-15-5127-2022), for the most challenging
+# cases, convergence of the Newton solver is not necessarily stable, even with
+# an initial guess from the Picard iteration. To stabilize it, the paper
+# follows an approach from [Fraters et al.
 # (2019)](https://doi.org/10.1093/gji/ggz183) to modify the Jacobian used in
 # the Newton solve, and demonstrates it can be implemented in a few lines of
 # code in G-ADOPT. A user wishing to use this approach is referred to the code
