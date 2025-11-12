@@ -625,7 +625,8 @@ class LevelSetSolver(SolverConfigurationMixin):
                 self.step += 1
 
                 if self.reinitialisation and not disable_reinitialisation:
-                    if self.step % self.reini_kwargs["frequency"] == 0:
+                    if self.step % 1 == 0:
+                        print(f"Reinitialising level set at step {self.step}")
                         self.reinitialise()
 
         elif self.reinitialisation and not disable_reinitialisation:

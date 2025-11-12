@@ -239,6 +239,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
             # Wrap update_forcings to match irksome's callback signature: (stage_index, stage_time)
             if update_forcings is not None:
                 def irksome_callback(stage_index, stage_time):
+                    print(f"Calling update_forcings at stage {stage_index} with time {stage_time}")
                     update_forcings(stage_time)
                 self.stepper.stage_update_callback = irksome_callback
             else:
