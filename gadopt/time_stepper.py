@@ -238,9 +238,18 @@ class IrksomeIntegrator(TimeIntegratorBase):
             # Wrap update_forcings to match irksome's callback signature: (stage_index, stage_time)
             if update_forcings is not None:
                 def irksome_callback(stage_index, stage_time):
-                    print(f"Calling update_forcings at stage {stage_index} with time {stage_time}")
-                    update_forcings(stage_time)
-                self.stepper.stage_update_callback = irksome_callback
+                    # Call update_forcings - try with stage_time first if t is provided,
+                    # otherwise call with no arguments
+                    # This handles callbacks that may or may not accept arguments
+                    if t is not None:
+                        try:
+                            update_forcings(stage_time)
+                        except TypeError:
+                            # Callback doesn't accept arguments, call without
+                            update_forcings()
+                    else:
+                        update_forcings()
+                setattr(self.stepper, 'stage_update_callback', irksome_callback)
             else:
                 self.stepper.stage_update_callback = None
         else:
