@@ -149,8 +149,10 @@ newton_solver = StokesSolver(
 )
 # -
 
-# When we now try to solve the equations, we notice that the solver does not
-# converge:
+# Given a nonlinear system of equations, as we have set up here, the
+# default solver configuration of G-ADOPT means we will be solving
+# the discretised equations using Newton's method. When try this solve
+# however, we notice that the Newton iteration does not converge:
 
 try:
     newton_solver.solve()
@@ -178,8 +180,8 @@ except ConvergenceError:
 # solved in the previous iteration. Assuming the values of $u$ and $p$ converge
 # between iterations - this is not guaranteed! - and thus $u_{\text{Picard}}\to
 # u$ and $p_{\text{Picard}}\to p$, we converge to the original nonlinear system
-# we wanted to solve. It is therefore important to monitor how close the values
-# of $u$ and $p$ get between iterations.
+# we wanted to solve. It is therefore important to monitor the change in values
+# of $u$ and $p$ in subsequent iterations.
 #
 # To construct this Picard solver, we simply define another solver but now
 # using a viscosity that depends on `u_picard` and `p_picard` that we will
@@ -236,13 +238,15 @@ for i in range(50):
 
 
 # As you can see, it takes a fair number of iterations before the changes in
-# $u$ and $p$ get sufficiently small (i.e. below our specified tolerance). Note that the residuals ("SNES Function
-# norm") that are being printed are the residuals of the linearized equations.
-# Only when the differences between $(u,p)$ and $(u_{\text{Picard}},
-# p_{\text{Picard}})$ are sufficiently small does this mean that we have solved
-# the nonlinear Drucker-Prager equations.
+# $u$ and $p$ get sufficiently small (i.e. below our specified tolerance). Note
+# that the residuals ("SNES Function norm") that are being printed are the
+# residuals of the linearized equations. Only when the differences between
+# $(u,p)$ and $(u_{\text{Picard}}, p_{\text{Picard}})$ are sufficiently small
+# does this mean that we have solved the _nonlinear_ Drucker-Prager equations,
+# using the same final $(u, p)$ solution everywhere in the equations (i.e.
+# including the viscosity), to a desirable level of accuracy.
 #
-# In fact we can check this by using the Newton solver. Since our best solution
+# In fact, we can check this by using the Newton solver. Since our best solution
 # is now stored in `u` and `p`, when we call the Newton solver this will be
 # used as the initial guess for the full nonlinear Newton solve. The residuals
 # that are now printed are the residuals of the actual nonlinear equations we
@@ -255,14 +259,20 @@ newton_solver = StokesSolver(
 )
 newton_solver.solve()
 
-# We see that the initial residual in the Newton solve is now already down to `9e-6`, and the Newton solver is now able to reduce it even further down to `2e-13`. This is as expected: the convergence of the Picard iteration is more robust, but slower. When we have a sufficiently good initial guess, the Newton solver converges much faster. A common strategy for challenging cases is therefore to start with a few Picard iterations, followed by a Newton solve, as summarized in the following code:
+# We see that the initial residual in the Newton solve is now already down to
+# `9e-6`, and the Newton solver is now able to reduce it even further down to
+# `2e-13`. This is as expected: the convergence of the Picard iteration is more
+# robust, but slower. When we have a sufficiently good initial guess, the
+# Newton solver converges much faster. A common strategy for challenging cases
+# is therefore to start with a few Picard iterations, followed by a Newton
+# solve, as summarized in the following code:
 
 # +
 z.assign(0)  # throw away our solution and start from 0 again
 
 switch.assign(0.)  # switch to isoviscous rheology where mu=mu1.
 picard_solver.solve()
-switch.assign(1.)  # switch back to Drucker-Praeger rheology.
+switch.assign(1.)  # switch back to Drucker-Prager rheology.
 for i in range(10):
     z_picard.assign(z)
     picard_solver.solve()
@@ -299,7 +309,8 @@ newton_solver.solve()
 # fig.tight_layout()
 # -
 
-# For testing purposes, ensuring that our demos remain valid through various updates to G-ADOPT, we also write some statistics to a `param.log` file:
+# For testing purposes, ensuring that our demos remain valid through various
+# updates to G-ADOPT, we also write some statistics to a `param.log` file:
 
 gd = GeodynamicalDiagnostics(z)
 plog = ParameterLog('params.log', mesh)
@@ -317,12 +328,14 @@ plog.close()
 #
 # Newton Stabilisation
 # --------------------
-# As also briefly discussed in [Davies et al.
+# As also briefly discussed in the [Davies et al.
 # (2022)](https://doi.org/10.5194/gmd-15-5127-2022) G-ADOPT paper, for the most
 # challenging cases, convergence of the Newton solver is not necessarily
 # stable, even with an initial guess from the Picard iteration. To stabilize
 # it, the paper follows an approach from [Fraters et al.
 # (2019)](https://doi.org/10.1093/gji/ggz183) to modify the Jacobian used in
 # the Newton solve, and demonstrates it can be implemented in a few lines of
-# code in G-ADOPT. A user wishing to use this approach is referred to the code available in one of the G-ADOPT test cases:
-# `tests/Drucker-Prager_rheology/spiegelman.py`, available in the G-ADOPT repository.
+# code in G-ADOPT. A user wishing to use this approach is referred to the code
+# available in one of the G-ADOPT test cases:
+# `tests/Drucker-Prager_rheology/spiegelman.py`, available in the G-ADOPT
+# repository.
