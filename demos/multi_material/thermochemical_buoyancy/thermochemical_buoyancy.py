@@ -335,7 +335,7 @@ while True:
 
         log("Reached end of simulation -- exiting time-step loop")
         break
-    if step > 10:
+    if step > 0:
         break
 
 # Let us finally examine the location of the material interface and the temperature
