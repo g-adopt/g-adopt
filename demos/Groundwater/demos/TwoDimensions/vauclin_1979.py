@@ -142,7 +142,3 @@ PETSc.Sys.Print(f"Exterior flux: {exterior_flux}")
 # Save file
 h_file = VTKFile("vauclin_1979.pvd")
 h_file.write(h, theta, q)
-
-with CheckpointFile(f"{nodesX}x{nodesZ}.h5", 'w') as afile:
-    afile.save_mesh(mesh) # Save the mesh (optional, but recommended)
-    afile.save_function(h) # Save the function
