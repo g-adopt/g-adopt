@@ -66,7 +66,7 @@ time_step = Function(R).assign(1e-7)  # Initial time step
 # We next initialise our temperature field. We choose a spatial distribution that will
 # enable the upwelling of four equidistant plumes, using the following equation:
 
-# $$T(x, y) = r_{\text{max}} - r + A\cos\left(4 \arctan\left(\frac{y}{x}\right)\right)  \sin((r - r_{\text{min}}) \pi)$$
+# $T(x, y) = r_{\text{max}} - r + A\cos\left(4 \arctan\left(\frac{y}{x}\right)\right)  \sin((r - r_{\text{min}}) \pi)$
 
 # where $A = 0.02$ is the amplitude of the initial perturbation.
 
@@ -123,16 +123,17 @@ assign_level_set_values(psi, epsilon, signed_distance)  # Populate level-set fie
 # it must also be defined as a material field and provided to the approximation.
 
 # +
-# For this tutorial, we use a buoyancy number of 0.5 and a viscosity contrast of 5. With
-# such a combination, we expect the deeper material to have sufficient thermal buoyancy
-# to overcome the density increase and rise towards the surface, despite its higher
-# viscosity.
+# For this tutorial, we use a buoyancy number of 2 and a viscosity contrast of 10. With
+# such a combination, the deeper material is negatively buoyant and diffuses momentum
+# efficiently, making it hard for any compositional upwelling to develop. This
+# stratification has direct consequences on the mantle's thermal structure, as we will
+# observe at the end of this tutorial.
 Ra = 1e5  # Thermal Rayleigh number
 # Compositional Rayleigh number defined based on each material value and location
-RaB_buoyant, RaB_dense = 0.0, 5e4
+RaB_buoyant, RaB_dense = 0.0, 2e5
 RaB = material_field(psi, [RaB_dense, RaB_buoyant], interface="arithmetic")
 # Viscosity defined based on each material value and location
-mu = material_field(psi, [mu_dense := 5.0, mu_buoyant := 1.0], interface="geometric")
+mu = material_field(psi, [mu_dense := 10.0, mu_buoyant := 1.0], interface="geometric")
 
 approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
 # -
@@ -235,11 +236,9 @@ entrainment_height = interface_coord_r  # Height above which entrainment is calc
 
 step = 0  # A counter to keep track of looping
 output_counter = 1  # A counter to keep track of outputting
-time_end = 0.1
+steady_state_tolerance = 1e-4  # Threshold identifying a steady-state solution
 while True:
     # Update timestep
-    if time_end - time_now < output_frequency:
-        t_adapt.maximum_timestep = time_end - time_now
     t_adapt.update_timestep()
 
     # Advect and reinitialise level set
@@ -276,12 +275,12 @@ while True:
     )
 
     # Write output
-    if time_now >= output_counter * output_frequency - 1e-16:
+    if time_now >= output_counter * output_frequency:
         output_file.write(*stokes.subfunctions, T, psi, time=time_now)
         output_counter += 1
 
-    # Check if simulation has completed
-    if time_now >= time_end:
+    # Check if simulation has reached a steady state
+    if time_now > 0.001 and norm(T - energy_solver.T_old) < steady_state_tolerance:
         plog.close()  # Close logging file
 
         # Checkpoint solution fields to disk
@@ -309,3 +308,8 @@ while True:
 # plotter.camera_position = "xy"
 # plotter.show(jupyter_backend="static", interactive=False)
 # -
+
+# It is clear from this view that the dense and viscous material at the base of the
+# domain had a critical impact on the system's evolution. By remaining close to the
+# inner hot boundary, it isolated it and limited the scope of thermal upwellings, which
+# led to significant cooling from the top boundary.
