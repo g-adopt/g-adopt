@@ -54,3 +54,8 @@ Isothermal Rayleigh-Taylor instability.
 
 Entrainment of a thin, compositionally dense layer by thermal convection.
 - Compositional and thermal buoyancy
+
+**woidt_1978**
+
+Initiation and development of a salt dome family.
+- Compositional buoyancy

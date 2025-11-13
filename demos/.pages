@@ -4,6 +4,7 @@
         - [base_case](mantle_convection/base_case.ipynb)
     - Physical approximation (rheology)
         - [viscoplastic_case](mantle_convection/viscoplastic_case.ipynb)
+        - [Drucker_Prager](mantle_convection/Drucker_Prager.ipynb)
     - Physical approximation (compressibility)
         - [2d_compressible_TALA](mantle_convection/2d_compressible_TALA.ipynb)
         - [2d_compressible_ALA](mantle_convection/2d_compressible_ALA.ipynb)
