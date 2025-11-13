@@ -407,6 +407,13 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 gd = GeodynamicalDiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
+# Although not necessary for this demo let's checkpoint the displacement and
+# velocity fields at each timestep so that we can use them in our adjoint ice demo.
+
+objective_checkpoint_file = "forward-2d-cylindrical-disp-vel.h5"
+obj_chk = CheckpointFile(objective_checkpoint_file, 'w')
+obj_chk.save_mesh(mesh)
+
 # Now let's run the simulation! At each step we call `solve` to calculate the
 # displacement pressure field and update the internal variable accounting for
 # the stress relaxation in the time dependent viscoelastic constitutive equation.
@@ -426,6 +433,10 @@ for timestep in range(1, max_timesteps+1):
     velocity.interpolate((u - disp_old)/dt)
     disp_old.assign(u)
 
+    # checkpoint solution state for objective function in adjoint ice demo
+    obj_chk.save_function(u, name="displacement", idx=timestep)
+    obj_chk.save_function(velocity, name="velocity", idx=timestep)
+
     if timestep % output_frequency == 0:
         log("timestep", timestep)
 
@@ -436,6 +447,7 @@ for timestep in range(1, max_timesteps+1):
             checkpoint.save_function(m, name="internal variable")
 
 plog.close()
+obj_chk.close()
 # -
 
 # Let's use the python package *PyVista* to plot the magnitude of the displacement
