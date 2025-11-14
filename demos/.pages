@@ -31,3 +31,5 @@
 - PDE-constrained optimisation
     - [pde_constrained_field](PDE_constrained_optimisation/PDE_constrained_field.ipynb)
     - [pde_constrained_boundary](PDE_constrained_optimisation/PDE_constrained_boundary.ipynb)
+- Smoothing
+    - [smoothing](smoothing/smoothing.ipynb)
