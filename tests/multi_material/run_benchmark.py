@@ -90,7 +90,7 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if benchmark == "trim_2023":
         epsilon = 1.0 / 2.0 / simulation.k
-    elif benchmark == "davies_2022":
+    elif simulation.mesh_gen == "extruded_annulus":
         epsilon = ga.interface_thickness(level_set[0].function_space())
     else:
         epsilon = ga.interface_thickness(
@@ -146,7 +146,7 @@ else:  # Initialise mesh and key functions
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if benchmark == "trim_2023":
         epsilon = 1.0 / 2.0 / simulation.k
-    elif benchmark == "davies_2022":
+    elif simulation.mesh_gen == "extruded_annulus":
         epsilon = ga.interface_thickness(func_space_ls)
     else:
         epsilon = ga.interface_thickness(func_space_ls, min_cell_edge_length=True)
@@ -336,7 +336,7 @@ while True:
         exit_loop = time_now >= simulation.time_end
     else:
         steady_state = (
-            fd.assemble(fd.sqrt((temperature - energy_solver.T_old) ** 2) * fd.dx)
+            fd.norm(temperature - energy_solver.solution_old)
             < simulation.steady_state_threshold
         )
         exit_loop = time_now >= 1e2 * simulation.initial_timestep and steady_state
