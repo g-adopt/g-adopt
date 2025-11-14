@@ -506,7 +506,7 @@ class AbstractRKScheme(ABC):
         self.is_dirk = np.diag(self.a).all()
 
 
-def shu_osher_butcher(α_or_λ, β_or_μ):
+def shu_osher_butcher(alpha_or_lambda, beta_or_mu):
     """
     Generate arrays composing the Butcher tableau of a Runge-Kutta method from the
     coefficient arrays of the equivalent, original or modified, Shu-Osher form.
@@ -514,8 +514,8 @@ def shu_osher_butcher(α_or_λ, β_or_μ):
     See also Ketcheson, Macdonald, and Gottlieb (2009).
 
     Function arguments:
-    α_or_λ : array_like, shape (n + 1, n)
-    β_or_μ : array_like, shape (n + 1, n)
+    alpha_or_lambda : array_like, shape (n + 1, n)
+    beta_or_mu : array_like, shape (n + 1, n)
     """
 
     X = np.identity(α_or_λ.shape[1]) - α_or_λ[:-1]
