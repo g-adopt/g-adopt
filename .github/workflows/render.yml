@@ -28,6 +28,13 @@ jobs:
           apt update
           apt install -y git-lfs
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Fetch LFS artifacts
+        run: |
+          git lfs checkout
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Install dependencies
