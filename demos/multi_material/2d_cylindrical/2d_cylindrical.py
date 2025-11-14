@@ -142,7 +142,9 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
 # the compositional Rayleigh number across the domain.
 
 # + tags=["active-ipynb"]
-# VTKFile("RaB.pvd").write(Function(psi).interpolate(RaB))
+# VTKFile("RaB.pvd").write(
+#     Function(psi, name="Compositional Rayleigh number").interpolate(RaB)
+# )
 # RaB_data = pv.read("RaB/RaB_0.vtu")
 # plotter = pv.Plotter(notebook=True)
 # plotter.add_mesh(RaB_data, cmap="BrBG")
@@ -166,10 +168,10 @@ t_adapt = TimestepAdaptor(
 
 stokes_nullspace = create_stokes_nullspace(Z, rotational=True)
 
-# Boundary conditions are next specified. Boundary conditions for temperature are set to
-# $T = 0.0$ at the surface ($r_{\text{max}}$) and $T = 1.0$ at the base
-# ($r_{\text{min}}$). For velocity, we implicitly specify free‐slip conditions on both
-# boundaries by explicitly setting the normal velocity component to 0.
+# Boundary conditions are specified next. For temperature, they are set to $T = 0.0$ at
+# the surface ($r_{\text{max}}$) and $T = 1.0$ at the base ($r_{\text{min}}$). For
+# velocity, we implicitly specify free‐slip conditions on both boundaries by explicitly
+# setting the normal velocity component to 0.
 
 temp_bcs = {boundary.bottom: {"T": 1.0}, boundary.top: {"T": 0.0}}
 stokes_bcs = {boundary.bottom: {"un": 0.0}, boundary.top: {"un": 0.0}}
