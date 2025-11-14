@@ -88,7 +88,7 @@ steady_state_tolerance = 1e-7  # Used to determine if solution has reached a ste
 # We choose the initial temperature distribution to trigger upwelling of 4 equidistant plumes.
 # This initial temperature field is prescribed as:
 #
-# $$T(x,y) = (r_{\text{max}} - r) + A\cos(4 \; atan2\ (y,x))  \sin(r-r_{\text{min}}) \pi)$$
+# $$T(x,y) = (r_{\text{max}} - r) + A\cos(4 \; atan2\ (y,x))  \sin((r-r_{\text{min}}) \pi)$$
 #
 # where $A=0.02$ is the amplitude of the initial perturbation.
 
