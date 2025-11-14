@@ -135,7 +135,7 @@ approximation = BoussinesqApproximation(
 # -
 
 # Let us now verify that the material fields have been correctly initialised. We plot
-# the density and vicosity across the domain.
+# the density and viscosity across the domain.
 
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots(nrows=2, figsize=(20, 15))
