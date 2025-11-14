@@ -23,6 +23,7 @@ cases = {
     f"{mc_path}/Drucker_Prager": {"extra_checks": ["ux_max"]},
     f"{mm_path}/compositional_buoyancy": {"extra_checks": ["entrainment"]},
     f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
+    f"{mm_path}/free_surface": {"extra_checks": ["slab_tip_depth"]},
     f"{gia_path}/base_case": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical_lvv": {"extra_checks": ["uv_min"]},
