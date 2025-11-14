@@ -606,7 +606,15 @@ class LevelSetSolver(SolverConfigurationMixin):
         self.gradient_solver.solve()
 
     def reinitialise(self) -> None:
-        """Performs reinitialisation steps."""
+        """Performs reinitialisation steps.
+
+        Note:
+            This method currently uses the deprecated `update_forcings` callback to update
+            the level-set gradient between reinitialisation stages. Future versions should
+            consider using Firedrake's `ExternalOperator` to express the gradient dependency
+            symbolically, or reformulate as a coupled system that solves for both the
+            level-set function and its gradient simultaneously.
+        """
         for _ in range(self.reini_kwargs["steps"]):
             self.reini_integrator.advance(update_forcings=self.update_gradient)
 

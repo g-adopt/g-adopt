@@ -8,7 +8,9 @@ This module now includes Irksome integration.
 """
 
 from abc import ABC, abstractmethod
+from numbers import Number
 from typing import Any, Callable, Optional
+import warnings
 
 import firedrake
 import numpy as np
@@ -140,6 +142,12 @@ class IrksomeIntegrator(TimeIntegratorBase):
         strong_bcs: List of Firedrake Dirichlet boundary conditions
         bc_type: Boundary condition type for Irksome ("DAE" or "ODE")
         solver_parameters: Dictionary of solver parameters provided to PETSc
+        initial_time: Initial time value (default: 0.0). This initialises the internal
+                      time variable that Irksome uses in time-dependent forms.
+
+    Note:
+        The internal time variable (self.t) is shared with Irksome's TimeStepper.
+        Users should manage time externally and pass it to advance(t=...).
     """
 
     def __init__(
@@ -153,6 +161,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
         bc_type: str = "DAE",
         solver_parameters: Optional[dict[str, Any]] = None,
+        initial_time: Number = 0.0,
     ):
         super().__init__()
 
@@ -165,10 +174,11 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self.dt_reference = ensure_constant(dt)
 
         # Create MeshConstant objects for time variables (what Irksome expects)
+        # These are shared with Irksome's TimeStepper (ensures synchronisation)
         mesh = solution.ufl_domain()
         mc = MeshConstant(mesh)
-        self.t = mc.Constant(0.0)
-        self.dt_mesh_const = mc.Constant(float(dt))  # Internal MeshConstant for Irksome
+        self.t = mc.Constant(initial_time)  # Shared time variable with Irksome
+        self.dt_mesh_const = mc.Constant(float(dt))  # MeshConstant for Irksome, synced from dt_reference
 
         # Build the Irksome form using the unified irksome_form method
         # This ensures solution-dependent coefficients in the mass term are
@@ -197,8 +207,8 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self.stepper = IrksomeTimeStepper(
             F,
             butcher,
-            self.t,
-            self.dt_mesh_const,  # Use MeshConstant for Irksome
+            self.t,              # Shared time variable (MeshConstant)
+            self.dt_mesh_const,  # MeshConstant for Irksome (synced from dt_reference)
             solution,
             **irksome_kwargs
         )
@@ -211,63 +221,84 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self._initialized = True
 
     def advance(self, update_forcings: Callable | None = None, t: float | None = None):
-        """Advance the solution by one time step."""
+        """Advance the solution by one time step.
+
+        Args:
+            update_forcings: [SOON TO BE DEPRECATED] Optional callable to update time-dependent forcings.
+                Currently, this callback is called once before advancing (equivalent to calling it
+                before `advance()`). For updating terms through time-stepping stages (e.g., per-stage
+                updates in multi-stage methods), use one of the following approaches:
+                  - Include time-dependent expressions directly in your UFL form using the
+                    time variable `t` (e.g., `sin(t)`, `exp(-t)`, etc.)
+                  - Use Firedrake's `ExternalOperator` for complex dependencies
+                  - Solve coupled systems monolithically rather than using callbacks
+            t: Optional current simulation time. If provided, updates the internal time variable
+               before advancing. If not provided, uses the current value of self.t.
+
+        Note:
+            Following Irksome's design, this method does NOT automatically update the time variable
+            after advancing. Users should manually update time after calling advance():
+                integrator.advance(t=current_time)
+                current_time += dt
+            This ensures time synchronization between g-adopt and Irksome's internal state.
+        """
         if not self._initialized:
             self.initialize(self.solution)
 
-        # Apply boundary conditions to solution before advancing
-        # This replicates the behavior from G-ADOPT's original DIRKGeneric
-        # (see time_stepper.py line 319-320 on main branch)
+        # Deprecation warning
+        if update_forcings is not None:
+            warnings.warn(
+                "The 'update_forcings' parameter will be deprecated in a future version. "
+                "Currently, it is called once before advancing (equivalent to calling it before advance()). "
+                "For updating terms through time-stepping stages (e.g., per-stage updates in multi-stage methods), "
+                "consider these alternatives:\n"
+                "  1. Use explicit time dependence in UFL forms (e.g., include 't' directly)\n"
+                "  2. Use Firedrake's ExternalOperator for complex derived quantities\n"
+                "  3. Solve coupled systems monolithically instead of using callbacks",
+                DeprecationWarning,
+                stacklevel=2
+            )
+
+        # Apply boundary conditions
         for bci in self.strong_bcs:
             bci.apply(self.solution)
 
         # Save current solution to solution_old before advancing
-        # This is needed for diagnostics like maxchange = ||T - T_old||
         self.solution_old.assign(self.solution)
 
-        # Sync dt_mesh_const with the reference dt before advancing
-        self.dt_mesh_const.assign(float(self.dt_reference))
+        # Sync dt_mesh_const with dt_reference before advancing
+        # This ensures Irksome uses the current dt value (in case user updated dt_reference)
+        self.dt_mesh_const.assign(self.dt_reference)
 
-        # Update time if provided
+        # Update internal time if provided by user
+        # This ensures Irksome uses the correct time during this advance() call
         if t is not None:
-            self.t.assign(float(t))
+            self.t.assign(ensure_constant(t))
 
-        # If stepper supports stage callbacks (DIRK/Explicit), pass update_forcings as callback
-        # Otherwise call it once before advancing (for stage-coupled methods)
-        if hasattr(self.stepper, 'stage_update_callback'):
-            # Wrap update_forcings to match irksome's callback signature: (stage_index, stage_time)
-            if update_forcings is not None:
-                def irksome_callback(stage_index, stage_time):
-                    # Call update_forcings - try with stage_time first if t is provided,
-                    # otherwise call with no arguments
-                    # This handles callbacks that may or may not accept arguments
-                    if t is not None:
-                        try:
-                            update_forcings(stage_time)
-                        except TypeError:
-                            # Callback doesn't accept arguments, call without
-                            update_forcings()
-                    else:
-                        update_forcings()
-                setattr(self.stepper, 'stage_update_callback', irksome_callback)
-            else:
-                self.stepper.stage_update_callback = None
-        else:
-            # For stage-coupled methods without stage callback support, call once
-            if update_forcings is not None:
-                update_forcings(float(self.t))
+        # Call update_forcings once if provided (will be deprecated behaviour)
+        if update_forcings is not None:
+            update_forcings(float(self.t))
 
         # Advance using Irksome
+        # Note: Irksome uses self.t internally but does not modify it
+        # The time used during stages is: t + c[i] * dt
         self.stepper.advance()
 
-        # Update time for next step
-        self.t.assign(float(self.t) + float(self.dt_mesh_const))
+    def get_time(self) -> float:
+        """Get the current value of the internal time variable.
 
-    def set_dt(self, new_dt: float):
-        """Update the time step."""
-        self.dt = float(new_dt)
-        self.dt_reference.assign(float(new_dt))
-        # Note: dt_mesh_const will be synced on next advance() call
+        Returns:
+            The current time as a float.
+        """
+        return float(self.t)
+
+    def get_dt(self) -> float:
+        """Get the current value of the time step from dt_reference.
+
+        Returns:
+            The current time step as a float.
+        """
+        return float(self.dt_reference)
 
 
 def create_custom_tableau(a, b, c):
