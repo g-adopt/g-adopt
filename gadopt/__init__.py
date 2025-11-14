@@ -45,7 +45,7 @@ from .time_stepper import (
     IrksomeQinZhang,
     IrksomePareschiRusso,
 )
-from .transport_solver import EnergySolver, GenericTransportSolver
+from .transport_solver import DiffusiveSmoothingSolver, EnergySolver, GenericTransportSolver
 from .utility import (
     InteriorBC,
     LayerAveraging,
