@@ -518,9 +518,9 @@ def shu_osher_butcher(alpha_or_lambda, beta_or_mu):
     beta_or_mu : array_like, shape (n + 1, n)
     """
 
-    X = np.identity(α_or_λ.shape[1]) - α_or_λ[:-1]
-    A = np.linalg.solve(X, β_or_μ[:-1])
-    b = np.transpose(β_or_μ[-1] + np.dot(α_or_λ[-1], A))
+    X = np.identity(alpha_or_lambda.shape[1]) - alpha_or_lambda[:-1]
+    A = np.linalg.solve(X, beta_or_mu[:-1])
+    b = np.transpose(beta_or_mu[-1] + np.dot(alpha_or_lambda[-1], A))
     c = np.sum(A, axis=1)
     return A, b, c
 
