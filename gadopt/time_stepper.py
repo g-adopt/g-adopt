@@ -136,7 +136,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
         solution: Firedrake function representing the equation's solution
         dt: Integration time step (Firedrake Constant or float)
         butcher: Irksome Butcher tableau (e.g., GaussLegendre, RadauIIA)
-        stage_type: Type of stage formulation (e.g., "deriv")
+        stage_type: Type of stage formulation (e.g., "deriv", "dirk", "explicit")
         solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
         strong_bcs: List of Firedrake Dirichlet boundary conditions
@@ -144,10 +144,36 @@ class IrksomeIntegrator(TimeIntegratorBase):
         solver_parameters: Dictionary of solver parameters provided to PETSc
         initial_time: Initial time value (default: 0.0). This initialises the internal
                       time variable that Irksome uses in time-dependent forms.
+        adaptive_parameters: Optional dict for adaptive time-stepping (stage_type="deriv" only).
+                            Keys: tol, dtmin, dtmax, KI, KP, max_reject, onscale_factor,
+                            safety_factor, gamma0_params. See Irksome documentation.
+        **irksome_kwargs: Additional keyword arguments passed directly to Irksome's TimeStepper.
+                         Examples: splitting, nullspace, transpose_nullspace, near_nullspace,
+                         appctx, form_compiler_parameters, etc.
 
     Note:
         The internal time variable (self.t) is shared with Irksome's TimeStepper.
         Users should manage time externally and pass it to advance(t=...).
+
+        For adaptive time-stepping, the advance() method returns (error, dt_used) tuple
+        when adaptive_parameters is provided.
+
+    Example:
+        # Basic usage
+        integrator = IrksomeIntegrator(eq, T, dt, GaussLegendre(2))
+
+        # With adaptive time-stepping
+        integrator = IrksomeIntegrator(
+            eq, T, dt, RadauIIA(3),
+            adaptive_parameters={"tol": 1e-3, "dtmin": 1e-6, "dtmax": 0.1}
+        )
+
+        # With additional Irksome parameters
+        integrator = IrksomeIntegrator(
+            eq, T, dt, butcher,
+            splitting=AI,  # Passed to Irksome
+            nullspace=my_nullspace  # Passed to Irksome
+        )
     """
 
     def __init__(
@@ -162,13 +188,15 @@ class IrksomeIntegrator(TimeIntegratorBase):
         bc_type: str = "DAE",
         solver_parameters: Optional[dict[str, Any]] = None,
         initial_time: Number = 0.0,
+        adaptive_parameters: Optional[dict[str, Any]] = None,
+        **irksome_kwargs,
     ):
-        super().__init__()
-
         self.equation = equation
         self.solution = solution
         self.solution_old = solution_old or firedrake.Function(solution)
-        self.dt = float(dt)
+
+        # Unique identifier used in solver (for API consistency with TimeIntegrator)
+        self.name = '-'.join([self.__class__.__name__, self.equation.__class__.__name__])
 
         # Keep reference to original dt constant for syncing
         self.dt_reference = ensure_constant(dt)
@@ -189,9 +217,9 @@ class IrksomeIntegrator(TimeIntegratorBase):
         # This ensures BC-consistency like the original G-ADOPT DIRKGeneric
         self.strong_bcs = strong_bcs or []
 
-        # Create the Irksome time stepper using MeshConstant
-        # For stage_type="deriv", pass bc_type parameter
-        irksome_kwargs = {
+        # Build kwargs for Irksome TimeStepper
+        # Start with g-adopt's standard parameters
+        stepper_kwargs = {
             "stage_type": stage_type,
             "bcs": strong_bcs or (),
             "solver_parameters": solver_parameters or {}
@@ -199,10 +227,15 @@ class IrksomeIntegrator(TimeIntegratorBase):
 
         # Add bc_type only for stage formulations that support it
         if stage_type == "deriv":
-            irksome_kwargs["bc_type"] = bc_type
+            stepper_kwargs["bc_type"] = bc_type
 
-        # Store update_forcings callback - will be wrapped and passed to irksome
-        self.update_forcings_callback = None
+        # Add adaptive_parameters if provided
+        if adaptive_parameters is not None:
+            stepper_kwargs["adaptive_parameters"] = adaptive_parameters
+
+        # Merge in any additional Irksome-specific kwargs
+        # This allows users to pass splitting, nullspace, etc.
+        stepper_kwargs.update(irksome_kwargs)
 
         self.stepper = IrksomeTimeStepper(
             F,
@@ -210,7 +243,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
             self.t,              # Shared time variable (MeshConstant)
             self.dt_mesh_const,  # MeshConstant for Irksome (synced from dt_reference)
             solution,
-            **irksome_kwargs
+            **stepper_kwargs
         )
 
         self._initialized = False
@@ -277,7 +310,13 @@ class IrksomeIntegrator(TimeIntegratorBase):
 
         # Call update_forcings once if provided (will be deprecated behaviour)
         if update_forcings is not None:
-            update_forcings(float(self.t))
+            # Try calling with time argument first, fall back to no arguments
+            # This handles both old callbacks (no args) and new ones (with time arg)
+            try:
+                update_forcings(float(self.t))
+            except TypeError:
+                # Callback doesn't accept time argument, call without it
+                update_forcings()
 
         # Advance using Irksome
         # Note: Irksome uses self.t internally but does not modify it
@@ -341,6 +380,7 @@ class RKGeneric(IrksomeIntegrator):
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
+        **kwargs,
     ):
         # Create Butcher tableau from instance attributes (inherited from Abstract class)
         butcher = create_custom_tableau(self.a, self.b, self.c)
@@ -354,7 +394,8 @@ class RKGeneric(IrksomeIntegrator):
             stage_type=self.stage_type,
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters
+            solver_parameters=solver_parameters,
+            **kwargs
         )
 
 
@@ -388,9 +429,10 @@ class StaticButcherTableauIntegrator(IrksomeIntegrator):
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
+        **kwargs,
     ):
         if self.butcher_tableau is None:
-            raise NotImplementedError(
+            raise ValueError(
                 f"{self.__class__.__name__} must define a butcher_tableau class attribute"
             )
 
@@ -403,7 +445,8 @@ class StaticButcherTableauIntegrator(IrksomeIntegrator):
             stage_type=self.stage_type,
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters
+            solver_parameters=solver_parameters,
+            **kwargs
         )
 
 
