@@ -4,13 +4,14 @@
 # Rationale
 # -
 
-# G-ADOPT handles multi-material simulations via the conservative level-set approach,
-# which is an interface-capturing method. At the core of this method lies the need to
-# calculate a signed-distance function, which expresses the distance from the material
-# interface location to any point in the numerical domain. As calculating such a field
-# can be challenging, G-ADOPT exposes the `assign_level_set_values` function as part of
-# its API to ease computing the signed-distance function. Under the hood, this function
-# leverages `Shapely` to calculate planar distances.
+# G-ADOPT handles multi-material simulations via the conservative level-set approach
+# ([Olsson and Kreiss, 2005](https://doi.org/10.1016/j.jcp.2005.04.007)), which is an
+# interface-capturing method. At the core of this method lies the need to calculate a
+# signed-distance function, which expresses the distance from the material interface
+# location to any point in the numerical domain. As calculating such a field can be
+# challenging, G-ADOPT exposes the `assign_level_set_values` function as part of its API
+# to ease computing the signed-distance function. Under the hood, this function
+# leverages [`Shapely`](https://shapely.readthedocs.io/en/stable/) to calculate planar distances.
 
 # This example
 # -
@@ -69,6 +70,7 @@ psi = Function(K, name="Level set")  # Firedrake function for level set
 # We now set up objects that will be useful for level-set initialisation: spatial
 # coordinates and the thickness of the hyperbolic tangent profile defined in the
 # conservative level-set formulation.
+
 x, y = SpatialCoordinate(mesh)  # Extract UFL representation of spatial coordinates
 epsilon = interface_thickness(K, min_cell_edge_length=True)
 
@@ -87,7 +89,7 @@ assign_level_set_values(psi, epsilon, signed_distance)
 
 # As you can see, initialisation is straightforward in this case, and it does not
 # require any external package under the hood, making it compatible with 3-D domains.
-# Let us visualise the location of the material interface that we have just initialised
+# Let's visualise the location of the material interface that we have just initialised
 # to verify its correctness.
 
 # + tags=["active-ipynb"]
@@ -135,8 +137,8 @@ assign_level_set_values(psi, epsilon, signed_distance)
 # signed-distance function. In such cases, G-ADOPT allows a user to mathematically
 # describe the interface geometry as a sufficient step to calculate the signed-distance
 # function. Under the hood, this mathematical description is provided to `Shapely`,
-# which generates a geometrical object representing the interface. From this object,
-# `Shapely` then computes the distance of any mesh node to the material interface, which
+# which generates a geometric object representing the interface. `Shapely` then computes
+# the distance of any mesh node to this object (i.e. the material interface), which
 # G-ADOPT then uses to determine the conservative level-set profile.
 
 ##### Curve interface
@@ -145,12 +147,13 @@ assign_level_set_values(psi, epsilon, signed_distance)
 # possibilities: either G-ADOPT exposes an implementation of that curve or it does not,
 # in which case a user will have to provide the implementation. We will start with the
 # first possibility and examine a material interface represented by a cosine function.
-# G-ADOPT exposed implementations use a parametric representation of the curve, and so
-# such a parameter must be provided. Here, it will be equivalent to the x-coordinate. To
-# complete the description of the cosine function, its amplitude, wavelength, and shift
-# are also provided. Finally, we need to close the curve by providing coordinates along
-# domain boundaries. The material enclosed in such a way will be attributed the 1-side
-# of the conservative level-set profile.
+# G-ADOPT exposed implementations use a parametric curve representation, which can also
+# describe algebraic curves by identifying the parameter with a domain coordinate. Thus,
+# these implemented functions require a parameter to be given; here, it will be the
+# x-coordinate. To complete the description of the cosine function, its amplitude,
+# wavelength, and shift are also supplied. Finally, we need to close the curve by
+# providing coordinates along domain boundaries. The material enclosed in such a way
+# will be attributed the 1-side of the conservative level-set profile.
 
 # +
 callable_args = (
@@ -180,18 +183,14 @@ assign_level_set_values(
 # As we did earlier, we can swap the location of the 0 and 1 sides of the profile. To do
 # so, we need to provide the complementary choice of boundary coordinates.
 
-# +
-boundary_coordinates = [(domain_dims[0], 0.0), (0.0, 0.0), (0.0, domain_dims[1])]
-
 assign_level_set_values(
     psi,
     epsilon,
     interface_geometry="curve",
     interface_callable="cosine",
     interface_args=callable_args,
-    boundary_coordinates=boundary_coordinates,
+    boundary_coordinates=[(domain_dims[0], 0.0), (0.0, 0.0), (0.0, domain_dims[1])],
 )
-# -
 
 # + tags=["active-ipynb"]
 # plot_level_set(psi)
@@ -199,26 +198,33 @@ assign_level_set_values(
 
 # As expected, sides have been swapped.
 
+# Let us now examine the scenario where the material interface is still a curve, but the
+# user has to provide its implementation. We choose a
+# [Lissajous curve](https://www.wikiwand.com/en/articles/Lissajous_curve), which admits
+# a parametric representation. We set $a = 1$, $b = 2$, $\delta = \frac{\pi}{2}$, and
+# scale the curve to make it fit within our rectangular domain. This curve is closed; we
+# do not need to provide `boundary_coordinates` anymore. However, given the underlying
+# Shapely engine, we need to ensure that the first and final points describing the curve
+# match. In other words, we need to know the curve's arc length. Here, it is $2\pi$, but
+# sometimes it can be non-trivial to determine. And even when known, floating-point
+# arithmetic can make the comparison inexact. We will first assume that we know this
+# length and then demonstrate how to modify the curve's implementation if it is unknown.
 
+
+# +
 def lissajous_curve(t: np.ndarray, a: float, b: float, delta: float) -> np.ndarray:
     """Lissajous curve."""
-    curve_points = np.column_stack(
-        (np.sin(a * t + delta) + 1.0, (np.sin(b * t) + 1.0) / 2.0)
-    )
-    index_stop = np.nonzero(
-        (curve_points[2:, 0] > 1.9999) & (curve_points[2:, 1] < 0.51)
-    )[0][0]
+    curve = np.column_stack((np.sin(a * t + delta) + 1.0, (np.sin(b * t) + 1.0) / 2.0))
 
-    return np.vstack((curve_points[: index_stop + 2], curve_points[0]))
+    return np.vstack((curve, curve[0]))
 
 
 callable_args = (
-    curve_parameter := np.linspace(0.0, 10.0, 1000),
+    curve_parameter := np.linspace(0.0, 2 * np.pi, 1000),
     a := 1.0,
     b := 2.0,
     delta := np.pi / 2.0,
 )
-boundary_coordinates = np.atleast_2d([]).reshape(-1, 2)
 
 assign_level_set_values(
     psi,
@@ -226,9 +232,89 @@ assign_level_set_values(
     interface_geometry="curve",
     interface_callable=lissajous_curve,
     interface_args=callable_args,
-    boundary_coordinates=boundary_coordinates,
+)
+# -
+
+# + tags=["active-ipynb"]
+# plot_level_set(psi)
+# -
+
+# The interface matches the desired Lissajous curve.
+
+# As promised, we now demonstrate how to modify the curve's implementation when the arc
+# length is unknown. We compress the curve horizontally to depict such a situation.
+
+
+# +
+def lissajous_curve(t: np.ndarray, a: float, b: float, delta: float) -> np.ndarray:
+    """Lissajous curve."""
+    curve = np.column_stack(
+        (0.9 * np.sin(a * t + delta) + 1.0, (np.sin(b * t) + 1.0) / 2.0)
+    )
+    index_stop = np.nonzero((curve[2:, 0] > 1.8999) & (curve[2:, 1] < 0.51))[0][0]
+
+    return np.vstack((curve[: index_stop + 2], curve[0]))
+
+
+callable_args = (curve_parameter := np.linspace(0.0, 10.0, 1000), a, b, delta)
+
+assign_level_set_values(
+    psi,
+    epsilon,
+    interface_geometry="curve",
+    interface_callable=lissajous_curve,
+    interface_args=callable_args,
+)
+# -
+
+# + tags=["active-ipynb"]
+# plot_level_set(psi)
+# -
+
+# The level-set profile is again successfully initialised.
+
+##### Polygon interface
+
+assign_level_set_values(
+    psi,
+    epsilon,
+    interface_geometry="polygon",
+    interface_callable="rectangle",
+    interface_args=(reference_vertex := (0.38, 0.12), edge_sizes := (0.21, 0.88)),
 )
 
 # + tags=["active-ipynb"]
 # plot_level_set(psi)
 # -
+
+##### Circle interface
+
+# We have already initialised the level-set interface as a circle when we directly
+# provided the signed-distance function. As it is simple to generate a circle with
+# Shapely, G-ADOPT also exposes a way to describe this geometry via
+# `assign_level_set_values`. This time, `interface_coordinates` must be a tuple holding
+# the coordinates of the circle's centre and the circle's radius. Let's reproduce the
+# earlier circle.
+
+assign_level_set_values(
+    psi,
+    epsilon,
+    interface_geometry="circle",
+    interface_coordinates=(circle_centre, circle_radius),
+)
+
+# + tags=["active-ipynb"]
+# plot_level_set(psi)
+# -
+
+# As expected, we recover the earlier circular geometry, noting that level-set sides are
+# swapped because, here, the 1-side is attributed to the enclosed material.
+
+##### Shapely interface
+
+# While G-ADOPT provides ways to easily generate some simple interface shapes, it is not
+# reasonable to expect that it could cover all possible scenarios. For these more
+# complex scenarios, a user is invited to create the material interface geometry
+# directly via Shapely and to provide the resulting object to G-ADOPT via the
+# `interface` argument. We demonstrate such an approach here by defining a material
+# interface as the union between a square, a triangle, and a circle.
