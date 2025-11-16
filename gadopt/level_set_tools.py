@@ -19,9 +19,9 @@ import numpy as np
 import shapely as sl
 from mpi4py import MPI
 from numpy.testing import assert_allclose
-from ufl.core.expr import Expr
+from ufl.algebra import Operator
 
-from .equations import Equation
+from .equations import Equation  # , interior_penalty_factor
 from .scalar_equation import mass_term
 from .solver_options_manager import SolverConfigurationMixin
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
@@ -38,18 +38,10 @@ __all__ = [
 ]
 
 # Default parameters for level-set advection
-adv_params_default = {
-    "time_integrator": eSSPRKs10p3,
-    "bcs": {},
-    "subcycles": 1,
-}
+adv_params_default = {"time_integrator": eSSPRKs10p3, "bcs": {}, "subcycles": 1}
 
 # Default parameters for level-set reinitialisation
-reini_params_default = {
-    "timestep": 0.02,
-    "time_integrator": eSSPRKs3p3,
-    "steps": 1,
-}
+reini_params_default = {"timestep": 2e-2, "time_integrator": eSSPRKs3p3, "steps": 1}
 solver_params_default = {
     "adv": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
     "reini": {"pc_type": "bjacobi", "sub_pc_type": "ilu"},
@@ -111,7 +103,7 @@ def assign_level_set_values(
     level_set: fd.Function,
     epsilon: float | fd.Function,
     /,
-    signed_distance: fd.Function | Expr | None = None,
+    signed_distance: fd.Function | Operator | None = None,
     interface_geometry: str | None = None,
     *,
     interface: sl.LineString | sl.Polygon | None = None,
@@ -372,15 +364,52 @@ def reinitialisation_term(
     method.
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
-    grad_norm = fd.sqrt(fd.dot(fd.grad(trial), fd.grad(trial)) + 1e-12)
+
+    def gradient_norm(field: fd.Function, regularisation: float = 0.0) -> Operator:
+        return fd.sqrt(fd.dot(fd.grad(field), fd.grad(field)) + regularisation)
+
+    # def sipg_term(F, diffusion):
+    #     sigma = interior_penalty_factor(eq, shift=1)
+    #     sigma_int = sigma * fd.avg(fd.FacetArea(eq.mesh) / fd.CellVolume(eq.mesh))
+    #     F += (
+    #         sigma_int
+    #         * fd.avg(diffusion)
+    #         * fd.dot(fd.jump(eq.test, eq.n), fd.jump(trial, eq.n))
+    #         * eq.dS
+    #     )
+    #     F -= fd.dot(fd.avg(diffusion * fd.grad(eq.test)), fd.jump(trial, eq.n)) * eq.dS
+    #     F -= fd.dot(fd.jump(eq.test, eq.n), fd.avg(diffusion * fd.grad(trial))) * eq.dS
+
+    #     return F
+
+    # grad_trial = fd.grad(trial)
+    # grad_trial_dot = fd.dot(grad_trial, grad_trial)
+
+    # alpha = 1e-4
+    # beta = 1e1
+    # m = eq.epsilon / fd.sqrt(
+    #     eq.epsilon**2 * grad_trial_dot
+    #     + alpha**2 * fd.exp(-beta * eq.epsilon**2 * grad_trial_dot)
+    # )
+
+    # diffusion_terms = [
+    #     -trial * (1.0 - trial) * m,
+    #     eq.epsilon * m**2 * grad_trial_dot,
+    #     (1.0 - m**2 * grad_trial_dot) * eq.epsilon,
+    # ]
+
+    # weak_form = 0.0
+    # for diffusion in diffusion_terms:
+    #     F = fd.dot(fd.grad(eq.test), diffusion * grad_trial) * eq.dx
+    #     weak_form += sipg_term(F, diffusion)
+    #     weak_form -= eq.test * diffusion * fd.dot(grad_trial, eq.n) * eq.ds
+
+    # return -weak_form
 
     sharpening = -trial * (1.0 - trial) * (1.0 - 2.0 * trial)
-    balance = eq.epsilon * (1.0 - 2.0 * trial) * grad_norm
+    balance = eq.epsilon * (1.0 - 2.0 * trial) * gradient_norm(trial, 1e-12)
     weak_form = eq.test * (sharpening + balance) * eq.dx
-
-    penalty_factor = 1e-4 * (trial.ufl_element().degree() + 1) ** 2
-    penalty_factor *= fd.avg(eq.epsilon) / fd.avg(fd.CellDiameter(eq.mesh))
-    weak_form += fd.jump(eq.test) * penalty_factor * fd.jump(trial) * eq.dS
+    weak_form -= fd.jump(eq.test) * fd.avg(eq.epsilon) * fd.jump(trial) * eq.dS
 
     return weak_form
 
@@ -544,7 +573,7 @@ class LevelSetSolver(SolverConfigurationMixin):
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
-        bilinear_form = fd.inner(test, trial) * fd.dx
+        bilinear_form = fd.dot(test, trial) * fd.dx
         ibp_element = -self.solution * fd.div(test) * fd.dx
         ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * fd.ds
         boundary_flux = (
@@ -603,9 +632,7 @@ class LevelSetSolver(SolverConfigurationMixin):
             self.reini_integrator.advance()
 
     def solve(
-        self,
-        disable_advection: bool = False,
-        disable_reinitialisation: bool = False,
+        self, disable_advection: bool = False, disable_reinitialisation: bool = False
     ) -> None:
         """Updates the level-set function by means of advection and reinitialisation.
 
@@ -631,7 +658,10 @@ class LevelSetSolver(SolverConfigurationMixin):
 
 
 def material_interface(
-    level_set: fd.Function, field_value: float, other_side: float | Expr, interface: str
+    level_set: fd.Function,
+    field_value: float,
+    other_side: float | Operator,
+    interface: str,
 ):
     """Generates UFL algebra describing a physical property across a material interface.
 
@@ -670,7 +700,7 @@ def material_interface(
 
 def material_field_from_copy(
     level_set: list[fd.Function], field_values: list[float], interface: str
-) -> Expr:
+) -> Operator:
     """Generates UFL algebra by consuming `level_set` and `field_values` lists.
 
     Args:
@@ -702,7 +732,7 @@ def material_field(
     level_set: fd.Function | list[fd.Function],
     field_values: list[float],
     interface: str,
-) -> Expr:
+) -> Operator:
     """Generates UFL algebra describing a physical property across the domain.
 
     Calls `material_field_from_copy` using a copy of the level-set list, preventing the
