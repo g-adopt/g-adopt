@@ -1,5 +1,6 @@
 import pickle
 from pathlib import Path
+import numpy as np
 
 from gadopt import *
 from gadopt.gplates import GplatesVelocityFunction, pyGplatesConnector, ensure_reconstruction
@@ -15,7 +16,7 @@ def test_obtain_muller_2022_se():
             assert Path(file_path).exists(), f"{file_path} does not exist."
 
 
-def test_gplates():
+def test_gplates(write_pvd=False):
     gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
 
     # Set up geometry:
@@ -29,9 +30,9 @@ def test_gplates():
         layer_height=(rmax - rmin)/(nlayers-1),
         extrusion_type="radial",
     )
+    mesh.cartesian = False  # I don't think we need this in the tests, but for clarity
 
     V = VectorFunctionSpace(mesh, "CG", 2)
-
     mueller_2022_se = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
 
     # compute surface velocities
@@ -48,12 +49,28 @@ def test_gplates():
 
     surface_rms = []
 
+    # Create a VTK file if needed
+    if write_pvd:
+        vtkfile = VTKFile("gplates_velocity.pvd")
+
     for t in np.arange(409, 0, -50):
         gplates_function.update_plate_reconstruction(rec_model.age2ndtime(t))
+
+        # Visualise the velocity field
+        if write_pvd:
+            vtkfile.write(gplates_function)
+
+        # Calculate and test radial component
+        radial_component = assemble(inner(gplates_function, FacetNormal(mesh)) * ds_t)
+
+        # Assert that radial component is essentially zero
+        assert abs(radial_component) < 5e-9, f"Radial component at time {t} Ma is {radial_component}, should be 0"
+
         surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
 
     # Loading reference plate velocities
     test_data_path = Path(__file__).resolve().parent / "data"
+
     with open(test_data_path / "test_gplates.pkl", "rb") as file:
         ref_surface_rms = pickle.load(file)
 

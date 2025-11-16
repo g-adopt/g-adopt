@@ -17,12 +17,13 @@ from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
-from .time_stepper import RungeKuttaTimeIntegrator
-from .utility import DEBUG, INFO, absv, is_continuous, log, log_level
+from .time_stepper import BackwardEuler, RungeKuttaTimeIntegrator
+from .utility import DEBUG, INFO, absv, ensure_constant, is_continuous, log, log_level
 
 __all__ = [
     "GenericTransportSolver",
     "EnergySolver",
+    "DiffusiveSmoothingSolver",
     "direct_energy_solver_parameters",
     "iterative_energy_solver_parameters",
 ]
@@ -390,3 +391,93 @@ class EnergySolver(GenericTransportBase):
             approximation=self.approximation,
             bcs=self.weak_bcs,
         )
+
+
+class DiffusiveSmoothingSolver(GenericTransportSolver):
+    """A class to perform diffusive smoothing by inheriting from GenericTransportSolver.
+
+    This class provides functionality to solve a diffusion equation for smoothing
+    a scalar function, using clean inheritance from GenericTransportSolver.
+
+    Args:
+        solution (firedrake.Function): The solution function to store the smoothed result.
+        wavelength (Number): The wavelength for diffusion.
+        K (Union[firedrake.Function, Number], optional): Diffusion tensor. Defaults to 1.
+        bcs (dict[int, dict[str, int | float]] | None): Boundary conditions to impose on the solution.
+        solver_parameters (dict[str, str | float] | None): Solver parameters for the solver. Defaults to None.
+        integration_quad_degree (int | None): Quadrature degree for integrating the diffusion tensor. If None, defaults to 2p+1 where p is the polynomial degree.
+        **kwargs: Additional keyword arguments to pass to the solver.
+    """
+
+    def __init__(
+        self,
+        solution: Function,
+        wavelength: Number,
+        K: Function | Number = 1,
+        bcs: dict[int, dict[str, int | float]] | None = None,
+        solver_parameters: dict[str, str | float] | None = None,
+        integration_quad_degree: int | None = None,
+        **kwargs
+    ):
+        # Extract function space from solution
+        function_space = solution.function_space()
+
+        # Calculate diffusive time step
+        dt = self._calculate_diffusive_time_step(function_space, wavelength, K, integration_quad_degree)
+
+        # Initialise the parent GenericTransportSolver
+        super().__init__(
+            "diffusion",
+            solution,
+            dt,
+            BackwardEuler,
+            eq_attrs={"diffusivity": ensure_constant(K)},
+            bcs=bcs,
+            solver_parameters=solver_parameters,
+            **kwargs
+        )
+
+    def _calculate_diffusive_time_step(
+        self,
+        function_space: FunctionSpace,
+        wavelength: Number,
+        K: Function | Number,
+        integration_quad_degree: int | None
+    ) -> Constant:
+        """Calculate the diffusive time step based on wavelength and diffusivity."""
+        mesh = function_space.mesh()
+
+        # Determine quadrature degree for tensor integration
+        if integration_quad_degree is None:
+            p = function_space.ufl_element().degree()
+            if not isinstance(p, int):  # Tensor-product element
+                p = max(p)
+            integration_quad_degree = 2 * p + 1
+
+        # For anisotropic diffusion, use average diffusivity
+        if hasattr(K, 'ufl_shape') and len(K.ufl_shape) == 2:
+            # Tensor diffusivity (2D tensor, e.g., (2,2) or (3,3))
+            K_avg = (
+                assemble(sqrt(inner(K, K)) * dx(mesh, degree=integration_quad_degree)) /
+                assemble(Constant(1) * dx(mesh, degree=integration_quad_degree))
+            )
+        else:
+            # Scalar diffusivity (Number, Constant, or scalar Function)
+            K_avg = K
+
+        return Constant(wavelength**2 / (4 * K_avg))
+
+    def action(self, field: Function) -> None:
+        """Apply smoothing action to an input field.
+
+        Args:
+            field (firedrake.Function): The input field to be smoothed.
+
+        Note:
+            The smoothed result is stored in the solution function passed to the constructor.
+        """
+        # Start with the input field
+        self.solution.assign(field)
+
+        # Solve the diffusion equation (inherited from GenericTransportSolver)
+        self.solve()
