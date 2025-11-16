@@ -20,11 +20,13 @@ cases = {
     f"{mc_path}/3d_spherical": {"extra_checks": ["nu_top", "t_dev_avg"]},
     f"{mc_path}/3d_cartesian": {"extra_checks": ["nu_top"], "rtol": 1e-4},
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
+    f"{mc_path}/Drucker_Prager": {"extra_checks": ["ux_max"]},
     f"{mm_path}/compositional_buoyancy": {"extra_checks": ["entrainment"]},
     f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
     f"{gia_path}/base_case": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical_lvv": {"extra_checks": ["uv_min"]},
+    "smoothing": {"extra_checks": ["isotropic_rms", "anisotropic_rms"]},
     f"{tests_path}/2d_cylindrical_TALA_DG": {
         "extra_checks": ["nu_top", "avg_t", "FullT_min", "FullT_max"]
     },

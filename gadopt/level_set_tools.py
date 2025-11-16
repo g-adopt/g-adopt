@@ -619,7 +619,7 @@ class LevelSetSolver(SolverConfigurationMixin):
 
         self.step = 0
 
-    def update_gradient(self, *args, **kwargs) -> None:
+    def update_gradient(self) -> None:
         """Calls the gradient solver.
 
         Can be provided as a forcing to time integrators.

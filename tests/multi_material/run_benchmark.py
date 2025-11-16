@@ -1,5 +1,4 @@
 from argparse import ArgumentParser
-from functools import partial
 from importlib import import_module
 from pathlib import Path
 from subprocess import run
@@ -24,6 +23,7 @@ def write_checkpoint(checkpoint_file, checkpoint_fields, dump_counter):
             checkpoint_file.save_function(field, name=field_name, idx=dump_counter)
 
     checkpoint_file.set_attr("/", "time", time_now)
+    checkpoint_file.set_attr("/", "timestep", float(timestep))
 
 
 def write_output(output_file):
@@ -33,16 +33,15 @@ def write_output(output_file):
     else:
         compo_rayleigh.interpolate(RaB)
     viscosity.interpolate(mu)
-    if benchmark == "trim_2023":
-        simulation.internal_heating_rate(H, time_now)
 
+    myr_to_seconds = 1e6 * 365.25 * 8.64e4
     output_file.write(
         *stokes_function.subfunctions,
         temperature,
         *level_set,
         *level_set_grad,
         *output_fields,
-        time=time_now / 1e6 / 365.25 / 8.64e4 if simulation.dimensional else time_now,
+        time=time_now / (myr_to_seconds if simulation.dimensional else 1.0),
     )
 
 
@@ -84,6 +83,9 @@ if simulation.checkpoint_restart:  # Restore mesh and key functions
                 break
 
         time_now = h5_check.get_attr("/", "time")
+        func_space_real = fd.FunctionSpace(mesh, "R", 0)
+        timestep = fd.Function(func_space_real)
+        timestep.assign(h5_check.get_attr("/", "timestep"))
 
     # Thickness of the hyperbolic tangent profile in the conservative level-set approach
     if benchmark == "trim_2023":
@@ -143,6 +145,8 @@ else:  # Initialise mesh and key functions
         ga.assign_level_set_values(ls, epsilon, **kwargs)
 
     time_now = 0.0
+    func_space_real = fd.FunctionSpace(mesh, "R", 0)
+    timestep = fd.Function(func_space_real).assign(simulation.initial_timestep)
     dump_counter = 0
 
 # Annotate mesh as Cartesian to inform other G-ADOPT objects
@@ -167,7 +171,7 @@ if simulation.dimensional:
     rho_material = ga.material_field(
         level_set,
         [material.rho for material in simulation.materials],
-        interface="sharp",
+        interface="arithmetic" if benchmark == "woidt_1978" else "sharp",
     )
     density = fd.Function(func_space_output, name="Density")
     output_fields.append(density)
@@ -196,6 +200,7 @@ approximation_parameters["mu"] = mu
 
 if benchmark == "trim_2023":
     H = fd.Function(temperature.function_space(), name="Internal heating rate")
+    simulation.internal_heating_rate(H, time_now)
     output_fields.append(H)
     approximation_parameters["H"] = H
 
@@ -205,10 +210,6 @@ if simulation.dimensional:
 
 Ra = getattr(simulation, "Ra", 0.0)
 approximation = ga.BoussinesqApproximation(Ra, **approximation_parameters)
-
-# Timestep object
-real_func_space = fd.FunctionSpace(mesh, "R", 0)
-timestep = fd.Function(real_func_space).assign(simulation.initial_timestep)
 
 # Set up possible energy solver
 energy_solver = None
@@ -278,13 +279,9 @@ geo_diag = ga.GeodynamicalDiagnostics(
     stokes_function, temperature, bottom_id=3, top_id=4
 )
 
-if benchmark == "trim_2023":
-    disable_reinitialisation = True  # Omit level-set reinitialisation
-    # Update time-dependent internal heating during energy solve
-    update_forcings = partial(simulation.internal_heating_rate, H)
-else:
-    disable_reinitialisation = False
-    update_forcings = None
+# Level-set reinitialisation must be excluded for Trim et al. (2023), as the level-set
+# field acts as the composition field, which is purely advected.
+disable_reinitialisation = True if benchmark == "trim_2023" else False
 
 # Perform the time loop
 has_end_time = hasattr(simulation, "time_end")
@@ -309,7 +306,7 @@ while True:
 
     # Solve energy system
     if energy_solver is not None:
-        energy_solver.solve(update_forcings, time_now)
+        energy_solver.solve()
 
     # Advect each level set
     for ls_solver in level_set_solver:
@@ -321,6 +318,8 @@ while True:
 
     # Progress simulation time
     time_now += float(timestep)
+    if benchmark == "trim_2023":
+        simulation.internal_heating_rate(H, time_now)
 
     # Check if simulation has completed
     if has_end_time:
