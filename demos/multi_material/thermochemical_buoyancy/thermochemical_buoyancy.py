@@ -4,10 +4,10 @@
 # Rationale
 # -
 
-# Our [previous tutorial](../compositional_buoyancy) introduced multi-material simulations in G-ADOPT by
-# investigating compositional effects on buoyancy. We extend that tutorial to include
-# thermal effects, thereby simulating thermochemical convection, which is, for example,
-# essential to modelling Earth's mantle evolution.
+# Our [previous tutorial](../compositional_buoyancy) introduced multi-material
+# simulations in G-ADOPT by investigating compositional effects on buoyancy. We extend
+# that tutorial to include thermal effects, thereby simulating thermochemical
+# convection, which is, for example, essential to modelling Earth's mantle evolution.
 
 # This example
 # -

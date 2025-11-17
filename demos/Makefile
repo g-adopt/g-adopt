@@ -22,6 +22,12 @@ $(mc_dir)/free_surface/free_surface.ipynb: $(mc_dir)/base_case/base_case.ipynb
 # dynamic topography requires the checkpoint from the base case
 $(mc_dir)/dynamic_topography/dynamic_topography.ipynb: $(mc_dir)/base_case/base_case.ipynb
 
+# smoothing requires the checkpoint file to be generated
+smoothing/smoothing.ipynb: smoothing/smoothing-example.h5
+
+smoothing/smoothing-example.h5:
+	$(MAKE) -C smoothing smoothing-example.h5
+
 ### make mantle_convection/base_case should just run the mantle_convection/base_case demo
 ### make mantle_convection should run all mantle convection demos
 $(all_cases) $(mc_dir) $(mm_dir) $(gia_dir):
