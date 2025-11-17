@@ -21,8 +21,11 @@
 # possible.
 
 # As with all examples, the first step is to import the `gadopt` package, which
-# provides access to Firedrake and associated functionality. We also import `matplotlib`
-# for plotting purposes and `numpy` for generic mathematical manipulations.
+# provides access to Firedrake and associated functionality. We also import `shapely`
+# for handling geometric shapes, `matplotlib` for plotting purposes, and `numpy` for
+# generic mathematical manipulations.
+
+import shapely as sl
 
 from gadopt import *
 
@@ -50,9 +53,8 @@ from gadopt import *
 
 # -
 
-# Let's now set up a rectangular mesh; we will investigate an annulus mesh later on. We
-# define the function space where the level-set field lives and its corresponding
-# function.
+# Let's now set up a mesh, define the function space where the level-set field lives,
+# and its corresponding function.
 
 # +
 mesh_elements = (100, 200)  # Number of cells in x and y directions
@@ -147,10 +149,10 @@ assign_level_set_values(psi, epsilon, signed_distance)
 # possibilities: either G-ADOPT exposes an implementation of that curve or it does not,
 # in which case a user will have to provide the implementation. We will start with the
 # first possibility and examine a material interface represented by a cosine function.
-# G-ADOPT exposed implementations use a parametric curve representation, which can also
-# describe algebraic curves by identifying the parameter with a domain coordinate. Thus,
-# these implemented functions require a parameter to be given; here, it will be the
-# x-coordinate. To complete the description of the cosine function, its amplitude,
+# G-ADOPT's exposed implementations use a parametric curve representation, which can
+# also describe algebraic curves by identifying the parameter with a domain coordinate.
+# Thus, these implemented functions require a parameter to be given; here, it will be
+# the x-coordinate. To complete the description of the cosine function, its amplitude,
 # wavelength, and shift are also supplied. Finally, we need to close the curve by
 # providing coordinates along domain boundaries. The material enclosed in such a way
 # will be attributed the 1-side of the conservative level-set profile.
@@ -204,11 +206,12 @@ assign_level_set_values(
 # a parametric representation. We set $a = 1$, $b = 2$, $\delta = \frac{\pi}{2}$, and
 # scale the curve to make it fit within our rectangular domain. This curve is closed; we
 # do not need to provide `boundary_coordinates` anymore. However, given the underlying
-# Shapely engine, we need to ensure that the first and final points describing the curve
-# match. In other words, we need to know the curve's arc length. Here, it is $2\pi$, but
-# sometimes it can be non-trivial to determine. And even when known, floating-point
-# arithmetic can make the comparison inexact. We will first assume that we know this
-# length and then demonstrate how to modify the curve's implementation if it is unknown.
+# `Shapely`` engine, we need to ensure that the first and final points describing the
+# curve match. In other words, we need to know the curve's arc length. Here, it is
+# $2\pi$, but sometimes it can be non-trivial to determine. And even when known,
+# floating-point arithmetic can make the comparison inexact. We will first assume that
+# we know this length and then demonstrate how to modify the curve's implementation if
+# it is unknown.
 
 
 # +
@@ -271,9 +274,16 @@ assign_level_set_values(
 # plot_level_set(psi)
 # -
 
-# The level-set profile is again successfully initialised.
+# The level-set profile is again successfully initialised. Feel free to attempt using
+# more complex closed curves to initialise the level-set field.
 
 ##### Polygon interface
+
+# So far, we have described the material interface as a planar curve. Another option is
+# for the interface to represent a polygon. Here again, G-ADOPT exposes a `Callable` in
+# the simple case of a rectangle aligned with coordinate axes. The function requires the
+# coordinates of the reference vertex, which is taken as the lower-left vertex, and the
+# length of each length (horizontal first, then vertical).
 
 assign_level_set_values(
     psi,
@@ -286,6 +296,39 @@ assign_level_set_values(
 # + tags=["active-ipynb"]
 # plot_level_set(psi)
 # -
+
+# That interface does follow the shape of a rectangle.
+
+# As was the case for curves, polygons can also be generated via user-defined functions.
+# Let's define a random polygon here and see if the material interface can be
+# successfully generated. The `Callable` must return a closed loop of polygonal
+# vertices.
+
+
+# +
+def random_polygon() -> list[list[float, float]]:
+    return [
+        [0.6, 0.1],
+        [1.3, 0.3],
+        [1.3, 0.7],
+        [1.1, 0.4],
+        [0.3, 0.8],
+        [0.1, 0.3],
+        [0.6, 0.1],
+    ]
+
+
+assign_level_set_values(
+    psi, epsilon, interface_geometry="polygon", interface_callable=random_polygon
+)
+# -
+
+# + tags=["active-ipynb"]
+# plot_level_set(psi)
+# -
+
+# Another successful initialisation. Feel free to experiment with your own random
+# polygon.
 
 ##### Circle interface
 
@@ -308,13 +351,35 @@ assign_level_set_values(
 # -
 
 # As expected, we recover the earlier circular geometry, noting that level-set sides are
-# swapped because, here, the 1-side is attributed to the enclosed material.
+# swapped because, when using `interface_geometry`, the 1-side is attributed to the
+# enclosed material.
 
 ##### Shapely interface
 
 # While G-ADOPT provides ways to easily generate some simple interface shapes, it is not
-# reasonable to expect that it could cover all possible scenarios. For these more
-# complex scenarios, a user is invited to create the material interface geometry
-# directly via Shapely and to provide the resulting object to G-ADOPT via the
-# `interface` argument. We demonstrate such an approach here by defining a material
-# interface as the union between a square, a triangle, and a circle.
+# reasonable to expect that it covers all possible scenarios. For more complex
+# scenarios, one is encouraged to create the material interface geometry directly via
+# `Shapely` and to provide the resulting object to G-ADOPT via the `interface` argument.
+# We demonstrate such an approach here by defining a material interface as an annulus
+# indented by a triangle.
+
+# +
+triangle = sl.Polygon([[0.61, 0.3], [1.07, 0.3], [1.4, 0.6], [0.61, 0.3]])
+
+ann_centre = (1.1, 0.5)
+ann_inner_radius = 0.2
+ann_outer_radius = 0.4
+ann_inner_circle = sl.Point(ann_centre).buffer(ann_inner_radius)
+ann_outer_circle = sl.Point(ann_centre).buffer(ann_outer_radius)
+annulus = ann_outer_circle.difference(ann_inner_circle)
+
+interface = annulus.difference(triangle)
+
+assign_level_set_values(psi, epsilon, interface_geometry="shapely", interface=interface)
+# -
+
+# + tags=["active-ipynb"]
+# plot_level_set(psi)
+# -
+
+# What a fancy-looking material interface!

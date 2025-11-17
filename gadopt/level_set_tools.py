@@ -124,7 +124,7 @@ def assign_level_set_values(
     | tuple[tuple[float, float], float]
     | None = None,
     interface_callable: Callable | str | None = None,
-    interface_args: tuple[Any, ...] | None = None,
+    interface_args: tuple[Any, ...] = (),
     boundary_coordinates: list[tuple[float, float]] | None = None,
 ) -> None:
     """Updates level-set field given interface thickness and signed-distance function.
