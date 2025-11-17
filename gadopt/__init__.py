@@ -36,6 +36,14 @@ from .time_stepper import (
     ImplicitMidpoint,
     eSSPRKs3p3,
     eSSPRKs10p3,
+    # Direct Irksome scheme access
+    IrksomeRadauIIA,
+    IrksomeGaussLegendre,
+    IrksomeLobattoIIIA,
+    IrksomeLobattoIIIC,
+    IrksomeAlexander,
+    IrksomeQinZhang,
+    IrksomePareschiRusso,
 )
 from .transport_solver import DiffusiveSmoothingSolver, EnergySolver, GenericTransportSolver
 from .utility import (
