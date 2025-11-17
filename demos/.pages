@@ -4,6 +4,7 @@
         - [base_case](mantle_convection/base_case.ipynb)
     - Physical approximation (rheology)
         - [viscoplastic_case](mantle_convection/viscoplastic_case.ipynb)
+        - [Drucker_Prager](mantle_convection/Drucker_Prager.ipynb)
     - Physical approximation (compressibility)
         - [2d_compressible_TALA](mantle_convection/2d_compressible_TALA.ipynb)
         - [2d_compressible_ALA](mantle_convection/2d_compressible_ALA.ipynb)
@@ -30,6 +31,10 @@
         - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)
     - Boundary condition
         - [free_surface](multi_material/free_surface.ipynb)
+    - Geometry
+        - [2d_cylindrical](multi_material/2d_cylindrical.ipynb)
 - PDE-constrained optimisation
     - [pde_constrained_field](PDE_constrained_optimisation/PDE_constrained_field.ipynb)
     - [pde_constrained_boundary](PDE_constrained_optimisation/PDE_constrained_boundary.ipynb)
+- Smoothing
+    - [smoothing](smoothing/smoothing.ipynb)
