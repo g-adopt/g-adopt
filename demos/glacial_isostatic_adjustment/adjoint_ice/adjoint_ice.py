@@ -32,7 +32,7 @@
 
 # Gradient-based optimisation and the Adjoint method
 # --------------------------------------------------
-# So the next obvious question is, how do we actually find the initial ice thickness
+# So the next obvious question is: how do we actually find the initial ice thickness
 # distribution? A first approach could be just to guess a lot of different ice
 # histories...! We could input these to our GIA code and then compare the misfit
 # between the outputs of our model with the observations.
@@ -379,7 +379,7 @@ ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 # plotter.close()
 # -
 
-# Let's choose a timestep 250 years as before.
+# Let's choose a timestep of 250 years as before.
 
 # +
 # Timestepping parameters
