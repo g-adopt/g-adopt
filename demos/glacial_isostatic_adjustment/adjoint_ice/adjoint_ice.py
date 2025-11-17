@@ -1,20 +1,30 @@
 # Synthetic ice inversion using adjoints
 # =======================================================
-# In the previous tutorials we have seen how to run Glacial Isostatic Adjustment (GIA) models forward in time. Two of the key
-# ingredients are an ice loading history and a viscosity structure of the mantle. However, like many problems in Earth Sciences,
-# these inputs are not known. We need to infer these unknown inputs based on any geological and geophysical observations that
-# we can get our hands on! In the GIA problem this is often in the form of paleo relative sea level markers and present day geodetic observations.
+# In the previous tutorials we have seen how to run Glacial Isostatic Adjustment (GIA)
+# models forward in time. Two of the key ingredients are an ice loading history and
+# a viscosity structure of the mantle. However, like many problems in Earth Sciences,
+# these inputs are not known. We need to infer these unknown inputs based on any
+# geological and geophysical observations that we can get our hands on! In the GIA
+# problem this is often in the form of paleo relative sea level markers and present
+# day geodetic observations.
 #
-# In this tutorial, we will demonstrate how to perform an inversion to recover the ice thickness distribution of an
-# idealised GIA simulation using G-ADOPT. We make the important assumption that we know the viscosity
-# structure of the mantle. In reality, this is not the case, but it will simplify things for this first example!
+# In this tutorial, we will demonstrate how to perform an inversion to recover the
+# ice thickness distribution of an idealised GIA simulation using G-ADOPT. We make
+# the important assumption that we know the viscosity structure of the mantle.
+# In reality, this is not the case, but it will simplify things for this first example!
 #
-# The tutorial involves a *twin experiment*, where we assess the performance of the inversion scheme by inverting the
-# ice thickness distribution to match a synthetic reference simulation, known as the "*Reference Twin*". To create this reference twin, we
-# run a forward GIA simulation and record all relevant fields at each time step. In our case, this will be the displacement and velocity recorded at the surface of the Earth. We will use these outputs of the reference twin as the "observations" for our inversion.
+# The tutorial involves a *twin experiment*, where we assess the performance of the
+# inversion scheme by inverting the ice thickness distribution to match a synthetic
+# reference simulation, known as the "*Reference Twin*". To create this reference
+# twin, we run a forward GIA simulation and record all relevant fields at each time
+# step. In our case, this will be the displacement and velocity recorded at the
+# surface of the Earth. We will use these outputs of the reference twin as the
+# "observations" for our inversion.
 #
-# We have pre-run this simulation by running the forward 2D cylindrical case with lateral viscosity variations, and stored model output as a
-# checkpoint file on our servers. To download the reference benchmark checkpoint file if it doesn't already exist, execute the following command:
+# We have pre-run this simulation by running the forward 2D cylindrical case with
+# lateral viscosity variations, and stored model output as a checkpoint file on
+# our servers. To download the reference benchmark checkpoint file if it doesn't
+# already exist, execute the following command:
 
 # + tags=["active-ipynb"]
 # ![ ! -f forward-2d-cylindrical-disp-vel.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-vel.h5
@@ -22,18 +32,42 @@
 
 # Gradient-based optimisation and the Adjoint method
 # --------------------------------------------------
-# So the next obvious question is, how do we actually find the initial ice thickness distribution? A first approach could be just to guess a lot of different ice histories...! We could input these to our GIA code and then compare the misfit between the outputs of our model with the observations.
+# So the next obvious question is, how do we actually find the initial ice thickness
+# distribution? A first approach could be just to guess a lot of different ice
+# histories...! We could input these to our GIA code and then compare the misfit
+# between the outputs of our model with the observations.
 #
-# As you can imagine, this can quickly become expensive depending on the cost of the forward model! Also, for the simplest grid based discretisations of ice thickness every time we refine the grid there will be more combinations of parameters to choose! Generally, with 3D finite element models these kind of direct search methods are not practical.
+# As you can imagine, this can quickly become expensive depending on the cost of the
+# forward model! Also, for the simplest grid based discretisations of ice thickness
+# every time we refine the grid there will be more combinations of parameters to
+# choose! Generally, with 3D finite element models these kind of direct search methods
+# are not practical.
 #
-# The trick up our sleeve is that *G-ADOPT* (thanks to *Firedrake* and *Pyadjoint*), is able to calculate the gradient of an output functional from the forward model, for example a misfit between model predictions and observations, with respect to input parameters via an automatically generated *Adjoint* model. Using this technique, it is possible to compute the gradient of a functional in a cost independent of the number of parameters! In practice, the cost associated with generating the adjoint model is usually a fraction of the (nonlinear) forward model. If you are interested to learn more about Adjoint models, please see this nice introduction from the Dolfin-Adjoint website [https://www.dolfin-adjoint.org/en/latest/documentation/maths/index.html#dolfin-adjoint-mathematical-background].
+# The trick up our sleeve is that *G-ADOPT* (thanks to *Firedrake* and *Pyadjoint*),
+# is able to calculate the gradient of an output functional from the forward model,
+# for example a misfit between model predictions and observations, with respect to
+# input parameters via an automatically generated *Adjoint* model. Using this
+# technique, it is possible to compute the gradient of a functional in a cost
+# independent of the number of parameters! In practice, the cost associated with
+# generating the adjoint model is usually a fraction of the (nonlinear) forward model.
+# If you are interested to learn more about Adjoint models, please see this nice
+# introduction from the Dolfin-Adjoint
+# website [https://www.dolfin-adjoint.org/en/latest/documentation/maths/index.html#dolfin-adjoint-mathematical-background].
 #
-# Once we have the adjoint model, we can use the gradient information to speed up our inversion by finding efficient search directions to adjust the unknown input parameters. This forms the basis of an iterative procedure, where we find the gradient of the misfit w.r.t the model inputs, update the model inputs to (hopefully!) decrease the misfit and then find the new gradient and so on...  (N.b. the optimisation algorithm we use later on actually also approximates the Hessian, i.e. second order derivatives, to make the inversion process more efficient.)
+# Once we have the adjoint model, we can use the gradient information to speed up our
+# inversion by finding efficient search directions to adjust the unknown input
+# parameters. This forms the basis of an iterative procedure, where we find the
+# gradient of the misfit w.r.t the model inputs, update the model inputs to
+# (hopefully!) decrease the misfit and then find the new gradient and so on...
+# (N.b. the optimisation algorithm we use later on actually also approximates the
+# Hessian, i.e. second order derivatives, to make the inversion process more efficient.)
 #
-# The rest of this tutorial will focus on how to set up an adjoint problem. The key steps are summarised as follows:
+# The rest of this tutorial will focus on how to set up an adjoint problem. The key
+# steps are summarised as follows:
 # 1. Defining an objective function.
 # 2. Verifying the accuracy of the gradients using a Taylor test.
-# 3. Setting up and solving a gradient-based minimisation problem for a synthetic ice load.
+# 3. Setting up and solving a gradient-based minimisation problem for a synthetic ice
+# load.
 
 # This example
 # -------------
@@ -262,15 +296,15 @@ viscosity = setup_heterogenous_viscosity(background_viscosity)
 # Defining the Control
 # ---------------------
 #
-# Now let's setup the ice load. For this tutorial we will start with an ice thickness of zero
-# everywhere, but our target ice load will be the same two synthetic ice sheets in the
-# previous demo. A key step is to define our control, i.e. the field or parameter that we are
-# inverting for. In our case, this is the normalised ice thickness.
+# Now let's setup the ice load. For this tutorial we will start with an ice thickness of
+# zero everywhere, but our target ice load will be the same two synthetic ice sheets in
+# the previous demo. A key step is to define our control, i.e. the field or parameter
+# that we are inverting for. In our case, this is the normalised ice thickness.
 #
-# Since the ice thickness is only defined at the surface of the Earth we need to tell *G-ADOPT*
-# that the interior sensitivity should always be zero. We can do this by projecting the *control* field
-# to another function, imposing a homogenous Dirichlet boundary condition at all the interior nodes, i.e.
-# fixing the interior elements to have an ice thickness of zero.
+# Since the ice thickness is only defined at the surface of the Earth we define the
+# control on a surface mesh and then interpolate the control ice thickness to the
+# 2D computational domain to ensure that that the interior sensitivity should always
+# be zero.
 
 # +
 # Initialise ice loading
@@ -309,7 +343,8 @@ ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 # -
 
 
-# Let's visualise the ice thickness using pyvista, by plotting a ring outside our synthetic Earth.
+# Let's visualise the ice thickness using pyvista, by plotting a ring outside our
+# synthetic Earth.
 
 # + tags=["active-ipynb"]
 # import pyvista as pv
@@ -321,7 +356,8 @@ ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 #
 # text_pos = (1,600)
 #
-# updated_ice_file = VTKFile('ice.pvd').write(control_ice_thickness, target_normalised_ice_thickness)
+# updated_ice_file = VTKFile('ice.pvd')
+# updated_ice_file.write(control_ice_thickness, target_normalised_ice_thickness)
 # reader = pv.get_reader("ice.pvd")
 #
 # # Create a plotter object
@@ -363,8 +399,8 @@ max_timesteps = round((Tend - Tstart * year_in_seconds/characteristic_maxwell_ti
 output_frequency = round(dt_out / dt)
 # -
 
-# We also need to specify boundary conditions, a G-ADOPT approximation, nullspaces and finally the
-# Stokes solver.
+# We also need to specify boundary conditions, a G-ADOPT approximation, nullspaces and
+# finally the Stokes solver.
 
 # +
 stokes_bcs = {boundary.top: {'free_surface': {'normal_stress': ice_load}},
@@ -410,7 +446,8 @@ stokes_solver = InternalVariableSolver(
 )
 # -
 
-# We next set up our output in VTK format. This format can be read by programs like pyvista and Paraview.
+# We next set up our output in VTK format. This format can be read by programs like
+# pyvista and Paraview.
 
 # +
 # Create a velocity function for plotting
@@ -430,10 +467,10 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 gd = GeodynamicalDiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
-# Now is a good time to setup a helper function for defining the time integrated misfit that we need
-# later as part of our overall objective function. This is going to be called at each timestep of
-# the forward run to calculate the difference between the displacement and velocity at the surface
-# compared our reference forward simulation.
+# Now is a good time to setup a helper function for defining the time integrated misfit
+# that we need later as part of our overall objective function. This is going to be
+# called at each timestep of the forward run to calculate the difference between the
+# displacement and velocity at the surface compared to our reference forward simulation.
 
 # +
 # Overload surface integral measure for G-ADOPT's extruded meshes.
@@ -535,21 +572,12 @@ for timestep in range(1, max_timesteps+1):
 #
 # Now we can define our overall objective function that we want to minimise.
 # This includes the time integrated displacement and velocity misfit at the
-# surface as we discussed above. It is also a good idea to add a smoothing
-# and damping term to help regularise the inversion problem.
+# surface as we discussed above.
 
 # +
-circumference = 2 * pi * radius_values[0]
-
-alpha_smoothing = 1
-alpha_damping = 0.1
-# damping = assemble((control_ice_thickness) ** 2 / circumference * ds(top_id))
-# smoothing = assemble(dot(grad(normalised_ice_thickness), grad(normalised_ice_thickness)) / circumference * ds(top_id))
-
-J = (displacement_misfit + velocity_misfit) / max_timesteps  # + alpha_damping * damping + alpha_smoothing * smoothing
+J = (displacement_misfit + velocity_misfit) / max_timesteps
 log("J = ", J)
 # -
-
 
 # Let's also pause annotation as we are now done with the forward terms.
 
@@ -587,7 +615,11 @@ def eval_cb(J, m):
     updated_ice_thickness_file.write(updated_ice_thickness)
     updated_displacement.interpolate(u.block_variable.checkpoint)
     updated_velocity.interpolate(velocity.block_variable.checkpoint)
-    updated_out_file.write(updated_displacement, final_target_displacement, updated_velocity, final_target_velocity)
+    updated_out_file.write(
+        updated_displacement,
+        final_target_displacement,
+        updated_velocity,
+        final_target_velocity)
 
 
 # -
@@ -599,9 +631,9 @@ def eval_cb(J, m):
 # optimise. It does this without explicitly depending on all intermediary
 # state variables, hence the name "reduced".
 #
-# To define the reduced functional, we provide the class with an objective (which is an overloaded UFL object) and the control.
-#  We can also pass our call back function which will be called every time
-# the functional is evaluated.
+# To define the reduced functional, we provide the class with an objective (which is an
+# overloaded UFL object) and the control. We can also pass our call back function which
+# will be called every time the functional is evaluated.
 
 reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 
@@ -621,7 +653,7 @@ log("Replay tape RF", reduced_functional(control_ice_thickness_surf))
 # ice thickness.  This is as simple as calling the `derivative()` method on  our
 # reduced functional.
 
-# +
+#
 dJdm = reduced_functional.derivative(apply_riesz=True)
 
 grad_file = VTKFile("adj_ice.pvd").write(dJdm)
@@ -655,13 +687,14 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 
 # ### Verification of Gradients via a Taylor Test
 #
-# A good way to verify this the gradient is correct is to carry out a Taylor test. For the control, $I_h$,
-# reduced functional, $J(I_h)$, and its derivative,
-# $\frac{\mathrm{d} J}{\mathrm{d} I_h}$, the Taylor remainder convergence test can be expressed as:
+# A good way to verify this the gradient is correct is to carry out a Taylor test. For
+# the control, $I_h$, reduced functional, $J(I_h)$, and its derivative,
+# $\frac{\mathrm{d} J}{\mathrm{d} I_h}$, the Taylor remainder convergence test can be
+# expressed as:
 #
 # $$ \left| J(I_h + h \,\delta I_h) - J(I_h) - h\,\frac{\mathrm{d} J}{\mathrm{d} I_h} \cdot \delta I_h \right| \longrightarrow 0 \text{ at } O(h^2). $$
 #
-# The expression on the left-hand side is termed the second-order Taylor remainder. i
+# The expression on the left-hand side is termed the second-order Taylor remainder.
 # This term's convergence rate of $O(h^2)$ is a robust indicator for
 # verifying the computational implementation of the gradient calculation.
 # Essentially, if you halve the value of $h$, the magnitude
@@ -674,11 +707,9 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 #
 # ### Performing Taylor Tests
 #
-# In our implementation, we perform a second-order Taylor remainder test for each
-# term of the objective functional. The test involves
-# computing the functional and the associated gradient when randomly perturbing
-# the ice thickness field, $I_h$, and subsequently
-# halving the perturbations at each level.
+# The test involves computing the functional and the associated gradient when randomly
+# perturbing the ice thickness field, $I_h$, and subsequently halving the perturbations
+# at each level.
 #
 # Here is how you can perform a Taylor test in the code:
 
