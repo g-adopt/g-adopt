@@ -32,6 +32,7 @@ __all__ = [
     "LevelSetSolver",
     "assign_level_set_values",
     "interface_thickness",
+    "material_conservation",
     "material_entrainment",
     "material_field",
     "min_max_height",
@@ -422,12 +423,48 @@ def reinitialisation_term(
 
     # return -weak_form
 
+    # sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
+    # grad_norm = fd.sqrt(fd.inner(fd.grad(trial), fd.grad(trial)))
+    # balance_term = eq.epsilon * (1 - 2 * trial) * grad_norm * eq.test * eq.dx
+
+    # h = fd.avg(fd.CellVolume(eq.mesh)) / fd.FacetArea(eq.mesh)
+    # sigma = interior_penalty_factor(eq)
+
+    # alpha = h / sigma
+    # beta = 1
+    # gamma = h / sigma
+
+    # grad_flux = beta * fd.jump(trial, eq.n) / h + fd.avg(fd.grad(trial))
+    # grad_flux_norm = fd.sqrt(fd.inner(grad_flux, grad_flux))
+    # balance_flux = fd.avg(eq.epsilon) * (1 - 2 * fd.avg(trial)) * grad_flux_norm
+    # flux_term = alpha * balance_flux * fd.avg(eq.test) * eq.dS
+
+    # penalty_term = gamma * fd.jump(trial) * fd.jump(eq.test) * eq.dS
+
+    # return sharpen_term + balance_term + flux_term + penalty_term
+
+    # grad_norm = fd.sqrt(fd.dot(fd.grad(trial), fd.grad(trial)) + 1e-12)
+
+    # sharpening = -trial * (1.0 - trial) * (1.0 - 2.0 * trial)
+    # balance = eq.epsilon * (1.0 - 2.0 * trial) * grad_norm
+    # weak_form = eq.test * (sharpening + balance) * eq.dx
+
+    # penalty_factor = 1e-4 * (trial.ufl_element().degree() + 1) ** 2
+    # penalty_factor *= fd.avg(eq.epsilon) / fd.avg(fd.CellDiameter(eq.mesh))
+    # weak_form += fd.jump(eq.test) * penalty_factor * fd.jump(trial) * eq.dS
+
+    # return weak_form
+
+    # sharpening = -trial * (1.0 - trial) * (1.0 - 2.0 * trial)
+    # balance = eq.epsilon * (1.0 - 2.0 * trial) * gradient_norm(trial, 1e-12)
+    # weak_form = eq.test * (sharpening + balance) * eq.dx
+    # weak_form -= fd.jump(eq.test) * fd.avg(eq.epsilon) * fd.jump(trial) * eq.dS
+
+    # return weak_form
+
     sharpening = -trial * (1.0 - trial) * (1.0 - 2.0 * trial)
     balance = eq.epsilon * (1.0 - 2.0 * trial) * gradient_norm(trial, 1e-12)
-    weak_form = eq.test * (sharpening + balance) * eq.dx
-    weak_form -= fd.jump(eq.test) * fd.avg(eq.epsilon) * fd.jump(trial) * eq.dS
-
-    return weak_form
+    return eq.test * (sharpening + balance) * eq.dx
 
 
 reinitialisation_term.required_attrs = {"epsilon"}
@@ -784,6 +821,38 @@ def material_field(
         raise ValueError(f"Interface must be one of {impl_interface}")
 
     return material_field_from_copy(level_set, field_values, interface)
+
+
+def material_conservation(
+    level_set: fd.Function, /, *, material_size: float, side: int
+) -> float:
+    """Calculates the proportion of existing material relative to its original size.
+
+    For the diagnostic calculation to be meaningful, the level-set side provided must
+    spatially isolate the target material.
+
+    Args:
+      level_set:
+        A Firedrake function for the level-set field
+      material_size:
+        A float representing the total volume or area occupied by the target material
+      side:
+        An integer (`0` or `1`) denoting the level-set value on the target material side
+
+    Returns:
+      A float corresponding to the material fraction above or below the target height
+    """
+    match side:
+        case 0:
+            material_check = operator.le
+        case 1:
+            material_check = operator.ge
+        case _:
+            raise ValueError("'side' must be 0 or 1")
+
+    material = fd.conditional(material_check(level_set, 0.5), 1, 0)
+
+    return fd.assemble(material * fd.dx) / material_size
 
 
 def material_entrainment(

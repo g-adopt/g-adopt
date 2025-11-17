@@ -16,6 +16,7 @@ from .level_set_tools import (
     LevelSetSolver,
     assign_level_set_values,
     interface_thickness,
+    material_conservation,
     material_entrainment,
     material_field,
     min_max_height,

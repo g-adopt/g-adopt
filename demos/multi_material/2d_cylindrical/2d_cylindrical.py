@@ -74,7 +74,7 @@ x, y = SpatialCoordinate(mesh)  # UFL representation of spatial coordinates
 r = sqrt(x**2 + y**2)  # Radial coordinate
 T.interpolate(rmax - r + 0.02 * cos(4.0 * atan2(y, x)) * sin((r - rmin) * pi))
 
-# We can plot this initial temperature field:
+# We can plot this initial temperature field
 
 # + tags=["active-ipynb"]
 # VTKFile("temp.pvd").write(T)
@@ -219,7 +219,10 @@ output_file = VTKFile("output.pvd")
 output_file.write(*stokes.subfunctions, T, psi, time=time_now)
 
 plog = ParameterLog("params.log", mesh)
-plog.log_str("step time dt u_rms nu_base nu_top energy avg_t T_min T_max entrainment")
+plog.log_str(
+    "step time dt u_rms nu_base nu_top energy avg_t T_min T_max conservation "
+    "entrainment"
+)
 
 gd = GeodynamicalDiagnostics(stokes, T, boundary.bottom, boundary.top, quad_degree=6)
 
@@ -254,13 +257,15 @@ while True:
     step += 1
     time_now += float(time_step)
 
-    # Compute diagnostics:
+    # Compute diagnostics
     nusselt_number_top = gd.Nu_top() * top_scaling
     nusselt_number_base = gd.Nu_bottom() * bot_scaling
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
 
+    # Calculate proportion of existing material relative to its original size
+    conservation = material_conservation(psi, material_size=material_area, side=0)
     # Calculate proportion of material entrained above a given height
-    buoy_entr = material_entrainment(
+    entrainment = material_entrainment(
         psi,
         material_size=material_area,
         entrainment_height=entrainment_height,
@@ -269,11 +274,11 @@ while True:
         skip_material_size_check=True,
     )
 
-    # Log diagnostics:
+    # Log diagnostics
     plog.log_str(
         f"{step} {time_now} {float(time_step)} {gd.u_rms()} {nusselt_number_base} "
         f"{nusselt_number_top} {energy_conservation} {gd.T_avg()} {gd.T_min()} "
-        f"{gd.T_max()} {buoy_entr}"
+        f"{gd.T_max()} {conservation} {entrainment}"
     )
 
     # Write output

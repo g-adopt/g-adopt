@@ -29,7 +29,7 @@ diagnostics = {
         )
     ],
     "robey_2019": [
-        (lambda data: abs(max(data["rms_velocity"]) - 284.5), operator.le, 1e-1),
+        (lambda data: abs(max(data["rms_velocity"]) - 284.4), operator.le, 1e-1),
         (lambda data: abs(max(data["entrainment"]) - 0.919), operator.le, 1e-3),
     ],
     "schmalholz_2011": [
@@ -38,7 +38,7 @@ diagnostics = {
                 np.asarray(data["normalised_time"])[
                     np.asarray(data["slab_necking"]) <= 0.2
                 ].min()
-                - 0.814
+                - 0.812
             ),
             operator.le,
             1e-3,
@@ -70,7 +70,7 @@ diagnostics = {
     "van_keken_1997_isothermal": [
         (lambda data: abs(max(data["rms_velocity"]) - 3.1e-3), operator.le, 4e-5),
         (lambda data: abs(data["rms_velocity"][-1] - 2.15e-4), operator.le, 2e-5),
-        (lambda data: abs(data["entrainment"][-1] - 0.802), operator.le, 5e-3),
+        (lambda data: abs(data["entrainment"][-1] - 0.802), operator.le, 3e-3),
     ],
     "van_keken_1997_thermochemical": [
         (
