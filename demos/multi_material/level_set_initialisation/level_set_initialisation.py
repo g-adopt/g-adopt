@@ -9,9 +9,10 @@
 # interface-capturing method. At the core of this method lies the need to calculate a
 # signed-distance function, which expresses the distance from the material interface
 # location to any point in the numerical domain. As calculating such a field can be
-# challenging, G-ADOPT exposes the `assign_level_set_values` function as part of its API
-# to ease computing the signed-distance function. Under the hood, this function
-# leverages [`Shapely`](https://shapely.readthedocs.io/en/stable/) to calculate planar distances.
+# challenging, G-ADOPT provides the `assign_level_set_values` function as part of its
+# API to ease computing the signed-distance function. Under the hood, this function
+# leverages [`Shapely`](https://shapely.readthedocs.io/en/stable/) to calculate planar
+# distances.
 
 # This example
 # -
@@ -25,9 +26,9 @@
 # for handling geometric shapes, `matplotlib` for plotting purposes, and `numpy` for
 # generic mathematical manipulations.
 
-import shapely as sl
-
 from gadopt import *
+
+import shapely as sl
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
@@ -78,9 +79,10 @@ epsilon = interface_thickness(K, min_cell_edge_length=True)
 
 #### Providing the signed-distance function
 
-# Let's start exploring some possible initialisation strategies. A first scenario is the
-# one for which the signed-distance function can be easily deduced from the domain's
-# spatial coordinates. Here, we take the example of an interface located at $x = 0.2$.
+# Let's start exploring the initialisation strategies G-ADOPT supports. A first scenario
+# is the  one for which the signed-distance function can be easily deduced from the
+# domain's spatial coordinates. Here, we take the example of an interface located at
+# $x = 0.2$.
 
 # +
 interface_coord_x = 0.2
@@ -145,17 +147,19 @@ assign_level_set_values(psi, epsilon, signed_distance)
 
 ##### Curve interface
 
-# Let's start with the case where the material interface is a curve. We will explore two
-# possibilities: either G-ADOPT exposes an implementation of that curve or it does not,
-# in which case a user will have to provide the implementation. We will start with the
-# first possibility and examine a material interface represented by a cosine function.
-# G-ADOPT's exposed implementations use a parametric curve representation, which can
-# also describe algebraic curves by identifying the parameter with a domain coordinate.
-# Thus, these implemented functions require a parameter to be given; here, it will be
-# the x-coordinate. To complete the description of the cosine function, its amplitude,
-# wavelength, and shift are also supplied. Finally, we need to close the curve by
-# providing coordinates along domain boundaries. The material enclosed in such a way
-# will be attributed the 1-side of the conservative level-set profile.
+# Let's start with the case where the material interface is a curve. G-ADOPT provides
+# built-in curve implementations, or a user can provide their own. We will start with
+# the former and examine a material interface represented by a cosine function.
+# G-ADOPT's provided implementation, which we select by setting `interface_callable` to
+# `"cosine"`, uses a parametric curve representation, which can also describe algebraic
+# curves by identifying the parameter with a domain coordinate. Thus, these implemented
+# functions require a parameter to be given; here, it will be the x-coordinate. To
+# complete the description of the cosine function, its amplitude, wavelength, and shift
+# are also supplied. In order to account for the different parameters required to
+# construct each type of interface geometry, the generic `interface_args` argument is
+# used to store these parameters for any chosen geometry. Finally, we need to close the
+# curve by providing coordinates along domain boundaries. The material enclosed in such
+# a way will be attributed the 1-side of the conservative level-set profile.
 
 # +
 callable_args = (
@@ -280,10 +284,10 @@ assign_level_set_values(
 ##### Polygon interface
 
 # So far, we have described the material interface as a planar curve. Another option is
-# for the interface to represent a polygon. Here again, G-ADOPT exposes a `Callable` in
-# the simple case of a rectangle aligned with coordinate axes. The function requires the
-# coordinates of the reference vertex, which is taken as the lower-left vertex, and the
-# length of each length (horizontal first, then vertical).
+# for the interface to represent a polygon. Here again, G-ADOPT provides a helper method
+# for the simple case of a rectangle aligned with coordinate axes. The function requires
+# the coordinates of the reference vertex, which is taken as the lower-left vertex, and
+# the length of each length (horizontal first, then vertical).
 
 assign_level_set_values(
     psi,
@@ -301,8 +305,7 @@ assign_level_set_values(
 
 # As was the case for curves, polygons can also be generated via user-defined functions.
 # Let's define a random polygon here and see if the material interface can be
-# successfully generated. The `Callable` must return a closed loop of polygonal
-# vertices.
+# successfully generated. The function must return a closed loop of polygonal vertices.
 
 
 # +
@@ -334,7 +337,7 @@ assign_level_set_values(
 
 # We have already initialised the level-set interface as a circle when we directly
 # provided the signed-distance function. As it is simple to generate a circle with
-# Shapely, G-ADOPT also exposes a way to describe this geometry via
+# Shapely, G-ADOPT also provides a way to describe this geometry via
 # `assign_level_set_values`. This time, `interface_coordinates` must be a tuple holding
 # the coordinates of the circle's centre and the circle's radius. Let's reproduce the
 # earlier circle.
