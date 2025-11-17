@@ -28,6 +28,7 @@
 - Multi-material
     - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
     - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)
+    - [2d_cylindrical](multi_material/2d_cylindrical.ipynb)
 - PDE-constrained optimisation
     - [pde_constrained_field](PDE_constrained_optimisation/PDE_constrained_field.ipynb)
     - [pde_constrained_boundary](PDE_constrained_optimisation/PDE_constrained_boundary.ipynb)
