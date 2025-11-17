@@ -22,11 +22,17 @@ cases = {
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
     f"{mc_path}/Drucker_Prager": {"extra_checks": ["ux_max"]},
     f"{mm_path}/2d_cylindrical": {
-        "extra_checks": ["nu_top", "T_min", "T_max", "entrainment"]
+        "extra_checks": ["nu_top", "T_min", "T_max", "conservation", "entrainment"]
     },
-    f"{mm_path}/compositional_buoyancy": {"extra_checks": ["entrainment"]},
-    f"{mm_path}/free_surface": {"extra_checks": ["slab_tip_depth"]},
-    f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
+    f"{mm_path}/compositional_buoyancy": {
+        "extra_checks": ["conservation", "entrainment"]
+    },
+    f"{mm_path}/free_surface": {
+        "extra_checks": ["conservation", "entrainment", "slab_tip_depth"]
+    },
+    f"{mm_path}/thermochemical_buoyancy": {
+        "extra_checks": ["conservation", "entrainment"]
+    },
     f"{gia_path}/base_case": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical_lvv": {"extra_checks": ["uv_min"]},
