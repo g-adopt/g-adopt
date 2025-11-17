@@ -9,7 +9,6 @@ functional.txt: adjoint_ice.py forward-2d-cylindrical-disp-vel.h5 2d_cylindrical
 	$(run-python)
 
 forward-2d-cylindrical-disp-vel.h5 : category := gia
-forward-2d-cylindrical-disp-vel.h5 : ncpus := 1
 forward-2d-cylindrical-disp-vel.h5: 2d_cylindrical_lvv.py
 	$(run-python)
 
