@@ -1,7 +1,7 @@
 # Mantle convection base case using adaptive meshing
 # ==================================================
-# This tutorial demonstrates the adaptive meshing capabality available in
-# G-ADOPT, which dynamically adapts the mesh to focus resolution where needed.
+# This tutorial demonstrates the adaptive meshing capability available in
+# G-ADOPT, which dynamically modifies the mesh to focus resolution where needed.
 # As demonstrated in [Davies et al.
 # (2011)](https://doi.org/10.1029/2011GC003551) this may significantly reduce
 # the computational requirements of mantle convection models, in particular
@@ -12,36 +12,39 @@
 # ------------------------------------
 # This functionality is available in G-ADOPT via the [mmg remeshing
 # library](https://www.mmgtools.org/) and therefore requires a few extra flags
-# in the configuration of the PETSc library used in the firedrake installation
+# in the configuration of the PETSc library used in the Firedrake installation
 # as explained
 # [here](https://github.com/mesh-adaptation/docs/wiki/Installation-Instructions).
 # Additionally, for the assembly of the metric field, which allows us to
 # specify exactly where mesh resolution is needed, we use the
-# [animate](https://mesh-adaptation.github.io/docs/animate/index.html) python
+# [animate](https://mesh-adaptation.github.io/docs/animate/index.html) Python
 # package that can be pip installed from
 # https://github.com/mesh-adaptation/animate
 
 from gadopt import *
 from animate import RiemannianMetric, adapt
 
-# Set up the initial mesh and timestepping options
+# Set up the initial mesh and timestepping options. Here, we
+# explicitly use a simplex mesh to demonstrate adaptive
+# remeshing. Additionally, we specify the number of simulation time
+# steps separating two instances of mesh adaptation as
+# `timesteps_per_adapt`.
 
 nx, ny = 10, 10
 mesh = UnitSquareMesh(nx, ny, quadrilateral=False)  # Square mesh generated via firedrake
 
 time = 0.0  # Initial time
-timestep = 0  # Initial timestep
+timestep = 0  # Placeholder for initial timestep
 timesteps_per_adapt = 10
 delta_t = Constant(1e-6)  # Initial time-step
 
-# Create pvd-file to output solutions fields at the specified
-# output frequency, which we can visualise using paraview
-# or pyvista. We need the additional `adaptive=True` as
-# the mesh will not be the same during the entire simulation.
-# We choose the same output frequency as the number of timesteps
-# between mesh adapts, so that we get one output on each different
-# mesh
-# Additionally, we open a log file to output diagnostic values.
+# Create pvd-file to output solutions fields at the specified output
+# frequency, which we can visualise using ParaView or pyvista. We need
+# to pass `adaptive=True` to `VTKFile`, as the mesh will not be the
+# same during the entire simulation.  We choose the same output
+# frequency as the number of timesteps between mesh adapts, so that we
+# get one output on each different mesh. Additionally, we open a log
+# file to output diagnostic values.
 
 # +
 output_file = VTKFile("output.pvd", adaptive=True)
@@ -62,18 +65,20 @@ p_init = 0.
 # In all other demos, we would now continue defining some function spaces,
 # create some functions, and then the solvers using those. As we will be
 # adapting the mesh these steps will need to be repeated after each adapt.
-# Therefore we will wrap these steps in a python function. The following python
-# function in fact wraps the entire base case: it takes in a mesh builds up the
-# function spaces, functions and solvers and then runs the model for a
-# specified number of timesteps. We will be using this function in an outside
-# loop, where we adapt the mesh and then call the function to run the model on
-# the adapted mesh for a number of timesteps. The temperature, velocity
-# and pressure solution at the end of those timesteps, which we have solved
-# on the current adapted mesh, will need to be interpolated after the next mesh
-# adaptivity stage onto the new mesh and are therefore provided as `T_init`,
-# `u_init`, and `p_init` arguments. In the first call to this subroutine, the mesh
-# is still the initial mesh, and we simply use the initial condition expressions
-# we have just defined.
+# Therefore we will wrap these steps in a function.
+#
+# The following function in fact wraps the entire base case: it takes
+# in a mesh, builds up the function spaces, functions and solvers and
+# then runs the model for a specified number of timesteps. We will be
+# using this function in an outside loop, where we adapt the mesh and
+# then call the function to run the model on the adapted mesh for a
+# number of timesteps. The temperature, velocity and pressure solutions
+# at the end of those timesteps, which we have solved on the current
+# adapted mesh, will need to be interpolated after the next mesh
+# adaptivity stage onto the new mesh and are therefore provided as
+# `T_init`, `u_init`, and `p_init` arguments. In the first call to
+# this subroutine, the mesh is still the initial mesh, and we simply
+# use the initial condition expressions we have just defined.
 
 # +
 
@@ -81,7 +86,7 @@ p_init = 0.
 def run_interval(mesh, time, timestep, Nt, T_init, u_init, p_init):
     """Run for Nt timesteps on the given mesh
 
-    This sets up all the usual functionspace, equations, solvers, etc.
+    This sets up all the usual function spaces, equations, solvers, etc.
     on the given mesh, and runs the timeloop for the given n/o timesteps.
     Everything is exactly like in the base case.
 
@@ -97,6 +102,11 @@ def run_interval(mesh, time, timestep, Nt, T_init, u_init, p_init):
     time, T, u, p - time, temperature, velocity and pressure at the end of the timesteps
     steady_state_reached - have we reached steady state during the timesteps?
     """
+
+    # Make the assumption that the mesh is a Cartesian domain,
+    # and retrieve associated ids for defining boundary conditions
+    mesh.cartesian = True
+    boundary = get_boundary_ids(mesh)
 
     # Set up function spaces - currently using the bilinear Q2Q1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
@@ -115,6 +125,8 @@ def run_interval(mesh, time, timestep, Nt, T_init, u_init, p_init):
     # Set up temperature field and extract velocity and pressure from "mixed" function z
     T = Function(Q, name="Temperature")
     u, p = z.subfunctions
+    u.rename("Velocity")
+    p.rename("Pressure")
 
     # Interpolate temperature, velocity and pressure. In the first call this will
     # simply interpolate the provided UFL expresssions for the initial conditions.
@@ -136,12 +148,6 @@ def run_interval(mesh, time, timestep, Nt, T_init, u_init, p_init):
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
 
-    # Next rename for output:
-    u.rename("Velocity")
-    p.rename("Pressure")
-
-    mesh.cartesian = True
-    boundary = get_boundary_ids(mesh)
     gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 
     temp_bcs = {
@@ -156,11 +162,8 @@ def run_interval(mesh, time, timestep, Nt, T_init, u_init, p_init):
         boundary.right: {'ux': 0},
     }
 
-    energy_solver = EnergySolver(T, u, approximation, delta_t, BackwardEuler, bcs=temp_bcs)
-    Told = energy_solver.T_old
-    Ttheta = 0.5*T + 0.5*Told
-    Told.assign(T)
-    stokes_solver = StokesSolver(z, approximation, Ttheta, bcs=stokes_bcs,
+    energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
+    stokes_solver = StokesSolver(z, approximation, T, bcs=stokes_bcs,
                                  nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
                                  solver_parameters="iterative")
 
@@ -202,6 +205,9 @@ def run_interval(mesh, time, timestep, Nt, T_init, u_init, p_init):
 
 # -
 
+# Metric based mesh adaptation
+# ----------------------------
+#
 # As explained above, we start with using the symbolic expressions for temperature, velocity,
 # and pressure. After the first first call to run_interval(), `T`, `u`, and `p` will
 # simply refer to the solution in the last timestep on the current mesh.
@@ -210,7 +216,7 @@ T = T_init
 u = u_init
 p = p_init
 
-# We wil then use these to define a metric field that controls where resolution
+# We will then use these to define a metric field that controls where resolution
 # is focussed in the adapted mesh. The metric field is a rank 2 tensor field
 # $M(x)$, providing a symmetric and positive definite dim x dim matrix at each
 # location $x$, that encodes the local optimal edge length. Representing an
@@ -224,7 +230,7 @@ p = p_init
 # edges of length 1 in the x-direction, and 5 in the y-direction, we choose the
 # metric $M = \begin{pmatrix} 1 & 0 \\ 0 & 1/25\end{pmatrix}$.
 #
-# A common choice for the metric is to use the Hessian (second derivative)
+# A common choice for the metric is to use the Hessian (second derivatives)
 # $H(q)$ of a solution field $q$, typically scaled by some scalar $\epsilon$:
 # $M(x) = \epsilon H(u)$.  In this way, we ask for smaller edges in the
 # directions of high curvature in the solution (and vice versa). Moreover, this
@@ -242,23 +248,25 @@ p = p_init
 # estimated number of elements in the outputs corresponds to a user chosen
 # number, referred to as target complexity.
 #
-# The $\epsilon$ that is computed in this way still corresponds to a level of
-# estimated local interpolation error in the adapted mesh that is satisfied
-# everywhere Thus, we can think about the resulting mesh as the mesh that, for
-# the specified desired number of elements, optimally distributes the
-# resolution everywhere to achieve a certain uniform level of interpolation
-# error.  In some simulations however, this choice may lead to too much
-# focussing of resolution in areas of high curvature.  In particular, when
-# there are discontinuities in the solution the curvature may become
-# practically infinite, depending on resolution. Rather than aiming for the
-# optimal mesh to have the same upper bound for interpolation error everywhere
-# - in mathematical terms this means bounding the infinity norm of the local
-# interpolation error - we can also ask for a local rescaling of the metric
-# that minimizes the interpolation error in a different norm: the `animate`
-# package allows us to specify any $L^p$ norm.  The choice $p=\inf$ corresponds
-# to the scaling with a constant $\epsilon$ as described here.
+# The $\epsilon$ that is computed in this way still corresponds to a
+# level of estimated local interpolation error in the adapted mesh
+# that is satisfied everywhere. Thus, we can think about the resulting
+# mesh as the mesh that, for the specified desired number of elements,
+# optimally distributes the resolution everywhere to achieve a certain
+# uniform level of interpolation error.  In some simulations however,
+# this choice may lead to too much focussing of resolution in areas of
+# high curvature.  In particular, when there are discontinuities in
+# the solution the curvature may become practically infinite,
+# depending on resolution. Rather than aiming for the optimal mesh to
+# have the same upper bound for interpolation error everywhere - in
+# mathematical terms this means bounding the infinity norm of the
+# local interpolation error - we can also ask for a local rescaling of
+# the metric that minimizes the interpolation error in a different
+# norm: the `animate` package allows us to specify any $L^p$ norm.
+# The choice $p=\inf$ corresponds to the scaling with a constant
+# $\epsilon$ as described here.
 #
-# Finally, we can select an overal minimum and maxium edge length, and a
+# Finally, we can select an overall minimum and maximum edge length, and a
 # maximum aspect ratio to avoid excessively small, large, or flat cells
 # respectively. The gradation factor limits the variation in edge lengths going
 # from one cell to the next, where a factor of 1.5 mean that the edges in a
@@ -293,23 +301,23 @@ for _ in range(nadapts):
     time, T, u, p, steady_state_reached = run_interval(mesh, time, timestep, timesteps_per_adapt, T, u, p)
     if steady_state_reached:
         break
-    timestep = timestep + timesteps_per_adapt
+    timestep += timesteps_per_adapt
 
     metric_parameters = {
         # metric gets rescaled s.t. we always end up with ~ 1000 vertices:
         'dm_plex_metric_target_complexity': 1000,
         'dm_plex_metric_p': np.inf,  # Use infinity norm for estimated interpolation error
-        'dm_plex_metric_gradation_factor': 1.5,  # gradation factor
+        'dm_plex_metric_gradation_factor': 1.5,  # Variation in edge length from one cell to another
         'dm_plex_metric_a_max': 10,  # maximum aspect ratio
         'dm_plex_metric_h_min': 1e-5,  # minimum edge length
-        'dm_plex_metric_h_max': .1  # maximum edge length
+        'dm_plex_metric_h_max': 1e-1  # maximum edge length
     }
 
     TV = TensorFunctionSpace(mesh, "CG", 1)  # function space for the metric
     # first generate a metric based on the Hessian for each velocity component
     metrics = []
     for i in range(2):
-        # a RiemannianMetric is just firedrake Function on a tensor function space
+        # a RiemannianMetric is just a Firedrake Function on a tensor function space
         # with additional functionality
         H = RiemannianMetric(TV)
         H.set_parameters(metric_parameters)
@@ -355,6 +363,8 @@ plog.close()
 #     plotter.clear()
 # plotter.close()
 # -
+
+# ![adaptive mesh base case](./movie.gif)
 
 # To learn more about the anisotropic, metric based adaptivity and various
 # choices that can be made to assemble the metric, see the [documentation of
