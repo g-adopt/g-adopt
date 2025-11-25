@@ -81,15 +81,14 @@ from gadopt import *
 # The novelty of using the overloading approach provided by pyadjoint is that it requires
 # minimal changes to our script to enable the inverse capabilities of G-ADOPT.
 # To turn on the adjoint, one simply imports the inverse module to
-# enable all taping functionality from pyadjoint.
-#
-# Doing so will turn Firedrake's objects to overloaded types, in a way
-# that any UFL operation will be annotated and added to the tape, unless
-# otherwise specified.
+# enable all taping functionality from pyadjoint. Doing so will turn Firedrake's objects
+# to overloaded types, in a way that any UFL operation will be annotated and added to
+# the tape, unless otherwise specified.
 
 from gadopt.inverse import *
 
 # We also import some G-ADOPT utilities for later use.
+
 from gadopt.utility import (
     CombinedSurfaceMeasure,
     initialise_background_field,
@@ -109,7 +108,6 @@ from gadopt_demo_utils.gia_demo_utils import ice_sheet_disc
 
 tape = get_working_tape()
 tape.clear_tape()
-
 
 # To verify the tape is empty, we can print all blocks:
 
