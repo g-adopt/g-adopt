@@ -21,10 +21,11 @@
 # surface of the Earth. We will use these outputs of the reference twin as the
 # "observations" for our inversion.
 #
-# We have pre-run this simulation by running the forward 2D cylindrical case with
-# lateral viscosity variations, and stored model output as a checkpoint file on
-# our servers. To download the reference benchmark checkpoint file if it doesn't
-# already exist, execute the following command:
+# [The reference case](../2d_cylindrical_lvv) for this tutorial is the 2D
+# cylindrical tutorial with lateral viscosity variations we saw previously.
+# We have run the model forwards in time and stored the model output as a checkpoint
+# file on our servers. To download the reference benchmark checkpoint file if it
+# doesn't already exist, execute the following command:
 
 # + tags=["active-ipynb"]
 # ![ ! -f forward-2d-cylindrical-disp-vel.h5 ] && wget https://data.gadopt.org/demos/forward-2d-cylindrical-disp-vel.h5
@@ -74,10 +75,21 @@
 # Let's get started!
 # The first step is to import the gadopt module, which
 # provides access to Firedrake and associated functionality.
-# We also import some G-ADOPT utilities for later use.
 
 from gadopt import *
+
+# The novelty of using the overloading approach provided by pyadjoint is that it requires
+# minimal changes to our script to enable the inverse capabilities of G-ADOPT.
+# To turn on the adjoint, one simply imports the inverse module to
+# enable all taping functionality from pyadjoint.
+#
+# Doing so will turn Firedrake's objects to overloaded types, in a way
+# that any UFL operation will be annotated and added to the tape, unless
+# otherwise specified.
+
 from gadopt.inverse import *
+
+# We also import some G-ADOPT utilities for later use.
 from gadopt.utility import (
     CombinedSurfaceMeasure,
     initialise_background_field,
@@ -93,15 +105,6 @@ from gadopt_demo_utils.gia_demo_utils import ice_sheet_disc
 # )
 # -
 
-# The novelty of using the overloading approach provided by pyadjoint is that it requires
-# minimal changes to our script to enable the inverse capabilities of G-ADOPT.
-# To turn on the adjoint, one simply imports the inverse module to
-# enable all taping functionality from pyadjoint.
-#
-# Doing so will turn Firedrake's objects to overloaded types, in a way
-# that any UFL operation will be annotated and added to the tape, unless
-# otherwise specified.
-#
 # We first ensure that the tape is cleared of any previous operations, using the following code:
 
 tape = get_working_tape()
@@ -115,9 +118,10 @@ print(tape.get_blocks())
 
 continue_annotation()
 
-# In this tutorial we are going to load the mesh created by the forward cylindrical demo in the
-# previous tutorial. This makes it easier to load the synthetic data from the previous
-# tutorial for our 'twin' experiment.
+# In this tutorial we are going to load the mesh from the checkpoint created by the
+# [the forward case](../2d_cylindrical_lvv) in the previous tutorial. This makes it
+# easier to load the synthetic data from the previous tutorial for our 'twin'
+# experiment.
 
 # Set up geometry:
 checkpoint_file = "forward-2d-cylindrical-disp-vel.h5"
@@ -307,6 +311,25 @@ viscosity = setup_heterogenous_viscosity(background_viscosity)
 # zero.
 
 # +
+# Set up geometry:
+rmax = radius_values_nondim[0]
+ncells = 180
+
+# Construct a surface mesh:
+surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh')
+P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # control space
+control_ice_thickness_surf = Function(P1_surf)  # control
+control = Control(control_ice_thickness_surf, riesz_map="L2")
+
+# defining the control
+control_ice_thickness = Function(P1, name="control normalised ice thickness")
+control_ice_thickness.interpolate(control_ice_thickness_surf, allow_missing_dofs=True)
+# -
+
+# We next set up the relevant parameters for the ice load and set up a target
+# ice thickness field for comparison with our final inversion.
+
+# +
 # Initialise ice loading
 rho_ice = 931 / density_scale
 g = 9.815
@@ -324,24 +347,16 @@ disc1 = ice_sheet_disc(X, disc_centre1, disc_halfwidth1)
 disc2 = ice_sheet_disc(X, disc_centre2, disc_halfwidth2)
 target_normalised_ice_thickness = Function(P1, name="target normalised ice thickness")
 target_normalised_ice_thickness.interpolate(Hice1 * disc1 + Hice2*disc2)
-# Set up geometry:
-rmax = radius_values_nondim[0]
-ncells = 180
-
-# Construct a surface mesh:
-surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh')
-P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # control space
-control_ice_thickness_surf = Function(P1_surf)  # control
-control = Control(control_ice_thickness_surf, riesz_map="L2")
-# defining the control
-control_ice_thickness = Function(P1, name="control normalised ice thickness")
-control_ice_thickness.interpolate(control_ice_thickness_surf, allow_missing_dofs=True)
-
-visc_file = VTKFile('viscosity.pvd').write(viscosity)
-
-ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 # -
 
+# Finally we set up the ice load using the `control_ice_thickness` field (defined on
+# the full mesh) that will force our simulation. Generally, it is a good idea to rescale
+# the unknown control parameters, because optimisation algorithms find it harder to
+# minimise a misfit if the control varies over many orders of mangitude. Here we have
+# used `Hice1` to normalise the magnitude of the control, so that we expect the control
+# ice thickness to vary between 0 and 2.
+
+ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 
 # Let's visualise the ice thickness using pyvista, by plotting a ring outside our
 # synthetic Earth.
@@ -362,6 +377,8 @@ ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
+#
+# visc_file = VTKFile('viscosity.pvd').write(viscosity)  # write out viscosity
 #
 # plotter.subplot(0, 0)
 # plot_ice_ring(plotter, scalar='target normalised ice thickness', **plot_kwargs)
