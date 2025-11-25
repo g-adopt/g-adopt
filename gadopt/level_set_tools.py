@@ -615,24 +615,24 @@ class LevelSetSolver(SolverConfigurationMixin):
         self.step = 0
 
     def update_gradient(self) -> None:
-        """Calls the gradient solver.
-
-        Can be provided as a forcing to time integrators.
-        """
+        """Calls the gradient solver to update the level-set gradient."""
         self.gradient_solver.solve()
 
     def reinitialise(self) -> None:
         """Performs reinitialisation steps.
 
         Note:
-            This method currently uses the deprecated `update_forcings` callback to update
-            the level-set gradient between reinitialisation stages. Future versions should
-            consider using Firedrake's `ExternalOperator` to express the gradient dependency
+            The gradient is updated between reinitialisation stages by explicitly calling
+            `update_gradient()` before each advance step. Future versions could consider
+            using Firedrake's `ExternalOperator` to express the gradient dependency
             symbolically, or reformulate as a coupled system that solves for both the
             level-set function and its gradient simultaneously.
         """
         for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(update_forcings=self.update_gradient)
+            # Update gradient based on current level-set solution
+            self.update_gradient()
+            # Advance one reinitialisation step
+            self.reini_integrator.advance()
 
     def solve(
         self,

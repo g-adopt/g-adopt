@@ -254,9 +254,9 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         """Optional instructions to execute right after a solve."""
         pass
 
-    def solve(self, update_forcings: Callable | None = None, t: float | None = None) -> None:
+    def solve(self, t: float | None = None) -> None:
         """Advances solver in time."""
-        self.ts.advance(update_forcings, t)
+        self.ts.advance(t=t)
 
         self.solver_callback()
 

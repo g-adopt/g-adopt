@@ -9,8 +9,7 @@ This module now includes Irksome integration.
 
 from abc import ABC, abstractmethod
 from numbers import Number
-from typing import Any, Callable, Optional
-import warnings
+from typing import Any, Optional
 
 import firedrake
 import numpy as np
@@ -30,12 +29,10 @@ class TimeIntegratorBase(ABC):
     """Defines the API for all time integrators."""
 
     @abstractmethod
-    def advance(self, update_forcings: Callable | None = None, t: float | None = None):
+    def advance(self, t: float | None = None):
         """Advances equations for one time step.
 
         Args:
-          update_forcings:
-            Callable updating any time-dependent equation forcings
           t:
             Current simulation time
 
@@ -105,7 +102,7 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         pass
 
     @abstractmethod
-    def solve_stage(self, i_stage, t, update_forcings=None):
+    def solve_stage(self, i_stage, t):
         """Solves a single stage of step from t to t+dt.
         All functions that the equation depends on must be at right state
         corresponding to each sub-step.
@@ -113,14 +110,12 @@ class RungeKuttaTimeIntegrator(TimeIntegrator):
         """
         pass
 
-    def advance(
-        self, update_forcings: Callable | None = None, t: float | None = None
-    ) -> None:
+    def advance(self, t: float | None = None) -> None:
         """Advances equations for one time step."""
         if not self._initialized:
             self.initialize(self.solution)
         for i in range(self.n_stages):
-            self.solve_stage(i, update_forcings, t)
+            self.solve_stage(i, t)
 
         self.get_final_solution()
 
@@ -139,8 +134,22 @@ class IrksomeIntegrator(TimeIntegratorBase):
         stage_type: Type of stage formulation (e.g., "deriv", "dirk", "explicit")
         solution_old: Firedrake function representing the equation's solution
                       at the previous timestep
-        strong_bcs: List of Firedrake Dirichlet boundary conditions
-        bc_type: Boundary condition type for Irksome ("DAE" or "ODE")
+        strong_bcs: List of Firedrake boundary conditions (DirichletBC or EquationBC).
+                    Note: EquationBC is only compatible with bc_type="DAE".
+        bc_type: Boundary condition type for Irksome ("DAE" or "ODE").
+                 Only applies when stage_type="deriv".
+
+                 - "DAE" (default): Differential-Algebraic Equation style BCs.
+                   Enforces BCs as constraints, handling incompatible BC + IC gracefully.
+                   Supports both DirichletBC and EquationBC.
+
+                 - "ODE": Ordinary Differential Equation style BCs.
+                   Takes time derivative of boundary data. Requires compatible BC + IC.
+                   Only supports DirichletBC (EquationBC raises NotImplementedError).
+                   Only works with splitting=AI (additive implicit), where AI splits the
+                   Butcher matrix A as (A, I) with I being the identity matrix. This is
+                   the default splitting strategy and reformulates the RK method to have
+                   a denser mass matrix with block-diagonal stiffness.
         solver_parameters: Dictionary of solver parameters provided to PETSc
         initial_time: Initial time value (default: 0.0). This initialises the internal
                       time variable that Irksome uses in time-dependent forms.
@@ -230,7 +239,8 @@ class IrksomeIntegrator(TimeIntegratorBase):
             stepper_kwargs["bc_type"] = bc_type
 
         # Add adaptive_parameters if provided
-        if adaptive_parameters is not None:
+        self.is_adaptive = adaptive_parameters is not None
+        if self.is_adaptive:
             stepper_kwargs["adaptive_parameters"] = adaptive_parameters
 
         # Merge in any additional Irksome-specific kwargs
@@ -240,7 +250,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self.stepper = IrksomeTimeStepper(
             F,
             butcher,
-            self.t,              # Shared time variable (MeshConstant)
+            self.t,  # Shared time variable (MeshConstant)
             self.dt_mesh_const,  # MeshConstant for Irksome (synced from dt_reference)
             solution,
             **stepper_kwargs
@@ -253,44 +263,43 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self.solution.assign(init_solution)
         self._initialized = True
 
-    def advance(self, update_forcings: Callable | None = None, t: float | None = None):
+    def advance(self, t: float | None = None) -> tuple[float, float] | None:
         """Advance the solution by one time step.
 
         Args:
-            update_forcings: [SOON TO BE DEPRECATED] Optional callable to update time-dependent forcings.
-                Currently, this callback is called once before advancing (equivalent to calling it
-                before `advance()`). For updating terms through time-stepping stages (e.g., per-stage
-                updates in multi-stage methods), use one of the following approaches:
-                  - Include time-dependent expressions directly in your UFL form using the
-                    time variable `t` (e.g., `sin(t)`, `exp(-t)`, etc.)
-                  - Use Firedrake's `ExternalOperator` for complex dependencies
-                  - Solve coupled systems monolithically rather than using callbacks
             t: Optional current simulation time. If provided, updates the internal time variable
                before advancing. If not provided, uses the current value of self.t.
+
+        Returns:
+            When adaptive_parameters are provided: tuple (error, dt_used) where:
+                - error: Error estimate from the adaptive stepper
+                - dt_used: Actual time step used (may differ from initial dt)
+            When adaptive_parameters are not provided: None
 
         Note:
             Following Irksome's design, this method does NOT automatically update the time variable
             after advancing. Users should manually update time after calling advance():
+                # Non-adaptive case:
                 integrator.advance(t=current_time)
                 current_time += dt
+
+                # Adaptive case:
+                result = integrator.advance(t=current_time)
+                if result is not None:
+                    error, dt_used = result
+                    current_time += dt_used
             This ensures time synchronization between g-adopt and Irksome's internal state.
+
+            When adaptive timestepping is enabled, Irksome updates dt_mesh_const internally.
+            This method syncs dt_mesh_const back to dt_reference so get_dt() returns the
+            actual dt used.
+
+            For time-dependent forcings, include time-dependent expressions directly in your
+            UFL form using the time variable `t` (e.g., `sin(t)`, `exp(-t)`, etc.), or use
+            Firedrake's `ExternalOperator` for complex dependencies.
         """
         if not self._initialized:
             self.initialize(self.solution)
-
-        # Deprecation warning
-        if update_forcings is not None:
-            warnings.warn(
-                "The 'update_forcings' parameter will be deprecated in a future version. "
-                "Currently, it is called once before advancing (equivalent to calling it before advance()). "
-                "For updating terms through time-stepping stages (e.g., per-stage updates in multi-stage methods), "
-                "consider these alternatives:\n"
-                "  1. Use explicit time dependence in UFL forms (e.g., include 't' directly)\n"
-                "  2. Use Firedrake's ExternalOperator for complex derived quantities\n"
-                "  3. Solve coupled systems monolithically instead of using callbacks",
-                DeprecationWarning,
-                stacklevel=2
-            )
 
         # Apply boundary conditions
         for bci in self.strong_bcs:
@@ -308,20 +317,25 @@ class IrksomeIntegrator(TimeIntegratorBase):
         if t is not None:
             self.t.assign(ensure_constant(t))
 
-        # Call update_forcings once if provided (will be deprecated behaviour)
-        if update_forcings is not None:
-            # Try calling with time argument first, fall back to no arguments
-            # This handles both old callbacks (no args) and new ones (with time arg)
-            try:
-                update_forcings(float(self.t))
-            except TypeError:
-                # Callback doesn't accept time argument, call without it
-                update_forcings()
-
         # Advance using Irksome
         # Note: Irksome uses self.t internally but does not modify it
         # The time used during stages is: t + c[i] * dt
-        self.stepper.advance()
+        result = self.stepper.advance()
+
+        # Handle adaptive timestepping return value
+        if self.is_adaptive:
+            # Irksome returns (error, dt_used) tuple when adaptive is enabled
+            adapt_error, adapt_dt = result
+
+            # Sync dt_mesh_const back to dt_reference
+            # (Irksome updated dt_mesh_const internally during advance)
+            self.dt_reference.assign(float(adapt_dt))
+
+            # Return tuple so users can track the actual dt used
+            return (adapt_error, float(adapt_dt))
+
+        # Non-adaptive: return None for consistency
+        return None
 
     def get_time(self) -> float:
         """Get the current value of the internal time variable.
