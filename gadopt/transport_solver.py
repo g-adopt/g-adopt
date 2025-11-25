@@ -9,7 +9,6 @@ documented parameters and call the `solve` method to request a solver update.
 import abc
 from collections.abc import Mapping
 from numbers import Number
-from typing import Any, Callable
 
 from firedrake import *
 
