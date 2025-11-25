@@ -94,7 +94,7 @@ from gadopt_demo_utils.gia_demo_utils import ice_sheet_disc
 # -
 
 # The novelty of using the overloading approach provided by pyadjoint is that it requires
-# minimal changes to our script to enable the inverse capabalities of G-ADOPT.
+# minimal changes to our script to enable the inverse capabilities of G-ADOPT.
 # To turn on the adjoint, one simply imports the inverse module to
 # enable all taping functionality from pyadjoint.
 #
@@ -303,8 +303,8 @@ viscosity = setup_heterogenous_viscosity(background_viscosity)
 #
 # Since the ice thickness is only defined at the surface of the Earth we define the
 # control on a surface mesh and then interpolate the control ice thickness to the
-# 2D computational domain to ensure that that the interior sensitivity should always
-# be zero.
+# 2D computational domain to ensure that the interior sensitivity is always
+# zero.
 
 # +
 # Initialise ice loading
@@ -642,7 +642,7 @@ reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 #
 # A good check to see if the forward taping worked is to rerun the forward model based on
 # the operations stored on the tape. We can do this by providing the control to the
-# reducted functional and print out the answer - it is good to see they are the same!
+# reduced functional and print out the answer - it is good to see they are the same!
 
 log("J", J)
 log("Replay tape RF", reduced_functional(control_ice_thickness_surf))
@@ -662,7 +662,7 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 
 # We can see there is a clear hemispherical pattern in
 # the gradients. Red indicates that increasing the ice thickness here would increase
-# out objective function and blue areas indicates that increasing the ice thickness
+# our objective function and blue areas indicates that increasing the ice thickness
 # here would decrease our objective function. In the 'southern' hemisphere
 # where we have the biggest ice load the gradient is negative, which makes sense as
 # we expect increasing the ice thickness here to reduce our surface misfit.
@@ -687,7 +687,7 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 
 # ### Verification of Gradients via a Taylor Test
 #
-# A good way to verify this the gradient is correct is to carry out a Taylor test. For
+# A good way to verify the gradient is correct is to carry out a Taylor test. For
 # the control, $I_h$, reduced functional, $J(I_h)$, and its derivative,
 # $\frac{\mathrm{d} J}{\mathrm{d} I_h}$, the Taylor remainder convergence test can be
 # expressed as:
@@ -766,7 +766,7 @@ functional_values = []
 
 optimiser.run()
 
-# If we're performing mulitple successive optimisations, we want
+# If we're performing multiple successive optimisations, we want
 # to ensure the annotations are switched back on for the next code
 # to use them
 
