@@ -112,6 +112,7 @@ tape.clear_tape()
 
 
 # To verify the tape is empty, we can print all blocks:
+
 print(tape.get_blocks())
 
 # We then begin annotation.
@@ -123,7 +124,6 @@ continue_annotation()
 # easier to load the synthetic data from the previous tutorial for our 'twin'
 # experiment.
 
-# Set up geometry:
 checkpoint_file = "forward-2d-cylindrical-disp-vel.h5"
 with CheckpointFile(checkpoint_file, 'r') as afile:
     mesh = afile.load_mesh(name='surface_mesh_extruded')
@@ -311,17 +311,17 @@ viscosity = setup_heterogenous_viscosity(background_viscosity)
 # zero.
 
 # +
-# Set up geometry:
+# Construct a surface mesh:
 rmax = radius_values_nondim[0]
 ncells = 180
-
-# Construct a surface mesh:
 surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh')
+
+# Define control on surface mesh
 P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # control space
 control_ice_thickness_surf = Function(P1_surf)  # control
 control = Control(control_ice_thickness_surf, riesz_map="L2")
 
-# defining the control
+# Interpolate control to computational domain (full 2D cylindrical mesh)
 control_ice_thickness = Function(P1, name="control normalised ice thickness")
 control_ice_thickness.interpolate(control_ice_thickness_surf, allow_missing_dofs=True)
 # -
@@ -373,7 +373,6 @@ ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 #
 # updated_ice_file = VTKFile('ice.pvd')
 # updated_ice_file.write(control_ice_thickness, target_normalised_ice_thickness)
-# reader = pv.get_reader("ice.pvd")
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
@@ -564,18 +563,6 @@ for timestep in range(1, max_timesteps+1):
 #     }
 # plot_displacement(plotter, disp='displacement', vel='velocity') #, scalar_bar_args=disp_scalar_bar_args)
 #
-# # Plot ice ring
-# reader = pv.get_reader("ice.pvd")
-# ice_scalar_bar_args = {"title": 'Normalised ice thickness',
-#                        "position_x": 0.1,
-#                        "position_y": 0.3,
-#                        "vertical": True,
-#                        "title_font_size": 22,
-#                        "label_font_size": 18,
-#                        "fmt": "%.1f",
-#                        "font_family": "arial",
-#                        "n_labels": 5,
-#                        }
 # plot_ice_ring(plotter, scalar='control normalised ice thickness')
 #
 # plotter.camera_position = 'xy'
@@ -796,8 +783,6 @@ continue_annotation()
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
-# reader = pv.get_reader("updated_out.pvd")
-# reader.set_active_time_point(5)
 # plotter.subplot(0, 0)
 # plot_viscosity(plotter,show_scalar_bar=False)
 # plotter.add_text("Target")
@@ -805,19 +790,6 @@ continue_annotation()
 # plotter.subplot(0, 1)
 # plot_viscosity(plotter, **plot_kwargs)
 #
-# ice_scalar_bar_args = {"title": 'Normalised ice thickness',
-#                        "position_x": 0.2,
-#                        "position_y": 0.1,
-#                        "vertical": False,
-#                        "title_font_size": 22,
-#                        "label_font_size": 18,
-#                        "fmt": "%.1f",
-#                        "font_family": "arial",
-#                        "n_labels": 5,
-#                        }
-#
-# reader = pv.get_reader("updated_ice_thickness.pvd")
-# reader.set_active_time_point(5)
 # plotter.subplot(0, 0)
 # plot_ice_ring(plotter, fname='ice.pvd', scalar='target normalised ice thickness', **plot_kwargs)
 # plotter.camera_position = 'xy'
