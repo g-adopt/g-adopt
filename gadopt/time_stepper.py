@@ -4,7 +4,7 @@ they instantiate one of the implemented algorithm class, for example, `ERKEuler`
 providing relevant parameters defined in the parent class (i.e. `ERKGeneric` or
 `DIRKGeneric`). Then, they call the `advance` method to request a solver update.
 
-This module now includes Irksome integration.
+This module includes Irksome integration.
 """
 
 from abc import ABC, abstractmethod
