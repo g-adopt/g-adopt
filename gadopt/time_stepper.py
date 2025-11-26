@@ -259,7 +259,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
         self._initialized = False
 
     def initialize(self, init_solution):
-        """Initialize the time integrator."""
+        """Initialise the time integrator."""
         self.solution.assign(init_solution)
         self._initialized = True
 
@@ -288,7 +288,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
                 if result is not None:
                     error, dt_used = result
                     current_time += dt_used
-            This ensures time synchronization between g-adopt and Irksome's internal state.
+            This ensures time synchronisation between g-adopt and Irksome's internal state.
 
             When adaptive timestepping is enabled, Irksome updates dt_mesh_const internally.
             This method syncs dt_mesh_const back to dt_reference so get_dt() returns the
@@ -341,17 +341,17 @@ class IrksomeIntegrator(TimeIntegratorBase):
         """Get the current value of the internal time variable.
 
         Returns:
-            The current time as a float.
+            The current time.
         """
-        return float(self.t)
+        return self.t
 
     def get_dt(self) -> float:
         """Get the current value of the time step from dt_reference.
 
         Returns:
-            The current time step as a float.
+            The current time step.
         """
-        return float(self.dt_reference)
+        return self.dt_reference
 
 
 def create_custom_tableau(a, b, c):
@@ -399,7 +399,7 @@ class RKGeneric(IrksomeIntegrator):
         # Create Butcher tableau from instance attributes (inherited from Abstract class)
         butcher = create_custom_tableau(self.a, self.b, self.c)
 
-        # Initialize with Irksome backend
+        # Initialise with Irksome backend
         super().__init__(
             equation=equation,
             solution=solution,
@@ -450,7 +450,7 @@ class StaticButcherTableauIntegrator(IrksomeIntegrator):
                 f"{self.__class__.__name__} must define a butcher_tableau class attribute"
             )
 
-        # Initialize with Irksome backend using the pre-built tableau
+        # Initialise with Irksome backend using the pre-built tableau
         super().__init__(
             equation=equation,
             solution=solution,
@@ -1192,7 +1192,7 @@ class DIRKLPUM2(DIRKGeneric, DIRKLPUM2Abstract):
 
 
 class IrksomeRadauIIA(IrksomeIntegrator):
-    """Direct access to Irksome's RadauIIA scheme for use with EnergySolver."""
+    """Direct access to Irksome's RadauIIA scheme."""
 
     def __init__(
         self,
@@ -1203,18 +1203,18 @@ class IrksomeRadauIIA(IrksomeIntegrator):
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-        **kwargs  # Accept additional kwargs for EnergySolver compatibility
+        **kwargs  # Accept additional kwargs
     ):
         # Create Irksome RadauIIA tableau
         butcher = RadauIIA(order)
 
-        # Initialize with Irksome backend (RadauIIA is fully implicit)
+        # Initialise with Irksome backend (RadauIIA is fully implicit)
         super().__init__(
             equation=equation,
             solution=solution,
             dt=dt,
             butcher=butcher,
-            stage_type="deriv",  # Use "deriv" for fully implicit schemes
+            stage_type="deriv",  # "deriv" for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
@@ -1222,7 +1222,7 @@ class IrksomeRadauIIA(IrksomeIntegrator):
 
 
 class IrksomeGaussLegendre(IrksomeIntegrator):
-    """Direct access to Irksome's GaussLegendre scheme for use with EnergySolver."""
+    """Direct access to Irksome's GaussLegendre scheme."""
 
     def __init__(
         self,
@@ -1233,18 +1233,18 @@ class IrksomeGaussLegendre(IrksomeIntegrator):
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-        **kwargs  # Accept additional kwargs for EnergySolver compatibility
+        **kwargs  # Accept additional kwargs for compatibility
     ):
         # Create Irksome GaussLegendre tableau
         butcher = GaussLegendre(order)
 
-        # Initialize with Irksome backend (GaussLegendre is fully implicit )
+        # Initialise with Irksome backend (GaussLegendre is fully implicit )
         super().__init__(
             equation=equation,
             solution=solution,
             dt=dt,
             butcher=butcher,
-            stage_type="deriv",  # Use "deriv" for fully implicit schemes
+            stage_type="deriv",  # "deriv" for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
@@ -1252,7 +1252,7 @@ class IrksomeGaussLegendre(IrksomeIntegrator):
 
 
 class IrksomeLobattoIIIA(IrksomeIntegrator):
-    """Direct access to Irksome's LobattoIIIA scheme for use with EnergySolver."""
+    """Direct access to Irksome's LobattoIIIA scheme."""
 
     def __init__(
         self,
@@ -1267,7 +1267,7 @@ class IrksomeLobattoIIIA(IrksomeIntegrator):
         # Create Irksome LobattoIIIA tableau
         butcher = LobattoIIIA(order)
 
-        # Initialize with Irksome backend
+        # Initialise with Irksome backend
         super().__init__(
             equation=equation,
             solution=solution,
@@ -1281,7 +1281,7 @@ class IrksomeLobattoIIIA(IrksomeIntegrator):
 
 
 class IrksomeLobattoIIIC(IrksomeIntegrator):
-    """Direct access to Irksome's LobattoIIIC scheme for use with EnergySolver."""
+    """Direct access to Irksome's LobattoIIIC scheme."""
 
     def __init__(
         self,
@@ -1302,7 +1302,7 @@ class IrksomeLobattoIIIC(IrksomeIntegrator):
             solution=solution,
             dt=dt,
             butcher=butcher,
-            stage_type="deriv",  # Use "deriv" for fully implicit schemes
+            stage_type="deriv",  # for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
             solver_parameters=solver_parameters
@@ -1310,19 +1310,19 @@ class IrksomeLobattoIIIC(IrksomeIntegrator):
 
 
 class IrksomeAlexander(StaticButcherTableauIntegrator):
-    """Direct access to Irksome's Alexander scheme for use with EnergySolver."""
+    """Direct access to Irksome's Alexander scheme."""
     butcher_tableau = Alexander()
     stage_type = "dirk"
 
 
 class IrksomeQinZhang(StaticButcherTableauIntegrator):
-    """Direct access to Irksome's QinZhang scheme for use with EnergySolver."""
+    """Direct access to Irksome's QinZhang scheme."""
     butcher_tableau = QinZhang()
     stage_type = "dirk"
 
 
 class IrksomePareschiRusso(IrksomeIntegrator):
-    """Direct access to Irksome's PareschiRusso scheme for use with EnergySolver."""
+    """Direct access to Irksome's PareschiRusso scheme."""
 
     def __init__(
         self,
@@ -1333,12 +1333,12 @@ class IrksomePareschiRusso(IrksomeIntegrator):
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-        **kwargs  # Accept additional kwargs for EnergySolver compatibility
+        **kwargs  # Accept additional kwargs compatibility
     ):
         # Create Irksome PareschiRusso tableau
         butcher = PareschiRusso(x)
 
-        # Initialize with Irksome backend
+        # Initialise with Irksome backend
         super().__init__(
             equation=equation,
             solution=solution,

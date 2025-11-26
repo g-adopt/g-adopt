@@ -622,11 +622,8 @@ class LevelSetSolver(SolverConfigurationMixin):
         """Performs reinitialisation steps.
 
         Note:
-            The gradient is updated between reinitialisation stages by explicitly calling
-            `update_gradient()` before each advance step. Future versions could consider
-            using Firedrake's `ExternalOperator` to express the gradient dependency
-            symbolically, or reformulate as a coupled system that solves for both the
-            level-set function and its gradient simultaneously.
+            The gradient (n) of the level-set function is updated between reinitialisation
+            steps by explicitly calling `update_gradient()` before each advance.
         """
         for _ in range(self.reini_kwargs["steps"]):
             # Update gradient based on current level-set solution
