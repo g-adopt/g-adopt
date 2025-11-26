@@ -28,6 +28,7 @@ from .utility import (
     is_continuous,
     normal_is_continuous,
     tensor_jump,
+    upward_normal,
     vertical_component,
 )
 
@@ -203,7 +204,7 @@ def advection_hydrostatic_prestress_term(
     rho0 = eq.approximation.density
     g = eq.approximation.g
     u_r = vertical_component(trial)
-
+    '''
     # Only include jump term for discontinuous density spaces
     if is_continuous(rho0.function_space()):
         F = 0
@@ -221,6 +222,15 @@ def advection_hydrostatic_prestress_term(
     # so we neglect this term but keep the free surface term that accounts for
     # viscous feedback at isostatic equibrium
     F -= div(eq.test) * eq.approximation.compressible_adv_hyd_pre(u_r) * eq.dx
+    '''
+    
+    grad_phi = g * upward_normal(eq.mesh)
+
+    F = 0.5 * B_mu * rho0 * dot(grad(dot(trial, grad_phi)), eq.test) * eq.dx
+    F += 0.5 * B_mu * rho0 * dot(trial, grad(dot(eq.test, grad_phi))) * eq.dx
+
+    F -= 0.5 * B_mu * rho0 * dot(div(trial)*grad_phi, eq.test) * eq.dx
+    F -= 0.5 * B_mu * rho0 * dot(grad_phi, trial) * div(eq.test) * eq.dx
 
     return -F
 

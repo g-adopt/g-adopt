@@ -789,7 +789,8 @@ class InternalVariableSolver(StokesSolverBase):
         stress = self.approximation.stress(
             self.solution, internal_variables=self.internal_variables_update
         )
-        source = self.approximation.buoyancy(self.solution) * self.k
+        #source = self.approximation.buoyancy(self.solution) * self.k
+        source = 0 * self.k
 
         eq_attrs = {"stress": stress, "source": source}
 
@@ -815,7 +816,8 @@ class InternalVariableSolver(StokesSolverBase):
             vertical_component(self.solution)
         )
 
-        return combined_normal_stress
+        return normal_stress #combined_normal_stress
+#        return combined_normal_stress
 
     def update_m(
         self, m: fd.Function, maxwell_time: fd.Function | Expr
