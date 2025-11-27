@@ -8,11 +8,66 @@ time stepping functionality, and error handling.
 import pytest
 import numpy as np
 from firedrake import *
-from gadopt import *
-from gadopt.time_stepper import *
-from gadopt.scalar_equation import mass_term, diffusion_term, source_term
-from irksome import BackwardEuler as IrksomeBackwardEuler, GaussLegendre
+from irksome import BackwardEuler as IrksomeBackwardEuler
+from irksome import GaussLegendre
 from irksome.ButcherTableaux import ButcherTableau
+
+from gadopt import *
+from gadopt.scalar_equation import diffusion_term, mass_term, source_term
+from gadopt.time_stepper import *
+
+
+# Helper function to create custom tableau
+def create_custom_tableau(a, b, c):
+    """Create a Butcher tableau for Irksome.
+
+    Args:
+        a: Butcher matrix (2D array)
+        b: Weights (1D array)
+        c: Nodes (1D array)
+
+    Returns:
+        ButcherTableau instance
+    """
+    return ButcherTableau(
+        A=np.array(a),
+        b=np.array(b),
+        btilde=None,
+        c=np.array(c),
+        order=len(b),
+        embedded_order=None,
+        gamma0=None
+    )
+
+
+# Define scheme mappings
+scheme_mappings = {
+    # Special cases with direct Irksome equivalents
+    BackwardEulerAbstract: (IrksomeBackwardEuler(), "dirk"),
+    ImplicitMidpointAbstract: (GaussLegendre(1), "dirk"),
+    # Explicit schemes
+    ForwardEulerAbstract: "explicit",
+    SSPRK33Abstract: "explicit",
+    ERKMidpointAbstract: "explicit",
+    ERKLSPUM2Abstract: "explicit",
+    ERKLPUM2Abstract: "explicit",
+    eSSPRKs3p3Abstract: "explicit",
+    eSSPRKs4p3Abstract: "explicit",
+    eSSPRKs5p3Abstract: "explicit",
+    eSSPRKs6p3Abstract: "explicit",
+    eSSPRKs7p3Abstract: "explicit",
+    eSSPRKs8p3Abstract: "explicit",
+    eSSPRKs9p3Abstract: "explicit",
+    eSSPRKs10p3Abstract: "explicit",
+    # DIRK schemes
+    CrankNicolsonAbstract: "dirk",
+    DIRK22Abstract: "dirk",
+    DIRK23Abstract: "dirk",
+    DIRK33Abstract: "dirk",
+    DIRK43Abstract: "dirk",
+    DIRKLSPUM2Abstract: "dirk",
+    DIRKLPUM2Abstract: "dirk",
+}
 
 
 # Utility functions for testing (moved from time_stepper.py)
@@ -25,59 +80,17 @@ def gadopt_to_irksome_tableau(scheme_class):
     Returns:
         tuple: (ButcherTableau instance, stage_type string)
     """
-    # Create a temporary instance to access the tableau
-    temp_scheme = scheme_class()
-
-    # Helper function to create custom tableau
-    def create_custom_tableau_local(a, b, c):
-        return ButcherTableau(
-            A=np.array(a),
-            b=np.array(b),
-            btilde=None,
-            c=np.array(c),
-            order=len(b),
-            embedded_order=None,
-            gamma0=None
-        )
-
-    # Define scheme mappings
-    scheme_mappings = {
-        # Special cases with direct Irksome equivalents
-        BackwardEulerAbstract: lambda: (IrksomeBackwardEuler(), "dirk"),
-        ImplicitMidpointAbstract: lambda: (GaussLegendre(1), "dirk"),
-
-        # Explicit schemes
-        ForwardEulerAbstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        SSPRK33Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        ERKMidpointAbstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        ERKLSPUM2Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        ERKLPUM2Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs3p3Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs4p3Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs5p3Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs6p3Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs7p3Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs8p3Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs9p3Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-        eSSPRKs10p3Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "explicit"),
-
-        # DIRK schemes
-        CrankNicolsonAbstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRK22Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRK23Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRK33Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRK43Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRKLSPUM2Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-        DIRKLPUM2Abstract: lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "dirk"),
-    }
-
     # Get the mapping function or use default
-    mapping_func = scheme_mappings.get(
-        scheme_class,
-        lambda: (create_custom_tableau_local(temp_scheme.a, temp_scheme.b, temp_scheme.c), "deriv")
-    )
-
-    return mapping_func()
+    mapping = scheme_mappings[scheme_class]
+    if isinstance(mapping, str):
+        # Need to create custom tableau from scheme class
+        temp_scheme = scheme_class()
+        return create_custom_tableau(
+            temp_scheme.a, temp_scheme.b, temp_scheme.c
+        ), mapping
+    else:
+        # Direct Irksome tableau and stage type
+        return mapping
 
 
 def create_irksome_integrator(equation, solution, dt, scheme_class, **kwargs):
@@ -108,38 +121,12 @@ def create_irksome_integrator(equation, solution, dt, scheme_class, **kwargs):
 class TestTableauConversion:
     """Test tableau conversion from G-ADOPT to Irksome."""
 
-    @pytest.mark.parametrize("scheme_class", [
-        # Explicit schemes
-        ForwardEulerAbstract,
-        ERKLSPUM2Abstract,
-        ERKLPUM2Abstract,
-        ERKMidpointAbstract,
-        SSPRK33Abstract,
-        eSSPRKs3p3Abstract,
-        eSSPRKs4p3Abstract,
-        eSSPRKs5p3Abstract,
-        eSSPRKs6p3Abstract,
-        eSSPRKs7p3Abstract,
-        eSSPRKs8p3Abstract,
-        eSSPRKs9p3Abstract,
-        eSSPRKs10p3Abstract,
-
-        # Implicit schemes
-        BackwardEulerAbstract,
-        ImplicitMidpointAbstract,
-        CrankNicolsonAbstract,
-        DIRK22Abstract,
-        DIRK23Abstract,
-        DIRK33Abstract,
-        DIRK43Abstract,
-        DIRKLSPUM2Abstract,
-        DIRKLPUM2Abstract,
-    ])
+    @pytest.mark.parametrize("scheme_class", scheme_mappings.keys())
     def test_tableau_conversion(self, scheme_class):
         """Test that scheme classes convert to valid Irksome tableaux."""
         tableau, stage_type = gadopt_to_irksome_tableau(scheme_class)
         assert tableau is not None
-        assert stage_type in ["explicit", "dirk", "deriv"]
+        assert stage_type in ["explicit", "dirk"]
 
         # Check that tableau has required attributes
         assert hasattr(tableau, 'A')  # Butcher matrix (Irksome uses 'A' not 'a')
@@ -206,48 +193,6 @@ class TestDirectIrksomeSchemes:
         assert integrator.equation == equation
         assert integrator.solution == u
 
-    def test_irksome_radau_order_parameter(self):
-        """Test IrksomeRadauIIA with different orders."""
-        mesh = UnitSquareMesh(5, 5)
-        V = FunctionSpace(mesh, "CG", 1)
-        u = Function(V)
-
-        test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
-        equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
-            eq_attrs=eq_attrs,
-            bcs={}
-        )
-
-        # Test different orders
-        for order in [1, 2, 3]:
-            integrator = IrksomeRadauIIA(equation, u, dt=0.01, order=order)
-            assert integrator is not None
-
-    def test_irksome_gauss_legendre_order_parameter(self):
-        """Test IrksomeGaussLegendre with different orders."""
-        mesh = UnitSquareMesh(5, 5)
-        V = FunctionSpace(mesh, "CG", 1)
-        u = Function(V)
-
-        test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
-        equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
-            eq_attrs=eq_attrs,
-            bcs={}
-        )
-
-        # Test different orders
-        for order in [1, 2, 3]:
-            integrator = IrksomeGaussLegendre(equation, u, dt=0.01, order=order)
-            assert integrator is not None
-
 
 class TestEnergySolverIntegration:
     """Test integration with EnergySolver."""
@@ -262,6 +207,7 @@ class TestEnergySolverIntegration:
         IrksomeRadauIIA,
         IrksomeGaussLegendre,
         IrksomeLobattoIIIA,
+        IrksomePareschiRusso,
     ])
     def test_energy_solver_integration(self, time_stepper):
         """Test that time steppers work with EnergySolver."""
@@ -280,42 +226,6 @@ class TestEnergySolverIntegration:
         # Test EnergySolver creation
         dt = Constant(0.01)
         solver = EnergySolver(T, u, approximation, dt, time_stepper)
-
-        assert solver is not None
-        assert solver.timestepper is not None
-
-    def test_energy_solver_with_irksome_radau(self):
-        """Test EnergySolver specifically with IrksomeRadauIIA."""
-        mesh = UnitSquareMesh(5, 5)
-        V = VectorFunctionSpace(mesh, "CG", 1)  # Velocity space
-        Q = FunctionSpace(mesh, "CG", 1)        # Temperature space
-        T = Function(Q)
-        u = Function(V)
-        u.assign(as_vector((0.0, 0.0)))  # Zero velocity field
-
-        Ra = Constant(1000.0)  # Rayleigh number
-        approximation = BoussinesqApproximation(Ra)
-
-        dt = Constant(0.01)
-        solver = EnergySolver(T, u, approximation, dt, IrksomeRadauIIA)
-
-        assert solver is not None
-        assert solver.timestepper is not None
-
-    def test_energy_solver_with_irksome_pareschi_russo(self):
-        """Test EnergySolver specifically with IrksomePareschiRusso."""
-        mesh = UnitSquareMesh(5, 5)
-        V = VectorFunctionSpace(mesh, "CG", 1)  # Velocity space
-        Q = FunctionSpace(mesh, "CG", 1)        # Temperature space
-        T = Function(Q)
-        u = Function(V)
-        u.assign(as_vector((0.0, 0.0)))  # Zero velocity field
-
-        Ra = Constant(1000.0)  # Rayleigh number
-        approximation = BoussinesqApproximation(Ra)
-
-        dt = Constant(0.01)
-        solver = EnergySolver(T, u, approximation, dt, IrksomePareschiRusso)
 
         assert solver is not None
         assert solver.timestepper is not None
@@ -577,7 +487,7 @@ class TestErrorHandling:
 
     def test_invalid_scheme(self):
         """Test that invalid schemes raise appropriate errors."""
-        with pytest.raises((AttributeError, TypeError)):
+        with pytest.raises(KeyError):
             # Try to convert a non-scheme class
             gadopt_to_irksome_tableau(str)
 

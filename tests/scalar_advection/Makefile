@@ -17,5 +17,5 @@ clean:
 	rm -f num_steps_adaptive.log dt_stats_adaptive.log
 	rm -rf output
 
-check: final_error.log final_error_adaptive.log num_steps_adaptive.log dt_stats_adaptive.log
+check: all
 	python3 -m pytest

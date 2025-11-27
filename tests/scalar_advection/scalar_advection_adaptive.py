@@ -1,5 +1,5 @@
-# Demo for pure scalar advection with adaptive timestepping - this is adapted from the Firedrake DG_advection demo,
-# but here we use G-ADOPT's GenericTransportSolver with IrksomeRadauIIA adaptive timestepping and use a CG discretisation with
+# Demo for pure scalar advection with adaptive timestepping - this is adapted from the Firedrake DG_advection demo.
+# Here, however, we use G-ADOPT's GenericTransportSolver with IrksomeRadauIIA adaptive timestepping and use a CG discretisation with
 # Streamline Upwind (SU) stabilisation.
 
 from gadopt import *

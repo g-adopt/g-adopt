@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+from numpy.testing import assert_allclose
 
 base = Path(__file__).parent.resolve()
 
@@ -11,7 +12,7 @@ def test_scalar_advection():
     final_error = np.loadtxt(base / "final_error.log")
 
     # check that norm(q) is the same as previously run
-    assert np.allclose(final_error, expected_error, rtol=1e-6, atol=1e-16)
+    assert_allclose(final_error, expected_error, rtol=1e-6, atol=1e-16)
 
 
 def test_scalar_advection_adaptive():
@@ -32,16 +33,13 @@ def test_scalar_advection_adaptive():
         expected_dt_stats = expected_data['dt_stats']
 
         # Check final error value
-        assert np.allclose(final_error, expected_error, rtol=1e-6, atol=1e-16), \
-            f"Final error mismatch: got {final_error}, expected {expected_error}"
+        assert_allclose(final_error, expected_error, rtol=1e-6, atol=1e-16)
 
         # Check number of timesteps
-        assert np.allclose(num_steps, expected_steps, rtol=0, atol=0), \
-            f"Number of steps mismatch: got {num_steps}, expected {expected_steps}"
+        assert_allclose(num_steps, expected_steps, rtol=0, atol=0)
 
         # Check timestep statistics (min, max, mean)
-        assert np.allclose(dt_stats, expected_dt_stats, rtol=1e-6, atol=1e-16), \
-            f"Timestep statistics mismatch: got {dt_stats}, expected {expected_dt_stats}"
+        assert_allclose(dt_stats, expected_dt_stats, rtol=1e-6, atol=1e-16)
 
     # Basic sanity checks even if expected files don't exist
     assert num_steps > 0, "Number of steps must be positive"
