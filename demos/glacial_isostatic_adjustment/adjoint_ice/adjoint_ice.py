@@ -317,8 +317,8 @@ ncells = 180
 surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh')
 
 # Define control on surface mesh
-P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # control space
-ice_thickness_control = Function(P1_surf, name="Ice thickness (control)")  # control
+P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # Function space on surface mesh for control
+ice_thickness_control = Function(P1_surf, name="Ice thickness (control)")  # What we optimise
 control = Control(ice_thickness_control, riesz_map="L2")
 
 # Interpolate control to computational domain (full 2D cylindrical mesh)
@@ -589,7 +589,6 @@ pause_annotation()
 # Let's setup some call backs to help us keep track of the inversion.
 
 # +
-# updated_ice_thickness = Function(normalised_ice_thickness, name="updated ice thickness")
 updated_ice_thickness = Function(ice_thickness_full, name="Ice thickness (updated)")
 updated_ice_thickness_file = VTKFile("updated_ice_thickness.pvd")
 updated_displacement = Function(V, name="Displacement (updated)")
