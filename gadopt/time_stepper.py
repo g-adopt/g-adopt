@@ -337,7 +337,8 @@ class IrksomeIntegrator(TimeIntegratorBase):
         # Non-adaptive: return None for consistency
         return None
 
-    def get_time(self) -> float:
+    @property
+    def time(self) -> float:
         """Get the current value of the internal time variable.
 
         Returns:
@@ -345,7 +346,8 @@ class IrksomeIntegrator(TimeIntegratorBase):
         """
         return self.t
 
-    def get_dt(self) -> float:
+    @property
+    def dt(self) -> float:
         """Get the current value of the time step from dt_reference.
 
         Returns:
