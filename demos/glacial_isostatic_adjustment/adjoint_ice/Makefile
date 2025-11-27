@@ -5,18 +5,15 @@ include ../../../rules.mk
 all: functional.txt
 
 functional.txt : category := gia
-functional.txt: adjoint_ice.py forward-2d-cylindrical-disp-vel.h5 2d_cylindrical_lvv.py
+functional.txt: adjoint_ice.py forward-2d-cylindrical-disp-vel.h5
 	$(run-python)
 
-forward-2d-cylindrical-disp-vel.h5 : category := gia
-forward-2d-cylindrical-disp-vel.h5: 2d_cylindrical_lvv.py
-	$(run-python)
-
-2d_cylindrical_lvv.py:
-	cp ${CURDIR}/../2d_cylindrical_lvv/2d_cylindrical_lvv.py .
+forward-2d-cylindrical-disp-vel.h5: ../2d_cylindrical_lvv/2d_cylindrical_lvv.py
+	$(MAKE) -C ../2d_cylindrical_lvv
+	cp ../2d_cylindrical_lvv/forward-2d-cylindrical-disp-vel.h5 .
 
 clean:
-	rm -rf functional.txt taylor_test_minconv.txt 2d_cylindrical_lvv.py *.h5 *.pvd solutions solution visualisation_vtk optimisation_checkpoint
+	rm -rf functional.txt taylor_test_minconv.txt *.h5 *.pvd solutions solution visualisation_vtk optimisation_checkpoint
 
 check: functional.txt
 	python3 -m pytest
