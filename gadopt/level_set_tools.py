@@ -622,7 +622,7 @@ class LevelSetSolver(SolverConfigurationMixin):
         """Performs reinitialisation steps.
 
         Note:
-            The gradient (n) of the level-set function is updated between reinitialisation
+            The gradient of the level-set function is updated between reinitialisation
             steps by explicitly calling `update_gradient()` before each advance.
         """
         for _ in range(self.reini_kwargs["steps"]):

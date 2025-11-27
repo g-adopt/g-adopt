@@ -202,7 +202,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
     ):
         self.equation = equation
         self.solution = solution
-        self.solution_old = solution_old or firedrake.Function(solution)
+        self.solution_old = solution_old or firedrake.Function(solution, name=solution.name() + " (old)")
 
         # Unique identifier used in solver (for API consistency with TimeIntegrator)
         self.name = '-'.join([self.__class__.__name__, self.equation.__class__.__name__])
@@ -212,15 +212,12 @@ class IrksomeIntegrator(TimeIntegratorBase):
 
         # Create MeshConstant objects for time variables (what Irksome expects)
         # These are shared with Irksome's TimeStepper (ensures synchronisation)
-        mesh = solution.ufl_domain()
-        mc = MeshConstant(mesh)
+        mc = MeshConstant(equation.mesh)
         self.t = mc.Constant(initial_time)  # Shared time variable with Irksome
         self.dt_mesh_const = mc.Constant(float(dt))  # MeshConstant for Irksome, synced from dt_reference
 
-        # Build the Irksome form using the unified irksome_form method
-        # This ensures solution-dependent coefficients in the mass term are
-        # correctly evaluated at the current stage solution
-        F = equation.irksome_form(solution, Dt)
+        # Build the Irksome form
+        F = equation.mass(Dt(solution)) - equation.residual(solution)
 
         # Store strong_bcs for applying at initialization
         # This ensures BC-consistency like the original G-ADOPT DIRKGeneric
@@ -230,8 +227,8 @@ class IrksomeIntegrator(TimeIntegratorBase):
         # Start with g-adopt's standard parameters
         stepper_kwargs = {
             "stage_type": stage_type,
-            "bcs": strong_bcs or (),
-            "solver_parameters": solver_parameters or {}
+            "bcs": strong_bcs,
+            "solver_parameters": solver_parameters,
         }
 
         # Add bc_type only for stage formulations that support it
@@ -335,7 +332,7 @@ class IrksomeIntegrator(TimeIntegratorBase):
             return (adapt_error, float(adapt_dt))
 
         # Non-adaptive: return None for consistency
-        return None
+        return
 
     @property
     def time(self) -> float:

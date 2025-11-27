@@ -92,7 +92,7 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         Dictionary of PETSc solver options used to update the default G-ADOPT options
       timestepper_kwargs:
         Dictionary of additional keyword arguments passed to the timestepper constructor.
-        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA)
+        Useful for parameterised schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
