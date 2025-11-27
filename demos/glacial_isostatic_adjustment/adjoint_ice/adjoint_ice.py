@@ -300,18 +300,19 @@ viscosity = setup_heterogenous_viscosity(background_viscosity)
 # Defining the Control
 # ---------------------
 #
-# Now let's setup the ice load. For this tutorial we will start with an ice thickness of
+# The next key step is to define our control, i.e. the field or parameter
+# that we are inverting for. In our case, this is the ice thickness.
+# For this tutorial we will start with an ice thickness of
 # zero everywhere, but our target ice load will be the same two synthetic ice sheets in
-# the previous demo. A key step is to define our control, i.e. the field or parameter
-# that we are inverting for. In our case, this is the normalised ice thickness.
+# the previous demo.
 #
 # Since the ice thickness is only defined at the surface of the Earth we define the
 # control on a surface mesh and then interpolate the control ice thickness to the
 # 2D computational domain to ensure that the interior sensitivity is always
-# zero.
+# zero. Let's setup the ice thickness control field now.
 
 # +
-# Construct a surface mesh:
+# Construct a surface mesh
 rmax = radius_values_nondim[0]
 ncells = 180
 surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_mesh')
@@ -320,11 +321,32 @@ surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_m
 P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # Function space on surface mesh for control
 ice_thickness_control = Function(P1_surf, name="Ice thickness (control)")  # What we optimise
 control = Control(ice_thickness_control, riesz_map="L2")
+# -
+
+# In the cell above, when we initialised the control field, we also specified the option
+# `riesz_map=L2`. This ensures we use the $L_2$ derivative for optimisation, as opposed
+# to the more traditional Euclidean $l_2$ derivative that is defined with respect
+# to the control vector’s discrete degrees of freedom. The L2 formulation is
+# more appropriate because it properly accounts for variations in mesh cell size.
+# Specifically, the optimisation is driven by the gradients
+# $\left[\frac{\partial J}{\partial h_{\text{load}}}\right]_{L_2(\partial\Omega_{\text{top}})}$
+# such that sensitivity of the objective function to perturbations $\delta h_{\text{load}}$
+# in thickness is given by
+#
+# \begin{equation}
+#   \delta J = \int_{\partial\Omega_{\text{top}}} \left[\frac{\partial J}{\partial h_{\text{load}}}\right]_{L_2(\partial\Omega_{\text{top}})}
+#   \delta h_{\text{load}}~ds
+# \end{equation}
+
+# We now interpolate our control ice thickness field (defined on the surface mesh)
+# into a Firedrake Function defined onto the full 2D computational mesh, so that
+# we can apply this as a load through the boundary conditions. We specify the option
+# `allow_missing_dofs` to let Firedrake know that our target mesh extends outside
+# the source mesh.
 
 # Interpolate control to computational domain (full 2D cylindrical mesh)
 ice_thickness_full = Function(P1, name="Ice thickness (full mesh)")
 ice_thickness_full.interpolate(ice_thickness_control, allow_missing_dofs=True)
-# -
 
 # We next set up the relevant parameters for the ice load and set up a target
 # ice thickness field for comparison with our final inversion.
