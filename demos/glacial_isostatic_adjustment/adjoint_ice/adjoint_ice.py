@@ -104,7 +104,8 @@ from gadopt_demo_utils.gia_demo_utils import ice_sheet_disc
 # )
 # -
 
-# We first ensure that the tape is cleared of any previous operations, using the following code:
+# We first ensure that the tape is cleared of any previous operations, using the
+# following code
 
 tape = get_working_tape()
 tape.clear_tape()
@@ -143,20 +144,21 @@ u = Function(V, name='displacement')
 m = Function(S, name="internal variable")
 # -
 
-# Let's set up the background profiles for the material properties with the same values as before.
+# Let's set up the background profiles for the material properties with the same values
+# as before.
 
 # +
 X = SpatialCoordinate(mesh)
 
 # Layer properties from Spada et al. (2011)
-radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]
+radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]  # radius values in m
 domain_depth = radius_values[0]-radius_values[-1]
 radius_values_nondim = np.array(radius_values)/domain_depth
 
-density_values = [3037, 3438, 3871, 4978]
-shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
-bulk_shear_ratio = 1.94
-viscosity_values = [1e25, 1e21, 1e21, 2e21]
+density_values = [3037, 3438, 3871, 4978]  # Density in [kg/m^3]
+shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]  # Shear modulus in [Pa]
+bulk_shear_ratio = 1.94  # ratio of bulk modulus to shear modulus
+viscosity_values = [1e25, 1e21, 1e21, 2e21]  # Viscosity in [Pa s]
 
 density_scale = 4500
 shear_modulus_scale = 1e11
@@ -316,12 +318,12 @@ surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_m
 
 # Define control on surface mesh
 P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # control space
-control_ice_thickness_surf = Function(P1_surf)  # control
-control = Control(control_ice_thickness_surf, riesz_map="L2")
+ice_thickness_control = Function(P1_surf, name="Ice thickness (control)")  # control
+control = Control(ice_thickness_control, riesz_map="L2")
 
 # Interpolate control to computational domain (full 2D cylindrical mesh)
-control_ice_thickness = Function(P1, name="control normalised ice thickness")
-control_ice_thickness.interpolate(control_ice_thickness_surf, allow_missing_dofs=True)
+ice_thickness_full = Function(P1, name="Ice thickness (full mesh)")
+ice_thickness_full.interpolate(ice_thickness_control, allow_missing_dofs=True)
 # -
 
 # We next set up the relevant parameters for the ice load and set up a target
@@ -336,25 +338,26 @@ log("Ratio of buoyancy/shear = rho g D / mu = ", float(B_mu))
 Hice1 = 1000 / domain_depth
 Hice2 = 2000 / domain_depth
 
-# Setup a disc ice load but with a smooth transition given by a tanh profile
+# Setup up target ice thickness
 disc_centre1 = (2*pi/360) * 25  # Centre of disc 1 in radians
 disc_centre2 = pi  # Centre of disc 2 in radians
 disc_halfwidth1 = (2*pi/360) * 10  # Disc 1 half width in radians
 disc_halfwidth2 = (2*pi/360) * 20  # Disc 2 half width in radians
 disc1 = ice_sheet_disc(X, disc_centre1, disc_halfwidth1)
 disc2 = ice_sheet_disc(X, disc_centre2, disc_halfwidth2)
-target_normalised_ice_thickness = Function(P1, name="target normalised ice thickness")
-target_normalised_ice_thickness.interpolate(Hice1 * disc1 + Hice2*disc2)
+ice_thickness_target = Function(P1, name="Ice thickness (target)")
+ice_thickness_target.interpolate(Hice1 * disc1 + Hice2*disc2)
 # -
 
-# Finally we set up the ice load using the `control_ice_thickness` field (defined on
+# Finally we set up the ice load using the `ice_thickness_full` field (defined on
 # the full mesh) that will force our simulation. Generally, it is a good idea to rescale
 # the unknown control parameters, because optimisation algorithms find it harder to
 # minimise a misfit if the control varies over many orders of mangitude. Here we have
-# used `Hice1` to normalise the magnitude of the control, so that we expect the control
+# used `Hscale` to normalise the magnitude of the control, so that we expect the control
 # ice thickness to vary between 0 and 2.
 
-ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
+Hscale = 1000 / domain_depth
+ice_load = B_mu * rho_ice * Hscale * ice_thickness_full
 
 # Let's visualise the ice thickness using pyvista, by plotting a ring outside our
 # synthetic Earth.
@@ -370,7 +373,7 @@ ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 # text_pos = (1,600)
 #
 # updated_ice_file = VTKFile('ice.pvd')
-# updated_ice_file.write(control_ice_thickness, target_normalised_ice_thickness)
+# updated_ice_file.write(ice_thickness_full, ice_thickness_target)
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
@@ -378,13 +381,13 @@ ice_load = B_mu * rho_ice * Hice1 * control_ice_thickness
 # visc_file = VTKFile('viscosity.pvd').write(viscosity)  # write out viscosity
 #
 # plotter.subplot(0, 0)
-# plot_ice_ring(plotter, scalar='target normalised ice thickness', **plot_kwargs)
+# plot_ice_ring(plotter, scalar='Ice thickness (target)', **plot_kwargs)
 # plot_viscosity(plotter,show_scalar_bar=False)
 # plotter.add_text("Target", position=text_pos)
 # plotter.camera_position = 'xy'
 #
 # plotter.subplot(0, 1)
-# plot_ice_ring(plotter, scalar='control normalised ice thickness')
+# plot_ice_ring(plotter, scalar='Ice thickness (full mesh)')
 # plot_viscosity(plotter, **plot_kwargs)
 # plotter.add_text("Initial Guess", position=text_pos)
 # plotter.camera_position = 'xy'
@@ -561,7 +564,7 @@ for timestep in range(1, max_timesteps+1):
 #     }
 # plot_displacement(plotter, disp='displacement', vel='velocity') #, scalar_bar_args=disp_scalar_bar_args)
 #
-# plot_ice_ring(plotter, scalar='control normalised ice thickness')
+# plot_ice_ring(plotter, scalar='Ice thickness (full mesh)')
 #
 # plotter.camera_position = 'xy'
 # plotter.add_text("Time = 10 ka")
@@ -576,10 +579,8 @@ for timestep in range(1, max_timesteps+1):
 # This includes the time integrated displacement and velocity misfit at the
 # surface as we discussed above.
 
-# +
 J = (displacement_misfit + velocity_misfit) / max_timesteps
 log("J = ", J)
-# -
 
 # Let's also pause annotation as we are now done with the forward terms.
 
@@ -589,10 +590,10 @@ pause_annotation()
 
 # +
 # updated_ice_thickness = Function(normalised_ice_thickness, name="updated ice thickness")
-updated_ice_thickness = Function(control_ice_thickness, name="updated ice thickness")
+updated_ice_thickness = Function(ice_thickness_full, name="Ice thickness (updated)")
 updated_ice_thickness_file = VTKFile("updated_ice_thickness.pvd")
-updated_displacement = Function(V, name="updated displacement")
-updated_velocity = Function(V, name="updated velocity")
+updated_displacement = Function(V, name="Displacement (updated)")
+updated_velocity = Function(V, name="Velocity (velocity)")
 updated_out_file = VTKFile("updated_out.pvd")
 
 with CheckpointFile(checkpoint_file, 'r') as afile:
@@ -613,7 +614,7 @@ def eval_cb(J, m):
     log("velocity misfit", velocity_misfit.block_variable.checkpoint / max_timesteps)
 
     # Write out values of control and final forward model results
-    updated_ice_thickness.assign(control_ice_thickness.block_variable.checkpoint)
+    updated_ice_thickness.assign(ice_thickness_full.block_variable.checkpoint)
     updated_ice_thickness_file.write(updated_ice_thickness)
     updated_displacement.interpolate(u.block_variable.checkpoint)
     updated_velocity.interpolate(velocity.block_variable.checkpoint)
@@ -647,7 +648,7 @@ reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 # reduced functional and print out the answer - it is good to see they are the same!
 
 log("J", J)
-log("Replay tape RF", reduced_functional(control_ice_thickness_surf))
+log("Replay tape RF", reduced_functional(ice_thickness_control))
 
 # ### Visualising the derivative
 #
@@ -655,7 +656,7 @@ log("Replay tape RF", reduced_functional(control_ice_thickness_surf))
 # ice thickness.  This is as simple as calling the `derivative()` method on  our
 # reduced functional.
 
-#
+# +
 dJdm = reduced_functional.derivative(apply_riesz=True)
 
 grad_file = VTKFile("adj_ice.pvd").write(dJdm)
@@ -672,12 +673,12 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 # + tags=["active-ipynb"]
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
 # plotter.subplot(0, 0)
-# plot_ice_ring(plotter, scalar='target normalised ice thickness', **plot_kwargs)
+# plot_ice_ring(plotter, scalar='Ice thickness (target)', **plot_kwargs)
 # plot_viscosity(plotter, show_scalar_bar=False)
 # plotter.add_text("Target", position=text_pos)
 # plotter.camera_position = 'xy'
 # plotter.subplot(0, 1)
-# plot_ice_ring(plotter, scalar='control normalised ice thickness')
+# plot_ice_ring(plotter, scalar='Ice thickness (full mesh)')
 # plot_viscosity(plotter, show_scalar_bar=False)
 # plot_adj_ring(plotter, fname='adj_ice.pvd', stretch=1.4, **plot_kwargs)
 # plotter.camera_position = 'xy'
@@ -716,9 +717,11 @@ grad_file = VTKFile("adj_ice.pvd").write(dJdm)
 # Here is how you can perform a Taylor test in the code:
 
 # +
-h = Function(control_ice_thickness_surf)
+h = Function(ice_thickness_control)
 h.dat.data[:] = np.random.random(h.dat.data_ro.shape)
-minconv = taylor_test(reduced_functional, control_ice_thickness_surf, h)
+minconv = taylor_test(reduced_functional, ice_thickness_control, h)
+
+log("Expected rate: 2.0 (quadratic), Achieved:", minconv)
 
 with open("taylor_test_minconv.txt", "w") as f:
     f.write(str(minconv))
@@ -732,8 +735,8 @@ with open("taylor_test_minconv.txt", "w") as f:
 # as we do not want negative ice thicknesses!
 
 # +
-ice_thickness_lb = Function(control_ice_thickness_surf.function_space(), name="Lower bound ice thickness")
-ice_thickness_ub = Function(control_ice_thickness_surf.function_space(), name="Upper bound ice thickness")
+ice_thickness_lb = Function(ice_thickness_control.function_space(), name="ice thickness (lower bound)")
+ice_thickness_ub = Function(ice_thickness_control.function_space(), name="Ice thickness (upper bound)")
 ice_thickness_lb.assign(0.0)
 ice_thickness_ub.assign(5)
 
@@ -789,10 +792,10 @@ continue_annotation()
 # plot_viscosity(plotter, **plot_kwargs)
 #
 # plotter.subplot(0, 0)
-# plot_ice_ring(plotter, fname='ice.pvd', scalar='target normalised ice thickness', **plot_kwargs)
+# plot_ice_ring(plotter, fname='ice.pvd', scalar='Ice thickness (target)', **plot_kwargs)
 # plotter.camera_position = 'xy'
 # plotter.subplot(0, 1)
-# plot_ice_ring(plotter, fname='updated_ice_thickness.pvd', scalar='updated ice thickness', timestep=5, thickness_scale=1000, **plot_kwargs)
+# plot_ice_ring(plotter, fname='updated_ice_thickness.pvd', scalar='Ice thickness (updated)', timestep=5, thickness_scale=1000, **plot_kwargs)
 #
 # plotter.camera_position = 'xy'
 # plotter.add_text("Optimised")
@@ -815,3 +818,4 @@ with open("functional.txt", "w") as f:
 # plt.xlabel("Iteration #")
 # plt.ylabel("Functional value")
 # plt.title("Convergence")
+# -
