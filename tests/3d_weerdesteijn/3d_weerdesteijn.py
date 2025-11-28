@@ -345,13 +345,14 @@ iterative_parameters = {"mat_type": "matfree",
                         "snes_monitor": None,
                         "snes_converged_reason": None,
                         "snes_type": "ksponly",
-                        "ksp_type": "gmres",
+                        "ksp_type": "cg",
                         "ksp_rtol": 1e-5,
                         "ksp_converged_reason": None,
                         "ksp_monitor": None,
                         "pc_type": "python",
                         "pc_fieldsplit_type": "firedrake.AssembledPC",
-                        "pc_python_type": "firedrake.AssembledPC",
+                        # "pc_python_type": "firedrake.AssembledPC",
+                        "pc_python_type": "gadopt.SPDAssembledPC",
                         "assembled_pc_type": "gamg",
                         "assembled_mg_levels_pc_type": "sor",
                         "assembled_pc_gamg_threshold": args.gamg_threshold,
@@ -376,7 +377,10 @@ coupled_solver = InternalVariableSolver(
     near_nullspace=Z_near_nullspace,
 )
 
+#M = assemble(derivative(coupled_solver.F, u), mat_type='aij')
+#assert M.petscmat.isSymmetric(1e-13)
 
+#exit()
 coupled_stage = PETSc.Log.Stage("coupled_solve")
 
 # We next set up our output, in VTK format. This format can be read by programs like pyvista and Paraview.
