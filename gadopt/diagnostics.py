@@ -7,12 +7,13 @@ relevant parameters and call individual class methods to compute associated diag
 import firedrake as fd
 import numpy as np
 from mpi4py import MPI
-from functools import cache
+from functools import cache, cached_property
+from enum import Enum
 
 from firedrake.ufl_expr import extract_unique_domain
-from .utility import CombinedSurfaceMeasure
+from .utility import CombinedSurfaceMeasure, vertical_component
 
-__all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics"]
+__all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics", "GIADiagnostics"]
 
 
 @cache
@@ -38,6 +39,11 @@ def get_volume(dx):
     return fd.assemble(fd.Constant(1) * dx)
 
 
+class ExtremaType(Enum):
+    MAX = 0
+    MIN = 1
+
+
 class FunctionContext:
     """Hold objects that can be derived from a Firedrake Function
 
@@ -55,13 +61,36 @@ class FunctionContext:
     """
 
     def __init__(self, quad_degree: int, func: fd.Function):
-        self.function = func
-        self.mesh = extract_unique_domain(func)
-        self.function_space = func.function_space()
-        self.dx = get_dx(self.mesh, quad_degree)
-        self.ds = get_ds(self.mesh, self.function_space, quad_degree)
-        self.normal = get_normal(self.mesh)
-        self.volume = get_volume(get_dx(self.mesh, quad_degree))
+        self._function = func
+        self._quad_degree = quad_degree
+
+    @cached_property
+    def function(self):
+        return self._function
+
+    @cached_property
+    def mesh(self):
+        return extract_unique_domain(self.function)
+
+    @cached_property
+    def function_space(self):
+        return self.function.function_space()
+
+    @cached_property
+    def dx(self):
+        return get_dx(self.mesh, self._quad_degree)
+
+    @cached_property
+    def ds(self):
+        return get_ds(self.mesh, self.function_space, self._quad_degree)
+
+    @cached_property
+    def normal(self):
+        return get_normal(self.mesh)
+
+    @cached_property
+    def volume(self):
+        return get_volume(self.dx)
 
     @cache
     def get_boundary_nodes(self, boundary_id: int) -> list[int]:
@@ -112,10 +141,17 @@ class BaseDiagnostics:
         to reference that function.
     """
 
-    def __init__(self, quad_degree: int, **funcs: fd.Function):
-        self._function_contexts: dict[fd.Function, FunctionContext] = {}
+    def __init__(self, quad_degree: int, **funcs: fd.Function | None):
+        # A firedrake function is hashed using the output of repr(f), we can
+        # keep track of internally allocated functions using a string based
+        # off of repr(f)
+        self._function_contexts: dict[str | fd.Function, FunctionContext] = {}
 
         for name, func in funcs.items():
+            # Handle optional functions in diagnostics
+            if func is None:
+                setattr(self, name, 0.0)
+                continue
             if len(func.subfunctions) == 1:
                 setattr(self, name, func)
                 self._init_single_func(quad_degree, func)
@@ -154,7 +190,7 @@ class BaseDiagnostics:
         f: fd.Function,
         boundary_id: int | None = None,
         dim: int | None = None,
-    ):
+    ) -> float:
         """Calculate the minimum value of a function
 
         Args:
@@ -187,7 +223,7 @@ class BaseDiagnostics:
         f: fd.Function,
         boundary_id: int | None = None,
         dim: int | None = None,
-    ):
+    ) -> float:
         """Calculate the maximum value of a function
 
         Args:
@@ -215,7 +251,7 @@ class BaseDiagnostics:
             f_data = f_data[:, dim]
         return f.comm.allreduce(f_data.max(initial=-np.inf), MPI.MAX)
 
-    def _function_avg(self, f: fd.Function):
+    def _function_avg(self, f: fd.Function) -> float:
         """Calculate the average value of a function
 
         Args:
@@ -230,6 +266,40 @@ class BaseDiagnostics:
             fd.assemble(f * self._function_contexts[f].dx)
             / self._function_contexts[f].volume
         )
+
+    def _function_rms(self, f: fd.Function, measure: fd.Measure | None = None):
+        self._check_present(f)
+        factor = 1.0
+        if measure is None:
+            measure = self._function_contexts[f].dx
+            factor /= fd.sqrt(self._function_contexts[f].volume)
+        return fd.sqrt(fd.assemble(fd.dot(f, f) * measure)) * factor
+
+    def _radial_component_extrema(
+        self, f: fd.Function, which: ExtremaType, boundary_id=None
+    ) -> float:
+        self._check_present(f)
+        self._check_dim_valid(f)  # Can't take radial component of a scalar function
+        if repr(f) + "_rad" not in self._function_contexts:
+            # Need a scalar function space with the same element and degree as the vector function
+            # space belonging to f
+            self._function_contexts[repr(f) + "_rad"] = FunctionContext(
+                self._function_contexts[f]._quad_degree,
+                fd.Function(self._function_contexts[f].function_space.sub(0)),
+            )
+            # Need 2 references to this FunctionContext to pass the check above and the _check_present in
+            # _function_min/_function_max
+            self._function_contexts[
+                self._function_contexts[repr(f) + "_rad"].function
+            ] = self._function_contexts[repr(f) + "_rad"]
+        f_rad = self._function_contexts[repr(f) + "_rad"].function
+        f_rad.interpolate(vertical_component(f))
+        match which:
+            case ExtremaType.MAX:
+                out = self._function_max(f_rad, boundary_id)
+            case ExtremaType.MIN:
+                out = self._function_min(f_rad, boundary_id)
+        return out
 
 
 class GeodynamicalDiagnostics(BaseDiagnostics):
@@ -254,7 +324,6 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
       T_min: Minimum temperature in domain
       T_max: Maximum temperature in domain
       ux_max: Maximum velocity (first component, optionally over a given boundary)
-      uv_min: Minimum velocity (vertical component, optionally over a given boundary)
 
     """
 
@@ -269,12 +338,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         quad_degree: int = 4,
     ):
         u, p = z.subfunctions[:2]
-
-        if T is None:
-            self.T = 0.0
-            super().__init__(quad_degree, u=u, p=p)
-        else:
-            super().__init__(quad_degree, u=u, p=p, T=T)
+        super().__init__(quad_degree, u=u, p=p, T=T)
 
         if bottom_id:
             self.ds_b = self._function_contexts[self.u].ds(bottom_id)
@@ -284,16 +348,17 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
             self.top_surface = fd.assemble(fd.Constant(1) * self.ds_t)
 
     def u_rms(self):
-        return fd.norm(self.u) / fd.sqrt(self._function_contexts[self.u].volume)
+        return self._function_rms(self.u)
 
     def u_rms_top(self) -> float:
-        return fd.sqrt(fd.assemble(fd.dot(self.u, self.u) * self.ds_t))
+        return self._function_rms(self.u, self.ds_t)
 
     def Nu_top(self, scale: float = 1.0):
         return (
             -scale
             * fd.assemble(
-                fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal) * self.ds_t
+                fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal)
+                * self.ds_t
             )
             / self.top_surface
         )
@@ -302,7 +367,8 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         return (
             scale
             * fd.assemble(
-                fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal) * self.ds_b
+                fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal)
+                * self.ds_b
             )
             / self.bottom_surface
         )
@@ -318,3 +384,42 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
 
     def ux_max(self, boundary_id: int | None = None) -> float:
         return self._function_max(self.u, boundary_id, 0)
+
+
+class GIADiagnostics(BaseDiagnostics):
+    def __init__(
+        self,
+        u: fd.Function,
+        displacement: fd.Function | None = None,
+        /,
+        bottom_id: int | str | None = None,
+        top_id: int | str | None = None,
+        *,
+        quad_degree: int = 4,
+    ):
+        super().__init__(quad_degree, u=u, displacement=displacement)
+
+        if bottom_id:
+            self.ds_b = self._function_contexts[self.u].ds(bottom_id)
+        if top_id:
+            self.ds_t = self._function_contexts[self.u].ds(top_id)
+            self._top_id = top_id
+
+    def u_rms(self):
+        return self._function_rms(self.u)
+
+    def u_rms_top(self) -> float:
+        return self._function_rms(self.u, self.ds_t)
+
+    def ux_max(self, boundary_id: int | None = None) -> float:
+        return self._function_max(self.u, boundary_id, 0)
+
+    def uv_min(self, boundary_id: int | None = None) -> float:
+        "Minimum value of vertical component of velocity/displacement"
+        return self._radial_component_extrema(self.u, ExtremaType.MIN, boundary_id)
+
+    def displacement_min(self) -> float:
+        return self._function_min(self.displacement, self._top_id)
+
+    def displacement_max(self) -> float:
+        return self._function_max(self.displacement, self._top_id)

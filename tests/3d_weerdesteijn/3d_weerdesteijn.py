@@ -392,7 +392,7 @@ plog = ParameterLog("params.log", mesh)
 plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max uv_min"
 )
-gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
+gd = GIADiagnostics(u, density, boundary.bottom, boundary.top)
 
 checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
 

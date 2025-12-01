@@ -36,7 +36,7 @@ cases = {
     },
     f"{tests_path}/viscoplastic_case_DG": {"extra_checks": ["nu_top", "avg_t"]},
     f"{tests_path}/3d_weerdesteijn": {"extra_checks": ["uv_min"]},
-    f"{tests_path}/3d_spada": {"extra_checks": ["uv_min"]},
+    f"{tests_path}/3d_spada": {"extra_checks": ["uv_min", "disp_min", "disp_max"]},
     f"{tests_path}/3d_sphere_burgers": {"extra_checks": ["uv_min"]},
 }
 

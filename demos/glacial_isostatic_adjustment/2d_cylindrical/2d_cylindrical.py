@@ -283,7 +283,7 @@ plog.log_str(
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
-gd = GeodynamicalDiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
+gd = GIADiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
 # Now let's run the simulation! At each step we call `solve` to calculate the
