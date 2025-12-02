@@ -2,7 +2,7 @@ graph TD
   base[Base]
 
   subgraph geometry[Geometry]
-  cylindrical_2d[2D Cylindrical]
+  cylindrical_2d[2D Cylindrical] --> cylindrical_lvv_2d[2d Cylindrical LVV]
   end
 
   subgraph rheology[Rheology]
@@ -19,3 +19,4 @@ graph TD
 
   click base "base_case"
   click cylindrical_2d "2d_cylindrical"
+  click cylindrical_lvv_2d "2d_cylindrical_lvv"
