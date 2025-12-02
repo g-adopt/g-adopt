@@ -13,8 +13,8 @@ final_error_adaptive.log num_steps_adaptive.log dt_stats_adaptive.log: scalar_ad
 	$(run-python)
 
 clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 final_error.log final_error_adaptive.log
-	rm -f num_steps_adaptive.log dt_stats_adaptive.log
+	rm -f *.pvd *.vtu *.pvtu *.h5 *.log
+	rm -f *.log
 	rm -rf output
 
 check: all
