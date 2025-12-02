@@ -131,43 +131,32 @@ class Equation:
     def irksome_form(
         self,
         solution: fd.Function,
-        dt_operator: Any
+        Dt: Any,  # Irksome's Dt operator
     ) -> fd.Form:
-        """Generates the UFL form suitable for Irksome time integrators.
+        """Builds the Irksome form for time integration.
 
-        This method creates a unified residual form that includes both the mass term
-        (with Dt applied) and the spatial residual terms. This ensures that
-        solution-dependent coefficients in the mass term are correctly evaluated
-        at the current stage solution during implicit Runge-Kutta integration.
-
-        The form is constructed as:
-            F = mass_term(eq, Dt(solution)) - residual(solution)
-
-        which represents the equation in residual form:
-            ∂u/∂t + spatial_terms(u) = 0
+        This method constructs the form: mass(time_derivative) - residual(solution)
+        where time_derivative is typically Dt(solution), but can be customized
+        by subclasses or by overriding this method for special cases like
+        Dt(coeff * solution).
 
         Args:
-            solution: The solution function
-            dt_operator: The Irksome Dt operator for time derivatives
+            solution:
+                Firedrake Function representing the solution variable.
+            Dt:
+                Irksome's time derivative operator.
 
         Returns:
-            A UFL form suitable for Irksome's TimeStepper, representing the
-            complete residual including time derivative and spatial terms.
+            The UFL form for Irksome's TimeStepper.
 
         Note:
-            The negative sign before residual is necessary because G-ADOPT's
-            residual terms return -F (RHS convention), but Irksome expects
-            everything on the LHS.
+            Subclasses or specific equation instances can override this method
+            to customize the time derivative term. For example, to use
+            Dt(coeff * solution) instead of Dt(solution), override this method
+            and construct the appropriate time derivative expression.
         """
-        # Apply Dt to the solution for the mass term
-        mass_form = self.mass(dt_operator(solution))
-
-        # Get the spatial residual terms
-        residual_form = self.residual(solution)
-
-        # Combine: mass term minus residual (which is already negative)
-        # This gives us: Dt(u) + spatial_terms = 0 (in weak form)
-        return mass_form - residual_form
+        # Default implementation: Dt(solution)
+        return self.mass(Dt(solution)) - self.residual(solution)
 
 
 def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:

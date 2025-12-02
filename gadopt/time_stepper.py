@@ -112,17 +112,25 @@ class IrksomeIntegrator:
         # Unique identifier used in solver
         self.name = '-'.join([self.__class__.__name__, self.equation.__class__.__name__])
 
-        # Keep reference to original dt constant for syncing
+        # Time management: maintain two dt objects for syncing between user and Irksome
+        # dt_reference: User's dt (e.g., Firedrake Constant) - what users control via .dt property
+        # dt_irksome: Irksome's dt (MeshConstant) - synced from dt_reference before each step
         self.dt_reference = ensure_constant(dt)
 
         # Create MeshConstant objects for time variables (what Irksome expects)
         # These are shared with Irksome's TimeStepper (ensures synchronisation)
         mc = MeshConstant(equation.mesh)
         self.t = mc.Constant(initial_time)  # Shared time variable with Irksome
-        self.dt_mesh_const = mc.Constant(float(dt))  # MeshConstant for Irksome, synced from dt_reference
+        self.dt_irksome = mc.Constant(float(dt))  # Irksome's dt, synced from dt_reference
 
-        # Build the Irksome form
-        F = equation.mass(Dt(solution)) - equation.residual(solution)
+        # Build the Irksome form directly
+        # This constructs the residual form: Dt(u) - residual(u) = 0
+        # The mass term includes the time derivative operator Dt applied to the solution,
+        # ensuring solution-dependent coefficients in the mass term are correctly evaluated
+        # at each RK stage. The negative sign accounts for G-ADOPT's RHS convention.
+        # The equation's irksome_form method can be overridden to customize the time
+        # derivative term (e.g., for Dt(coeff * solution)).
+        F = equation.irksome_form(solution, Dt)
 
         # Store strong_bcs for applying at initialization
         # This ensures BC-consistency like the original G-ADOPT DIRKGeneric
@@ -153,17 +161,10 @@ class IrksomeIntegrator:
             F,
             butcher,
             self.t,  # Shared time variable (MeshConstant)
-            self.dt_mesh_const,  # MeshConstant for Irksome (synced from dt_reference)
+            self.dt_irksome,  # Irksome's dt (MeshConstant, synced from dt_reference)
             solution,
             **stepper_kwargs
         )
-
-        self._initialized = False
-
-    def initialize(self, init_solution):
-        """Initialise the time integrator."""
-        self.solution.assign(init_solution)
-        self._initialized = True
 
     def advance(self, t: float | None = None) -> tuple[float, float] | None:
         """Advance the solution by one time step.
@@ -192,17 +193,14 @@ class IrksomeIntegrator:
                     current_time += dt_used
             This ensures time synchronisation between g-adopt and Irksome's internal state.
 
-            When adaptive timestepping is enabled, Irksome updates dt_mesh_const internally.
-            This method syncs dt_mesh_const back to dt_reference so get_dt() returns the
-            actual dt used.
+            When adaptive timestepping is enabled, Irksome updates dt_irksome internally.
+            This method syncs dt_irksome back to dt_reference so the .dt property returns
+            the actual dt used.
 
             For time-dependent forcings, include time-dependent expressions directly in your
             UFL form using the time variable `t` (e.g., `sin(t)`, `exp(-t)`, etc.), or use
             Firedrake's `ExternalOperator` for complex dependencies.
         """
-        if not self._initialized:
-            self.initialize(self.solution)
-
         # Apply boundary conditions
         for bci in self.strong_bcs:
             bci.apply(self.solution)
@@ -210,9 +208,9 @@ class IrksomeIntegrator:
         # Save current solution to solution_old before advancing
         self.solution_old.assign(self.solution)
 
-        # Sync dt_mesh_const with dt_reference before advancing
-        # This ensures Irksome uses the current dt value (in case user updated dt_reference)
-        self.dt_mesh_const.assign(self.dt_reference)
+        # Sync dt from user to Irksome before advancing
+        # This ensures Irksome uses the current dt value (in case user modified dt_reference)
+        self.dt_irksome.assign(self.dt_reference)
 
         # Update internal time if provided by user
         # This ensures Irksome uses the correct time during this advance() call
@@ -229,8 +227,8 @@ class IrksomeIntegrator:
             # Irksome returns (error, dt_used) tuple when adaptive is enabled
             adapt_error, adapt_dt = result
 
-            # Sync dt_mesh_const back to dt_reference
-            # (Irksome updated dt_mesh_const internally during advance)
+            # Sync dt from Irksome back to user
+            # (Irksome updated dt_irksome internally during adaptive step)
             self.dt_reference.assign(float(adapt_dt))
 
             # Return tuple so users can track the actual dt used
