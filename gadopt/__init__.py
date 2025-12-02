@@ -4,8 +4,11 @@ from firedrake.output import VTKFile
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
+    CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
-    SmallDisplacementViscoelasticApproximation,
+    IncompressibleMaxwellApproximation,
+    MaxwellApproximation,
+    QuasiCompressibleInternalVariableApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import GeodynamicalDiagnostics
@@ -29,9 +32,10 @@ from .soil_curves import (
 )
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
+    BoundaryNormalStressSolver,
+    InternalVariableSolver,
     StokesSolver,
     ViscoelasticStokesSolver,
-    BoundaryNormalStressSolver,
 )
 from .time_stepper import (
     BackwardEuler,
@@ -41,8 +45,16 @@ from .time_stepper import (
     ImplicitMidpoint,
     eSSPRKs3p3,
     eSSPRKs10p3,
+    # Direct Irksome scheme access
+    IrksomeRadauIIA,
+    IrksomeGaussLegendre,
+    IrksomeLobattoIIIA,
+    IrksomeLobattoIIIC,
+    IrksomeAlexander,
+    IrksomeQinZhang,
+    IrksomePareschiRusso,
 )
-from .transport_solver import EnergySolver, GenericTransportSolver
+from .transport_solver import DiffusiveSmoothingSolver, EnergySolver, GenericTransportSolver
 from .utility import (
     InteriorBC,
     LayerAveraging,

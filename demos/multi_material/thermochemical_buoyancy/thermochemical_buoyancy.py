@@ -4,10 +4,10 @@
 # Rationale
 # -
 
-# Our [previous tutorial](../compositional_buoyancy) introduced multi-material simulations in G-ADOPT by
-# investigating compositional effects on buoyancy. We extend that tutorial to include
-# thermal effects, thereby simulating thermochemical convection, which is, for example,
-# essential to modelling Earth's mantle evolution.
+# Our [previous tutorial](../compositional_buoyancy) introduced multi-material
+# simulations in G-ADOPT by investigating compositional effects on buoyancy. We extend
+# that tutorial to include thermal effects, thereby simulating thermochemical
+# convection, which is, for example, essential to modelling Earth's mantle evolution.
 
 # This example
 # -
@@ -139,7 +139,7 @@ assign_level_set_values(psi, epsilon, signed_distance)
 # axes.set_aspect("equal")
 # contours = tricontourf(psi, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="PiYG")
 # tricontour(psi, axes=axes, levels=[0.5])
-# fig.colorbar(contours, label="Conservative level-set")
+# fig.colorbar(contours, label="Conservative level set")
 # -
 
 # We next define the material fields and instantiate the approximation. Here, the system
@@ -202,8 +202,9 @@ T.interpolate(max_value(min_value(Tu + Tl + Tr + Ts - 3.0 / 2.0, 1.0), 0.0))
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
-# contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="inferno")
-# fig.colorbar(contours, label="Temperature")
+# axes.margins(0.0)
+# pcolor = tripcolor(T, cmap="inferno", axes=axes)
+# fig.colorbar(pcolor, label="Temperature")
 # -
 
 # As with the previous examples, we set up an instance of the `TimestepAdaptor` class
@@ -308,7 +309,7 @@ while True:
         psi,
         material_size=material_area,
         entrainment_height=entrainment_height,
-        side=0,
+        side=1,
         direction="above",
         skip_material_size_check=True,
     )
@@ -341,6 +342,6 @@ while True:
 # + tags=["active-ipynb"]
 # fig, axes = plt.subplots()
 # axes.set_aspect("equal")
-# contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), axes=axes, cmap="inferno")
-# tricontour(psi, axes=axes, levels=[0.5])
+# contours = tricontourf(T, levels=linspace(0.0, 1.0, 11), cmap="inferno", axes=axes)
+# tricontour(psi, levels=[0.5], axes=axes)
 # fig.colorbar(contours, label="Temperature")

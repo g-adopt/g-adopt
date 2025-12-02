@@ -26,7 +26,12 @@ from .scalar_equation import mass_term
 from .solver_options_manager import SolverConfigurationMixin
 from .time_stepper import eSSPRKs3p3, eSSPRKs10p3
 from .transport_solver import GenericTransportSolver
-from .utility import CombinedSurfaceMeasure, is_cartesian, node_coordinates, vertical_component
+from .utility import (
+    CombinedSurfaceMeasure,
+    is_cartesian,
+    node_coordinates,
+    vertical_component,
+)
 
 __all__ = [
     "LevelSetSolver",
@@ -96,7 +101,7 @@ def interface_thickness(
     epsilon = fd.Function(level_set_space, name="Interface thickness")
 
     if not min_cell_edge_length:
-        scale /= fd.sqrt(level_set_space.mesh().geometric_dimension())
+        scale /= fd.sqrt(level_set_space.mesh().geometric_dimension)
         epsilon.interpolate(scale * level_set_space.mesh().cell_sizes)
     else:
         if level_set_space.extruded:
@@ -119,7 +124,7 @@ def assign_level_set_values(
     | tuple[tuple[float, float], float]
     | None = None,
     interface_callable: Callable | str | None = None,
-    interface_args: tuple[Any, ...] | None = None,
+    interface_args: tuple[Any, ...] = (),
     boundary_coordinates: list[tuple[float, float]] | None = None,
 ) -> None:
     """Updates level-set field given interface thickness and signed-distance function.
@@ -148,9 +153,10 @@ def assign_level_set_values(
       form `(x, y) = (x(t), y(t))`. In this case, `interface_geometry` should be `curve`
       and `interface_callable` must be provided along with any `interface_args` to
       implement the parametric equation. `interface_callable` can be a user-defined
-      `Callable` or a `str` matching an implemented preset. Additionally,
-      `boundary_coordinates` must be supplied as a `list` of coordinates along domain
-      boundaries to enclose the 1-side of the conservative level set.
+      `Callable` or a `str` matching an implemented preset. Additionally, if the curve
+      is not closed, `boundary_coordinates` must be supplied as a `list` of coordinates
+      along domain boundaries to ensure the desired material gets attributed the 1-side
+      of the conservative level set.
     - The material interface is a polygonal chain, and `interface_geometry` takes the
       value `polygon`. If the polygonal chain is closed, either `interface_coordinates`
       or `interface_callable` must be provided. The former is a `list` of vertex
@@ -280,11 +286,6 @@ def assign_level_set_values(
         raise ValueError(
             "'interface_geometry' must be 'shapely' when providing 'interface'"
         )
-    if interface_callable is not None and interface_geometry == "circle":
-        raise ValueError(
-            "'interface_callable' must not be provided when 'interface_geometry' is "
-            "'circle'"
-        )
 
     callable_presets = {"cosine": cosine, "line": line, "rectangle": rectangle}
     if isinstance(interface_callable, str):
@@ -300,18 +301,27 @@ def assign_level_set_values(
 
     match interface_geometry:
         case "curve":
-            if boundary_coordinates is None:
-                raise ValueError(
-                    "'boundary_coordinates' must be provided when 'interface_geometry' "
-                    "is 'curve'"
-                )
-
             interface = sl.LineString(interface_coordinates)
-            enclosed_side = sl.Polygon(
-                np.vstack((interface_coordinates, boundary_coordinates))
-            )
 
-            signed_distance = sgn_dist_open_itf(interface, enclosed_side, level_set)
+            if interface.is_closed:
+                if boundary_coordinates is not None:
+                    raise ValueError(
+                        "'boundary_coordinates' must be omitted when the provided curve "
+                        "is closed"
+                    )
+
+                signed_distance = sgn_dist_closed_itf(sl.Polygon(interface), level_set)
+            else:
+                if boundary_coordinates is None:
+                    raise ValueError(
+                        "'boundary_coordinates' must be supplied when the provided curve "
+                        "is open"
+                    )
+
+                enclosed_side = sl.Polygon(
+                    np.vstack((interface_coordinates, boundary_coordinates))
+                )
+                signed_distance = sgn_dist_open_itf(interface, enclosed_side, level_set)
         case "polygon":
             if boundary_coordinates is None:
                 interface = sl.Polygon(interface_coordinates)
@@ -325,6 +335,17 @@ def assign_level_set_values(
 
                 signed_distance = sgn_dist_open_itf(interface, enclosed_side, level_set)
         case "circle":
+            if interface_callable is not None:
+                raise ValueError(
+                    "'interface_callable' must not be provided when "
+                    "'interface_geometry' is 'circle'"
+                )
+            if boundary_coordinates is not None:
+                raise ValueError(
+                    "'boundary_coordinates' must not be provided when "
+                    "'interface_geometry' is 'circle'"
+                )
+
             centre, radius = interface_coordinates
             interface = sl.Point(centre).buffer(radius)
 
@@ -568,7 +589,7 @@ class LevelSetSolver(SolverConfigurationMixin):
                 solution_old=self.solution_old,
                 eq_attrs={"u": self.adv_kwargs["u"]},
                 bcs=self.adv_kwargs["bcs"],
-                solver_parameters=self.solver_parameters['adv'],
+                solver_parameters=self.solver_parameters["adv"],
             )
 
         if self.reinitialisation:
@@ -588,22 +609,27 @@ class LevelSetSolver(SolverConfigurationMixin):
                 self.solution,
                 self.reini_kwargs["timestep"],
                 solution_old=self.solution_old,
-                solver_parameters=self.solver_parameters['reini'],
+                solver_parameters=self.solver_parameters["reini"],
             )
 
         self.step = 0
 
-    def update_gradient(self, *args, **kwargs) -> None:
-        """Calls the gradient solver.
-
-        Can be provided as a forcing to time integrators.
-        """
+    def update_gradient(self) -> None:
+        """Calls the gradient solver to update the level-set gradient."""
         self.gradient_solver.solve()
 
     def reinitialise(self) -> None:
-        """Performs reinitialisation steps."""
+        """Performs reinitialisation steps.
+
+        Note:
+            The gradient of the level-set function is updated between reinitialisation
+            steps by explicitly calling `update_gradient()` before each advance.
+        """
         for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(t=0, update_forcings=self.update_gradient)
+            # Update gradient based on current level-set solution
+            self.update_gradient()
+            # Advance one reinitialisation step
+            self.reini_integrator.advance()
 
     def solve(
         self,
