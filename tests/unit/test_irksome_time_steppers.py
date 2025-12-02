@@ -257,7 +257,6 @@ class TestBoundaryConditions:
         # Set initial condition
         x = SpatialCoordinate(mesh)
         u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
-        integrator.initialize(u)
 
         # Take a time step - this should not raise an error
         integrator.advance()
@@ -312,7 +311,6 @@ class TestTimeStepping:
         # Set initial condition
         x = SpatialCoordinate(mesh)
         u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
-        integrator.initialize(u)
 
         # Take a few time steps
         initial_norm = norm(u)
@@ -352,7 +350,6 @@ class TestDynamicTimeStepping:
         # Set initial condition
         x = SpatialCoordinate(mesh)
         u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
-        integrator.initialize(u)
 
         # Take a step with original dt
         integrator.advance()
@@ -388,7 +385,6 @@ class TestDynamicTimeStepping:
 
         x = SpatialCoordinate(mesh)
         u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
-        integrator.initialize(u)
 
         # Take steps with changing dt
         integrator.advance()
@@ -450,10 +446,9 @@ class TestErrorHandling:
         integrator = create_irksome_integrator(equation, u, dt=1e-10, scheme_class=ERKEuler)
         assert integrator is not None
 
-        # Initialization should work
+        # Set initial condition
         x = SpatialCoordinate(mesh)
         u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
-        integrator.initialize(u)
 
         # Advance with very small dt should not crash
         integrator.advance()
@@ -496,7 +491,6 @@ class TestIntegrationWithExistingSchemes:
         # Set initial condition and advance
         x = SpatialCoordinate(mesh)
         u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
-        integrator.initialize(u)
         integrator.advance()
 
         # Should work without errors
