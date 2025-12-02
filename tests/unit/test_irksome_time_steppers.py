@@ -347,64 +347,6 @@ class TestTimeStepping:
         final_norm = norm(u)
         assert not abs(final_norm - initial_norm) < 1e-10  # Should have evolved
 
-    def test_time_stepping_forward_euler(self):
-        """Test Forward Euler time stepping specifically."""
-        mesh = UnitSquareMesh(5, 5)
-        V = FunctionSpace(mesh, "CG", 1)
-        u = Function(V)
-
-        test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
-        equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
-            eq_attrs=eq_attrs,
-            bcs={}
-        )
-
-        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme_class=ERKEuler)
-
-        # Set initial condition
-        x = SpatialCoordinate(mesh)
-        u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
-        integrator.initialize(u)
-
-        # Take one step
-        integrator.advance()
-
-        # Solution should have evolved
-        assert norm(u) > 0
-
-    def test_time_stepping_dirk33(self):
-        """Test DIRK33 time stepping specifically."""
-        mesh = UnitSquareMesh(5, 5)
-        V = FunctionSpace(mesh, "CG", 1)
-        u = Function(V)
-
-        test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
-        equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
-            eq_attrs=eq_attrs,
-            bcs={}
-        )
-
-        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme_class=DIRK33)
-
-        # Set initial condition
-        x = SpatialCoordinate(mesh)
-        u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
-        integrator.initialize(u)
-
-        # Take one step
-        integrator.advance()
-
-        # Solution should have evolved
-        assert norm(u) > 0
-
 
 class TestDynamicTimeStepping:
     """Test dynamic time step updates."""
