@@ -17,7 +17,7 @@ from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
-from .time_stepper import BackwardEuler, RungeKuttaTimeIntegrator
+from .time_stepper import BackwardEuler, IrksomeIntegrator
 from .utility import DEBUG, INFO, absv, ensure_constant, is_continuous, log, log_level
 
 __all__ = [
@@ -111,7 +111,7 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         solution: Function,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         *,
         solution_old: Function | None = None,
         eq_attrs: dict[str, float] = {},
@@ -313,7 +313,7 @@ class GenericTransportSolver(GenericTransportBase):
         solution: Function,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         **kwargs,
     ) -> None:
         self.terms = [terms] if isinstance(terms, str) else terms
@@ -372,7 +372,7 @@ class EnergySolver(GenericTransportBase):
         approximation: BaseApproximation,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         **kwargs,
     ) -> None:
         self.u = u

@@ -43,30 +43,31 @@ def create_custom_tableau(a, b, c):
 # Define scheme mappings
 scheme_mappings = {
     # Special cases with direct Irksome equivalents
-    BackwardEulerAbstract: (IrksomeBackwardEuler(), "dirk"),
-    ImplicitMidpointAbstract: (GaussLegendre(1), "dirk"),
+    BackwardEuler: (IrksomeBackwardEuler(), "dirk"),
+    ImplicitMidpoint: (GaussLegendre(1), "dirk"),
     # Explicit schemes
-    ForwardEulerAbstract: "explicit",
-    SSPRK33Abstract: "explicit",
-    ERKMidpointAbstract: "explicit",
-    ERKLSPUM2Abstract: "explicit",
-    ERKLPUM2Abstract: "explicit",
-    eSSPRKs3p3Abstract: "explicit",
-    eSSPRKs4p3Abstract: "explicit",
-    eSSPRKs5p3Abstract: "explicit",
-    eSSPRKs6p3Abstract: "explicit",
-    eSSPRKs7p3Abstract: "explicit",
-    eSSPRKs8p3Abstract: "explicit",
-    eSSPRKs9p3Abstract: "explicit",
-    eSSPRKs10p3Abstract: "explicit",
+    ERKEuler: "explicit",
+    ForwardEuler: "explicit",
+    SSPRK33: "explicit",
+    ERKMidpoint: "explicit",
+    ERKLSPUM2: "explicit",
+    ERKLPUM2: "explicit",
+    eSSPRKs3p3: "explicit",
+    eSSPRKs4p3: "explicit",
+    eSSPRKs5p3: "explicit",
+    eSSPRKs6p3: "explicit",
+    eSSPRKs7p3: "explicit",
+    eSSPRKs8p3: "explicit",
+    eSSPRKs9p3: "explicit",
+    eSSPRKs10p3: "explicit",
     # DIRK schemes
-    CrankNicolsonAbstract: "dirk",
-    DIRK22Abstract: "dirk",
-    DIRK23Abstract: "dirk",
-    DIRK33Abstract: "dirk",
-    DIRK43Abstract: "dirk",
-    DIRKLSPUM2Abstract: "dirk",
-    DIRKLPUM2Abstract: "dirk",
+    CrankNicolsonRK: "dirk",
+    DIRK22: "dirk",
+    DIRK23: "dirk",
+    DIRK33: "dirk",
+    DIRK43: "dirk",
+    DIRKLSPUM2: "dirk",
+    DIRKLPUM2: "dirk",
 }
 
 
@@ -84,9 +85,9 @@ def gadopt_to_irksome_tableau(scheme_class):
     mapping = scheme_mappings[scheme_class]
     if isinstance(mapping, str):
         # Need to create custom tableau from scheme class
-        temp_scheme = scheme_class()
+        # Access class attributes directly (a, b, c are class-level attributes)
         return create_custom_tableau(
-            temp_scheme.a, temp_scheme.b, temp_scheme.c
+            scheme_class.a, scheme_class.b, scheme_class.c
         ), mapping
     else:
         # Direct Irksome tableau and stage type
@@ -135,13 +136,13 @@ class TestTableauConversion:
 
     def test_tableau_conversion_forward_euler(self):
         """Test specific Forward Euler conversion."""
-        tableau, stage_type = gadopt_to_irksome_tableau(ForwardEulerAbstract)
+        tableau, stage_type = gadopt_to_irksome_tableau(ERKEuler)
         assert stage_type == "explicit"
         assert tableau is not None
 
     def test_tableau_conversion_dirk33(self):
         """Test specific DIRK33 conversion."""
-        tableau, stage_type = gadopt_to_irksome_tableau(DIRK33Abstract)
+        tableau, stage_type = gadopt_to_irksome_tableau(DIRK33)
         assert stage_type == "dirk"
         assert tableau is not None
 
@@ -235,12 +236,12 @@ class TestBoundaryConditions:
     """Test that schemes work correctly with boundary conditions."""
 
     @pytest.mark.parametrize("scheme_class", [
-        ForwardEulerAbstract,
-        SSPRK33Abstract,
-        eSSPRKs3p3Abstract,
-        eSSPRKs10p3Abstract,
-        DIRK33Abstract,
-        ImplicitMidpointAbstract,
+        ERKEuler,
+        SSPRK33,
+        eSSPRKs3p3,
+        eSSPRKs10p3,
+        DIRK33,
+        ImplicitMidpoint,
     ])
     def test_schemes_with_dirichlet_bcs(self, scheme_class):
         """Test that schemes work with Dirichlet boundary conditions.
@@ -291,12 +292,12 @@ class TestBoundaryConditions:
     def test_explicit_scheme_with_bcs_stage_type(self):
         """Verify that explicit schemes get stage_type='explicit' not 'deriv'."""
         # Test eSSPRKs10p3 specifically (the scheme that triggered the original bug)
-        tableau, stage_type = gadopt_to_irksome_tableau(eSSPRKs10p3Abstract)
+        tableau, stage_type = gadopt_to_irksome_tableau(eSSPRKs10p3)
         assert stage_type == "explicit", \
             f"eSSPRKs10p3 should have stage_type='explicit', got '{stage_type}'"
 
         # Test a few more explicit schemes
-        for scheme in [ForwardEulerAbstract, SSPRK33Abstract, eSSPRKs3p3Abstract]:
+        for scheme in [ERKEuler, SSPRK33, eSSPRKs3p3]:
             tableau, stage_type = gadopt_to_irksome_tableau(scheme)
             assert stage_type == "explicit", \
                 f"{scheme.__name__} should have stage_type='explicit', got '{stage_type}'"
@@ -306,10 +307,10 @@ class TestTimeStepping:
     """Test actual time stepping functionality."""
 
     @pytest.mark.parametrize("scheme_class", [
-        ForwardEulerAbstract,
-        eSSPRKs3p3Abstract,
-        DIRK33Abstract,
-        ImplicitMidpointAbstract,
+        ERKEuler,
+        eSSPRKs3p3,
+        DIRK33,
+        ImplicitMidpoint,
     ])
     def test_time_stepping(self, scheme_class):
         """Test actual time stepping with different schemes."""
@@ -362,7 +363,7 @@ class TestTimeStepping:
             bcs={}
         )
 
-        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme_class=ForwardEulerAbstract)
+        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme_class=ERKEuler)
 
         # Set initial condition
         x = SpatialCoordinate(mesh)
@@ -391,7 +392,7 @@ class TestTimeStepping:
             bcs={}
         )
 
-        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme_class=DIRK33Abstract)
+        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme_class=DIRK33)
 
         # Set initial condition
         x = SpatialCoordinate(mesh)
@@ -428,7 +429,7 @@ class TestDynamicTimeStepping:
 
         # Create integrator with Constant dt
         dt = Constant(0.01)
-        integrator = create_irksome_integrator(equation, u, dt, ForwardEulerAbstract)
+        integrator = create_irksome_integrator(equation, u, dt, ERKEuler)
 
         # Set initial condition
         x = SpatialCoordinate(mesh)
@@ -465,7 +466,7 @@ class TestDynamicTimeStepping:
         )
 
         dt = Constant(0.01)
-        integrator = create_irksome_integrator(equation, u, dt, DIRK33Abstract)
+        integrator = create_irksome_integrator(equation, u, dt, DIRK33)
 
         x = SpatialCoordinate(mesh)
         u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
@@ -528,7 +529,7 @@ class TestErrorHandling:
         )
 
         # Test with very small dt
-        integrator = create_irksome_integrator(equation, u, dt=1e-10, scheme_class=ForwardEulerAbstract)
+        integrator = create_irksome_integrator(equation, u, dt=1e-10, scheme_class=ERKEuler)
         assert integrator is not None
 
         # Initialization should work
@@ -547,13 +548,13 @@ class TestIntegrationWithExistingSchemes:
     """Test that existing G-ADOPT schemes still work with Irksome backend."""
 
     @pytest.mark.parametrize("scheme_class", [
-        ForwardEulerAbstract,
-        BackwardEulerAbstract,
-        ImplicitMidpointAbstract,
-        DIRK33Abstract,
-        SSPRK33Abstract,
-        eSSPRKs3p3Abstract,
-        eSSPRKs10p3Abstract,
+        ERKEuler,
+        BackwardEuler,
+        ImplicitMidpoint,
+        DIRK33,
+        SSPRK33,
+        eSSPRKs3p3,
+        eSSPRKs10p3,
     ])
     def test_existing_schemes_still_work(self, scheme_class):
         """Test that existing schemes still work with Irksome backend."""
@@ -612,7 +613,7 @@ class TestSolverParameters:
 
         integrator = create_irksome_integrator(
             equation, u, dt=0.01,
-            scheme_class=DIRK33Abstract,
+            scheme_class=DIRK33,
             solver_parameters=solver_params
         )
 
