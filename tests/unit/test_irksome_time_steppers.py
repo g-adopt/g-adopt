@@ -6,38 +6,14 @@ time stepping functionality, and error handling.
 """
 
 import pytest
-import numpy as np
 from firedrake import *
 from irksome import BackwardEuler as IrksomeBackwardEuler
 from irksome import GaussLegendre
-from irksome.ButcherTableaux import ButcherTableau
 
 from gadopt import *
 from gadopt.scalar_equation import diffusion_term, mass_term, source_term
 from gadopt.time_stepper import *
-
-
-# Helper function to create custom tableau
-def create_custom_tableau(a, b, c):
-    """Create a Butcher tableau for Irksome.
-
-    Args:
-        a: Butcher matrix (2D array)
-        b: Weights (1D array)
-        c: Nodes (1D array)
-
-    Returns:
-        ButcherTableau instance
-    """
-    return ButcherTableau(
-        A=np.array(a),
-        b=np.array(b),
-        btilde=None,
-        c=np.array(c),
-        order=len(b),
-        embedded_order=None,
-        gamma0=None
-    )
+from gadopt.time_stepper import create_custom_tableau  # Explicitly import helper function
 
 
 # Define scheme mappings
