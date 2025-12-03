@@ -20,11 +20,12 @@ from gadopt.utility import (
     initialise_background_field
 )
 
+# Let's import the ice sheet disc function from the [last tutorial](../2d_cylindrical)
+
+from gadopt.demos.glacial_isostatic_adjustment.utils import ice_sheet_disc
+
 # + tags=["active-py"] jupyter={"source_hidden": True, "outputs_hidden": True}
-from gadopt.demos.glacial_isostatic_adjustment.utils import (
-    ice_sheet_disc,
-    setup_heterogenous_viscosity
-)
+from gadopt.demos.glacial_isostatic_adjustment.utils import setup_heterogenous_viscosity
 # -
 
 # We also import some helper functions for plotting and making animations associated
@@ -158,7 +159,9 @@ initialise_background_field(
 # northern hemisphere to represent a downgoing slab.
 
 # + tags=["active-ipynb"]
+# from gadopt.utility import vertical_component
 # %load -s setup_heterogenous_viscosity ../utils.py
+# %run -s setup_heterogenous_viscosity ../utils.py
 # -
 
 # To better represent the spatially varying viscosity field let's use a linear

@@ -160,9 +160,9 @@ initialise_background_field(
 # North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify
 # things let's keep the ice load fixed in time.
 
-# Define an ice sheet disc
 # + tags=["active-ipynb"]
 # %load -s ice_sheet_disc ../utils.py
+# %run -s ice_sheet_disc ../utils.py
 # -
 
 # +

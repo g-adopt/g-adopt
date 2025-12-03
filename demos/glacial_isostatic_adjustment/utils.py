@@ -1,6 +1,6 @@
-import ufl
-from firedrake import *
+from firedrake import atan2, conditional, exp, Function, pi, tanh
 from gadopt.utility import vertical_component
+import ufl
 
 
 def ice_sheet_disc(
