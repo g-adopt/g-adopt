@@ -24,62 +24,25 @@
 from gadopt import *
 from animate import RiemannianMetric, adapt
 
-# Set up the initial mesh and timestepping options. Here, we
-# explicitly use a simplex mesh to demonstrate adaptive
-# remeshing. Additionally, we specify the number of simulation time
-# steps separating two instances of mesh adaptation as
-# `timesteps_per_adapt`.
-
-nx, ny = 10, 10
-mesh = UnitSquareMesh(nx, ny, quadrilateral=False)  # Square mesh generated via firedrake
-
-time = 0.0  # Initial time
-timestep = 0  # Placeholder for initial timestep
-timesteps_per_adapt = 10
-delta_t = Constant(1e-6)  # Initial time-step
-
-# Create pvd-file to output solutions fields at the specified output
-# frequency, which we can visualise using ParaView or pyvista. We need
-# to pass `adaptive=True` to `VTKFile`, as the mesh will not be the
-# same during the entire simulation.  We choose the same output
-# frequency as the number of timesteps between mesh adapts, so that we
-# get one output on each different mesh. Additionally, we open a log
-# file to output diagnostic values.
-
-# +
-output_file = VTKFile("output.pvd", adaptive=True)
-output_frequency = timesteps_per_adapt  # Output every adapt
-
-plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
-# -
-
-# Initial conditions for the model, these will be interpolated onto
-# the initial mesh later on.
-
-X = SpatialCoordinate(mesh)
-T_init = 1.0 - X[1] + 0.05 * cos(pi * X[0]) * sin(pi * X[1])
-u_init = as_vector((0., 0.))
-p_init = 0.
-
-# In all other demos, we would now continue defining some function spaces,
-# create some functions, and then the solvers using those. As we will be
-# adapting the mesh these steps will need to be repeated after each adapt.
-# Therefore we will wrap these steps in a function.
+# In the other demos, we define a mesh and then, in turn, function spaces,
+# functions, solvers etc. that depend on that mesh. In this demo, the
+# anisotropic, metric-based mesh adaptivity will generate a completely new mesh
+# after a number of time steps, to better resolve the solution as it evolves
+# over time. The creation of function spaces, functions solvers etc.  will
+# therefore have to be repeated after each mesh adaptivity step. We then run a
+# few timesteps using these solvers, before we again adapt the mesh and repeat
+# the whole process.
 #
-# The following function in fact wraps the entire base case: it takes
-# in a mesh, builds up the function spaces, functions and solvers and
-# then runs the model for a specified number of timesteps. We will be
-# using this function in an outside loop, where we adapt the mesh and
-# then call the function to run the model on the adapted mesh for a
-# number of timesteps. The temperature, velocity and pressure solutions
-# at the end of those timesteps, which we have solved on the current
-# adapted mesh, will need to be interpolated after the next mesh
-# adaptivity stage onto the new mesh and are therefore provided as
-# `T_init`, `u_init`, and `p_init` arguments. In the first call to
-# this subroutine, the mesh is still the initial mesh, and we simply
-# use the initial condition expressions we have just defined.
-
+# For this reason we wrap most of the code of the base case demo into a python
+# function that takes in a mesh, creates all mesh-dependent objects and runs a
+# specified number of timesteps. We also need to provide the solution at the
+# start of these timesteps. In the first call to this function this will simply
+# be the initial conditions for the solution fields.  Each call will be
+# followed by a mesh adaptivity step, but then we still have the solution that
+# we have just solved at the end of the timesteps in that call on the mesh
+# before the adapt. The python function below therefore takes whatever solution
+# for temperature, velocity and pressure is provided and *interpolates* it onto
+# the provided new mesh.
 # +
 
 
@@ -205,23 +168,52 @@ def run_interval(mesh, time, timestep, Nt, T_init, u_init, p_init):
 
 # -
 
+# Our initial mesh is very coarse. Note that for the type of mesh adaptivity
+# we use here we need a triangular mesh.
+
+nx, ny = 10, 10
+mesh = UnitSquareMesh(nx, ny, quadrilateral=False)  # Square mesh generated via firedrake
+
+# We set some options with regards to the timestepping. In particular
+# we specify how many timesteps are performed between mesh adapts.
+
+time = 0.0  # Initial time
+timestep = 0  # Placeholder for initial timestep
+timesteps_per_adapt = 10
+delta_t = Constant(1e-6)  # Initial time-step
+
+# Create pvd-file to output solutions fields at the specified output
+# frequency, which we can visualise using ParaView or pyvista. We need
+# to pass `adaptive=True` to `VTKFile`, as the mesh will not be the
+# same during the entire simulation.  We choose the same output
+# frequency as the number of timesteps between mesh adapts, so that we
+# get one output on each different mesh. Additionally, we open a log
+# file to output diagnostic values.
+
+# +
+output_file = VTKFile("output.pvd", adaptive=True)
+output_frequency = timesteps_per_adapt  # Output every adapt
+
+plog = ParameterLog('params.log', mesh)
+plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
+# -
+
+# Initial conditions for the model, these will be interpolated onto
+# the initial mesh later on.
+
+X = SpatialCoordinate(mesh)
+T_init = 1.0 - X[1] + 0.05 * cos(pi * X[0]) * sin(pi * X[1])
+u_init = as_vector((0., 0.))
+p_init = 0.
+
 # Metric based mesh adaptation
 # ----------------------------
 #
-# As explained above, we start with using the symbolic expressions for temperature, velocity,
-# and pressure. After the first first call to run_interval(), `T`, `u`, and `p` will
-# simply refer to the solution in the last timestep on the current mesh.
-
-T = T_init
-u = u_init
-p = p_init
-
-# We will then use these to define a metric field that controls where resolution
-# is focussed in the adapted mesh. The metric field is a rank 2 tensor field
-# $M(x)$, providing a symmetric and positive definite dim x dim matrix at each
-# location $x$, that encodes the local optimal edge length. Representing an
-# edge by a vector $e$ between two vertices, we define an optimal edge to
-# satisfy the condition:
+# The metric field is used to control where in the domain resolution is
+# focussed in the adapted mesh. It is a rank 2 tensor field $M(x)$, providing a
+# symmetric and positive definite dim x dim matrix at each location $x$, that
+# encodes the local optimal edge length. Representing an edge by a vector $e$
+# between two vertices, we define an optimal edge to satisfy the condition:
 #
 # $$e^T M(x) e \approx 1$$
 #
@@ -271,29 +263,45 @@ p = p_init
 # respectively. The gradation factor limits the variation in edge lengths going
 # from one cell to the next, where a factor of 1.5 mean that the edges in a
 # neighbouring cell can only be 50% larger, and reversely, the edges in this
-# cell can only be 50% larger than those in its neighbouring cells.
-#
-# To assemble the metric in this way we use the `RiemannianMetric` class from
-# `animate` which is a (subclass of a) Firedrake Function with additional
-# functionality. We can set the parameters that we have just discussed. The
-# `compute_hessian()` method provides a way to numerically reconstruct the
-# Hessian of a scalar solution field. Since we have multiple solution fields
-# available, we can combine the Hessians of these using either the
-# `intersect()` or `average()` methods. The intersect method ensures that we
-# impose the minimum edge length required to satisfy a certain interpolation
-# error bound in all solution fields, whereas the average method simply uses
-# the average of the required edge lengths. As the last step, we call the
-# adapt() function with the current mesh and the metric, which will then use
-# the Mmg library to return a newly adapted mesh according to our
-# specifications.
+# cell can only be 50% larger than those in its neighbouring cells. The
+# configuration choices for the metric that we have just described,
+# are specified in the following dictionary:
 
-# We perform `nadapts` mesh adapts followed by `timesteps_per_adapt` timesteps
-# each.  We have chosen a very low number here, so that you can run this
-# relatively quickly and look at the results. To achieve steady state, at low
-# Rayleigh number (Ra=1e4) you need `nadapts`>1000. For higher Rayleigh numbers
-# the simulation never reaches steady state. For really high numbers (Ra>1e6)
-# you will also need to increase the target complexity to ensure adaptivity
-# provides sufficient resolution.
+metric_parameters = {
+    # metric gets rescaled s.t. we always end up with ~ 1000 vertices:
+    'dm_plex_metric_target_complexity': 1000,
+    'dm_plex_metric_p': np.inf,  # Use infinity norm for estimated interpolation error
+    'dm_plex_metric_gradation_factor': 1.5,  # Variation in edge length from one cell to another
+    'dm_plex_metric_a_max': 10,  # maximum aspect ratio
+    'dm_plex_metric_h_min': 1e-5,  # minimum edge length
+    'dm_plex_metric_h_max': 1e-1  # maximum edge length
+}
+
+# Mesh adaptivity loop
+# ----------------------------
+#
+# We perform `nadapts` iterations in which we perform `timesteps_per_adapt`
+# timesteps, followed by the assembly of the metric based on the current
+# solution and then we adapt the mesh based on that metric. The total number of
+# timesteps, `nadapts*timesteps_per_adapt`, is chosen fairly low, so that you
+# can run this relatively quickly and look at the results. To achieve steady
+# state, at low Rayleigh number (Ra=1e4) you need `nadapts`>1000. For higher
+# Rayleigh numbers the simulation never reaches steady state. For really high
+# numbers (Ra>1e6) you will also need to increase the target complexity to
+# ensure adaptivity provides sufficient resolution.
+#
+# To assemble the metric based on the Hessian of solution fields we use the
+# `RiemannianMetric` class from `animate` which is a (subclass of a) Firedrake
+# Function with additional functionality.  The `compute_hessian()` method
+# provides a way to numerically reconstruct the Hessian of a scalar solution
+# field. Since we have multiple solution fields available, we can combine the
+# Hessians of these using either the `intersect()` or `average()` methods. The
+# intersect method ensures that we impose the minimum edge length required to
+# satisfy a certain interpolation error bound in all solution fields, whereas
+# the average method simply uses the average of the required edge lengths. As
+# the last step, we call the adapt() function with the current mesh and the
+# metric, which will then use the Mmg library to return a newly adapted mesh
+# according to our specifications.
 
 # +
 nadapts = 50
@@ -302,16 +310,6 @@ for _ in range(nadapts):
     if steady_state_reached:
         break
     timestep += timesteps_per_adapt
-
-    metric_parameters = {
-        # metric gets rescaled s.t. we always end up with ~ 1000 vertices:
-        'dm_plex_metric_target_complexity': 1000,
-        'dm_plex_metric_p': np.inf,  # Use infinity norm for estimated interpolation error
-        'dm_plex_metric_gradation_factor': 1.5,  # Variation in edge length from one cell to another
-        'dm_plex_metric_a_max': 10,  # maximum aspect ratio
-        'dm_plex_metric_h_min': 1e-5,  # minimum edge length
-        'dm_plex_metric_h_max': 1e-1  # maximum edge length
-    }
 
     TV = TensorFunctionSpace(mesh, "CG", 1)  # function space for the metric
     # first generate a metric based on the Hessian for each velocity component
