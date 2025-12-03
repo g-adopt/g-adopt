@@ -24,10 +24,9 @@ from gadopt.utility import (
     initialise_background_field
 )
 
-# We next import a helper function from the gadopt_demo_utils package
-# to set up a synthetic ice sheet later on.
-
-from gadopt_demo_utils.gia_demo_utils import ice_sheet_disc
+# + tags=["active-py"] jupyter={"source_hidden": True, "outputs_hidden": True}
+from gadopt.demos.glacial_isostatic_adjustment.utils import ice_sheet_disc
+# -
 
 # We also import some helper functions for plotting and making animations associated
 # with this demo.
@@ -160,6 +159,11 @@ initialise_background_field(
 # extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the
 # North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify
 # things let's keep the ice load fixed in time.
+
+# Define an ice sheet disc
+# + tags=["active-ipynb"]
+# %load -s ice_sheet_disc ../utils.py
+# -
 
 # +
 # Initialise ice loading

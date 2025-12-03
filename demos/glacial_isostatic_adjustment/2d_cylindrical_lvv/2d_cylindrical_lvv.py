@@ -21,7 +21,7 @@ from gadopt.utility import (
 )
 
 # + tags=["active-py"] jupyter={"source_hidden": True, "outputs_hidden": True}
-from gadopt_demo_utils.gia_demo_utils import (
+from gadopt.demos.glacial_isostatic_adjustment.utils import (
     ice_sheet_disc,
     setup_heterogenous_viscosity
 )
@@ -161,7 +161,7 @@ initialise_background_field(
 # %load -s setup_heterogenous_viscosity ../utils.py
 # -
 
-# To better represent the spatially varying viscosity field lets use a linear
+# To better represent the spatially varying viscosity field let's use a linear
 # discontinuous Galerkin space, `DG1`, i.e. the viscosity fields varies linearly
 # within cells but can have jumps in between cells.
 
@@ -173,16 +173,12 @@ initialise_background_field(
 viscosity = setup_heterogenous_viscosity(X, background_viscosity)
 # -
 
-# We'll keep the same ice synthetic ice sheet configuration as in the previous tutorial.
-# Let's put one a larger one over the South Pole, with a total horizontal
-# extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the
-# North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify
-# things we keep the ice load fixed in time.
-
-# Define an ice sheet disc
-# + tags=["active-ipynb"]
-# %load -s ice_sheet_disc ../utils.py
-# -
+# We'll keep the same ice synthetic ice sheet configuration as in the
+# [previous tutorial](../2d_cylindrical). Let's put one a larger one over the South
+# Pole, with a total horizontal extent of 40 $^\circ$ and a maximum thickness of
+# 2 km, and a smaller one offset from the North Pole with a width of 20 $^\circ$
+# and a maximum thickness of 1 km. To simplify things we keep the ice load fixed in
+# time.
 
 # +
 # Initialise ice loading

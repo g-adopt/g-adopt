@@ -2,6 +2,7 @@ import ufl
 from firedrake import *
 from gadopt.utility import vertical_component
 
+
 def ice_sheet_disc(
         X: ufl.geometry.SpatialCoordinate,
         disc_centre: float,
@@ -47,16 +48,6 @@ def ice_sheet_disc(
     return disc
 
 
-def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
-    arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
-    numerator = exp(-1/(2*(1-rho**2))*arg)
-    if normalised_area:
-        denominator = 2*pi*sigma_x*sigma_y*(1-rho**2)**0.5
-    else:
-        denominator = 1
-    return numerator / denominator
-
-
 def setup_heterogenous_viscosity(
         X: ufl.geometry.SpatialCoordinate,
         background_viscosity: Function,
@@ -88,6 +79,40 @@ def setup_heterogenous_viscosity(
       heterogenous_viscosity_field
         A new field containing the updated lateral viscosity variations
     '''
+
+    def bivariate_gaussian(x, y, mu_x, mu_y, sigma_x, sigma_y, rho, normalised_area=False):
+        '''Bivariate gaussian function
+
+        Args:
+          x:
+            x-coordinate
+          y:
+            y-coordinate
+          mu_x:
+            x-coordinate of centre of guassian
+          mu_y:
+            y-coordinate of centre of gaussian
+          sigma_x:
+            standard deviation in x-direction
+          sigma_y:
+            standard deviation in y-direction
+          rho:
+            degree of correlation
+          normalised_area:
+            Flag to normalise the area of the gaussian
+
+        Returns:
+          Value of bivariate guassian at point (x,y)
+        '''
+
+        arg = ((x-mu_x)/sigma_x)**2 - 2*rho*((x-mu_x)/sigma_x)*((y-mu_y)/sigma_y) + ((y-mu_y)/sigma_y)**2
+        numerator = exp(-1/(2*(1-rho**2))*arg)
+        if normalised_area:
+            denominator = 2*pi*sigma_x*sigma_y*(1-rho**2)**0.5
+        else:
+            denominator = 1
+        return numerator / denominator
+
     heterogenous_viscosity_field = Function(background_viscosity.function_space(),
                                             name='viscosity')
 
