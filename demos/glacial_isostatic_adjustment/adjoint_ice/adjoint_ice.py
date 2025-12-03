@@ -92,7 +92,7 @@ from gadopt.inverse import *
 from gadopt.utility import (
     CombinedSurfaceMeasure,
     initialise_background_field)
-from gadopt_demo_utils.gia_demo_utils import (
+from gadopt.demos.glacial_isostatic_adjustment.utils import (
     ice_sheet_disc,
     setup_heterogenous_viscosity
 )

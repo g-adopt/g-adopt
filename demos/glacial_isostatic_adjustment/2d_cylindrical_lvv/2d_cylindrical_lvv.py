@@ -20,13 +20,12 @@ from gadopt.utility import (
     initialise_background_field
 )
 
-# We next import a helper function from the gadopt_demo_utils package
-# to set up a synthetic ice sheet and viscosity field later on.
-
+# + tags=["active-py"] jupyter={"source_hidden": True, "outputs_hidden": True}
 from gadopt_demo_utils.gia_demo_utils import (
     ice_sheet_disc,
     setup_heterogenous_viscosity
 )
+# -
 
 # We also import some helper functions for plotting and making animations associated
 # with this demo.
@@ -156,14 +155,10 @@ initialise_background_field(
 # varying viscosity field. We'll put some regions of low viscosity
 # near the South Pole (inspired by West Antarctica) as well as in the lower mantle.
 # We've also put some relatively higher viscosity patches of mantle in the
-# northern hemisphere to represent a downgoing slab. Let's load a function
-# we have predefined earlier from the
-# `gadopt-demo-utils` [package](https://github.com/g-adopt/gadopt-demo-utils).
-# We can inspect the `setup_heterogenous_viscosity` function using some inline
-# jupyter notebook magic as follows
+# northern hemisphere to represent a downgoing slab.
 
 # + tags=["active-ipynb"]
-# setup_heterogenous_viscosity??
+# %load -s setup_heterogenous_viscosity ../utils.py
 # -
 
 # To better represent the spatially varying viscosity field lets use a linear
@@ -183,6 +178,11 @@ viscosity = setup_heterogenous_viscosity(X, background_viscosity)
 # extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the
 # North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify
 # things we keep the ice load fixed in time.
+
+# Define an ice sheet disc
+# + tags=["active-ipynb"]
+# %load -s ice_sheet_disc ../utils.py
+# -
 
 # +
 # Initialise ice loading
