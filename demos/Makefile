@@ -28,6 +28,12 @@ smoothing/smoothing.ipynb: smoothing/smoothing-example.h5
 smoothing/smoothing-example.h5:
 	$(MAKE) -C smoothing smoothing-example.h5
 
+# adjoint ice requires the checkpoint file to be generated
+$(gia_dir)/adjoint_ice/adjoint_ice.ipynb: $(gia_dir)/adjoint_ice/forward-2d-cylindrical-disp-vel.h5
+
+$(gia_dir)/adjoint_ice/forward-2d-cylindrical-disp-vel.h5:
+	$(MAKE) -C $(gia_dir)/adjoint_ice forward-2d-cylindrical-disp-vel.h5
+
 ### make mantle_convection/base_case should just run the mantle_convection/base_case demo
 ### make mantle_convection should run all mantle convection demos
 $(all_cases) $(mc_dir) $(mm_dir) $(gia_dir):
