@@ -161,7 +161,6 @@ initialise_background_field(
 # + tags=["active-ipynb"]
 # from gadopt.utility import vertical_component
 # %load -s setup_heterogenous_viscosity ../utils.py
-# %run -s setup_heterogenous_viscosity ../utils.py
 # -
 
 # To better represent the spatially varying viscosity field let's use a linear

@@ -162,7 +162,6 @@ initialise_background_field(
 
 # + tags=["active-ipynb"]
 # %load -s ice_sheet_disc ../utils.py
-# %run -s ice_sheet_disc ../utils.py
 # -
 
 # +
