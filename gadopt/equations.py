@@ -128,36 +128,6 @@ class Equation:
             term(self, trial) for term in self.residual_terms
         )
 
-    def irksome_form(
-        self,
-        solution: fd.Function,
-        Dt: Any,  # Irksome's Dt operator
-    ) -> fd.Form:
-        """Builds the Irksome form for time integration.
-
-        This method constructs the form: mass(time_derivative) - residual(solution)
-        where time_derivative is typically Dt(solution), but can be customized
-        by subclasses or by overriding this method for special cases like
-        Dt(coeff * solution).
-
-        Args:
-            solution:
-                Firedrake Function representing the solution variable.
-            Dt:
-                Irksome's time derivative operator.
-
-        Returns:
-            The UFL form for Irksome's TimeStepper.
-
-        Note:
-            Subclasses or specific equation instances can override this method
-            to customize the time derivative term. For example, to use
-            Dt(coeff * solution) instead of Dt(solution), override this method
-            and construct the appropriate time derivative expression.
-        """
-        # Default implementation: Dt(solution)
-        return self.mass(Dt(solution)) - self.residual(solution)
-
 
 def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     r"""
