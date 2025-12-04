@@ -96,7 +96,7 @@ def model(level, bc_type='specified_head', do_write=False):
         h,
         soil_curve,
         delta_t=dt,
-        timestepper=ImplicitMidpoint,
+        timestepper=IrksomeRadauIIA,
         bcs=richards_bcs,
         solver_parameters="direct",
         quad_degree=3,
