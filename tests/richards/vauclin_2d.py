@@ -68,33 +68,48 @@ def model(level, do_write=False):
 
     # Time parameters
     t_final = 86400.0  # 1 day [s]
-    dt = Constant(10.0)  # Match reference implementation
+    dt = Constant(10.0)  # Initial time step [s]
 
-    # Create Richards solver with DIRK22 timestepper
+    # Create Richards solver with IrksomeRadauIIA adaptive timestepper
     richards_solver = RichardsSolver(
         h,
         soil_curve,
         delta_t=dt,
-        timestepper=ImplicitMidpoint,
+        timestepper=IrksomeRadauIIA,
         bcs=richards_bcs,
         solver_parameters="direct",
-        quad_degree=3
+        quad_degree=3,
+        timestepper_kwargs={
+            'order': 3,
+            'adaptive_parameters': {
+                'tol': 1e-4,
+                'dtmin': 1.0,
+                'dtmax': 100.0,
+                'safety_factor': 0.9,
+            }
+        }
     )
 
-    # Time integration
+    # Time integration with adaptive timestepping
     time = 0.0
     total_flux = 0.0
-    dt_val = float(dt)
 
     while time < t_final:
         time_var.assign(time)
-        richards_solver.solve()
-        time += dt_val
+        result = richards_solver.solve(t=time)
+
+        # Get actual dt used (adaptive timestepping)
+        if result is not None:
+            error, dt_used = result
+            time += dt_used
+        else:
+            dt_used = float(dt)
+            time += dt_used
 
         # Compute total infiltration through top boundary
         ds_top = ds(boundary_ids.top)
         flux_top = assemble(top_flux * ds_top)
-        total_flux += flux_top * dt_val
+        total_flux += flux_top * dt_used
 
     # Compute final solution statistics
     min_h = h.dat.data.min()

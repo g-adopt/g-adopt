@@ -89,9 +89,9 @@ def model(level, bc_type='specified_head', do_write=False):
     ]
     # Time parameters
     t_final = 1.0e6
-    dt = Constant(5000.0)  # Time step size [s]
+    dt = Constant(5000.0)  # Initial time step size [s]
 
-    # Create Richards solver with ImplicitMidpoint timestepper
+    # Create Richards solver with IrksomeRadauIIA adaptive timestepper
     richards_solver = RichardsSolver(
         h,
         soil_curve,
@@ -99,20 +99,38 @@ def model(level, bc_type='specified_head', do_write=False):
         timestepper=ImplicitMidpoint,
         bcs=richards_bcs,
         solver_parameters="direct",
-        quad_degree=3
+        quad_degree=3,
+        timestepper_kwargs={
+            "adaptive_parameters": {
+                'tol': 1e-3,  # Error tolerance per step
+                'dtmin': 1e-6,  # Minimum allowed dt
+                'dtmax': t_final/100.0,  # Maximum allowed dt (reasonable fraction of total time)
+                'KI': 1/15,  # Integration gain
+                'KP': 0.13,  # Proportional gain
+            }
+        }
     )
 
-    # Time integration
+    # Time integration with adaptive timestepping
     time = t_initial
+    step = 0
 
     output = VTKFile("tracy_h_test.pvd")
-
     output.write(h)
 
     while time < t_final:
-        richards_solver.solve()
-        output.write(h)
-        time += float(dt)
+        result = richards_solver.solve(t=time)
+
+        # Get actual dt used (adaptive timestepping)
+        if result is not None:
+            error, dt_used = result
+            time += dt_used
+        else:
+            time += float(dt)
+
+        step += 1
+        if step % 10 == 0:  # Write output every 10 steps
+            output.write(h)
 
     # Compute analytical solution at final time
     h_anal = Function(V, name="AnalyticalPressureHead")
