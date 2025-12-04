@@ -111,7 +111,7 @@ while t < T:
     adv_solver.solve(t=t)
 
     # Get the actual dt used by the adaptive stepper
-    dt_used = float(adv_solver.ts.dt_mesh_const)
+    dt_used = float(adv_solver.ts.dt_reference)
     dt_values.append(dt_used)
     t += dt_used
     step += 1
