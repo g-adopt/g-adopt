@@ -125,12 +125,12 @@ class IrksomeIntegrator:
 
         # Build the Irksome form directly
         # This constructs the residual form: Dt(u) - residual(u) = 0
-        # The mass term includes the time derivative operator Dt applied to the solution,
-        # ensuring solution-dependent coefficients in the mass term are correctly evaluated
-        # at each RK stage. The negative sign accounts for G-ADOPT's RHS convention.
-        # The equation's irksome_form method can be overridden to customize the time
-        # derivative term (e.g., for Dt(coeff * solution)).
-        F = equation.irksome_form(solution, Dt)
+        # The mass term applies the time derivative operator Dt internally,
+        # allowing each equation to decide how to construct the time derivative
+        # (e.g., Dt(solution) or Dt(coeff * solution) for time-dependent coefficients).
+        # The negative sign accounts for G-ADOPT's RHS convention.
+        # Build the Irksome form
+        F = equation.mass(solution) - equation.residual(solution)
 
         # Store strong_bcs for applying at initialization
         # This ensures BC-consistency like the original G-ADOPT DIRKGeneric
