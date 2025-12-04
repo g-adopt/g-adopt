@@ -40,6 +40,7 @@ where:
 """
 
 from firedrake import *
+from irksome import Dt
 
 from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous
@@ -52,20 +53,25 @@ __all__ = [
 
 
 def richards_mass_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function, solution_old: Function
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
 ) -> Form:
     r"""Richards equation mass term with nonlinear capacity.
 
-    The mass term accounts for water storage changes:
+    The mass term accounts for water storage changes using the time derivative
+    of the water content:
 
     $$
-    (S_s S + C) \\frac{\\partial h}{\\partial t}
+    \\frac{\\partial \\theta(h)}{\\partial t} = \\frac{d\\theta}{dh} \\frac{\\partial h}{\\partial t}
     $$
+
+    This formulation is equivalent to $(S_s S + C) \\frac{\\partial h}{\\partial t}$
+    but lets Irksome automatically handle the chain rule differentiation of $\\theta(h)$.
 
     where:
-    - $S_s$ is the specific storage coefficient (from soil curve)
-    - $S(h) = (\\theta - \\theta_r)/(\\theta_s - \\theta_r)$ is effective saturation
-    - $C(h) = d\\theta/dh$ is the specific moisture capacity
+    - $h$ is the pressure head
+    - $\\theta(h)$ is the moisture content (includes $S_s S$ for compressible storage)
+    - Irksome's `Dt` operator automatically applies the chain rule to compute
+      $C(h) = d\\theta/dh$ when differentiating $\\theta(h)$ with respect to time
 
     Args:
         eq: G-ADOPT Equation instance
@@ -76,17 +82,20 @@ def richards_mass_term(
     """
     soil_curve = eq.soil_curve
 
-    # Evaluate nonlinear coefficients
+    # Water content as a function of pressure head
+    # theta(h) includes both unsaturated storage (moisture content changes)
+    # and compressible storage (S_s * S * h) for the saturated zone
     theta = soil_curve.moisture_content(trial)
-    C = soil_curve.water_retention(trial)
 
-    # Effective saturation
+    # Effective saturation for compressible storage term
     S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
 
-    # Mass coefficient from previous timestep
-    mass_coeff = soil_curve.Ss * S + C
+    # Total water content including compressible storage
+    # When Dt is applied, this gives: (S_s S + C) * Dt(h)
+    # where C = d(theta)/dh is computed automatically by Irksome
+    water_content = theta + soil_curve.Ss * S * trial
 
-    return inner(eq.test, mass_coeff * trial) * eq.dx
+    return inner(eq.test, Dt(water_content)) * eq.dx
 
 
 def richards_diffusion_term(
@@ -209,7 +218,7 @@ def richards_gravity_term(
     K = soil_curve.relative_permeability(trial)
 
     # Get mesh dimension and spatial coordinates
-    dim = eq.mesh.geometric_dimension()
+    dim = eq.mesh.geometric_dimension
     x = SpatialCoordinate(eq.mesh)
 
     # Gradient in vertical direction (last coordinate)
