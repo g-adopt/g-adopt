@@ -19,7 +19,7 @@ from .utility import ensure_constant
 
 # Irksome imports
 from irksome import (
-    MeshConstant, Dt, TimeStepper as IrksomeTimeStepper,
+    MeshConstant, TimeStepper as IrksomeTimeStepper,
     RadauIIA, GaussLegendre, LobattoIIIA, LobattoIIIC,
     BackwardEuler as IrksomeBackwardEuler, Alexander, QinZhang, PareschiRusso)
 from irksome.ButcherTableaux import ButcherTableau
