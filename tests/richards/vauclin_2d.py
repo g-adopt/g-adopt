@@ -1,5 +1,4 @@
 from gadopt import *
-import numpy
 import gwassess
 
 
@@ -75,19 +74,10 @@ def model(level, do_write=False):
         h,
         soil_curve,
         delta_t=dt,
-        timestepper=IrksomeRadauIIA,
+        timestepper=ImplicitMidpoint,
         bcs=richards_bcs,
         solver_parameters="direct",
         quad_degree=3,
-        timestepper_kwargs={
-            'order': 3,
-            'adaptive_parameters': {
-                'tol': 1e-4,
-                'dtmin': 1.0,
-                'dtmax': 100.0,
-                'safety_factor': 0.9,
-            }
-        }
     )
 
     # Time integration with adaptive timestepping
