@@ -17,7 +17,6 @@ References:
 import firedrake as fd
 import ufl
 from abc import ABC, abstractmethod
-from typing import Dict, Any
 
 
 class SoilCurve(ABC):
