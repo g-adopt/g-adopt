@@ -33,7 +33,7 @@ from . import richards_equation as richards_eq
 from .equations import Equation
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .soil_curves import SoilCurve
-from .time_stepper import RungeKuttaTimeIntegrator
+from .time_stepper import IrksomeIntegrator
 from .utility import DEBUG, INFO, is_continuous, log_level
 
 __all__ = [
@@ -115,6 +115,10 @@ class RichardsSolver(SolverConfigurationMixin):
       quad_degree:
         Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
         where p is the polynomial degree of the trial space
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA) or
+        adaptive time-stepping (e.g., {'adaptive_parameters': {'tol': 1e-3}})
 
     ### Valid keys for boundary conditions
     |  Condition  |  Type  |              Description               |
@@ -139,12 +143,13 @@ class RichardsSolver(SolverConfigurationMixin):
         soil_curve: SoilCurve,
         /,
         delta_t: Constant,
-        timestepper: type[RungeKuttaTimeIntegrator],
+        timestepper: type[IrksomeIntegrator],
         *,
         bcs: dict[int | str, dict[str, Number]] = {},
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
         quad_degree: int | None = None,
+        timestepper_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.solution = solution
         self.soil_curve = soil_curve
@@ -152,13 +157,11 @@ class RichardsSolver(SolverConfigurationMixin):
         self.timestepper = timestepper
         self.bcs = bcs
         self.quad_degree = quad_degree
+        self.timestepper_kwargs = timestepper_kwargs or {}
 
         self.solution_space = solution.function_space()
         self.mesh = self.solution_space.mesh()
         self.test = TestFunction(self.solution_space)
-
-        # Store previous solution for IMEX treatment (explicit nonlinearity)
-        self.solution_old = solution.copy(deepcopy=True)
 
         self.continuous_solution = is_continuous(self.solution)
 
@@ -203,14 +206,6 @@ class RichardsSolver(SolverConfigurationMixin):
             'soil_curve': self.soil_curve,
         }
 
-        # Create wrapper functions that have required_attrs and optional_attrs
-        def mass_wrapper(eq, trial):
-            return richards_eq.richards_mass_term(
-                eq, trial, self.solution_old
-            )
-        mass_wrapper.required_attrs = richards_eq.richards_mass_term.required_attrs
-        mass_wrapper.optional_attrs = richards_eq.richards_mass_term.optional_attrs
-
         self.equation = Equation(
             self.test,
             self.solution_space,
@@ -218,7 +213,7 @@ class RichardsSolver(SolverConfigurationMixin):
                 richards_eq.richards_diffusion_term,
                 richards_eq.richards_gravity_term,
             ],
-            mass_term=mass_wrapper,
+            mass_term=richards_eq.richards_mass_term,
             eq_attrs=eq_attrs,
             bcs=self.weak_bcs,
             quad_degree=self.quad_degree,
@@ -265,19 +260,20 @@ class RichardsSolver(SolverConfigurationMixin):
             self.delta_t,
             solver_parameters=self.solver_parameters,
             strong_bcs=self.strong_bcs,
+            **self.timestepper_kwargs,
         )
 
-    def solve(self, update_forcings=None, t: float | None = None) -> None:
+    def solve(self, t: float | None = None) -> tuple[float, float] | None:
         """Advances solver in time.
 
         Args:
-          update_forcings:
-            Optional callable to update time-dependent forcings. Called with current time.
           t:
             Current simulation time (optional)
-        """
-        # Update solution_old BEFORE solving (for IMEX treatment)
-        self.solution_old.assign(self.solution)
 
-        # Solve (now with coefficients from previous timestep)
-        self.ts.advance(update_forcings, t)
+        Returns:
+          When adaptive time-stepping is enabled: tuple (error, dt_used) where:
+              - error: Error estimate from the adaptive stepper
+              - dt_used: Actual time step used (may differ from initial dt)
+          When adaptive time-stepping is not enabled: None
+        """
+        return self.ts.advance(t)

@@ -1020,7 +1020,8 @@ class IrksomeRadauIIA(IrksomeIntegrator):
             stage_type="deriv",  # "deriv" for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters
+            solver_parameters=solver_parameters,
+            **kwargs  # Pass adaptive_parameters and other kwargs to parent
         )
 
 
@@ -1050,7 +1051,8 @@ class IrksomeGaussLegendre(IrksomeIntegrator):
             stage_type="deriv",  # "deriv" for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters
+            solver_parameters=solver_parameters,
+            **kwargs  # Pass adaptive_parameters and other kwargs to parent
         )
 
 
@@ -1104,6 +1106,7 @@ class IrksomeLobattoIIIC(IrksomeIntegrator):
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
+        **kwargs,
     ):
         # Create Irksome LobattoIIIC tableau
         butcher = LobattoIIIC(order)
@@ -1117,7 +1120,8 @@ class IrksomeLobattoIIIC(IrksomeIntegrator):
             stage_type="deriv",  # for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters
+            solver_parameters=solver_parameters,
+            **kwargs  # Pass adaptive_parameters and other kwargs to parent
         )
 
 
@@ -1159,5 +1163,6 @@ class IrksomePareschiRusso(IrksomeIntegrator):
             stage_type="dirk",
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters
+            solver_parameters=solver_parameters,
+            **kwargs  # Pass additional kwargs to parent
         )
