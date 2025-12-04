@@ -14,6 +14,7 @@ and at the very end return `-F`.
 """
 
 import firedrake as fd
+from irksome import Dt
 
 from .equations import Equation
 from .utility import vertical_component
@@ -31,7 +32,7 @@ def free_surface_term(
 def mass_term(
     eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
 ) -> fd.Form:
-    r"""Mass term \int test * trial * ds for the free surface time discretisation.
+    r"""Mass term \int test * Dt(trial) * ds for the free surface time discretisation.
 
     Args:
         eq:
@@ -45,7 +46,7 @@ def mass_term(
     """
     return (
         eq.buoyancy_scale
-        * fd.dot(eq.test, trial)
+        * fd.dot(eq.test, Dt(trial))
         * vertical_component(eq.n)
         * eq.ds(eq.boundary_id)
     )
