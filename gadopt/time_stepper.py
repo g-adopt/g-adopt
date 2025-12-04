@@ -19,7 +19,7 @@ from .utility import ensure_constant
 
 # Irksome imports
 from irksome import (
-    MeshConstant, TimeStepper as IrksomeTimeStepper,
+    MeshConstant, Dt, TimeStepper as IrksomeTimeStepper,
     RadauIIA, GaussLegendre, LobattoIIIA, LobattoIIIC,
     BackwardEuler as IrksomeBackwardEuler, Alexander, QinZhang, PareschiRusso)
 from irksome.ButcherTableaux import ButcherTableau
@@ -1020,8 +1020,7 @@ class IrksomeRadauIIA(IrksomeIntegrator):
             stage_type="deriv",  # "deriv" for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters,
-            **kwargs  # Pass adaptive_parameters and other kwargs to parent
+            solver_parameters=solver_parameters
         )
 
 
@@ -1051,8 +1050,7 @@ class IrksomeGaussLegendre(IrksomeIntegrator):
             stage_type="deriv",  # "deriv" for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters,
-            **kwargs  # Pass adaptive_parameters and other kwargs to parent
+            solver_parameters=solver_parameters
         )
 
 
@@ -1106,7 +1104,6 @@ class IrksomeLobattoIIIC(IrksomeIntegrator):
         solution_old: Optional[firedrake.Function] = None,
         solver_parameters: Optional[dict[str, Any]] = {},
         strong_bcs: Optional[list[firedrake.DirichletBC]] = None,
-        **kwargs,
     ):
         # Create Irksome LobattoIIIC tableau
         butcher = LobattoIIIC(order)
@@ -1120,8 +1117,7 @@ class IrksomeLobattoIIIC(IrksomeIntegrator):
             stage_type="deriv",  # for fully implicit schemes
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters,
-            **kwargs  # Pass adaptive_parameters and other kwargs to parent
+            solver_parameters=solver_parameters
         )
 
 
@@ -1163,6 +1159,5 @@ class IrksomePareschiRusso(IrksomeIntegrator):
             stage_type="dirk",
             solution_old=solution_old,
             strong_bcs=strong_bcs,
-            solver_parameters=solver_parameters,
-            **kwargs  # Pass additional kwargs to parent
+            solver_parameters=solver_parameters
         )
