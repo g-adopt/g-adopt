@@ -6,12 +6,14 @@ relevant parameters and call individual class methods to compute associated diag
 
 import firedrake as fd
 import numpy as np
+import ufl.core.expr
+import ufl.core.operator
+import ufl.core.terminal
 from mpi4py import MPI
 from functools import cache, cached_property
-from enum import Enum
 
 from firedrake.ufl_expr import extract_unique_domain
-from .utility import CombinedSurfaceMeasure, vertical_component
+from .utility import CombinedSurfaceMeasure, get_boundary_ids, vertical_component
 
 __all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics", "GIADiagnostics"]
 
@@ -37,11 +39,6 @@ def get_normal(mesh):
 @cache
 def get_volume(dx):
     return fd.assemble(fd.Constant(1) * dx)
-
-
-class ExtremaType(Enum):
-    MAX = 0
-    MIN = 1
 
 
 class FunctionContext:
@@ -91,6 +88,10 @@ class FunctionContext:
     @cached_property
     def volume(self):
         return get_volume(self.dx)
+
+    @cached_property
+    def boundary_ids(self):
+        return get_boundary_ids(self.mesh)
 
     @cache
     def get_boundary_nodes(self, boundary_id: int) -> list[int]:
@@ -145,20 +146,29 @@ class BaseDiagnostics:
         # A firedrake function is hashed using the output of repr(f), we can
         # keep track of internally allocated functions using a string based
         # off of repr(f)
-        self._function_contexts: dict[str | fd.Function, FunctionContext] = {}
+        self._function_contexts: dict[
+            fd.Function | ufl.core.operator.Operator, FunctionContext
+        ] = {}
+        self._quad_degree = quad_degree
+        self.register_functions(**funcs)
 
+    def register_functions(self, *, quad_degree: int | None = None, **funcs: fd.Function | None):
+        if quad_degree is None:
+            quad_degree = self._quad_degree
         for name, func in funcs.items():
             # Handle optional functions in diagnostics
             if func is None:
                 setattr(self, name, 0.0)
                 continue
             if len(func.subfunctions) == 1:
-                setattr(self, name, func)
-                self._init_single_func(quad_degree, func)
+                if not hasattr(self, name):
+                    setattr(self, name, func)
+                    self._init_single_func(quad_degree, func)
             else:
                 for i, subfunc in enumerate(func.subfunctions):
-                    setattr(self, f"{name}_{i}", func)
-                    self._init_single_func(quad_degree, subfunc)
+                    if not hasattr(self, f"{name}_{i}"):
+                        setattr(self, f"{name}_{i}", func)
+                        self._init_single_func(quad_degree, subfunc)
 
     def _init_single_func(self, quad_degree: int, func: fd.Function):
         """
@@ -166,92 +176,207 @@ class BaseDiagnostics:
         """
         self._function_contexts[func] = FunctionContext(quad_degree, func)
 
+    #
+    # Section 1. Core functions whose output remains constant throughout a model run
+    #            Generally intended for internal use only, though can be used to
+    #            cache common UFL expressions (e.g. get_radial_component)
+    #
     @cache
-    def _check_present(self, func: fd.Function) -> None:
+    def _extract_functions(self, func_or_op: ufl.core.expr.Expr) -> set[fd.Function]:
         """
-        Determine if a function is present in this BaseDiagnostics object
+        Docstring for _extract_functions
+
+        :param func_or_op: Description
+        :type func_or_op: ufl.core.expr.Expr
+        :return: Description
+        :rtype: set[Function]
         """
-        if func not in self._function_contexts:
-            raise KeyError(f"Function {func} is not present in this diagnostic object")
+        if isinstance(func_or_op, fd.Function):
+            return {func_or_op}
+        elif isinstance(func_or_op, ufl.core.operator.Operator):
+            funcs = set()
+            for f in func_or_op.ufl_operands:
+                funcs |= self._extract_functions(f)
+            return funcs
+        elif isinstance(func_or_op, ufl.core.terminal.Terminal):
+            # Some other UFL object
+            return set()
+        else:
+            raise TypeError("Invalid type")
 
     @cache
-    def _check_dim_valid(self, f: fd.Function) -> None:
+    def _check_present(self, func_or_op: ufl.core.expr.Expr) -> None:
         """
-        Determine if the 'dim' argument can be used when searching for a function
+        Determine if a function is present in this BaseDiagnostics object. If a UFL
+        operator is passed in, check that all operands that are functions are
+        present in this BaseDiagnostics object.
+        """
+        for func in self._extract_functions(func_or_op):
+            if func not in self._function_contexts:
+                raise KeyError(
+                    f"Function {func} is not present in this diagnostic object"
+                )
+
+    @cache
+    def _check_dim_valid(self, f: ufl.core.expr.Expr) -> None:
+        """
+        Determine if the 'dim' argument can be used when searching for an expression
         min/max (i.e. if f is a vector/tensor function).
         """
-        if len(f.dat.shape) < 2:
-            raise KeyError(
+        # The official UFL-sanctioned method of determining if an expression is
+        # non-scalar
+        # https://github.com/firedrakeproject/ufl/blob/master/ufl/core/expr.py#L290
+        if not (f.ufl_shape or f.ufl_free_indices):
+            raise TypeError(
                 "Requested a min/max over function dimension for a scalar function"
             )
 
-    def _function_min(
+    @cache
+    def _check_boundary_id(
+        self, f: fd.Function, boundary_id: int | str | None = None
+    ) -> None:
+        return
+        # if boundary_id is None:
+        #    # None is always fine
+        #    return
+        # if boundary_id not in self._function_contexts[f].boundary_ids:
+        #    raise KeyError("Invalid boundary ID for function")
+
+    @cache
+    def _get_measure(
         self,
-        f: fd.Function,
+        func_or_op: fd.Function | ufl.core.operator.Operator,
+        boundary_id: int | str | None = None,
+    ) -> fd.Measure:
+        self._check_boundary_id(func_or_op, boundary_id)
+        for func in self._extract_functions(func_or_op):
+            self._check_present(func)
+            if boundary_id is None:
+                return self._function_contexts[func].dx
+            else:
+                return self._function_contexts[func].ds(boundary_id)
+
+    @cache
+    def _get_func_for_op(self, op: ufl.core.operator.Operator) -> fd.Function:
+        # Need a new function for this. If our operator has the same ufl_shape
+        # as any of its operands, great, we can reuse that function space and
+        # associated function context
+        if op not in self._function_contexts:
+            target_shape = op.ufl_shape
+            for func in self._extract_functions(op):
+                if func.ufl_shape == target_shape:
+                    fs = self._function_contexts[func].function_space
+                    break
+            else:
+                # There are a few different possibilities if we don't find a matching
+                # functions space. The choice of function space isn't critically
+                # important as we're not solving anything on it, however, we want the
+                # basic element to match whatever the input space was. If we've fallen
+                # through to here, use the last func to come out of _extract_functions
+                # as our starting point. Firstly, if the FunctionSpace element is not scalar
+                # we need to reduce it to a scalar element. When we pass a given scalar
+                # element into VectorFunctionSpace or TensorFunction space, firedrake will
+                # automatically construct the necessary vector/tensor element from it.
+                if func.ufl_shape:
+                    # I don't believe firedrake has a mechanism to create different
+                    # sub-elements for different vector/tensor components, so just take
+                    # sub_elements[0]. Dealing with weird spaces like that is well beyond
+                    # the scope of this module anyway.
+                    sub_elem = func.ufl_element().sub_elements[0]
+                else:
+                    sub_elem = func.ufl_element()
+                match len(target_shape):
+                    case 0:
+                        # Scalar target function
+                        fs = fd.FunctionSpace(func.ufl_domain(), sub_elem)
+                    case 1:
+                        # Vector target function
+                        fs = fd.VectorFunctionSpace(func.ufl_domain(), sub_elem)
+                    case 2:
+                        # Tensor target function
+                        fs = fd.TensorFunctionSpace(func.ufl_domain(), sub_elem)
+                    case _:
+                        # Don't know
+                        raise TypeError("Unknown function space type")
+            self._function_contexts[op] = FunctionContext(
+                self._function_contexts[func]._quad_degree, fd.Function(fs)
+            )
+        return self._function_contexts[op].function
+
+    @cache
+    def get_radial_component(self, f: fd.Function) -> ufl.core.operator.Operator:
+        self._check_present(f)
+        self._check_dim_valid(f)  # Can't take radial component of a scalar function
+        return vertical_component(f)
+
+    #
+    # Section 2. Implementations
+    #            Shared implementations for user-facing functions go here
+    #
+
+    def _minmax(
+        self,
+        func_or_op: fd.Function | ufl.core.operator.Operator,
         boundary_id: int | None = None,
         dim: int | None = None,
-    ) -> float:
-        """Calculate the minimum value of a function
-
-        Args:
-          f:
-            Firedrake function
-          boundary_id:
-            Optional, if passed the minimum will be calculated on the specified
-            boundary, otherwise it will be the minimum over the whole domain
-          dim:
-            Optional, if passed, will calculate the minimum only for the `dim`
-            component of a vector function.
-
-        Returns:
-          Minimum value of f across the specified domain/component
+    ) -> np.ndarray[float, float]:
         """
-        self._check_present(f)
+        Docstring for _minmax
+
+        :param func_or_op: Description
+        :type func_or_op: fd.Function | ufl.core.operator.Operator
+        :param boundary_id: Description
+        :type boundary_id: int | None
+        :param dim: Description
+        :type dim: int | None
+        :return: Description
+        :rtype: tuple[float, float]
+        """
+        self._check_present(func_or_op)
+        self._check_boundary_id(func_or_op, boundary_id)
+        if isinstance(func_or_op, ufl.core.operator.Operator):
+            f = self._get_func_for_op(func_or_op)
+            f.interpolate(func_or_op)
+        elif isinstance(func_or_op, fd.Function):
+            f = func_or_op
+        func_ctx = self._function_contexts[func_or_op]
         if boundary_id:
-            f_data = f.dat.data_ro[
-                self._function_contexts[f].get_boundary_nodes(boundary_id)
-            ]
+            f_data = f.dat.data_ro[func_ctx.get_boundary_nodes(boundary_id)]
         else:
             f_data = f.dat.data_ro
         if dim is not None:
             self._check_dim_valid(f)
             f_data = f_data[:, dim]
-        return f.comm.allreduce(f_data.min(initial=np.inf), MPI.MIN)
+        buf = np.array((f_data.min(initial=np.inf), -f_data.max(initial=-np.inf)))
+        f.comm.Allreduce(MPI.IN_PLACE, buf.data, MPI.MIN)
+        return buf
 
-    def _function_max(
+    #
+    # Section 3. User-facing functionality
+    #            Common quantities to be calculated across functions
+    #            Every function in this section should take a boundary ID
+    #            if appropriate
+    #
+
+    def min(
         self,
-        f: fd.Function,
+        func_or_op: fd.Function | ufl.core.operator.Operator,
         boundary_id: int | None = None,
         dim: int | None = None,
     ) -> float:
-        """Calculate the maximum value of a function
-
-        Args:
-          f:
-            Firedrake function
-          boundary_id:
-            Optional, if passed the maximum will be calculated on the specified
-            boundary, otherwise it will be the maximum over the whole domain
-          dim:
-            Optional, if passed, will calculate the maximum only for the `dim`
-            component of a vector function.
-
-        Returns:
-          Maximum value of f across the specified domain/component
         """
-        self._check_present(f)
-        if boundary_id:
-            f_data = f.dat.data_ro[
-                self._function_contexts[f].get_boundary_nodes(boundary_id)
-            ]
-        else:
-            f_data = f.dat.data_ro
-        if dim is not None:
-            self._check_dim_valid(f)
-            f_data = f_data[:, dim]
-        return f.comm.allreduce(f_data.max(initial=-np.inf), MPI.MAX)
+        """
+        return self._minmax(func_or_op, boundary_id, dim)[0]
 
-    def _function_avg(self, f: fd.Function) -> float:
+    def max(
+        self,
+        func_or_op: fd.Function | ufl.core.operator.Operator,
+        boundary_id: int | None = None,
+        dim: int | None = None,
+    ) -> float:
+        return -self._minmax(func_or_op, boundary_id, dim)[1]
+
+    def integral(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
         """Calculate the average value of a function
 
         Args:
@@ -262,44 +387,21 @@ class BaseDiagnostics:
           Average value of f across the entire domain associated with it
         """
         self._check_present(f)
-        return (
-            fd.assemble(f * self._function_contexts[f].dx)
-            / self._function_contexts[f].volume
-        )
+        measure = self._get_measure(f, boundary_id)
+        return fd.assemble(f * measure)
 
-    def _function_rms(self, f: fd.Function, measure: fd.Measure | None = None):
+    def l1norm(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
         self._check_present(f)
-        factor = 1.0
-        if measure is None:
-            measure = self._function_contexts[f].dx
-            factor /= fd.sqrt(self._function_contexts[f].volume)
-        return fd.sqrt(fd.assemble(fd.dot(f, f) * measure)) * factor
+        measure = self._get_measure(f, boundary_id)
+        return fd.assemble(abs(f) * measure)
 
-    def _radial_component_extrema(
-        self, f: fd.Function, which: ExtremaType, boundary_id=None
-    ) -> float:
+    def l2norm(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
         self._check_present(f)
-        self._check_dim_valid(f)  # Can't take radial component of a scalar function
-        if repr(f) + "_rad" not in self._function_contexts:
-            # Need a scalar function space with the same element and degree as the vector function
-            # space belonging to f
-            self._function_contexts[repr(f) + "_rad"] = FunctionContext(
-                self._function_contexts[f]._quad_degree,
-                fd.Function(self._function_contexts[f].function_space.sub(0)),
-            )
-            # Need 2 references to this FunctionContext to pass the check above and the _check_present in
-            # _function_min/_function_max
-            self._function_contexts[
-                self._function_contexts[repr(f) + "_rad"].function
-            ] = self._function_contexts[repr(f) + "_rad"]
-        f_rad = self._function_contexts[repr(f) + "_rad"].function
-        f_rad.interpolate(vertical_component(f))
-        match which:
-            case ExtremaType.MAX:
-                out = self._function_max(f_rad, boundary_id)
-            case ExtremaType.MIN:
-                out = self._function_min(f_rad, boundary_id)
-        return out
+        measure = self._get_measure(f, boundary_id)
+        return fd.sqrt(fd.assemble(fd.dot(f, f) * measure))
+
+    def rms(self, f: fd.Function) -> float:
+        return self.l2norm(f) / fd.sqrt(self._function_contexts[f].volume)
 
 
 class GeodynamicalDiagnostics(BaseDiagnostics):
@@ -340,6 +442,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         u, p = z.subfunctions[:2]
         super().__init__(quad_degree, u=u, p=p, T=T)
 
+        self.top_id = top_id
         if bottom_id:
             self.ds_b = self._function_contexts[self.u].ds(bottom_id)
             self.bottom_surface = fd.assemble(fd.Constant(1) * self.ds_b)
@@ -348,10 +451,10 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
             self.top_surface = fd.assemble(fd.Constant(1) * self.ds_t)
 
     def u_rms(self):
-        return self._function_rms(self.u)
+        return self.rms(self.u)
 
     def u_rms_top(self) -> float:
-        return self._function_rms(self.u, self.ds_t)
+        return self.l2norm(self.u, self.top_id)
 
     def Nu_top(self, scale: float = 1.0):
         return (
@@ -374,52 +477,59 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         )
 
     def T_avg(self):
-        return self._function_avg(self.T)
+        return self.integral(self.T) / self._function_contexts[self.T].volume
 
     def T_min(self):
-        return self._function_min(self.T)
+        return self.min(self.T)
 
     def T_max(self):
-        return self._function_max(self.T)
+        return self.max(self.T)
 
     def ux_max(self, boundary_id: int | None = None) -> float:
-        return self._function_max(self.u, boundary_id, 0)
+        return self.max(self.u, boundary_id, 0)
 
 
 class GIADiagnostics(BaseDiagnostics):
     def __init__(
         self,
         u: fd.Function,
-        displacement: fd.Function | None = None,
         /,
         bottom_id: int | str | None = None,
         top_id: int | str | None = None,
         *,
         quad_degree: int = 4,
     ):
-        super().__init__(quad_degree, u=u, displacement=displacement)
+        super().__init__(quad_degree, u=u)
 
         if bottom_id:
             self.ds_b = self._function_contexts[self.u].ds(bottom_id)
         if top_id:
             self.ds_t = self._function_contexts[self.u].ds(top_id)
-            self._top_id = top_id
+            self.top_id = top_id
 
     def u_rms(self):
-        return self._function_rms(self.u)
+        return self.rms(self.u)
 
     def u_rms_top(self) -> float:
-        return self._function_rms(self.u, self.ds_t)
+        return self.l2norm(self.u, self.top_id)
 
     def ux_max(self, boundary_id: int | None = None) -> float:
-        return self._function_max(self.u, boundary_id, 0)
+        return self.max(self.u, boundary_id, 0)
 
     def uv_min(self, boundary_id: int | None = None) -> float:
         "Minimum value of vertical component of velocity/displacement"
-        return self._radial_component_extrema(self.u, ExtremaType.MIN, boundary_id)
+        return self.min(self.get_radial_component(self.u), boundary_id)
 
-    def displacement_min(self) -> float:
-        return self._function_min(self.displacement, self._top_id)
+    def uv_max(self, boundary_id: int | None = None) -> float:
+        "Maximum value of vertical component of velocity/displacement"
+        return self.max(self.get_radial_component(self.u), boundary_id)
 
-    def displacement_max(self) -> float:
-        return self._function_max(self.displacement, self._top_id)
+    def l2_norm_surface(self) -> float:
+        return self.l2norm(self.get_radial_component(self.u), self.top_id)
+
+    def l1_norm_surface(self) -> float:
+        return self.l1norm(self.get_radial_component(self.u), self.top_id)
+
+    def integrated_displacement(self) -> float:
+        # return fd.assemble(self._get_radial_component(self.u) * self.ds_t)
+        return self.integral(self.get_radial_component(self.u), self.top_id)
