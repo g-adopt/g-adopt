@@ -1,8 +1,31 @@
+from irksome import Dt
 from test_free_surface import run_benchmark
 
 from gadopt import *
 from gadopt.equations import Equation
-from gadopt.free_surface_equation import free_surface_term, mass_term
+from gadopt.free_surface_equation import free_surface_term
+from gadopt.utility import vertical_component
+
+
+def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+    r"""Mass term for the free surface time discretisation via Irksome.
+
+    Args:
+        eq:
+          G-ADOPT Equation.
+        trial:
+          Firedrake trial function.
+
+    Returns:
+        The UFL form associated with the mass term of the equation.
+
+    """
+    return (
+        eq.test
+        * Dt(eq.buoyancy_scale * trial)
+        * vertical_component(eq.n)
+        * eq.ds(eq.boundary_id)
+    )
 
 
 class ExplicitFreeSurfaceModel:
