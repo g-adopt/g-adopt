@@ -42,8 +42,10 @@ def test_scalar_advection_adaptive():
         assert_allclose(dt_stats, expected_dt_stats, rtol=1e-6, atol=1e-16)
 
     # Basic sanity checks even if expected files don't exist
+    # Use small tolerance for floating-point comparisons
+    eps = 1e-12
     assert num_steps > 0, "Number of steps must be positive"
     assert dt_stats[0] > 0, "Minimum timestep must be positive"
-    assert dt_stats[1] >= dt_stats[0], "Maximum timestep must be >= minimum"
-    assert dt_stats[2] >= dt_stats[0] and dt_stats[2] <= dt_stats[1], \
+    assert dt_stats[1] >= dt_stats[0] - eps, "Maximum timestep must be >= minimum"
+    assert dt_stats[2] >= dt_stats[0] - eps and dt_stats[2] <= dt_stats[1] + eps, \
         "Mean timestep must be between min and max"
