@@ -754,6 +754,7 @@ class InternalVariableSolver(StokesSolverBase):
         *,
         internal_variables: fd.Function | list[fd.Function],
         dt: float,
+        stress_glut: fd.Function = None,
         **kwargs,
     ) -> None:
 
@@ -768,6 +769,8 @@ class InternalVariableSolver(StokesSolverBase):
         # N.b. the potential for confusion as GIA modellers often use
         # mu to represent the shear modulus.
         approximation.mu = approximation.effective_viscosity(dt)
+
+        self.stress_glut = stress_glut
 
         super().__init__(solution, approximation, dt=dt, **kwargs)
 
@@ -791,7 +794,7 @@ class InternalVariableSolver(StokesSolverBase):
         )
         source = self.approximation.buoyancy(self.solution) * self.k
 
-        eq_attrs = {"stress": stress, "source": source}
+        eq_attrs = {"stress": stress, "source": source, "stress_glut": self.stress_glut}
 
         self.equations.append(
             Equation(

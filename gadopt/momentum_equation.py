@@ -225,6 +225,20 @@ def advection_hydrostatic_prestress_term(
     return -F
 
 
+def stress_glut_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+
+    if eq.stress_glut is not None:
+        source = div(eq.stress_glut)
+
+        F = -dot(eq.test, source) * eq.dx
+    else:
+        F = 0
+
+    return -F
+
+
 viscosity_term.required_attrs = {"stress"}
 viscosity_term.optional_attrs = {"interior_penalty"}
 pressure_gradient_term.required_attrs = {"p"}
@@ -235,6 +249,8 @@ momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
 advection_hydrostatic_prestress_term.required_attrs = set()
 advection_hydrostatic_prestress_term.optional_attrs = set()
+stress_glut_term.required_attrs = set()
+stress_glut_term.optional_attrs = set()
 
 momentum_terms = [momentum_source_term, pressure_gradient_term, viscosity_term]
 mass_terms = divergence_term
@@ -243,5 +259,6 @@ stokes_terms = [momentum_terms, mass_terms]
 compressible_viscoelastic_terms = [
     advection_hydrostatic_prestress_term,
     momentum_source_term,
+    stress_glut_term,
     viscosity_term,
 ]
