@@ -131,4 +131,4 @@ print(final_error)
 # Save results for testing: final error, number of steps, and timestep statistics
 np.savetxt("final_error_adaptive.log", [final_error])
 np.savetxt("num_steps_adaptive.log", [step])
-np.savetxt("dt_stats_adaptive.log", [np.min(dt_values), np.max(dt_values), np.mean(dt_values)])
+np.savetxt("dt_stats_adaptive.log", dt_values)

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import numpy as np
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_array_equal
 
 base = Path(__file__).parent.resolve()
 
@@ -33,19 +33,15 @@ def test_scalar_advection_adaptive():
         expected_dt_stats = expected_data['dt_stats']
 
         # Check final error value
-        assert_allclose(final_error, expected_error, rtol=1e-6, atol=1e-16)
+        assert_allclose(final_error, expected_error)
 
         # Check number of timesteps
-        assert_allclose(num_steps, expected_steps, rtol=0, atol=0)
+        assert_array_equal(num_steps, expected_steps)
 
         # Check timestep statistics (min, max, mean)
-        assert_allclose(dt_stats, expected_dt_stats, rtol=1e-6, atol=1e-16)
+        assert_allclose(dt_stats, expected_dt_stats)
 
     # Basic sanity checks even if expected files don't exist
-    # Use small tolerance for floating-point comparisons
-    eps = 1e-12
     assert num_steps > 0, "Number of steps must be positive"
-    assert dt_stats[0] > 0, "Minimum timestep must be positive"
-    assert dt_stats[1] >= dt_stats[0] - eps, "Maximum timestep must be >= minimum"
-    assert dt_stats[2] >= dt_stats[0] - eps and dt_stats[2] <= dt_stats[1] + eps, \
-        "Mean timestep must be between min and max"
+    assert min(dt_stats) > 0, "Minimum timestep must be positive"
+    assert_allclose(sum(dt_stats), 2 * np.pi, rtol=1e-2)
