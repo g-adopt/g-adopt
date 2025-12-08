@@ -18,6 +18,8 @@ from .utility import CombinedSurfaceMeasure, get_boundary_ids, vertical_componen
 __all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics", "GIADiagnostics"]
 
 
+# Free functions to allow caching of attributes that may be common among
+# multiple functions
 @cache
 def get_dx(mesh, quad_degree: int) -> fd.Measure:
     return fd.dx(domain=mesh, degree=quad_degree)
@@ -42,7 +44,7 @@ def get_volume(dx):
 
 
 class FunctionContext:
-    """Hold objects that can be derived from a Firedrake Function
+    """Hold objects that can be derived from a Firedrake Function.
 
     This class gathers references to objects that can be pulled from a Firedrake
     Function object and calculates quantities based on those objects that will remain
@@ -50,47 +52,66 @@ class FunctionContext:
     are: mesh, function_space, dx and ds measures, the FacetNormal of the mesh
     (as the `.normal` attribute) and the volume of the domain.
 
-    Args:
-      quad_degree:
-        The quadrature degree for the measures held by this object
-      func:
-        The Firedrake function these attributes belong to
+    Typical usage example:
+
+      function_contexts[F] = FunctionContext(quad_degree,F)
     """
 
     def __init__(self, quad_degree: int, func: fd.Function):
+        """Initialises the FunctionContext object for `func`
+
+        Args:
+            quad_degree (int): quad degree used to construct measures on
+                               domains associated with `func`
+            func (fd.Function):
+        """
         self._function = func
         self._quad_degree = quad_degree
 
     @cached_property
     def function(self):
+        """The function associated with the instance"""
         return self._function
 
     @cached_property
     def mesh(self):
+        """The mesh on which the function has been defined"""
         return extract_unique_domain(self.function)
 
     @cached_property
     def function_space(self):
+        """The function space on which the function has been defined"""
         return self.function.function_space()
 
     @cached_property
     def dx(self):
+        """
+        The volume integration measure defined by the mesh and
+        `quad_degree` passed when creating this instance
+        """
         return get_dx(self.mesh, self._quad_degree)
 
     @cached_property
     def ds(self):
+        """
+        The surface integration measure defined by the mesh and
+        `quad_degree` passed when creating this instance
+        """
         return get_ds(self.mesh, self.function_space, self._quad_degree)
 
     @cached_property
     def normal(self):
+        """The facet normal of the mesh belonging to this instance"""
         return get_normal(self.mesh)
 
     @cached_property
     def volume(self):
+        """The volume of the mesh belonging to this instance"""
         return get_volume(self.dx)
 
     @cached_property
     def boundary_ids(self):
+        """The boundary IDs of the mesh associated with this instance"""
         return get_boundary_ids(self.mesh)
 
     @cache
@@ -99,16 +120,15 @@ class FunctionContext:
 
         Creates a `DirichletBC` object, then uses the `.nodes` attribute for that
         object to provide a list of indices that reside on the boundary of the domain
-        of the function associated with this `FunctionContext` object. The
+        of the function associated with this `FunctionContext` instance. The
         `dof_dset.size` parameter of the `FunctionSpace` is used to exclude nodes in
         the halo region of the domain.
 
         Args:
-          boundary_id:
-            Integer ID of the domain boundary
+            boundary_id (int): Integer ID of the domain boundary
 
         Returns:
-          List of integers corresponding to nodes on the boundary identified by
+            list[int]: List of integers corresponding to nodes on the boundary identified by
           `boundary_id`
         """
         bc = fd.DirichletBC(self.function_space, 0, boundary_id)
@@ -133,26 +153,61 @@ class BaseDiagnostics:
     is created for each function. These attributes are accessed by the
     `diag._function_contexts` dict.
 
-    Args:
-      quad_degree:
-        The quadrature degree for the measures held by this object
-
-      **funcs:
-        key-value pairs of Firedrake functions and the class member that will be used
-        to reference that function.
+    This class is intended to be subclassed by domain-specific diagnostic classes
     """
 
     def __init__(self, quad_degree: int, **funcs: fd.Function | None):
-        # A firedrake function is hashed using the output of repr(f), we can
-        # keep track of internally allocated functions using a string based
-        # off of repr(f)
+        """Initialise a BaseDiagnostics object.
+
+        Sets the `quad_degree` for measures used by this object and passes the
+        remaining keyword arguments through to `register_functions`.
+
+        Args:
+            quad_degree (int): The quadrature degree for the measures held by this object
+            **funcs (fd.Function | None): key-value pairs of Firedrake functions to associate
+            with this instance
+        """
         self._function_contexts: dict[
             fd.Function | ufl.core.operator.Operator, FunctionContext
         ] = {}
         self._quad_degree = quad_degree
         self.register_functions(**funcs)
 
-    def register_functions(self, *, quad_degree: int | None = None, **funcs: fd.Function | None):
+    def register_functions(
+        self, *, quad_degree: int | None = None, **funcs: fd.Function | None
+    ):
+        """Register a function with this BaseDiagnostics object.
+
+        Creates a `FunctionContext` object for each function passed in as a keyword
+        argument. Also creates an attribute on the instance to access the input function
+        named for the key of the keyword argument. i.e:
+
+        ```
+        > diag.register_functions(self,F=F)
+        > type(diag.F)
+        <class 'firedrake.function.Function'>
+        ```
+        If an input function is set to `None`, the attribute will still be created
+        but set to 0.0. If a mixed function is entered, each subfunction will have
+        a `FunctionContext` object associated with it, and the attribute will be named
+        with an additional number to denote the index of the subfunction i.e.:
+
+        ```
+        > diag.register_functions(self,F)
+        > type(diag.F)
+        AttributeError: 'BaseDiagnostics' object has no attribute 'F'
+        > type(diag.F_0)
+        <class 'firedrake.function.Function'>
+        > type(diag.F_1)
+        <class 'firedrake.function.Function'>
+
+        Args:
+            quad_degree (int | None, optional): The quadrature degree for the measures
+            to be used by this function. If `None`, the `quad_degree` passed at object
+            instantiation time is used. Defaults to None.
+            **funcs (fd.Function | None): key-value pairs of Firedra functions to associate
+            with this instance
+        """
         if quad_degree is None:
             quad_degree = self._quad_degree
         for name, func in funcs.items():
@@ -171,9 +226,7 @@ class BaseDiagnostics:
                         self._init_single_func(quad_degree, subfunc)
 
     def _init_single_func(self, quad_degree: int, func: fd.Function):
-        """
-        Create a FunctionContext for a single function
-        """
+        """Create a FunctionContext for a single function"""
         self._function_contexts[func] = FunctionContext(quad_degree, func)
 
     #
@@ -183,13 +236,20 @@ class BaseDiagnostics:
     #
     @cache
     def _extract_functions(self, func_or_op: ufl.core.expr.Expr) -> set[fd.Function]:
-        """
-        Docstring for _extract_functions
+        """Extract all Firedrake functions associated with a UFL expression.
 
-        :param func_or_op: Description
-        :type func_or_op: ufl.core.expr.Expr
-        :return: Description
-        :rtype: set[Function]
+        This function recursively searches through any UFL expression for Firedrake
+        `Function` objects.
+
+        Args:
+            func_or_op (ufl.core.expr.Expr): The UFL expression to search through
+
+        Raises:
+            TypeError: An object that was neither a UFL Operator or UFL Terminal
+            was encountered
+
+        Returns:
+            set[fd.Function]: The set of found Firedrake Functions
         """
         if isinstance(func_or_op, fd.Function):
             return {func_or_op}
@@ -206,10 +266,18 @@ class BaseDiagnostics:
 
     @cache
     def _check_present(self, func_or_op: ufl.core.expr.Expr) -> None:
-        """
-        Determine if a function is present in this BaseDiagnostics object. If a UFL
-        operator is passed in, check that all operands that are functions are
-        present in this BaseDiagnostics object.
+        """Check if a Firedrake function is known to this instance.
+
+        Determine if a function is present in this BaseDiagnostics instance. If a UFL
+        operator is passed in, check that all operands that are functions are present
+        in this BaseDiagnostics instance.
+
+        Args:
+            func_or_op (ufl.core.expr.Expr): The UFL expression to check
+
+        Raises:
+            KeyError: The functions associated with the expression were not found in
+            this instance.
         """
         for func in self._extract_functions(func_or_op):
             if func not in self._function_contexts:
@@ -235,12 +303,22 @@ class BaseDiagnostics:
     def _check_boundary_id(
         self, f: fd.Function, boundary_id: int | str | None = None
     ) -> None:
-        return
-        # if boundary_id is None:
-        #    # None is always fine
-        #    return
-        # if boundary_id not in self._function_contexts[f].boundary_ids:
-        #    raise KeyError("Invalid boundary ID for function")
+        """Check if a provided boundary ID is valid.
+
+        Args:
+            f (fd.Function): Function to check
+            boundary_id (int | str | None, optional): The boundary ID to check. If set
+            to `None`, assume we're performing a volume integral, so no boundary ID is
+            necessary. Otherwise check the boundary ID against those derived from the
+            mesh belonging to this instance. Defaults to None.
+
+        Raises:
+            KeyError: Mesh does not have a boundary corresponding to `boundary_id`
+        """
+        if boundary_id is None:
+            return
+        if boundary_id not in self._function_contexts[f].boundary_ids:
+            raise KeyError("Invalid boundary ID for function")
 
     @cache
     def _get_measure(
@@ -248,6 +326,21 @@ class BaseDiagnostics:
         func_or_op: fd.Function | ufl.core.operator.Operator,
         boundary_id: int | str | None = None,
     ) -> fd.Measure:
+        """Get the integration measure associated with this UFL expression.
+
+        If a boundary ID is provided, return the surface measure corresponding to that
+        boundary. If not, return the volume measure.
+
+        Args:
+            func_or_op (fd.Function | ufl.core.operator.Operator): UFL Expression to
+            check
+            boundary_id (int | str | None, optional): Boundary ID. If not provided or
+            set to None, returns the volume measure. Defaults to None.
+
+        Returns:
+            fd.Measure: The surface measure corresponding to the provided boundary ID
+            or the volume measure.
+        """
         self._check_boundary_id(func_or_op, boundary_id)
         for func in self._extract_functions(func_or_op):
             self._check_present(func)
@@ -258,9 +351,27 @@ class BaseDiagnostics:
 
     @cache
     def _get_func_for_op(self, op: ufl.core.operator.Operator) -> fd.Function:
-        # Need a new function for this. If our operator has the same ufl_shape
-        # as any of its operands, great, we can reuse that function space and
-        # associated function context
+        """Return a function on which to interpolate a UFL operator.
+
+        In some cases, UFL operators need to be interpolated onto a function in order
+        to calculate diagnostic quantities. This function creates a new function on
+        either an existing, compatible function space for the operator, or, if no
+        suitable function space exists within the `FunctionContext` objects known to
+        this instance, creates a new function space with the same base element as the
+        function space used to construct the UFL expression.
+
+        Args:
+            op (ufl.core.operator.Operator): A UFL expression
+
+        Raises:
+            TypeError: The function space detected for the UFL operator is not one of a
+            Scalar, Vector or Tensor function space.
+
+        Returns:
+            fd.Function: A function on which to interpolate the diagnostic quantity
+            described by `op`.
+        """
+
         if op not in self._function_contexts:
             target_shape = op.ufl_shape
             for func in self._extract_functions(op):
@@ -268,20 +379,16 @@ class BaseDiagnostics:
                     fs = self._function_contexts[func].function_space
                     break
             else:
-                # There are a few different possibilities if we don't find a matching
-                # functions space. The choice of function space isn't critically
-                # important as we're not solving anything on it, however, we want the
-                # basic element to match whatever the input space was. If we've fallen
-                # through to here, use the last func to come out of _extract_functions
-                # as our starting point. Firstly, if the FunctionSpace element is not scalar
-                # we need to reduce it to a scalar element. When we pass a given scalar
-                # element into VectorFunctionSpace or TensorFunction space, firedrake will
-                # automatically construct the necessary vector/tensor element from it.
+                # The choice of function space isn't critically important, however we
+                # want the basic element to match whatever the input space was. If
+                # we've fallen through to here, use the last func to come out of
+                # `_extract_functions` as our starting point. If the FunctionSpace
+                # element is not scalar, reduce it to a scalar element. When a given
+                # scalar element is passed into VectorFunctionSpace or TensorFunction
+                # space, Firedrake will automatically construct the necessary
+                # vector/tensor element from it.
                 if func.ufl_shape:
-                    # I don't believe firedrake has a mechanism to create different
-                    # sub-elements for different vector/tensor components, so just take
-                    # sub_elements[0]. Dealing with weird spaces like that is well beyond
-                    # the scope of this module anyway.
+                    # Assume all sub-elements are the same for vector/tensor spaces
                     sub_elem = func.ufl_element().sub_elements[0]
                 else:
                     sub_elem = func.ufl_element()
@@ -305,6 +412,19 @@ class BaseDiagnostics:
 
     @cache
     def get_radial_component(self, f: fd.Function) -> ufl.core.operator.Operator:
+        """Get the radial component of a function.
+
+        Returns a UFL expression for the radial component of a function. Uses the
+        G-ADOPT `vertical_component` function and caches the result such that the
+        UFL expression only needs to be constructed once per run.
+
+        Args:
+            f (fd.Function): Function
+
+        Returns:
+            ufl.core.operator.Operator: UFL expression for the vertical component of
+            `f`
+        """
         self._check_present(f)
         self._check_dim_valid(f)  # Can't take radial component of a scalar function
         return vertical_component(f)
@@ -320,26 +440,35 @@ class BaseDiagnostics:
         boundary_id: int | None = None,
         dim: int | None = None,
     ) -> np.ndarray[float, float]:
-        """
-        Docstring for _minmax
+        """Calculate the minimum and maximum value of a Firedrake function
 
-        :param func_or_op: Description
-        :type func_or_op: fd.Function | ufl.core.operator.Operator
-        :param boundary_id: Description
-        :type boundary_id: int | None
-        :param dim: Description
-        :type dim: int | None
-        :return: Description
-        :rtype: tuple[float, float]
+        Use the `dat.dat_ro` object of a Firedrake function to extract the values
+        of that function, then use an MPI_Allreduce to simultaneously calculate the
+        minimum and maximum of that function. If a UFL operator is passed in, first
+        interpolate that onto a Firedrake function before calculating. If a boundary
+        ID is provided, calculate the min/max along that boundary only.
+
+        Args:
+            func_or_op (fd.Function | ufl.core.operator.Operator): UFL Expression on
+            on which to find min/max
+            boundary_id (int | None, optional): Boundary ID. If not provided or set to
+            `None`, will find min/max across entire domain. Defaults to None.
+            dim (int | None, optional): For vector functions, the dimension to over
+            which to calculate min/max. If not provided or set to `None`, calculate
+            min/max across all components. Defaults to None.
+
+        Returns:
+            np.ndarray[float, float]: The minimum and negative maximum value of the
+            function over the specified domain
         """
         self._check_present(func_or_op)
-        self._check_boundary_id(func_or_op, boundary_id)
         if isinstance(func_or_op, ufl.core.operator.Operator):
             f = self._get_func_for_op(func_or_op)
             f.interpolate(func_or_op)
         elif isinstance(func_or_op, fd.Function):
             f = func_or_op
         func_ctx = self._function_contexts[func_or_op]
+        self._check_boundary_id(func_or_op, boundary_id)
         if boundary_id:
             f_data = f.dat.data_ro[func_ctx.get_boundary_nodes(boundary_id)]
         else:
@@ -365,6 +494,8 @@ class BaseDiagnostics:
         dim: int | None = None,
     ) -> float:
         """
+        Calculate the minimum value of a function. See `_minmax`
+        docstring for more information.
         """
         return self._minmax(func_or_op, boundary_id, dim)[0]
 
@@ -374,33 +505,75 @@ class BaseDiagnostics:
         boundary_id: int | None = None,
         dim: int | None = None,
     ) -> float:
+        """
+        Calculate the maximum value of a function See `_minmax`
+        docstring for more information.
+        """
         return -self._minmax(func_or_op, boundary_id, dim)[1]
 
     def integral(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
-        """Calculate the average value of a function
+        """Calculate the integral of a function over the domain associated with it
 
         Args:
-          f:
-            Firedrake function
+            f (fd.Function): Function.
+            boundary_id (int | str | None, optional): Boundary ID .If not provided or
+            set to `None`, will integrate across entire domain. If provided, will
+            integrate along the specified boundary only. Defaults to None.
 
         Returns:
-          Average value of f across the entire domain associated with it
+            float: Result of integration
         """
         self._check_present(f)
         measure = self._get_measure(f, boundary_id)
         return fd.assemble(f * measure)
 
     def l1norm(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
+        """Calculate the L1norm of a function over the domain associated with it
+
+        Args:
+            f (fd.Function): Function.
+            boundary_id (int | str | None, optional): Boundary ID .If not provided or
+            set to `None`, will integrate across entire domain. If provided, will
+            integrate along the specified boundary only. Defaults to None.
+
+        Returns:
+            float: L1 norm
+        """
+        self._check_present(f)
         self._check_present(f)
         measure = self._get_measure(f, boundary_id)
         return fd.assemble(abs(f) * measure)
 
     def l2norm(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
+        """Calculate the L2norm of a function over the domain associated with it
+
+        Args:
+            f (fd.Function): Function.
+            boundary_id (int | str | None, optional): Boundary ID .If not provided or
+            set to `None`, will integrate across entire domain. If provided, will
+            integrate along the specified boundary only. Defaults to None.
+
+        Returns:
+            float: L2 norm
+        """
         self._check_present(f)
         measure = self._get_measure(f, boundary_id)
         return fd.sqrt(fd.assemble(fd.dot(f, f) * measure))
 
     def rms(self, f: fd.Function) -> float:
+        """Calculate the RMS of a function over the domain associated with it
+
+        For the purposes of this function, RMS is defined as L2norm/volume
+
+        Args:
+            f (fd.Function): Function.
+            boundary_id (int | str | None, optional): Boundary ID .If not provided or
+            set to `None`, will integrate across entire domain. If provided, will
+            integrate along the specified boundary only. Defaults to None.
+
+        Returns:
+            float: RMS
+        """
         return self.l2norm(f) / fd.sqrt(self._function_contexts[f].volume)
 
 
@@ -531,5 +704,4 @@ class GIADiagnostics(BaseDiagnostics):
         return self.l1norm(self.get_radial_component(self.u), self.top_id)
 
     def integrated_displacement(self) -> float:
-        # return fd.assemble(self._get_radial_component(self.u) * self.ds_t)
         return self.integral(self.get_radial_component(self.u), self.top_id)
