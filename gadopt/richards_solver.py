@@ -48,7 +48,6 @@ iterative_richards_solver_parameters: dict[str, Any] = {
     "ksp_type": "bcgs",
     "pc_type": "bjacobi",
     "ksp_rtol": 1e-5,
-    "snes_view": None,
 }
 """Default iterative solver parameters for solution of Richards equation.
 
@@ -62,7 +61,6 @@ Note:
 
 direct_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
-    "snes_monitor": None,
     "snes_type": "newtonls",
     "ksp_type": "preonly",
     "pc_type": "lu",

@@ -17,6 +17,7 @@ References:
 import firedrake as fd
 import ufl
 from abc import ABC, abstractmethod
+from typing import Dict, Any
 
 
 class SoilCurve(ABC):
@@ -62,7 +63,7 @@ class SoilCurve(ABC):
         params.update(kwargs)
 
         # Convert all parameters to fd.Constant for UFL compatibility
-        self.parameters = {key: fd.Constant(value) for key, value in params.items()}
+        self.parameters = {key: value for key, value in params.items()}
         self._validate_parameters()
 
     @property
@@ -174,8 +175,8 @@ class HaverkampCurve(SoilCurve):
         for param in required_params:
             if param not in self.parameters:
                 raise ValueError(f"Missing required parameter: {param}")
-            if not isinstance(self.parameters[param], fd.Constant):
-                raise ValueError(f"Parameter {param} must be a fd.Constant")
+            #if not isinstance(self.parameters[param], fd.Constant):
+            #    raise ValueError(f"Parameter {param} must be a fd.Constant")
 
     def moisture_content(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
@@ -239,12 +240,12 @@ class VanGenuchtenCurve(SoilCurve):
         for param in required_params:
             if param not in self.parameters:
                 raise ValueError(f"Missing required parameter: {param}")
-            if not isinstance(self.parameters[param], fd.Constant):
-                raise ValueError(f"Parameter {param} must be a fd.Constant")
+            #if not isinstance(self.parameters[param], fd.Constant):
+            #    raise ValueError(f"Parameter {param} must be a fd.Constant")
 
         # Validate parameter ranges (check the value of the Constant)
-        if self.parameters['n'].values()[0] <= 1.0:
-            raise ValueError("Parameter n must be > 1.0")
+        #if self.parameters['n'].values()[0] <= 1.0:
+        #    raise ValueError("Parameter n must be > 1.0")
 
     def moisture_content(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
@@ -314,8 +315,8 @@ class ExponentialCurve(SoilCurve):
         for param in required_params:
             if param not in self.parameters:
                 raise ValueError(f"Missing required parameter: {param}")
-            if not isinstance(self.parameters[param], fd.Constant):
-                raise ValueError(f"Parameter {param} must be a fd.Constant")
+            #if not isinstance(self.parameters[param], fd.Constant):
+            #    raise ValueError(f"Parameter {param} must be a fd.Constant")
 
     def moisture_content(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """

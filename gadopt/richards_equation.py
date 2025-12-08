@@ -88,7 +88,8 @@ def richards_mass_term(
     # Mass coefficient
     mass_coeff = soil_curve.Ss * S + C
 
-    return inner(eq.test, mass_coeff * Dt(trial)) * eq.dx
+    #return inner(eq.test, mass_coeff * Dt(trial)) * eq.dx
+    return inner(eq.test, 1 * Dt(theta)) * eq.dx
 
 
 def richards_diffusion_term(
@@ -131,7 +132,7 @@ def richards_diffusion_term(
     F = inner(grad(eq.test), K * grad(trial)) * eq.dx
 
     # Interior penalty for DG
-    sigma = interior_penalty_factor(eq, shift=-1)
+    sigma = interior_penalty_factor(eq, shift=-0)
     if not is_continuous(eq.trial_space):
         sigma_int = sigma * avg(FacetArea(eq.mesh) / CellVolume(eq.mesh))
 
@@ -211,7 +212,7 @@ def richards_gravity_term(
     K = soil_curve.relative_permeability(trial)
 
     # Get mesh dimension and spatial coordinates
-    dim = eq.mesh.geometric_dimension
+    dim = eq.mesh.geometric_dimension()
     x = SpatialCoordinate(eq.mesh)
 
     # Gradient in vertical direction (last coordinate)
