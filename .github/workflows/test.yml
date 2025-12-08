@@ -153,6 +153,7 @@ jobs:
       - name: Run test
         id: run_tests
         run: |
+          firedrake-clean
           tsp --timeout -T 7200
           tsp --memprof
           . .venv/bin/activate
