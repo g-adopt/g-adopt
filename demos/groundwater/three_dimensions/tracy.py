@@ -6,7 +6,7 @@ Comparison to Tracy's two dimensional exact solution
 Here we compare numerical solutions with the exact solution derived in
     Tracy, 2006, Water Resources Research, Clean two- and three-dimensional solutions of Richards' equation for testing numerical solvers
     https://doi.org/10.1029/2005WR004638
-The simulation is performed on a square of side length L = 15.24 metres. Dirichlet boundaries conditions are imposed on the bottom, left and right boundaries $h = -L$. For the top boundary, we have
+The simulation is performed on a cube of side length L = 15.24 metres. Dirichlet boundaries conditions are imposed on the bottom, left and right boundaries $h = -L$. For the top boundary, we have
     $$h(x,z=L,t) = (1/alpha)*ln(exp(alpha*h_r) + h_0*(sin(pi*x/L)))$$
 where $\alpha=0.25$, $hr=-L$, and $h_0 =  1 - exp(alpha*h_r)$. For the initial condition, we use $h$ from Tracy's exact solution at $t=2000$. We compute the L2 norm of h_{numerical}-h_{exact}
 
