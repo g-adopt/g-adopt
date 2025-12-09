@@ -13,9 +13,9 @@ where $\alpha=0.25$, $hr=-L$, and $h_0 =  1 - exp(alpha*h_r)$. For the initial c
 """
 
 L = 15.24    # Domain length [m]
-nodes = 201  # Number of grid points in each direction
+nodes = 251  # Number of grid points in each direction
 
-dt = Constant(2500)
+dt = Constant(4000)
 t_final = 1e05
 
 mesh = RectangleMesh(nodes, nodes, L, L, name="mesh", quadrilateral=True)
@@ -78,17 +78,19 @@ richards_solver = RichardsSolver(
     h,
     soil_curve,
     delta_t=dt,
-    timestepper=ImplicitMidpoint,
+    timestepper=DIRK22,
     bcs=richards_bcs,
     solver_parameters="direct",
     quad_degree=5,
 )
 
 time = 0
+snes_iterations = 0
 while time < t_final:
 
     richards_solver.solve()
     time += float(dt)
+
 
 # Compute L2 norm of error
 hExact = exact_solution(X, t_final+offset)
