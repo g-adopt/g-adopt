@@ -31,18 +31,36 @@ jobs:
         with:
           lfs: true
 
+      - name: Add adaptivity to Firedrake
+        run: |
+          cd /opt/petsc
+          python3 /opt/firedrake/scripts/firedrake-configure \
+            --arch default --show-petsc-configure-options | \
+            xargs -L1 ./configure --with-make-np=8 --download-slepc \
+            --download-mmg --download-eigen --download-parmmg
+          make PETSC_DIR=/opt/petsc PETSC_ARCH=arch-firedrake-default all
+
       - name: Fetch LFS artifacts
         run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
           git lfs checkout
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+
+      - name: Fetch animate
+        uses: actions/checkout@v4
+        with:
+          repository: mesh-adaptation/animate
+          path: animate
+
       - name: Install dependencies
         run: |
           apt install -y xvfb gmsh gh unzip
 
           uv venv --system-site-packages
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
+          uv pip install -e ./animate
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |

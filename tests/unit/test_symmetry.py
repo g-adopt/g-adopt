@@ -70,7 +70,7 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
 
     T = fd.Function(solution_space.sub(1))
     boundary = gadopt.get_boundary_ids(mesh)
-    bids = list(vars(boundary).values())
+    bids = list(boundary)
     bcs = {bids[0]: {'un': 0}, bids[1]: {'normal_stress': 0}}
     # cylindrical/spherical meshes only have 2 boundaries
     # if we have more, let's test some more bc types
