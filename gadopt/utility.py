@@ -541,7 +541,7 @@ def get_boundary_ids(mesh) -> BoundaryIDNamespace:
 
     if mesh.topology_dm.hasLabel("Face Sets"):
         axis_extremes_order = [["left", "right"], ["bottom", "top"]]
-        dim = mesh.geometric_dimension
+        dim = mesh.geometric_dimension()
         plex_dim = mesh.topology_dm.getCoordinateDim()  # In an extruded mesh, this is different to the
         # firedrake-assigned geometric_dimension
         if dim == 3:
