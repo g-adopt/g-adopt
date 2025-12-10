@@ -427,9 +427,9 @@ for timestep in range(1, max_timesteps+1):
     displacement_max = gd.uv_max(boundary.top) * D
     log("Greatest (+ve) displacement", displacement_max)
     displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds), displacement_min])
-    disp_norm_L2surf = gd.l2_norm_surface()
+    disp_norm_L2surf = gd.l2_norm_top()
     log("L2 surface norm displacement", disp_norm_L2surf)
-    disp_norm_L1surf = gd.l1_norm_surface()
+    disp_norm_L1surf = gd.l1_norm_top()
     log("L1 surface norm displacement", disp_norm_L1surf)
 
     integrated_disp = gd.integrated_displacement()

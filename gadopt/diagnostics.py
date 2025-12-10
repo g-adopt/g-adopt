@@ -222,7 +222,7 @@ class BaseDiagnostics:
             else:
                 for i, subfunc in enumerate(func.subfunctions):
                     if not hasattr(self, f"{name}_{i}"):
-                        setattr(self, f"{name}_{i}", func)
+                        setattr(self, f"{name}_{i}", subfunc)
                         self._init_single_func(quad_degree, subfunc)
 
     def _init_single_func(self, quad_degree: int, func: fd.Function):
@@ -537,7 +537,6 @@ class BaseDiagnostics:
             float: L1 norm
         """
         self._check_present(f)
-        self._check_present(f)
         measure = self._get_measure(f, boundary_id)
         return fd.assemble(abs(f) * measure)
 
@@ -612,11 +611,11 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         u, p = z.subfunctions[:2]
         super().__init__(quad_degree, u=u, p=p, T=T)
 
-        self.top_id = top_id
         if bottom_id:
             self.ds_b = self._function_contexts[self.u].ds(bottom_id)
             self.bottom_surface = fd.assemble(fd.Constant(1) * self.ds_b)
         if top_id:
+            self.top_id = top_id
             self.ds_t = self._function_contexts[self.u].ds(top_id)
             self.top_surface = fd.assemble(fd.Constant(1) * self.ds_t)
 
@@ -694,10 +693,10 @@ class GIADiagnostics(BaseDiagnostics):
         "Maximum value of vertical component of velocity/displacement"
         return self.max(self.get_radial_component(self.u), boundary_id)
 
-    def l2_norm_surface(self) -> float:
+    def l2_norm_top(self) -> float:
         return self.l2norm(self.get_radial_component(self.u), self.top_id)
 
-    def l1_norm_surface(self) -> float:
+    def l1_norm_top(self) -> float:
         return self.l1norm(self.get_radial_component(self.u), self.top_id)
 
     def integrated_displacement(self) -> float:
