@@ -226,7 +226,7 @@ output_file = VTKFile("output.pvd")
 output_file.write(*stokes.subfunctions, psi, time=time_now)
 
 plog = ParameterLog("params.log", mesh)
-plog.log_str("step time dt u_rms entrainment")
+plog.log_str("step time dt u_rms conservation entrainment")
 
 gd = GeodynamicalDiagnostics(stokes, bottom_id=boundary.bottom, top_id=boundary.top)
 
@@ -256,8 +256,10 @@ while True:
     step += 1
     time_now += float(time_step)
 
+    # Calculate proportion of existing material relative to its original size
+    conservation = material_conservation(psi, material_size=material_area, side=0)
     # Calculate proportion of material entrained above a given height
-    buoy_entr = material_entrainment(
+    entrainment = material_entrainment(
         psi,
         material_size=material_area,
         entrainment_height=entrainment_height,
@@ -266,7 +268,10 @@ while True:
     )
 
     # Log diagnostics
-    plog.log_str(f"{step} {time_now} {float(time_step)} {gd.u_rms()} {buoy_entr}")
+    plog.log_str(
+        f"{step} {time_now} {float(time_step)} {gd.u_rms()} {conservation} "
+        f"{entrainment}"
+    )
 
     # Write output
     if time_now >= output_counter * output_frequency:

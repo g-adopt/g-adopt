@@ -227,9 +227,12 @@ output_file = VTKFile("output.pvd")
 output_file.write(*stokes.subfunctions, psi, time=time_now / myr_to_seconds)
 
 plog = ParameterLog("params.log", mesh)
-plog.log_str("step time dt u_rms slab_tip_depth")
+plog.log_str("step time dt u_rms conservation entrainment slab_tip_depth")
 
 gd = GeodynamicalDiagnostics(stokes)
+
+material_area = 2.1e6 * 1e5  # Area of tracked material in the domain
+entrainment_height = 5e5  # Height below which entrainment diagnostic is calculated
 # -
 
 # Finally, we initiate the time loop, which runs until the simulation end time is
@@ -254,11 +257,26 @@ while True:
     step += 1
     time_now += float(time_step)
 
-    # Log diagnostics
+    # Calculate proportion of existing material relative to its original size
+    conservation = material_conservation(psi, material_size=material_area, side=1)
+    # Calculate proportion of material entrained below a given height
+    entrainment = material_entrainment(
+        psi,
+        material_size=material_area,
+        entrainment_height=entrainment_height,
+        side=1,
+        direction="below",
+    )
+    # Determine maximal slab depth
     slab_tip_depth = (
         domain_dims[1] - min_max_height(psi, epsilon, side=1, mode="min")
     ) / 1e3
-    plog.log_str(f"{step} {time_now} {float(time_step)} {gd.u_rms()} {slab_tip_depth}")
+
+    # Log diagnostics
+    plog.log_str(
+        f"{step} {time_now} {float(time_step)} {gd.u_rms()} {conservation} "
+        f"{entrainment} {slab_tip_depth}"
+    )
 
     # Write output
     if time_now >= output_counter * output_frequency - 1e-16:
