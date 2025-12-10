@@ -25,7 +25,8 @@ from gadopt.utility import (
 
 from gadopt.demos.glacial_isostatic_adjustment.utils import (
     ice_sheet_disc,
-    setup_heterogenous_viscosity)
+    setup_heterogenous_viscosity
+)
 
 # We also import some helper functions for plotting and making animations associated
 # with this demo.

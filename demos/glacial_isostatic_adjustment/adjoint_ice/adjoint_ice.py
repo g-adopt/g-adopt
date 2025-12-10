@@ -91,7 +91,8 @@ from gadopt.inverse import *
 
 from gadopt.utility import (
     CombinedSurfaceMeasure,
-    initialise_background_field)
+    initialise_background_field
+)
 from gadopt.demos.glacial_isostatic_adjustment.utils import (
     ice_sheet_disc,
     setup_heterogenous_viscosity
@@ -121,7 +122,7 @@ print(tape.get_blocks())
 continue_annotation()
 
 # In this tutorial we are going to load the mesh from the checkpoint created by the
-# [the forward case](../2d_cylindrical_lvv) in the previous tutorial. This makes it
+# [the forward case](../2d_cylindrical_lvv). This makes it
 # easier to load the synthetic data from the previous tutorial for our 'twin'
 # experiment.
 
@@ -657,7 +658,7 @@ ice_thickness_ub.assign(5)
 bounds = [ice_thickness_lb, ice_thickness_ub]
 # -
 
-# Next we setup a pyadjoint minimization problem. We tweak GADOPT's default minimisation
+# Next we setup a pyadjoint minimization problem. We tweak G-ADOPT's default minimisation
 # parameters (found in `gadopt/inverse.py`) for our problem. We limit the number of
 # iterations to 5 just so that the demo is quick to run. (N.b. 20 iterations gives a
 # very accurate answer.)
