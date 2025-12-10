@@ -6,7 +6,6 @@
 # with the quasi 1D demo based on Figure 2.7.
 
 from gadopt import *
-from gadopt.time_stepper import DIRK33
 
 nx, ny = 10, 10
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)
