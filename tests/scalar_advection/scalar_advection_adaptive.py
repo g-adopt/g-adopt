@@ -104,8 +104,7 @@ step = 0
 dt_values = []  # Store all timestep values for testing
 while t < T:
     # Set maximum dt to prevent overshooting final time
-    if hasattr(adv_solver.ts, 'dt_max'):
-        adv_solver.ts.dt_max = T - t
+    adv_solver.ts.stepper.dt_max = T - t
 
     # Advance with adaptive timestepping
     adv_solver.solve(t=t)
