@@ -61,9 +61,9 @@ class FunctionContext:
         """Initialises the FunctionContext object for `func`
 
         Args:
-            quad_degree (int): quad degree used to construct measures on
-                               domains associated with `func`
-            func (fd.Function):
+            quad_degree: quad degree used to construct measures on
+                         domains associated with `func`
+            func: Function
         """
         self._function = func
         self._quad_degree = quad_degree
@@ -125,11 +125,11 @@ class FunctionContext:
         the halo region of the domain.
 
         Args:
-            boundary_id (int): Integer ID of the domain boundary
+            boundary_id: Integer ID of the domain boundary
 
         Returns:
-            list[int]: List of integers corresponding to nodes on the boundary identified by
-          `boundary_id`
+            List of integers corresponding to nodes on the boundary identified by
+            `boundary_id`
         """
         bc = fd.DirichletBC(self.function_space, 0, boundary_id)
         return [n for n in bc.nodes if n < self.function_space.dof_dset.size]
@@ -163,9 +163,9 @@ class BaseDiagnostics:
         remaining keyword arguments through to `register_functions`.
 
         Args:
-            quad_degree (int): The quadrature degree for the measures held by this object
-            **funcs (fd.Function | None): key-value pairs of Firedrake functions to associate
-            with this instance
+            quad_degree: The quadrature degree for the measures held by this object
+            **funcs: key-value pairs of Firedrake functions to associate with this
+            instance
         """
         self._function_contexts: dict[
             fd.Function | ufl.core.operator.Operator, FunctionContext
@@ -202,11 +202,11 @@ class BaseDiagnostics:
         <class 'firedrake.function.Function'>
 
         Args:
-            quad_degree (int | None, optional): The quadrature degree for the measures
-            to be used by this function. If `None`, the `quad_degree` passed at object
+            quad_degree (optional): The quadrature degree for the measures to be used
+            by this function. If `None`, the `quad_degree` passed at object
             instantiation time is used. Defaults to None.
-            **funcs (fd.Function | None): key-value pairs of Firedra functions to associate
-            with this instance
+            **funcs: key-value pairs of Firedrake functions to associate with this
+            instance
         """
         if quad_degree is None:
             quad_degree = self._quad_degree
@@ -242,14 +242,14 @@ class BaseDiagnostics:
         `Function` objects.
 
         Args:
-            func_or_op (ufl.core.expr.Expr): The UFL expression to search through
+            func_or_op: The UFL expression to search through
 
         Raises:
             TypeError: An object that was neither a UFL Operator or UFL Terminal
             was encountered
 
         Returns:
-            set[fd.Function]: The set of found Firedrake Functions
+            The set of found Firedrake Functions
         """
         if isinstance(func_or_op, fd.Function):
             return {func_or_op}
@@ -273,7 +273,7 @@ class BaseDiagnostics:
         in this BaseDiagnostics instance.
 
         Args:
-            func_or_op (ufl.core.expr.Expr): The UFL expression to check
+            func_or_op: The UFL expression to check
 
         Raises:
             KeyError: The functions associated with the expression were not found in
@@ -306,11 +306,11 @@ class BaseDiagnostics:
         """Check if a provided boundary ID is valid.
 
         Args:
-            f (fd.Function): Function to check
-            boundary_id (int | str | None, optional): The boundary ID to check. If set
-            to `None`, assume we're performing a volume integral, so no boundary ID is
-            necessary. Otherwise check the boundary ID against those derived from the
-            mesh belonging to this instance. Defaults to None.
+            f: Function to check
+            boundary_id (optional): The boundary ID to check. If set to `None`,
+            assume we're performing a volume integral, so no boundary ID is necessary.
+            Otherwise check the boundary ID against those derived from the mesh
+            belonging to this instance. Defaults to None.
 
         Raises:
             KeyError: Mesh does not have a boundary corresponding to `boundary_id`
@@ -332,14 +332,13 @@ class BaseDiagnostics:
         boundary. If not, return the volume measure.
 
         Args:
-            func_or_op (fd.Function | ufl.core.operator.Operator): UFL Expression to
-            check
-            boundary_id (int | str | None, optional): Boundary ID. If not provided or
-            set to None, returns the volume measure. Defaults to None.
+            func_or_op: UFL Expression to check
+            boundary_id (optional): Boundary ID. If not provided or set to None,
+            returns the volume measure. Defaults to None.
 
         Returns:
-            fd.Measure: The surface measure corresponding to the provided boundary ID
-            or the volume measure.
+            The surface measure corresponding to the provided boundary ID or the
+            volume measure.
         """
         self._check_boundary_id(func_or_op, boundary_id)
         for func in self._extract_functions(func_or_op):
@@ -361,15 +360,15 @@ class BaseDiagnostics:
         function space used to construct the UFL expression.
 
         Args:
-            op (ufl.core.operator.Operator): A UFL expression
+            op: A UFL expression
 
         Raises:
             TypeError: The function space detected for the UFL operator is not one of a
             Scalar, Vector or Tensor function space.
 
         Returns:
-            fd.Function: A function on which to interpolate the diagnostic quantity
-            described by `op`.
+            A function on which to interpolate the diagnostic quantity described by
+            `op`.
         """
 
         if op not in self._function_contexts:
@@ -419,11 +418,10 @@ class BaseDiagnostics:
         UFL expression only needs to be constructed once per run.
 
         Args:
-            f (fd.Function): Function
+            f: Function
 
         Returns:
-            ufl.core.operator.Operator: UFL expression for the vertical component of
-            `f`
+            UFL expression for the vertical component of `f`
         """
         self._check_present(f)
         self._check_dim_valid(f)  # Can't take radial component of a scalar function
@@ -449,17 +447,16 @@ class BaseDiagnostics:
         ID is provided, calculate the min/max along that boundary only.
 
         Args:
-            func_or_op (fd.Function | ufl.core.operator.Operator): UFL Expression on
-            on which to find min/max
-            boundary_id (int | None, optional): Boundary ID. If not provided or set to
-            `None`, will find min/max across entire domain. Defaults to None.
-            dim (int | None, optional): For vector functions, the dimension to over
-            which to calculate min/max. If not provided or set to `None`, calculate
-            min/max across all components. Defaults to None.
+            func_or_op: UFL Expression on on which to find min/max
+            boundary_id (optional): Boundary ID. If not provided or set to `None`,
+            will find min/max across entire domain. Defaults to None.
+            dim (optional): For vector functions, the dimension to over which to
+            calculate min/max. If not provided or set to `None`, calculate min/max
+            across all components. Defaults to None.
 
         Returns:
-            np.ndarray[float, float]: The minimum and negative maximum value of the
-            function over the specified domain
+            The minimum and negative maximum value of the function over the
+            specified domain
         """
         self._check_present(func_or_op)
         if isinstance(func_or_op, ufl.core.operator.Operator):
@@ -515,13 +512,13 @@ class BaseDiagnostics:
         """Calculate the integral of a function over the domain associated with it
 
         Args:
-            f (fd.Function): Function.
-            boundary_id (int | str | None, optional): Boundary ID .If not provided or
-            set to `None`, will integrate across entire domain. If provided, will
-            integrate along the specified boundary only. Defaults to None.
+            f: Function.
+            boundary_id (optional): Boundary ID. If not provided or set to `None`
+            will integrate across entire domain. If provided, will integrate along
+            the specified boundary only. Defaults to None.
 
         Returns:
-            float: Result of integration
+            Result of integration
         """
         self._check_present(f)
         measure = self._get_measure(f, boundary_id)
@@ -531,10 +528,10 @@ class BaseDiagnostics:
         """Calculate the L1norm of a function over the domain associated with it
 
         Args:
-            f (fd.Function): Function.
-            boundary_id (int | str | None, optional): Boundary ID .If not provided or
-            set to `None`, will integrate across entire domain. If provided, will
-            integrate along the specified boundary only. Defaults to None.
+            f: Function.
+            boundary_id (optional): Boundary ID .If not provided or set to `None`,
+            will integrate across entire domain. If provided, will integrate along
+            the specified boundary only. Defaults to None.
 
         Returns:
             float: L1 norm
@@ -548,10 +545,10 @@ class BaseDiagnostics:
         """Calculate the L2norm of a function over the domain associated with it
 
         Args:
-            f (fd.Function): Function.
-            boundary_id (int | str | None, optional): Boundary ID .If not provided or
-            set to `None`, will integrate across entire domain. If provided, will
-            integrate along the specified boundary only. Defaults to None.
+            f: Function.
+            boundary_id (optional): Boundary ID. If not provided or set to `None`,
+            will integrate across entire domain. If provided, will integrate along
+            the specified boundary only. Defaults to None.
 
         Returns:
             float: L2 norm
@@ -566,10 +563,10 @@ class BaseDiagnostics:
         For the purposes of this function, RMS is defined as L2norm/volume
 
         Args:
-            f (fd.Function): Function.
-            boundary_id (int | str | None, optional): Boundary ID .If not provided or
-            set to `None`, will integrate across entire domain. If provided, will
-            integrate along the specified boundary only. Defaults to None.
+            f: Function.
+            boundary_id (optional): Boundary ID. If not provided or set to `None`,
+            will integrate across entire domain. If provided, will integrate along
+            the specified boundary only. Defaults to None.
 
         Returns:
             float: RMS
