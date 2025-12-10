@@ -27,6 +27,7 @@
     - [2d_cylindrical](glacial_isostatic_adjustment/2d_cylindrical.ipynb)
     - [2d_cylindrical_lvv](glacial_isostatic_adjustment/2d_cylindrical_lvv.ipynb)
     - [adjoint_ice](glacial_isostatic_adjustment/adjoint_ice.ipynb)
+    - [adjoint_viscosity](glacial_isostatic_adjustment/adjoint_viscosity.ipynb)
 - Multi-material
     - Sources of buoyancy
         - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
