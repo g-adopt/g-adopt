@@ -19,6 +19,7 @@ dependencies = [
   "pandas",
   "shapely",
   "vtk",
+  "irksome @ git+https://github.com/firedrakeproject/irksome",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +27,7 @@ demos = ["assess", "gadopt-demo-utils @ git+https://github.com/g-adopt/gadopt-de
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]
-packages = ["gadopt", "gadopt.gplates"]
+packages = ["gadopt", "gadopt.gplates", "gadopt.demos"]
+package-dir = { "gadopt.demos" = "demos" }
 
 [tool.setuptools_scm]
