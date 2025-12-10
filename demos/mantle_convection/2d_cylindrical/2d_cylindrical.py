@@ -166,7 +166,6 @@ stokes_solver = StokesSolver(
     T,
     bcs=stokes_bcs,
     solver_parameters="iterative",
-    constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,

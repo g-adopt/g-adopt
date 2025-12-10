@@ -403,8 +403,8 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
         if self.constant_jacobian:
             warn(
-                "Constant Jacobian specified for the Stokes system; the viscosity must "
-                " not vary in time."
+                "Constant Jacobian specified for the Stokes system; please ensure that"
+                "the viscosity does not vary in time."
             )
 
             trial = fd.TrialFunction(self.solution_space)
