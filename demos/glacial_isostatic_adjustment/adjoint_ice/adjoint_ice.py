@@ -52,8 +52,8 @@
 # independent of the number of parameters! In practice, the cost associated with
 # generating the adjoint model is usually a fraction of the (nonlinear) forward model.
 # If you are interested to learn more about Adjoint models, please see this nice
-# introduction from the Dolfin-Adjoint
-# website [https://www.dolfin-adjoint.org/en/latest/documentation/maths/index.html#dolfin-adjoint-mathematical-background].
+# [introduction](https://www.dolfin-adjoint.org/en/latest/documentation/maths/)
+# from the Dolfin-Adjoint website.
 #
 # Once we have the adjoint model, we can use the gradient information to speed up our
 # inversion by finding efficient search directions to adjust the unknown input
@@ -352,7 +352,6 @@ iterative_parameters = {"mat_type": "matfree",
                         "snes_type": "ksponly",
                         "ksp_type": "gmres",
                         "ksp_rtol": 1e-5,
-                        "ksp_converged_reason": None,
                         "pc_type": "python",
                         "pc_python_type": "firedrake.AssembledPC",
                         "assembled_pc_type": "gamg",
