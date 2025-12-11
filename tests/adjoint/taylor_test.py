@@ -3,14 +3,16 @@ This standalone script tests the robustness of the derivatives
 using the Taylor remainder convergence test.
 """
 
-from gadopt import *
-from gadopt.inverse import *
-from mpi4py import MPI
-import numpy as np
 import sys
+import warnings
 from pathlib import Path
 
+import numpy as np
 from cases import cases, schedules
+from mpi4py import MPI
+
+from gadopt import *
+from gadopt.inverse import *
 
 ds_t = ds_t(degree=6)
 dx = dx(degree=6)
@@ -100,14 +102,18 @@ def rectangle_taylor_test(case, scheduler_name):
 
     # Setup Energy and Stokes solver
     energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-    stokes_solver = StokesSolver(
-        z,
-        approximation,
-        T,
-        bcs=stokes_bcs,
-        nullspace=Z_nullspace,
-        transpose_nullspace=Z_nullspace,
-    )
+    with warnings.catch_warnings():  # Suppress constant Jacobian warning
+        warnings.simplefilter("ignore")
+
+        stokes_solver = StokesSolver(
+            z,
+            approximation,
+            T,
+            bcs=stokes_bcs,
+            constant_jacobian=True,
+            nullspace=Z_nullspace,
+            transpose_nullspace=Z_nullspace,
+        )
 
     initial_timestep = 0 if case in ["Tobs", "uobs"] else timesteps - 1
 
