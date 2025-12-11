@@ -55,16 +55,15 @@ class FunctionContext:
     Typical usage example:
 
       function_contexts[F] = FunctionContext(quad_degree,F)
+
+    Args:
+        quad_degree: quad degree used to construct measures on
+                     domains associated with `func`
+        func: Function
+
     """
 
     def __init__(self, quad_degree: int, func: fd.Function):
-        """Initialises the FunctionContext object for `func`
-
-        Args:
-            quad_degree: quad degree used to construct measures on
-                         domains associated with `func`
-            func: Function
-        """
         self._function = func
         self._quad_degree = quad_degree
 
@@ -154,6 +153,11 @@ class BaseDiagnostics:
     `diag._function_contexts` dict.
 
     This class is intended to be subclassed by domain-specific diagnostic classes
+
+    Args:
+        quad_degree: The quadrature degree for the measures held by this object
+        **funcs: key-value pairs of Firedrake functions to associate with this
+        instance
     """
 
     def __init__(self, quad_degree: int, **funcs: fd.Function | None):
@@ -161,11 +165,6 @@ class BaseDiagnostics:
 
         Sets the `quad_degree` for measures used by this object and passes the
         remaining keyword arguments through to `register_functions`.
-
-        Args:
-            quad_degree: The quadrature degree for the measures held by this object
-            **funcs: key-value pairs of Firedrake functions to associate with this
-            instance
         """
         self._function_contexts: dict[
             fd.Function | ufl.core.operator.Operator, FunctionContext
@@ -659,6 +658,28 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
 
 
 class GIADiagnostics(BaseDiagnostics):
+    """Typical simulation diagnostics used in glacial isostatic adjustment simulations.
+
+    Arguments:
+      d:            Firedrake function for displacement
+      bottom_id:    Bottom boundary identifier
+      top_id:       Top boundary identifier
+      quad_degree:  Degree of polynomial quadrature approximation
+
+    Note:
+      All diagnostics are returned as floats.
+
+    Functions:
+      u_rms: Root-mean squared displacement
+      u_rms_top: Root-mean squared displacement along the top boundary
+      ux_max: Maximum displacement (first component, optionally over a given boundary)
+      uv_min: Minimum vertical displacement, optionally over a given boundary
+      uv_max: Maximum vertical displacement, optionally over a given boundary
+      l2_norm_top: L2 norm of displacement on top surface
+      l1_norm_top: L1 norm of displacement on top surface
+      integrated_displacement: integral of displacement on top surface
+    """
+
     def __init__(
         self,
         u: fd.Function,
