@@ -615,16 +615,21 @@ class LevelSetSolver(SolverConfigurationMixin):
         self.step = 0
 
     def update_gradient(self) -> None:
-        """Calls the gradient solver.
-
-        Can be provided as a forcing to time integrators.
-        """
+        """Calls the gradient solver to update the level-set gradient."""
         self.gradient_solver.solve()
 
     def reinitialise(self) -> None:
-        """Performs reinitialisation steps."""
+        """Performs reinitialisation steps.
+
+        Note:
+            The gradient of the level-set function is updated between reinitialisation
+            steps by explicitly calling `update_gradient()` before each advance.
+        """
         for _ in range(self.reini_kwargs["steps"]):
-            self.reini_integrator.advance(update_forcings=self.update_gradient)
+            # Update gradient based on current level-set solution
+            self.update_gradient()
+            # Advance one reinitialisation step
+            self.reini_integrator.advance()
 
     def solve(
         self,
