@@ -6,9 +6,9 @@ relevant parameters and call individual class methods to compute associated diag
 
 import firedrake as fd
 import numpy as np
-import ufl.core.expr
-import ufl.core.operator
-import ufl.core.terminal
+from ufl.core.expr import Expr
+from ufl.core.operator import Operator
+from ufl.core.terminal import Terminal
 from mpi4py import MPI
 from functools import cache, cached_property
 
@@ -54,11 +54,11 @@ class FunctionContext:
 
     Typical usage example:
 
-      function_contexts[F] = FunctionContext(quad_degree,F)
+      function_contexts[F] = FunctionContext(quad_degree, F)
 
     Args:
-        quad_degree: quad degree used to construct measures on
-                     domains associated with `func`
+        quad_degree: Quadrature degree to use when approximating integrands involving
+        `func`
         func: Function
 
     """
@@ -113,6 +113,11 @@ class FunctionContext:
         """The boundary IDs of the mesh associated with this instance"""
         return get_boundary_ids(self.mesh)
 
+    @cached_property
+    def surface_area(self):
+        """The surface area of all surfaces of the mesh belonging to this instance"""
+        return {id: get_volume(self.ds(id)) for id in self.boundary_ids}
+
     @cache
     def get_boundary_nodes(self, boundary_id: int) -> list[int]:
         """Return the list of nodes on the boundary owned by this process
@@ -155,9 +160,9 @@ class BaseDiagnostics:
     This class is intended to be subclassed by domain-specific diagnostic classes
 
     Args:
-        quad_degree: The quadrature degree for the measures held by this object
-        **funcs: key-value pairs of Firedrake functions to associate with this
-        instance
+        quad_degree: Quadrature degree to use when approximating integrands managed by
+        this object
+        **funcs: Firedrake functions to associate with this instance
     """
 
     def __init__(self, quad_degree: int, **funcs: fd.Function | None):
@@ -166,9 +171,7 @@ class BaseDiagnostics:
         Sets the `quad_degree` for measures used by this object and passes the
         remaining keyword arguments through to `register_functions`.
         """
-        self._function_contexts: dict[
-            fd.Function | ufl.core.operator.Operator, FunctionContext
-        ] = {}
+        self._function_contexts: dict[fd.Function | Operator, FunctionContext] = {}
         self._quad_degree = quad_degree
         self.register_functions(**funcs)
 
@@ -182,7 +185,7 @@ class BaseDiagnostics:
         named for the key of the keyword argument. i.e:
 
         ```
-        > diag.register_functions(self,F=F)
+        > diag.register_functions(self, F=F)
         > type(diag.F)
         <class 'firedrake.function.Function'>
         ```
@@ -192,7 +195,7 @@ class BaseDiagnostics:
         with an additional number to denote the index of the subfunction i.e.:
 
         ```
-        > diag.register_functions(self,F)
+        > diag.register_functions(self, F)
         > type(diag.F)
         AttributeError: 'BaseDiagnostics' object has no attribute 'F'
         > type(diag.F_0)
@@ -231,10 +234,10 @@ class BaseDiagnostics:
     #
     # Section 1. Core functions whose output remains constant throughout a model run
     #            Generally intended for internal use only, though can be used to
-    #            cache common UFL expressions (e.g. get_radial_component)
+    #            cache common UFL expressions (e.g. get_upward_component)
     #
     @cache
-    def _extract_functions(self, func_or_op: ufl.core.expr.Expr) -> set[fd.Function]:
+    def _extract_functions(self, func_or_op: Expr) -> set[fd.Function]:
         """Extract all Firedrake functions associated with a UFL expression.
 
         This function recursively searches through any UFL expression for Firedrake
@@ -252,19 +255,19 @@ class BaseDiagnostics:
         """
         if isinstance(func_or_op, fd.Function):
             return {func_or_op}
-        elif isinstance(func_or_op, ufl.core.operator.Operator):
+        elif isinstance(func_or_op, Operator):
             funcs = set()
             for f in func_or_op.ufl_operands:
                 funcs |= self._extract_functions(f)
             return funcs
-        elif isinstance(func_or_op, ufl.core.terminal.Terminal):
+        elif isinstance(func_or_op, Terminal):
             # Some other UFL object
             return set()
         else:
             raise TypeError("Invalid type")
 
     @cache
-    def _check_present(self, func_or_op: ufl.core.expr.Expr) -> None:
+    def _check_present(self, func_or_op: Expr) -> None:
         """Check if a Firedrake function is known to this instance.
 
         Determine if a function is present in this BaseDiagnostics instance. If a UFL
@@ -285,7 +288,7 @@ class BaseDiagnostics:
                 )
 
     @cache
-    def _check_dim_valid(self, f: ufl.core.expr.Expr) -> None:
+    def _check_dim_valid(self, f: Expr) -> None:
         """
         Determine if the 'dim' argument can be used when searching for an expression
         min/max (i.e. if f is a vector/tensor function).
@@ -295,13 +298,11 @@ class BaseDiagnostics:
         # https://github.com/firedrakeproject/ufl/blob/master/ufl/core/expr.py#L290
         if not (f.ufl_shape or f.ufl_free_indices):
             raise TypeError(
-                "Requested a min/max over function dimension for a scalar function"
+                "Requested a min/max over function component but the function is scalar"
             )
 
     @cache
-    def _check_boundary_id(
-        self, f: fd.Function, boundary_id: int | str | None = None
-    ) -> None:
+    def _check_boundary_id(self, f: fd.Function, boundary_id: int | str | None) -> None:
         """Check if a provided boundary ID is valid.
 
         Args:
@@ -309,7 +310,7 @@ class BaseDiagnostics:
             boundary_id (optional): The boundary ID to check. If set to `None`,
             assume we're performing a volume integral, so no boundary ID is necessary.
             Otherwise check the boundary ID against those derived from the mesh
-            belonging to this instance. Defaults to None.
+            belonging to this instance.
 
         Raises:
             KeyError: Mesh does not have a boundary corresponding to `boundary_id`
@@ -321,9 +322,7 @@ class BaseDiagnostics:
 
     @cache
     def _get_measure(
-        self,
-        func_or_op: fd.Function | ufl.core.operator.Operator,
-        boundary_id: int | str | None = None,
+        self, func_or_op: fd.Function | Operator, boundary_id: int | str | None = None
     ) -> fd.Measure:
         """Get the integration measure associated with this UFL expression.
 
@@ -348,7 +347,7 @@ class BaseDiagnostics:
                 return self._function_contexts[func].ds(boundary_id)
 
     @cache
-    def _get_func_for_op(self, op: ufl.core.operator.Operator) -> fd.Function:
+    def _get_func_for_op(self, op: Operator) -> fd.Function:
         """Return a function on which to interpolate a UFL operator.
 
         In some cases, UFL operators need to be interpolated onto a function in order
@@ -409,10 +408,10 @@ class BaseDiagnostics:
         return self._function_contexts[op].function
 
     @cache
-    def get_radial_component(self, f: fd.Function) -> ufl.core.operator.Operator:
-        """Get the radial component of a function.
+    def get_upward_component(self, f: fd.Function) -> Operator:
+        """Get the upward (against gravity) component of a function.
 
-        Returns a UFL expression for the radial component of a function. Uses the
+        Returns a UFL expression for the upward component of a function. Uses the
         G-ADOPT `vertical_component` function and caches the result such that the
         UFL expression only needs to be constructed once per run.
 
@@ -423,7 +422,7 @@ class BaseDiagnostics:
             UFL expression for the vertical component of `f`
         """
         self._check_present(f)
-        self._check_dim_valid(f)  # Can't take radial component of a scalar function
+        self._check_dim_valid(f)  # Can't take upward component of a scalar function
         return vertical_component(f)
 
     #
@@ -433,7 +432,7 @@ class BaseDiagnostics:
 
     def _minmax(
         self,
-        func_or_op: fd.Function | ufl.core.operator.Operator,
+        func_or_op: fd.Function | Operator,
         boundary_id: int | None = None,
         dim: int | None = None,
     ) -> np.ndarray[float, float]:
@@ -458,7 +457,7 @@ class BaseDiagnostics:
             specified domain
         """
         self._check_present(func_or_op)
-        if isinstance(func_or_op, ufl.core.operator.Operator):
+        if isinstance(func_or_op, Operator):
             f = self._get_func_for_op(func_or_op)
             f.interpolate(func_or_op)
         elif isinstance(func_or_op, fd.Function):
@@ -485,7 +484,7 @@ class BaseDiagnostics:
 
     def min(
         self,
-        func_or_op: fd.Function | ufl.core.operator.Operator,
+        func_or_op: fd.Function | Operator,
         boundary_id: int | None = None,
         dim: int | None = None,
     ) -> float:
@@ -497,7 +496,7 @@ class BaseDiagnostics:
 
     def max(
         self,
-        func_or_op: fd.Function | ufl.core.operator.Operator,
+        func_or_op: fd.Function | Operator,
         boundary_id: int | None = None,
         dim: int | None = None,
     ) -> float:
@@ -586,8 +585,8 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
       All diagnostics are returned as floats.
 
     Functions:
-      u_rms: Root-mean squared velocity
-      u_rms_top: Root-mean squared velocity along the top boundary
+      u_rms: Root-mean-square velocity
+      u_rms_top: Root-mean-square velocity along the top boundary
       Nu_top: Nusselt number at the top boundary
       Nu_bottom: Nusselt number at the bottom boundary
       T_avg: Average temperature in the domain
@@ -611,12 +610,11 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         super().__init__(quad_degree, u=u, p=p, T=T)
 
         if bottom_id:
+            self.bottom_id = bottom_id
             self.ds_b = self._function_contexts[self.u].ds(bottom_id)
-            self.bottom_surface = fd.assemble(fd.Constant(1) * self.ds_b)
         if top_id:
             self.top_id = top_id
             self.ds_t = self._function_contexts[self.u].ds(top_id)
-            self.top_surface = fd.assemble(fd.Constant(1) * self.ds_t)
 
     def u_rms(self):
         return self.rms(self.u)
@@ -631,7 +629,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
                 fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal)
                 * self.ds_t
             )
-            / self.top_surface
+            / self._function_contexts[self.T].surface_area[self.top_id]
         )
 
     def Nu_bottom(self, scale: float = 1.0):
@@ -641,7 +639,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
                 fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal)
                 * self.ds_b
             )
-            / self.bottom_surface
+            / self._function_contexts[self.T].surface_area[self.bottom_id]
         )
 
     def T_avg(self):
@@ -670,8 +668,8 @@ class GIADiagnostics(BaseDiagnostics):
       All diagnostics are returned as floats.
 
     Functions:
-      u_rms: Root-mean squared displacement
-      u_rms_top: Root-mean squared displacement along the top boundary
+      u_rms: Root-mean-square displacement
+      u_rms_top: Root-mean-square displacement along the top boundary
       ux_max: Maximum displacement (first component, optionally over a given boundary)
       uv_min: Minimum vertical displacement, optionally over a given boundary
       uv_max: Maximum vertical displacement, optionally over a given boundary
@@ -708,17 +706,17 @@ class GIADiagnostics(BaseDiagnostics):
 
     def uv_min(self, boundary_id: int | None = None) -> float:
         "Minimum value of vertical component of velocity/displacement"
-        return self.min(self.get_radial_component(self.u), boundary_id)
+        return self.min(self.get_upward_component(self.u), boundary_id)
 
     def uv_max(self, boundary_id: int | None = None) -> float:
         "Maximum value of vertical component of velocity/displacement"
-        return self.max(self.get_radial_component(self.u), boundary_id)
+        return self.max(self.get_upward_component(self.u), boundary_id)
 
     def l2_norm_top(self) -> float:
-        return self.l2norm(self.get_radial_component(self.u), self.top_id)
+        return self.l2norm(self.get_upward_component(self.u), self.top_id)
 
     def l1_norm_top(self) -> float:
-        return self.l1norm(self.get_radial_component(self.u), self.top_id)
+        return self.l1norm(self.get_upward_component(self.u), self.top_id)
 
     def integrated_displacement(self) -> float:
-        return self.integral(self.get_radial_component(self.u), self.top_id)
+        return self.integral(self.get_upward_component(self.u), self.top_id)

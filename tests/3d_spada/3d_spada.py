@@ -298,7 +298,7 @@ if OUTPUT:
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max uv_min disp_min disp_max"
+    "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
 )
 gd = GIADiagnostics(u, boundary.bottom, boundary.top)
 
@@ -341,7 +341,7 @@ for timestep in range(1, max_timesteps+1):
     # Log diagnostics:
     plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uv_min(boundary.top)} {displacement_min*D} {displacement_max*D}")
+                 f"{displacement_min*D} {displacement_max*D}")
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)
