@@ -608,9 +608,8 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 # be outputting the timestep number, the time, the timestep size, the RMS displacement,
 # the RMS displacement at the surface of the domain, the maximum x-component of
 # displacement at the domains surface, the minimum vertical component of displacement
-# at the surface of the domain. These are computed using the GeodynamicalDiagnostics
-# class, which takes in the displacement function and density alongside bottom and
-# top boundary IDs.
+# at the surface of the domain. These are computed using the GIADiagnostics class,
+# which takes in the displacement function alongside bottom and top boundary IDs.
 
 # +
 plog = ParameterLog("params.log", mesh)
@@ -618,7 +617,7 @@ plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max uv_min"
 )
 
-gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
+gd = GIADiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
 # Now let's run the simulation! We are going to control the ice thickness using
