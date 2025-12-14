@@ -173,6 +173,7 @@ class BaseDiagnostics:
         """
         self._function_contexts: dict[fd.Function | Operator, FunctionContext] = {}
         self._quad_degree = quad_degree
+        self._mixed_functions: list[str] = []
         self.register_functions(**funcs)
 
     def register_functions(
@@ -197,7 +198,7 @@ class BaseDiagnostics:
         ```
         > diag.register_functions(self, F)
         > type(diag.F)
-        AttributeError: 'BaseDiagnostics' object has no attribute 'F'
+        AttributeError: 'Requested 'F', which lives on a mixed space. Instead, access subfunctions via F_0, F_1, ..."
         > type(diag.F_0)
         <class 'firedrake.function.Function'>
         > type(diag.F_1)
@@ -222,6 +223,7 @@ class BaseDiagnostics:
                     setattr(self, name, func)
                     self._init_single_func(quad_degree, func)
             else:
+                self._mixed_functions.append(name)
                 for i, subfunc in enumerate(func.subfunctions):
                     if not hasattr(self, f"{name}_{i}"):
                         setattr(self, f"{name}_{i}", subfunc)
@@ -230,6 +232,14 @@ class BaseDiagnostics:
     def _init_single_func(self, quad_degree: int, func: fd.Function):
         """Create a FunctionContext for a single function"""
         self._function_contexts[func] = FunctionContext(quad_degree, func)
+
+    def __getattr__(self, name: str):
+        if name in self._mixed_functions:
+            subfn_string = ", ".join([i for i in dir(self) if i.startswith(name + "_")])
+            raise AttributeError(
+                f"Requested '{name}', which lives on a mixed space. Instead, access subfunctions via {subfn_string}"
+            )
+        return super().__getattribute__(name)
 
     #
     # Section 1. Core functions whose output remains constant throughout a model run
