@@ -237,7 +237,7 @@ class BaseDiagnostics:
         if name in self._mixed_functions:
             subfn_string = ", ".join([i for i in dir(self) if i.startswith(name + "_")])
             raise AttributeError(
-                f"Requested '{name}', which lives on a mixed space. Instead, access subfunctions via {subfn_string}"
+                f"Requested '{name}', which lives in a mixed space. Instead, access subfunctions via {subfn_string}"
             )
         return super().__getattribute__(name)
 
