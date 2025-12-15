@@ -135,12 +135,12 @@ plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 # -
 
-# We can now setup and solve the variational problem, for both the energy and Stokes equations,
-# passing in the approximation configured above. Note that given viscosity varies with both
-# space and time, we can no longer specify the keyword constant_jacobian = True. We also make
-# the solver aware of this spatial and temporal variation using the mu keyword. The latter is
-# particularly relevant for iterative solvers and preconditioners that can make use of this
-# information to improve convergence.
+# We can now set up and solve the variational problem, for both the energy and Stokes
+# equations, passing in the approximation configured above. Note that given viscosity
+# (as provided above to our approximation) varies with both space and time, it would be
+# erroneous to specify `constant_jacobian=True`. Under the hood, solvers can access the
+# viscosity from the approximation and provide it to iterative solvers and
+# preconditioners that can make use of it to improve convergence.
 
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
