@@ -621,6 +621,10 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
         viscosity: Function | Number | list,
         *,
         bulk_shear_ratio: Function | Number = 1,
+        power_law: bool = False,
+        exponent: Number = 3,
+        transition_stress: Function | Number = None,
+        background_stress: Function | Number = 0,
         **kwargs,
     ):
         self.bulk_modulus = ensure_constant(bulk_modulus)
@@ -645,6 +649,12 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
             for visc, mu in zip(self.viscosity, self.shear_modulus)
         ]
         self.mu0 = ensure_constant(sum(self.shear_modulus))
+
+        # Power law arguments
+        self.power_law=power_law
+        self.exponent=exponent
+        self.transition_stress=transition_stress
+        self.background_stress=background_stress
 
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         dim = len(u)
@@ -672,13 +682,28 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
             )
 
         div_u = div(u) * Identity(len(u))
-        d = self.deviatoric_strain(u)
-
+        
         stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
-        stress += 2 * self.mu0 * d
-        for mu, m in zip(self.shear_modulus, internal_variables):
-            stress -= 2 * mu * m
+        stress += self.deviatoric_stress(u, internal_variables)
         return stress
+    
+    def deviatoric_stress(self, u, internal_variables):
+        d = self.deviatoric_strain(u)
+        dev_stress = 2 * self.mu0 * d
+        for mu, m in zip(self.shear_modulus, internal_variables):
+            dev_stress -= 2 * mu * m
+        return dev_stress
+
+    def second_stress_invariant(self, dev_stress):
+        # 2nd invariant
+        return sqrt(inner(dev_stress, dev_stress) + 1e-16)
+
+    def power_law_factor(self, dev_stress):
+        dev_stress_2 = self.second_stress_invariant(dev_stress)
+        a = self.background_stress / self.transition_stress
+        b =  (dev_stress_2 + self.background_stress)/self.transition_stress
+        n = self.exponent
+        return (1 + a**(n-1)) / (1 + b**(n-1) )
 
     def hydrostatic_prestress_advection(
         self, u_r: Function | ufl.core.expr.Expr

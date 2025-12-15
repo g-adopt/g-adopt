@@ -842,6 +842,117 @@ class InternalVariableSolver(StokesSolverBase):
             m.interpolate(m_new)
 
 
+class CoupledInternalVariableSolver(StokesSolverBase):
+    """Solver for coupled internal variable viscoelastic formulation.
+
+    Args:
+      solution:
+        Firedrake function representing the displacement solution
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations
+      dt:
+        Float quantifying the time step used for time integration
+      additional_forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      quad_degree:
+        Integer denoting the quadrature degree
+      solver_parameters:
+        Dictionary of PETSc solver options or string matching one of the default sets
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
+      J:
+        Firedrake function representing the Jacobian of the mixed Stokes system
+      constant_jacobian:
+        Boolean specifying whether the Jacobian of the system is constant
+      nullspace:
+        A `MixedVectorSpaceBasis` for the operator's kernel
+      transpose_nullspace:
+        A `MixedVectorSpaceBasis` for the kernel of the operator's transpose
+      near_nullspace:
+        A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
+        body modes)
+    """
+
+    name = "InternalVariable"
+
+    def __init__(
+        self,
+        solution: fd.Function,
+        approximation: BaseGIAApproximation,
+        /,
+        *,
+        dt: float,
+        scaling_factor=1,
+        **kwargs,
+    ) -> None:
+
+        # provide an `effective viscosity' to the approximation used
+        # for SIPG terms in the viscosity term of momentum_equation.py
+        # N.b. the potential for confusion as GIA modellers often use
+        # mu to represent the shear modulus.
+        approximation.mu = approximation.effective_viscosity(dt)
+        self.scaling_factor=scaling_factor
+
+        super().__init__(solution, approximation, dt=dt, **kwargs)
+
+    def set_equations(self) -> None:
+        self.u, *internal_variables = self.solution_split
+        stress = self.approximation.stress(self.u, internal_variables=m)
+        source = self.approximation.buoyancy(self.u) * self.k
+        strain = self.approximation.deviatoric_strain(self.u)
+        maxwell_times = self.approximation.maxwell_times
+        if self.approximation.power_law:
+            dev_stress = self.approximation.deviatoric_stress(self.u, internal_variables)
+            visc_factor = self.approximation.power_law_factor(dev_stress)
+            for i in range(len(maxwell_times)):
+                maxwell_times[i] *= visc_factor
+
+        residual_terms = [
+            residual_terms_compressible_viscoelastic,
+        ]
+        eqs_attrs = [
+            {"stress": stress, "source": source},
+        ]
+        mass_terms = [None]
+        scaling_factors = [self.scaling_factor]
+        
+        # Loop over number of internal variables
+        for i in range(len(maxwell_times)):
+            residual_terms.append(residual_terms_internal_variable)
+            eqs_attrs.append({"source": strain / maxwell_times[i], "sink_coeff": 1 / maxwell_times[i]})
+            mass_terms.append(mass_term)
+            scaling_factors.append(-self.theta*self.scaling_factor)
+
+        for i in range(len(self.test)):
+            self.equations.append(
+                Equation(
+                    self.test[i],
+                    self.Z[i],
+                    residual_terms[i],
+                    mass_term=mass_terms[i],
+                    eq_attrs=eqs_attrs[i],
+                    approximation=self.approximation,
+                    bcs=self.weak_bcs,
+                    quad_degree=self.quad_degree,
+                    rescale_factor=scaling_factors[i],
+                )
+            )
+
+    def set_free_surface_boundary(
+        self, params_fs: dict[str, int | bool], bc_id: int
+    ) -> Expr:
+        normal_stress = params_fs.get("normal_stress", 0.0)
+        # Add free surface stress term. This is also referred to as the Hydrostatic
+        # Prestress advection term in the GIA literature.
+        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
+            vertical_component(self.u)
+        )
+
+        return combined_normal_stress
+
+
 class BoundaryNormalStressSolver(SolverConfigurationMixin):
     r"""A class for calculating surface forces acting on a boundary.
 
