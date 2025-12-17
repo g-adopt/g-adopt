@@ -369,6 +369,9 @@ def create_custom_tableau(
     Returns:
         An Irksome ButcherTableau instance
     """
+    if not np.allclose(np.sum(a, axis=1), c):
+        raise ValueError("Inconsistent Butcher tableau: Row sum of 'a' is not 'c'")
+
     return ButcherTableau(
         A=a, b=b, btilde=None, c=c, order=len(b), embedded_order=None, gamma0=None
     )
@@ -411,18 +414,15 @@ class AbstractRKScheme(ABC):
         if cls.__name__ == "eSSPRK":
             return
 
-        np.testing.assert_array_equal(
-            np.triu(cls.a, 1),
-            np.zeros_like(cls.a),
-            err_msg="Butcher tableau must be lower diagonal",
-        )
-        np.testing.assert_allclose(
-            np.sum(cls.a, axis=1),
-            cls.c,
-            err_msg="Inconsistent Butcher tableau: Row sum of a is not c",
-        )
-
         cls.butcher_tableau = create_custom_tableau(cls.a, cls.b, cls.c)
+
+        if not (
+            cls.butcher_tableau.is_explicit
+            or cls.butcher_tableau.is_diagonally_implicit
+        ):
+            raise ValueError(
+                "Butcher tableau is neither explicit nor diagonally implicit"
+            )
 
     @property
     @abstractmethod
