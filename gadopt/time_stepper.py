@@ -416,10 +416,7 @@ class AbstractRKScheme(ABC):
 
         cls.butcher_tableau = create_custom_tableau(cls.a, cls.b, cls.c)
 
-        if not (
-            cls.butcher_tableau.is_explicit
-            or cls.butcher_tableau.is_diagonally_implicit
-        ):
+        if cls.butcher_tableau.is_fully_implicit:
             raise ValueError(
                 "Butcher tableau is neither explicit nor diagonally implicit"
             )
