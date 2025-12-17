@@ -11,7 +11,7 @@ from .approximations import (
     QuasiCompressibleInternalVariableApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
-from .diagnostics import GeodynamicalDiagnostics
+from .diagnostics import *
 from .level_set_tools import (
     LevelSetSolver,
     assign_level_set_values,
