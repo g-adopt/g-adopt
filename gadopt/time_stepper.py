@@ -1,8 +1,8 @@
 """This module provides several classes to perform integration of time-dependent
 equations via Irksome. Users choose if they require an explicit or diagonally implicit
 time integrator, and they instantiate one of the implemented algorithm classes, for
-example, `ERKEuler`, by providing relevant parameters defined in `RKGeneric`. Then, they
-call the `advance` method to request a solver update.
+example, `ForwardEuler`, by providing relevant parameters defined in `RKGeneric`. Then,
+they call the `advance` method to request a solver update.
 """
 
 from abc import ABC, abstractmethod
@@ -173,9 +173,10 @@ class IrksomeIntegrator:
         # Add adaptive_parameters if provided
         self.is_adaptive = adaptive_parameters is not None
         if self.is_adaptive:
-            assert stage_type == "deriv", (
-                "A method with stage_type=deriv is required for adaptive_parameters"
-            )
+            if stage_type != "deriv":
+                raise ValueError(
+                    "A method with stage_type=deriv is required for adaptive_parameters"
+                )
             stepper_kwargs["adaptive_parameters"] = adaptive_parameters
         # Merge in any additional Irksome-specific kwargs, such as splitting
         stepper_kwargs.update(irksome_kwargs)
@@ -447,7 +448,7 @@ class AbstractRKScheme(ABC):
         """
 
 
-class ERKEuler(AbstractRKScheme, ERKGeneric):
+class ForwardEuler(AbstractRKScheme, ERKGeneric):
     """Forward Euler method"""
 
     a = [[0]]
@@ -488,7 +489,7 @@ class ERKLPUM2(AbstractRKScheme, ERKGeneric):
     cfl_coeff = 2.0
 
 
-class ERKMidpoint(AbstractRKScheme, ERKGeneric):
+class Midpoint(AbstractRKScheme, ERKGeneric):
     a = [[0.0, 0.0], [0.5, 0.0]]
     b = [0.0, 1.0]
     c = [0.0, 0.5]
@@ -998,10 +999,10 @@ class Alexander(DIRKGeneric):
 
 
 rk_schemes_gadopt = [
-    ERKEuler,
+    ForwardEuler,
     ERKLSPUM2,
     ERKLPUM2,
-    ERKMidpoint,
+    Midpoint,
     SSPRK33,
     eSSPRKs3p3,
     eSSPRKs4p3,
