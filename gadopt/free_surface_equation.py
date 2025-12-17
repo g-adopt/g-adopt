@@ -14,13 +14,14 @@ and at the very end return `-F`.
 """
 
 import firedrake as fd
+from ufl.indexed import Indexed
 
 from .equations import Equation
 from .utility import vertical_component
 
 
 def free_surface_term(
-    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+    eq: Equation, trial: fd.Argument | Indexed | fd.Function
 ) -> fd.Form:
     r"""Free Surface term: u \dot n"""
     F = -eq.buoyancy_scale * eq.test * fd.dot(eq.u, eq.n) * eq.ds(eq.boundary_id)
@@ -28,9 +29,7 @@ def free_surface_term(
     return -F
 
 
-def mass_term(
-    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
-) -> fd.Form:
+def mass_term(eq: Equation, trial: fd.Argument | Indexed | fd.Function) -> fd.Form:
     r"""Mass term \int test * trial * ds for the free surface time discretisation.
 
     Args:

@@ -23,6 +23,7 @@ from gadopt.utility import (
     extruded_layer_heights,
     initialise_background_field
 )
+import numpy as np
 
 # We also import a helper function for setting up the ice sheet load associated
 # with this demo.
@@ -263,13 +264,7 @@ V_nullspace = rigid_body_modes(V, rotational=True)
 # list of internal variables, boundary conditions and nullspaces.
 
 stokes_solver = InternalVariableSolver(
-    u,
-    approximation,
-    dt=dt,
-    internal_variables=m,
-    bcs=stokes_bcs,
-    constant_jacobian=True,
-    nullspace=V_nullspace,
+    u, approximation, dt=dt, internal_variables=m, bcs=stokes_bcs, nullspace=V_nullspace
 )
 
 # We next set up our output in VTK format and the the logging file using `GeodynamicalDiagnostics` as before.

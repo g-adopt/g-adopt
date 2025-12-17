@@ -22,6 +22,7 @@ and then return `-F`.
 
 from firedrake import *
 from firedrake.mesh import ExtrudedMeshTopology
+from ufl.indexed import Indexed
 
 from .equations import Equation, interior_penalty_factor
 from .utility import (
@@ -32,9 +33,7 @@ from .utility import (
 )
 
 
-def viscosity_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Viscosity term $-nabla * (mu nabla u)$ in the momentum equation.
 
     Using the symmetric interior penalty method (Epshteyn & Rivière, 2007), the weak
@@ -146,9 +145,7 @@ def viscosity_term(
     return -F
 
 
-def pressure_gradient_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def pressure_gradient_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     assert normal_is_continuous(eq.test)
 
     F = -dot(div(eq.test), eq.p) * eq.dx
@@ -163,9 +160,7 @@ def pressure_gradient_term(
     return -F
 
 
-def divergence_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def divergence_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     assert normal_is_continuous(eq.u)
 
     rho = eq.rho_continuity
@@ -181,16 +176,14 @@ def divergence_term(
     return -F
 
 
-def momentum_source_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def momentum_source_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     F = -dot(eq.test, eq.source) * eq.dx
 
     return -F
 
 
 def advection_hydrostatic_prestress_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     # Advection of background hydrostatic pressure used in linearised
     # GIA simulations. This method implements the volume integral and

@@ -298,6 +298,7 @@
 
 from gadopt import *
 from gadopt.utility import extruded_layer_heights, initialise_background_field
+import numpy as np
 
 # Next we need to create a mesh of the mantle region we want to simulate. The
 # Weerdesteijn test case is a 3D box 1500 km wide horizontally and 2891 km deep.

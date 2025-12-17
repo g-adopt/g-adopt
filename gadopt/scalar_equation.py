@@ -21,14 +21,14 @@ and then return `-F`.
 """
 
 from firedrake import *
+from ufl.indexed import Indexed
 
 from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous, normal_is_continuous
+from irksome import Dt
 
 
-def advection_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def advection_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar advection term (non-conservative): u \dot \div(q)."""
     advective_velocity_scaling = getattr(eq, "advective_velocity_scaling", 1)
     u = advective_velocity_scaling * eq.u
@@ -57,9 +57,7 @@ def advection_term(
     return -F
 
 
-def diffusion_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def diffusion_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar diffusion term $-nabla * (kappa grad q)$.
 
     Using the symmetric interior penalty method, the weak form becomes
@@ -124,14 +122,14 @@ def diffusion_term(
     return -F
 
 
-def source_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+def source_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar source term `s_T`."""
     F = -dot(eq.test, eq.source) * eq.dx
 
     return -F
 
 
-def sink_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+def sink_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar sink term `\alpha_T T`."""
     # Implement sink term implicitly at current time step.
     F = dot(eq.test, eq.sink_coeff * trial) * eq.dx
@@ -139,7 +137,7 @@ def sink_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
     return -F
 
 
-def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     """UFL form for the mass term used in the time discretisation.
 
     Args:
@@ -152,7 +150,7 @@ def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
         The UFL form associated with the mass term of the equation.
 
     """
-    return dot(eq.test, trial) * eq.dx
+    return dot(eq.test, Dt(trial)) * eq.dx
 
 
 advection_term.required_attrs = {"u"}

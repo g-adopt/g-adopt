@@ -4,6 +4,7 @@
 
 from gadopt import *
 from gadopt.time_stepper import DIRK33
+import numpy as np
 
 # We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)

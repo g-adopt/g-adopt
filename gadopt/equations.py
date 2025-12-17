@@ -13,6 +13,7 @@ from typing import Any, Callable
 from warnings import warn
 
 import firedrake as fd
+from ufl.indexed import Indexed
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .utility import CombinedSurfaceMeasure
@@ -50,7 +51,7 @@ class Equation:
 
     """
 
-    test: fd.Argument | fd.ufl.indexed.Indexed
+    test: fd.Argument | Indexed
     trial_space: fd.functionspaceimpl.WithGeometry
     residual_terms: InitVar[Callable | list[Callable]]
     _: KW_ONLY
@@ -112,16 +113,12 @@ class Equation:
             self.ds = fd.ds(**measure_kwargs)
             self.dS = fd.dS(**measure_kwargs)
 
-    def mass(
-        self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
-    ) -> fd.Form:
+    def mass(self, trial: fd.Argument | Indexed | fd.Function) -> fd.Form:
         """Generates the UFL form corresponding to the mass term."""
 
         return self.scaling_factor * self.mass_term(self, trial)
 
-    def residual(
-        self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
-    ) -> fd.Form:
+    def residual(self, trial: fd.Argument | Indexed | fd.Function) -> fd.Form:
         """Generates the UFL form corresponding to the residual terms."""
 
         return self.scaling_factor * sum(
