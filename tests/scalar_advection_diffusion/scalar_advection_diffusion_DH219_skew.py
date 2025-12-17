@@ -5,6 +5,8 @@
 # so it is a good test of the tensor implementation of SU, compared
 # with the quasi 1D demo based on Figure 2.7.
 
+import numpy as np
+
 from gadopt import *
 
 nx, ny = 10, 10

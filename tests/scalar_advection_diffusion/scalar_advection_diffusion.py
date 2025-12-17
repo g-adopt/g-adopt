@@ -2,6 +2,8 @@
 # again using G-ADOPT's GenericTransportSolver and a CG discretisation with Streamline
 # Upwind (SU) stabilisation, albeit here we introduce some explicit diffusion.
 
+import numpy as np
+
 from gadopt import *
 
 # We use a 40-by-40 mesh of squares.

@@ -19,6 +19,7 @@ from gadopt.utility import (
     extruded_layer_heights,
     initialise_background_field
 )
+import numpy as np
 
 # Let's import the ice sheet disc function from the [last tutorial](../2d_cylindrical)
 # as well as a helper function to setup the lateral viscosity variations
