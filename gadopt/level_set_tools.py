@@ -20,6 +20,7 @@ import shapely as sl
 from mpi4py import MPI
 from numpy.testing import assert_allclose
 from ufl.core.expr import Expr
+from ufl.indexed import Indexed
 
 from .equations import Equation
 from .scalar_equation import mass_term
@@ -383,7 +384,7 @@ def assign_level_set_values(
 
 
 def reinitialisation_term(
-    eq: Equation, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
+    eq: Equation, trial: fd.Argument | Indexed | fd.Function
 ) -> fd.Form:
     """Term for the conservative level set reinitialisation equation.
 
