@@ -12,6 +12,7 @@
 # First, we define the domain extents and discretisation.
 
 from gadopt import *
+import numpy as np
 x_max = 1.0
 y_max = 1.0
 disc_n = 150

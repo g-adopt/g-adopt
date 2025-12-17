@@ -7,6 +7,7 @@
 
 from gadopt import *
 from gadopt.time_stepper import DIRK33
+import numpy as np
 
 nx, ny = 10, 10
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)

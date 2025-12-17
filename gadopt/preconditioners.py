@@ -3,6 +3,7 @@ r"""This module contains classes that augment default Firedrake preconditioners.
 """
 
 import firedrake as fd
+from ufl.indexed import Indexed
 from firedrake.petsc import PETSc
 from .utility import InteriorBC
 
@@ -13,8 +14,8 @@ class FreeSurfaceMassInvPC(fd.MassInvPC):
     def form(
         self,
         pc: fd.PETSc.PC,
-        tests: list[fd.Argument | fd.ufl.indexed.Indexed],
-        trials: list[fd.Argument | fd.ufl.indexed.Indexed | fd.Function],
+        tests: list[fd.Argument | Indexed],
+        trials: list[fd.Argument | Indexed | fd.Function],
     ) -> tuple[fd.Form, list[fd.DirichletBC]]:
         """Sets the form.
 

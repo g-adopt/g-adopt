@@ -98,6 +98,8 @@ from gadopt.demos.glacial_isostatic_adjustment.utils import (
     setup_heterogenous_viscosity
 )
 
+import numpy as np
+
 # + tags=["active-ipynb"]
 # from gadopt_demo_utils.gia_demo_utils import (
 #    plot_adj_ring,

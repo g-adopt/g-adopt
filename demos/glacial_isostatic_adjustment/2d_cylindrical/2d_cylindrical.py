@@ -23,6 +23,7 @@ from gadopt.utility import (
     extruded_layer_heights,
     initialise_background_field
 )
+import numpy as np
 
 # We also import a helper function for setting up the ice sheet load associated
 # with this demo.
