@@ -6,7 +6,6 @@
 # and for regression testing.
 
 from gadopt import *
-from gadopt.time_stepper import DIRK33
 import numpy as np
 import sys
 
