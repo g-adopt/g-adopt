@@ -1,17 +1,45 @@
-include ../../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-.PHONY: all clean check
+ifeq ($(d),)
 
-all: params.log
+d := .
+# current directory relative to root makefile
+cwd := $(shell realpath --strip --relative-to=../../.. $(CURDIR))
 
-params.log : category := mantle_convection
-params.log : ncpus := 4
-params.log: 3d_cartesian.py
+.PHONY: all
+all: $(d)/.done
+
+$(d)/.done:
+	$(MAKE) -C ../../.. $(cwd)/.done
+
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest ../../test_all.py -k $(cwd)
+
+else
+
+TGT_$(d) := $(d)/params.log
+SRC_$(d) := $(d)/3d_cartesian.py
+NOTEBOOK_SRC_$(d) := $(d)/3d_cartesian.py
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
+DIR_CLEAN_$(d) := output reference_state
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(d)/params.log : category := mantle_convection
+$(d)/params.log : ncpus := 4
+$(d)/params.log: $(SRC_$(d))
 	$(run-python)
 
-clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
-	rm -rf output reference_state
+TGT := $(TGT) $(TGT_$(d))
+NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
-check: params.log
-	python3 -m pytest $(CURDIR)/../../test_all.py -k $(test_class)/$(current_dir)
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))

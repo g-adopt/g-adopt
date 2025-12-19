@@ -1,16 +1,49 @@
-include ../../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-.PHONY: all clean check
+ifeq ($(d),)
 
-all: params.log
+d := .
+# current directory relative to root makefile
+cwd := $(shell realpath --strip --relative-to=../../.. $(CURDIR))
 
-params.log : category := mantle_convection
-params.log: free_surface.py
+.PHONY: all
+all: $(d)/.done
+
+$(d)/.done:
+	$(MAKE) -C ../../.. $(cwd)/.done
+
+.PHONY: check
+check: $(d)/.done
+	python3 -m pytest ../../test_all.py -k $(cwd)
+
+else
+
+TGT_$(d) := $(d)/params.log
+SRC_$(d) := $(d)/free_surface.py
+NOTEBOOK_SRC_$(d) := $(d)/free_surface.py
+NOTEBOOK_IMGS_$(d) := $(d)/temperature_warp.gif
+CLEAN_$(d) := *.pvd *.vtu *.pvtu *.h5 params.log .done
+DIR_CLEAN_$(d) := output
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(d)/params.log : category := mantle_convection
+$(d)/params.log: $(SRC_$(d))
 	$(run-python)
 
-clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log
-	rm -rf output
+# this case relies on the base case
+$(NOTEBOOK_SRC_$(d):.py=.ipynb): demos/mantle_convection/base_case/base_case.ipynb
 
-check: params.log
-	python3 -m pytest $(CURDIR)/../../test_all.py -k $(test_class)/$(current_dir)
+TGT := $(TGT) $(TGT_$(d))
+NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
+NOTEBOOK_IMGS := $(NOTEBOOK_IMGS) $(NOTEBOOK_IMGS_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
+
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
