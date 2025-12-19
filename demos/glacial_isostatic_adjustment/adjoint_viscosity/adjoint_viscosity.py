@@ -97,6 +97,7 @@ from gadopt.demos.glacial_isostatic_adjustment.utils import (
     ice_sheet_disc,
     setup_heterogenous_viscosity
 )
+import numpy as np
 
 # + tags=["active-ipynb"]
 # from gadopt_demo_utils.gia_demo_utils import (
@@ -373,7 +374,7 @@ plog.log_str(
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
-gd = GeodynamicalDiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
+gd = GIADiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
 # Now is a good time to setup a helper function for defining the time integrated misfit
