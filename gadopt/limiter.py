@@ -295,7 +295,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
           field: Firedrake function onto which the limiter is applied
 
         """
-        if annotate_tape(): 
+        if annotate_tape():
             raise RuntimeError('Limiting is currently not compatible for adjoint modelling.')
         with timed_stage('limiter'):
 
