@@ -21,8 +21,7 @@ from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
-from .free_surface_equation import free_surface_term
-from .free_surface_equation import mass_term as mass_term_fs
+from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
@@ -259,7 +258,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
         self.rho_continuity = self.approximation.rho_continuity()
         self.equations = []  # G-ADOPT's Equation instances
-        self.F = 0.0  # Weak form of the system
 
         self.set_boundary_conditions()
         self.set_equations()
@@ -333,16 +331,11 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def set_form(self) -> None:
         """Sets the weak form including linear and bilinear terms."""
-        for equation, solution, solution_old in zip(
-            self.equations, self.solution_split, self.solution_old_split
-        ):
-            if equation.mass_term:
-                if equation.scaling_factor != -self.theta:
-                    raise ValueError(
-                        "Equation scaling does not match employed theta scheme."
-                    )
-                self.F += equation.mass((solution - solution_old) / self.dt)
-            self.F -= equation.residual(solution)
+        self.F = sum(
+            eq.residual(sol) for eq, sol in zip(self.equations, self.solution_split)
+        )
+        if self.additional_forcing_term is not None:
+            self.F += self.additional_forcing_term
 
     def set_solver_options(
         self,
@@ -398,9 +391,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def set_solver(self) -> None:
         """Sets up the Firedrake variational problem and solver."""
-        if self.additional_forcing_term is not None:
-            self.F += self.additional_forcing_term
-
         if self.constant_jacobian:
             warn(
                 "Constant Jacobian specified for the Stokes system; please ensure that"
@@ -494,6 +484,7 @@ class StokesSolver(StokesSolverBase):
 
         self.eta_ind = 2
         self.free_surface_map = {}
+        self.free_surface_equations = []
         super().__init__(solution, approximation, **kwargs)
 
     def set_free_surface_boundary(
@@ -542,19 +533,39 @@ class StokesSolver(StokesSolverBase):
             )
 
         for bc_id, (eta_ind, buoyancy) in self.free_surface_map.items():
-            eq_attrs = {"boundary_id": bc_id, "buoyancy_scale": buoyancy, "u": u}
+            mass_term, surface_velocity_term = free_surface_terms
+            eq_attrs = {"boundary_id": bc_id, "buoyancy_scale": buoyancy}
 
             self.equations.append(
                 Equation(
                     self.tests[eta_ind],
                     self.solution_space[eta_ind],
-                    free_surface_term,
-                    mass_term=mass_term_fs,
+                    surface_velocity_term,
+                    eq_attrs=eq_attrs | {"u": u},
+                    quad_degree=self.quad_degree,
+                    scaling_factor=-self.theta,
+                )
+            )
+            self.free_surface_equations.append(
+                Equation(
+                    self.tests[eta_ind],
+                    self.solution_space[eta_ind],
+                    mass_term,
                     eq_attrs=eq_attrs,
                     quad_degree=self.quad_degree,
                     scaling_factor=-self.theta,
                 )
             )
+
+    def set_form(self) -> None:
+        super().set_form()
+        self.F
+        for eq, sol, sol_old in zip(
+            self.free_surface_equations,
+            self.solution_split[2:],
+            self.solution_old_split[2:],
+        ):
+            self.F += eq.residual((sol - sol_old) / self.dt)
 
     def set_solver_options(
         self, solver_preset: ConfigType | None, solver_extras: ConfigType | None

@@ -394,9 +394,9 @@ def reinitialisation_term(
     method.
     European Journal of Mechanics-B/Fluids, 98, 40-63.
     """
-    sharpen_term = -trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
+    sharpen_term = trial * (1 - trial) * (1 - 2 * trial) * eq.test * eq.dx
     balance_term = (
-        eq.epsilon
+        -eq.epsilon
         * (1 - 2 * trial)
         * fd.sqrt(fd.inner(eq.level_set_grad, eq.level_set_grad))
         * eq.test
@@ -583,7 +583,7 @@ class LevelSetSolver(SolverConfigurationMixin):
         """Sets up time integrators for advection and reinitialisation as required."""
         if self.advection:
             self.adv_solver = GenericTransportSolver(
-                "advection",
+                ["advection", "mass"],
                 self.solution,
                 self.adv_kwargs["timestep"] / self.adv_kwargs["subcycles"],
                 self.adv_kwargs["time_integrator"],
@@ -597,8 +597,7 @@ class LevelSetSolver(SolverConfigurationMixin):
             reinitialisation_equation = Equation(
                 fd.TestFunction(self.solution_space),
                 self.solution_space,
-                reinitialisation_term,
-                mass_term=mass_term,
+                residual_terms=[mass_term, reinitialisation_term],
                 eq_attrs={
                     "level_set_grad": self.solution_grad,
                     "epsilon": self.reini_kwargs["epsilon"],
