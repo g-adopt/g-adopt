@@ -13,6 +13,7 @@ import numpy as np
 from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
 from pyop2 import op2
 from typing import Optional
+from firedrake.adjoint import annotate_tape
 
 __all__ = ["VertexBasedP1DGLimiter"]
 
@@ -294,6 +295,8 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
           field: Firedrake function onto which the limiter is applied
 
         """
+        if annotate_tape(): 
+            raise RuntimeError('Limiting is currently not compatible for adjoint modelling.')
         with timed_stage('limiter'):
 
             if self.is_vector:
