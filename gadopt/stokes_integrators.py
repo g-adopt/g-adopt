@@ -24,6 +24,7 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
+from .scalar_equation import old_mass_term, internal_variable_terms
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
     DEBUG,
@@ -337,10 +338,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             self.equations, self.solution_split, self.solution_old_split
         ):
             if equation.mass_term:
-                if equation.scaling_factor != -self.theta:
-                    raise ValueError(
-                        "Equation scaling does not match employed theta scheme."
-                    )
                 self.F += equation.mass((solution - solution_old) / self.dt)
             self.F -= equation.residual(solution)
 
@@ -885,6 +882,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         *,
         dt: float,
         scaling_factor=1,
+        theta=1,
         **kwargs,
     ) -> None:
 
@@ -895,22 +893,23 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         approximation.mu = approximation.effective_viscosity(dt)
         self.scaling_factor=scaling_factor
 
-        super().__init__(solution, approximation, dt=dt, **kwargs)
+        super().__init__(solution, approximation, dt=dt, theta=theta, **kwargs)
 
     def set_equations(self) -> None:
-        self.u, *internal_variables = self.solution_split
-        stress = self.approximation.stress(self.u, internal_variables=m)
-        source = self.approximation.buoyancy(self.u) * self.k
-        strain = self.approximation.deviatoric_strain(self.u)
+        u, *internal_variables = self.solution_split
+        stress = self.approximation.stress(
+            u, internal_variables=internal_variables)
+        source = self.approximation.buoyancy(u) * self.k
+        strain = self.approximation.deviatoric_strain(u)
         maxwell_times = self.approximation.maxwell_times
         if self.approximation.power_law:
-            dev_stress = self.approximation.deviatoric_stress(self.u, internal_variables)
+            dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
             visc_factor = self.approximation.power_law_factor(dev_stress)
             for i in range(len(maxwell_times)):
                 maxwell_times[i] *= visc_factor
 
         residual_terms = [
-            residual_terms_compressible_viscoelastic,
+            compressible_viscoelastic_terms,
         ]
         eqs_attrs = [
             {"stress": stress, "source": source},
@@ -920,23 +919,25 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         
         # Loop over number of internal variables
         for i in range(len(maxwell_times)):
-            residual_terms.append(residual_terms_internal_variable)
-            eqs_attrs.append({"source": strain / maxwell_times[i], "sink_coeff": 1 / maxwell_times[i]})
-            mass_terms.append(mass_term)
+            residual_terms.append(internal_variable_terms)
+            eqs_attrs.append(
+                {"source": strain / maxwell_times[i],
+                 "sink_coeff": 1 / maxwell_times[i]})
+            mass_terms.append(old_mass_term)
             scaling_factors.append(-self.theta*self.scaling_factor)
 
-        for i in range(len(self.test)):
+        for i in range(len(self.tests)):
             self.equations.append(
                 Equation(
-                    self.test[i],
-                    self.Z[i],
+                    self.tests[i],
+                    self.solution_space[i],
                     residual_terms[i],
                     mass_term=mass_terms[i],
                     eq_attrs=eqs_attrs[i],
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
                     quad_degree=self.quad_degree,
-                    rescale_factor=scaling_factors[i],
+                    scaling_factor=scaling_factors[i],
                 )
             )
 
@@ -947,7 +948,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         # Add free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
         combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
-            vertical_component(self.u)
+            vertical_component(self.solution_split[0])
         )
 
         return combined_normal_stress

@@ -58,6 +58,9 @@ parser.add_argument("--bulk_shear_ratio", default=100, type=float,
                     help="Ratio of Bulk modulus / Shear modulus", required=False)
 parser.add_argument("--Tstart", default=0, type=float,
                     help="Simulation start time in years", required=False)
+parser.add_argument("--load_checkpoint", action='store_true',
+                    help="Load checkpoint")
+parser.add_argument("--checkpoint_file", default=None, type=str, help="Checkpoint file name", required=False)
 parser.add_argument("--short_simulation", action='store_true',
                     help="Run simulation with short ice history from Weerdesteijn et a. 2023 testcase")
 parser.add_argument("--lateral_viscosity", action='store_true',
@@ -68,6 +71,8 @@ parser.add_argument("--viscosity_ratio", default=1, type=float,
                     help="Ratio of viscosity 2 / viscosity 1", required=False)
 parser.add_argument("--write_output", action='store_true',
                     help="Write out Paraview VTK files")
+parser.add_argument("--power_law", action='store_true', help="Power law rheology")
+parser.add_argument("--transition_stress", default=0.2, type=float, help="Transition stress in MPa", required=False)
 parser.add_argument("--optional_name", default="", type=str,
                     help="Optional string to add to simulation name for outputs",
                     required=False)
@@ -109,11 +114,16 @@ else:
     nx = round(L / (args.dx*1e3))
     surface_mesh = SquareMesh(nx, nx, L_tilde)
 
-mesh = ExtrudedMesh(
-    surface_mesh,
-    layers=len(layer_heights),
-    layer_height=layer_heights,
-)
+if args.load_checkpoint:
+    with CheckpointFile(args.checkpoint_file, 'r') as afile:
+        mesh = afile.load_mesh(name='surface_mesh_extruded')
+else:
+    mesh = ExtrudedMesh(
+        surface_mesh,
+        layers=len(layer_heights),
+        layer_height=layer_heights,
+        )
+
 
 vertical_component = 2
 
@@ -143,14 +153,16 @@ R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 Z = MixedFunctionSpace([V, S])  # Mixed function space.
 
 
-# +
-u = Function(V, name='displacement')  # A field over the mixed function space Z.
-m = Function(S, name='internal variable 1')  # A field over the mixed function space Z.
-m_list = [m]
-
-if args.burgers:
-    m2 = Function(S, name='internal variable 2')  # A field over the internal variable space.
-    m_list.append(m2)
+if args.load_checkpoint:
+    with CheckpointFile(args.checkpoint_file, "r") as checkpoint:
+        z = checkpoint.load_function(mesh, "Stokes")
+else:
+    z = Function(Z)  # A field over the mixed function space Z.
+# function to store the solutions:
+u, m = split(z)  # returns symbolic ufl expression for u and m
+# next rename for output:
+z.subfunctions[0].rename("displacement")
+z.subfunctions[1].rename("internal variable")
 
 stress = Function(S, name='deviatoric stress')  # A field over the mixed function space Z.
 power_factor = Function(DG1, name='viscosity factor')  # A field over the mixed function space Z.
@@ -167,6 +179,7 @@ X = SpatialCoordinate(mesh)
 density_values = [3037, 3438, 3871, 4978]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 viscosity_values = [1e40, 1e21, 1e21, 2e21]
+exponent_values = [1, 3, 3, 1]
 
 density_scale = 4500
 shear_modulus_scale = 1e11
@@ -182,6 +195,13 @@ if args.burgers:
 else:
     shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
     viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
+
+if args.power_law:
+    # multiply background field by 2 if n=1 because
+    # otherwise viscosity halved. i.e. factor = 1 / (1 + tau**(n-1)) = 0.5
+    # if n = 1.
+    viscosity_values_tilde[0] *= 2
+    viscosity_values_tilde[-1] *= 2
 
 density = Function(DG0, name="density")
 initialise_background_field(
@@ -226,9 +246,7 @@ else:
 
 if args.burgers:
     viscosity_1 = Function(DG0, name="viscosity 1")
-    initialise_background_field(
-        viscosity_1, viscosity_values_1_tilde, X, radius_values_tilde,
-        shift=radius_values_tilde[-1])
+    initialise_background_field(viscosity_2, viscosity_values_2_tilde)
     viscosity_2 = Function(DG0, name="viscosity 2")
     initialise_background_field(
         viscosity_2, viscosity_values_2_tilde, X, radius_values_tilde,
@@ -238,6 +256,13 @@ else:
     initialise_background_field(
         viscosity, viscosity_values_tilde, X, radius_values_tilde,
         shift=radius_values_tilde[-1])
+
+# only used if arg.power_law set to true
+exponent = Function(DG0, name="n exponent")
+initialise_background_field(
+    exponent, exponent_values, X, radius_values_tilde,
+    shift=radius_values_tilde[-1])
+transition_stress = args.transition_stress * 1e6 / shear_modulus_scale
 
 # Next let's define the length of our time step. If we want to accurately resolve the
 # elastic response we should choose a timestep lower than the Maxwell time,
@@ -255,7 +280,7 @@ for layer_visc, layer_mu in zip(viscosity_values, shear_modulus_values):
 
 # +
 # Timestepping parameters
-Tstart = 0
+Tstart = args.Tstart
 time = Function(R).assign(Tstart * year_in_seconds / characteristic_maxwell_time)
 
 dt_years = args.dt_years
@@ -341,7 +366,13 @@ stokes_bcs = {
 
 approximation = approx(
     bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_mod_list,
-    viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio)
+    viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio,
+    power_law=args.power_law, exponent=exponent,
+    transition_stress=transition_stress)
+
+stress.interpolate(approximation.deviatoric_stress(z.subfunctions[0], [z.subfunctions[1]]))
+dev_stress_2.interpolate(approximation.second_stress_invariant(stress))
+power_factor.interpolate(approximation.power_law_factor(stress))
 
 iterative_parameters = {"mat_type": "matfree",
                         "snes_monitor": None,
@@ -361,21 +392,61 @@ iterative_parameters = {"mat_type": "matfree",
                         "assembled_pc_gamg_coarse_eq_limit": 1000,
                         "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
                         }
+iterative_parameters = {"mat_type": "matfree",
+                        "snes_monitor": None,
+                        "snes_converged_reason": None,
+                        "snes_monitor": None,
+                        "snes_type": "newtonls",
+                        "snes_linesearch_type": "l2",
+                        "snes_max_it": 100,
+                        "snes_atol": 1e-15,
+                        "snes_rtol": 1e-4,
+                        #"snes_type": "ksponly",
+                        "ksp_type": "gmres",
+                        "ksp_rtol": 1e-3,
+                        "ksp_converged_reason": None,
+                        "ksp_monitor": None,
+                        "pc_type": "fieldsplit",
+                        "pc_fieldsplit_type": "symmetric_multiplicative",
+
+                        "fieldsplit_0_ksp_converged_reason": None,
+                        "fieldsplit_0_ksp_monitor": None,
+#                        "fieldsplit_0_ksp_type": "cg",
+                        "fieldsplit_0_ksp_type": "gmres",
+                        "fieldsplit_0_pc_type": "python",
+#                        "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
+                        "fieldsplit_0_pc_python_type": "firedrake.AssembledPC",
+                        "fieldsplit_0_assembled_pc_type": "gamg",
+                        "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
+                        "fieldsplit_0_ksp_rtol": 1e-5,
+                        "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
+                        "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
+                        "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
+                        "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+
+                        "fieldsplit_1_ksp_converged_reason": None,
+                        "fieldsplit_1_ksp_monitor": None,
+                        "fieldsplit_1_ksp_type": "cg",
+                        "fieldsplit_1_pc_type": "python",
+                        "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
+                        "fieldsplit_1_assembled_pc_type": "sor",
+                        "fieldsplit_1_ksp_rtol": 1e-5,
+                        }
 
 Z_nullspace = None  # Default: don't add nullspace for now
 Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot,
                                     translations=[0, 1, 2])
 
-coupled_solver = InternalVariableSolver(
-    u,
+coupled_solver = CoupledInternalVariableSolver(
+    z,
     approximation,
     dt=dt,
-    internal_variables=m_list,
     bcs=stokes_bcs,
     solver_parameters=iterative_parameters,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
+    scaling_factor=1e6
 )
 
 
@@ -387,18 +458,21 @@ coupled_stage = PETSc.Log.Stage("coupled_solve")
 # Create output file
 OUTPUT = args.write_output
 if OUTPUT:
+    stress.interpolate(approximation.deviatoric_stress(z.subfunctions[0], [z.subfunctions[1]]))
+    dev_stress_2.interpolate(approximation.second_stress_invariant(stress))
+    power_factor.interpolate(approximation.power_law_factor(stress))
     output_file = VTKFile(args.output_path+f"output_{name}.pvd")
-    output_file.write(u, m)
+    output_file.write(*z.subfunctions, stress, dev_stress_2, power_factor)
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max uv_min"
 )
-gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
+gd = GeodynamicalDiagnostics(z.subfunctions[0], density, boundary.bottom, boundary.top)
 
-checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
+checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-power{args.power_law}nondim-chk.h5"
 
-displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.dat"
+displacement_filename = f"{args.output_path}displacement-{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-power{args.power_law}-nondim.dat"
 
 # Initial displacement at time zero is zero
 displacement_min_array = [[0.0, 0.0]]
@@ -423,7 +497,7 @@ for timestep in range(1, max_timesteps+1):
                  f"{gd.uv_min(boundary.top)}")
     # Compute diagnostics:
     # output dimensional vertical displacement
-    vertical_displacement.interpolate(vc(u)*D)
+    vertical_displacement.interpolate(vc(z.subfunctions[0])*D)
     bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
     displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
     # Minimum displacement at surface (should be top left corner with
@@ -448,11 +522,13 @@ for timestep in range(1, max_timesteps+1):
         log("timestep", timestep)
 
         if OUTPUT:
-            output_file.write(u, m)
+            stress.interpolate(approximation.deviatoric_stress(z.subfunctions[0], [z.subfunctions[1]]))
+            dev_stress_2.interpolate(approximation.second_stress_invariant(stress))
+            power_factor.interpolate(approximation.power_law_factor(stress))
+            output_file.write(*z.subfunctions, stress, dev_stress_2, power_factor)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:
-            checkpoint.save_function(u, name="Stokes")
-            checkpoint.save_function(m, name="Internal variable")
+            checkpoint.save_function(z, name="Stokes")
 
         if MPI.COMM_WORLD.rank == 0:
             np.savetxt(displacement_filename, displacement_min_array)

@@ -26,6 +26,7 @@ from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
     BoundaryNormalStressSolver,
+    CoupledInternalVariableSolver,
     InternalVariableSolver,
     StokesSolver,
     ViscoelasticStokesSolver,
