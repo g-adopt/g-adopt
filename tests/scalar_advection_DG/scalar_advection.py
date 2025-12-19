@@ -3,7 +3,6 @@
 # G-ADOPT's VertexBasedP1DGLimiter.
 
 from gadopt import *
-from gadopt.time_stepper import DIRK33
 import numpy as np
 
 
