@@ -228,6 +228,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # import pyvista as pv
+# import numpy as np
 #
 # # Read the PVD file
 # reader = pv.get_reader("output.pvd")

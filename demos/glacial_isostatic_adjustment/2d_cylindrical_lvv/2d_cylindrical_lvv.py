@@ -299,7 +299,7 @@ plog.log_str(
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
-gd = GeodynamicalDiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
+gd = GIADiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
 # Although not necessary for this demo let's checkpoint the displacement and

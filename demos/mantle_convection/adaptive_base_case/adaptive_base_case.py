@@ -23,6 +23,7 @@
 
 from gadopt import *
 from animate import RiemannianMetric, adapt
+import numpy as np
 
 # Set up the initial mesh and timestepping options. Here, we
 # explicitly use a simplex mesh to demonstrate adaptive
