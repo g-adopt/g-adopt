@@ -24,8 +24,9 @@ from .equations import Equation
 from .free_surface_equation import free_surface_term
 from .free_surface_equation import mass_term as mass_term_fs
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
-from .scalar_equation import old_mass_term, internal_variable_terms
-from .solver_options_manager import SolverConfigurationMixin, ConfigType
+from .scalar_equation import internal_variable_terms, mass_term
+from .solver_options_manager import ConfigType, SolverConfigurationMixin
+from .time_stepper import IrksomeIntegrator
 from .utility import (
     DEBUG,
     INFO,
@@ -149,6 +150,10 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         G-ADOPT approximation defining terms in the system of equations
       dt:
         Float specifying the time step if the system involves a coupled time integration
+      timestepper:
+        Runge-Kutta time integrator employing an explicit or implicit numerical scheme
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the Irksome time stepper
       theta:
         Float defining the theta scheme parameter used in a coupled time integration
       additional_forcing_term:
@@ -210,6 +215,8 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         /,
         *,
         dt: float | None = None,
+        timestepper: IrksomeIntegrator | None = None,
+        timestepper_kwargs: dict[str, Any] | None = None,
         theta: float = 0.5,
         additional_forcing_term: fd.Form | None = None,
         bcs: dict[int | str, dict[str, Any]] = {},
@@ -225,6 +232,8 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.solution = solution
         self.approximation = approximation
         self.dt = dt
+        self.timestepper = timestepper
+        self.timestepper_kwargs = timestepper_kwargs or {}
         self.theta = theta
         self.additional_forcing_term = additional_forcing_term
         self.bcs = bcs
@@ -260,7 +269,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
         self.rho_continuity = self.approximation.rho_continuity()
         self.equations = []  # G-ADOPT's Equation instances
-        self.F = 0.0  # Weak form of the system
 
         self.set_boundary_conditions()
         self.set_equations()
@@ -334,12 +342,11 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def set_form(self) -> None:
         """Sets the weak form including linear and bilinear terms."""
-        for equation, solution, solution_old in zip(
-            self.equations, self.solution_split, self.solution_old_split
-        ):
-            if equation.mass_term:
-                self.F += equation.mass((solution - solution_old) / self.dt)
-            self.F -= equation.residual(solution)
+        self.F = sum(
+            eq.residual(sol) for eq, sol in zip(self.equations, self.solution_split)
+        )
+        if self.additional_forcing_term is not None:
+            self.F += self.additional_forcing_term
 
     def set_solver_options(
         self,
@@ -395,44 +402,59 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def set_solver(self) -> None:
         """Sets up the Firedrake variational problem and solver."""
-        if self.additional_forcing_term is not None:
-            self.F += self.additional_forcing_term
-
-        if self.constant_jacobian:
-            trial = fd.TrialFunction(self.solution_space)
-            F = fd.replace(self.F, {self.solution: trial})
-            a, L = fd.lhs(F), fd.rhs(F)
-
-            self.problem = fd.LinearVariationalProblem(
-                a, L, self.solution, bcs=self.strong_bcs, constant_jacobian=True
-            )
-            self.solver = fd.LinearVariationalSolver(
-                self.problem,
+        if self.timestepper is not None:
+            self.ts = self.timestepper(
+                self.equations,
+                self.solution,
+                self.dt,
+                strong_bcs=self.strong_bcs,
                 solver_parameters=self.solver_parameters,
                 nullspace=self.nullspace,
                 transpose_nullspace=self.transpose_nullspace,
                 near_nullspace=self.near_nullspace,
                 appctx=self.appctx,
                 options_prefix=self.name,
+                **self.timestepper_kwargs,
             )
         else:
-            self.problem = fd.NonlinearVariationalProblem(
-                self.F, self.solution, bcs=self.strong_bcs, J=self.J
-            )
-            self.solver = fd.NonlinearVariationalSolver(
-                self.problem,
-                solver_parameters=self.solver_parameters,
-                nullspace=self.nullspace,
-                transpose_nullspace=self.transpose_nullspace,
-                near_nullspace=self.near_nullspace,
-                appctx=self.appctx,
-                options_prefix=self.name,
-            )
+            if self.constant_jacobian:
+                trial = fd.TrialFunction(self.solution_space)
+                F = fd.replace(self.F, {self.solution: trial})
+                a, L = fd.lhs(F), fd.rhs(F)
+
+                self.problem = fd.LinearVariationalProblem(
+                    a, L, self.solution, bcs=self.strong_bcs, constant_jacobian=True
+                )
+                self.solver = fd.LinearVariationalSolver(
+                    self.problem,
+                    solver_parameters=self.solver_parameters,
+                    nullspace=self.nullspace,
+                    transpose_nullspace=self.transpose_nullspace,
+                    near_nullspace=self.near_nullspace,
+                    appctx=self.appctx,
+                    options_prefix=self.name,
+                )
+            else:
+                self.problem = fd.NonlinearVariationalProblem(
+                    self.F, self.solution, bcs=self.strong_bcs, J=self.J
+                )
+
+                self.solver = fd.NonlinearVariationalSolver(
+                    self.problem,
+                    solver_parameters=self.solver_parameters,
+                    nullspace=self.nullspace,
+                    transpose_nullspace=self.transpose_nullspace,
+                    near_nullspace=self.near_nullspace,
+                    appctx=self.appctx,
+                    options_prefix=self.name,
+                )
 
     def solve(self) -> None:
         """Solves the system."""
-        self.solver.solve()
-        self.solution_old.assign(self.solution)
+        if self.timestepper is not None:
+            self.ts.advance()
+        else:
+            self.solver.solve()
 
 
 class StokesSolver(StokesSolverBase):
@@ -882,7 +904,6 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         *,
         dt: float,
         scaling_factor=1,
-        theta=1,
         **kwargs,
     ) -> None:
 
@@ -891,9 +912,9 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         # N.b. the potential for confusion as GIA modellers often use
         # mu to represent the shear modulus.
         approximation.mu = approximation.effective_viscosity(dt)
-        self.scaling_factor=scaling_factor
+        self.scaling_factor = scaling_factor
 
-        super().__init__(solution, approximation, dt=dt, theta=theta, **kwargs)
+        super().__init__(solution, approximation, dt=dt, **kwargs)
 
     def set_equations(self) -> None:
         u, *internal_variables = self.solution_split
@@ -908,36 +929,34 @@ class CoupledInternalVariableSolver(StokesSolverBase):
             for i in range(len(maxwell_times)):
                 maxwell_times[i] *= visc_factor
 
-        residual_terms = [
-            compressible_viscoelastic_terms,
-        ]
-        eqs_attrs = [
-            {"stress": stress, "source": source},
-        ]
-        mass_terms = [None]
-        scaling_factors = [self.scaling_factor]
-        
-        # Loop over number of internal variables
-        for i in range(len(maxwell_times)):
-            residual_terms.append(internal_variable_terms)
-            eqs_attrs.append(
-                {"source": strain / maxwell_times[i],
-                 "sink_coeff": 1 / maxwell_times[i]})
-            mass_terms.append(old_mass_term)
-            scaling_factors.append(-self.theta*self.scaling_factor)
+        self.equations.append(
+            Equation(
+                self.tests[0],
+                self.solution_space[0],
+                compressible_viscoelastic_terms,
+                eq_attrs={"stress": stress, "source": source},
+                approximation=self.approximation,
+                bcs=self.weak_bcs,
+                quad_degree=self.quad_degree,
+                scaling_factor=self.scaling_factor,
+            )
+        )
 
-        for i in range(len(self.tests)):
+        # Loop over number of internal variables
+        for i, maxwell_time in enumerate(maxwell_times):
             self.equations.append(
                 Equation(
-                    self.tests[i],
-                    self.solution_space[i],
-                    residual_terms[i],
-                    mass_term=mass_terms[i],
-                    eq_attrs=eqs_attrs[i],
+                    self.tests[i + 1],
+                    self.solution_space[i + 1],
+                    [*internal_variable_terms, mass_term],
+                    eq_attrs={
+                        "source": strain / maxwell_time,
+                        "sink_coeff": 1 / maxwell_time,
+                    },
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
                     quad_degree=self.quad_degree,
-                    scaling_factor=scaling_factors[i],
+                    scaling_factor=self.scaling_factor,
                 )
             )
 

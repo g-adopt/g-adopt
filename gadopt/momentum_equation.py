@@ -1,27 +1,17 @@
 r"""Derived terms and associated equations for the Stokes system.
 
-All terms are considered as if they were on the right-hand side of the equation, leading
-to the following UFL expression returned by the `residual` method:
+All terms are considered as if they were on the left-hand side of the equation, leading
+to the following UFL expression returned by `Equation`'s `residual` method:
 
 $$
-  (dq)/dt = sum "term.residual()"
+  dq / dt + F(q) = 0.
 $$
-
-This sign convention ensures compatibility with Thetis's time integrators. In general,
-however, we like to think about the terms as they are on the left-hand side. Therefore,
-in the residual methods below, we first sum the terms in the variable `F` as if they
-were on the left-hand side, i.e.
-
-$$
-  (dq)/dt + F(q) = 0,
-$$
-
-and then return `-F`.
 
 """
 
 from firedrake import *
 from firedrake.mesh import ExtrudedMeshTopology
+from ufl.indexed import Indexed
 
 from .equations import Equation, interior_penalty_factor
 from .utility import (
@@ -32,9 +22,7 @@ from .utility import (
 )
 
 
-def viscosity_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Viscosity term $-nabla * (mu nabla u)$ in the momentum equation.
 
     Using the symmetric interior penalty method (Epshteyn & Rivière, 2007), the weak
@@ -122,7 +110,7 @@ def viscosity_term(
             # be zero stress (i.e. free slip) or prescribed via "stress".
             F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
 
-            if hasattr(eq.approximation, 'bulk_modulus'):
+            if hasattr(eq.approximation, "bulk_modulus"):
                 trial_tensor_jump = identity * (dot(eq.n, trial) - bc["un"])
                 trial_tensor_jump += transpose(trial_tensor_jump)
                 bulk = eq.approximation.bulk_modulus * eq.approximation.bulk_shear_ratio
@@ -143,12 +131,10 @@ def viscosity_term(
         if "normal_stress" in bc:
             F += dot(eq.test, bc["normal_stress"] * eq.n) * eq.ds(bc_id)
 
-    return -F
+    return F
 
 
-def pressure_gradient_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def pressure_gradient_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     assert normal_is_continuous(eq.test)
 
     F = -dot(div(eq.test), eq.p) * eq.dx
@@ -160,12 +146,10 @@ def pressure_gradient_term(
         if "u" in bc or "un" in bc:
             F += dot(eq.test, eq.n) * eq.p * eq.ds(bc_id)
 
-    return -F
+    return F
 
 
-def divergence_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def divergence_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     assert normal_is_continuous(eq.u)
 
     rho = eq.rho_continuity
@@ -178,19 +162,15 @@ def divergence_term(
         elif "un" in bc:
             F -= eq.test * rho * (bc["un"] - dot(eq.n, eq.u)) * eq.ds(bc_id)
 
-    return -F
+    return F
 
 
-def momentum_source_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
-    F = -dot(eq.test, eq.source) * eq.dx
-
-    return -F
+def momentum_source_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
+    return -dot(eq.test, eq.source) * eq.dx
 
 
 def advection_hydrostatic_prestress_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     # Advection of background hydrostatic pressure used in linearised
     # GIA simulations. This method implements the volume integral and
@@ -222,7 +202,7 @@ def advection_hydrostatic_prestress_term(
     # viscous feedback at isostatic equibrium
     F -= div(eq.test) * eq.approximation.compressible_adv_hyd_pre(u_r) * eq.dx
 
-    return -F
+    return F
 
 
 viscosity_term.required_attrs = {"stress"}

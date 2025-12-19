@@ -1,35 +1,23 @@
 r"""Scalar terms (e.g. for temperature and salinity transport).
 
-All terms are considered as if they were on the right-hand side of the equation, leading
-to the following UFL expression returned by the `residual` method:
+All terms are considered as if they were on the left-hand side of the equation, leading
+to the following UFL expression returned by the `Equation`'s `residual` method:
 
 $$
-  (dq)/dt = sum "term.residual()"
+  (dq)/dt + F(q) = 0.
 $$
-
-This sign convention ensures compatibility with Thetis's time integrators. In general,
-however, we like to think about the terms as they are on the left-hand side. Therefore,
-in the residual methods below, we first sum the terms in the variable `F` as if they
-were on the left-hand side, i.e.
-
-$$
-  (dq)/dt + F(q) = 0,
-$$
-
-and then return `-F`.
 
 """
 
 from firedrake import *
+from irksome import Dt
+from ufl.indexed import Indexed
 
 from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous, normal_is_continuous
-from irksome import Dt
 
 
-def advection_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def advection_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar advection term (non-conservative): u \dot \div(q)."""
     advective_velocity_scaling = getattr(eq, "advective_velocity_scaling", 1)
     u = advective_velocity_scaling * eq.u
@@ -55,12 +43,10 @@ def advection_term(
             # On incoming boundaries, where dot(u, n) < 0, replace trial with bc["q"].
             F += eq.test * min_value(dot(u, eq.n), 0) * (bc["q"] - trial) * eq.ds(bc_id)
 
-    return -F
+    return F
 
 
-def diffusion_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def diffusion_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar diffusion term $-nabla * (kappa grad q)$.
 
     Using the symmetric interior penalty method, the weak form becomes
@@ -122,25 +108,21 @@ def diffusion_term(
             # (q_ext = trial) and flux = kappa dq/dn = dot(n, dot(diff_tensor, grad(q)).
             F -= eq.test * bc["flux"] * eq.ds(bc_id)
 
-    return -F
+    return F
 
 
-def source_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+def source_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar source term `s_T`."""
-    F = -inner(eq.test, eq.source) * eq.dx
-
-    return -F
+    return -inner(eq.test, eq.source) * eq.dx
 
 
-def sink_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+def sink_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar sink term `\alpha_T T`."""
     # Implement sink term implicitly at current time step.
-    F = inner(eq.test, eq.sink_coeff * trial) * eq.dx
-
-    return -F
+    return inner(eq.test, eq.sink_coeff * trial) * eq.dx
 
 
-def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     """UFL form for the mass term used in the time discretisation.
 
     Args:
@@ -153,29 +135,17 @@ def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
         The UFL form associated with the mass term of the equation.
 
     """
-    return dot(eq.test, Dt(trial)) * eq.dx
+    mass_scaling = getattr(eq, "mass_scaling", 1.0)
 
-
-def old_mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
-    """UFL form for the mass term used in the time discretisation.
-
-    Args:
-        eq:
-          G-ADOPT Equation.
-        trial:
-          Firedrake trial function.
-
-    Returns:
-        The UFL form associated with the mass term of the equation.
-
-    """
-    return inner(eq.test, trial) * eq.dx
+    return mass_scaling * inner(eq.test, Dt(trial)) * eq.dx
 
 
 advection_term.required_attrs = {"u"}
 advection_term.optional_attrs = {"advective_velocity_scaling", "su_nubar"}
 diffusion_term.required_attrs = {"diffusivity"}
 diffusion_term.optional_attrs = {"reference_for_diffusion", "interior_penalty"}
+mass_term.required_attrs = set()
+mass_term.optional_attrs = {"mass_scaling"}
 source_term.required_attrs = {"source"}
 source_term.optional_attrs = set()
 sink_term.required_attrs = {"sink_coeff"}
