@@ -3,7 +3,6 @@
 # Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
-from gadopt.time_stepper import DIRK33
 import numpy as np
 
 # We use a 40-by-40 mesh of squares.

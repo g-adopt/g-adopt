@@ -250,15 +250,9 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
             **self.timestepper_kwargs,
         )
 
-    def solver_callback(self) -> None:
-        """Optional instructions to execute right after a solve."""
-        pass
-
     def solve(self, t: float | None = None) -> None:
         """Advances solver in time."""
-        self.ts.advance(t=t)
-
-        self.solver_callback()
+        return self.ts.advance(t=t)
 
 
 class GenericTransportSolver(GenericTransportBase):

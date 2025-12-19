@@ -2,9 +2,9 @@
 # again using G-ADOPT's GenericTransportSolver and a CG discretisation with Streamline
 # Upwind (SU) stabilisation, albeit here we introduce some explicit diffusion.
 
-from gadopt import *
-from gadopt.time_stepper import DIRK33
 import numpy as np
+
+from gadopt import *
 
 # We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)

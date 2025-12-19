@@ -3,7 +3,6 @@
 # Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
-from gadopt.time_stepper import IrksomeRadauIIA
 import numpy as np
 
 # We use a 40-by-40 mesh of squares.
@@ -81,12 +80,12 @@ adv_solver = GenericTransportSolver(
     "advection",
     q,
     dt,
-    IrksomeRadauIIA,
+    RadauIIA,
     eq_attrs=eq_attrs,
     bcs=bcs,
     su_advection=True,
     timestepper_kwargs={
-        "order": 3,  # RadauIIA order
+        "tableau_parameter": 3,  # RadauIIA order
         "adaptive_parameters": {
             "tol": 1e-5,  # Error tolerance per step
             "dtmin": 1e-6,  # Minimum allowed dt
