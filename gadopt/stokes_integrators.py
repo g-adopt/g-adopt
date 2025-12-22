@@ -334,8 +334,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.F = sum(
             eq.residual(sol) for eq, sol in zip(self.equations, self.solution_split)
         )
-        if self.additional_forcing_term is not None:
-            self.F += self.additional_forcing_term
 
     def set_solver_options(
         self,
@@ -391,6 +389,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def set_solver(self) -> None:
         """Sets up the Firedrake variational problem and solver."""
+        if self.additional_forcing_term is not None:
+            self.F += self.additional_forcing_term
+
         if self.constant_jacobian:
             warn(
                 "Constant Jacobian specified for the Stokes system; please ensure that"
