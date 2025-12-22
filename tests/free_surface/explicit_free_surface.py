@@ -1,5 +1,6 @@
 from irksome import Dt
 from test_free_surface import run_benchmark
+from ufl.indexed import Indexed
 
 from gadopt import *
 from gadopt.equations import Equation
@@ -7,7 +8,7 @@ from gadopt.free_surface_equation import surface_velocity_term
 from gadopt.utility import vertical_component
 
 
-def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     """To be removed when `Dt` becomes used in `free_surface_equation.py`."""
     n_up = vertical_component(eq.n)
 
