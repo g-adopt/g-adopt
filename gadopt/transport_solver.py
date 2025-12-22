@@ -433,14 +433,14 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
 
         # Initialise the parent GenericTransportSolver
         super().__init__(
-            "diffusion",
+            ["diffusion", "mass"],
             solution,
             dt,
             BackwardEuler,
             eq_attrs={"diffusivity": ensure_constant(K)},
             bcs=bcs,
             solver_parameters=solver_parameters,
-            **kwargs
+            **kwargs,
         )
 
     def _calculate_diffusive_time_step(

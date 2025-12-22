@@ -1,9 +1,21 @@
+from irksome import Dt
 from test_free_surface import run_benchmark
 
 from gadopt import *
 from gadopt.equations import Equation
-from gadopt.free_surface_equation import free_surface_term, mass_term
+from gadopt.free_surface_equation import surface_velocity_term
+from gadopt.utility import vertical_component
 
+
+def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+    """To be removed when `Dt` becomes used in `free_surface_equation.py`."""
+    n_up = vertical_component(eq.n)
+
+    return eq.test * Dt(eq.buoyancy_scale * trial) * n_up * eq.ds(eq.boundary_id)
+
+
+mass_term.required_attrs = {"buoyancy_scale", "boundary_id"}
+mass_term.optional_attrs = set()
 
 class ExplicitFreeSurfaceModel:
     # Test case from Section 3.1.1 of `An implicit free surface algorithm
@@ -142,13 +154,13 @@ class ExplicitFreeSurfaceModel:
         }
 
         # Setup remaining free surface parameters needed for explicit coupling
+        # Initialise the separate free surface equation for explicit coupling
         eta_eq = Equation(
             TestFunction(self.W),
             self.W,
-            free_surface_term,
-            mass_term=mass_term,
+            [mass_term, surface_velocity_term],
             eq_attrs=eq_attrs,
-        )  # Initialise the separate free surface equation for explicit coupling
+        )
         # Apply strong homogenous boundary to interior DOFs to prevent a singular matrix when only integrating the free surface equation over the top surface.
         eta_strong_bcs = [InteriorBC(self.W, 0., self.boundary.top)]
 
