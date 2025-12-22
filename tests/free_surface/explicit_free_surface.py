@@ -17,6 +17,7 @@ def mass_term(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) ->
 mass_term.required_attrs = {"buoyancy_scale", "boundary_id"}
 mass_term.optional_attrs = set()
 
+
 class ExplicitFreeSurfaceModel:
     # Test case from Section 3.1.1 of `An implicit free surface algorithm
     # for geodynamical simulations', Kramer et al 2012.
