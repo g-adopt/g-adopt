@@ -560,7 +560,7 @@ class StokesSolver(StokesSolverBase):
 
     def set_form(self) -> None:
         super().set_form()
-        self.F
+
         for eq, sol, sol_old in zip(
             self.free_surface_equations,
             self.solution_split[2:],
