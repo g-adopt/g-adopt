@@ -44,7 +44,7 @@ def expected_errors():
 
 
 cases = [
-    pytest.param("explicit", [1.4, 1.1, 1.0], marks=pytest.mark.xfail(reason="Free surface mass term needs Irksome Dt operator")),
+    ("explicit", [1.4, 1.1, 1.0]),
     ("implicit", [2.0, 2.0, 2.0]),
     ("implicit-iterative", [2.0, 2.0, 2.0]),
     ("implicit-both-top", [2.0, 2.0, 2.0]),

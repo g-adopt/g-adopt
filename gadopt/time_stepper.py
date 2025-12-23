@@ -152,13 +152,9 @@ class IrksomeIntegrator:
         if isinstance(equation, fd.Form):
             F = equation
         elif isinstance(equation, list):
-            F = 0.0
-            for eq, sol in zip(equation, fd.split(solution)):
-                if eq.mass_term is not None:
-                    F += eq.mass(sol)
-                F -= eq.residual(sol)
+            F = sum(eq.residual(sol) for eq, sol in zip(equation, fd.split(solution)))
         else:
-            F = equation.mass(solution) - equation.residual(solution)
+            F = equation.residual(solution)
 
         # Build kwargs for Irksome TimeStepper
         # Start with g-adopt's standard parameters
