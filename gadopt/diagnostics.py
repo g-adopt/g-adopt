@@ -27,8 +27,8 @@ def get_dx(mesh, quad_degree: int) -> fd.Measure:
 
 
 @cache
-def get_ds(mesh, function_space, quad_degree: int) -> fd.Measure:
-    if function_space.extruded:
+def get_ds(mesh, quad_degree: int) -> fd.Measure:
+    if mesh.extruded:
         return CombinedSurfaceMeasure(mesh, quad_degree)
     else:
         return fd.ds(domain=mesh, degree=quad_degree)
@@ -97,7 +97,7 @@ class FunctionContext:
         The surface integration measure defined by the mesh and
         `quad_degree` passed when creating this instance
         """
-        return get_ds(self.mesh, self.function_space, self._quad_degree)
+        return get_ds(self.mesh, self._quad_degree)
 
     @cached_property
     def normal(self):
@@ -112,12 +112,21 @@ class FunctionContext:
     @cached_property
     def boundary_ids(self):
         """The boundary IDs of the mesh associated with this instance"""
-        return self.mesh.topology.exterior_facets.unique_markers
+        return (
+            tuple(self.mesh.topology.exterior_facets.unique_markers) + ("top", "bottom")
+            if self.mesh.extruded
+            else ()
+        )
 
     @cache
     def check_boundary_id(self, boundary_id: Sequence[int | str] | int | str) -> None:
         """Check if a boundary id or tuple of boundary ids is valid"""
-        if isinstance(boundary_id, Sequence):
+        # strings are Sequences, so have to handle this first otherwise this function
+        # searches for 't' 'o' 'p' in ( 'top', 'bottom' )
+        if isinstance(boundary_id, str):
+            if boundary_id not in self.boundary_ids:
+                raise KeyError("Invalid boundary ID for function")
+        elif isinstance(boundary_id, Sequence):
             if not all(id in self.boundary_ids for id in boundary_id):
                 raise KeyError("Invalid boundary ID for function")
         else:
