@@ -112,10 +112,8 @@ class FunctionContext:
     @cached_property
     def boundary_ids(self):
         """The boundary IDs of the mesh associated with this instance"""
-        return (
-            tuple(self.mesh.topology.exterior_facets.unique_markers) + ("top", "bottom")
-            if self.mesh.extruded
-            else ()
+        return tuple(self.mesh.topology.exterior_facets.unique_markers) + (
+            ("top", "bottom") if self.mesh.extruded else ()
         )
 
     @cache
