@@ -53,6 +53,7 @@ jobs:
         with:
           repository: mesh-adaptation/animate
           path: animate
+          submodules: true
 
       - name: Install dependencies
         run: |
