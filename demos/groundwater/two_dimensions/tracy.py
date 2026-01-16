@@ -93,5 +93,5 @@ while time < t_final:
 
 
 # Compute L2 norm of error
-hExact = exact_solution(X, t_final+offset)
-print("L2 error: ", assemble(sqrt(dot((h - hExact), (h - hExact)))*dx))
+hExact = exact_solution(x, t_final+offset, soil_curves)
+PETSc.Sys.Print("L2 error: ", sqrt(assemble((h - hExact)**2 * eq.dx)))
