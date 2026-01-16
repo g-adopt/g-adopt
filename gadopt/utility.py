@@ -518,7 +518,24 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
     averager.extrapolate_layer_average(function, interpolated_visc)
 
 
-def get_boundary_ids(mesh) -> SimpleNamespace:
+class BoundaryIDNamespace(SimpleNamespace):
+    def keys(self):
+        return self.__dict__.keys()
+
+    def items(self):
+        return self.__dict__.items()
+
+    def values(self):
+        return self.__dict__.values()
+
+    def __contains__(self, item):
+        return item in self.values()
+
+    def __iter__(self):
+        return self.values().__iter__()
+
+
+def get_boundary_ids(mesh) -> BoundaryIDNamespace:
     # PETSc creates these labels when loading meshes from files, Firedrake imitates it
     # in its own mesh creation functions.
 
@@ -587,7 +604,7 @@ def get_boundary_ids(mesh) -> SimpleNamespace:
     # utilised by 'CombinedSurfaceMeasure' above
     else:
         kwargs = {"bottom": "bottom", "top": "top"}
-    return SimpleNamespace(**kwargs)
+    return BoundaryIDNamespace(**kwargs)
 
 
 def extruded_layer_heights(

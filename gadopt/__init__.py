@@ -11,7 +11,7 @@ from .approximations import (
     QuasiCompressibleInternalVariableApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
-from .diagnostics import GeodynamicalDiagnostics
+from .diagnostics import *
 from .level_set_tools import (
     LevelSetSolver,
     assign_level_set_values,
@@ -30,13 +30,7 @@ from .stokes_integrators import (
     StokesSolver,
     ViscoelasticStokesSolver,
 )
-from .time_stepper import (
-    BackwardEuler,
-    CrankNicolsonRK,
-    ImplicitMidpoint,
-    eSSPRKs3p3,
-    eSSPRKs10p3,
-)
+from .time_stepper import *
 from .transport_solver import DiffusiveSmoothingSolver, EnergySolver, GenericTransportSolver
 from .utility import (
     InteriorBC,

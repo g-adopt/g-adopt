@@ -21,7 +21,11 @@ cases = {
     f"{mc_path}/3d_cartesian": {"extra_checks": ["nu_top"], "rtol": 1e-4},
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
     f"{mc_path}/Drucker_Prager": {"extra_checks": ["ux_max"]},
+    f"{mm_path}/2d_cylindrical": {
+        "extra_checks": ["nu_top", "T_min", "T_max", "entrainment"]
+    },
     f"{mm_path}/compositional_buoyancy": {"extra_checks": ["entrainment"]},
+    f"{mm_path}/free_surface": {"extra_checks": ["slab_tip_depth"]},
     f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
     f"{gia_path}/base_case": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["uv_min"]},
@@ -32,7 +36,7 @@ cases = {
     },
     f"{tests_path}/viscoplastic_case_DG": {"extra_checks": ["nu_top", "avg_t"]},
     f"{tests_path}/3d_weerdesteijn": {"extra_checks": ["uv_min"]},
-    f"{tests_path}/3d_spada": {"extra_checks": ["uv_min"]},
+    f"{tests_path}/3d_spada": {"extra_checks": ["disp_min", "disp_max"]},
     f"{tests_path}/3d_sphere_burgers": {"extra_checks": ["uv_min"]},
 }
 

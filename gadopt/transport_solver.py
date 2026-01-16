@@ -9,7 +9,7 @@ documented parameters and call the `solve` method to request a solver update.
 import abc
 from collections.abc import Mapping
 from numbers import Number
-from typing import Any, Callable
+from typing import Any
 
 from firedrake import *
 
@@ -17,7 +17,7 @@ from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
-from .time_stepper import BackwardEuler, RungeKuttaTimeIntegrator
+from .time_stepper import BackwardEuler, IrksomeIntegrator
 from .utility import DEBUG, INFO, absv, ensure_constant, is_continuous, log, log_level
 
 __all__ = [
@@ -90,6 +90,9 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         provided to PETSc
       solver_parameters_extra:
         Dictionary of PETSc solver options used to update the default G-ADOPT options
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterised schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -108,18 +111,20 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         solution: Function,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         *,
         solution_old: Function | None = None,
         eq_attrs: dict[str, float] = {},
         bcs: dict[int, dict[str, Number]] = {},
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
+        timestepper_kwargs: dict[str, Any] | None = None,
         su_advection: bool = False,
     ) -> None:
         self.solution = solution
         self.delta_t = delta_t
         self.timestepper = timestepper
+        self.timestepper_kwargs = timestepper_kwargs or {}
         self.solution_old = solution_old or Function(solution)
         self.eq_attrs = eq_attrs
         self.bcs = bcs
@@ -242,17 +247,12 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
             solution_old=self.solution_old,
             solver_parameters=self.solver_parameters,
             strong_bcs=self.strong_bcs,
+            **self.timestepper_kwargs,
         )
 
-    def solver_callback(self) -> None:
-        """Optional instructions to execute right after a solve."""
-        pass
-
-    def solve(self, update_forcings: Callable | None = None, t: float | None = None) -> None:
+    def solve(self, t: float | None = None) -> None:
         """Advances solver in time."""
-        self.ts.advance(update_forcings, t)
-
-        self.solver_callback()
+        return self.ts.advance(t=t)
 
 
 class GenericTransportSolver(GenericTransportBase):
@@ -290,6 +290,9 @@ class GenericTransportSolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -304,7 +307,7 @@ class GenericTransportSolver(GenericTransportBase):
         solution: Function,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         **kwargs,
     ) -> None:
         self.terms = [terms] if isinstance(terms, str) else terms
@@ -345,6 +348,9 @@ class EnergySolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -360,7 +366,7 @@ class EnergySolver(GenericTransportBase):
         approximation: BaseApproximation,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         **kwargs,
     ) -> None:
         self.u = u

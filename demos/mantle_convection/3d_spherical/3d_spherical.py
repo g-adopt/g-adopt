@@ -142,7 +142,6 @@ stokes_solver = StokesSolver(
     approximation,
     T,
     bcs=stokes_bcs,
-    constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
@@ -174,8 +173,8 @@ for timestep in range(0, timesteps):
     energy_solver.solve()
 
     # Compute diagnostics:
-    nusselt_number_top = gd.Nu_top() * (rmax*(rmin-rmax)/rmin) * -1.
-    nusselt_number_base = gd.Nu_bottom() * (rmin*(rmax-rmin)/rmax)
+    nusselt_number_top = gd.Nu_top(scale=(rmax * (rmin - rmax) / rmin) * -1.0)
+    nusselt_number_base = gd.Nu_bottom(scale=(rmin * (rmax - rmin) / rmax))
     energy_conservation = abs(abs(nusselt_number_top) - abs(nusselt_number_base))
     T_dev_avg = assemble(T_dev * dx) / domain_volume
 
