@@ -13,9 +13,9 @@ where $\alpha=0.25$, $hr=-L$, and $h_0 =  1 - exp(alpha*h_r)$. For the initial c
 """
 
 L = 15.24    # Domain length [m]
-nodes = 251  # Number of grid points in each direction
+nodes = 101  # Number of grid points in each direction
 
-dt = Constant(4000)
+dt = Constant(1000)
 t_final = 1e05
 
 mesh = RectangleMesh(nodes, nodes, L, L, name="mesh", quadrilateral=True)
@@ -78,10 +78,8 @@ richards_solver = RichardsSolver(
     h,
     soil_curve,
     delta_t=dt,
-    timestepper=DIRK22,
+    timestepper=ImplicitMidpoint,
     bcs=richards_bcs,
-    solver_parameters="direct",
-    quad_degree=5,
 )
 
 time = 0
@@ -93,5 +91,5 @@ while time < t_final:
 
 
 # Compute L2 norm of error
-hExact = exact_solution(x, t_final+offset)
+hExact = exact_solution(X, t_final+offset)
 PETSc.Sys.Print("L2 error: ", sqrt(assemble((h - hExact)**2 * dx)))
