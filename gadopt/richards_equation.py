@@ -89,8 +89,8 @@ def richards_mass_term(
     # Mass coefficient
     mass_coeff = soil_curve.Ss * S + C
 
-    #return inner(eq.test, mass_coeff * Dt(h)) * eq.dx
-    return inner(eq.test, 1 * Dt(theta)) * eq.dx
+    return inner(eq.test, mass_coeff * Dt(h)) * eq.dx
+    #return inner(eq.test, 1 * Dt(theta)) * eq.dx
 
 
 def richards_diffusion_term(

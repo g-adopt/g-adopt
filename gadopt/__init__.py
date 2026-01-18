@@ -60,6 +60,8 @@ from .utility import (
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,
+    data_2_function,
+    load_spatial_field,
     interpolate_1d_profile,
     log,
     node_coordinates,

@@ -20,6 +20,8 @@ from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
+import pandas as pd
+from scipy.interpolate import griddata
 
 try:
     from firedrake import MeshSequenceGeometry
@@ -664,3 +666,32 @@ def initialise_background_field(
             conditional(vertical_component(X) + shift > radii[i+1],
                         conditional(vertical_component(X) + shift <= radii[i],
                                     background_values[i], f), f))
+
+
+def data_2_function(mesh_coords, file_name):
+    # Takes a data set that defines a value defined at the surface of the mesh and defines a firedrake function from this data
+
+    x_coord = mesh_coords[:, 0]
+    y_coord = mesh_coords[:, 1]
+    elevation = x_coord*0
+
+    data = pd.read_csv(file_name)
+
+    x_surface = data['x']
+    y_surface = data['y']
+    z_surface = data['z']
+
+    points = np.vstack((x_surface, y_surface))
+    points = points.T
+
+    elevation = griddata(points, z_surface, (x_coord, y_coord), method='linear')
+
+    return elevation
+
+
+def load_spatial_field(name, filename, V, Vcg, mesh_coords):
+
+    """Load a CSV field and interpolate it into the DG space V."""
+    cg_field = Function(Vcg)
+    cg_field.dat.data[:] = data_2_function(mesh_coords, filename)
+    return Function(V, name=name).interpolate(cg_field)
