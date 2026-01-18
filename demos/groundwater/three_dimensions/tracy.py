@@ -13,16 +13,16 @@ where $\alpha=0.25$, $hr=-L$, and $h_0 =  1 - exp(alpha*h_r)$. For the initial c
 """
 
 L = 15.24    # Domain length [m]
-nodes = 26  # Number of grid points in each direction
+nodes = 51  # Number of grid points in each direction
 
-dt = Constant(10000)
+dt = Constant(1000)
 t_final = 1e05
 
 mesh2D = RectangleMesh(nodes, nodes, L, L, quadrilateral=True)
 mesh = ExtrudedMesh(mesh2D, nodes, layer_height=L/nodes)
 X = SpatialCoordinate(mesh)
 
-V = FunctionSpace(mesh, "DQ", 2)
+V = FunctionSpace(mesh, "DQ", 0)
 
 soil_curve = ExponentialCurve(
     theta_r=0.15,  # Residual water content [-]
@@ -82,8 +82,6 @@ richards_solver = RichardsSolver(
     delta_t=dt,
     timestepper=ImplicitMidpoint,
     bcs=richards_bcs,
-    solver_parameters="iterative",
-    quad_degree=5,
 )
 
 time = 0
@@ -96,4 +94,4 @@ while time < t_final:
 
 # Compute L2 norm of error
 hExact = exact_solution(X, t_final+offset)
-print("L2 error: ", assemble(sqrt(dot((h - hExact), (h - hExact)))*dx))
+PETSc.Sys.Print("L2 error: ", sqrt(assemble((h - hExact)**2 * dx)))
