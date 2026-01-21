@@ -41,6 +41,7 @@ where:
 
 from firedrake import *
 from irksome import Dt
+from ufl.indexed import Indexed
 
 from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous
@@ -53,7 +54,7 @@ __all__ = [
 
 
 def richards_mass_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     r"""Richards equation mass term with nonlinear capacity.
 
@@ -92,7 +93,7 @@ def richards_mass_term(
 
 
 def richards_diffusion_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     r"""Richards diffusion term for pressure-driven flow using SIPG.
 
@@ -175,7 +176,7 @@ def richards_diffusion_term(
 
 
 def richards_gravity_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     r"""Richards gravity term for gravity-driven flow with upwinding.
 

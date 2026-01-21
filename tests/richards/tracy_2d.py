@@ -91,12 +91,12 @@ def model(level, bc_type='specified_head', do_write=False):
     t_final = 1.0e6
     dt = Constant(5000.0)  # Initial time step size [s]
 
-    # Create Richards solver with IrksomeRadauIIA adaptive timestepper
+    # Create Richards solver with RadauIIA adaptive timestepper
     richards_solver = RichardsSolver(
         h,
         soil_curve,
         delta_t=dt,
-        timestepper=IrksomeRadauIIA,
+        timestepper=RadauIIA,
         bcs=richards_bcs,
         solver_parameters="direct",
         quad_degree=3,

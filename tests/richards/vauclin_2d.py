@@ -69,7 +69,7 @@ def model(level, do_write=False):
     t_final = 86400.0  # 1 day [s]
     dt = Constant(10.0)  # Initial time step [s]
 
-    # Create Richards solver with IrksomeRadauIIA adaptive timestepper
+    # Create Richards solver with ImplicitMidpoint timestepper
     richards_solver = RichardsSolver(
         h,
         soil_curve,
