@@ -298,9 +298,9 @@ if OUTPUT:
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max uv_min"
+    "timestep time dt u_rms u_rms_surf ux_max disp_min disp_max"
 )
-gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
+gd = GIADiagnostics(u, boundary.bottom, boundary.top)
 
 
 checkpoint_filename = f"{args.output_path}{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
@@ -323,34 +323,32 @@ for timestep in range(1, max_timesteps+1):
     time.assign(time+dt)
     coupled_solver.solve()
 
-    # Log diagnostics:
-    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
-                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uv_min(boundary.top)}")
     # Compute diagnostics:
 
     velocity.interpolate((u-old_disp)/dt)
     old_disp.interpolate(u)
 
-    # output dimensional vertical displacement
-    vertical_displacement.interpolate(vc(u)*D)
-    bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
-    displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
     # Minimum displacement at surface (should be top left corner with
     # greatest (-ve) deflection due to ice loading
-    displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)
-    log("Greatest (-ve) displacement", displacement_min)
-    displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
-    displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)
-    log("Greatest (+ve) displacement", displacement_max)
+    displacement_min = gd.uv_min(boundary.top)
+    log("Greatest (-ve) displacement", displacement_min*D)
+    displacement_max = gd.uv_max(boundary.top)
+    log("Greatest (+ve) displacement", displacement_max*D)
     displacement_min_array.append(
         [float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds),
             displacement_min])
+
+    # Log diagnostics:
+    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+                 f"{displacement_min*D} {displacement_max*D}")
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)
 
         if OUTPUT:
+            # output dimensional vertical displacement
+            vertical_displacement.interpolate(vc(u)*D)
             output_file.write(u, *m_list, vertical_displacement, velocity)
 
         with CheckpointFile(checkpoint_filename, "w") as checkpoint:

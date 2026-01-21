@@ -21,7 +21,6 @@ from gadopt import *
 from gadopt.utility import CombinedSurfaceMeasure
 from gadopt.utility import extruded_layer_heights
 from gadopt.utility import initialise_background_field
-from gadopt.utility import vertical_component as vc
 import argparse
 import numpy as np
 import scipy
@@ -360,7 +359,7 @@ plog = ParameterLog("params.log", mesh)
 plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max uv_min"
 )
-gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
+gd = GIADiagnostics(u, boundary.bottom, boundary.top)
 
 checkpoint_filename = f"{args.output_path}{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
 
@@ -389,14 +388,9 @@ for timestep in range(1, max_timesteps+1):
     old_disp.interpolate(u)
 
     # output dimensional vertical displacement
-    vertical_displacement.interpolate(vc(u)*D)
-    bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
-    displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
-    displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)
+    displacement_min = gd.uv_min(boundary.top)
     log("Greatest (-ve) displacement", displacement_min)
-    displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
-    displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)
-    log("Greatest (+ve) displacement", displacement_max)
+    log("Greatest (+ve) displacement", gd.uv_max(boundary.top))
     displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds),
                                    displacement_min])
 

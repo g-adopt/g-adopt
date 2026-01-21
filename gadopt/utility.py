@@ -529,7 +529,7 @@ class BoundaryIDNamespace(SimpleNamespace):
         return self.__dict__.values()
 
     def __contains__(self, item):
-        return item in self.__dict__
+        return item in self.values()
 
     def __iter__(self):
         return self.values().__iter__()

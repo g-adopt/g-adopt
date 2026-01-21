@@ -157,21 +157,21 @@ gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 # First of all, as the Stokes equation now includes a time dependent
 # boundary condition we need to pass the timestep to the Stokes solver.
 #
-# Also it is important to make sure that the *constant_jacobian* option is switched to *False* if the
-# free surface is used in combination with adaptive timestepping! For the base case we
-# can make the simulation a bit faster by only building the Stokes block matrix associated
-# with the LHS of the Stokes equations at the first timestep, because none of the prefactors
-# change in time. However, the timestep appears on the LHS of the equations when the free
-# surface is activated, so we need to reassamble this block matrix at each timestep if we use an adapative timestepping method.
+# Also it is important to make sure that the `constant_jacobian` option is switched to
+# `False` (the default value) if the free surface is used in combination with adaptive
+# timestepping! For the base case we could make the simulation a bit faster by only
+# building the Stokes block matrix associated with the LHS of the Stokes equations at
+# the first timestep, because none of the prefactors change in time. However, the
+# timestep appears on the LHS of the equations when the free surface is activated, so we
+# need to reassamble this block matrix at each timestep if we use an adapative
+# timestepping method.
 
 # +
 energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
-stokes_solver = StokesSolver(
-    z, approximation, T, dt=delta_t, bcs=stokes_bcs, constant_jacobian=False
-)
+stokes_solver = StokesSolver(z, approximation, T, dt=delta_t, bcs=stokes_bcs)
 
 # -
 
@@ -228,6 +228,7 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt
 # import pyvista as pv
+# import numpy as np
 #
 # # Read the PVD file
 # reader = pv.get_reader("output.pvd")

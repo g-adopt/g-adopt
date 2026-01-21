@@ -5,8 +5,9 @@
 # so it is a good test of the tensor implementation of SU, compared
 # with the quasi 1D demo based on Figure 2.7.
 
+import numpy as np
+
 from gadopt import *
-from gadopt.time_stepper import DIRK33
 
 nx, ny = 10, 10
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)

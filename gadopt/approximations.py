@@ -11,7 +11,8 @@ from numbers import Number
 from typing import Optional
 from warnings import warn
 
-from firedrake import Function, Identity, div, grad, inner, sym, ufl, tr
+from firedrake import Function, Identity, div, grad, inner, sym, tr
+import ufl
 
 from .utility import ensure_constant, vertical_component
 

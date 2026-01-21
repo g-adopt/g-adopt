@@ -3,7 +3,6 @@
 # Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
-from gadopt.time_stepper import IrksomeRadauIIA
 import numpy as np
 
 # We use a 40-by-40 mesh of squares.
@@ -78,18 +77,23 @@ bc_in = {"q": q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 eq_attrs = {"u": u}
 adv_solver = GenericTransportSolver(
-    "advection", q, dt, IrksomeRadauIIA,
-    eq_attrs=eq_attrs, bcs=bcs, su_advection=True,
+    "advection",
+    q,
+    dt,
+    RadauIIA,
+    eq_attrs=eq_attrs,
+    bcs=bcs,
+    su_advection=True,
     timestepper_kwargs={
-        'order': 3,  # RadauIIA order
-        'adaptive_parameters': {
-            'tol': 1e-3,        # Error tolerance per step
-            'dtmin': 1e-6,      # Minimum allowed dt
-            'dtmax': T/100.0,   # Maximum allowed dt (reasonable fraction of total time)
-            'KI': 1/15,         # Integration gain
-            'KP': 0.13          # Proportional gain
-        }
-    }
+        "tableau_parameter": 3,  # RadauIIA order
+        "adaptive_parameters": {
+            "tol": 1e-5,  # Error tolerance per step
+            "dtmin": 1e-6,  # Minimum allowed dt
+            "dtmax": T / 100.0,  # Maximum allowed dt (sensible fraction of total time)
+            "KI": 1 / 15,  # Integration gain
+            "KP": 0.13,  # Proportional gain
+        },
+    },
 )
 
 # Get nubar (additional SU diffusion) for plotting
@@ -103,10 +107,6 @@ t = 0.0
 step = 0
 dt_values = []  # Store all timestep values for testing
 while t < T:
-    # Set maximum dt to prevent overshooting final time
-    if hasattr(adv_solver.ts, 'dt_max'):
-        adv_solver.ts.dt_max = T - t
-
     # Advance with adaptive timestepping
     adv_solver.solve(t=t)
 
@@ -115,6 +115,9 @@ while t < T:
     dt_values.append(dt_used)
     t += dt_used
     step += 1
+
+    if T - t < dt_used:  # Set maximum dt to prevent overshooting final time
+        adv_solver.ts.stepper.dt_max = T - t
 
     if step % 20 == 0:
         outfile.write(q)
@@ -131,4 +134,4 @@ print(final_error)
 # Save results for testing: final error, number of steps, and timestep statistics
 np.savetxt("final_error_adaptive.log", [final_error])
 np.savetxt("num_steps_adaptive.log", [step])
-np.savetxt("dt_stats_adaptive.log", [np.min(dt_values), np.max(dt_values), np.mean(dt_values)])
+np.savetxt("dt_stats_adaptive.log", dt_values)

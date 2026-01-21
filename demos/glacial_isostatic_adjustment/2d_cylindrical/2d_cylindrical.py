@@ -23,11 +23,12 @@ from gadopt.utility import (
     extruded_layer_heights,
     initialise_background_field
 )
+import numpy as np
 
-# We next import a helper function from the gadopt_demo_utils package
-# to set up a synthetic ice sheet later on.
+# We also import a helper function for setting up the ice sheet load associated
+# with this demo.
 
-from gadopt_demo_utils.gia_demo_utils import ice_sheet_disc
+from gadopt.demos.glacial_isostatic_adjustment.utils import ice_sheet_disc
 
 # We also import some helper functions for plotting and making animations associated
 # with this demo.
@@ -159,7 +160,13 @@ initialise_background_field(
 # Let's put a larger one over the South Pole, with a total horizontal
 # extent of 40 $^\circ$ and a maximum thickness of 2 km, and a smaller one offset from the
 # North Pole with a width of 20 $^\circ$ and a maximum thickness of 1 km. To simplify
-# things let's keep the ice load fixed in time.
+# things let's keep the ice load fixed in time. We can inspect the `ice_sheet_disc`
+# function with the code below.
+
+# + tags=["active-ipynb"]
+# import inspect
+# print(inspect.getsource(ice_sheet_disc))
+# -
 
 # +
 # Initialise ice loading
@@ -257,13 +264,7 @@ V_nullspace = rigid_body_modes(V, rotational=True)
 # list of internal variables, boundary conditions and nullspaces.
 
 stokes_solver = InternalVariableSolver(
-    u,
-    approximation,
-    dt=dt,
-    internal_variables=m,
-    bcs=stokes_bcs,
-    constant_jacobian=True,
-    nullspace=V_nullspace,
+    u, approximation, dt=dt, internal_variables=m, bcs=stokes_bcs, nullspace=V_nullspace
 )
 
 # We next set up our output in VTK format and the the logging file using `GeodynamicalDiagnostics` as before.
@@ -283,7 +284,7 @@ plog.log_str(
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
-gd = GeodynamicalDiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
+gd = GIADiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
 # Now let's run the simulation! At each step we call `solve` to calculate the
