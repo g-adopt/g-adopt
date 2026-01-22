@@ -509,3 +509,33 @@ class TestSolverParameters:
         integrator = RadauIIA(equation, u, dt=0.01, solver_parameters=solver_params)
 
         assert integrator is not None
+
+
+class TestOptionsPrefixPropagation:
+    """Test that solver options_prefix is correctly propagated to PETSc."""
+
+    @pytest.mark.parametrize("scheme", [ForwardEuler, DIRK33, ImplicitMidpoint])
+    def test_prefix_propagation_various_schemes(self, scheme):
+        """Test prefix propagation works across different scheme types."""
+        mesh = UnitSquareMesh(5, 5)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
+        equation = Equation(
+            test,
+            V,
+            residual_terms=[diffusion_term, source_term],
+            mass_term=mass_term,
+            eq_attrs=eq_attrs,
+        )
+
+        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme=scheme)
+
+        solver = integrator.stepper.solver
+        prefix = solver.snes.getOptionsPrefix()
+
+        # Verify prefix matches integrator name
+        expected_prefix = integrator.name + "_"
+        assert prefix == expected_prefix

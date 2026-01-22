@@ -166,6 +166,7 @@ class IrksomeIntegrator:
             "stage_type": stage_type,
             "bcs": strong_bcs,
             "solver_parameters": solver_parameters,
+            "options_prefix": self.name,
         }
         # Add bc_type only for stage formulations that support it
         if stage_type == "deriv":
