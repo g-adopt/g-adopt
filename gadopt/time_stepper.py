@@ -249,14 +249,17 @@ class IrksomeIntegrator:
         # Handle adaptive timestepping return value
         if self.is_adaptive:
             # Irksome returns (error, dt_used) tuple when adaptive is enabled
+            # Note: adapt_dt is the dt that was USED in this step
+            # self.dt_irksome now contains the NEW recommended dt for next step
             adapt_error, adapt_dt = result
 
             # Sync dt from Irksome back to user
-            # (Irksome updated dt_irksome internally during adaptive step)
-            self.dt_reference.assign(adapt_dt)
+            # Use dt_irksome (new recommendation), not adapt_dt (old used value)
+            self.dt_reference.assign(self.dt_irksome)
 
-            # Return tuple so users can track the actual dt used
-            return adapt_error, adapt_dt
+            # Return the new recommended dt for the G-ADOPT usage pattern:
+            # error, dt = solver.solve(); delta_t.assign(dt)
+            return adapt_error, float(self.dt_irksome)
 
     @property
     def time(self) -> float:
