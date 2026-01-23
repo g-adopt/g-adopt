@@ -102,6 +102,7 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
     terms_mapping = {
         "advection": scalar_eq.advection_term,
         "diffusion": scalar_eq.diffusion_term,
+        "mass": scalar_eq.mass_term,
         "sink": scalar_eq.sink_term,
         "source": scalar_eq.source_term,
     }
@@ -269,6 +270,7 @@ class GenericTransportSolver(GenericTransportBase):
         | --------- | --------------------- | ----------------------------------------- |
         | advection | u                     | advective_velocity_scaling, su_nubar      |
         | diffusion | diffusivity           | reference_for_diffusion, interior_penalty |
+        | mass      | diffusivity           | mass_scaling                              |
         | source    | source                |                                           |
         | sink      | sink_coeff            |                                           |
 
@@ -319,7 +321,6 @@ class GenericTransportSolver(GenericTransportBase):
             self.test,
             self.solution_space,
             residual_terms=[self.terms_mapping[term] for term in self.terms],
-            mass_term=scalar_eq.mass_term,
             eq_attrs=self.eq_attrs,
             bcs=self.weak_bcs,
         )
@@ -382,6 +383,7 @@ class EnergySolver(GenericTransportBase):
         self.eq_attrs |= {
             "advective_velocity_scaling": rho_cp,
             "diffusivity": self.approximation.kappa(),
+            "mass_scaling": rho_cp,
             "reference_for_diffusion": self.approximation.Tbar,
             "sink_coeff": self.approximation.linearized_energy_sink(self.u),
             "source": self.approximation.energy_source(self.u),
@@ -392,7 +394,6 @@ class EnergySolver(GenericTransportBase):
             self.test,
             self.solution_space,
             residual_terms=self.terms_mapping.values(),
-            mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
             eq_attrs=self.eq_attrs,
             approximation=self.approximation,
             bcs=self.weak_bcs,
@@ -433,14 +434,14 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
 
         # Initialise the parent GenericTransportSolver
         super().__init__(
-            "diffusion",
+            ["diffusion", "mass"],
             solution,
             dt,
             BackwardEuler,
             eq_attrs={"diffusivity": ensure_constant(K)},
             bcs=bcs,
             solver_parameters=solver_parameters,
-            **kwargs
+            **kwargs,
         )
 
     def _calculate_diffusive_time_step(

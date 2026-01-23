@@ -67,7 +67,7 @@ def model(n, Pe=0.25, su_advection=True, do_write=False):
     # considered non-dimensional and controlled only by the thermal diffusivity and heat
     # source values. We use the diagonally implicit DIRK33 Runge-Kutta method for
     # timestepping.
-    terms = ["advection", "diffusion", "source"]
+    terms = ["advection", "diffusion", "mass", "source"]
     eq_attrs = {"diffusivity": kappa, "source": 1, "u": u}
     adv_diff_solver = GenericTransportSolver(
         terms,
