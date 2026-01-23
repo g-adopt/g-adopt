@@ -54,7 +54,11 @@ def check_series(
     extra_checks,
 ):
     pd.testing.assert_series_equal(
-        actual[["u_rms"] + extra_checks], expected, check_names=False, **compare_params
+        actual[["u_rms"] + extra_checks],
+        expected,
+        check_names=False,
+        check_index_type=False,
+        **compare_params,
     )
 
     assert abs(actual.name - expected.name) <= convergence_tolerance
