@@ -23,7 +23,10 @@ def surface_velocity_term(
 
 
 def mass_term(eq: Equation, trial: fd.Argument | Indexed | fd.Function) -> fd.Form:
-    r"""Mass term $\int test * trial * ds$ for the free surface time discretisation.
+    r"""Mass term for the free surface theta-scheme time discretisation.
+
+    Note: This mass term does not use Irksome's `Dt` operator; `StokesSolver` manually
+    implements the time discretisation: `(eta - eta_old) / dt`.
 
     Args:
         eq:

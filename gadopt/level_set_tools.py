@@ -388,7 +388,9 @@ def reinitialisation_term(
 ) -> fd.Form:
     """Term for the conservative level set reinitialisation equation.
 
-    Implements terms on the right-hand side of Equation 17 from
+    Implements terms of Equation 17 from Parameswaran and Mandal (2023) as expressed on
+    the left-hand side.
+
     Parameswaran, S., & Mandal, J. C. (2023).
     A stable interface-preserving reinitialization equation for conservative level set
     method.

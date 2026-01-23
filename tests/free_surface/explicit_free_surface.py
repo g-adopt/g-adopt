@@ -9,7 +9,12 @@ from gadopt.utility import vertical_component
 
 
 def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
-    """To be removed when `Dt` becomes used in `free_surface_equation.py`."""
+    """Mass term using Irksome's `Dt` operator for the explicit time discretisation.
+
+    Note: `free_surface_equation.mass_term` does not use Irksome's `Dt` operator, as
+    `StokesSolver` manually implements the time discretisation for the coupled implicit
+    approach.
+    """
     n_up = vertical_component(eq.n)
 
     return eq.test * Dt(eq.buoyancy_scale * trial) * n_up * eq.ds(eq.boundary_id)

@@ -270,6 +270,7 @@ class GenericTransportSolver(GenericTransportBase):
         | --------- | --------------------- | ----------------------------------------- |
         | advection | u                     | advective_velocity_scaling, su_nubar      |
         | diffusion | diffusivity           | reference_for_diffusion, interior_penalty |
+        | mass      | diffusivity           | mass_scaling                              |
         | source    | source                |                                           |
         | sink      | sink_coeff            |                                           |
 
