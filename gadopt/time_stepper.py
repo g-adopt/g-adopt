@@ -257,9 +257,9 @@ class IrksomeIntegrator:
             # Use dt_irksome (new recommendation), not adapt_dt (old used value)
             self.dt_reference.assign(self.dt_irksome)
 
-            # Return the new recommended dt for the G-ADOPT usage pattern:
-            # error, dt = solver.solve(); delta_t.assign(dt)
-            return adapt_error, float(self.dt_irksome)
+            # Return the dt that was USED in this step (adapt_dt)
+            # The NEW recommended dt is already synced to dt_reference above
+            return adapt_error, adapt_dt
 
     @property
     def time(self) -> float:
