@@ -555,3 +555,97 @@ class TestSolverParameters:
         integrator = RadauIIA(equation, u, dt=0.01, solver_parameters=solver_params)
 
         assert integrator is not None
+
+
+class TestOptionsPrefixPropagation:
+    """Test that solver options_prefix is correctly propagated to PETSc."""
+
+    @pytest.mark.parametrize("scheme", [ForwardEuler, DIRK33, ImplicitMidpoint])
+    def test_prefix_propagation_various_schemes(self, scheme):
+        """Test prefix propagation works across different scheme types."""
+        mesh = UnitSquareMesh(5, 5)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
+        equation = Equation(
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
+        )
+
+        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme=scheme)
+
+        solver = integrator.stepper.solver
+        prefix = solver.snes.getOptionsPrefix()
+
+        # Verify prefix matches integrator name
+        expected_prefix = integrator.name + "_"
+        assert prefix == expected_prefix
+
+    def test_prefix_propagation_collocation(self):
+        """Test prefix propagation for stage_type='deriv' (collocation schemes)."""
+        mesh = UnitSquareMesh(5, 5)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
+        equation = Equation(
+            test, V, residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
+        )
+
+        integrator = RadauIIA(equation, u, dt=0.01)
+        prefix = integrator.stepper.solver.snes.getOptionsPrefix()
+        assert prefix == integrator.name + "_"
+
+    def test_prefix_propagation_adaptive(self):
+        """Test prefix propagation for adaptive time-stepping (the Irksome fix)."""
+        mesh = UnitSquareMesh(5, 5)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
+        equation = Equation(
+            test, V, residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
+        )
+
+        integrator = GaussLegendre(
+            equation, u, dt=0.01, adaptive_parameters={"tol": 1e-2},
+        )
+        prefix = integrator.stepper.solver.snes.getOptionsPrefix()
+        assert prefix == integrator.name + "_"
+
+    def test_prefix_propagation_energy_solver(self):
+        """Test prefix propagation through EnergySolver to PETSc."""
+        mesh = UnitSquareMesh(5, 5)
+        V = VectorFunctionSpace(mesh, "CG", 1)
+        Q = FunctionSpace(mesh, "CG", 1)
+        T = Function(Q)
+        u = Function(V)
+        u.assign(as_vector((0.0, 0.0)))
+
+        approximation = BoussinesqApproximation(Constant(1000.0))
+        solver = EnergySolver(T, u, approximation, 0.01, BackwardEuler)
+
+        prefix = solver.ts.stepper.solver.snes.getOptionsPrefix()
+        assert prefix == solver.ts.name + "_"
+
+    def test_prefix_propagation_level_set_solver(self):
+        """Test prefix propagation through LevelSetSolver to PETSc."""
+        mesh = UnitSquareMesh(5, 5)
+        V = VectorFunctionSpace(mesh, "CG", 1)
+        Q = FunctionSpace(mesh, "CG", 1)
+        level_set = Function(Q)
+        u = Function(V)
+        u.assign(as_vector((0.0, 0.0)))
+
+        solver = LevelSetSolver(
+            level_set, adv_kwargs={"u": u, "timestep": Constant(0.01)}
+        )
+
+        prefix = solver.adv_solver.ts.stepper.solver.snes.getOptionsPrefix()
+        assert prefix == solver.adv_solver.ts.name + "_"
