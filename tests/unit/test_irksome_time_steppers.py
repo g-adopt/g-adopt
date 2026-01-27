@@ -546,8 +546,6 @@ class TestOptionsPrefixPropagation:
 
     def test_prefix_propagation_adaptive(self):
         """Test prefix propagation for adaptive time-stepping (the Irksome fix)."""
-        from irksome import GaussLegendre as IrksomeGaussLegendre
-
         mesh = UnitSquareMesh(5, 5)
         V = FunctionSpace(mesh, "CG", 1)
         u = Function(V)
@@ -558,9 +556,8 @@ class TestOptionsPrefixPropagation:
             eq_attrs=eq_attrs,
         )
 
-        integrator = IrksomeIntegrator(
-            equation, u, dt=0.01, butcher_tableau=IrksomeGaussLegendre(2),
-            adaptive_parameters={"tol": 1e-2},
+        integrator = GaussLegendre(
+            equation, u, dt=0.01, adaptive_parameters={"tol": 1e-2},
         )
         prefix = integrator.stepper.solver.snes.getOptionsPrefix()
         assert prefix == integrator.name + "_"
