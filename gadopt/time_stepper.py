@@ -245,13 +245,16 @@ class IrksomeIntegrator:
         # Handle adaptive timestepping return value
         if self.is_adaptive:
             # Irksome returns (error, dt_used) tuple when adaptive is enabled
+            # Note: adapt_dt is the dt that was USED in this step
+            # self.dt_irksome now contains the NEW recommended dt for next step
             adapt_error, adapt_dt = result
 
             # Sync dt from Irksome back to user
-            # (Irksome updated dt_irksome internally during adaptive step)
-            self.dt_reference.assign(adapt_dt)
+            # Use dt_irksome (new recommendation), not adapt_dt (old used value)
+            self.dt_reference.assign(self.dt_irksome)
 
-            # Return tuple so users can track the actual dt used
+            # Return the dt that was USED in this step (adapt_dt)
+            # The NEW recommended dt is already synced to dt_reference above
             return adapt_error, adapt_dt
 
     @property
