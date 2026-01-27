@@ -67,7 +67,7 @@ u_outfile.write(u)
 # In general, this would be a ``Function``, but here we just use a ``Constant`` value. ::
 
 T = 2*pi
-dt = T/600.0  # Initial timestep - adaptive stepper will adjust this
+dt = Constant(T / 600.0)  # Initial timestep - adaptive stepper will adjust this
 q_in = Constant(1.0)
 
 # Use G-ADOPT's GenericTransportSolver to advect the tracer with adaptive timestepping.
@@ -77,7 +77,7 @@ bc_in = {"q": q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 eq_attrs = {"u": u}
 adv_solver = GenericTransportSolver(
-    "advection",
+    ["advection", "mass"],
     q,
     dt,
     RadauIIA,
@@ -107,24 +107,24 @@ t = 0.0
 step = 0
 dt_values = []  # Store all timestep values for testing
 while t < T:
-    # Advance with adaptive timestepping
-    adv_solver.solve(t=t)
+    # Advance with adaptive timestepping; an error estimate and the time step used are
+    # returned
+    adapt_error, adapt_dt = adv_solver.solve(t=t)
 
-    # Get the actual dt used by the adaptive stepper
-    dt_used = float(adv_solver.ts.dt_reference)
-    dt_values.append(dt_used)
-    t += dt_used
+    # Store used time step and increment simulation time and step counter
+    dt_values.append(adapt_dt)
+    t += adapt_dt
     step += 1
 
-    if T - t < dt_used:  # Set maximum dt to prevent overshooting final time
+    if T - t < float(dt):  # Set maximum dt to prevent overshooting final time
         adv_solver.ts.stepper.dt_max = T - t
 
     if step % 20 == 0:
         outfile.write(q)
-        print(f"t={t:.6f}, dt={dt_used:.6e}, step={step}")
+        print(f"t={t:.6f}, dt={float(dt):.6e}, step={step}")
 
 # Finally, we display the normalised :math:`L^2` error, by comparing to the
-# initial condition. ::
+# initial condition.
 
 L2_err = sqrt(assemble((q - q_init)*(q - q_init)*dx))
 L2_init = sqrt(assemble(q_init*q_init*dx))
