@@ -19,11 +19,11 @@ dependencies = [
   "pandas",
   "shapely",
   "vtk",
-  "irksome @ git+https://github.com/firedrakeproject/irksome",
+  "irksome @ git+https://github.com/sghelichkhani/Irksome.git@adaptive-timestepping",
 ]
 
 [project.optional-dependencies]
-demos = ["assess", "gadopt-demo-utils @ git+https://github.com/g-adopt/gadopt-demo-utils.git", "gmsh", "imageio", "jupytext", "openpyxl", "pyvista"]
+demos = ["assess", "gadopt-demo-utils @ git+https://github.com/g-adopt/gadopt-demo-utils.git", "gmsh", "gwassess @ git+https://github.com/g-adopt/gwassess.git", "imageio", "jupytext", "openpyxl", "pyvista"]
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]

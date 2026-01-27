@@ -43,21 +43,151 @@ __all__ = [
 ]
 
 iterative_richards_solver_parameters: dict[str, Any] = {
-    "mat_type": "aij",
-    "snes_type": "newtonls",
-    "ksp_type": "bcgs",
-    "pc_type": "bjacobi",
-    "ksp_rtol": 1e-5,
-    "snes_view": None,
+    # ===========================================================================
+    # Matrix type
+    # ===========================================================================
+    "mat_type": "aij",  # Assembled sparse matrix (required for GAMG)
+    # Alternative: "matfree" - matrix-free, but requires AssembledPC wrapper for GAMG
+
+    # ===========================================================================
+    # Nonlinear solver (SNES) configuration
+    # ===========================================================================
+    "snes_type": "newtonls",  # Newton with line search
+    # Alternative: "newtontr" - Newton trust region (more robust, slower)
+    # Alternative: "ngmres" - Nonlinear GMRES (for slow convergence)
+
+    "snes_rtol": 1e-8,  # Relative tolerance for nonlinear residual
+    "snes_atol": 1e-8,  # Absolute tolerance for nonlinear residual
+    # Alternative: 1e-10 for tighter convergence, 1e-6 for faster solves
+
+    "snes_max_it": 50,  # Maximum Newton iterations
+    # Alternative: 100 for very difficult problems
+
+    # --- Line search ---
+    "snes_linesearch_type": "bt",  # Backtracking (cubic interpolation)
+    # Alternative: "l2" - L2 norm minimization (more robust for difficult problems)
+    # Alternative: "basic" - full Newton step (faster but less robust)
+    # Alternative: "cp" - critical point (for optimization-like problems)
+
+    # ===========================================================================
+    # Linear solver (KSP) configuration
+    # ===========================================================================
+    "ksp_type": "gmres",  # GMRES - robust for general matrices
+    # Alternative: "fgmres" - flexible GMRES (if preconditioner varies)
+    # Alternative: "cg" - conjugate gradient (only if Jacobian is SPD)
+    # Alternative: "bcgs" - BiCGSTAB (sometimes faster, less robust)
+    # Alternative: "richardson" - only as smoother, not main solver
+
+    "ksp_rtol": 1e-5,  # Relative tolerance for linear solve
+    # Alternative: 1e-3 to 1e-4 for inexact Newton (faster, may need more Newton iters)
+    # Alternative: 1e-8 for very tight linear solves
+
+    "ksp_max_it": 100,  # Maximum Krylov iterations
+    # Alternative: 200-500 for difficult problems
+
+    # --- GMRES-specific ---
+    "ksp_gmres_restart": 30,  # Restart after 30 iterations
+    # Alternative: 50-100 for difficult problems (more memory)
+    # Alternative: 10-20 for memory-constrained problems
+
+    # ===========================================================================
+    # Preconditioner (PC) configuration - GAMG
+    # ===========================================================================
+    "pc_type": "gamg",  # PETSc's native algebraic multigrid
+    # Alternative: "hypre" - Hypre BoomerAMG (sometimes better for 3D)
+    # Alternative: "mg" - geometric multigrid (requires mesh hierarchy)
+    # Alternative: "ilu" - incomplete LU (not mesh-independent, avoid!)
+    # Alternative: "bjacobi" - block Jacobi (not mesh-independent, avoid!)
+
+    # --- GAMG algorithm type ---
+    "pc_gamg_type": "agg",  # Smoothed aggregation (default, good for scalar problems)
+    # Alternative: "classical" - classical AMG (Ruge-Stuben style)
+    # Alternative: "geo" - geometric (requires coordinates, experimental)
+
+    # --- GAMG coarsening threshold ---
+    "pc_gamg_threshold": 0.02,  # Strength of connection threshold
+    # Alternative: 0.0 - keep all connections (more robust, more expensive)
+    # Alternative: 0.05 - more aggressive coarsening (faster, may degrade)
+    # Note: Higher values = more aggressive coarsening, fewer levels
+
+    # --- GAMG aggregation parameters ---
+    "pc_gamg_agg_nsmooths": 1,  # Smoothing steps for prolongation
+    # Alternative: 0 - no smoothing (faster, less accurate)
+    # Alternative: 2 - more smoothing (more robust for difficult problems)
+
+    "pc_gamg_square_graph": 1,  # Square graph for aggressive coarsening
+    # Alternative: 0 - no squaring
+    # Alternative: 2 - more aggressive
+
+    # --- GAMG coarse grid parameters ---
+    "pc_gamg_coarse_eq_limit": 1000,  # Max equations on coarsest grid
+    # Alternative: 500 - coarsen more aggressively
+    # Alternative: 2000 - less aggressive, may be more robust
+
+    # "pc_gamg_repartition": True,  # Repartition coarse grids (parallel only)
+    # Note: Can improve parallel scaling but adds overhead
+
+    # ===========================================================================
+    # Multigrid levels configuration
+    # ===========================================================================
+    # --- Smoother KSP type ---
+    "mg_levels_ksp_type": "chebyshev",  # Chebyshev polynomial smoother
+    # Alternative: "richardson" - Richardson iteration (simpler, may need damping)
+    # Alternative: "gmres" - GMRES smoother (more robust, more expensive)
+
+    "mg_levels_ksp_max_it": 2,  # Smoother iterations per level
+    # Alternative: 1 - faster but may degrade convergence
+    # Alternative: 3-4 - more robust for difficult problems
+
+    "mg_levels_ksp_convergence_test": "skip",  # Don't check convergence in smoother
+
+    # --- Smoother PC type ---
+    "mg_levels_pc_type": "jacobi",  # Point Jacobi (simple, parallel)
+    # Alternative: "sor" - SOR/Gauss-Seidel (better smoothing, less parallel)
+    # Alternative: "bjacobi" with "sub_pc_type": "ilu" - block Jacobi + ILU
+    # Alternative: "asm" - additive Schwarz (more robust, more expensive)
+    # Alternative: "pbjacobi" - point block Jacobi
+
+    # --- Chebyshev-specific (when using chebyshev smoother) ---
+    # "mg_levels_ksp_chebyshev_esteig": "0,0.1,0,1.1",  # Eigenvalue estimates
+    # Note: Usually auto-computed, but can be tuned if convergence issues
+
+    # ===========================================================================
+    # Coarse grid solver configuration
+    # ===========================================================================
+    "mg_coarse_ksp_type": "preonly",  # Direct solve on coarse grid
+    # Alternative: "gmres" - iterative on coarse (for very large coarse grids)
+
+    "mg_coarse_pc_type": "lu",  # LU factorization on coarse grid
+    # Alternative: "cholesky" - if coarse system is SPD
+    # Alternative: "redundant" with "redundant_pc_type": "lu" - redundant LU (parallel)
+    # Alternative: "telescope" - reduce to subset of processors
+
+    # "mg_coarse_pc_factor_mat_solver_type": "mumps",  # Use MUMPS for coarse LU
+    # Alternative: "superlu_dist" - SuperLU distributed
+    # Note: Only needed for large coarse grids or parallel efficiency
 }
 """Default iterative solver parameters for solution of Richards equation.
 
-Configured to use Newton's method with BiConjugate Gradient Stabilized (BiCGStab)
-Krylov scheme and Block Jacobi preconditioning. This configuration is suitable
-for 3D problems.
+Configured to use Newton's method with GMRES Krylov solver and GAMG (algebraic
+multigrid) preconditioning. This provides mesh-independent convergence for the
+diffusion-dominated Richards equation.
+
+The configuration is optimized for DIRK (diagonally implicit Runge-Kutta) time
+stepping methods where each stage is solved independently.
+
+Key features:
+- GAMG with smoothed aggregation for mesh-independent convergence
+- Chebyshev smoother on multigrid levels (2 iterations)
+- Backtracking line search for nonlinear robustness
+- Direct coarse grid solve for robustness
 
 Note:
   G-ADOPT defaults to iterative solvers in 3-D.
+
+References:
+  - PETSc GAMG documentation: https://petsc.org/release/manualpages/PC/PCGAMG/
+  - MATH-COURSE.md: Solver parameter patterns from Firedrake/Irksome demos
 """
 
 direct_richards_solver_parameters: dict[str, Any] = {
@@ -67,6 +197,7 @@ direct_richards_solver_parameters: dict[str, Any] = {
     "ksp_type": "preonly",
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
+    "snes_atol": 1e-15,
 }
 """Default direct solver parameters for solution of Richards equation.
 
@@ -115,6 +246,9 @@ class RichardsSolver(SolverConfigurationMixin):
       quad_degree:
         Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
         where p is the polynomial degree of the trial space
+      interior_penalty:
+        Penalty parameter for SIPG method in DG discretizations. Default is 2.0.
+        Smaller values give weaker boundary enforcement.
       timestepper_kwargs:
         Dictionary of additional keyword arguments passed to the timestepper constructor.
         Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA) or
@@ -149,6 +283,7 @@ class RichardsSolver(SolverConfigurationMixin):
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
         quad_degree: int | None = None,
+        interior_penalty: float | None = None,
         timestepper_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.solution = solution
@@ -157,6 +292,7 @@ class RichardsSolver(SolverConfigurationMixin):
         self.timestepper = timestepper
         self.bcs = bcs
         self.quad_degree = quad_degree
+        self.interior_penalty = interior_penalty
         self.timestepper_kwargs = timestepper_kwargs or {}
 
         self.solution_space = solution.function_space()
@@ -206,14 +342,17 @@ class RichardsSolver(SolverConfigurationMixin):
             'soil_curve': self.soil_curve,
         }
 
+        if self.interior_penalty is not None:
+            eq_attrs['interior_penalty'] = self.interior_penalty
+
         self.equation = Equation(
             self.test,
             self.solution_space,
             residual_terms=[
+                richards_eq.richards_mass_term,
                 richards_eq.richards_diffusion_term,
                 richards_eq.richards_gravity_term,
             ],
-            mass_term=richards_eq.richards_mass_term,
             eq_attrs=eq_attrs,
             bcs=self.weak_bcs,
             quad_degree=self.quad_degree,
