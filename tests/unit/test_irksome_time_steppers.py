@@ -515,8 +515,7 @@ class TestOptionsPrefixPropagation:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -537,8 +536,8 @@ class TestOptionsPrefixPropagation:
         test = TestFunction(V)
         eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V, residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term, eq_attrs=eq_attrs,
+            test, V, residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
         )
 
         integrator = RadauIIA(equation, u, dt=0.01)
@@ -555,8 +554,8 @@ class TestOptionsPrefixPropagation:
         test = TestFunction(V)
         eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V, residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term, eq_attrs=eq_attrs,
+            test, V, residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
         )
 
         integrator = IrksomeIntegrator(
