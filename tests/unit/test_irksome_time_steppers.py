@@ -106,8 +106,7 @@ class TestDirectIrksomeSchemes:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -142,8 +141,7 @@ class TestDirectIrksomeSchemes:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -209,8 +207,7 @@ class TestBoundaryConditions:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -269,8 +266,7 @@ class TestTimeStepping:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -307,8 +303,7 @@ class TestDynamicTimeStepping:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -344,8 +339,7 @@ class TestDynamicTimeStepping:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -386,8 +380,7 @@ class TestErrorHandling:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -406,8 +399,7 @@ class TestErrorHandling:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -443,8 +435,7 @@ class TestIntegrationWithExistingSchemes:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -531,8 +522,7 @@ class TestSolverParameters:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
@@ -557,8 +547,7 @@ class TestSolverParameters:
         equation = Equation(
             test,
             V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
         )
 
