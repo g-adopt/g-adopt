@@ -1,18 +1,46 @@
-include ../../rules.mk
+sp := $(sp).x
+dirstack_$(sp) := $(d)
+d := $(dir)
 
-cases := functional_boundary.txt functional_field.txt
+ifeq ($(d),)
 
-.PHONY: all clean check
+d := .
+# current directory relative to root makefile
+cwd := $(shell realpath --strip --relative-to=../.. $(CURDIR))
 
-all: $(cases)
+.PHONY: all
+all: $(d)/.done
 
-functional_%.txt : category := pde_constrained
-$(cases): functional_%.txt: PDE_constrained_%.py
+$(d)/.done:
+	$(MAKE) -C ../.. $(cwd)/.done
+
+.PHONY: check
+check: $(d)/.done $(d)/test_pde_constrained_optimisation.py
+	python3 -m pytest $(d)/test_pde_constrained_optimisation.py
+
+else
+
+CASES_$(d) := boundary field
+
+TGT_$(d) := $(CASES_$(d):%=$(d)/functional_%.txt)
+SRC_$(d) := $(CASES_$(d):%=$(d)/PDE_constrained_%.py)
+NOTEBOOK_SRC_$(d) := $(d)/PDE_constrained_boundary.py $(d)/PDE_constrained_field.py
+CLEAN_$(d) := $(CASES_$(d)) *.h5
+DIR_CLEAN_$(d) := __pycache__
+
+$(d)/.done: $(TGT_$(d))
+	@touch $@
+
+$(TGT_$(d)) : category := pde_constrained
+$(TGT_$(d)): $(d)/functional_%.txt: $(d)/PDE_constrained_%.py
 	$(run-python)
 
-clean:
-	rm $(cases) *.h5
-	rm -rf __pycache__
+TGT := $(TGT) $(TGT_$(d))
+NOTEBOOK_SRC := $(NOTEBOOK_SRC) $(NOTEBOOK_SRC_$(d))
+CLEAN := $(CLEAN) $(addprefix $(d)/,$(CLEAN_$(d)))
+DIR_CLEAN := $(DIR_CLEAN) $(addprefix $(d)/,$(DIR_CLEAN_$(d)))
 
-check: $(cases)
-	python3 -m pytest test_pde_constrained_optimisation.py
+endif
+
+d := $(dirstack_$(sp))
+sp := $(basename $(sp))
