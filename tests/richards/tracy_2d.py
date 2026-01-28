@@ -188,10 +188,8 @@ def model(level, bc_type='specified_head', degree=1, do_write=False, space_type=
     # Time parameters
     # Note: Tracy solution valid for t >= ~2000s (transient terms cause issues at t=0)
     t_final = t_max
-    # CG needs smaller initial dt
-    initial_dt = 0.01 if space_type == 'CG' else 100.0
-    adaptive_tol = 1e-1  # Same tolerance for both CG and DG
-    dt = Constant(initial_dt)
+    adaptive_tol = 1e-2  # Truncation tolerance for Irksome
+    dt = Constant(0.01)  # Initial time-step
 
     # Create Richards solver with RadauIIA timestepper
     richards_solver = RichardsSolver(
@@ -212,6 +210,7 @@ def model(level, bc_type='specified_head', degree=1, do_write=False, space_type=
                 'dtmax': t_final/100.0,  # Maximum allowed dt (reasonable fraction of total time)
                 'KI': 1/15,  # Integration gain
                 'KP': 0.13,  # Proportional gain
+                'max_reject': 50,  # Maximum number that the truncation error can exceed 'tol'
             }
         },
         interior_penalty=0.5 if space_type == 'DG' else None,
