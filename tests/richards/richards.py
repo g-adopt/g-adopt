@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import csv
 import os
 import sys
@@ -175,34 +176,62 @@ def run_all_levels(args):
     return 0
 
 
-def submit_subcommand(args):
-    """Submit batch of tests using task spooler."""
+async def run_subproc(args, level, cores):
+    """Run a single test case as a subprocess."""
+    # Build the command parts
+    cmd_parts = []
+
+    if args.template:
+        template_cmd = args.template.format(cores=cores)
+        cmd_parts.extend(template_cmd.split())
+
+    if cores > 1:
+        cmd_parts.extend(["mpiexec", "-np", str(cores)])
+
+    cmd_parts.extend([
+        os.path.basename(sys.executable),
+        __file__,
+        "run",
+        args.case,
+        "--level", str(level)
+    ])
+
+    if args.write:
+        cmd_parts.append("--write")
+
+    print(f"Submitting: {' '.join(cmd_parts)}")
+
+    if args.dry_run:
+        return 0
+
+    proc = await asyncio.create_subprocess_exec(*cmd_parts)
+    await proc.wait()
+    return proc.returncode
+
+
+async def submit_subcommand(args):
+    """Submit batch of tests using async parallelism."""
     case_config = get_case(cases, args.case)
     levels = case_config["levels"]
     degree = case_config["degree"]
 
+    # Launch all levels concurrently
+    procs = []
     for level in levels:
         cores = get_cores_for_level(level, degree)
+        procs.append((level, run_subproc(args, level, cores)))
 
-        # Build command
-        if args.template:
-            cmd = args.template.format(cores=cores)
-        else:
-            cmd = ""
+    # Wait for all to complete
+    rcs = await asyncio.gather(*[p[1] for p in procs])
 
-        if cores > 1:
-            cmd += f" mpiexec -np {cores}"
+    # Check for failures
+    failed = False
+    for i, (level, _) in enumerate(procs):
+        if rcs[i] != 0:
+            print(f"Level {level} failed with return code: {rcs[i]}")
+            failed = True
 
-        cmd += f" python3 {__file__} run {args.case} --level {level}"
-        if args.write:
-            cmd += " --write"
-
-        cmd = cmd.strip()
-        print(f"Submitting: {cmd}")
-        if not args.dry_run:
-            os.system(cmd)
-
-    return 0
+    return 1 if failed else 0
 
 
 def count_subcommand(args):
@@ -258,7 +287,7 @@ def main():
         else:
             return run_all_levels(args)
     elif args.command == "submit":
-        return submit_subcommand(args)
+        return asyncio.run(submit_subcommand(args))
     elif args.command == "count":
         return count_subcommand(args)
     elif args.command == "list":

@@ -19,7 +19,7 @@ dependencies = [
   "pandas",
   "shapely",
   "vtk",
-  "irksome @ git+https://github.com/sghelichkhani/Irksome.git@adaptive-timestepping",
+  "irksome @ git+https://github.com/firedrakeproject/Irksome.git",
 ]
 
 [project.optional-dependencies]
