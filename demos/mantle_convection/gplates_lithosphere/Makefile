@@ -5,6 +5,7 @@ include ../../../rules.mk
 all: lithosphere_output.pvd
 
 lithosphere_output.pvd : category := mantle_convection
+lithosphere_output.pvd : ncpus := 4
 lithosphere_output.pvd: gplates_lithosphere.py data
 	$(run-python)
 

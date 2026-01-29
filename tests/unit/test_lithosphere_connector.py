@@ -5,7 +5,6 @@ oceanic (age-tracked) and continental (back-rotated) data into a smooth
 3D indicator field (~1 in lithosphere, ~0 in mantle).
 """
 
-import pickle
 from pathlib import Path
 import numpy as np
 import pytest
@@ -14,6 +13,7 @@ from gadopt import *
 from gadopt.gplates import (
     GplatesScalarFunction,
     LithosphereConnector,
+    LithosphereConfig,
     pyGplatesConnector,
     ensure_reconstruction
 )
@@ -177,12 +177,13 @@ class TestLithosphereConnectorFunctional:
             age_to_property=half_space_cooling,
         )
 
-        assert connector.property_name == "thickness"
-        assert connector.k == 50  # default
-        assert connector.default_thickness == 100.0  # default
-        assert connector.r_outer == 2.208  # default
-        assert connector.depth_scale == 2890.0  # default
-        assert connector.transition_width == 10.0  # default
+        # Check config is populated with defaults
+        assert connector.config.property_name == "thickness"
+        assert connector.config.k_neighbors == 50  # default
+        assert connector.config.default_thickness == 100.0  # default
+        assert connector.config.r_outer == 2.208  # default
+        assert connector.config.depth_scale == 2890.0  # default
+        assert connector.config.transition_width == 10.0  # default
 
     def test_connector_time_conversion(self, plate_model_with_polygons, synthetic_continental_data):
         """Test time conversion delegation to gplates_connector."""
@@ -205,7 +206,7 @@ class TestLithosphereConnectorFunctional:
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_continental_data,
             age_to_property=half_space_cooling,
-            k_neighbors=10,
+            config_extra={"k_neighbors": 10},
         )
 
         # Create some target coordinates at different radii
@@ -237,13 +238,10 @@ class TestLithosphereConnectorFunctional:
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_continental_data,
             age_to_property=half_space_cooling,
-            k_neighbors=10,
-            r_outer=2.208,
-            depth_scale=2890.0,
+            config_extra={"k_neighbors": 10, "r_outer": 2.208, "depth_scale": 2890.0},
         )
 
         # Create points at same (lon, lat) but different radii
-        n_points = 10
         phi = 0.5  # Fixed longitude
         theta = 1.0  # Fixed colatitude
 
@@ -281,7 +279,7 @@ class TestLithosphereConnectorFunctional:
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_continental_data,
             age_to_property=half_space_cooling,
-            k_neighbors=10,
+            config_extra={"k_neighbors": 10},
         )
 
         # Create target coordinates
@@ -353,10 +351,12 @@ class TestGplatesScalarFunction:
             gplates_connector=connector,
             continental_data=(np.column_stack([lat, lon]), thickness),
             age_to_property=half_space_cooling,
-            r_outer=2.208,
-            depth_scale=2890.0,
-            transition_width=10.0,
-            k_neighbors=10,
+            config_extra={
+                "r_outer": 2.208,
+                "depth_scale": 2890.0,
+                "transition_width": 10.0,
+                "k_neighbors": 10,
+            },
         )
 
     def test_scalar_function_creation(self, mesh_and_function_space, lithosphere_connector):
@@ -520,6 +520,129 @@ class TestInterpolation:
         result[exact_match] = source_values[idx[exact_match, 0]]
 
         np.testing.assert_allclose(result, [100.0])
+
+
+class TestLithosphereConfig:
+    """Test LithosphereConfig dataclass."""
+
+    def test_default_values(self):
+        """Test that default values are set correctly."""
+        config = LithosphereConfig()
+
+        assert config.time_step == 1.0
+        assert config.n_points == 10000
+        assert config.reinit_interval_myr == 50.0
+        assert config.k_neighbors == 50
+        assert config.distance_threshold == 0.1
+        assert config.default_thickness == 100.0
+        assert config.r_outer == 2.208
+        assert config.depth_scale == 2890.0
+        assert config.transition_width == 10.0
+        assert config.property_name == "thickness"
+
+    def test_custom_values(self):
+        """Test setting custom values."""
+        config = LithosphereConfig(
+            n_points=40000,
+            r_outer=2.5,
+            transition_width=5.0,
+        )
+
+        assert config.n_points == 40000
+        assert config.r_outer == 2.5
+        assert config.transition_width == 5.0
+        # Other values should be defaults
+        assert config.k_neighbors == 50
+
+    def test_to_dict(self):
+        """Test config serialization to dict."""
+        config = LithosphereConfig(n_points=20000)
+        d = config.to_dict()
+
+        assert isinstance(d, dict)
+        assert d["n_points"] == 20000
+        assert d["r_outer"] == 2.208
+        assert "time_step" in d
+
+    def test_from_dict(self):
+        """Test config creation from dict."""
+        d = {"n_points": 30000, "r_outer": 2.0}
+        config = LithosphereConfig.from_dict(d)
+
+        assert config.n_points == 30000
+        assert config.r_outer == 2.0
+        # Defaults for unspecified values
+        assert config.k_neighbors == 50
+
+    def test_from_dict_ignores_unknown_keys(self):
+        """Test that from_dict ignores unknown keys."""
+        d = {"n_points": 30000, "unknown_key": 999}
+        config = LithosphereConfig.from_dict(d)
+
+        assert config.n_points == 30000
+        assert not hasattr(config, "unknown_key")
+
+    def test_with_overrides(self):
+        """Test creating new config with overrides."""
+        base = LithosphereConfig(n_points=10000, r_outer=2.208)
+        modified = base.with_overrides({"n_points": 40000, "transition_width": 5.0})
+
+        # Modified values
+        assert modified.n_points == 40000
+        assert modified.transition_width == 5.0
+        # Preserved values
+        assert modified.r_outer == 2.208
+        # Original unchanged
+        assert base.n_points == 10000
+        assert base.transition_width == 10.0
+
+    def test_validation_time_step(self):
+        """Test validation of time_step."""
+        with pytest.raises(ValueError, match="time_step must be positive"):
+            LithosphereConfig(time_step=-1.0)
+
+        with pytest.raises(ValueError, match="time_step must be positive"):
+            LithosphereConfig(time_step=0.0)
+
+    def test_validation_n_points(self):
+        """Test validation of n_points."""
+        with pytest.raises(ValueError, match="n_points must be at least 100"):
+            LithosphereConfig(n_points=50)
+
+    def test_validation_r_outer(self):
+        """Test validation of r_outer."""
+        with pytest.raises(ValueError, match="r_outer must be positive"):
+            LithosphereConfig(r_outer=-1.0)
+
+    def test_validation_depth_scale(self):
+        """Test validation of depth_scale."""
+        with pytest.raises(ValueError, match="depth_scale must be positive"):
+            LithosphereConfig(depth_scale=0.0)
+
+    def test_validation_transition_width(self):
+        """Test validation of transition_width."""
+        with pytest.raises(ValueError, match="transition_width must be positive"):
+            LithosphereConfig(transition_width=-5.0)
+
+    def test_validation_k_neighbors(self):
+        """Test validation of k_neighbors."""
+        with pytest.raises(ValueError, match="k_neighbors must be at least 1"):
+            LithosphereConfig(k_neighbors=0)
+
+    def test_validation_distance_threshold(self):
+        """Test validation of distance_threshold."""
+        with pytest.raises(ValueError, match="distance_threshold must be positive"):
+            LithosphereConfig(distance_threshold=-0.1)
+
+    def test_validation_default_thickness(self):
+        """Test validation of default_thickness."""
+        with pytest.raises(ValueError, match="default_thickness must be non-negative"):
+            LithosphereConfig(default_thickness=-10.0)
+
+    def test_validation_reinit_interval_myr(self):
+        """Test validation of reinit_interval_myr."""
+        with pytest.raises(ValueError, match="reinit_interval_myr must be positive"):
+            LithosphereConfig(reinit_interval_myr=0.0)
 
 
 class TestAgeToThicknessFunction:

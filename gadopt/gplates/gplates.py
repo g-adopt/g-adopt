@@ -1,22 +1,32 @@
 import warnings
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Callable, Optional, Union, List
+from typing import Callable
 
 import firedrake as fd
 import h5py
 import numpy as np
+import pygplates
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
-from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
-from ..solver_options_manager import SolverConfigurationMixin
 
-import pygplates
+from ..solver_options_manager import SolverConfigurationMixin
+from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
+
+
+def debug_log(msg):
+    """Log message only when GADOPT_LOGLEVEL=DEBUG."""
+    if DEBUG >= log_level:
+        log(msg)
+
 
 __all__ = [
     "GplatesVelocityFunction",
     "GplatesScalarFunction",
     "LithosphereConnector",
+    "LithosphereConfig",
+    "LithosphereConnectorDefault",
     "pyGplatesConnector"
 ]
 
@@ -670,6 +680,192 @@ class pyGplatesConnector(object):
         return np.array([[x[i], y[i], z[i]] for i in range(len(x))])
 
 
+@dataclass
+class LithosphereConfig:
+    """Configuration for lithosphere indicator computation.
+
+    Groups all tunable parameters for LithosphereConnector into a single
+    configuration object. Provides sensible defaults for Earth's mantle.
+
+    Use with LithosphereConnector:
+        >>> config = LithosphereConfig(n_points=40000, transition_width=5.0)
+        >>> connector = LithosphereConnector(gplates, data, age_func, config=config)
+
+    Or override specific values with config_extra:
+        >>> connector = LithosphereConnector(
+        ...     gplates, data, age_func,
+        ...     config_extra={"n_points": 40000}
+        ... )
+
+    Attributes
+    ----------
+    Ocean Tracker Parameters
+    ~~~~~~~~~~~~~~~~~~~~~~~~
+    time_step : float
+        Time step for ocean age tracker in Myr. Default: 1.0
+    n_points : int
+        Number of points for ocean tracker mesh. Higher values give
+        better resolution but slower computation. Default: 10000
+    reinit_interval_myr : float
+        Reinitialize ocean tracker every N Myr to prevent drift
+        accumulation. Default: 50.0
+
+    Interpolation Parameters
+    ~~~~~~~~~~~~~~~~~~~~~~~~
+    k_neighbors : int
+        Number of nearest neighbors for thickness interpolation.
+        Default: 50
+    distance_threshold : float
+        Maximum angular distance (radians on unit sphere) for valid
+        interpolation. Points beyond this receive default_thickness.
+        Default: 0.1 (~570 km at Earth's surface)
+    default_thickness : float
+        Thickness (km) assigned to points with no nearby data.
+        Default: 100.0
+
+    Mesh Geometry Parameters
+    ~~~~~~~~~~~~~~~~~~~~~~~~
+    r_outer : float
+        Outer radius of mesh in non-dimensional units. This is the
+        radial coordinate of Earth's surface in the mesh.
+        Default: 2.208 (for r_inner=1.208, giving mantle depth ratio)
+    depth_scale : float
+        Physical depth (km) corresponding to 1 non-dimensional unit.
+        For Earth's mantle: 2890 km. Default: 2890.0
+    transition_width : float
+        Width of tanh transition at lithosphere base in km. Controls
+        smoothness of the indicator field. Default: 10.0
+
+    Data Parameters
+    ~~~~~~~~~~~~~~~
+    property_name : str
+        Name of the thickness property in data files. Default: 'thickness'
+
+    Examples
+    --------
+    >>> # Use all defaults
+    >>> config = LithosphereConfig()
+    >>>
+    >>> # High-resolution ocean tracking
+    >>> config = LithosphereConfig(
+    ...     n_points=40000,
+    ...     time_step=0.5,
+    ...     reinit_interval_myr=25.0,
+    ... )
+    >>>
+    >>> # Different mesh geometry (e.g., different r_inner)
+    >>> config = LithosphereConfig(
+    ...     r_outer=2.5,
+    ...     depth_scale=2890.0,
+    ... )
+    """
+
+    # Ocean tracker parameters
+    time_step: float = 1.0
+    n_points: int = 10000
+    reinit_interval_myr: float = 50.0
+
+    # Interpolation parameters
+    k_neighbors: int = 50
+    distance_threshold: float = 0.1
+    default_thickness: float = 100.0
+
+    # Mesh geometry parameters
+    r_outer: float = 2.208
+    depth_scale: float = 2890.0
+    transition_width: float = 10.0
+
+    # Data parameters
+    property_name: str = "thickness"
+
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        if self.time_step <= 0:
+            raise ValueError(f"time_step must be positive, got {self.time_step}")
+        if self.n_points < 100:
+            raise ValueError(f"n_points must be at least 100, got {self.n_points}")
+        if self.reinit_interval_myr <= 0:
+            raise ValueError(
+                f"reinit_interval_myr must be positive, got {self.reinit_interval_myr}"
+            )
+        if self.k_neighbors < 1:
+            raise ValueError(f"k_neighbors must be at least 1, got {self.k_neighbors}")
+        if self.distance_threshold <= 0:
+            raise ValueError(
+                f"distance_threshold must be positive, got {self.distance_threshold}"
+            )
+        if self.default_thickness < 0:
+            raise ValueError(
+                f"default_thickness must be non-negative, got {self.default_thickness}"
+            )
+        if self.r_outer <= 0:
+            raise ValueError(f"r_outer must be positive, got {self.r_outer}")
+        if self.depth_scale <= 0:
+            raise ValueError(f"depth_scale must be positive, got {self.depth_scale}")
+        if self.transition_width <= 0:
+            raise ValueError(
+                f"transition_width must be positive, got {self.transition_width}"
+            )
+
+    def to_dict(self) -> dict:
+        """Convert configuration to dictionary.
+
+        Returns
+        -------
+        dict
+            Configuration as dictionary, suitable for serialization.
+        """
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, config_dict: dict) -> "LithosphereConfig":
+        """Create configuration from dictionary.
+
+        Parameters
+        ----------
+        config_dict : dict
+            Dictionary with configuration parameters. Unknown keys are ignored.
+
+        Returns
+        -------
+        LithosphereConfig
+            Configuration object with values from dictionary.
+        """
+        # Filter to only known fields
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in config_dict.items() if k in known_fields}
+        return cls(**filtered)
+
+    def with_overrides(self, overrides: dict) -> "LithosphereConfig":
+        """Create a new config with specified overrides.
+
+        Parameters
+        ----------
+        overrides : dict
+            Dictionary of parameter overrides.
+
+        Returns
+        -------
+        LithosphereConfig
+            New configuration with overrides applied.
+
+        Examples
+        --------
+        >>> base = LithosphereConfig()
+        >>> high_res = base.with_overrides({"n_points": 40000})
+        """
+        current = self.to_dict()
+        current.update(overrides)
+        return self.from_dict(current)
+
+
+# Default configuration instance for LithosphereConnector.
+# Import and inspect this to see all available parameters and their defaults:
+#   from gadopt.gplates import LithosphereConnectorDefault
+#   print(LithosphereConnectorDefault)
+LithosphereConnectorDefault = LithosphereConfig()
+
+
 class LithosphereConnector:
     """Connector for lithosphere indicator field through geological time.
 
@@ -685,10 +881,17 @@ class LithosphereConnector:
 
     Uses pyGplatesConnector for plate model access and time conversion.
 
+    MPI Parallelization:
+        When a communicator is provided, only rank 0 performs I/O and gtrack
+        computations. The resulting thickness data is broadcast to all ranks,
+        and each rank interpolates to its local mesh points. This avoids
+        redundant I/O and computation across MPI ranks.
+
     Attributes:
         gplates_connector: The pyGplatesConnector instance for time conversion and plate model.
-        property_name: Name of the thickness property (e.g., 'thickness').
+        config: The LithosphereConfig with all tunable parameters.
         reconstruction_age: Last computed geological age (Ma), used for caching.
+        comm: MPI communicator (None for serial execution).
 
     Args:
         gplates_connector (pyGplatesConnector): Connector with plate model files.
@@ -699,35 +902,46 @@ class LithosphereConnector:
             - Tuple of (latlon_array, thickness_values_km)
         age_to_property (Callable): Function converting seafloor age (Myr) to thickness (km).
             Signature: age_to_property(ages: np.ndarray) -> np.ndarray
-        time_step (float): Time step for ocean tracker (Myr). Default 1.0.
-        n_points (int): Number of points for ocean tracker mesh. Default 10000.
-        reinit_interval_myr (float): Reinitialize ocean tracker every N Myr. Default 50.0.
-        k_neighbors (int): Number of neighbors for thickness interpolation. Default 50.
-        property_name (str): Name of the thickness property. Default 'thickness'.
-        r_outer (float): Outer radius of mesh in mesh units. Default 2.208.
-            This is the radial coordinate of Earth's surface in the mesh.
-        depth_scale (float): Physical depth (km) corresponding to 1 mesh unit. Default 2890.0.
-            For Earth's mantle, 1 non-dimensional unit = 2890 km (mantle depth).
-        transition_width (float): Width of tanh transition in km. Default 10.0.
-            Controls the smoothness of the lithosphere-mantle boundary.
-        default_thickness (float): Thickness (km) for points with no nearby data. Default 100.0.
-        distance_threshold (float): Max angular distance for interpolation (radians on unit sphere).
-            Points beyond this get default_thickness. Default 0.1.
+        config (LithosphereConfig, optional): Configuration object with all tunable
+            parameters. If None, uses default LithosphereConfig().
+        config_extra (dict, optional): Dictionary of parameter overrides to apply
+            on top of config. Useful for tweaking specific values without creating
+            a full config object.
+        comm: MPI communicator for parallel execution. If provided, rank 0
+            performs I/O and gtrack computations, then broadcasts results.
+            If None (default), all operations run locally (serial mode).
 
     Examples:
         >>> def half_space_cooling(age_myr):
         ...     age_sec = age_myr * 3.15576e13
         ...     return 2.32 * np.sqrt(1e-6 * age_sec) / 1e3  # km
         >>>
-        >>> lith_connector = LithosphereConnector(
+        >>> # Using default configuration (serial)
+        >>> connector = LithosphereConnector(
         ...     gplates_connector=plate_model,
         ...     continental_data='SL2013sv.nc',
         ...     age_to_property=half_space_cooling,
-        ...     r_outer=2.208,
-        ...     depth_scale=2890.0,
-        ...     transition_width=10.0,
         ... )
-        >>> indicator = lith_connector.get_indicator(mesh_coords, ndtime)
+        >>>
+        >>> # With MPI parallelization (rank 0 computes, broadcasts to others)
+        >>> connector = LithosphereConnector(
+        ...     gplates_connector=plate_model,
+        ...     continental_data='SL2013sv.nc',
+        ...     age_to_property=half_space_cooling,
+        ...     comm=mesh.comm,
+        ... )
+        >>>
+        >>> # With custom config
+        >>> config = LithosphereConfig(n_points=40000, transition_width=5.0)
+        >>> connector = LithosphereConnector(
+        ...     gplates_connector=plate_model,
+        ...     continental_data='SL2013sv.nc',
+        ...     age_to_property=half_space_cooling,
+        ...     config=config,
+        ...     comm=mesh.comm,
+        ... )
+        >>>
+        >>> indicator = connector.get_indicator(mesh_coords, ndtime)
     """
 
     def __init__(
@@ -735,30 +949,25 @@ class LithosphereConnector:
         gplates_connector: "pyGplatesConnector",
         continental_data,
         age_to_property: Callable[[np.ndarray], np.ndarray],
-        time_step: float = 1.0,
-        n_points: int = 10000,
-        reinit_interval_myr: float = 50.0,
-        k_neighbors: int = 50,
-        property_name: str = "thickness",
-        r_outer: float = 2.208,
-        depth_scale: float = 2890.0,
-        transition_width: float = 10.0,
-        default_thickness: float = 100.0,
-        distance_threshold: float = 0.1,
+        config: LithosphereConfig = None,
+        config_extra: dict = None,
+        comm=None,
     ):
         self.gplates_connector = gplates_connector
         self.age_to_property = age_to_property
-        self.k = k_neighbors
-        self.property_name = property_name
-        self.r_outer = r_outer
-        self.depth_scale = depth_scale
-        self.transition_width = transition_width
-        self.default_thickness = default_thickness
-        self.distance_threshold = distance_threshold
-        self.reinit_interval = reinit_interval_myr
+        self.comm = comm
+        self._is_root = (comm is None or comm.rank == 0)
+
+        # Build effective configuration
+        # Use module-level LithosphereConnectorDefault if no config provided
+        if config is None:
+            config = LithosphereConnectorDefault
+        if config_extra is not None:
+            config = config.with_overrides(config_extra)
+        self.config = config
 
         # Pre-compute transition width in mesh units
-        self._transition_width_nondim = transition_width / depth_scale
+        self._transition_width_nondim = config.transition_width / config.depth_scale
 
         # Validate connector has required polygon files
         if gplates_connector.continental_polygons is None:
@@ -772,7 +981,7 @@ class LithosphereConnector:
                 "Pass static_polygons to pyGplatesConnector constructor."
             )
 
-        # Import gtrack components
+        # Import gtrack components (import on all ranks is fine, just don't instantiate)
         from gtrack import (
             SeafloorAgeTracker, PointRotator, PolygonFilter,
             PointCloud, TracerConfig
@@ -781,35 +990,41 @@ class LithosphereConnector:
         # Store PointCloud class for later use
         self._PointCloud = PointCloud
 
-        # Store n_points for reinitialization
-        self._n_points = n_points
+        # Only rank 0 creates gtrack objects and loads data
+        # This avoids redundant I/O and memory usage across MPI ranks
+        if self._is_root:
+            # Create ocean age tracker
+            tracer_config = TracerConfig(
+                time_step=config.time_step,
+                default_mesh_points=config.n_points,
+            )
+            self._ocean_tracker = SeafloorAgeTracker(
+                rotation_files=gplates_connector.rotation_filenames,
+                topology_files=gplates_connector.topology_filenames,
+                continental_polygons=gplates_connector.continental_polygons,
+                config=tracer_config,
+            )
 
-        # Create ocean age tracker
-        config = TracerConfig(
-            time_step=time_step,
-            default_mesh_points=n_points,
-        )
-        self._ocean_tracker = SeafloorAgeTracker(
-            rotation_files=gplates_connector.rotation_filenames,
-            topology_files=gplates_connector.topology_filenames,
-            continental_polygons=gplates_connector.continental_polygons,
-            config=config,
-        )
+            # Create point rotator for continental data
+            self._rotator = PointRotator(
+                rotation_files=gplates_connector.rotation_filenames,
+                static_polygons=gplates_connector.static_polygons,
+            )
 
-        # Create point rotator for continental data
-        self._rotator = PointRotator(
-            rotation_files=gplates_connector.rotation_filenames,
-            static_polygons=gplates_connector.static_polygons,
-        )
+            # Create polygon filter for continental regions
+            self._polygon_filter = PolygonFilter(
+                polygon_files=gplates_connector.continental_polygons,
+                rotation_files=gplates_connector.rotation_filenames,
+            )
 
-        # Create polygon filter for continental regions
-        self._polygon_filter = PolygonFilter(
-            polygon_files=gplates_connector.continental_polygons,
-            rotation_files=gplates_connector.rotation_filenames,
-        )
-
-        # Load and prepare continental data
-        self._continental_present = self._load_continental_data(continental_data)
+            # Load and prepare continental data
+            self._continental_present = self._load_continental_data(continental_data)
+        else:
+            # Non-root ranks don't need gtrack objects
+            self._ocean_tracker = None
+            self._rotator = None
+            self._polygon_filter = None
+            self._continental_present = None
 
         # State management
         self._initialized = False
@@ -845,16 +1060,21 @@ class LithosphereConnector:
         Checks if time has changed significantly (using gplates_connector.delta_t)
         before recomputing. Returns cached result if time hasn't changed enough.
 
+        When running with MPI (comm is set), rank 0 performs all gtrack computations
+        and broadcasts the resulting thickness data. All ranks then interpolate
+        to their local mesh points.
+
         Args:
             target_coords: (M, 3) array of mesh coordinates in mesh units.
+                Each MPI rank provides its local mesh coordinates.
             ndtime: Non-dimensional time.
 
         Returns:
-            (M,) array of indicator values (0 to 1).
+            (M,) array of indicator values (0 to 1) for local mesh points.
         """
         age = self.ndtime2age(ndtime)
 
-        log(f"LithosphereConnector: Computing lithosphere indicator for {age:.2f} Ma.")
+        debug_log(f"LithosphereConnector: Computing lithosphere indicator for {age:.2f} Ma.")
 
         # Check if we can use cached result
         if self.reconstruction_age is not None:
@@ -862,46 +1082,61 @@ class LithosphereConnector:
                 # Check if coordinates are the same (using hash of shape and sample)
                 coords_hash = (target_coords.shape, target_coords[0, 0] if len(target_coords) > 0 else 0)
                 if self._cached_result is not None and coords_hash == self._cached_coords_hash:
-                    log(f"LithosphereConnector: Using cached result.")
+                    debug_log("LithosphereConnector: Using cached result.")
                     return self._cached_result
 
-        # Initialize ocean tracker if needed
-        if not self._initialized:
-            starting_age = self.gplates_connector.oldest_age
-            log(f"LithosphereConnector: Initializing ocean tracker at {starting_age} Ma.")
-            self._ocean_tracker.initialize(starting_age=starting_age)
-            self._initialized = True
-            self._last_reinit_age = starting_age
+        # Rank 0 performs all gtrack operations, others wait for broadcast
+        if self._is_root:
+            # Initialize ocean tracker if needed
+            if not self._initialized:
+                starting_age = self.gplates_connector.oldest_age
+                debug_log(f"LithosphereConnector: Initializing ocean tracker at {starting_age} Ma.")
+                self._ocean_tracker.initialize(starting_age=starting_age)
+                self._initialized = True
+                self._last_reinit_age = starting_age
 
-        # Check for reinitialisation
-        if self._last_reinit_age is not None:
-            if abs(self._last_reinit_age - age) >= self.reinit_interval:
-                log(f"LithosphereConnector: Reinitializing ocean tracker at {age:.2f} Ma.")
-                self._ocean_tracker.reinitialize(n_points=self._n_points)
-                self._last_reinit_age = age
+            # Check for reinitialisation
+            if self._last_reinit_age is not None:
+                if abs(self._last_reinit_age - age) >= self.config.reinit_interval_myr:
+                    debug_log(f"LithosphereConnector: Reinitializing ocean tracker at {age:.2f} Ma.")
+                    self._ocean_tracker.reinitialize(n_points=self.config.n_points)
+                    self._last_reinit_age = age
 
-        # Get ocean lithosphere
-        ocean_cloud = self._ocean_tracker.step_to(age)
-        ocean_ages = ocean_cloud.get_property('age')
-        ocean_values = self.age_to_property(ocean_ages)
-        ocean_cloud.add_property(self.property_name, ocean_values)
+            # Get ocean lithosphere
+            ocean_cloud = self._ocean_tracker.step_to(age)
+            ocean_ages = ocean_cloud.get_property('age')
+            ocean_values = self.age_to_property(ocean_ages)
+            ocean_cloud.add_property(self.config.property_name, ocean_values)
 
-        # Get rotated continental lithosphere
-        cont_cloud = self._rotator.rotate(
-            self._continental_present,
-            from_age=0.0,
-            to_age=age
-        )
+            # Get rotated continental lithosphere
+            cont_cloud = self._rotator.rotate(
+                self._continental_present,
+                from_age=0.0,
+                to_age=age
+            )
 
-        # Combine into single PointCloud
-        # warn=False because ocean cloud doesn't have plate_ids (expected behavior)
-        # and only has 'age' property while continental has 'thickness'
-        combined = self._PointCloud.concatenate([ocean_cloud, cont_cloud], warn=False)
+            # Combine into single PointCloud
+            # warn=False because ocean cloud doesn't have plate_ids (expected behavior)
+            # and only has 'age' property while continental has 'thickness'
+            combined = self._PointCloud.concatenate([ocean_cloud, cont_cloud], warn=False)
 
-        # Compute smooth lithosphere indicator
+            # Extract numpy arrays for broadcast
+            source_xyz = combined.xyz.copy()
+            source_thickness = combined.get_property(self.config.property_name).copy()
+        else:
+            # Non-root ranks: placeholders for broadcast
+            source_xyz = None
+            source_thickness = None
+
+        # Broadcast thickness data from rank 0 to all ranks
+        if self.comm is not None:
+            source_xyz = self.comm.bcast(source_xyz, root=0)
+            source_thickness = self.comm.bcast(source_thickness, root=0)
+
+        # All ranks compute indicator for their local mesh points
         result = self._compute_indicator(
-            combined.xyz,
-            combined.get_property(self.property_name),
+            source_xyz,
+            source_thickness,
             target_coords
         )
 
@@ -934,7 +1169,7 @@ class LithosphereConnector:
         elif isinstance(data, tuple) and len(data) == 2:
             latlon, values = data
             cloud = PointCloud.from_latlon(np.asarray(latlon))
-            cloud.add_property(self.property_name, np.asarray(values))
+            cloud.add_property(self.config.property_name, np.asarray(values))
         else:
             raise TypeError(
                 f"Unsupported continental_data type: {type(data)}. "
@@ -942,13 +1177,13 @@ class LithosphereConnector:
             )
 
         # Filter to continental regions at present day
-        log(f"LithosphereConnector: Filtering continental data ({cloud.n_points} points).")
+        debug_log(f"LithosphereConnector: Filtering continental data ({cloud.n_points} points).")
         cloud = self._polygon_filter.filter_inside(cloud, at_age=0.0)
-        log(f"LithosphereConnector: After filtering: {cloud.n_points} continental points.")
+        debug_log(f"LithosphereConnector: After filtering: {cloud.n_points} continental points.")
 
         # Assign plate IDs for rotation
         cloud = self._rotator.assign_plate_ids(cloud, at_age=0.0, remove_undefined=True)
-        log(f"LithosphereConnector: After plate ID assignment: {cloud.n_points} points.")
+        debug_log(f"LithosphereConnector: After plate ID assignment: {cloud.n_points} points.")
 
         return cloud
 
@@ -968,20 +1203,20 @@ class LithosphereConnector:
         """
         PointCloud = self._PointCloud
 
-        log(f"LithosphereConnector: Loading data from {filepath}.")
+        debug_log(f"LithosphereConnector: Loading data from {filepath}.")
 
         with h5py.File(filepath, 'r') as f:
             lon = f['lon'][:]
             lat = f['lat'][:]
 
             # Try property_name first, then 'z' as fallback
-            if self.property_name in f:
-                values = f[self.property_name][:]
+            if self.config.property_name in f:
+                values = f[self.config.property_name][:]
             elif 'z' in f:
                 values = f['z'][:]
             else:
                 raise KeyError(
-                    f"File must contain '{self.property_name}' or 'z' dataset. "
+                    f"File must contain '{self.config.property_name}' or 'z' dataset. "
                     f"Available datasets: {list(f.keys())}"
                 )
 
@@ -999,9 +1234,9 @@ class LithosphereConnector:
             values = values.ravel()
 
         cloud = PointCloud.from_latlon(latlon)
-        cloud.add_property(self.property_name, values)
+        cloud.add_property(self.config.property_name, values)
 
-        log(f"LithosphereConnector: Loaded {cloud.n_points} points from file.")
+        debug_log(f"LithosphereConnector: Loaded {cloud.n_points} points from file.")
 
         return cloud
 
@@ -1040,21 +1275,21 @@ class LithosphereConnector:
 
         # Build KDTree from source points (now on unit sphere)
         tree = cKDTree(unit_source)
-        dists, idx = tree.query(unit_target, k=self.k)
+        dists, idx = tree.query(unit_target, k=self.config.k_neighbors)
 
         # Interpolate thickness at each target's (lon, lat)
         epsilon = 1e-10
 
-        if self.k == 1:
+        if self.config.k_neighbors == 1:
             thickness_km = source_thickness_km[idx].copy()
-            too_far = dists > self.distance_threshold
-            thickness_km[too_far] = self.default_thickness
+            too_far = dists > self.config.distance_threshold
+            thickness_km[too_far] = self.config.default_thickness
         else:
             # Handle exact matches
             exact_match = dists[:, 0] < epsilon
 
             # Identify points with no nearby source data (gaps)
-            too_far = dists[:, 0] > self.distance_threshold
+            too_far = dists[:, 0] > self.config.distance_threshold
 
             # Safe distances for division
             safe_dists = np.maximum(dists, epsilon)
@@ -1070,13 +1305,13 @@ class LithosphereConnector:
             thickness_km[exact_match] = source_thickness_km[idx[exact_match, 0]]
 
             # For gaps (no nearby points), use default thickness
-            thickness_km[too_far] = self.default_thickness
+            thickness_km[too_far] = self.config.default_thickness
 
         # Convert thickness to mesh units
-        thickness_nondim = thickness_km / self.depth_scale
+        thickness_nondim = thickness_km / self.config.depth_scale
 
         # Compute lithosphere base radius
-        lith_base_r = self.r_outer - thickness_nondim
+        lith_base_r = self.config.r_outer - thickness_nondim
 
         # Compute smooth indicator using tanh
         # indicator = 0.5 * (1 + tanh((r - lith_base) / width))
@@ -1102,20 +1337,35 @@ class GplatesScalarFunction(fd.Function):
     3. Converting ages to thickness using a user-provided function
     4. Computing indicator based on radial position vs lithosphere base
 
+    MPI Parallelization:
+        For efficient parallel execution, pass `comm=mesh.comm` when creating
+        the LithosphereConnector. This ensures rank 0 performs I/O and gtrack
+        computations, then broadcasts results to all ranks.
+
     Attributes:
         lithosphere_connector: The connector providing indicator data.
         mesh_coords: Cached mesh coordinates for interpolation.
 
     Args:
         function_space: Scalar function space (e.g., Q).
-        lithosphere_connector: LithosphereConnector instance.
+        lithosphere_connector: LithosphereConnector instance. For parallel
+            execution, create with `comm=mesh.comm`.
         name: Optional name for the function.
         **kwargs: Additional arguments passed to Firedrake Function.
 
     Examples:
+        >>> # Serial execution
         >>> lithosphere_indicator = GplatesScalarFunction(
         ...     Q,
         ...     lithosphere_connector=lith_connector,
+        ...     name="Lithosphere_Indicator"
+        ... )
+        >>>
+        >>> # Parallel execution (recommended)
+        >>> connector = LithosphereConnector(..., comm=mesh.comm)
+        >>> lithosphere_indicator = GplatesScalarFunction(
+        ...     Q,
+        ...     lithosphere_connector=connector,
         ...     name="Lithosphere_Indicator"
         ... )
         >>> lithosphere_indicator.update_plate_reconstruction(ndtime=0.5)
@@ -1136,6 +1386,17 @@ class GplatesScalarFunction(fd.Function):
 
         # Cache mesh coordinates (NOT normalized - connector handles scaling)
         mesh = extract_unique_domain(self)
+
+        # Warn if running in parallel without comm set on connector
+        if mesh.comm.size > 1 and lithosphere_connector.comm is None:
+            warnings.warn(
+                "Running in parallel but LithosphereConnector has no communicator. "
+                "Each MPI rank will independently load data and compute gtrack operations. "
+                "For efficiency, create connector with comm=mesh.comm to have rank 0 "
+                "compute and broadcast results.",
+                category=RuntimeWarning
+            )
+
         # Create a VectorFunctionSpace matching the scalar space for coordinates
         # Use VectorElement to wrap the scalar element (works for TensorProductElements too)
         from finat.ufl import VectorElement

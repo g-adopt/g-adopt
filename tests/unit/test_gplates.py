@@ -11,7 +11,9 @@ def test_obtain_muller_2022_se():
     plate_reconstruction_files_with_path = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
 
     # Check if the files are downloaded and accessible
-    for file_list in plate_reconstruction_files_with_path.values():
+    # Values can be lists (rotation/topology files) or strings (polygon files)
+    for files in plate_reconstruction_files_with_path.values():
+        file_list = files if isinstance(files, list) else [files]
         for file_path in file_list:
             assert Path(file_path).exists(), f"{file_path} does not exist."
 

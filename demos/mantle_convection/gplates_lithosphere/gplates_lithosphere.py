@@ -24,9 +24,11 @@
 # - Plate reconstruction files (download using Makefile)
 
 # +
+import h5py
+import numpy as np
+
 from gadopt import *
 from gadopt.gplates import *
-import numpy as np
 
 # Mesh parameters - higher resolution to resolve lithosphere
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 6, 16
@@ -35,10 +37,6 @@ rmin, rmax, ref_level, nlayers = 1.208, 2.208, 6, 16
 # Use geometric spacing with smallest layers at top
 layer_heights = np.geomspace(0.02, 0.2, nlayers)[::-1]  # Reverse: thin at top, thick at bottom
 layer_heights = layer_heights / layer_heights.sum()  # Normalize to sum to 1
-
-log(f"Layer heights (fraction): {layer_heights}")
-log(f"Layer heights (km): {layer_heights * (rmax - rmin) * 2890}")
-log(f"Top 4 layers span: {layer_heights[:4].sum() * (rmax - rmin) * 2890:.1f} km")
 
 mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
 mesh = ExtrudedMesh(mesh2d, layers=nlayers, layer_height=layer_heights, extrusion_type="radial")
@@ -118,13 +116,11 @@ plate_model = pyGplatesConnector(
 #
 # It produces a smooth 3D indicator field: ~1 inside lithosphere, ~0 in mantle.
 #
-# For this demo, we'll create synthetic continental data. In practice,
-# you would load real data from seismic tomography models like SL2013sv.
+# For this demo, we'll load continental thickness data from an HDF5 file.
+# In practice, this would come from seismic tomography models like SL2013sv.
 
 # +
 # Load real continental thickness data from HDF5 file
-import h5py
-
 continental_data_file = "/Users/sghelichkhani/Workplace/gtrack/examples/output/lithospheric_thickness_icosahedral.h5"
 with h5py.File(continental_data_file, 'r') as f:
     lonlat = f['lonlat'][:]  # (N, 2) with (lon, lat) order
@@ -135,26 +131,74 @@ latlon = np.column_stack([lonlat[:, 1], lonlat[:, 0]])
 
 # Create data tuple (latlon, values in km)
 continental_data = (latlon, thickness_values)
-log(f"Loaded continental data: {len(thickness_values)} points, "
-    f"thickness range {thickness_values.min():.1f} - {thickness_values.max():.1f} km")
+# -
 
-# Create the lithosphere connector
+# ## LithosphereConfig: Configuration Parameters
+#
+# All tunable parameters for `LithosphereConnector` are grouped into
+# `LithosphereConfig`. To inspect the default values:
+#
+#     from gadopt.gplates import LithosphereConnectorDefault
+#     print(LithosphereConnectorDefault)
+#
+# ### Ocean Tracker Parameters
+# Control how seafloor ages are tracked through time using gtrack:
+#
+# - `time_step` (default: 1.0) — Time step for age tracker in Myr
+# - `n_points` (default: 10000) — Number of points in ocean tracker mesh;
+#   higher values give finer resolution but slower computation
+# - `reinit_interval_myr` (default: 50.0) — Reinitialize tracker every N Myr
+#   to prevent numerical drift accumulation
+#
+# ### Interpolation Parameters
+# Control how thickness values are looked up at mesh coordinates:
+#
+# - `k_neighbors` (default: 50) — Number of nearest neighbors for
+#   inverse-distance weighted interpolation
+# - `distance_threshold` (default: 0.1) — Maximum angular distance in radians
+#   for valid interpolation; ~0.1 rad ≈ 570 km at Earth's surface
+# - `default_thickness` (default: 100.0) — Thickness in km assigned to points
+#   with no nearby source data (gaps)
+#
+# ### Mesh Geometry Parameters
+# Must match your simulation mesh geometry:
+#
+# - `r_outer` (default: 2.208) — Outer radius of mesh in non-dimensional units;
+#   this is the radial coordinate of Earth's surface
+# - `depth_scale` (default: 2890.0) — Physical depth in km corresponding to
+#   1 non-dimensional unit; for Earth's mantle this is 2890 km
+# - `transition_width` (default: 10.0) — Width of tanh transition at
+#   lithosphere base in km; controls smoothness of the indicator field
+#
+# ### Data Parameters
+#
+# - `property_name` (default: "thickness") — Name of the thickness property
+#   when reading from data files
+#
+# ## Using config_extra to Override Defaults
+#
+# You can override specific parameters using the `config_extra` dictionary,
+# following the same pattern as G-ADOPT's `solver_parameters_extra`.
+# Only specify parameters you want to change — everything else keeps its
+# default value.
+
+# +
+# Create the lithosphere connector with custom overrides
+# Note: We pass comm=mesh.comm for efficient parallel execution.
+# This ensures rank 0 handles all I/O and gtrack computations,
+# then broadcasts results to other ranks. Without this, each MPI
+# rank would independently load data and compute (wasteful).
 lithosphere_connector = LithosphereConnector(
     gplates_connector=plate_model,
     continental_data=continental_data,
     age_to_property=half_space_cooling,
-    property_name="thickness",
-    # Mesh geometry parameters
-    r_outer=rmax,  # Outer radius of mesh (Earth's surface)
-    depth_scale=2890.0,  # 1 mesh unit = 2890 km (Earth's mantle depth)
-    # Indicator parameters
-    transition_width=10.0,  # Smooth transition width in km
-    default_thickness=100.0,  # Default thickness (km) for gaps
-    distance_threshold=0.2,  # Max interpolation distance (radians)
-    k_neighbors=20,  # Number of neighbors for interpolation
-    # Ocean tracker parameters
-    n_points=40000,  # Number of points for ocean tracker mesh
-    reinit_interval_myr=50.0,  # Reinitialize ocean tracker every 50 Myr
+    config_extra={
+        "r_outer": rmax,            # Match our mesh outer radius
+        "n_points": 40000,          # Higher resolution ocean tracking
+        "k_neighbors": 20,          # Fewer neighbors for faster interpolation
+        "distance_threshold": 0.2,  # Wider search for sparse data (~1140 km)
+    },
+    comm=mesh.comm,  # Enable MPI parallelization
 )
 # -
 
@@ -214,13 +258,7 @@ for age in output_ages:
 
     # Output to VTK (include depth for visualization)
     output_file.write(lithosphere_indicator, depth_km)
-
-    # Print statistics (indicator ranges from 0 to 1)
-    indicator_data = lithosphere_indicator.dat.data_ro
-    depth_data = depth_km.dat.data_ro
-    log(f"Age {age} Ma: indicator range {indicator_data.min():.3f} - {indicator_data.max():.3f}, "
-        f"mean {indicator_data.mean():.3f}")
-    log(f"  Depth range: {depth_data.min():.1f} - {depth_data.max():.1f} km")
+    log(f"Written output for {age} Ma")
 # -
 
 # ## Visualization
@@ -279,6 +317,5 @@ for age in output_ages:
 # ```
 
 # +
-# Clean up
-log("Demo complete.")
+log("Demo complete. Output written to lithosphere_output.pvd")
 # -
