@@ -20,6 +20,7 @@ dependencies = [
   "shapely",
   "vtk",
   "irksome @ git+https://github.com/firedrakeproject/Irksome",
+  "gtrack",
 ]
 
 [project.optional-dependencies]

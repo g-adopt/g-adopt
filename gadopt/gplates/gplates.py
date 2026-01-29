@@ -1,5 +1,9 @@
 import warnings
+from pathlib import Path
+from typing import Callable, Optional, Union, List
+
 import firedrake as fd
+import h5py
 import numpy as np
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape, stop_annotating
@@ -11,6 +15,8 @@ import pygplates
 
 __all__ = [
     "GplatesVelocityFunction",
+    "GplatesScalarFunction",
+    "LithosphereConnector",
     "pyGplatesConnector"
 ]
 
@@ -266,7 +272,9 @@ class pyGplatesConnector(object):
                  scaling_factor=1.0,
                  nseeds=1e5,
                  nneighbours=4,
-                 kappa=1e-6):
+                 kappa=1e-6,
+                 continental_polygons=None,
+                 static_polygons=None):
         """An interface to PyGPlates, used for updating top Dirichlet boundary conditions
         using plate tectonic reconstructions.
 
@@ -288,11 +296,28 @@ class pyGplatesConnector(object):
                     the finer velocity variations will then result in more challenging Stokes solves.
             nneighbours (Optional[int]): Number of neighbouring points when interpolating velocity for each grid point. Default is 4.
             kappa: (Optional[float]): Diffusion constant used for don-dimensionalising time. Default is 1e-6.
+            continental_polygons (Optional[Union[str, List[str]]]): Path(s) to continental polygon files.
+                    Required for LithosphereConnector to filter continental regions.
+            static_polygons (Optional[Union[str, List[str]]]): Path(s) to static polygon files for plate ID assignment.
+                    Required for LithosphereConnector to assign plate IDs for rotation.
 
         Examples:
             >>> connector = pyGplatesConnector(rotation_filenames, topology_filenames, oldest_age)
             >>> connector.get_plate_velocities(ndtime=100)
+
+            >>> # With polygon files for lithosphere tracking
+            >>> connector = pyGplatesConnector(
+            ...     rotation_filenames, topology_filenames, oldest_age,
+            ...     continental_polygons='continental_polygons.gpml',
+            ...     static_polygons='static_polygons.gpml'
+            ... )
         """
+
+        # Store original filenames for downstream use (e.g., LithosphereConnector)
+        self.rotation_filenames = rotation_filenames
+        self.topology_filenames = topology_filenames
+        self.continental_polygons = continental_polygons
+        self.static_polygons = static_polygons
 
         # Rotation model(s)
         self.rotation_model = pygplates.RotationModel(rotation_filenames)
@@ -643,3 +668,502 @@ class pyGplatesConnector(object):
         x = np.cos(theta) * radius
         z = np.sin(theta) * radius
         return np.array([[x[i], y[i], z[i]] for i in range(len(x))])
+
+
+class LithosphereConnector:
+    """Connector for lithosphere indicator field through geological time.
+
+    Combines oceanic lithosphere (age-tracked via gtrack's SeafloorAgeTracker,
+    converted to thickness) with continental lithosphere (back-rotated
+    present-day thickness data via gtrack's PointRotator) to produce a smooth
+    3D indicator field: 1 inside lithosphere, 0 in mantle.
+
+    The indicator uses a tanh transition for numerical stability:
+        indicator = 0.5 * (1 + tanh((r - lith_base) / transition_width))
+
+    where lith_base = r_outer - thickness (in mesh units).
+
+    Uses pyGplatesConnector for plate model access and time conversion.
+
+    Attributes:
+        gplates_connector: The pyGplatesConnector instance for time conversion and plate model.
+        property_name: Name of the thickness property (e.g., 'thickness').
+        reconstruction_age: Last computed geological age (Ma), used for caching.
+
+    Args:
+        gplates_connector (pyGplatesConnector): Connector with plate model files.
+            Must have `continental_polygons` and `static_polygons` set.
+        continental_data: Present-day continental thickness data. Can be:
+            - gtrack.PointCloud with the thickness property
+            - Path to HDF5/NetCDF file
+            - Tuple of (latlon_array, thickness_values_km)
+        age_to_property (Callable): Function converting seafloor age (Myr) to thickness (km).
+            Signature: age_to_property(ages: np.ndarray) -> np.ndarray
+        time_step (float): Time step for ocean tracker (Myr). Default 1.0.
+        n_points (int): Number of points for ocean tracker mesh. Default 10000.
+        reinit_interval_myr (float): Reinitialize ocean tracker every N Myr. Default 50.0.
+        k_neighbors (int): Number of neighbors for thickness interpolation. Default 50.
+        property_name (str): Name of the thickness property. Default 'thickness'.
+        r_outer (float): Outer radius of mesh in mesh units. Default 2.208.
+            This is the radial coordinate of Earth's surface in the mesh.
+        depth_scale (float): Physical depth (km) corresponding to 1 mesh unit. Default 2890.0.
+            For Earth's mantle, 1 non-dimensional unit = 2890 km (mantle depth).
+        transition_width (float): Width of tanh transition in km. Default 10.0.
+            Controls the smoothness of the lithosphere-mantle boundary.
+        default_thickness (float): Thickness (km) for points with no nearby data. Default 100.0.
+        distance_threshold (float): Max angular distance for interpolation (radians on unit sphere).
+            Points beyond this get default_thickness. Default 0.1.
+
+    Examples:
+        >>> def half_space_cooling(age_myr):
+        ...     age_sec = age_myr * 3.15576e13
+        ...     return 2.32 * np.sqrt(1e-6 * age_sec) / 1e3  # km
+        >>>
+        >>> lith_connector = LithosphereConnector(
+        ...     gplates_connector=plate_model,
+        ...     continental_data='SL2013sv.nc',
+        ...     age_to_property=half_space_cooling,
+        ...     r_outer=2.208,
+        ...     depth_scale=2890.0,
+        ...     transition_width=10.0,
+        ... )
+        >>> indicator = lith_connector.get_indicator(mesh_coords, ndtime)
+    """
+
+    def __init__(
+        self,
+        gplates_connector: "pyGplatesConnector",
+        continental_data,
+        age_to_property: Callable[[np.ndarray], np.ndarray],
+        time_step: float = 1.0,
+        n_points: int = 10000,
+        reinit_interval_myr: float = 50.0,
+        k_neighbors: int = 50,
+        property_name: str = "thickness",
+        r_outer: float = 2.208,
+        depth_scale: float = 2890.0,
+        transition_width: float = 10.0,
+        default_thickness: float = 100.0,
+        distance_threshold: float = 0.1,
+    ):
+        self.gplates_connector = gplates_connector
+        self.age_to_property = age_to_property
+        self.k = k_neighbors
+        self.property_name = property_name
+        self.r_outer = r_outer
+        self.depth_scale = depth_scale
+        self.transition_width = transition_width
+        self.default_thickness = default_thickness
+        self.distance_threshold = distance_threshold
+        self.reinit_interval = reinit_interval_myr
+
+        # Pre-compute transition width in mesh units
+        self._transition_width_nondim = transition_width / depth_scale
+
+        # Validate connector has required polygon files
+        if gplates_connector.continental_polygons is None:
+            raise ValueError(
+                "gplates_connector must have continental_polygons set. "
+                "Pass continental_polygons to pyGplatesConnector constructor."
+            )
+        if gplates_connector.static_polygons is None:
+            raise ValueError(
+                "gplates_connector must have static_polygons set. "
+                "Pass static_polygons to pyGplatesConnector constructor."
+            )
+
+        # Import gtrack components
+        from gtrack import (
+            SeafloorAgeTracker, PointRotator, PolygonFilter,
+            PointCloud, TracerConfig
+        )
+
+        # Store PointCloud class for later use
+        self._PointCloud = PointCloud
+
+        # Store n_points for reinitialization
+        self._n_points = n_points
+
+        # Create ocean age tracker
+        config = TracerConfig(
+            time_step=time_step,
+            default_mesh_points=n_points,
+        )
+        self._ocean_tracker = SeafloorAgeTracker(
+            rotation_files=gplates_connector.rotation_filenames,
+            topology_files=gplates_connector.topology_filenames,
+            continental_polygons=gplates_connector.continental_polygons,
+            config=config,
+        )
+
+        # Create point rotator for continental data
+        self._rotator = PointRotator(
+            rotation_files=gplates_connector.rotation_filenames,
+            static_polygons=gplates_connector.static_polygons,
+        )
+
+        # Create polygon filter for continental regions
+        self._polygon_filter = PolygonFilter(
+            polygon_files=gplates_connector.continental_polygons,
+            rotation_files=gplates_connector.rotation_filenames,
+        )
+
+        # Load and prepare continental data
+        self._continental_present = self._load_continental_data(continental_data)
+
+        # State management
+        self._initialized = False
+        self._last_reinit_age = None
+        self.reconstruction_age = None
+        self._cached_result = None
+        self._cached_coords_hash = None
+
+    def ndtime2age(self, ndtime: float) -> float:
+        """Convert non-dimensional time to geological age (Ma).
+
+        Delegates to gplates_connector.
+        """
+        return self.gplates_connector.ndtime2age(ndtime)
+
+    def age2ndtime(self, age: float) -> float:
+        """Convert geological age (Ma) to non-dimensional time.
+
+        Delegates to gplates_connector.
+        """
+        return self.gplates_connector.age2ndtime(age)
+
+    def get_indicator(
+        self,
+        target_coords: np.ndarray,
+        ndtime: float
+    ) -> np.ndarray:
+        """Get smooth lithosphere indicator at target coordinates for given time.
+
+        Returns a 3D field that is ~1 inside the lithosphere and ~0 in the mantle,
+        with a smooth tanh transition at the lithosphere base.
+
+        Checks if time has changed significantly (using gplates_connector.delta_t)
+        before recomputing. Returns cached result if time hasn't changed enough.
+
+        Args:
+            target_coords: (M, 3) array of mesh coordinates in mesh units.
+            ndtime: Non-dimensional time.
+
+        Returns:
+            (M,) array of indicator values (0 to 1).
+        """
+        age = self.ndtime2age(ndtime)
+
+        log(f"LithosphereConnector: Computing lithosphere indicator for {age:.2f} Ma.")
+
+        # Check if we can use cached result
+        if self.reconstruction_age is not None:
+            if abs(age - self.reconstruction_age) < self.gplates_connector.delta_t:
+                # Check if coordinates are the same (using hash of shape and sample)
+                coords_hash = (target_coords.shape, target_coords[0, 0] if len(target_coords) > 0 else 0)
+                if self._cached_result is not None and coords_hash == self._cached_coords_hash:
+                    log(f"LithosphereConnector: Using cached result.")
+                    return self._cached_result
+
+        # Initialize ocean tracker if needed
+        if not self._initialized:
+            starting_age = self.gplates_connector.oldest_age
+            log(f"LithosphereConnector: Initializing ocean tracker at {starting_age} Ma.")
+            self._ocean_tracker.initialize(starting_age=starting_age)
+            self._initialized = True
+            self._last_reinit_age = starting_age
+
+        # Check for reinitialisation
+        if self._last_reinit_age is not None:
+            if abs(self._last_reinit_age - age) >= self.reinit_interval:
+                log(f"LithosphereConnector: Reinitializing ocean tracker at {age:.2f} Ma.")
+                self._ocean_tracker.reinitialize(n_points=self._n_points)
+                self._last_reinit_age = age
+
+        # Get ocean lithosphere
+        ocean_cloud = self._ocean_tracker.step_to(age)
+        ocean_ages = ocean_cloud.get_property('age')
+        ocean_values = self.age_to_property(ocean_ages)
+        ocean_cloud.add_property(self.property_name, ocean_values)
+
+        # Get rotated continental lithosphere
+        cont_cloud = self._rotator.rotate(
+            self._continental_present,
+            from_age=0.0,
+            to_age=age
+        )
+
+        # Combine into single PointCloud
+        # warn=False because ocean cloud doesn't have plate_ids (expected behavior)
+        # and only has 'age' property while continental has 'thickness'
+        combined = self._PointCloud.concatenate([ocean_cloud, cont_cloud], warn=False)
+
+        # Compute smooth lithosphere indicator
+        result = self._compute_indicator(
+            combined.xyz,
+            combined.get_property(self.property_name),
+            target_coords
+        )
+
+        # Cache result
+        self.reconstruction_age = age
+        self._cached_result = result
+        self._cached_coords_hash = (target_coords.shape, target_coords[0, 0] if len(target_coords) > 0 else 0)
+
+        return result
+
+    def _load_continental_data(self, data):
+        """Load and prepare continental data.
+
+        Args:
+            data: One of:
+                - PointCloud with property matching self.property_name
+                - Path to HDF5/NetCDF file (loaded via h5py)
+                - Tuple of (latlon_array, values_array)
+
+        Returns:
+            PointCloud filtered to continental regions with plate IDs assigned.
+        """
+        PointCloud = self._PointCloud
+
+        if hasattr(data, 'xyz') and hasattr(data, 'properties'):
+            # Already a PointCloud
+            cloud = data
+        elif isinstance(data, (str, Path)):
+            cloud = self._load_from_hdf5(data)
+        elif isinstance(data, tuple) and len(data) == 2:
+            latlon, values = data
+            cloud = PointCloud.from_latlon(np.asarray(latlon))
+            cloud.add_property(self.property_name, np.asarray(values))
+        else:
+            raise TypeError(
+                f"Unsupported continental_data type: {type(data)}. "
+                "Expected PointCloud, file path, or (latlon, values) tuple."
+            )
+
+        # Filter to continental regions at present day
+        log(f"LithosphereConnector: Filtering continental data ({cloud.n_points} points).")
+        cloud = self._polygon_filter.filter_inside(cloud, at_age=0.0)
+        log(f"LithosphereConnector: After filtering: {cloud.n_points} continental points.")
+
+        # Assign plate IDs for rotation
+        cloud = self._rotator.assign_plate_ids(cloud, at_age=0.0, remove_undefined=True)
+        log(f"LithosphereConnector: After plate ID assignment: {cloud.n_points} points.")
+
+        return cloud
+
+    def _load_from_hdf5(self, filepath):
+        """Load data from HDF5/NetCDF file using h5py.
+
+        Expected file structure:
+            - 'lon': longitude array (degrees, 0-360 or -180 to 180)
+            - 'lat': latitude array (degrees, -90 to 90)
+            - 'z' or property_name: values array
+
+        Args:
+            filepath: Path to HDF5 or NetCDF file.
+
+        Returns:
+            PointCloud with property values.
+        """
+        PointCloud = self._PointCloud
+
+        log(f"LithosphereConnector: Loading data from {filepath}.")
+
+        with h5py.File(filepath, 'r') as f:
+            lon = f['lon'][:]
+            lat = f['lat'][:]
+
+            # Try property_name first, then 'z' as fallback
+            if self.property_name in f:
+                values = f[self.property_name][:]
+            elif 'z' in f:
+                values = f['z'][:]
+            else:
+                raise KeyError(
+                    f"File must contain '{self.property_name}' or 'z' dataset. "
+                    f"Available datasets: {list(f.keys())}"
+                )
+
+        # Convert longitude from 0-360 to -180 to 180 if needed
+        lon = np.where(lon > 180, lon - 360, lon)
+
+        # Create meshgrid if 1D arrays (gridded data)
+        if lon.ndim == 1 and lat.ndim == 1:
+            lon_grid, lat_grid = np.meshgrid(lon, lat)
+            latlon = np.column_stack([lat_grid.ravel(), lon_grid.ravel()])
+            values = values.ravel()
+        else:
+            # Already 2D or flattened
+            latlon = np.column_stack([lat.ravel(), lon.ravel()])
+            values = values.ravel()
+
+        cloud = PointCloud.from_latlon(latlon)
+        cloud.add_property(self.property_name, values)
+
+        log(f"LithosphereConnector: Loaded {cloud.n_points} points from file.")
+
+        return cloud
+
+    def _compute_indicator(
+        self,
+        source_xyz: np.ndarray,
+        source_thickness_km: np.ndarray,
+        target_coords: np.ndarray
+    ) -> np.ndarray:
+        """Compute smooth lithosphere indicator for target coordinates.
+
+        For each target point:
+        1. Compute its radial position r
+        2. Look up thickness at its (lon, lat) via inverse-distance interpolation
+        3. Compute lithosphere base: lith_base_r = r_outer - thickness_nondim
+        4. Return smooth indicator: 0.5 * (1 + tanh((r - lith_base_r) / transition_width))
+
+        Args:
+            source_xyz: (N, 3) source point coordinates (unit sphere).
+            source_thickness_km: (N,) thickness values in km at source points.
+            target_coords: (M, 3) target mesh coordinates.
+
+        Returns:
+            (M,) indicator values: ~1 inside lithosphere, ~0 in mantle.
+        """
+        # Compute radial position of each target point
+        r_target = np.linalg.norm(target_coords, axis=1)
+
+        # Normalize target to unit sphere for thickness lookup
+        unit_target = target_coords / np.maximum(r_target[:, np.newaxis], 1e-10)
+
+        # Normalize source points to unit sphere
+        # (gtrack stores coordinates in meters at Earth's radius ~6.38e6 m)
+        r_source = np.linalg.norm(source_xyz, axis=1)
+        unit_source = source_xyz / np.maximum(r_source[:, np.newaxis], 1e-10)
+
+        # Build KDTree from source points (now on unit sphere)
+        tree = cKDTree(unit_source)
+        dists, idx = tree.query(unit_target, k=self.k)
+
+        # Interpolate thickness at each target's (lon, lat)
+        epsilon = 1e-10
+
+        if self.k == 1:
+            thickness_km = source_thickness_km[idx].copy()
+            too_far = dists > self.distance_threshold
+            thickness_km[too_far] = self.default_thickness
+        else:
+            # Handle exact matches
+            exact_match = dists[:, 0] < epsilon
+
+            # Identify points with no nearby source data (gaps)
+            too_far = dists[:, 0] > self.distance_threshold
+
+            # Safe distances for division
+            safe_dists = np.maximum(dists, epsilon)
+
+            # Inverse distance weights
+            weights = 1.0 / safe_dists
+            weights /= weights.sum(axis=1, keepdims=True)
+
+            # Weighted average thickness
+            thickness_km = np.sum(weights * source_thickness_km[idx], axis=1)
+
+            # For exact matches, use nearest value directly
+            thickness_km[exact_match] = source_thickness_km[idx[exact_match, 0]]
+
+            # For gaps (no nearby points), use default thickness
+            thickness_km[too_far] = self.default_thickness
+
+        # Convert thickness to mesh units
+        thickness_nondim = thickness_km / self.depth_scale
+
+        # Compute lithosphere base radius
+        lith_base_r = self.r_outer - thickness_nondim
+
+        # Compute smooth indicator using tanh
+        # indicator = 0.5 * (1 + tanh((r - lith_base) / width))
+        # This gives ~1 when r > lith_base (inside lithosphere)
+        # and ~0 when r < lith_base (in mantle)
+        indicator = 0.5 * (1.0 + np.tanh(
+            (r_target - lith_base_r) / self._transition_width_nondim
+        ))
+
+        return indicator
+
+
+class GplatesScalarFunction(fd.Function):
+    """Firedrake Function for lithosphere indicator from plate reconstructions.
+
+    Creates a 3D scalar field that is ~1 inside the lithosphere and ~0 in the
+    mantle, with a smooth tanh transition at the lithosphere base. This can be
+    used to modify viscosity or other material properties.
+
+    The field is computed by:
+    1. Tracking oceanic lithosphere ages forward in time (SeafloorAgeTracker)
+    2. Rotating continental thickness data backward in time (PointRotator)
+    3. Converting ages to thickness using a user-provided function
+    4. Computing indicator based on radial position vs lithosphere base
+
+    Attributes:
+        lithosphere_connector: The connector providing indicator data.
+        mesh_coords: Cached mesh coordinates for interpolation.
+
+    Args:
+        function_space: Scalar function space (e.g., Q).
+        lithosphere_connector: LithosphereConnector instance.
+        name: Optional name for the function.
+        **kwargs: Additional arguments passed to Firedrake Function.
+
+    Examples:
+        >>> lithosphere_indicator = GplatesScalarFunction(
+        ...     Q,
+        ...     lithosphere_connector=lith_connector,
+        ...     name="Lithosphere_Indicator"
+        ... )
+        >>> lithosphere_indicator.update_plate_reconstruction(ndtime=0.5)
+        >>>
+        >>> # Use to modify viscosity
+        >>> effective_viscosity = mantle_viscosity * (1 + 1000 * lithosphere_indicator)
+    """
+
+    def __init__(
+        self,
+        function_space,
+        lithosphere_connector: LithosphereConnector,
+        name: str = None,
+        **kwargs
+    ):
+        super().__init__(function_space, name=name, **kwargs)
+        self.lithosphere_connector = lithosphere_connector
+
+        # Cache mesh coordinates (NOT normalized - connector handles scaling)
+        mesh = extract_unique_domain(self)
+        # Create a VectorFunctionSpace matching the scalar space for coordinates
+        # Use VectorElement to wrap the scalar element (works for TensorProductElements too)
+        from finat.ufl import VectorElement
+        scalar_element = function_space.ufl_element()
+        vector_element = VectorElement(scalar_element)
+        coords_space = fd.FunctionSpace(mesh, vector_element)
+        coords_func = fd.Function(coords_space)
+        coords_func.interpolate(fd.SpatialCoordinate(mesh))
+        self.mesh_coords = coords_func.dat.data_ro_with_halos.copy()
+
+    def update_plate_reconstruction(self, ndtime: float):
+        """Update lithosphere indicator for given non-dimensional time.
+
+        Delegates to lithosphere_connector.get_indicator() which handles:
+        - Time caching (skip if time hasn't changed significantly)
+        - Ocean tracker stepping
+        - Continental rotation
+        - Thickness interpolation
+        - Smooth indicator computation
+
+        Args:
+            ndtime: Non-dimensional time.
+        """
+        with stop_annotating():
+            values = self.lithosphere_connector.get_indicator(
+                self.mesh_coords, ndtime
+            )
+            self.dat.data_with_halos[:] = values
+
+        if annotate_tape():
+            self.create_block_variable()
