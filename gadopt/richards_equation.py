@@ -41,6 +41,7 @@ where:
 
 from firedrake import *
 from irksome import Dt
+from ufl.indexed import Indexed
 
 from .equations import Equation, interior_penalty_factor
 from .utility import is_continuous
@@ -53,7 +54,7 @@ __all__ = [
 
 
 def richards_mass_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     r"""Richards equation mass term with nonlinear capacity.
 
@@ -77,11 +78,10 @@ def richards_mass_term(
         UFL form for the mass term
     """
     soil_curve = eq.soil_curve
-    h = trial
 
     # Evaluate nonlinear coefficients
-    theta = soil_curve.moisture_content(h)
-    C = soil_curve.water_retention(h)
+    theta = soil_curve.moisture_content(trial)
+    C = soil_curve.water_retention(trial)
 
     # Effective saturation
     S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
@@ -89,12 +89,11 @@ def richards_mass_term(
     # Mass coefficient
     mass_coeff = soil_curve.Ss * S + C
 
-    return inner(eq.test, mass_coeff * Dt(h)) * eq.dx
-    #return inner(eq.test, 1 * Dt(theta)) * eq.dx
+    return inner(eq.test, mass_coeff * Dt(trial)) * eq.dx
 
 
 def richards_diffusion_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     r"""Richards diffusion term for pressure-driven flow using SIPG.
 
@@ -125,27 +124,26 @@ def richards_diffusion_term(
         UFL form for the diffusion term
     """
     soil_curve = eq.soil_curve
-    h = trial
 
     # Evaluate hydraulic conductivity at trial function
-    K = soil_curve.relative_permeability(h)
+    K = soil_curve.relative_permeability(trial)
 
     # Volume integral
-    F = inner(grad(eq.test), K * grad(h)) * eq.dx
+    F = inner(grad(eq.test), K * grad(trial)) * eq.dx
 
     # Interior penalty for DG
-    sigma = interior_penalty_factor(eq, shift=0)
+    sigma = interior_penalty_factor(eq, shift=-1)
     if not is_continuous(eq.trial_space):
         sigma_int = sigma * avg(FacetArea(eq.mesh) / CellVolume(eq.mesh))
 
         # SIPG terms on interior facets
         F += (
             sigma_int
-            * inner(jump(eq.test, eq.n), avg(K) * jump(h, eq.n))
+            * inner(jump(eq.test, eq.n), avg(K) * jump(trial, eq.n))
             * eq.dS
         )
-        F -= inner(avg(K * grad(eq.test)), jump(h, eq.n)) * eq.dS
-        F -= inner(jump(eq.test, eq.n), avg(K * grad(h))) * eq.dS
+        F -= inner(avg(K * grad(eq.test)), jump(trial, eq.n)) * eq.dS
+        F -= inner(jump(eq.test, eq.n), avg(K * grad(trial))) * eq.dS
 
     # Boundary conditions
     for bc_id, bc in eq.bcs.items():
@@ -158,20 +156,27 @@ def richards_diffusion_term(
             sigma_ext = sigma * FacetArea(eq.mesh) / CellVolume(eq.mesh)
 
             # SIPG boundary terms (similar to interior)
-            F += (2 * sigma_ext * eq.test * K * jump_h * eq.ds(bc_id))
+            F += (
+                2
+                * sigma_ext
+                * eq.test
+                * K
+                * jump_h
+                * eq.ds(bc_id)
+            )
             F -= inner(K * grad(eq.test), eq.n) * jump_h * eq.ds(bc_id)
-            F -= eq.test * inner(K * grad(h), eq.n) * eq.ds(bc_id)
+            F -= eq.test * inner(K * grad(trial), eq.n) * eq.ds(bc_id)
 
         elif 'flux' in bc:
             # Neumann BC on flux
             # flux = -K * dh/dn, so we add the flux term
-            F -= eq.test * bc['flux'] * eq.ds(bc_id)
+            F += eq.test * bc['flux'] * eq.ds(bc_id)
 
     return -F
 
 
 def richards_gravity_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     r"""Richards gravity term for gravity-driven flow with upwinding.
 

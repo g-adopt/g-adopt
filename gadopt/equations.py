@@ -173,7 +173,7 @@ def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
         sigma = 1.0
     else:
         # safety factor: 1.0 is theoretical minimum
-        alpha = getattr(eq, "interior_penalty", 2.0)
+        alpha = getattr(eq, "interior_penalty", 1.0)
         num_facets = eq.mesh.ufl_cell().num_facets()
         sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
 
