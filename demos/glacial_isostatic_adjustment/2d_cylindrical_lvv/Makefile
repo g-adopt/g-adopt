@@ -2,15 +2,16 @@ include ../../../rules.mk
 
 .PHONY: all clean check
 
-all: params.log
+all: 2d_cylindrical_lvv.done
 
-params.log : category := gia
-params.log: 2d_cylindrical_lvv.py
+2d_cylindrical_lvv.done : category := gia
+2d_cylindrical_lvv.done: 2d_cylindrical_lvv.py
 	$(run-python)
+	@touch $@
 
 clean:
-	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.gif
+	rm -f *.pvd *.vtu *.pvtu *.h5 params.log *.done *.gif
 	rm -rf output ice mesh viscosity __pycache__
 
-check: params.log
+check: 2d_cylindrical_lvv.done
 	python3 -m pytest $(CURDIR)/../../test_all.py -k $(test_class)/$(current_dir)
