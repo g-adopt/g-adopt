@@ -48,6 +48,12 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
     mu = eq.approximation.mu
     stress = eq.stress
+    # For boundary terms, use linearised viscosity/stress if available.
+    # When viscosity depends on the solution, using a Function coefficient
+    # (updated via Picard iteration) avoids non-symmetric Jacobian terms
+    # that arise from differentiating mu(strain_rate) w.r.t. u.
+    mu_bdy = getattr(eq, 'mu_lin', None) or mu
+    stress_bdy = getattr(eq, 'stress_boundary', None) or stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
     sigma = interior_penalty_factor(eq)
@@ -88,11 +94,11 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             F += (
                 2
                 * sigma
-                * inner(outer(eq.n, eq.test), mu * trial_tensor_jump)
+                * inner(outer(eq.n, eq.test), mu_bdy * trial_tensor_jump)
                 * eq.ds(bc_id)
             )
-            F -= inner(mu * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
-            F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
+            F -= inner(mu_bdy * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
+            F -= inner(outer(eq.n, eq.test), stress_bdy) * eq.ds(bc_id)
 
         if "un" in bc:
             trial_tensor_jump = 2 * outer(eq.n, eq.n) * (dot(eq.n, trial) - bc["un"])
@@ -102,13 +108,13 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             F += (
                 2
                 * sigma
-                * inner(outer(eq.n, eq.test), mu * trial_tensor_jump)
+                * inner(outer(eq.n, eq.test), mu_bdy * trial_tensor_jump)
                 * eq.ds(bc_id)
             )
-            F -= inner(mu * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
+            F -= inner(mu_bdy * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
             # We only keep the normal part of stress; the tangential part is assumed to
             # be zero stress (i.e. free slip) or prescribed via "stress".
-            F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
+            F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress_bdy, eq.n)) * eq.ds(bc_id)
 
             if hasattr(eq.approximation, 'bulk_modulus'):
                 trial_tensor_jump = identity * (dot(eq.n, trial) - bc["un"])
@@ -206,7 +212,7 @@ def advection_hydrostatic_prestress_term(
 
 
 viscosity_term.required_attrs = {"stress"}
-viscosity_term.optional_attrs = {"interior_penalty"}
+viscosity_term.optional_attrs = {"interior_penalty", "mu_lin", "stress_boundary"}
 pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
 divergence_term.required_attrs = {"u", "rho_continuity"}

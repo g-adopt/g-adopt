@@ -418,6 +418,11 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             self.problem = fd.NonlinearVariationalProblem(
                 self.F, self.solution, bcs=self.strong_bcs, J=self.J
             )
+            mu_lin_callback = (
+                self._update_mu_lin
+                if getattr(self, 'mu_lin', None) is not None
+                else None
+            )
             self.solver = fd.NonlinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
@@ -426,7 +431,19 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 near_nullspace=self.near_nullspace,
                 appctx=self.appctx,
                 options_prefix=self.name,
+                pre_function_callback=mu_lin_callback,
+                pre_jacobian_callback=mu_lin_callback,
             )
+
+    def _update_mu_lin(self, current_solution):
+        """Update linearised boundary viscosity from the current iterate.
+
+        Called by SNES before each residual/Jacobian evaluation. By this
+        point Firedrake has already copied the PETSc Vec into
+        self.solution, so self.approximation.mu reflects the current
+        iterate.
+        """
+        self.mu_lin.interpolate(self.approximation.mu)
 
     def solve(self) -> None:
         """Solves the system."""
@@ -515,8 +532,42 @@ class StokesSolver(StokesSolverBase):
         u, p = self.solution_split[:2]
         stress = self.approximation.stress(u)
         source = self.approximation.buoyancy(p, self.T) * self.k
+
+        # Detect whether Picard linearization of boundary viscosity is needed.
+        # When viscosity depends on the solution AND weak SIPG BCs are present,
+        # the chain rule terms from derivative(F, u) through mu(strain_rate)
+        # produce a non-symmetric Jacobian. We avoid this by replacing mu with
+        # a Function coefficient (mu_lin) in boundary terms, updated each SNES
+        # iteration via pre_function_callback / pre_jacobian_callback.
+        has_weak_sipg_bcs = any(
+            "un" in bc or "u" in bc for bc in self.weak_bcs.values()
+        )
+        nonlinear_mu = depends_on(self.approximation.mu, self.solution)
+
+        momentum_attrs = {"p": p, "stress": stress, "source": source}
+        if nonlinear_mu and has_weak_sipg_bcs:
+            V = self.solution_space.sub(0) if self.is_mixed_space else self.solution_space
+            degree = V.ufl_element().degree()
+            if isinstance(degree, tuple):
+                degree = max(degree)
+            Q_mu = fd.FunctionSpace(V.mesh(), "DG", degree)
+            self.mu_lin = fd.Function(Q_mu, name="mu_linearised")
+            self.mu_lin.interpolate(self.approximation.mu)
+
+            stress_boundary = 2 * self.mu_lin * fd.sym(fd.grad(u))
+            if self.approximation.compressible:
+                dim = self.mesh.geometric_dimension
+                stress_boundary -= (
+                    2 / 3 * self.mu_lin * fd.Identity(dim) * fd.div(u)
+                )
+
+            momentum_attrs["mu_lin"] = self.mu_lin
+            momentum_attrs["stress_boundary"] = stress_boundary
+        else:
+            self.mu_lin = None
+
         eqs_attrs = [
-            {"p": p, "stress": stress, "source": source},
+            momentum_attrs,
             {"u": u, "rho_continuity": self.rho_continuity},
         ]
 

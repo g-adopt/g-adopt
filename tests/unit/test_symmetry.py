@@ -1,6 +1,7 @@
 import firedrake as fd
 import gadopt
 import pytest
+import ufl
 
 N = 4  # resolution in all directions
 mesh1d = fd.UnitIntervalMesh(N)
@@ -96,3 +97,64 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
         # test symmetry of entire matrix
         M = fd.assemble(fd.derivative(solver.F, z), mat_type='aij')
         assert M.petscmat.isSymmetric(1e-13)
+
+
+@pytest.mark.parametrize("approx_class", [
+    gadopt.BoussinesqApproximation,
+    gadopt.TruncatedAnelasticLiquidApproximation,
+])
+def test_stokes_boundary_symmetry_nonlinear_viscosity(
+    approx_class, mesh, solution_space
+):
+    """Test that boundary Jacobian is symmetric with nonlinear viscosity.
+
+    With strain-rate-dependent viscosity, the full Newton Jacobian has
+    non-symmetric volume contributions from differentiating through mu.
+    However, the boundary (SIPG) contribution should be symmetric thanks
+    to the Picard linearization that replaces mu with a Function
+    coefficient (mu_lin) in boundary terms."""
+    z = fd.Function(solution_space)
+    u_sub, p_sub = z.subfunctions
+    X = fd.SpatialCoordinate(mesh)
+    u_sub.interpolate(X)
+
+    # Build a nonlinear viscosity that depends on strain rate
+    u, _ = fd.split(z)
+    epsilon = fd.sym(fd.grad(u))
+    epsii = fd.sqrt(fd.inner(epsilon, epsilon) + 1e-10)
+    mu = fd.Constant(1.0) + fd.Constant(1.0) / epsii
+
+    Ra = 1
+    if approx_class is gadopt.BoussinesqApproximation:
+        approximation = approx_class(Ra, mu=mu)
+    else:
+        approximation = approx_class(Ra, Di=1, mu=mu)
+
+    T = fd.Function(solution_space.sub(1))
+    boundary = gadopt.get_boundary_ids(mesh)
+    bids = list(boundary)
+    bcs = {bids[0]: {'un': 0}, bids[1]: {'normal_stress': 0}}
+    if len(bids) > 2:
+        dim = mesh.geometric_dimension
+        zero_vec = fd.Constant([0] * dim)
+        bcs[bids[2]] = {'stress': zero_vec}
+        bcs[bids[3]] = {'u': zero_vec}
+    solver = gadopt.StokesSolver(z, approximation, T, bcs=bcs)
+
+    # Extract only the boundary integrals from the residual. The volume
+    # Newton terms are non-symmetric (expected for full Newton with
+    # nonlinear mu), but the boundary SIPG terms should be symmetric
+    # because mu_lin (a Function coefficient) is not differentiated.
+    bdy_integrals = [
+        i for i in solver.F.integrals()
+        if 'exterior_facet' in i.integral_type()
+    ]
+    F_bdy = ufl.Form(bdy_integrals)
+
+    if approximation.compressible:
+        M_bdy = fd.assemble(fd.derivative(F_bdy, z), mat_type='nest')
+        M00 = M_bdy.petscmat.getNestSubMatrix(0, 0).convert('aij')
+        assert M00.isSymmetric(1e-10)
+    else:
+        M_bdy = fd.assemble(fd.derivative(F_bdy, z), mat_type='aij')
+        assert M_bdy.petscmat.isSymmetric(1e-10)
