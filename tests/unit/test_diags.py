@@ -229,9 +229,8 @@ def test_function_extraction():
     mesh = get_mesh("annulus")
     F = fd.VectorFunctionSpace(mesh, "CG", 1)
     f = fd.Function(F)
-    diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
     vc = gadopt.utility.vertical_component(f)
-    assert diags._extract_functions(vc) == {f}
+    assert gadopt.diagnostics.extract_functions(vc) == {f}
 
 
 @pytest.mark.parametrize(
