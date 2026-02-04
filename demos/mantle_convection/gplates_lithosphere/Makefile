@@ -1,4 +1,4 @@
-demos/mantle_convection/gplates_lithosphere/Makefile include ../../../rules.mk
+include ../../../rules.mk
 
 .PHONY: all clean check data plate_data thickness_data craton_data
 
