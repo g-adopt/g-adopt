@@ -1914,11 +1914,18 @@ class GplatesScalarFunction(fd.Function):
     def __init__(
         self,
         function_space,
-        indicator_connector: IndicatorConnector,
+        *args,
+        indicator_connector: IndicatorConnector = None,
         name: str = None,
         **kwargs
     ):
-        super().__init__(function_space, name=name, **kwargs)
+        super().__init__(function_space, *args, name=name, **kwargs)
+
+        # When Firedrake internally creates subfunctions via type(self)(V, val),
+        # indicator_connector will be None. Only set up connector machinery
+        # when explicitly provided.
+        if indicator_connector is None:
+            return
 
         # Validate connector type
         if not isinstance(indicator_connector, IndicatorConnector):
