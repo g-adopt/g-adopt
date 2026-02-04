@@ -86,6 +86,7 @@ def half_space_cooling(age_myr, kappa=1e-6):
     return thickness_km
 # -
 
+
 # ## Loading the plate reconstruction model
 #
 # We use the Müller et al. (2022) plate reconstruction model.  The
