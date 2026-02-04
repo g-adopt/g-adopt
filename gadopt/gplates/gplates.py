@@ -569,6 +569,7 @@ class pyGplatesConnector(object):
 
         # Rescale to preserve original magnitude (avoid division by zero)
         scale_factor = np.divide(original_magnitudes, tangential_magnitudes,
+                                 out=np.ones_like(original_magnitudes),
                                  where=tangential_magnitudes > pyGplatesConnector.eps_rel)
 
         res_u = res_u_tangential * scale_factor[:, np.newaxis]
