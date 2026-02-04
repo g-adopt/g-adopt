@@ -212,8 +212,50 @@ lithosphere_connector = LithosphereConnector(
 # Create Firedrake function for lithosphere indicator
 lithosphere_indicator = GplatesScalarFunction(
     Q,
-    lithosphere_connector=lithosphere_connector,
+    indicator_connector=lithosphere_connector,
     name="Lithosphere_Indicator"
+)
+# -
+
+# ## Creating the Craton Indicator
+#
+# In addition to the general lithosphere indicator, we can create a
+# separate indicator for cratonic regions. Cratons are the ancient,
+# stable cores of continents with thick, cold lithospheric roots
+# (typically 200-300 km deep).
+#
+# The `CratonConnector` works similarly to `LithosphereConnector`:
+# 1. Uses craton polygon shapefiles to filter data to cratonic regions
+# 2. Back-rotates the thickness data to past positions
+# 3. Computes a depth-based 3D indicator (~1 inside craton, ~0 outside)
+#
+# We use the same continental thickness data - the CratonConnector
+# automatically filters to only points inside craton polygons.
+
+# +
+# Path to craton shapefile (included with Muller 2022 reconstruction)
+craton_shapefile = "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2/shapes_cratons.shp"
+
+# Create craton connector
+# Uses same thickness data as lithosphere - filtered to craton polygons
+craton_connector = CratonConnector(
+    gplates_connector=plate_model,
+    craton_polygons=craton_shapefile,
+    craton_thickness_data=continental_data,  # Same data, filtered to cratons
+    config_extra={
+        "r_outer": rmax,             # Match our mesh outer radius
+        "k_neighbors": 1,            # Use nearest point only for sharp boundaries
+        "distance_threshold": 0.15, # Small search radius (~95 km) - sharp horizontal cutoff
+        "transition_width": 0.05,     # Sharp vertical transition at craton base (km)
+    },
+    comm=mesh.comm,  # Enable MPI parallelization
+)
+
+# Create Firedrake function for craton indicator
+craton_indicator = GplatesScalarFunction(
+    Q,
+    indicator_connector=craton_connector,
+    name="Craton_Indicator"
 )
 # -
 
@@ -247,17 +289,20 @@ depth_km.interpolate(depth_km_expr)
 output_file = VTKFile("lithosphere_output.pvd")
 
 # Times to output (geological ages in Ma)
-output_ages = [200, 150, 100, 50, 0]
+output_ages = np.arange(200, -1, -10)
 
 for age in output_ages:
     # Convert geological age to non-dimensional time
     ndtime = plate_model.age2ndtime(age)
 
-    # Update lithosphere indicator
+    # TEMPORARILY DISABLED: Update lithosphere indicator (has gtrack bug at certain ages)
     lithosphere_indicator.update_plate_reconstruction(ndtime)
 
+    # Update craton indicator
+    craton_indicator.update_plate_reconstruction(ndtime)
+
     # Output to VTK (include depth for visualization)
-    output_file.write(lithosphere_indicator, depth_km)
+    output_file.write(lithosphere_indicator, craton_indicator, depth_km)
     log(f"Written output for {age} Ma")
 # -
 
