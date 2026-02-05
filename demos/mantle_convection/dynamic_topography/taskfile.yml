@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../../.tasks.lib.yml
+    internal: true
+
+  base_case: ../base_case
+
+tasks:
+  prereq-global:
+    deps: [":base_case:run-tests"]
+    if: "{{ne .ROOT_TASKFILE .TASKFILE}}"
+  prereq-local:
+    deps: ["base_case:run-tests"]
+    if: "{{eq .ROOT_TASKFILE .TASKFILE}}"
+
+  run-tests:
+    vars:
+      file: "dynamic_topography.py"
+    deps:
+      - prereq-global
+      - prereq-local
+    sources:
+      - "{{.file}}"
+      - "../base_case/Final_State.h5"
+    generates:
+      - "params.log"
+      - "*.pvd"
+      - "*.vtu"
+      - "*.pvtu"
+      - "*.h5"
+      - "output/"
+    cmds:
+      - task: lib:run-python
+        vars: { file: "{{.file}}" }

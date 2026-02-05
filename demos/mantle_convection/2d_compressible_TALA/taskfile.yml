@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    vars:
+      file: "2d_compressible_TALA.py"
+    sources:
+      - "{{.file}}"
+    generates:
+      - "params.log"
+      - "*.pvd"
+      - "*.vtu"
+      - "*.pvtu"
+      - "*.h5"
+      - "output/"
+      - "reference_state/"
+    cmds:
+      - task: lib:run-python
+        vars:
+          file: "{{.file}}"
+          cpus: 4

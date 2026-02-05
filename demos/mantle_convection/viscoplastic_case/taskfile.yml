@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    vars:
+      file: "viscoplastic_case.py"
+    sources:
+      - "{{.file}}"
+    generates:
+      - "params.log"
+      - "*.pvd"
+      - "*.vtu"
+      - "*.pvtu"
+      - "*.h5"
+      - "output/"
+    cmds:
+      - task: lib:run-python
+        vars:
+          file: "{{.file}}"
+          cpus: 4

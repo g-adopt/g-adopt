@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../../.tasks.lib.yml
+    internal: true
+
+vars:
+  adjoint_file: "adjoint-demo-checkpoint-state.h5"
+
+tasks:
+  adjoint:
+    vars:
+      file: "adjoint_forward.py"
+    sources:
+      - "{{.file}}"
+    generates:
+      - "{{.adjoint_file}}"
+    cmds:
+      - task: lib:run-python
+        vars: { file: "{{.file}}" }
+  run-tests:
+    deps: [adjoint]
+    vars:
+      file: "adjoint.py"
+    sources:
+      - "{{.file}}"
+      - "{{.adjoint_file}}"
+    generates:
+      - "functional.txt"
+      - "*.pvd"
+      - "*.vtu"
+      - "*.pvtu"
+      - "solutions/"
+      - "solution/"
+      - "visualisation_vtk/"
+      - "optimisation_checkpoint/"
+    cmds:
+      - task: lib:run-python
+        vars:
+          file: "{{.file}}"
+          cpus: 2
