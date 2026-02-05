@@ -7,6 +7,7 @@ import pytest
 import numpy as np
 from typing import Literal
 from numbers import Number
+from unittest.mock import Mock, patch
 
 takes_boundary_id = ["min", "max", "integral", "l1norm", "l2norm"]
 takes_dim = ["min", "max"]
@@ -231,6 +232,81 @@ def test_function_extraction():
     f = fd.Function(F)
     vc = gadopt.utility.vertical_component(f)
     assert gadopt.diagnostics.extract_functions(vc) == {f}
+
+
+def test_cache_outside_base_diagnostics():
+    @gadopt.diagnostics.ts_cache
+    def func():
+        return 1
+
+    with pytest.raises(TypeError):
+        func()
+
+
+def test_cache_missing_attr():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    decorator_factory = gadopt.diagnostics.ts_cache(input_funcs="g")
+    decorator = decorator_factory(diags.integral)
+    with pytest.raises(AttributeError):
+        decorator(diags, f)
+
+
+def test_cache_not_a_function():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    decorator_factory = gadopt.diagnostics.ts_cache(input_funcs="integral")
+    decorator = decorator_factory(gadopt.BaseDiagnostics.integral)
+    with pytest.raises(TypeError):
+        decorator(diags, f)
+
+
+def test_cache_is_used():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    decorator_factory = gadopt.diagnostics.ts_cache()
+    mock = Mock(wraps=gadopt.BaseDiagnostics.integral)
+    decorator = decorator_factory(mock)
+    decorator(diags, f, None)
+    decorator(diags, f, None)
+    mock.assert_called_once()
+
+
+def test_no_functions_never_cached():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    with patch.object(
+        gadopt.BaseDiagnostics, "no_func_diag", return_value=1, create=True
+    ) as mock_method:
+        diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+        decorator_factory = gadopt.diagnostics.ts_cache()
+        decorator = decorator_factory(gadopt.BaseDiagnostics.no_func_diag)
+        decorator(diags)
+        decorator(diags)
+        assert mock_method.call_count == 2
+
+
+def test_cache_invalidated():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    X, Y = fd.SpatialCoordinate(mesh)
+    f.interpolate(X + Y)
+    diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    decorator_factory = gadopt.diagnostics.ts_cache()
+    mock = Mock(wraps=gadopt.BaseDiagnostics.integral)
+    decorator = decorator_factory(mock)
+    decorator(diags, f, None)
+    f.assign(-f)
+    decorator(diags, f, None)
+    assert mock.call_count == 2
 
 
 @pytest.mark.parametrize(

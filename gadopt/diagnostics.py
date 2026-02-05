@@ -130,7 +130,7 @@ def ts_cache(
     def ts_cache_decorator(diag_func):
         cache = {}
         funcs = defaultdict(set)
-        object_state = defaultdict(lambda: defaultdict(int))
+        object_state = defaultdict(lambda: defaultdict(lambda: int(-1)))
         check_funcs = set()
         if input_funcs is not None:
             check_funcs |= set(
@@ -141,7 +141,7 @@ def ts_cache(
             key = make_key(args, kwargs)
             if key not in cache:
                 # Do all sanity checking on the first call to the decorator
-                if not isinstance(args[0], BaseDiagnostics):
+                if len(args) == 0 or not isinstance(args[0], BaseDiagnostics):
                     raise TypeError(
                         "This decorator can only be used on G-ADOPT Diagnostics functions"
                     )
@@ -152,8 +152,8 @@ def ts_cache(
                 for arg in kwargs.values():
                     if isinstance(arg, Expr):
                         funcs[key] |= extract_functions(arg)
-                # Add any functions that we're specified in the arguments to the
-                # decorator
+                # Add any functions that were specified in the arguments to the
+                # decorator factory
                 for f in check_funcs:
                     if hasattr(args[0], f):
                         func = getattr(args[0], f)
@@ -166,7 +166,10 @@ def ts_cache(
                             f"This diagnostic object has an attribute named {f} but it is not a Firedrake function"
                         )
                     funcs[key].add(func)
-            if any(object_state[key][f] != f.dat.dat_version for f in funcs[key]):
+            if (
+                any(object_state[key][f] != f.dat.dat_version for f in funcs[key])
+                or not funcs[key]
+            ):
                 cache[key] = diag_func(*args, **kwargs)
                 for f in funcs[key]:
                     object_state[key][f] = f.dat.dat_version
