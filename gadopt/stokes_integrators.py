@@ -17,6 +17,7 @@ from typing import Any
 from warnings import warn
 
 import firedrake as fd
+import ufl
 from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, BaseGIAApproximation
@@ -418,11 +419,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             self.problem = fd.NonlinearVariationalProblem(
                 self.F, self.solution, bcs=self.strong_bcs, J=self.J
             )
-            mu_lin_callback = (
-                self._update_mu_lin
-                if getattr(self, 'mu_lin', None) is not None
-                else None
-            )
             self.solver = fd.NonlinearVariationalSolver(
                 self.problem,
                 solver_parameters=self.solver_parameters,
@@ -431,19 +427,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 near_nullspace=self.near_nullspace,
                 appctx=self.appctx,
                 options_prefix=self.name,
-                pre_function_callback=mu_lin_callback,
-                pre_jacobian_callback=mu_lin_callback,
             )
-
-    def _update_mu_lin(self, current_solution):
-        """Update linearised boundary viscosity from the current iterate.
-
-        Called by SNES before each residual/Jacobian evaluation. By this
-        point Firedrake has already copied the PETSc Vec into
-        self.solution, so self.approximation.mu reflects the current
-        iterate.
-        """
-        self.mu_lin.interpolate(self.approximation.mu)
 
     def solve(self) -> None:
         """Solves the system."""
@@ -532,42 +516,8 @@ class StokesSolver(StokesSolverBase):
         u, p = self.solution_split[:2]
         stress = self.approximation.stress(u)
         source = self.approximation.buoyancy(p, self.T) * self.k
-
-        # Detect whether Picard linearization of boundary viscosity is needed.
-        # When viscosity depends on the solution AND weak SIPG BCs are present,
-        # the chain rule terms from derivative(F, u) through mu(strain_rate)
-        # produce a non-symmetric Jacobian. We avoid this by replacing mu with
-        # a Function coefficient (mu_lin) in boundary terms, updated each SNES
-        # iteration via pre_function_callback / pre_jacobian_callback.
-        has_weak_sipg_bcs = any(
-            "un" in bc or "u" in bc for bc in self.weak_bcs.values()
-        )
-        nonlinear_mu = depends_on(self.approximation.mu, self.solution)
-
-        momentum_attrs = {"p": p, "stress": stress, "source": source}
-        if nonlinear_mu and has_weak_sipg_bcs:
-            V = self.solution_space.sub(0) if self.is_mixed_space else self.solution_space
-            degree = V.ufl_element().degree()
-            if isinstance(degree, tuple):
-                degree = max(degree)
-            Q_mu = fd.FunctionSpace(V.mesh(), "DG", degree)
-            self.mu_lin = fd.Function(Q_mu, name="mu_linearised")
-            self.mu_lin.interpolate(self.approximation.mu)
-
-            stress_boundary = 2 * self.mu_lin * fd.sym(fd.grad(u))
-            if self.approximation.compressible:
-                dim = self.mesh.geometric_dimension
-                stress_boundary -= (
-                    2 / 3 * self.mu_lin * fd.Identity(dim) * fd.div(u)
-                )
-
-            momentum_attrs["mu_lin"] = self.mu_lin
-            momentum_attrs["stress_boundary"] = stress_boundary
-        else:
-            self.mu_lin = None
-
         eqs_attrs = [
-            momentum_attrs,
+            {"p": p, "stress": stress, "source": source},
             {"u": u, "rho_continuity": self.rho_continuity},
         ]
 
@@ -618,6 +568,51 @@ class StokesSolver(StokesSolverBase):
             self.solution_old_split[2:],
         ):
             self.F += eq.residual((sol - sol_old) / self.dt)
+
+        # When viscosity depends on the solution (nonlinear rheology) and
+        # the boundary conditions include weak SIPG terms ("un" or "u"),
+        # the true Jacobian derivative(F, z) is non-symmetric because the
+        # chain rule differentiates through mu(strain_rate) in the boundary
+        # integrals. This breaks symmetric solvers (CG + GAMG).
+        #
+        # Fix: symmetrise the boundary contribution to the Jacobian. Split
+        # F into interior and boundary parts, keep the full Newton Jacobian
+        # for interior terms, and use J_bdy_sym = 0.5*(J_bdy + J_bdy^T)
+        # for boundary terms. This is a quasi-Newton method whose
+        # approximation error is confined to boundary integrals and vanishes
+        # as the boundary condition is satisfied.
+        #
+        # The residual F is unchanged, so the converged solution is exact
+        # and the adjoint tape records the correct forward model.
+        if self.J is None and self._needs_symmetric_boundary_jacobian():
+            self.J = self._build_symmetric_jacobian()
+
+    def _needs_symmetric_boundary_jacobian(self) -> bool:
+        """Check if Jacobian symmetrisation is needed."""
+        has_weak_sipg_bcs = any(
+            "un" in bc or "u" in bc for bc in self.weak_bcs.values()
+        )
+        nonlinear_mu = depends_on(self.approximation.mu, self.solution)
+        return nonlinear_mu and has_weak_sipg_bcs
+
+    def _build_symmetric_jacobian(self) -> fd.Form:
+        """Build a Jacobian with symmetrised boundary terms."""
+        int_integrals = [
+            i for i in self.F.integrals()
+            if "exterior_facet" not in i.integral_type()
+        ]
+        bdy_integrals = [
+            i for i in self.F.integrals()
+            if "exterior_facet" in i.integral_type()
+        ]
+
+        F_int = ufl.Form(int_integrals)
+        F_bdy = ufl.Form(bdy_integrals)
+
+        J_int = fd.derivative(F_int, self.solution)
+        J_bdy = fd.derivative(F_bdy, self.solution)
+
+        return J_int + fd.Constant(0.5) * (J_bdy + fd.adjoint(J_bdy))
 
     def set_solver_options(
         self, solver_preset: ConfigType | None, solver_extras: ConfigType | None
