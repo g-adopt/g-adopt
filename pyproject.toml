@@ -19,7 +19,7 @@ dependencies = [
   "pandas",
   "shapely",
   "vtk",
-  "irksome @ git+https://github.com/firedrakeproject/irksome",
+  "irksome @ git+https://github.com/firedrakeproject/Irksome",
 ]
 
 [project.optional-dependencies]

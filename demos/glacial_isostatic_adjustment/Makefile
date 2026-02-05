@@ -6,6 +6,9 @@ cases := $(notdir $(gia_cases))
 
 all: $(cases)
 
+# Ensure 2d_cylindrical_lvv completes before adjoint_ice starts
+adjoint_ice: | 2d_cylindrical_lvv
+
 $(cases):
 	$(MAKE) -C $@ $(MAKECMDGOALS)
 

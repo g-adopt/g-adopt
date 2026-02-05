@@ -93,7 +93,7 @@ jobs:
         run: |
           apt update
           apt install -y time unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
-          git config --global safe.directory '*'
+          git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
