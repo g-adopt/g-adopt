@@ -27,3 +27,16 @@ tasks:
     cmds:
       - task: lib:run-python
         vars: { file: "{{.file}}" }
+
+  convert-notebooks:
+    cmds:
+      - task: lib:convert-notebook
+        vars:
+          file_base: "2d_cylindrical"
+
+  add-files-to-archive:
+    cmds:
+      - task: lib:add-files-to-archive
+        vars:
+          archive: "{{.archive}}"
+          files: ["2d_cylindrical.ipynb", "displacement_warp.gif"]

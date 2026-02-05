@@ -26,3 +26,16 @@ tasks:
         vars:
           file: "{{.file}}"
           cpus: 4
+
+  convert-notebooks:
+    cmds:
+      - task: lib:convert-notebook
+        vars:
+          file_base: "3d_cartesian"
+
+  add-files-to-archive:
+    cmds:
+      - task: lib:add-files-to-archive
+        vars:
+          archive: "{{.archive}}"
+          files: ["3d_cartesian.ipynb"]

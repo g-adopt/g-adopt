@@ -42,3 +42,19 @@ tasks:
         vars:
           file: "{{.file}}"
           cpus: 2
+
+  convert-notebooks:
+    cmds:
+      - task: lib:convert-notebook
+        vars:
+          file_base: "adjoint_forward"
+      - task: lib:convert-notebook
+        vars:
+          file_base: "adjoint"
+
+  add-files-to-archive:
+    cmds:
+      - task: lib:add-files-to-archive
+        vars:
+          archive: "{{.archive}}"
+          files: ["adjoint.ipynb", "adjoint_forward.ipynb"]

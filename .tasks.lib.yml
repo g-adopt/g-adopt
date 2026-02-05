@@ -8,3 +8,18 @@ tasks:
       cpus: "{{default 1 .cpus}}"
     cmds:
       - echo "running {{.file}} -np {{.cpus}}"
+
+  convert-notebook:
+    vars:
+      input: "{{.file_base}}.py"
+      output: "{{.file_base}}.ipynb"
+    sources:
+      - "{{.input}}"
+    generates:
+      - "{{.output}}"
+    cmds:
+      - echo "converting {{.input}} to {{.output}}"
+
+  add-files-to-archive:
+    cmds:
+      - 'echo tar --append --file {{.archive}} {{.files | join " "}}'

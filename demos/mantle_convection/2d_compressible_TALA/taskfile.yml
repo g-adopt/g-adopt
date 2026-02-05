@@ -26,3 +26,16 @@ tasks:
         vars:
           file: "{{.file}}"
           cpus: 4
+
+  convert-notebooks:
+    cmds:
+      - task: lib:convert-notebook
+        vars:
+          file_base: "2d_compressible_TALA"
+
+  add-files-to-archive:
+    cmds:
+      - task: lib:add-files-to-archive
+        vars:
+          archive: "{{.archive}}"
+          files: ["2d_compressible_TALA.ipynb"]

@@ -3,32 +3,32 @@
 version: '3'
 
 includes:
-  base_case: ./base_case
   2d_cylindrical: ./2d_cylindrical
-  2d_cylindrical_lvv: ./2d_cylindrical_lvv
-  adjoint_ice: ./adjoint_ice
+  free_surface: ./free_surface
+  compositional_buoyancy: ./compositional_buoyancy
+  thermochemical_buoyancy: ./thermochemical_buoyancy
 
 vars:
-  gia_cases:
-    - "base_case"
+  mm_cases:
     - "2d_cylindrical"
-    - "2d_cylindrical_lvv"
-    - "adjoint_ice"
+    - "free_surface"
+    - "compositional_buoyancy"
+    - "thermochemical_buoyancy"
 
 tasks:
   run-tests:
     deps:
-      - for: { var: gia_cases }
+      - for: { var: mm_cases }
         task: "{{.ITEM}}:run-tests"
 
   convert-notebooks:
     deps:
-      - for: { var: gia_cases }
+      - for: { var: mm_cases }
         task: "{{.ITEM}}:convert-notebooks"
 
   add-files-to-archive:
     deps:
-      - for: { var: gia_cases }
+      - for: { var: mm_cases }
         task: "{{.ITEM}}:add-files-to-archive"
         vars:
           archive: "{{.archive}}"

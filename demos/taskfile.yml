@@ -4,8 +4,39 @@ version: '3'
 
 includes:
   gia: ./glacial_isostatic_adjustment
-  mantle: ./mantle_convection
+  mantle_convection: ./mantle_convection
+  multi_material: ./multi_material
+  PDE_constrained_optimisation: ./PDE_constrained_optimisation
+  smoothing: ./smoothing
+
+vars:
+  demo_categories:
+    - "gia"
+    - "mantle_convection"
+    - "multi_material"
+    - "PDE_constrained_optimisation"
+    - "smoothing"
 
 tasks:
   run-tests:
-    deps: [gia:run-tests, mantle:run-tests]
+    deps:
+      - for: { var: demo_categories }
+        task: "{{.ITEM}}:run-tests"
+
+  convert-notebooks:
+    deps:
+      - for: { var: demo_categories }
+        task: "{{.ITEM}}:convert-notebooks"
+
+  build-artifact:
+    cmds:
+      - "echo creating tar file"
+      - task: "convert-notebooks"
+      - task: "add-files-to-archive"
+
+  add-files-to-archive:
+    deps:
+      - for: { var: demo_categories }
+        task: "{{.ITEM}}:add-files-to-archive"
+        vars:
+          archive: "{{.TASKFILE_DIR}}/artifact.tar"

@@ -16,19 +16,35 @@ includes:
   dynamic_topography: ./dynamic_topography
   Drucker_Prager: ./Drucker_Prager
 
+vars:
+  mantle_cases:
+    - "base_case"
+    - "2d_compressible_ALA"
+    - "2d_compressible_TALA"
+    - "viscoplastic_case"
+    - "2d_cylindrical"
+    - "3d_spherical"
+    - "3d_cartesian"
+    - "adjoint"
+    - "gplates_global"
+    - "free_surface"
+    - "dynamic_topography"
+    - "Drucker_Prager"
+
 tasks:
   run-tests:
     deps:
-      - "base_case:run-tests"
-      - "2d_compressible_ALA:run-tests"
-      - "2d_compressible_TALA:run-tests"
-      - "viscoplastic_case:run-tests"
-      - "2d_cylindrical:run-tests"
-      - "3d_spherical:run-tests"
-      - "3d_cartesian:run-tests"
-      - "adjoint:run-tests"
-      - "gplates_global:run-tests"
-      - "free_surface:run-tests"
-      - "dynamic_topography:run-tests"
-      - "Drucker_Prager:run-tests"
+      - for: { var: mantle_cases }
+        task: "{{.ITEM}}:run-tests"
 
+  convert-notebooks:
+    deps:
+      - for: { var: mantle_cases }
+        task: "{{.ITEM}}:convert-notebooks"
+
+  add-files-to-archive:
+    deps:
+      - for: { var: mantle_cases }
+        task: "{{.ITEM}}:add-files-to-archive"
+        vars:
+          archive: "{{.archive}}"

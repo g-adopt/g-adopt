@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    vars:
+      files:
+        - "PDE_constrained_boundary.py"
+        - "PDE_constrained_field.py"
+    sources:
+      - "PDE_constrained_boundary.py"
+      - "PDE_constrained_field.py"
+    generates:
+      - "functional_boundary.txt"
+      - "functional_field.txt"
+      - "*.h5"
+    deps:
+      # this doesn't seem to iterate properly on sources,
+      # so we have to define it separately
+      - for: { var: files }
+        task: lib:run-python
+        vars: { file: "{{.ITEM}}" }
+
+  convert-notebooks:
+    vars:
+      file_bases:
+        - "PDE_constrained_boundary"
+        - "PDE_constrained_field"
+    deps:
+      - for: { var: file_bases }
+        task: lib:convert-notebook
+        vars:
+          file_base: "{{.ITEM}}"
+
+  add-files-to-archive:
+    cmds:
+      - task: lib:add-files-to-archive
+        vars:
+          archive: "{{.archive}}"
+          files: ["PDE_constrained_boundary.ipynb", "PDE_constrained_field.ipynb"]

@@ -4,14 +4,13 @@ version: '3'
 
 includes:
   lib:
-    taskfile: ../../../.tasks.lib.yml
+    taskfile: ../../.tasks.lib.yml
     internal: true
 
 tasks:
   run-tests:
-    run: once
     vars:
-      file: "2d_cylindrical_lvv.py"
+      file: "smoothing.py"
     sources:
       - "{{.file}}"
     generates:
@@ -20,24 +19,25 @@ tasks:
       - "*.vtu"
       - "*.pvtu"
       - "*.h5"
-      - "*.gif"
       - "output/"
-      - "ice/"
-      - "mesh/"
-      - "viscosity/"
+      - "original_temperature/"
     cmds:
+      - ln -s "../../tests/adjoint_2d_cylindrical/Checkpoint230.h5" smoothing-example.h5
+      - defer: rm smoothing-example.h5
       - task: lib:run-python
         vars: { file: "{{.file}}" }
 
   convert-notebooks:
     cmds:
+      - ln -s "../../tests/adjoint_2d_cylindrical/Checkpoint230.h5" smoothing-example.h5
+      - defer: rm smoothing-example.h5
       - task: lib:convert-notebook
         vars:
-          file_base: "2d_cylindrical_lvv"
+          file_base: "smoothing"
 
   add-files-to-archive:
     cmds:
       - task: lib:add-files-to-archive
         vars:
           archive: "{{.archive}}"
-          files: ["2d_cylindrical_lvv.ipynb", "displacement_warp.gif"]
+          files: ["smoothing.ipynb"]

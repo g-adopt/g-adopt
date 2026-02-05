@@ -22,3 +22,16 @@ tasks:
     cmds:
       - task: lib:run-python
         vars: { file: "{{.file}}" }
+
+  convert-notebooks:
+    cmds:
+      - task: lib:convert-notebook
+        vars:
+          file_base: "Drucker_Prager"
+
+  add-files-to-archive:
+    cmds:
+      - task: lib:add-files-to-archive
+        vars:
+          archive: "{{.archive}}"
+          files: ["Drucker_Prager.ipynb"]

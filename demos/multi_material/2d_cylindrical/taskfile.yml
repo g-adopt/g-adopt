@@ -11,7 +11,7 @@ tasks:
   run-tests:
     run: once
     vars:
-      file: "2d_cylindrical_lvv.py"
+      file: "2d_cylindrical.py"
     sources:
       - "{{.file}}"
     generates:
@@ -20,24 +20,26 @@ tasks:
       - "*.vtu"
       - "*.pvtu"
       - "*.h5"
-      - "*.gif"
       - "output/"
-      - "ice/"
+      - "level_set/"
       - "mesh/"
-      - "viscosity/"
+      - "RaB/"
+      - "temp/"
     cmds:
       - task: lib:run-python
-        vars: { file: "{{.file}}" }
+        vars:
+          file: "{{.file}}"
+          cpus: 4
 
   convert-notebooks:
     cmds:
       - task: lib:convert-notebook
         vars:
-          file_base: "2d_cylindrical_lvv"
+          file_base: "2d_cylindrical"
 
   add-files-to-archive:
     cmds:
       - task: lib:add-files-to-archive
         vars:
           archive: "{{.archive}}"
-          files: ["2d_cylindrical_lvv.ipynb", "displacement_warp.gif"]
+          files: ["2d_cylindrical.ipynb"]

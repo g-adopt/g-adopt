@@ -42,3 +42,23 @@ tasks:
       - defer: rm "{{.data_file}}"
       - task: lib:run-python
         vars: { file: "{{.file}}" }
+
+  convert-notebooks:
+    vars:
+      data_file: "forward-2d-cylindrical-disp-vel.h5"
+    deps:
+      - prereq-global
+      - prereq-local
+    cmds:
+      - ln -s "../2d_cylindrical_lvv/{{.data_file}}"
+      - defer: rm "{{.data_file}}"
+      - task: lib:convert-notebook
+        vars:
+          file_base: "2d_cylindrical"
+
+  add-files-to-archive:
+    cmds:
+      - task: lib:add-files-to-archive
+        vars:
+          archive: "{{.archive}}"
+          files: ["adjoint_ice.ipynb"]

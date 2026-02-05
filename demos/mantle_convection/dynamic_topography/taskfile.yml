@@ -36,3 +36,26 @@ tasks:
     cmds:
       - task: lib:run-python
         vars: { file: "{{.file}}" }
+
+  prereq-notebook-global:
+    deps: [":base_case:convert-notebooks"]
+    if: "{{ne .ROOT_TASKFILE .TASKFILE}}"
+  prereq-notebook-local:
+    deps: ["base_case:convert-notebooks"]
+    if: "{{eq .ROOT_TASKFILE .TASKFILE}}"
+
+  convert-notebooks:
+    deps:
+      - prereq-notebook-global
+      - prereq-notebook-local
+    cmds:
+      - task: lib:convert-notebook
+        vars:
+          file_base: "dynamic_topography"
+
+  add-files-to-archive:
+    cmds:
+      - task: lib:add-files-to-archive
+        vars:
+          archive: "{{.archive}}"
+          files: ["dynamic_topography.ipynb"]

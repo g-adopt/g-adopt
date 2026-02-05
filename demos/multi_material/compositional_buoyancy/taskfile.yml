@@ -11,7 +11,7 @@ tasks:
   run-tests:
     run: once
     vars:
-      file: "2d_cylindrical_lvv.py"
+      file: "compositional_buoyancy.py"
     sources:
       - "{{.file}}"
     generates:
@@ -20,24 +20,23 @@ tasks:
       - "*.vtu"
       - "*.pvtu"
       - "*.h5"
-      - "*.gif"
+      - "*.msh"
       - "output/"
-      - "ice/"
-      - "mesh/"
-      - "viscosity/"
     cmds:
       - task: lib:run-python
-        vars: { file: "{{.file}}" }
+        vars:
+          file: "{{.file}}"
+          cpus: 4
 
   convert-notebooks:
     cmds:
       - task: lib:convert-notebook
         vars:
-          file_base: "2d_cylindrical_lvv"
+          file_base: "compositional_buoyancy"
 
   add-files-to-archive:
     cmds:
       - task: lib:add-files-to-archive
         vars:
           archive: "{{.archive}}"
-          files: ["2d_cylindrical_lvv.ipynb", "displacement_warp.gif"]
+          files: ["compositional_buoyancy.ipynb"]
