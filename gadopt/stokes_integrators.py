@@ -593,7 +593,13 @@ class StokesSolver(StokesSolverBase):
             "un" in bc or "u" in bc for bc in self.weak_bcs.values()
         )
         nonlinear_mu = depends_on(self.approximation.mu, self.solution)
-        return nonlinear_mu and has_weak_sipg_bcs
+        needs_symmetrisation = nonlinear_mu and has_weak_sipg_bcs
+        if needs_symmetrisation and not is_continuous(self.equations[0].trial_space):
+            raise NotImplementedError(
+                "Jacobian symmetrisation not implemented for "
+                "discontinuous velocity elements"
+            )
+        return needs_symmetrisation
 
     def _build_symmetric_jacobian(self) -> fd.Form:
         """Build a Jacobian with symmetrised boundary terms."""
