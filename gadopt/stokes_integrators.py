@@ -618,7 +618,21 @@ class StokesSolver(StokesSolverBase):
         J_int = fd.derivative(F_int, self.solution)
         J_bdy = fd.derivative(F_bdy, self.solution)
 
-        return J_int + fd.Constant(0.5) * (J_bdy + fd.adjoint(J_bdy))
+        # here we symmetrize the (0,0) block of J_bdy
+        # for this we first need to split J_bdy into blocks
+        fs_bdy = dict(fd.formmanipulation.split_form(J_bdy))
+        # symmetrize (0,0) block:
+        fs_bdy[(0, 0)] = fd.Constant(0.5) * (fs_bdy[(0, 0)] + fd.adjoint(fs_bdy[(0, 0)]))
+        # each of the blocks in fs_bdy has arguments wrt the subspaces only
+        # (i.e. they are no longer numbered as part of the larger mixed system)
+        # therefore we need to replace these again with the corresponding
+        # sub-indexed arguments of the full mixed system before adding up
+        J_bdy_sym = 0
+        for idx, block in fs_bdy.items():
+            mixed_args = [fd.split(a)[i] for a, i in zip(J_bdy.arguments(), idx)]
+            J_bdy_sym += fd.replace(block, dict(zip(block.arguments(), mixed_args)))
+
+        return J_int + J_bdy_sym
 
     def set_solver_options(
         self, solver_preset: ConfigType | None, solver_extras: ConfigType | None
