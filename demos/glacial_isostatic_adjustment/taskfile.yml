@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  base_case: ./base_case
+  2d_cylindrical: ./2d_cylindrical
+  2d_cylindrical_lvv: ./2d_cylindrical_lvv
+  adjoint_ice: ./adjoint_ice
+
+tasks:
+  run-tests:
+    deps:
+      - "base_case:run-tests"
+      - "2d_cylindrical:run-tests"
+      - "2d_cylindrical_lvv:run-tests"
+      - "adjoint_ice:run-tests"

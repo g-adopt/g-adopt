@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  run-tests:
+    cmds:
+      - echo "Running tests/"
+    silent: true

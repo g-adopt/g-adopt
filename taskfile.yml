@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  demos: ./demos
+  tests: ./tests
+
+tasks:
+  run-tests:
+    desc: Run all test cases
+    deps: [demos:run-tests, tests:run-tests]

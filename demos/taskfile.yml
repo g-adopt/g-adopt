@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  gia: ./glacial_isostatic_adjustment
+  mantle: ./mantle_convection
+
+tasks:
+  run-tests:
+    deps: [gia:run-tests, mantle:run-tests]

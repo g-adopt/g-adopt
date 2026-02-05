@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  run-python:
+    cmds:
+      - echo "running {{.file}}"
+      - touch "params.log"

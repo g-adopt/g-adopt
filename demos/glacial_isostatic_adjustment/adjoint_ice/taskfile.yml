@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../../.tasks.lib.yml
+    internal: true
+
+  2d_cylindrical_lvv: ../2d_cylindrical_lvv
+
+tasks:
+  # we need to handle the case where we run from the task directory
+  # itself. for some reason, I can't just template in the leading colon
+  prereq-global:
+    deps: [":2d_cylindrical_lvv:run-tests"]
+    if: "{{ne .ROOT_TASKFILE .TASKFILE}}"
+  prereq-local:
+    deps: ["2d_cylindrical_lvv:run-tests"]
+    if: "{{eq .ROOT_TASKFILE .TASKFILE}}"
+
+  run-tests:
+    vars:
+      file: "adjoint_ice.py"
+      data_file: "forward-2d-cylindrical-disp-vel.h5"
+    deps:
+      - prereq-global
+      - prereq-local
+    sources:
+      - "{{.file}}"
+    generates:
+      - "functional.txt"
+      - "*.pvd"
+      - "*.vtu"
+      - "*.pvtu"
+      - "*.h5"
+      - "taylor_test_minconv.txt"
+      - "output/"
+      - "viscosity/"
+    cmds:
+      - ln -s "../2d_cylindrical_lvv/{{.data_file}}"
+      - defer: rm "{{.data_file}}"
+      - task: lib:run-python
+        vars: { file: "{{.file}}" }
