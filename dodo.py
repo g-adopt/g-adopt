@@ -37,7 +37,13 @@ def mpi_command(cfg):
 
 def link_dependencies(case_dir, cfg):
     for dep in cfg.get("deps", []):
-        src = REPO_ROOT / dep["case"] / dep["artifact"]
+        # dependency is consumed where it is, instead
+        # of linking into the current directory
+        if not dep.get("link", True):
+            continue
+
+        name = dep["artifact"]
+        src = REPO_ROOT / dep["case"] / name
         dst = case_dir / name
         if not dst.exists():
             dst.symlink_to(src)
