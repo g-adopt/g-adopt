@@ -14,6 +14,7 @@ steps = {
                 "case": "demos/mantle_convection/adjoint",
                 "step": "forward",
                 "artifact": "adjoint-demo-checkpoint-state.h5",
+                "notebook": "adjoint_forward.ipynb",
             },
         ],
         "outputs": ["functional.txt"],

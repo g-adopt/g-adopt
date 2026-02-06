@@ -51,6 +51,9 @@ def link_dependencies(case_dir, cfg):
 
 def unlink_dependencies(case_dir, cfg):
     for dep in cfg.get("deps", []):
+        if "artifact" not in dep:
+            continue
+
         dst = case_dir / dep.get("link_as", dep["artifact"])
         if dst.is_symlink():
             dst.unlink()
@@ -61,9 +64,9 @@ def make_run_task(case_dir, step, cfg):
 
     file_deps = [case_dir / cfg["entrypoint"]]
     for dep in cfg.get("deps", []):
-        dep_case = REPO_ROOT / dep["case"]
-        dep_step = dep.get("step")
-        file_deps.append(dep_case / dep["artifact"])
+        if "artifact" in dep:
+            dep_case = REPO_ROOT / dep["case"]
+            file_deps.append(dep_case / dep["artifact"])
 
     targets = [case_dir / out for out in cfg["outputs"]]
 
@@ -82,30 +85,44 @@ def normalise_meta(meta):
     if hasattr(meta, "steps"):
         return meta.steps
 
-    return {
-        "run": {
-            "entrypoint": meta.entrypoint,
-            "cores": getattr(meta, "cores", 1),
-            "outputs": meta.outputs,
-            "deps": getattr(meta, "deps", []),
-        }
-    }
+    properties = [
+        ("entrypoint", None),
+        ("notebook", None),
+        ("cores", 1),
+        ("outputs", []),
+        ("deps", []),
+    ]
 
-def make_convert_task(case_dir, cfg):
+    step = {}
+    for prop, default in properties:
+        if default is not None:
+            step[prop] = getattr(meta, prop, default)
+        elif hasattr(meta, prop):
+            step[prop] = getattr(meta, prop)
+
+    return { "run": step }
+
+def make_convert_task(case_dir, step, cfg):
     case_path = case_dir.relative_to(REPO_ROOT).as_posix()
     name = f"{case_path}:{step}"
 
-    file_deps = [case_dir / cfg["notebook"].with_suffix(".py")]
     notebook_file = case_dir / cfg["notebook"]
+    py_file = notebook_file.with_suffix(".py")
+
+    file_deps = [py_file]
+    for dep in cfg.get("deps", []):
+        if "notebook" in dep:
+            dep_case = REPO_ROOT / dep["case"]
+            file_deps.append(dep_case / dep["notebook"])
 
     return {
         "name": name,
         "actions": [
-            (link_dependenices, [case_dir, cfg]),
-            f"jupytext --to ipynb {notebook_file}",
-            CmdAption(
-                "jupyter-nbconvert --to notebook --execute --inplace "
-                """--TagRemovePreprocessor.enabled=True --TagRemovePreprocessor.remove_cell_tags='["exercise"]'"""
+            (link_dependencies, [case_dir, cfg]),
+            f"python3 -m jupytext --to ipynb {py_file}",
+            CmdAction(
+                "python3 -m nbconvert --to notebook --execute --inplace "
+                """--TagRemovePreprocessor.enabled=True --TagRemovePreprocessor.remove_cell_tags='["exercise"]' """
                 f"{notebook_file}",
                 cwd=case_dir
             ),
@@ -126,10 +143,10 @@ def task_run_case():
 def task_convert():
     for case_dir, meta in discover_cases():
         for step, cfg in normalise_meta(meta).items():
-            if "notebook" not in step:
+            if "notebook" not in cfg:
                 continue
 
-            yield make_convert_task(case_dir, cfg)
+            yield make_convert_task(case_dir, step, cfg)
 
 def pytest_command(case_dir, meta):
     match getattr(meta, "pytest", None):
