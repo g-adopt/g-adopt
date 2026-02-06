@@ -22,4 +22,5 @@ tasks:
         task: lib:run-python
         vars:
           file: "helmholtz.py"
-          cpus: "{{.ITEM}}"
+          cpus:
+            ref: .ITEM

@@ -24,7 +24,8 @@ tasks:
 
   run-case:
     internal: true
+    dir: "{{.TASKFILE_DIR}}"
     vars:
-      tsp_string: "{{if .BATCH_MODE}}tsp -N {cores} -f {{end}}"
+      tsp_string: "{{if .BATCH_MODE}}tsp -N {cores} -f{{end}}"
     cmds:
-      - 'python3 analytical.py submit -t "{{.tsp_string -}} mpiexec -np {cores}" {{.case}}'
+      - 'python3 analytical.py submit -t "{{.tsp_string}} mpiexec -np {cores}" {{.case}}'

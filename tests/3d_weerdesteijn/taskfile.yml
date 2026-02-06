@@ -20,9 +20,10 @@ tasks:
 
   make-mesh:
     internal: true
+    dir: "{{.TASKFILE_DIR}}"
     sources:
       - "weerdesteijn_box_refined_surface_nondim.geo"
     generates:
       - "weerdesteijn_box_refined_surface_{{.resolution}}_nondim.msh"
-    cmd: "gmsh -2 weerdesteijn_box_refined_surface_{{.resolution}}_nondim.msh -setnumber refined_dx {{.resolution}} -o weerdesteijn_box_refined_surface_nondim.geo"
+    cmd: "gmsh -2 weerdesteijn_box_refined_surface_nondim.geo -setnumber refined_dx {{.resolution}} -o weerdesteijn_box_refined_surface_{{.resolution}}_nondim.msh"
 

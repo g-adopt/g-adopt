@@ -4,13 +4,17 @@ version: '3'
 
 tasks:
   run-python:
+    run: always
     requires:
       vars:
         - file
+    sources:
+      - "{{.file}}"
     vars:
-      cpus: "{{default 1 .cpus}}"
+      tsp_string: "{{if .BATCH_MODE}}tsp -f {{if gt (.cpus | default 1) 1}}-N {{.cpus}} {{end}}{{end}}"
+      mpi_string: "{{if gt (.cpus | default 1) 1}}mpiexec -np {{.cpus}} {{end}}"
     cmds:
-      - echo "running {{.file}} -np {{.cpus}} with args '{{.args}}'"
+      - "{{.tsp_string}}{{.mpi_string}}python3 {{.file}} {{.args}}"
 
   convert-notebook:
     vars:

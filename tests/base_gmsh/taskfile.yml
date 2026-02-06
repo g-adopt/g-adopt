@@ -16,6 +16,7 @@ tasks:
 
   make-mesh:
     internal: true
+    dir: "{{.TASKFILE_DIR}}"
     sources:
       - square.msh
     generates:
