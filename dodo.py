@@ -115,10 +115,17 @@ def task_check():
 
         case_name = case_dir.relative_to(REPO_ROOT).as_posix()
 
+        file_dep = []
+        if hasattr(meta, "steps"):
+            for cfg in meta.steps.values():
+                file_dep += [case_dir / out for out in cfg["outputs"]]
+        else:
+            file_dep = [case_dir / out for out in meta.outputs]
+
         yield {
             "name": case_name,
             "actions": [cmd],
-            "file_dep": [case_dir / out for out in meta.outputs],
+            "file_dep": file_dep,
         }
 
 def task_mesh():
