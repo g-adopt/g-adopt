@@ -78,22 +78,53 @@ def make_run_task(case_dir, step, cfg):
         "teardown": [(unlink_dependencies, [case_dir, cfg])],
     }
 
-def run_single(case_dir, meta):
-    cfg = {
-        "entrypoint": meta.entrypoint,
-        "cores": getattr(meta, "cores", 1),
-        "outputs": meta.outputs,
-        "deps": getattr(meta, "deps", []),
+def normalise_meta(meta):
+    if hasattr(meta, "steps"):
+        return meta.steps
+
+    return {
+        "run": {
+            "entrypoint": meta.entrypoint,
+            "cores": getattr(meta, "cores", 1),
+            "outputs": meta.outputs,
+            "deps": getattr(meta, "deps", []),
+        }
     }
-    return make_run_task(case_dir, "run", cfg)
+
+def make_convert_task(case_dir, meta):
+    case_name = case_dir.relative_to(REPO_ROOT).as_posix()
+
+    file_deps = [case_dir / meta.notebook.with_suffix(".py")]
+    notebook_file = case_dir / meta.notebook
+
+    steps = normalise_meta(meta)
+    if "run" in steps:
+        dep_step = [(link_dependencies, [case_dir, steps["run"]])]
+        undep_step = [(unlink_dependencies, [case_dir, steps["run"]])]
+    else:
+        dep_step = []
+        undep_step = []
+
+    return {
+        "name": case_name,
+        "actions": dep_step + [
+            f"jupytext --to ipynb {notebook_file}",
+            CmdAption(
+                "jupyter-nbconvert --to notebook --execute --inplace "
+                """--TagRemovePreprocessor.enabled=True --TagRemovePreprocessor.remove_cell_tags='["exercise"]'"""
+                f"{notebook_file}",
+                cwd=case_dir
+            ),
+        ],
+        "file_dep": file_deps,
+        "targets": [notebook_file],
+        "teardown": undep_step,
+    }
 
 def task_run_case():
     for case_dir, meta in discover_cases():
-        if hasattr(meta, "steps"):
-            for step, cfg in meta.steps.items():
-                yield make_run_task(case_dir, step, cfg)
-        else:
-            yield run_single(case_dir, meta)
+        for step, cfg in normalise_meta(meta).items():
+            yield make_run_task(case_dir, step, cfg)
 
 def pytest_command(case_dir, meta):
     match getattr(meta, "pytest", None):
@@ -144,3 +175,10 @@ def task_mesh():
             "file_dep": [geo],
             "targets": [msh],
         }
+
+def task_convert():
+    for case_dir, meta in discover_cases():
+        if not hasattr(meta, "notebook"):
+            continue
+
+        yield make_convert_task(case_dir, meta)
