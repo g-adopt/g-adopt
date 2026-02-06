@@ -44,13 +44,14 @@ def link_dependencies(case_dir, cfg):
 
         name = dep["artifact"]
         src = REPO_ROOT / dep["case"] / name
-        dst = case_dir / name
+        target = dep.get("link_as", name)
+        dst = case_dir / target
         if not dst.exists():
             dst.symlink_to(src)
 
 def unlink_dependencies(case_dir, cfg):
     for dep in cfg.get("deps", []):
-        dst = case_dir / dep["artifact"]
+        dst = case_dir / dep.get("link_as", dep["artifact"])
         if dst.is_symlink():
             dst.unlink()
 
