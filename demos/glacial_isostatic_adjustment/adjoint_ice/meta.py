@@ -1,4 +1,5 @@
 entrypoint = "adjoint_ice.py"
+notebook = "adjoint_ice.ipynb"
 deps = [
     {
         "case": "demos/glacial_isostatic_adjustment/2d_cylindrical_lvv",

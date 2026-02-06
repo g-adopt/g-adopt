@@ -91,23 +91,17 @@ def normalise_meta(meta):
         }
     }
 
-def make_convert_task(case_dir, meta):
-    case_name = case_dir.relative_to(REPO_ROOT).as_posix()
+def make_convert_task(case_dir, cfg):
+    case_path = case_dir.relative_to(REPO_ROOT).as_posix()
+    name = f"{case_path}:{step}"
 
-    file_deps = [case_dir / meta.notebook.with_suffix(".py")]
-    notebook_file = case_dir / meta.notebook
-
-    steps = normalise_meta(meta)
-    if "run" in steps:
-        dep_step = [(link_dependencies, [case_dir, steps["run"]])]
-        undep_step = [(unlink_dependencies, [case_dir, steps["run"]])]
-    else:
-        dep_step = []
-        undep_step = []
+    file_deps = [case_dir / cfg["notebook"].with_suffix(".py")]
+    notebook_file = case_dir / cfg["notebook"]
 
     return {
-        "name": case_name,
-        "actions": dep_step + [
+        "name": name,
+        "actions": [
+            (link_dependenices, [case_dir, cfg]),
             f"jupytext --to ipynb {notebook_file}",
             CmdAption(
                 "jupyter-nbconvert --to notebook --execute --inplace "
@@ -118,13 +112,24 @@ def make_convert_task(case_dir, meta):
         ],
         "file_dep": file_deps,
         "targets": [notebook_file],
-        "teardown": undep_step,
+        "teardown": [(unlink_dependencies, [case_dir, cfg])],
     }
 
 def task_run_case():
     for case_dir, meta in discover_cases():
         for step, cfg in normalise_meta(meta).items():
+            if "entrypoint" not in cfg:
+                continue
+
             yield make_run_task(case_dir, step, cfg)
+
+def task_convert():
+    for case_dir, meta in discover_cases():
+        for step, cfg in normalise_meta(meta).items():
+            if "notebook" not in step:
+                continue
+
+            yield make_convert_task(case_dir, cfg)
 
 def pytest_command(case_dir, meta):
     match getattr(meta, "pytest", None):
@@ -175,10 +180,3 @@ def task_mesh():
             "file_dep": [geo],
             "targets": [msh],
         }
-
-def task_convert():
-    for case_dir, meta in discover_cases():
-        if not hasattr(meta, "notebook"):
-            continue
-
-        yield make_convert_task(case_dir, meta)

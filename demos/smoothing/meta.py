@@ -1,4 +1,5 @@
 entrypoint = "smoothing.py"
+notebook = "smoothing.ipynb"
 cores = 1
 deps = [
     {
