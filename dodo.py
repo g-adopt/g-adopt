@@ -99,16 +99,17 @@ def pytest_command(case_dir, meta):
         case None:
             return None
         case "auto":
-            test_file = REPO_ROOT / "test_all.py"
-            return f"pytest {test_file} -k {case_dir.name}"
+            test_file = REPO_ROOT / "demos/test_all.py"
+            test_name = Path(case_dir.parts[-2])
+            return f"python3 -m pytest {test_file} -k {test_name}"
         case "local":
-            return pytest
+            return f"python3 -m pytest {case_dir}"
         case other:
             return other
 
 def task_check():
     for case_dir, meta in discover_cases():
-        if not cmd := pytest_command(case_dir, meta):
+        if not (cmd := pytest_command(case_dir, meta)):
             continue
 
         case_name = case_dir.relative_to(REPO_ROOT).as_posix()

@@ -8,3 +8,4 @@ deps = [
     }
 ]
 outputs = ["params.log"]
+pytest = "auto"

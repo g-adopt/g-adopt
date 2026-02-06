@@ -17,3 +17,4 @@ steps = {
         "outputs": ["functional.txt"],
     },
 }
+pytest = "local"

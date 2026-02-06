@@ -7,3 +7,4 @@ deps = [
     },
 ]
 outputs = ["functional.txt"]
+pytest = "local"
