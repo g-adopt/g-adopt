@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    vars:
+      cases:
+        sh: "uv run --no-project --with numpy,pytest python3 {{.TASKFILE_DIR}}/test_scalar_advection_diffusion_DH27.py"
+    deps:
+      - for: { var: cases }
+        task: lib:run-python
+        vars:
+          file: "scalar_advection_diffusion_DH27.py"
+          args: "{{.ITEM}}"
+      - task: lib:run-python
+        vars: { file: "scalar_advection_diffusion.py" }
+      - task: lib:run-python
+        vars: { file: "scalar_advection_diffusion_DH27_skew.py" }

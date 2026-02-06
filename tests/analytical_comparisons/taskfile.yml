@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  run-tests:
+    vars:
+      cases:
+        - "smooth_cylindrical_freeslip"
+        - "smooth_cylindrical_zeroslip"
+        - "delta_cylindrical_freeslip"
+        - "delta_cylindrical_zeroslip"
+        - "delta_cylindrical_freeslip_dpc"
+        - "delta_cylindrical_zeroslip_dpc"
+    sources:
+      - "analytical.py"
+    generates:
+      - "*.dat"
+    deps:
+      - for: { var: cases }
+        task: run-case
+        vars:
+          case: "{{.ITEM}}"
+
+  run-case:
+    internal: true
+    vars:
+      tsp_string: "{{if .BATCH_MODE}}tsp -N {cores} -f {{end}}"
+    cmds:
+      - 'python3 analytical.py submit -t "{{.tsp_string -}} mpiexec -np {cores}" {{.case}}'

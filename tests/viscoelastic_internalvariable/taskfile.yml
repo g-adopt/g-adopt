@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    vars:
+      cases:
+        - "viscoelastic-compressible"
+        - "viscoelastic-compressible-burgers"
+        - "elastic-compressible"
+    deps:
+      - for: { var: cases }
+        task: lib:run-python
+        vars:
+          file: "internalvariable_viscoelastic_freesurface.py"
+          args: "--case {{.ITEM}}"

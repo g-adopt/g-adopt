@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    sources:
+      - "helmholtz.py"
+    generates:
+      - "optimisation_checkpoint_*/"
+      - "*.h5"
+      - "*.dat"
+    vars:
+      cpus: [1, 2]
+    deps:
+      - for: { var: cpus }
+        task: lib:run-python
+        vars:
+          file: "helmholtz.py"
+          cpus: "{{.ITEM}}"

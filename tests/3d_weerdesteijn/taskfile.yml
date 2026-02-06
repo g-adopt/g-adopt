@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    cmds:
+      - task: make-mesh
+        vars: { resolution: "20km" }
+      - task: lib:run-python
+        vars:
+          file: "3d_weerdesteijn.py"
+          cpus: 8
+          args: "--refined_surface --bulk_shear_ratio 1.94 --dt_years 5000 --DG0_layers 2"
+
+  make-mesh:
+    internal: true
+    sources:
+      - "weerdesteijn_box_refined_surface_nondim.geo"
+    generates:
+      - "weerdesteijn_box_refined_surface_{{.resolution}}_nondim.msh"
+    cmd: "gmsh -2 weerdesteijn_box_refined_surface_{{.resolution}}_nondim.msh -setnumber refined_dx {{.resolution}} -o weerdesteijn_box_refined_surface_nondim.geo"
+

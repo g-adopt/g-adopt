@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    vars:
+      cases:
+        sh: find {{.TASKFILE_DIR}}/benchmarks/ -mindepth 1 -maxdepth 1 -type d -printf '%P\n'
+    deps:
+      - for: { var: cases }
+        task: lib:run-python
+        vars:
+          file: "run_benchmark.py"
+          cpus: 4
+          args: "{{.ITEM}}"

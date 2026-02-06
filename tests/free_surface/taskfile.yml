@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    deps:
+      - run-serial
+      - run-parallel
+
+  run-serial:
+    internal: true
+    vars:
+      cases:
+        - "explicit"
+        - "implicit"
+        - "implicit_top_bottom"
+    deps:
+      - for: { var: cases }
+        task: lib:run-python
+        vars:
+          file: "{{.ITEM}}_free_surface.py"
+
+  run-parallel:
+    internal: true
+    vars:
+      cases:
+        - "implicit_top_bottom_buoyancy"
+        - "implicit_cylindrical"
+    deps:
+      - for: { var: cases }
+        task: lib:run-python
+        vars:
+          file: "{{.ITEM}}_free_surface.py"
+          cpus: 8

@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    vars:
+      cases:
+        - "elastic"
+        - "viscoelastic"
+        - "viscous"
+    deps:
+      - for: { var: cases }
+        task: lib:run-python
+        vars:
+          file: "zhong_viscoelastic_free_surface.py"
+          args: "--case {{.ITEM}}"

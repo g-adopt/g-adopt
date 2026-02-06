@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    vars:
+      files:
+        - "scalar_advection.py"
+        - "scalar_advection_adaptive.py"
+    deps:
+      - for: { var: files }
+        task: lib:run-python
+        vars: { file: "{{.ITEM}}" }

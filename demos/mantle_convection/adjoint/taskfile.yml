@@ -11,7 +11,8 @@ vars:
   adjoint_file: "adjoint-demo-checkpoint-state.h5"
 
 tasks:
-  adjoint:
+  adjoint-forward:
+    run: once
     vars:
       file: "adjoint_forward.py"
     sources:
@@ -22,7 +23,7 @@ tasks:
       - task: lib:run-python
         vars: { file: "{{.file}}" }
   run-tests:
-    deps: [adjoint]
+    deps: [adjoint-forward]
     vars:
       file: "adjoint.py"
     sources:

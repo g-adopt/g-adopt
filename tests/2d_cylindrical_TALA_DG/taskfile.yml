@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    deps:
+      - task: lib:run-python
+        vars:
+          file: "2d_cylindrical_TALA_DG.py"
+          cpus: 16

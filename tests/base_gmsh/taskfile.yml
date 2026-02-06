@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+
+tasks:
+  run-tests:
+    cmds:
+      - task: make-mesh
+      - task: lib:run-python
+        vars: { file: "base_case.py" }
+
+  make-mesh:
+    internal: true
+    sources:
+      - square.msh
+    generates:
+      - square.geo
+    cmd: gmsh -2 square.msh

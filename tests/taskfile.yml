@@ -2,8 +2,45 @@
 
 version: '3'
 
+includes:
+  analytical_comparisons: ./analytical_comparisons
+  multi_material: ./multi_material
+  optimisation_checkpointing: ./optimisation_checkpointing
+  scalar_advection: ./scalar_advection
+  scalar_advection_diffusion: ./scalar_advection_diffusion
+  dp_rheology: ./Drucker-Prager_rheology
+  adjoint: ./adjoint
+  2d_cylindrical_TALA_DG: ./2d_cylindrical_TALA_DG
+  viscoplastic_case_DG: ./viscoplastic_case_DG
+  free_surface: ./free_surface
+  viscoelastic: ./viscoelastic
+  base_gmsh: ./base_gmsh
+  viscoelastic_internalvariable: ./viscoelastic_internalvariable
+  3d_weerdesteijn: ./3d_weerdesteijn
+  3d_spada: ./3d_spada
+  3d_sphere_burgers: ./3d_sphere_burgers
+
+vars:
+  test_categories:
+    - "analytical_comparisons"
+    - "multi_material"
+    - "optimisation_checkpointing"
+    - "scalar_advection"
+    - "scalar_advection_diffusion"
+    - "dp_rheology"
+    - "adjoint"
+    - "2d_cylindrical_TALA_DG"
+    - "viscoplastic_case_DG"
+    - "free_surface"
+    - "viscoelastic"
+    - "base_gmsh"
+    - "viscoelastic_internalvariable"
+    - "3d_weerdesteijn"
+    - "3d_spada"
+    - "3d_sphere_burgers"
+
 tasks:
   run-tests:
-    cmds:
-      - echo "Running tests/"
-    silent: true
+    deps:
+    - for: { var: test_categories }
+      task: "{{.ITEM}}:run-tests"

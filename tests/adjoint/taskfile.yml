@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+includes:
+  lib:
+    taskfile: ../../.tasks.lib.yml
+    internal: true
+  adjoint:
+    ../../demos/mantle_convection/adjoint
+
+tasks:
+  prereq-forward-global:
+    deps: ["::demos:mantle_convection:adjoint:adjoint-forward"]
+    if: "{{ne .ROOT_TASKFILE .TASKFILE}}"
+  prereq-forward-local:
+    deps: ["adjoint:adjoint-forward"]
+    if: "{{eq .ROOT_TASKFILE .TASKFILE}}"
+
+  run-cases:
+    internal: true
+    deps:
+      - for:
+          matrix:
+            case: ["damping", "smoothing", "Tobs", "ubs", "uimposed"]
+            scheduler: ["noscheduler", "fullmemory", "fullstorage"]
+        task: lib:run-python
+        vars:
+          file: "taylor_test.py"
+          args: "{{.ITEM.case}}_{{.ITEM.scheduler}}"
+          cpus: 2
+
+  run-tests:
+    deps:
+      - prereq-forward-global
+      - prereq-forward-local
+    cmds:
+      - ln -s ../../demos/mantle_convection/adjoint/adjoint-demo-checkpoint-state.h5
+      - defer: rm adjoint-demo-checkpoint-state.h5
+      - task: run-cases

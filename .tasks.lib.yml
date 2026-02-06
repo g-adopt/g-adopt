@@ -4,10 +4,13 @@ version: '3'
 
 tasks:
   run-python:
+    requires:
+      vars:
+        - file
     vars:
       cpus: "{{default 1 .cpus}}"
     cmds:
-      - echo "running {{.file}} -np {{.cpus}}"
+      - echo "running {{.file}} -np {{.cpus}} with args '{{.args}}'"
 
   convert-notebook:
     vars:
