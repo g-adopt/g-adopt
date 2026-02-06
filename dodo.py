@@ -93,3 +93,45 @@ def task_run_case():
                 yield make_run_task(case_dir, step, cfg)
         else:
             yield run_single(case_dir, meta)
+
+def pytest_command(case_dir, meta):
+    match getattr(meta, "pytest", None):
+        case None:
+            return None
+        case "auto":
+            test_file = REPO_ROOT / "test_all.py"
+            return f"pytest {test_file} -k {case_dir.name}"
+        case "local":
+            return pytest
+        case other:
+            return other
+
+def task_check():
+    for case_dir, meta in discover_cases():
+        if not cmd := pytest_command(case_dir, meta):
+            continue
+
+        case_name = case_dir.relative_to(REPO_ROOT).as_posix()
+
+        yield {
+            "name": case_name,
+            "actions": [cmd],
+            "file_dep": [case_dir / out for out in meta.outputs],
+        }
+
+def task_mesh():
+    for case_dir, meta in discover_cases():
+        if not hasattr(meta, "mesh"):
+            continue
+
+        geo = case_dir / meta.mesh["geo"]
+        msh = case_dir / meta.mesh["msh"]
+
+        case_name = case_dir.relative_to(REPO_ROOT).as_posix()
+
+        yield {
+            "name": case_dir.name,
+            "actions": [f"gmsh -3 {geo} -o {msh}"],
+            "file_dep": [geo],
+            "targets": [msh],
+        }
