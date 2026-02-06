@@ -74,7 +74,7 @@ def make_run_task(case_dir, step, cfg):
         ],
         "file_dep": file_deps,
         "targets": targets,
-        "clean": [(unlink_dependencies, [case_dir, cfg])],
+        "teardown": [(unlink_dependencies, [case_dir, cfg])],
     }
 
 def run_single(case_dir, meta):
