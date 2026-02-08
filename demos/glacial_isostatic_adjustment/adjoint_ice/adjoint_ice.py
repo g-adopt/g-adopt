@@ -128,9 +128,9 @@ continue_annotation()
 # easier to load the synthetic data from the previous tutorial for our 'twin'
 # experiment.
 
-checkpoint_file = "forward-2d-cylindrical-disp-vel.h5"
-with CheckpointFile(checkpoint_file, 'r') as afile:
-    mesh = afile.load_mesh(name='surface_mesh_extruded')
+forward_checkpoint_file = "forward-2d-cylindrical-disp-vel.h5"
+forward_checkpoint = CheckpointFile(forward_checkpoint_file, "r")
+mesh = forward_checkpoint.load_mesh(name='surface_mesh_extruded')
 bottom_id, top_id = "bottom", "top"
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
@@ -412,9 +412,8 @@ ds = CombinedSurfaceMeasure(mesh, degree=6)
 
 
 def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
-    with CheckpointFile(checkpoint_file, 'r') as afile:
-        target_displacement = afile.load_function(mesh, name="displacement", idx=timestep)
-        target_velocity = afile.load_function(mesh, name="velocity", idx=timestep)
+    target_displacement = forward_checkpoint.load_function(mesh, name="displacement", idx=timestep)
+    target_velocity = forward_checkpoint.load_function(mesh, name="velocity", idx=timestep)
     circumference = 2 * pi * radius_values_nondim[0]
     velocity_error = velocity - target_velocity
     velocity_scale = 1e-5
@@ -512,9 +511,8 @@ updated_displacement = Function(V, name="Displacement (updated)")
 updated_velocity = Function(V, name="Velocity (velocity)")
 updated_out_file = VTKFile("updated_out.pvd")
 
-with CheckpointFile(checkpoint_file, 'r') as afile:
-    final_target_displacement = afile.load_function(mesh, name="displacement", idx=max_timesteps)
-    final_target_velocity = afile.load_function(mesh, name="velocity", idx=max_timesteps)
+final_target_displacement = forward_checkpoint.load_function(mesh, name="displacement", idx=max_timesteps)
+final_target_velocity = forward_checkpoint.load_function(mesh, name="velocity", idx=max_timesteps)
 
 functional_values = []
 
