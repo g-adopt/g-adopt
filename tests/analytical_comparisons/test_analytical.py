@@ -52,6 +52,7 @@ params = {
 }
 
 configs = []
+param_sets = []
 for name, conf in params.items():
     # these two keys don't form a part of the parameter matrix
     conf = conf.copy()
@@ -61,10 +62,11 @@ for name, conf in params.items():
 
     for combination in analytical.param_sets(conf, permutate):
         conf_tuple = (name, enabled_cases[name], dict(zip(conf.keys(), combination)))
+        configs.append(conf_tuple)
         if name in longtest_cases:
-            configs.append(pytest.param(*conf_tuple, marks=pytest.mark.longtest))
+            param_sets.append(pytest.param(*conf_tuple, marks=pytest.mark.longtest))
         else:
-            configs.append(conf_tuple)
+            param_sets.append(conf_tuple)
 
 
 def idfn(val):
@@ -72,7 +74,7 @@ def idfn(val):
         return "-".join([f"{k}{v}" for k, v in val.items()])
 
 
-@pytest.mark.parametrize("name,expected,config", configs, ids=idfn)
+@pytest.mark.parametrize("name,expected,config", param_sets, ids=idfn)
 def test_analytical(name, expected, config):
     levels = analytical.get_case(analytical.cases, name)["levels"]
 

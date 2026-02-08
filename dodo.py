@@ -25,15 +25,16 @@ def load_meta(meta_path):
 def mpi_command(cfg):
     cores = cfg.get("cores", 1)
     entrypoint = cfg["entrypoint"]
+
     mpi_command = ""
     if cores > 1:
         mpi_command = f"mpiexec -np {cores} "
 
-    return (
-        f"tsp -N {cores} -f "
-        f"{mpi_command}"
-        f"python3 {entrypoint}"
-    )
+    tsp_command = ""
+    if cfg.get("use_tsp", True):
+        tsp_command = f"tsp -N {cores} -f "
+
+    return f"{tsp_command}{mpi_command}python3 {entrypoint}"
 
 def link_dependencies(case_dir, cfg):
     for dep in cfg.get("deps", []):
