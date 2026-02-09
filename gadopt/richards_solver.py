@@ -61,14 +61,13 @@ Note:
 
 direct_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
-    "snes_type": "newtonls",
+    "snes_type": "newtonls", #
     "ksp_type": "preonly",
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
     "snes_force_iteration": True,
-    "snes_stol": 0,
     "snes_atol": 1e-12,
-    'snes_rtol': 1e-16
+    'snes_rtol': 1e-16,
 }
 """Default direct solver parameters for solution of Richards equation.
 
@@ -117,9 +116,6 @@ class RichardsSolver(SolverConfigurationMixin):
       quad_degree:
         Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
         where p is the polynomial degree of the trial space
-      interior_penalty:
-        Penalty parameter for SIPG method in DG discretizations. Default is 2.0.
-        Smaller values give weaker boundary enforcement.
       timestepper_kwargs:
         Dictionary of additional keyword arguments passed to the timestepper constructor.
         Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA) or
@@ -154,7 +150,6 @@ class RichardsSolver(SolverConfigurationMixin):
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
         quad_degree: int | None = None,
-        interior_penalty: float | None = None,
         timestepper_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.solution = solution
@@ -163,7 +158,6 @@ class RichardsSolver(SolverConfigurationMixin):
         self.timestepper = timestepper
         self.bcs = bcs
         self.quad_degree = quad_degree
-        self.interior_penalty = interior_penalty
         self.timestepper_kwargs = timestepper_kwargs or {}
 
         self.solution_space = solution.function_space()
@@ -207,15 +201,11 @@ class RichardsSolver(SolverConfigurationMixin):
             if weak_bc:
                 self.weak_bcs[bc_id] = weak_bc
 
-
     def set_equation(self) -> None:
         """Sets up the Richards equation with all terms."""
         eq_attrs = {
             'soil_curve': self.soil_curve,
         }
-
-        if self.interior_penalty is not None:
-            eq_attrs['interior_penalty'] = self.interior_penalty
 
         self.equation = Equation(
             self.test,

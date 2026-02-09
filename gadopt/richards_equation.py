@@ -90,6 +90,8 @@ def richards_mass_term(
     mass_coeff = soil_curve.Ss * S + C
 
     return inner(eq.test, mass_coeff * Dt(trial)) * eq.dx
+    #return inner(eq.test, Dt(theta)) * eq.dx
+
 
 
 def richards_diffusion_term(
@@ -132,7 +134,8 @@ def richards_diffusion_term(
     F = inner(grad(eq.test), K * grad(trial)) * eq.dx
 
     # Interior penalty for DG
-    sigma = interior_penalty_factor(eq, shift=-1)
+    sigma = interior_penalty_factor(eq, shift=0)
+
     if not is_continuous(eq.trial_space):
         sigma_int = sigma * avg(FacetArea(eq.mesh) / CellVolume(eq.mesh))
 
@@ -170,7 +173,7 @@ def richards_diffusion_term(
         elif 'flux' in bc:
             # Neumann BC on flux
             # flux = -K * dh/dn, so we add the flux term
-            F += eq.test * bc['flux'] * eq.ds(bc_id)
+            F -= eq.test * bc['flux'] * eq.ds(bc_id)
 
     return -F
 
