@@ -9,6 +9,8 @@ def main():
 
     dg1()
 
+    dg2())
+
     backward_euler()
 
     implicit_midpoint()
@@ -41,6 +43,33 @@ def dg1():
 
     PETSc.Sys.Print("")
 
+def dg2():
+
+    PETSc.Sys.Print("="*60)
+    PETSc.Sys.Print("Performing steady state solution check with DG2")
+    PETSc.Sys.Print("="*60)
+
+    t_final = 2.5e06
+    polynomial_degree = 2
+    time_step = 5000
+
+    nodes_vector = np.array([76, 151, 301, 601], dtype=float)
+    error_vector = nodes_vector * 0
+    convergencerate = nodes_vector * 0
+
+    for index in range(len(nodes_vector)):
+        nodes = nodes_vector[index]
+        L2_error = compute_error(round(nodes), time_step, t_final, polynomial_degree)
+        error_vector[index] = L2_error
+        if index == 0:
+            convergencerate[index] = 0
+        else:
+            convergencerate[index] = np.log2(error_vector[index-1]/error_vector[index])
+    max_convergence_rate = np.max(convergencerate)
+    PETSc.Sys.Print(f"Convergence rate {round(max_convergence_rate, 2)} achieved with DG2.")
+
+    PETSc.Sys.Print("")
+
 
 def backward_euler():
 
@@ -53,7 +82,7 @@ def backward_euler():
     polynomial_degree = 2
     integration_method = BackwardEuler
 
-    timestep_vec = np.array([5000, 2500, 1250, 625], dtype=float)
+    timestep_vec = np.array([10000, 5000, 2500, 1250], dtype=float)
     error_vector = timestep_vec * 0
     convergencerate = timestep_vec * 0
 
@@ -82,7 +111,7 @@ def implicit_midpoint():
     polynomial_degree = 2
     integration_method = ImplicitMidpoint
 
-    timestep_vec = np.array([5000, 2500, 1250, 625], dtype=float)
+    timestep_vec = np.array([10000, 5000, 2500, 1250], dtype=float)
     error_vector = timestep_vec * 0
     convergencerate = timestep_vec * 0
 
