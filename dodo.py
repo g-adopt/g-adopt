@@ -144,7 +144,7 @@ def make_convert_task(case_dir, step, cfg):
             (link_dependencies, [case_dir, cfg]),
             f"python3 -m jupytext --to ipynb {py_file}",
             CmdAction(
-                "python3 -m nbconvert --to notebook --execute --inplace "
+                "jupyter-nbconvert --to notebook --execute --inplace "
                 """--TagRemovePreprocessor.enabled=True --TagRemovePreprocessor.remove_cell_tags='["exercise"]' """
                 f"{notebook_file}",
                 cwd=case_dir
