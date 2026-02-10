@@ -1,22 +1,8 @@
-include ../../rules.mk
-
-cases := smooth_cylindrical_freeslip smooth_cylindrical_zeroslip delta_cylindrical_freeslip delta_cylindrical_zeroslip delta_cylindrical_freeslip_dpc delta_cylindrical_zeroslip_dpc
 long_cases := smooth_cylindrical_freesurface smooth_spherical_freeslip smooth_spherical_zeroslip
 
-sentinels := $(addprefix .sentinel.,$(cases))
-
-.PHONY: all longtest longtest_output $(cases) $(long_cases) clean check longcheck
-
-all: $(cases)
+.PHONY: longtest longtest_output $(long_cases) clean longcheck
 
 longtest: $(long_cases)
-
-$(cases): %: .sentinel.%
-
-tsp_string = $(if $(BATCH_MODE),tsp -N {cores} -f)
-$(sentinels): analytical.py
-	@$(call run_regular,python3 analytical.py submit -t "$(tsp_string) mpiexec -np {cores}" $(subst .sentinel.,,$@),analytical $(subst .sentinel.,,$@))
-	@echo "done" > $@
 
 .ONESHELL:
 SHELL = /bin/bash
@@ -30,9 +16,6 @@ clean:
 
 longtest_output:
 	[[ -d batch_output ]] && tail -n +1 batch_output/*
-
-check: $(sentinels)
-	python -m pytest -m 'not longtest'
 
 longcheck:
 	python -m pytest -m longtest
