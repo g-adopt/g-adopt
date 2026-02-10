@@ -5,6 +5,7 @@ deps = [
         "case": "demos/mantle_convection/base_case",
         "step": "run",
         "artifact": "Final_State.h5",
+        "notebook": "base_case.ipynb",
         "link": False,
     }
 ]
