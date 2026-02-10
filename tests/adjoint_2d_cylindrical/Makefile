@@ -1,5 +1,3 @@
-include ../../rules.mk
-
 cases := damping smoothing Tobs uobs uimposed
 schedulers := noscheduler fullmemory fulldisk
 
