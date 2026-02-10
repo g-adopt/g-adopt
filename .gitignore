@@ -1,4 +1,10 @@
 *.pvd
 *.vtu
+*.pvtu
 *.h5
+*.dat
+*.conv
+*.log
+*.cereal
+*.ipynb
 __pycache__/
