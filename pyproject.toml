@@ -16,6 +16,7 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
+  "doit",
   "pandas",
   "shapely",
   "vtk",

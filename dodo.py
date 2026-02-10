@@ -1,4 +1,5 @@
 import importlib
+from doit import get_var
 from doit.action import CmdAction
 from pathlib import Path
 
@@ -7,6 +8,8 @@ CASE_ROOTS = [
     REPO_ROOT / "demos",
     REPO_ROOT / "tests",
 ]
+
+batch_mode = get_var("batch_mode", "YES")
 
 
 def discover_cases():
@@ -35,7 +38,7 @@ def mpi_command(cfg):
         mpi_command = f"mpiexec -np {cores} "
 
     tsp_command = ""
-    if cfg.get("use_tsp", True):
+    if batch_mode == "YES" and cfg.get("use_tsp", True):
         tsp_command = f"tsp -N {cores} -f "
 
     return f"{tsp_command}{mpi_command}python3 {entrypoint} {args}"
@@ -76,7 +79,7 @@ def make_run_task(case_dir, step, cfg):
     actions = [(link_dependencies, [case_dir, cfg])]
     if cfg["entrypoint"] is not None:
         file_deps.append(case_dir / cfg["entrypoint"])
-        actions.append(CmdAction(mpi_command(cfg), cwd=case_dir))
+        actions.append(CmdAction((mpi_command, [cfg], {}), cwd=case_dir))
 
     for dep in cfg.get("deps", []):
         if "artifact" in dep:
