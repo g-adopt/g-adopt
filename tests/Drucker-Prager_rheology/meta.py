@@ -1,8 +1,5 @@
 from pathlib import Path
-import sys
-sys.path.append(str(Path(__file__).parent))
-
-from test_spiegelman import conf, param_sets  # noqa: E402
+from .test_spiegelman import conf, param_sets
 
 steps = {}
 for param_set in param_sets(conf):

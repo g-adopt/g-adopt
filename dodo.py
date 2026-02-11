@@ -1,6 +1,10 @@
 import importlib
+import sys
+
 from doit import get_var
 from doit.action import CmdAction
+
+from functools import cache
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent
@@ -21,11 +25,18 @@ def discover_cases():
 
 def load_meta(meta_path):
     spec = importlib.util.spec_from_file_location(
-        "case_meta", meta_path
+        "meta", meta_path, submodule_search_locations=[],
     )
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["meta"] = mod
     spec.loader.exec_module(mod)
+    del sys.modules["meta"]
     return mod
+
+
+@cache
+def cases():
+    return list(discover_cases())
 
 
 def mpi_command(cfg):
@@ -157,7 +168,7 @@ def make_convert_task(case_dir, step, cfg):
 
 
 def task_run_case():
-    for case_dir, meta in discover_cases():
+    for case_dir, meta in cases():
         for step, cfg in normalise_meta(meta).items():
             if "entrypoint" not in cfg:
                 continue
@@ -176,7 +187,7 @@ def task_convert():
     ]
 
     notebook_deps = []
-    for case_dir, meta in discover_cases():
+    for case_dir, meta in cases():
         for step, cfg in normalise_meta(meta).items():
             if "notebook" not in cfg:
                 continue
@@ -213,7 +224,7 @@ def pytest_command(case_dir, meta):
 
 
 def task_check():
-    for case_dir, meta in discover_cases():
+    for case_dir, meta in cases():
         if not (cmd := pytest_command(case_dir, meta)):
             continue
 
@@ -234,7 +245,7 @@ def task_check():
 
 
 def task_mesh():
-    for case_dir, meta in discover_cases():
+    for case_dir, meta in cases():
         if not hasattr(meta, "mesh"):
             continue
 

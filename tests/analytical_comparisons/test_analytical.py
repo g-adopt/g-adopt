@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import analytical
+from . import analytical
 import numpy as np
 import pandas as pd
 import pytest

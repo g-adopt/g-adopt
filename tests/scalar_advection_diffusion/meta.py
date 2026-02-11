@@ -1,8 +1,4 @@
-from pathlib import Path
-import sys
-sys.path.append(str(Path(__file__).parent))
-
-from test_scalar_advection_diffusion_DH27 import conf, param_sets  # noqa: E402
+from .test_scalar_advection_diffusion_DH27 import conf, param_sets
 
 steps = {}
 for params in param_sets:
