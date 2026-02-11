@@ -1,11 +1,5 @@
-# to get case information, we need a relative import to
-# this file, but it's not in a package
-from pathlib import Path
-import sys
-sys.path.append(str(Path(__file__).parent))
-
-from analytical import cases, get_case  # noqa: E402
-from test_analytical import configs, idfn  # noqa: E402
+from .analytical import cases, get_case
+from .test_analytical import configs, idfn
 
 case_names = [
     "smooth_cylindrical_freeslip",
