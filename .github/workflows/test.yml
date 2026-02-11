@@ -56,18 +56,23 @@ jobs:
       - name: Install dependencies
         run: |
           apt update
-          apt install -y python3-venv git-lfs
-          python3 -m venv venv
+          apt install -y git-lfs
 
       - uses: actions/checkout@v4
         with:
           lfs: true
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          # disable cache on hosted runner, otherwise we need a lock file
+          enable-cache: false
+
       - name: Run smoke test
         run: |
-          python3 -m venv --system-site-packages env
-          . env/bin/activate
-          python3 -m pip install .
+          uv venv --system-site-packages
+          uv pip install .
+          . .venv/bin/activate
           make -C demos/mantle_convection/base_case check
 
   build:
@@ -96,7 +101,7 @@ jobs:
           git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - uses: actions/checkout@v4
         with:
