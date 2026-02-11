@@ -258,6 +258,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.tests = fd.TestFunctions(self.solution_space)
 
         self.rho_continuity = self.approximation.rho_continuity()
+        self.nonlinear_mu = depends_on(self.approximation.mu, self.solution)
         self.equations = []  # G-ADOPT's Equation instances
 
         self.set_boundary_conditions()
@@ -351,7 +352,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             self.register_update_callback(self.set_solver)
             return
 
-        if not depends_on(self.approximation.mu, self.solution):
+        if not self.nonlinear_mu:
             self.add_to_solver_config({"snes_type": "ksponly"})
         else:
             self.add_to_solver_config(newton_stokes_solver_parameters)
@@ -592,13 +593,13 @@ class StokesSolver(StokesSolverBase):
         has_weak_sipg_bcs = any(
             "un" in bc or "u" in bc for bc in self.weak_bcs.values()
         )
-        nonlinear_mu = depends_on(self.approximation.mu, self.solution)
-        needs_symmetrisation = nonlinear_mu and has_weak_sipg_bcs
-        if needs_symmetrisation and not is_continuous(self.equations[0].trial_space):
+        needs_symmetrisation = self.nonlinear_mu and has_weak_sipg_bcs
+        if needs_symmetrisation and not is_continuous(self.solution_space[0]):
             raise NotImplementedError(
                 "Jacobian symmetrisation not implemented for "
                 "discontinuous velocity elements"
             )
+
         return needs_symmetrisation
 
     def _build_symmetric_jacobian(self) -> fd.Form:
