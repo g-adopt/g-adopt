@@ -2,9 +2,9 @@
 # again using G-ADOPT's GenericTransportSolver and a CG discretisation with Streamline
 # Upwind (SU) stabilisation, albeit here we introduce some explicit diffusion.
 
-from gadopt import *
-from gadopt.time_stepper import DIRK33
 import numpy as np
+
+from gadopt import *
 
 # We use a 40-by-40 mesh of squares.
 mesh = UnitSquareMesh(40, 40, quadrilateral=True)
@@ -61,7 +61,7 @@ dt = T/600.0
 # Use G-ADOPT's GenericTransportSolver to advect the tracer. We use the diagonally
 # implicit DIRK33 Runge-Kutta method for timestepping. 'g' means that the boundary
 # conditions will be applied strongly by the solver.
-terms = ["advection", "diffusion"]
+terms = ["advection", "diffusion", "mass"]
 eq_attrs = {"diffusivity": kappa, "u": u}
 g_top = 1.0
 g_bottom = 0.0

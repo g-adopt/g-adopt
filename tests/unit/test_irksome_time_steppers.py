@@ -6,113 +6,79 @@ time stepping functionality, and error handling.
 """
 
 import pytest
-from firedrake import *
-from irksome import BackwardEuler as IrksomeBackwardEuler
-from irksome import GaussLegendre
 
 from gadopt import *
+from gadopt.equations import Equation
 from gadopt.scalar_equation import diffusion_term, mass_term, source_term
-from gadopt.time_stepper import *
-from gadopt.time_stepper import create_custom_tableau  # Explicitly import helper function
+from gadopt.time_stepper import (
+    AbstractRKScheme,
+    create_custom_tableau,
+    rk_schemes_gadopt,
+    rk_schemes_irksome,
+)
 
 
-# Define scheme mappings
-scheme_mappings = {
-    # Special cases with direct Irksome equivalents
-    BackwardEuler: (IrksomeBackwardEuler(), "dirk"),
-    ImplicitMidpoint: (GaussLegendre(1), "dirk"),
-    # Explicit schemes
-    ERKEuler: "explicit",
-    ForwardEuler: "explicit",
-    SSPRK33: "explicit",
-    ERKMidpoint: "explicit",
-    ERKLSPUM2: "explicit",
-    ERKLPUM2: "explicit",
-    eSSPRKs3p3: "explicit",
-    eSSPRKs4p3: "explicit",
-    eSSPRKs5p3: "explicit",
-    eSSPRKs6p3: "explicit",
-    eSSPRKs7p3: "explicit",
-    eSSPRKs8p3: "explicit",
-    eSSPRKs9p3: "explicit",
-    eSSPRKs10p3: "explicit",
-    # DIRK schemes
-    CrankNicolsonRK: "dirk",
-    DIRK22: "dirk",
-    DIRK23: "dirk",
-    DIRK33: "dirk",
-    DIRK43: "dirk",
-    DIRKLSPUM2: "dirk",
-    DIRKLPUM2: "dirk",
-}
-
-
-# Utility functions for testing (moved from time_stepper.py)
-def gadopt_to_irksome_tableau(scheme_class):
+def gadopt_to_irksome_tableau(scheme: AbstractRKScheme):
     """Convert a G-ADOPT scheme class to an Irksome Butcher tableau.
 
     Args:
-        scheme_class: A G-ADOPT AbstractRKScheme class
+        scheme: A G-ADOPT AbstractRKScheme class
 
     Returns:
         tuple: (ButcherTableau instance, stage_type string)
     """
-    # Get the mapping function or use default
-    mapping = scheme_mappings[scheme_class]
-    if isinstance(mapping, str):
-        # Need to create custom tableau from scheme class
-        # Access class attributes directly (a, b, c are class-level attributes)
-        return create_custom_tableau(
-            scheme_class.a, scheme_class.b, scheme_class.c
-        ), mapping
-    else:
-        # Direct Irksome tableau and stage type
-        return mapping
+    butcher_tableau = scheme.butcher_tableau
+    if butcher_tableau is None:
+        butcher_tableau = create_custom_tableau(scheme.a, scheme.b, scheme.c)
+
+    return butcher_tableau, scheme.stage_type
 
 
-def create_irksome_integrator(equation, solution, dt, scheme_class, **kwargs):
+def create_irksome_integrator(
+    equation: Equation,
+    solution: Function,
+    dt: float,
+    scheme: AbstractRKScheme,
+    **kwargs,
+):
     """Create an IrksomeIntegrator from a G-ADOPT scheme class.
 
     Args:
         equation: G-ADOPT equation to integrate
         solution: Firedrake function representing the equation's solution
+        t: Integration time
         dt: Integration time step
-        scheme_class: G-ADOPT AbstractRKScheme class
+        scheme: G-ADOPT AbstractRKScheme class
         **kwargs: Additional arguments passed to IrksomeIntegrator
 
     Returns:
         IrksomeIntegrator instance
     """
-    tableau, stage_type = gadopt_to_irksome_tableau(scheme_class)
+    butcher_tableau, stage_type = gadopt_to_irksome_tableau(scheme)
 
     return IrksomeIntegrator(
-        equation=equation,
-        solution=solution,
-        dt=dt,
-        butcher=tableau,
-        stage_type=stage_type,
-        **kwargs
+        equation, solution, dt, butcher_tableau, stage_type=stage_type, **kwargs
     )
 
 
 class TestTableauConversion:
     """Test tableau conversion from G-ADOPT to Irksome."""
 
-    @pytest.mark.parametrize("scheme_class", scheme_mappings.keys())
-    def test_tableau_conversion(self, scheme_class):
+    @pytest.mark.parametrize("scheme", rk_schemes_gadopt)
+    def test_tableau_conversion(self, scheme):
         """Test that scheme classes convert to valid Irksome tableaux."""
-        tableau, stage_type = gadopt_to_irksome_tableau(scheme_class)
+        tableau, stage_type = gadopt_to_irksome_tableau(scheme)
         assert tableau is not None
         assert stage_type in ["explicit", "dirk"]
 
         # Check that tableau has required attributes
-        assert hasattr(tableau, 'A')  # Butcher matrix (Irksome uses 'A' not 'a')
-        assert hasattr(tableau, 'b')  # weights
-        assert hasattr(tableau, 'c')  # nodes
+        assert hasattr(tableau, "A")  # Butcher matrix (Irksome uses "A" not "a")
+        assert hasattr(tableau, "b")  # weights
+        assert hasattr(tableau, "c")  # nodes
 
     def test_tableau_conversion_forward_euler(self):
         """Test specific Forward Euler conversion."""
-        tableau, stage_type = gadopt_to_irksome_tableau(ERKEuler)
+        tableau, stage_type = gadopt_to_irksome_tableau(ForwardEuler)
         assert stage_type == "explicit"
         assert tableau is not None
 
@@ -126,16 +92,8 @@ class TestTableauConversion:
 class TestDirectIrksomeSchemes:
     """Test direct Irksome scheme classes."""
 
-    @pytest.mark.parametrize("irksome_class", [
-        IrksomeRadauIIA,
-        IrksomeGaussLegendre,
-        IrksomeLobattoIIIA,
-        IrksomeLobattoIIIC,
-        IrksomeAlexander,
-        IrksomeQinZhang,
-        IrksomePareschiRusso,
-    ])
-    def test_direct_irksome_schemes(self, irksome_class):
+    @pytest.mark.parametrize("scheme", rk_schemes_irksome)
+    def test_direct_irksome_schemes(self, scheme):
         """Test that direct Irksome schemes can be instantiated."""
         # Create simple setup
         mesh = UnitSquareMesh(5, 5)
@@ -144,54 +102,70 @@ class TestDirectIrksomeSchemes:
 
         # Create equation
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         # Test instantiation
-        if irksome_class in [
-                IrksomeRadauIIA, IrksomeGaussLegendre,
-                IrksomeLobattoIIIA, IrksomeLobattoIIIC]:
-            # These have order parameter
-            integrator = irksome_class(equation, u, dt=0.01, order=2)
-        elif irksome_class == IrksomePareschiRusso:
-            # This has x parameter
-            integrator = irksome_class(equation, u, dt=0.01, x=0.5)
-        else:
-            # These don't have additional parameters
-            integrator = irksome_class(equation, u, dt=0.01)
+        integrator = scheme(equation, u, dt=0.01)
 
         assert integrator is not None
-        assert integrator.equation == equation
+        assert integrator.solution == u
+
+    @pytest.mark.parametrize(
+        "scheme_with_param",
+        {
+            (GaussLegendre, 3),
+            (LobattoIIIA, 3),
+            (RadauIIA, 4),
+            (LobattoIIIC, 3),
+            (PareschiRusso, 1.0),
+        },
+    )
+    def test_direct_irksome_schemes_with_alternative_tableau_parameter(
+        self, scheme_with_param
+    ):
+        """Test that direct Irksome schemes can be instantiated."""
+        # Create simple setup
+        mesh = UnitSquareMesh(5, 5)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+
+        # Create equation
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
+        equation = Equation(
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
+        )
+
+        # Test instantiation
+        scheme, tableau_parameter = scheme_with_param
+        integrator = scheme(equation, u, dt=0.01, tableau_parameter=tableau_parameter)
+
+        assert integrator is not None
         assert integrator.solution == u
 
 
 class TestEnergySolverIntegration:
     """Test integration with EnergySolver."""
 
-    @pytest.mark.parametrize("time_stepper", [
-        # Test G-ADOPT schemes (now using Irksome internally)
-        ImplicitMidpoint,
-        BackwardEuler,
-        DIRK33,
-
-        # Test direct Irksome schemes
-        IrksomeRadauIIA,
-        IrksomeGaussLegendre,
-        IrksomeLobattoIIIA,
-        IrksomePareschiRusso,
-    ])
+    @pytest.mark.parametrize(
+        "time_stepper",
+        [BackwardEuler, ImplicitMidpoint, DIRK33] + rk_schemes_irksome,
+    )
     def test_energy_solver_integration(self, time_stepper):
         """Test that time steppers work with EnergySolver."""
         # Create simple setup
         mesh = UnitSquareMesh(5, 5)
         V = VectorFunctionSpace(mesh, "CG", 1)  # Velocity space
-        Q = FunctionSpace(mesh, "CG", 1)        # Temperature space
+        Q = FunctionSpace(mesh, "CG", 1)  # Temperature space
         T = Function(Q)
         u = Function(V)
         u.assign(as_vector((0.0, 0.0)))  # Zero velocity field
@@ -201,7 +175,7 @@ class TestEnergySolverIntegration:
         approximation = BoussinesqApproximation(Ra)
 
         # Test EnergySolver creation
-        dt = Constant(0.01)
+        dt = 0.01
         solver = EnergySolver(T, u, approximation, dt, time_stepper)
 
         assert solver is not None
@@ -211,15 +185,11 @@ class TestEnergySolverIntegration:
 class TestBoundaryConditions:
     """Test that schemes work correctly with boundary conditions."""
 
-    @pytest.mark.parametrize("scheme_class", [
-        ERKEuler,
-        SSPRK33,
-        eSSPRKs3p3,
-        eSSPRKs10p3,
-        DIRK33,
-        ImplicitMidpoint,
-    ])
-    def test_schemes_with_dirichlet_bcs(self, scheme_class):
+    @pytest.mark.parametrize(
+        "scheme",
+        [ForwardEuler, SSPRK33, eSSPRKs3p3, eSSPRKs10p3, DIRK33, ImplicitMidpoint],
+    )
+    def test_schemes_with_dirichlet_bcs(self, scheme):
         """Test that schemes work with Dirichlet boundary conditions.
 
         This test specifically addresses the bug where explicit schemes with
@@ -233,30 +203,27 @@ class TestBoundaryConditions:
 
         # Create equation
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         # Create Dirichlet boundary conditions
         bcs = [DirichletBC(V, Constant(0.0), "on_boundary")]
 
         # Create integrator with boundary conditions
-        tableau, stage_type = gadopt_to_irksome_tableau(scheme_class)
+        dt = 0.01
+        tableau, stage_type = gadopt_to_irksome_tableau(scheme)
         integrator = IrksomeIntegrator(
-            equation, u, dt=0.01,
-            butcher=tableau,
-            stage_type=stage_type,
-            strong_bcs=bcs
+            equation, u, dt, tableau, stage_type=stage_type, strong_bcs=bcs
         )
 
         # Set initial condition
         x = SpatialCoordinate(mesh)
-        u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
+        u.interpolate(sin(pi * x[0]) * sin(pi * x[1]))
 
         # Take a time step - this should not raise an error
         integrator.advance()
@@ -267,27 +234,26 @@ class TestBoundaryConditions:
     def test_explicit_scheme_with_bcs_stage_type(self):
         """Verify that explicit schemes get stage_type='explicit' not 'deriv'."""
         # Test eSSPRKs10p3 specifically (the scheme that triggered the original bug)
-        tableau, stage_type = gadopt_to_irksome_tableau(eSSPRKs10p3)
-        assert stage_type == "explicit", \
+        stage_type = gadopt_to_irksome_tableau(eSSPRKs10p3)[1]
+        assert stage_type == "explicit", (
             f"eSSPRKs10p3 should have stage_type='explicit', got '{stage_type}'"
+        )
 
         # Test a few more explicit schemes
-        for scheme in [ERKEuler, SSPRK33, eSSPRKs3p3]:
-            tableau, stage_type = gadopt_to_irksome_tableau(scheme)
-            assert stage_type == "explicit", \
+        for scheme in [ForwardEuler, SSPRK33, eSSPRKs3p3]:
+            stage_type = gadopt_to_irksome_tableau(scheme)[1]
+            assert stage_type == "explicit", (
                 f"{scheme.__name__} should have stage_type='explicit', got '{stage_type}'"
+            )
 
 
 class TestTimeStepping:
     """Test actual time stepping functionality."""
 
-    @pytest.mark.parametrize("scheme_class", [
-        ERKEuler,
-        eSSPRKs3p3,
-        DIRK33,
-        ImplicitMidpoint,
-    ])
-    def test_time_stepping(self, scheme_class):
+    @pytest.mark.parametrize(
+        "scheme", [ForwardEuler, eSSPRKs3p3, DIRK33, ImplicitMidpoint]
+    )
+    def test_time_stepping(self, scheme):
         """Test actual time stepping with different schemes."""
         # Create setup
         mesh = UnitSquareMesh(5, 5)
@@ -296,21 +262,20 @@ class TestTimeStepping:
 
         # Create equation
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         # Create integrator
-        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme_class=scheme_class)
+        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme=scheme)
 
         # Set initial condition
         x = SpatialCoordinate(mesh)
-        u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
+        u.interpolate(sin(pi * x[0]) * sin(pi * x[1]))
 
         # Take a few time steps
         initial_norm = norm(u)
@@ -334,22 +299,21 @@ class TestDynamicTimeStepping:
 
         # Create equation
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         # Create integrator with Constant dt
         dt = Constant(0.01)
-        integrator = create_irksome_integrator(equation, u, dt, ERKEuler)
+        integrator = create_irksome_integrator(equation, u, dt, scheme=ForwardEuler)
 
         # Set initial condition
         x = SpatialCoordinate(mesh)
-        u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
+        u.interpolate(sin(pi * x[0]) * sin(pi * x[1]))
 
         # Take a step with original dt
         integrator.advance()
@@ -371,20 +335,19 @@ class TestDynamicTimeStepping:
         u = Function(V)
 
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         dt = Constant(0.01)
-        integrator = create_irksome_integrator(equation, u, dt, DIRK33)
+        integrator = create_irksome_integrator(equation, u, dt, scheme=DIRK33)
 
         x = SpatialCoordinate(mesh)
-        u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
+        u.interpolate(sin(pi * x[0]) * sin(pi * x[1]))
 
         # Take steps with changing dt
         integrator.advance()
@@ -402,7 +365,7 @@ class TestErrorHandling:
 
     def test_invalid_scheme(self):
         """Test that invalid schemes raise appropriate errors."""
-        with pytest.raises(KeyError):
+        with pytest.raises(AttributeError):
             # Try to convert a non-scheme class
             gadopt_to_irksome_tableau(str)
 
@@ -413,18 +376,17 @@ class TestErrorHandling:
         u = Function(V)
 
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         # Test with invalid order (should raise AssertionError from Irksome)
         with pytest.raises(AssertionError):
-            _ = IrksomeRadauIIA(equation, u, dt=0.01, order=0)
+            _ = RadauIIA(equation, u, dt=0.01, tableau_parameter=0)
 
     def test_very_small_time_step(self):
         """Test behavior with very small time step."""
@@ -435,20 +397,21 @@ class TestErrorHandling:
         test = TestFunction(V)
         eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         # Test with very small dt
-        integrator = create_irksome_integrator(equation, u, dt=1e-10, scheme_class=ERKEuler)
+        integrator = create_irksome_integrator(
+            equation, u, dt=1e-10, scheme=ForwardEuler
+        )
         assert integrator is not None
 
-        # Set initial condition
+        # Initialisation should work
         x = SpatialCoordinate(mesh)
-        u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
+        u.interpolate(sin(pi * x[0]) * sin(pi * x[1]))
 
         # Advance with very small dt should not crash
         integrator.advance()
@@ -460,41 +423,89 @@ class TestErrorHandling:
 class TestIntegrationWithExistingSchemes:
     """Test that existing G-ADOPT schemes still work with Irksome backend."""
 
-    @pytest.mark.parametrize("scheme_class", [
-        ERKEuler,
-        BackwardEuler,
-        ImplicitMidpoint,
-        DIRK33,
-        SSPRK33,
-        eSSPRKs3p3,
-        eSSPRKs10p3,
-    ])
-    def test_existing_schemes_still_work(self, scheme_class):
+    @pytest.mark.parametrize("scheme", rk_schemes_gadopt)
+    def test_existing_schemes_still_work(self, scheme):
         """Test that existing schemes still work with Irksome backend."""
         mesh = UnitSquareMesh(5, 5)
         V = FunctionSpace(mesh, "CG", 1)
         u = Function(V)
 
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         # Create integrator using existing scheme
-        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme_class=scheme_class)
+        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme=scheme)
 
         # Set initial condition and advance
         x = SpatialCoordinate(mesh)
-        u.interpolate(sin(pi*x[0])*sin(pi*x[1]))
+        u.interpolate(sin(pi * x[0]) * sin(pi * x[1]))
         integrator.advance()
 
         # Should work without errors
         assert norm(u) > 0
+
+
+class TestAdaptiveTimeStepping:
+    """Test adaptive timestepping functionality."""
+
+    def test_adaptive_dt_recommendation_changes(self):
+        """Test that adaptive timestepping returns changing dt values.
+
+        G-ADOPT usage pattern:
+            delta_t = Constant(initial)
+            solver = Solver(..., delta_t, ...)
+            for step in range(n):
+                error, dt = solver.solve()
+                time += dt  # or use dt for time tracking
+
+        Over several steps with a diffusing solution, the adaptive algorithm
+        should use different dt values. If dt never changes, the adaptive
+        timestepping is not working correctly.
+        """
+        mesh = UnitSquareMesh(4, 4)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+
+        x, y = SpatialCoordinate(mesh)
+        u.interpolate(exp(-50 * ((x - 0.5) ** 2 + (y - 0.5) ** 2)))
+
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0)}
+        equation = Equation(
+            test, V, residual_terms=[diffusion_term, mass_term], eq_attrs=eq_attrs
+        )
+
+        delta_t = Constant(0.0001)
+
+        integrator = RadauIIA(
+            equation,
+            u,
+            delta_t,
+            tableau_parameter=2,
+            adaptive_parameters={"tol": 1e-2, "dtmin": 1e-10, "dtmax": 1.0},
+        )
+
+        # Collect returned dt values over several steps
+        dt_values = []
+        for _ in range(5):
+            _, dt = integrator.advance()
+            dt_values.append(dt)
+
+        # The adaptive algorithm should use different dt values
+        all_same = all(
+            abs(dt_values[i] - dt_values[0]) < 1e-14 for i in range(len(dt_values))
+        )
+
+        assert not all_same, (
+            f"Adaptive dt should change between steps, but got constant values: "
+            f"{dt_values}. This suggests adaptive timestepping is not working correctly."
+        )
 
 
 class TestSolverParameters:
@@ -507,31 +518,23 @@ class TestSolverParameters:
         u = Function(V)
 
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         # Test with custom solver parameters
-        solver_params = {
-            "ksp_type": "gmres",
-            "ksp_rtol": 1e-6,
-            "pc_type": "ilu"
-        }
-
+        solver_params = {"ksp_type": "gmres", "ksp_rtol": 1e-6, "pc_type": "ilu"}
         integrator = create_irksome_integrator(
-            equation, u, dt=0.01,
-            scheme_class=DIRK33,
-            solver_parameters=solver_params
+            equation, u, dt=0.01, scheme=DIRK33, solver_parameters=solver_params
         )
 
         assert integrator is not None
         # The solver parameters are passed to the Irksome stepper
-        assert hasattr(integrator, 'stepper')
+        assert hasattr(integrator, "stepper")
 
     def test_direct_irksome_solver_parameters(self):
         """Test solver parameters with direct Irksome schemes."""
@@ -540,20 +543,109 @@ class TestSolverParameters:
         u = Function(V)
 
         test = TestFunction(V)
-        eq_attrs = {"diffusivity": Constant(1.0), 'source': Constant(0.0)}
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
         equation = Equation(
-            test, V,
-            residual_terms=[diffusion_term, source_term],
-            mass_term=mass_term,
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
             eq_attrs=eq_attrs,
-            bcs={}
         )
 
         solver_params = {"ksp_type": "cg", "pc_type": "jacobi"}
-
-        integrator = IrksomeRadauIIA(
-            equation, u, dt=0.01, order=2,
-            solver_parameters=solver_params
-        )
+        integrator = RadauIIA(equation, u, dt=0.01, solver_parameters=solver_params)
 
         assert integrator is not None
+
+
+class TestOptionsPrefixPropagation:
+    """Test that solver options_prefix is correctly propagated to PETSc."""
+
+    @pytest.mark.parametrize("scheme", [ForwardEuler, DIRK33, ImplicitMidpoint])
+    def test_prefix_propagation_various_schemes(self, scheme):
+        """Test prefix propagation works across different scheme types."""
+        mesh = UnitSquareMesh(5, 5)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
+        equation = Equation(
+            test,
+            V,
+            residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
+        )
+
+        integrator = create_irksome_integrator(equation, u, dt=0.01, scheme=scheme)
+
+        solver = integrator.stepper.solver
+        prefix = solver.snes.getOptionsPrefix()
+
+        # Verify prefix matches integrator name
+        expected_prefix = integrator.name + "_"
+        assert prefix == expected_prefix
+
+    def test_prefix_propagation_collocation(self):
+        """Test prefix propagation for stage_type='deriv' (collocation schemes)."""
+        mesh = UnitSquareMesh(5, 5)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
+        equation = Equation(
+            test, V, residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
+        )
+
+        integrator = RadauIIA(equation, u, dt=0.01)
+        prefix = integrator.stepper.solver.snes.getOptionsPrefix()
+        assert prefix == integrator.name + "_"
+
+    def test_prefix_propagation_adaptive(self):
+        """Test prefix propagation for adaptive time-stepping (the Irksome fix)."""
+        mesh = UnitSquareMesh(5, 5)
+        V = FunctionSpace(mesh, "CG", 1)
+        u = Function(V)
+        test = TestFunction(V)
+        eq_attrs = {"diffusivity": Constant(1.0), "source": Constant(0.0)}
+        equation = Equation(
+            test, V, residual_terms=[diffusion_term, mass_term, source_term],
+            eq_attrs=eq_attrs,
+        )
+
+        integrator = GaussLegendre(
+            equation, u, dt=0.01, adaptive_parameters={"tol": 1e-2},
+        )
+        prefix = integrator.stepper.solver.snes.getOptionsPrefix()
+        assert prefix == integrator.name + "_"
+
+    def test_prefix_propagation_energy_solver(self):
+        """Test prefix propagation through EnergySolver to PETSc."""
+        mesh = UnitSquareMesh(5, 5)
+        V = VectorFunctionSpace(mesh, "CG", 1)
+        Q = FunctionSpace(mesh, "CG", 1)
+        T = Function(Q)
+        u = Function(V)
+        u.assign(as_vector((0.0, 0.0)))
+
+        approximation = BoussinesqApproximation(Constant(1000.0))
+        solver = EnergySolver(T, u, approximation, 0.01, BackwardEuler)
+
+        prefix = solver.ts.stepper.solver.snes.getOptionsPrefix()
+        assert prefix == solver.ts.name + "_"
+
+    def test_prefix_propagation_level_set_solver(self):
+        """Test prefix propagation through LevelSetSolver to PETSc."""
+        mesh = UnitSquareMesh(5, 5)
+        V = VectorFunctionSpace(mesh, "CG", 1)
+        Q = FunctionSpace(mesh, "CG", 1)
+        level_set = Function(Q)
+        u = Function(V)
+        u.assign(as_vector((0.0, 0.0)))
+
+        solver = LevelSetSolver(
+            level_set, adv_kwargs={"u": u, "timestep": Constant(0.01)}
+        )
+
+        prefix = solver.adv_solver.ts.stepper.solver.snes.getOptionsPrefix()
+        assert prefix == solver.adv_solver.ts.name + "_"

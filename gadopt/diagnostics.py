@@ -13,7 +13,8 @@ from mpi4py import MPI
 from functools import cache, cached_property
 
 from firedrake.ufl_expr import extract_unique_domain
-from .utility import CombinedSurfaceMeasure, get_boundary_ids, vertical_component
+from .utility import CombinedSurfaceMeasure, vertical_component
+from typing import Sequence
 
 __all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics", "GIADiagnostics"]
 
@@ -26,8 +27,8 @@ def get_dx(mesh, quad_degree: int) -> fd.Measure:
 
 
 @cache
-def get_ds(mesh, function_space, quad_degree: int) -> fd.Measure:
-    if function_space.extruded:
+def get_ds(mesh, quad_degree: int) -> fd.Measure:
+    if mesh.extruded:
         return CombinedSurfaceMeasure(mesh, quad_degree)
     else:
         return fd.ds(domain=mesh, degree=quad_degree)
@@ -96,7 +97,7 @@ class FunctionContext:
         The surface integration measure defined by the mesh and
         `quad_degree` passed when creating this instance
         """
-        return get_ds(self.mesh, self.function_space, self._quad_degree)
+        return get_ds(self.mesh, self._quad_degree)
 
     @cached_property
     def normal(self):
@@ -111,15 +112,35 @@ class FunctionContext:
     @cached_property
     def boundary_ids(self):
         """The boundary IDs of the mesh associated with this instance"""
-        return get_boundary_ids(self.mesh)
-
-    @cached_property
-    def surface_area(self):
-        """The surface area of all surfaces of the mesh belonging to this instance"""
-        return {id: get_volume(self.ds(id)) for id in self.boundary_ids}
+        return tuple(self.mesh.topology.exterior_facets.unique_markers) + (
+            ("top", "bottom") if self.mesh.extruded else ()
+        )
 
     @cache
-    def get_boundary_nodes(self, boundary_id: int) -> list[int]:
+    def check_boundary_id(self, boundary_id: Sequence[int | str] | int | str) -> None:
+        """Check if a boundary id or tuple of boundary ids is valid"""
+        # strings are Sequences, so have to handle this first otherwise this function
+        # searches for 't' 'o' 'p' in ( 'top', 'bottom' )
+        if isinstance(boundary_id, str):
+            if boundary_id not in self.boundary_ids:
+                raise KeyError("Invalid boundary ID for function")
+        elif isinstance(boundary_id, Sequence):
+            if not all(id in self.boundary_ids for id in boundary_id):
+                raise KeyError("Invalid boundary ID for function")
+        else:
+            if boundary_id not in self.boundary_ids:
+                raise KeyError("Invalid boundary ID for function")
+
+    @cache
+    def surface_area(self, boundary_id: Sequence[int | str] | int | str):
+        """The surface area of the mesh on the boundary belonging to boundary_id"""
+        self.check_boundary_id(boundary_id)
+        return get_volume(self.ds(boundary_id))
+
+    @cache
+    def get_boundary_nodes(
+        self, boundary_id: Sequence[int | str] | int | str
+    ) -> list[int]:
         """Return the list of nodes on the boundary owned by this process
 
         Creates a `DirichletBC` object, then uses the `.nodes` attribute for that
@@ -135,6 +156,7 @@ class FunctionContext:
             List of integers corresponding to nodes on the boundary identified by
             `boundary_id`
         """
+        self.check_boundary_id(boundary_id)
         bc = fd.DirichletBC(self.function_space, 0, boundary_id)
         return [n for n in bc.nodes if n < self.function_space.dof_dset.size]
 
@@ -312,7 +334,9 @@ class BaseDiagnostics:
             )
 
     @cache
-    def _check_boundary_id(self, f: fd.Function, boundary_id: int | str | None) -> None:
+    def _check_boundary_id(
+        self, f: fd.Function, boundary_id: Sequence[int | str] | int | str | None
+    ) -> None:
         """Check if a provided boundary ID is valid.
 
         Args:
@@ -325,14 +349,14 @@ class BaseDiagnostics:
         Raises:
             KeyError: Mesh does not have a boundary corresponding to `boundary_id`
         """
-        if boundary_id is None:
-            return
-        if boundary_id not in self._function_contexts[f].boundary_ids:
-            raise KeyError("Invalid boundary ID for function")
+        if boundary_id is not None:
+            self._function_contexts[f].check_boundary_id(boundary_id)
 
     @cache
     def _get_measure(
-        self, func_or_op: fd.Function | Operator, boundary_id: int | str | None = None
+        self,
+        func_or_op: fd.Function | Operator,
+        boundary_id: Sequence[int | str] | int | str | None = None,
     ) -> fd.Measure:
         """Get the integration measure associated with this UFL expression.
 
@@ -443,7 +467,7 @@ class BaseDiagnostics:
     def _minmax(
         self,
         func_or_op: fd.Function | Operator,
-        boundary_id: int | None = None,
+        boundary_id: Sequence[int | str] | int | str | None = None,
         dim: int | None = None,
     ) -> np.ndarray[float, float]:
         """Calculate the minimum and maximum value of a Firedrake function
@@ -495,7 +519,7 @@ class BaseDiagnostics:
     def min(
         self,
         func_or_op: fd.Function | Operator,
-        boundary_id: int | None = None,
+        boundary_id: Sequence[int | str] | int | str | None = None,
         dim: int | None = None,
     ) -> float:
         """
@@ -507,7 +531,7 @@ class BaseDiagnostics:
     def max(
         self,
         func_or_op: fd.Function | Operator,
-        boundary_id: int | None = None,
+        boundary_id: Sequence[int | str] | int | str | None = None,
         dim: int | None = None,
     ) -> float:
         """
@@ -516,7 +540,11 @@ class BaseDiagnostics:
         """
         return -self._minmax(func_or_op, boundary_id, dim)[1]
 
-    def integral(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
+    def integral(
+        self,
+        f: fd.Function,
+        boundary_id: Sequence[int | str] | int | str | None = None,
+    ) -> float:
         """Calculate the integral of a function over the domain associated with it
 
         Args:
@@ -532,7 +560,9 @@ class BaseDiagnostics:
         measure = self._get_measure(f, boundary_id)
         return fd.assemble(f * measure)
 
-    def l1norm(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
+    def l1norm(
+        self, f: fd.Function, boundary_id: Sequence[int | str] | int | str | None = None
+    ) -> float:
         """Calculate the L1norm of a function over the domain associated with it
 
         Args:
@@ -548,7 +578,9 @@ class BaseDiagnostics:
         measure = self._get_measure(f, boundary_id)
         return fd.assemble(abs(f) * measure)
 
-    def l2norm(self, f: fd.Function, boundary_id: int | str | None = None) -> float:
+    def l2norm(
+        self, f: fd.Function, boundary_id: Sequence[int | str] | int | str | None = None
+    ) -> float:
         """Calculate the L2norm of a function over the domain associated with it
 
         Args:
@@ -611,8 +643,8 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         z: fd.Function,
         T: fd.Function | None = None,
         /,
-        bottom_id: int | str | None = None,
-        top_id: int | str | None = None,
+        bottom_id: Sequence[int | str] | int | str | None = None,
+        top_id: Sequence[int | str] | int | str | None = None,
         *,
         quad_degree: int = 4,
     ):
@@ -639,7 +671,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
                 fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal)
                 * self.ds_t
             )
-            / self._function_contexts[self.T].surface_area[self.top_id]
+            / self._function_contexts[self.T].surface_area(self.top_id)
         )
 
     def Nu_bottom(self, scale: float = 1.0):
@@ -649,7 +681,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
                 fd.dot(fd.grad(self.T), self._function_contexts[self.T].normal)
                 * self.ds_b
             )
-            / self._function_contexts[self.T].surface_area[self.bottom_id]
+            / self._function_contexts[self.T].surface_area(self.bottom_id)
         )
 
     def T_avg(self):
@@ -661,7 +693,9 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
     def T_max(self):
         return self.max(self.T)
 
-    def ux_max(self, boundary_id: int | None = None) -> float:
+    def ux_max(
+        self, boundary_id: Sequence[int | str] | int | str | None = None
+    ) -> float:
         return self.max(self.u, boundary_id, 0)
 
 
@@ -692,8 +726,8 @@ class GIADiagnostics(BaseDiagnostics):
         self,
         u: fd.Function,
         /,
-        bottom_id: int | str | None = None,
-        top_id: int | str | None = None,
+        bottom_id: Sequence[int | str] | int | str | None = None,
+        top_id: Sequence[int | str] | int | str | None = None,
         *,
         quad_degree: int = 4,
     ):

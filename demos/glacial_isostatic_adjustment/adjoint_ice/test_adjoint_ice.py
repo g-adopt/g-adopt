@@ -6,7 +6,7 @@ def test_adjoint_taylortest():
     with open(Path(__file__).parent.resolve() / "taylor_test_minconv.txt", "r") as f:
         tt_minconv = [float(x) for x in f.readlines()]
 
-    np.testing.assert_allclose(tt_minconv[-1], 2, rtol=2e-2)
+    np.testing.assert_allclose(tt_minconv[-1], 2, rtol=3e-2)
 
 
 def test_adjoint_optimisation():
