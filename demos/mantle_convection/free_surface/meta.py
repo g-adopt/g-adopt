@@ -1,6 +1,6 @@
 entrypoint = "free_surface.py"
 notebook = "free_surface.ipynb"
-notebook_ouptuts = ["temperature_warp.gif"]
+notebook_outputs = ["temperature_warp.gif"]
 deps = [
     {
         "case": "demos/mantle_convection/base_case",
