@@ -7,6 +7,9 @@ from doit.action import CmdAction
 from functools import cache
 from pathlib import Path
 
+from typing import Any
+from collections.abc import Iterator
+
 REPO_ROOT = Path(__file__).parent
 CASE_ROOTS = [
     REPO_ROOT / "demos",
@@ -38,15 +41,40 @@ def load_meta(meta_path):
 def cases():
     return list(discover_cases())
 
+def hpcrun_command(cfg: dict[str, Any]) -> str:
+    """_summary_
+
+    _extended_summary_
+
+    Args:
+        cfg: _description_
+
+    Returns:
+        _description_
+    """
+    cores = cfg.get("cores", 1)
+    entrypoint = cfg["hpc_entrypoint"]
+    args = cfg.get("args", "")
+    launcher_args = cfg.get("launcher_args")
+
+    hpcrun_command = f"gadopt_hpcrun -n {cores} "
+    if launcher_args is not None:
+        hpcrun_command = f"{hpcrun_command}{launcher_args} "
+
+    return f"{hpcrun_command}python3 {entrypoint} {args}"
+
 
 def mpi_command(cfg):
     cores = cfg.get("cores", 1)
     entrypoint = cfg["entrypoint"]
     args = cfg.get("args", "")
+    launcher_args=cfg.get("launcher_args")
 
     mpi_command = ""
     if cores > 1:
         mpi_command = f"mpiexec -np {cores} "
+    if launcher_args is not None:
+        mpi_command = f"{mpi_command}{launcher_args} "
 
     tsp_command = ""
     if batch_mode == "YES" and cfg.get("use_tsp", True):
@@ -82,15 +110,22 @@ def unlink_dependencies(case_dir, cfg):
             dst.unlink()
 
 
-def make_run_task(case_dir, step, cfg):
+def make_run_task(case_dir, step, cfg, task_type=None):
     case_path = case_dir.relative_to(REPO_ROOT).as_posix()
     name = f"{case_path}:{step}"
+    entrypoint = "entrypoint" if task_type is None else f"{task_type}_entrypoint"
 
     file_deps = []
     actions = [(link_dependencies, [case_dir, cfg])]
-    if cfg["entrypoint"] is not None:
-        file_deps.append(case_dir / cfg["entrypoint"])
-        actions.append(CmdAction((mpi_command, [cfg], {}), cwd=case_dir))
+    if cfg[entrypoint] is not None:
+        file_deps.append(case_dir / cfg[entrypoint])
+        match task_type:
+            case "hpc":
+                actions.append(CmdAction((hpcrun_command, [cfg], {}), cwd=case_dir))
+            case None:
+                actions.append(CmdAction((mpi_command, [cfg], {}), cwd=case_dir))
+            case _:
+                raise TypeError(f"Unknown task type: {task_type}")
 
     for dep in cfg.get("deps", []):
         if "artifact" in dep:
@@ -112,19 +147,30 @@ def make_run_task(case_dir, step, cfg):
 
 
 def normalise_meta(meta):
-    if hasattr(meta, "steps"):
-        return meta.steps
 
     properties = [
         ("entrypoint", None),
+        ("hpc_entrypoint", None),
         ("notebook", None),
         ("notebook_outputs", None),
         ("mesh", None),
         ("args", None),
+        ("launcher_args", None),
         ("cores", 1),
         ("outputs", []),
         ("deps", []),
     ]
+
+    if hasattr(meta, "steps"):
+        for step_name, step_meta in meta.steps.items():
+            step = {}
+            for prop, default in properties:
+                if default is not None:
+                    step[prop] = step_meta.get(prop, default)
+                elif prop in step_meta:
+                    step[prop] = step_meta[prop]
+            meta.steps[step_name] = step
+        return meta.steps
 
     step = {}
     for prop, default in properties:
@@ -175,6 +221,14 @@ def task_run_case():
 
             yield make_run_task(case_dir, step, cfg)
 
+
+def task_run_case_hpc() -> Iterator[dict[str,dict[str,Any]]]:
+    for case_dir, meta in cases():
+        for step, cfg in normalise_meta(meta).items():
+            if "hpc_entrypoint" not in cfg:
+                continue
+
+            yield make_run_task(case_dir, step, cfg, task_type="hpc")
 
 def task_convert():
     demo_path = REPO_ROOT / "demos"
