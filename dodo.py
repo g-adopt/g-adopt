@@ -215,7 +215,12 @@ def pytest_command(case_dir, meta):
             return None
         case "auto":
             test_file = REPO_ROOT / "demos/test_all.py"
-            test_name = case_dir.relative_to(REPO_ROOT / "demos", walk_up=True)
+            # TODO: when support for Python <3.12 is dropped replace the next 4 lines with
+            #       test_name = case_dir.relative_to(REPO_ROOT / "demos", walk_up=True)
+            if case_dir.is_relative_to(REPO_ROOT / "demos"):
+                test_name = case_dir.relative_to(REPO_ROOT / "demos")
+            else:
+                test_name = Path("../tests") / case_dir.relative_to(REPO_ROOT / "tests")
             return f"python3 -m pytest {test_file} -k {test_name}"
         case "local":
             return f"python3 -m pytest {case_dir}"
