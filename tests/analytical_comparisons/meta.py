@@ -1,51 +1,76 @@
 from .analytical import cases, get_case
-from .test_analytical import configs, idfn
+from .test_analytical import longtest_cases, idfn
+
+import itertools
+from collections.abc import Generator
+
+
+class ParamSet:
+    def __init__(self, config):
+        self.idx_map = {}
+        idx = 0
+        to_combine = []
+        for k in config:
+            if k in ("cores", "levels", "permutate"):
+                continue
+            to_combine.append(config[k])
+            self.idx_map[idx] = k
+            idx += 1
+        if config.get("permutate", True):
+            self.combinations = itertools.product(*to_combine)
+        else:
+            self.combinations = zip(*to_combine)
+
+    def __iter__(self) -> Generator[tuple[str, str | None]]:
+        for combination in self.combinations:
+            yield (
+                " ".join(str(i) for i in combination),
+                idfn({self.idx_map[i]: v for i, v in enumerate(combination)}),
+            )
+
 
 case_names = [
-    "smooth_cylindrical_freeslip",
-    "smooth_cylindrical_zeroslip",
-    "delta_cylindrical_freeslip",
-    "delta_cylindrical_zeroslip",
-    "delta_cylindrical_freeslip_dpc",
-    "delta_cylindrical_zeroslip_dpc",
-]
-
-hpc_case_names = [
-    "smooth_cylindrical_freesurface",
-    "smooth_spherical_freeslip",
-    "smooth_spherical_zeroslip",
+    f"{i}_{j}_{k}"
+    for i in cases
+    for j in cases[i]
+    for k in cases[i][j]
+    if f"{i}_{j}_{k}" not in longtest_cases
 ]
 
 steps = {}
 for c in case_names:
-    outputs = []
-    levels = get_case(cases, c)["levels"]
+    case_meta = get_case(cases, c)
+    ps = ParamSet(case_meta)
+    for test_input_str, test_id in ps:
+        for level, cores in zip(case_meta["levels"], case_meta["cores"]):
+            step_key = f"{c}-levels{level}-{test_id}"
 
-    for config in [x for x in configs if x[0] == c]:
-        for level in levels:
-            outputs.append(f"errors-{c}-levels{level}-{idfn(config[2])}.dat")
+            outputs = [f"errors-{step_key}.dat"]
 
-    steps[c] = {
-        "entrypoint": "analytical.py",
-        "cores": 1,
-        "args": """submit -t "tsp -N {cores} -f mpiexec -np {cores}" """ + c,
-        "use_tsp": False,
-        "outputs": outputs,
-    }
+            steps[step_key] = {
+                "entrypoint": "analytical.py",
+                "args": f"{c} {level} {test_input_str}",
+                "cores": cores,
+                "outputs": outputs,
+            }
 
-for c in hpc_case_names:
-    outputs = []
-    levels = get_case(cases, c)["levels"]
-    for config in [x for x in configs if x[0] == c]:
-        for level in levels:
-            outputs.append(f"errors-{c}-levels{level}-{idfn(config[2])}.dat")
+for c in longtest_cases:
+    case_meta = get_case(cases, c)
+    ps = ParamSet(case_meta)
+    for test_input_str, test_id in ps:
+        for level, cores in zip(case_meta["levels"], case_meta["cores"]):
+            step_key = f"{c}-levels{level}-{test_id}"
 
-    steps[c] = {
-        "hpc_entrypoint": "analytical.py",
-        "cores": 1,
-        "args": """submit -t "tsp -N {cores} -f mpiexec -np {cores}" """ + c,
-        "use_tsp": False,
-        "outputs": outputs,
-    }
+            outputs = [f"errors-{step_key}.dat"]
 
-pytest = "python3 -m tests/analytical_comparisons -m 'not longtest'"
+            steps[step_key] = {
+                "hpc_entrypoint": "analytical.py",
+                "args": f"{c} {level} {test_input_str}",
+                "launcher_args": f"-o {step_key}.out -e {step_key}.err -N analytical_{step_key}",
+                "cores": cores,
+                "outputs": outputs,
+            }
+
+pytest = "python3 -m pytest tests/analytical_comparisons -m 'not longtest'"
+
+pytest_hpc = "python3 -m pytest tests/analytical_comparisons -m longtest"

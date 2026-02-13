@@ -1,0 +1,4 @@
+*.err
+*.out
+errors*.dat
+*_rankfile.txt
