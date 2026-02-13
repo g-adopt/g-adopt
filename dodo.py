@@ -480,7 +480,7 @@ def task_convert() -> Iterator[DoitTask]:
     }
 
 
-def pytest_command(case_dir: Path, meta: CaseMeta) -> str | None:
+def pytest_command(case_dir: Path, meta: CaseMeta, test_type: str | None = None) -> str | None:
     """Determine the test strategy for a meta file.
 
     The top-level `pytest` attribute can have a few values:
@@ -500,7 +500,15 @@ def pytest_command(case_dir: Path, meta: CaseMeta) -> str | None:
 
     """
 
-    match getattr(meta, "pytest", None):
+    match test_type:
+        case "hpc":
+            test_attr_name = "pytest_hpc"
+        case None:
+            test_attr_name = "pytest"
+        case _:
+            raise TypeError(f"Unknown test type: {test_type}")
+
+    match getattr(meta, test_attr_name, None):
         case None:
             return None
         case "auto":
@@ -518,40 +526,69 @@ def pytest_command(case_dir: Path, meta: CaseMeta) -> str | None:
             return other
 
 
-def task_check() -> Iterator[DoitTask]:
-    """Top level doit check task.
+def check_impl(test_type: str | None) -> Iterator[DoitTask]:
+    """Implementation of top level doit check task.
 
-    This generates subtasks for each case directory, which
-    will run the tests for the case, then call pytest (or
-    a custom test command). It probably shouldn't be used
-    for whole-repository testing, because it will run
-    individual pytest instances per-directory. For this
-    use-case, use the `run_case` task and `pytest` directory.
+    This generates subtasks for each case directory based
+    on the test_parameter, which will run the tests for the
+    case with the given type, then call pytest (or a custom
+    test command).
 
     Yields:
       check subtasks.
 
     """
-
     for case_dir, meta in cases():
-        if not (cmd := pytest_command(case_dir, meta)):
+        if not (cmd := pytest_command(case_dir, meta, test_type)):
             continue
 
         case_name = case_dir.relative_to(REPO_ROOT).as_posix()
+        entrypoint_attr = "entrypoint" if test_type is None else f"{test_type}_entrypoint"
 
         file_dep = []
         if hasattr(meta, "steps"):
             meta = cast(StepsModule, meta)
             for cfg in meta.steps.values():
-                file_dep += [case_dir / out for out in cfg["outputs"]]
+                if entrypoint_attr in cfg:
+                    file_dep += [case_dir / out for out in cfg["outputs"]]
         else:
-            file_dep = [case_dir / out for out in meta.outputs]
+            if hasattr(meta,entrypoint_attr):
+                file_dep = [case_dir / out for out in meta.outputs]
 
         yield {
             "name": case_name,
             "actions": [cmd],
             "file_dep": file_dep,
         }
+
+
+def task_check() -> Iterator[DoitTask]:
+    """Top level doit check task.
+
+    Runs the standard 'check task' implementation that 
+    gathers all tests belonging to cases that have an
+    'entrypoint' attribute. It probably shouldn't be used
+    for whole-repository testing, because it will run
+    individual pytest instances per-directory. For this
+    use-case, use the `run_case` task and `pytest` directly.
+
+    Returns:
+        check subtasks.
+    """
+    
+    return check_impl(None)
+
+def task_check_hpc() -> Iterator[DoitTask]:
+    """Top level doit check_hpc task.
+
+    Runs the HPC-specific 'check task' implementation that 
+    gathers all tests belonging to cases that have an
+    'hpc_entrypoint' attribute.
+
+    Returns:
+        check subtasks.
+    """
+    return check_impl("hpc")
 
 
 def task_mesh() -> Iterator[DoitTask]:
@@ -568,7 +605,6 @@ def task_mesh() -> Iterator[DoitTask]:
       mesh subtasks.
 
     """
-
     for case_dir, meta in cases():
         for step, cfg in normalise_meta(meta).items():
             if "mesh" not in cfg:
