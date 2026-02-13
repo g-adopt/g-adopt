@@ -316,6 +316,7 @@ def normalise_meta(meta: CaseMeta) -> dict[str, CaseMetaDict]:
         ("cores", 1),
         ("outputs", []),
         ("deps", []),
+        ("use_tsp", True),
     )
 
     if hasattr(meta, "steps"):

@@ -31,6 +31,9 @@ class CaseMetaModule(Protocol):
     cores: int
     outputs: Sequence[str]
     deps: Sequence[DepConfigDict]
+    use_tsp: bool
+
+    # Module-level properties
     pytest: str
 
 
@@ -45,6 +48,7 @@ class CaseMetaDict(TypedDict):
     cores: int
     outputs: Sequence[str]
     deps: Sequence[DepConfigDict]
+    use_tsp: bool
 
 
 class StepsModule(Protocol):
