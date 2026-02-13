@@ -9,7 +9,7 @@ from pathlib import Path
 
 from typing import Any, cast, Final, Iterator, Sequence
 
-from dodo_typing import CaseMeta, CaseMetaDict, DoitTask
+from dodo_typing import CaseMeta, CaseMetaDict, DoitTask, StepsModule
 
 
 REPO_ROOT = Path(__file__).parent
@@ -319,6 +319,7 @@ def normalise_meta(meta: CaseMeta) -> dict[str, CaseMetaDict]:
     )
 
     if hasattr(meta, "steps"):
+        meta = cast(StepsModule, meta)
         for step_name, step_meta in meta.steps.items():
             step = {}
             for prop, default in properties:
@@ -539,6 +540,7 @@ def task_check() -> Iterator[DoitTask]:
 
         file_dep = []
         if hasattr(meta, "steps"):
+            meta = cast(StepsModule, meta)
             for cfg in meta.steps.values():
                 file_dep += [case_dir / out for out in cfg["outputs"]]
         else:
@@ -567,18 +569,20 @@ def task_mesh() -> Iterator[DoitTask]:
     """
 
     for case_dir, meta in cases():
-        if not hasattr(meta, "mesh"):
-            continue
+        for step, cfg in normalise_meta(meta).items():
+            if "mesh" not in cfg:
+                continue
 
-        geo = case_dir / meta.mesh["geo"]
-        msh = case_dir / meta.mesh["msh"]
-        args = meta.mesh.get("args", "")
+            geo = case_dir / cfg["mesh"]["geo"]
+            msh = case_dir / cfg["mesh"]["msh"]
+            args = cfg["mesh"].get("args", "")
 
-        case_name = case_dir.relative_to(REPO_ROOT).as_posix()
+            case_path = case_dir.relative_to(REPO_ROOT).as_posix()
+            name = f"{case_path}:{step}"
 
-        yield {
-            "name": case_name,
-            "actions": [f"gmsh -2 {args} {geo} -o {msh}"],
-            "file_dep": [geo],
-            "targets": [msh],
-        }
+            yield {
+                "name": name,
+                "actions": [f"gmsh -2 {args} {geo} -o {msh}"],
+                "file_dep": [geo],
+                "targets": [msh],
+            }
