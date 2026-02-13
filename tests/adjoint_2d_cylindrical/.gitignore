@@ -1,0 +1,4 @@
+firedrake_adjoint_checkpoint_*
+*.err
+*.out
+*_functional.dat
