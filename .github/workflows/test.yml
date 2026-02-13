@@ -162,7 +162,7 @@ jobs:
           tsp --timeout -T 7200
           tsp --memprof
           . .venv/bin/activate
-          uv run doit run -n $(nproc --all) run_case
+          uv run doit run --process $(nproc --all) --continue --always-execute run_case
         env:
           GADOPT_LOGLEVEL: INFO
           BATCH_MODE: 1
