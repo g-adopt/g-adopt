@@ -17,6 +17,7 @@ from typing import Any
 from warnings import warn
 
 import firedrake as fd
+import ufl
 from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, BaseGIAApproximation
@@ -257,6 +258,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.tests = fd.TestFunctions(self.solution_space)
 
         self.rho_continuity = self.approximation.rho_continuity()
+        self.nonlinear_mu = depends_on(self.approximation.mu, self.solution)
         self.equations = []  # G-ADOPT's Equation instances
 
         self.set_boundary_conditions()
@@ -350,7 +352,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             self.register_update_callback(self.set_solver)
             return
 
-        if not depends_on(self.approximation.mu, self.solution):
+        if not self.nonlinear_mu:
             self.add_to_solver_config({"snes_type": "ksponly"})
         else:
             self.add_to_solver_config(newton_stokes_solver_parameters)
@@ -567,6 +569,71 @@ class StokesSolver(StokesSolverBase):
             self.solution_old_split[2:],
         ):
             self.F += eq.residual((sol - sol_old) / self.dt)
+
+        # When viscosity depends on the solution (nonlinear rheology) and
+        # the boundary conditions include weak SIPG terms ("un" or "u"),
+        # the true Jacobian derivative(F, z) is non-symmetric because the
+        # chain rule differentiates through mu(strain_rate) in the boundary
+        # integrals. This breaks symmetric solvers (CG + GAMG).
+        #
+        # Fix: symmetrise the boundary contribution to the Jacobian. Split
+        # F into interior and boundary parts, keep the full Newton Jacobian
+        # for interior terms, and use J_bdy_sym = 0.5*(J_bdy + J_bdy^T)
+        # for boundary terms. This is a quasi-Newton method whose
+        # approximation error is confined to boundary integrals and vanishes
+        # as the boundary condition is satisfied.
+        #
+        # The residual F is unchanged, so the converged solution is exact
+        # and the adjoint tape records the correct forward model.
+        if self.J is None and self._needs_symmetric_boundary_jacobian():
+            self.J = self._build_symmetric_jacobian()
+
+    def _needs_symmetric_boundary_jacobian(self) -> bool:
+        """Check if Jacobian symmetrisation is needed."""
+        has_weak_sipg_bcs = any(
+            "un" in bc or "u" in bc for bc in self.weak_bcs.values()
+        )
+        needs_symmetrisation = self.nonlinear_mu and has_weak_sipg_bcs
+        if needs_symmetrisation and not is_continuous(self.solution_space[0]):
+            raise NotImplementedError(
+                "Jacobian symmetrisation not implemented for "
+                "discontinuous velocity elements"
+            )
+
+        return needs_symmetrisation
+
+    def _build_symmetric_jacobian(self) -> fd.Form:
+        """Build a Jacobian with symmetrised boundary terms."""
+        int_integrals = [
+            i for i in self.F.integrals()
+            if "exterior_facet" not in i.integral_type()
+        ]
+        bdy_integrals = [
+            i for i in self.F.integrals()
+            if "exterior_facet" in i.integral_type()
+        ]
+
+        F_int = ufl.Form(int_integrals)
+        F_bdy = ufl.Form(bdy_integrals)
+
+        J_int = fd.derivative(F_int, self.solution)
+        J_bdy = fd.derivative(F_bdy, self.solution)
+
+        # here we symmetrize the (0,0) block of J_bdy
+        # for this we first need to split J_bdy into blocks
+        fs_bdy = dict(fd.formmanipulation.split_form(J_bdy))
+        # symmetrize (0,0) block:
+        fs_bdy[(0, 0)] = fd.Constant(0.5) * (fs_bdy[(0, 0)] + fd.adjoint(fs_bdy[(0, 0)]))
+        # each of the blocks in fs_bdy has arguments wrt the subspaces only
+        # (i.e. they are no longer numbered as part of the larger mixed system)
+        # therefore we need to replace these again with the corresponding
+        # sub-indexed arguments of the full mixed system before adding up
+        J_bdy_sym = 0
+        for idx, block in fs_bdy.items():
+            mixed_args = [fd.split(a)[i] for a, i in zip(J_bdy.arguments(), idx)]
+            J_bdy_sym += fd.replace(block, dict(zip(block.arguments(), mixed_args)))
+
+        return J_int + J_bdy_sym
 
     def set_solver_options(
         self, solver_preset: ConfigType | None, solver_extras: ConfigType | None
