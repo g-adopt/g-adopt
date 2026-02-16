@@ -165,7 +165,6 @@ jobs:
           uv run doit run --process $(nproc --all) --continue --always-execute run_case
         env:
           GADOPT_LOGLEVEL: INFO
-          BATCH_MODE: 1
 
       - name: Pytest
         id: run_pytest

@@ -7,7 +7,7 @@ from doit.action import CmdAction
 from functools import cache
 from pathlib import Path
 
-from typing import Any, cast, Final, Iterator, Sequence
+from typing import Any, cast, Iterator, Sequence
 
 from dodo_typing import CaseMeta, CaseMetaDict, DoitTask, StepsModule
 
@@ -480,7 +480,9 @@ def task_convert() -> Iterator[DoitTask]:
     }
 
 
-def pytest_command(case_dir: Path, meta: CaseMeta, test_type: str | None = None) -> str | None:
+def pytest_command(
+    case_dir: Path, meta: CaseMeta, test_type: str | None = None
+) -> str | None:
     """Determine the test strategy for a meta file.
 
     The top-level `pytest` attribute can have a few values:
@@ -497,6 +499,9 @@ def pytest_command(case_dir: Path, meta: CaseMeta, test_type: str | None = None)
     Returns:
       A check command to run, or None if the case shouldn't
       be part of the `check` task.
+
+    Raises:
+      TypeError when `test_type` is not "hpc" or None.
 
     """
 
@@ -529,21 +534,27 @@ def pytest_command(case_dir: Path, meta: CaseMeta, test_type: str | None = None)
 def check_impl(test_type: str | None) -> Iterator[DoitTask]:
     """Implementation of top level doit check task.
 
-    This generates subtasks for each case directory based
-    on the test_parameter, which will run the tests for the
-    case with the given type, then call pytest (or a custom
-    test command).
+    This generates subtasks for each case directory based on the
+    test_type parameter, which will run the tests for the case with
+    the given type, then call pytest (or a custom test command).
+
+    Args:
+      test_type: "hpc" for HPC-specific tests, or None for the
+                 usual case.
 
     Yields:
       check subtasks.
 
     """
+
     for case_dir, meta in cases():
         if not (cmd := pytest_command(case_dir, meta, test_type)):
             continue
 
         case_name = case_dir.relative_to(REPO_ROOT).as_posix()
-        entrypoint_attr = "entrypoint" if test_type is None else f"{test_type}_entrypoint"
+        entrypoint_attr = (
+            "entrypoint" if test_type is None else f"{test_type}_entrypoint"
+        )
 
         file_dep = []
         if hasattr(meta, "steps"):
@@ -552,7 +563,7 @@ def check_impl(test_type: str | None) -> Iterator[DoitTask]:
                 if entrypoint_attr in cfg:
                     file_dep += [case_dir / out for out in cfg["outputs"]]
         else:
-            if hasattr(meta,entrypoint_attr):
+            if hasattr(meta, entrypoint_attr):
                 file_dep = [case_dir / out for out in meta.outputs]
 
         yield {
@@ -565,7 +576,7 @@ def check_impl(test_type: str | None) -> Iterator[DoitTask]:
 def task_check() -> Iterator[DoitTask]:
     """Top level doit check task.
 
-    Runs the standard 'check task' implementation that 
+    Runs the standard 'check task' implementation that
     gathers all tests belonging to cases that have an
     'entrypoint' attribute. It probably shouldn't be used
     for whole-repository testing, because it will run
@@ -575,19 +586,21 @@ def task_check() -> Iterator[DoitTask]:
     Returns:
         check subtasks.
     """
-    
+
     return check_impl(None)
+
 
 def task_check_hpc() -> Iterator[DoitTask]:
     """Top level doit check_hpc task.
 
-    Runs the HPC-specific 'check task' implementation that 
+    Runs the HPC-specific 'check task' implementation that
     gathers all tests belonging to cases that have an
     'hpc_entrypoint' attribute.
 
     Returns:
         check subtasks.
     """
+
     return check_impl("hpc")
 
 
@@ -605,6 +618,7 @@ def task_mesh() -> Iterator[DoitTask]:
       mesh subtasks.
 
     """
+
     for case_dir, meta in cases():
         for step, cfg in normalise_meta(meta).items():
             if "mesh" not in cfg:

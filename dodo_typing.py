@@ -13,6 +13,7 @@ class DepConfigDictBase(TypedDict):
     step: str  # Step that generates the dependency
     artifact: str  # Dependency filename
 
+
 class DepConfigDict(DepConfigDictBase, total=False):
     link_as: str  # Link name
     link: bool  # Whether to link the dep into the running case
@@ -64,6 +65,7 @@ CaseMeta = CaseMetaModule | StepsModule
 class DoitTaskBase(TypedDict):
     name: str
     actions: list
+
 
 class DoitTask(DoitTaskBase, total=False):
     file_dep: Sequence[str | Path]
