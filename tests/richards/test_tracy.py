@@ -8,41 +8,40 @@ Convergence study of Tracy's two dimensional exact solution (steady-state and tr
 
 def test_tracy():
 
-
     PETSc.Sys.Print("="*60)
     PETSc.Sys.Print("Performing transient solution check with Backward Euler")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 1e05, 1, BackwardEuler
-    timestep_vec = np.array([10000, 5000, 2500, 1250], dtype=float)
-    nodes_vector = np.array([251, 251, 251, 251], dtype=float)
+    t_final, polynomial_degree, integration_method = 1e05, 2, BackwardEuler
+    timestep_vec = np.array([5000, 2500, 1250], dtype=float)
+    nodes_vector = np.array([61, 61, 61], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
-    PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with backward euler.")
+    PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with Backward Euler.")
     assert convergence_rate >= 0.9, "Optimal convergence rate not achieved."
     PETSc.Sys.Print("")
+
 
     PETSc.Sys.Print("="*60)
     PETSc.Sys.Print("Performing transient solution check with Implicit Midpoint")
     PETSc.Sys.Print("="*60)
 
     t_final, polynomial_degree, integration_method = 1e05, 2, ImplicitMidpoint
-    timestep_vec = np.array([10000, 5000, 2500, 1250], dtype=float)
-    nodes_vector = np.array([201, 201, 201, 201], dtype=float)
+    timestep_vec = np.array([10000, 5000, 2500], dtype=float)
+    nodes_vector = np.array([101, 101, 101], dtype=float) - 30
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
-    PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with backward euler.")
+    PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with implicit midpointr.")
     assert convergence_rate >= 1.9, "Optimal convergence rate not achieved."
     PETSc.Sys.Print("")
-
 
     PETSc.Sys.Print("="*60)
     PETSc.Sys.Print("Performing steady-state solution check with DG0")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 2.5e06, 0, BackwardEuler
-    nodes_vector = np.array([26, 51, 101, 201], dtype=float)
-    timestep_vec = 10 * np.array([5000, 5000, 5000, 5000], dtype=float)
+    t_final, polynomial_degree, integration_method = 1.0e09, 0, BackwardEuler
+    nodes_vector = np.array([51, 101, 201], dtype=float)
+    timestep_vec = 1e09/2 * np.array([1, 1, 1, 1], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with  DG0.")
@@ -53,9 +52,9 @@ def test_tracy():
     PETSc.Sys.Print("Performing steady-state solution check with DG1")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 2.5e06, 1, BackwardEuler
+    t_final, polynomial_degree, integration_method = 1.0e9, 1, BackwardEuler
     nodes_vector = np.array([51, 101, 201, 401], dtype=float)
-    timestep_vec = 10 * np.array([5000, 5000, 5000, 5000], dtype=float)
+    timestep_vec = 1e09/2 * np.array([1, 1, 1, 1], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with  DG1.")
@@ -66,9 +65,9 @@ def test_tracy():
     PETSc.Sys.Print("Performing steady-state solution check with DG2")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 2.5e06, 2, BackwardEuler
+    t_final, polynomial_degree, integration_method = 1.0e9, 2, BackwardEuler
     nodes_vector = np.array([76, 151, 301, 601], dtype=float)
-    timestep_vec = 10 * np.array([5000, 5000, 5000, 5000], dtype=float)
+    timestep_vec = 1e09/2 * np.array([1, 1, 1, 1, 1], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with  DG2.")
@@ -197,7 +196,7 @@ def compute_error(nodes,
     hExact = exact_solution(X, time+offset)
     L2_norm = sqrt(assemble((h-hExact)**2 * dx_quad))
 
-    PETSc.Sys.Print(f"L2 error:  = {L2_norm:.6e} | "
+    PETSc.Sys.Print(f"L2 error:  = {L2_norm:.2e} | "
                     f"dx = {L/(nodes-1):.4f} | "
                     f"dt = {float(dt):.0f} | "
                     f"Nodes = {nodes} | "
