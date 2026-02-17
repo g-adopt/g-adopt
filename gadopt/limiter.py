@@ -50,9 +50,12 @@ def assert_function_space(
         assert B.family() in fam_list, 'vertical space must be {0:s}'.format(fam_list)
         assert A.degree() == degree, 'degree of horizontal space must be {0:d}'.format(degree)
         assert B.degree() == degree, 'degree of vertical space must be {0:d}'.format(degree)
+        assert A.variant() == 'equispaced', 'variant of horizontal space must be equispaced'
+        assert B.variant() == 'equispaced', 'variant of vertical space must be equispaced'
     else:  # assume 2D mesh
         assert ufl_elem.family() in fam_list, 'function space must be one of {0:s}'.format(fam_list)
         assert ufl_elem.degree() == degree, 'degree of function space must be {0:d}'.format(degree)
+        assert ufl_elem.variant() == 'equispaced', 'variant of function space must be equispaced'
 
 
 def get_extruded_base_element(ufl_element: FiniteElement) -> FiniteElement:
