@@ -77,7 +77,7 @@ bc_in = {"q": q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 eq_attrs = {"u": u}
 adv_solver = GenericTransportSolver(
-    "advection", q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs
+    ["advection", "mass"], q, dt, SSPRK33, eq_attrs=eq_attrs, bcs=bcs
 )
 
 limiter = VertexBasedP1DGLimiter(Q)
@@ -116,9 +116,15 @@ q_max = diag.max(q)
 log('min q: ', q_min)
 log('max q: ', q_max)
 
-undershoot = abs(qinit_min - q_min)
-overshoot = abs(qinit_max - q_max)
+undershoot = qinit_min - q_min
+overshoot = q_max - qinit_max
 
-log('undershoot: ', undershoot)
-log('overshoot: ', overshoot)
+if undershoot > 0 :
+    log('undershoot: ', undershoot)
+else:
+    log('No undershoot detected')
+if overshoot > 0 :
+    log('overshoot: ', overshoot)
+else:
+    log('No overshoot detected')
 np.savetxt("final_error.log", [L2_err/L2_init, undershoot, overshoot])
