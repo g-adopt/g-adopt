@@ -7,13 +7,16 @@ import numpy as np
 
 
 # We use a 40-by-40 mesh of triangles.
-mesh = UnitSquareMesh(40, 40)
+mesh = UnitSquareMesh(80, 80)
 mesh.cartesian = True
 
 # We set up a linear Discontinuous function space for :math:`q`, and
 # a vector-valued continuous function space for our velocity field. ::
+# We need to set the variant type to `equispaced` for the discontinuous
+# function space so that the degrees of freedom are situated at the vertex
+# corners. This ensures that the vertex-based limiter works correctly.
 
-Q = FunctionSpace(mesh, "DG", 1)
+Q = FunctionSpace(mesh, "DG", 1, variant='equispaced')
 V = VectorFunctionSpace(mesh, "DG", 1)
 
 # We set up the initial velocity field using a simple analytic expression. ::
@@ -68,7 +71,7 @@ u_outfile.write(u)
 # here we just use a ``Constant`` value. ::
 
 T = 2*pi
-dt = T/600.0
+dt = T/1200.0
 q_in = Constant(1.0)
 
 # Use G-ADOPT's GenericTransportSolver to advect the tracer. We only include an
