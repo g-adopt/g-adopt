@@ -16,6 +16,15 @@ diagnostics = {
             4e-2,
         )
     ],
+    "davies_2022": [
+        (lambda data: abs(data["rms_velocity"][-1] - 193.169), operator.le, 6e-3),
+        (lambda data: abs(data["nusselt_bottom"][-1] - 9.928), operator.le, 4e-2),
+        (lambda data: abs(data["nusselt_top"][-1] - 9.879), operator.le, 2e-2),
+        (lambda data: abs(data["energy_conservation"][-1] - 0.0491), operator.le, 2e-2),
+        (lambda data: abs(data["avg_temperature"][-1] - 0.383), operator.le, 5e-4),
+        (lambda data: abs(data["min_temperature"][-1] - 0.0), operator.le, 6e-4),
+        (lambda data: abs(data["max_temperature"][-1] - 1.0), operator.le, 9e-4),
+    ],
     "gerya_2003": [
         (
             lambda data: abs(
@@ -55,14 +64,6 @@ diagnostics = {
             operator.le,
             1e-1,
         )
-    ],
-    "tosi_2015": [
-        (lambda data: abs(data["avg_temperature"][-1] - 0.5275), operator.le, 8e-5),
-        (lambda data: abs(data["nusselt_top"][-1] - 6.64), operator.le, 3e-2),
-        (lambda data: abs(data["nusselt_bottom"][-1] - 6.65), operator.le, 4e-2),
-        (lambda data: abs(data["rms_velocity"][-1] - 79.1), operator.le, 6e-2),
-        (lambda data: abs(data["min_visc"][-1] - 1.92e-4), operator.le, 3e-7),
-        (lambda data: abs(data["max_visc"][-1] - 1.92), operator.le, 6e-2),
     ],
     "trim_2023": [
         (lambda data: abs(data["rms_velocity"][-1] - 157.0796), operator.le, 5e0),
