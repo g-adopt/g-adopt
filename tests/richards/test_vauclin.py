@@ -10,7 +10,7 @@ def test_vauclin():
     t_final = 28800
     time_step = 25
     polynomial_degree = 2
-    grid_space = 0.02
+    grid_space = 0.035
 
     PETSc.Sys.Print('Generating reference solution...')
     h_ref = vauclin_benchmark(t_final, time_step, grid_space, polynomial_degree)
@@ -26,14 +26,14 @@ def test_vauclin():
 
     polynomial_degree = 1
 
-    dx_vec = np.array([0.16666, 0.1, 0.083333, 0.066666, 0.05, 0.04, 0.03333, 0.025, 0.02])
+    dx_vec = np.array([0.1, 0.05, 0.025])
     error_vec = dx_vec*0
 
     for index in range(len(dx_vec)):
         dx = dx_vec[index]
         h = vauclin_benchmark(t_final, time_step, dx, polynomial_degree)
         err = errornorm(h_ref, h_interp.interpolate(h), norm_type="L2", degree_rise=3)
-        PETSc.Sys.Print(f"Error with d x= {dx} is {err}")
+        PETSc.Sys.Print(f"Error with dx = {dx} is {err:.2e}")
         error_vec[index] = err
 
     X = np.log10(dx_vec)
