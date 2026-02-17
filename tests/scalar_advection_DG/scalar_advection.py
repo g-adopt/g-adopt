@@ -119,11 +119,11 @@ log('max q: ', q_max)
 undershoot = qinit_min - q_min
 overshoot = q_max - qinit_max
 
-if undershoot > 0 :
+if undershoot > 0:
     log('undershoot: ', undershoot)
 else:
     log('No undershoot detected')
-if overshoot > 0 :
+if overshoot > 0:
     log('overshoot: ', overshoot)
 else:
     log('No overshoot detected')
