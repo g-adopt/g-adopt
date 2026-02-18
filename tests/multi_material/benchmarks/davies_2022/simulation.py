@@ -1,8 +1,7 @@
 """Thermal benchmark.
-Tosi, N., Stein, C., Noack, L., Hüttig, C., Maierova, P., Samuel, H., ... &
-Tackley, P. J. (2015).
-A community benchmark for viscoplastic thermal convection in a 2-D square box.
-Geochemistry, Geophysics, Geosystems, 16(7), 2175-2196.
+Davies, D. R., Kramer, S. C., Ghelichkhan, S., & Gibson, A. (2022).
+Automating Finite Element Methods for Geodynamics via Firedrake.
+Geoscientific Model Development Discussions, 2022, 1-50.
 """
 
 import firedrake as fd
@@ -15,26 +14,30 @@ from .materials import material
 
 def initialise_temperature(temperature):
     mesh_coords = fd.SpatialCoordinate(temperature.function_space().mesh())
+    radial_coord = fd.sqrt(mesh_coords[0] ** 2 + mesh_coords[1] ** 2)
 
     temperature.interpolate(
-        1
-        - mesh_coords[1]
-        + A * fd.cos(fd.pi * mesh_coords[0]) * fd.sin(fd.pi * mesh_coords[1])
+        r_max
+        - radial_coord
+        + A
+        * fd.cos(4.0 * fd.atan2(mesh_coords[1], mesh_coords[0]))
+        * fd.sin((radial_coord - r_min) * fd.pi)
     )
 
 
 def diagnostics(simu_time, geo_diag, diag_vars, output_path):
     diag_fields["output_time"].append(simu_time)
-    diag_fields["avg_temperature"].append(geo_diag.T_avg())
-    diag_fields["nusselt_top"].append(geo_diag.Nu_top())
-    diag_fields["nusselt_bottom"].append(geo_diag.Nu_bottom())
     diag_fields["rms_velocity"].append(geo_diag.u_rms())
-    diag_fields["min_visc"].append(
-        geo_diag.T.comm.allreduce(diag_vars["viscosity"].dat.data.min(), MPI.MIN)
+    diag_fields["nusselt_bottom"].append(geo_diag.Nu_bottom() * Nu_bottom_scaling)
+    diag_fields["nusselt_top"].append(geo_diag.Nu_top() * Nu_top_scaling)
+    diag_fields["energy_conservation"].append(
+        abs(
+            abs(diag_fields["nusselt_top"][-1]) - abs(diag_fields["nusselt_bottom"][-1])
+        )
     )
-    diag_fields["max_visc"].append(
-        geo_diag.T.comm.allreduce(diag_vars["viscosity"].dat.data.max(), MPI.MAX)
-    )
+    diag_fields["avg_temperature"].append(geo_diag.T_avg())
+    diag_fields["min_temperature"].append(geo_diag.T_min())
+    diag_fields["max_temperature"].append(geo_diag.T_max())
 
     if MPI.COMM_WORLD.rank == 0:
         np.savez(
@@ -67,22 +70,14 @@ checkpoint_restart = 0
 # Mesh resolution should be sufficient to capture eventual small-scale dynamics
 # in the neighbourhood of material interfaces tracked by the level-set approach.
 # Insufficient mesh refinement can lead to unwanted motion of material interfaces.
-domain_dims = (1, 1)
-mesh_gen = "firedrake"
-mesh_elements = (48, 48)
+r_min, r_max = 1.22, 2.22
+n_cells, n_layers = 128, 32
+mesh_gen = "extruded_annulus"
 
 # Parameters to initialise level set
-callable_args = (
-    curve_parameter := np.array([0.0, domain_dims[0]]),
-    interface_slope := 0,
-    interface_coord_y := 0.5,
-)
-boundary_coordinates = [domain_dims, (0.0, domain_dims[1]), (0.0, interface_coord_y)]
 signed_distance_kwargs = {
-    "interface_geometry": "curve",
-    "interface_callable": "line",
-    "interface_args": callable_args,
-    "boundary_coordinates": boundary_coordinates,
+    "interface_geometry": "circle",
+    "interface_coordinates": ((0.0, 0.0), r_min + (r_max - r_min) / 3.0),
 }
 # The following list must be ordered such that, unpacking from the end, each dictionary
 # contains the keyword arguments required to initialise the signed-distance array
@@ -100,28 +95,33 @@ materials = [material, material]
 
 # Approximation parameters
 dimensional = False
-Ra = 1e2
+Ra = 1e5
 
 # Parameters to initialise temperature
-A = 0.01
+A = 0.02
 
-# Boundary conditions with mapping {1: left, 2: right, 3: bottom, 4: top}
-temp_bcs = {3: {"T": 1}, 4: {"T": 0}}
-stokes_bcs = {1: {"ux": 0}, 2: {"ux": 0}, 3: {"uy": 0}, 4: {"uy": 0}}
+# Boundary conditions with mapping {"bottom": r_min, "top": r_max}
+temp_bcs = {"bottom": {"T": 1.0}, "top": {"T": 0.0}}
+stokes_bcs = {"bottom": {"un": 0.0}, "top": {"un": 0.0}}
 
 # Timestepping objects
-initial_timestep = 1e-6
-dump_period = 1e-3
+initial_timestep = 1e-7
+dump_period = 5e-4
 checkpoint_period = 5
-steady_state_threshold = 1e-5
+steady_state_threshold = 1e-4
 
 # Diagnostic objects
+r_ratio = r_min / r_max
+Nu_top_scaling = fd.ln(r_ratio) / (r_ratio - 1.0)
+Nu_bottom_scaling = r_ratio * fd.ln(r_ratio) / (r_ratio - 1.0)
+
 diag_names = {
-    "avg_temperature": "Average temperature (non-dimensional)",
-    "nusselt_top": "Top Nusselt number (non-dimensional)",
-    "nusselt_bottom": "Bottom Nusselt number (non-dimensional)",
     "rms_velocity": "Root-mean-square velocity (non-dimensional)",
-    "min_visc": "Minimum viscosity (non-dimensional)",
-    "max_visc": "Maximum viscosity (non-dimensional)",
+    "nusselt_bottom": "Bottom Nusselt number (non-dimensional)",
+    "nusselt_top": "Top Nusselt number (non-dimensional)",
+    "energy_conservation": "Difference between top and bottom Nusselt numbers",
+    "avg_temperature": "Average temperature (non-dimensional)",
+    "min_temperature": "Minimum temperature (non-dimensional)",
+    "max_temperature": "Maximum temperature (non-dimensional)",
 }
 diag_fields = {field: [] for field in ("output_time", *diag_names.keys())}
