@@ -5,7 +5,7 @@ include ../../rules.mk
 all: final_error.log
 
 final_error.log : category := tests
-final_error.log: scalar_advection.py
+final_error.log: scalar_advection_DGlim.py
 	$(run-python)
 
 clean:
