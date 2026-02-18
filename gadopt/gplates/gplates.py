@@ -1174,6 +1174,7 @@ class LithosphereConnector(IndicatorConnector):
                 - PointCloud with property matching self.property_name
                 - Path to HDF5/NetCDF file (loaded via h5py)
                 - Tuple of (latlon_array, values_array)
+                - Scalar (int or float): uniform thickness for all points
 
         Returns:
             PointCloud filtered to continental regions with plate IDs assigned.
@@ -1189,10 +1190,15 @@ class LithosphereConnector(IndicatorConnector):
             latlon, values = data
             cloud = PointCloud.from_latlon(np.asarray(latlon))
             cloud.add_property(self.config.property_name, np.asarray(values))
+        elif isinstance(data, (int, float)):
+            from gtrack.mesh import create_sphere_mesh_latlon
+            latlon = create_sphere_mesh_latlon(self.config.n_points)
+            cloud = PointCloud.from_latlon(latlon)
+            cloud.add_property(self.config.property_name, np.full(len(latlon), float(data)))
         else:
             raise TypeError(
                 f"Unsupported continental_data type: {type(data)}. "
-                "Expected PointCloud, file path, or (latlon, values) tuple."
+                "Expected PointCloud, file path, (latlon, values) tuple, or scalar."
             )
 
         # Filter to continental regions at present day
@@ -1597,6 +1603,7 @@ class CratonConnector(IndicatorConnector):
                 - PointCloud with property matching self.config.property_name
                 - Path to HDF5/NetCDF file
                 - Tuple of (latlon_array, values_array)
+                - Scalar (int or float): uniform thickness for all points
             craton_polygons: Path to craton polygon file for filtering.
 
         Returns:
@@ -1613,10 +1620,15 @@ class CratonConnector(IndicatorConnector):
             latlon, values = data
             cloud = PointCloud.from_latlon(np.asarray(latlon))
             cloud.add_property(self.config.property_name, np.asarray(values))
+        elif isinstance(data, (int, float)):
+            from gtrack.mesh import create_sphere_mesh_latlon
+            latlon = create_sphere_mesh_latlon(self.config.n_points)
+            cloud = PointCloud.from_latlon(latlon)
+            cloud.add_property(self.config.property_name, np.full(len(latlon), float(data)))
         else:
             raise TypeError(
                 f"Unsupported craton_thickness_data type: {type(data)}. "
-                "Expected PointCloud, file path, or (latlon, values) tuple."
+                "Expected PointCloud, file path, (latlon, values) tuple, or scalar."
             )
 
         # Filter to craton regions at present day

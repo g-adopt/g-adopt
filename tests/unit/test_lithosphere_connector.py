@@ -277,6 +277,37 @@ class TestLithosphereConnectorFunctional:
         # Deep mantle should be close to 0
         assert deep_indicator[0] < 0.1
 
+    def test_constant_continental_data(self, plate_model_with_polygons):
+        """Test LithosphereConnector with a constant continental thickness."""
+        connector = LithosphereConnector(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=150.0,
+            age_to_property=half_space_cooling,
+            config_extra={"k_neighbors": 10},
+        )
+
+        # Create target coords spanning the shell
+        n_targets = 50
+        np.random.seed(789)
+        phi = np.random.uniform(0, 2*np.pi, n_targets)
+        theta = np.arccos(np.random.uniform(-1, 1, n_targets))
+        r = np.linspace(1.208, 2.208, n_targets)
+        target_coords = np.column_stack([
+            r * np.sin(theta) * np.cos(phi),
+            r * np.sin(theta) * np.sin(phi),
+            r * np.cos(theta)
+        ])
+
+        ndtime = connector.age2ndtime(100.0)
+        result = connector.get_indicator(target_coords, ndtime)
+
+        assert result.shape == (n_targets,)
+        assert np.all(np.isfinite(result))
+        assert np.all(result >= 0)
+        assert np.all(result <= 1)
+        # Surface points should be higher than deep points
+        assert result[-1] > result[0]
+
     def test_get_indicator_caching(self, plate_model_with_polygons, synthetic_continental_data):
         """Test that get_indicator uses caching for repeated calls."""
         connector = LithosphereConnector(
@@ -470,6 +501,50 @@ class TestIndicatorComputation:
         wide_gradient = np.abs(np.gradient(wide_indicator)).max()
 
         assert narrow_gradient > wide_gradient
+
+
+class TestConstantThicknessData:
+    """Test constant (scalar) thickness data dispatch logic.
+
+    These tests verify the indicator math when using a uniform thickness value,
+    without requiring plate reconstruction data.
+    """
+
+    def test_constant_produces_uniform_indicator_profile(self):
+        """Verify that a constant thickness produces a uniform indicator at a given depth."""
+        thickness_km = 200.0
+        r_outer = 2.208
+        depth_scale = 2890.0
+        transition_width_km = 10.0
+        transition_width_nondim = transition_width_km / depth_scale
+
+        lith_base = r_outer - thickness_km / depth_scale
+
+        # Points well inside the lithosphere (near surface)
+        r_surface = r_outer - 10.0 / depth_scale  # 10 km depth
+        indicator_surface = 0.5 * (1 + np.tanh((r_surface - lith_base) / transition_width_nondim))
+        assert indicator_surface > 0.99, "Near-surface indicator should be ~1 for 200 km thickness"
+
+        # Points well below lithosphere
+        r_deep = r_outer - 400.0 / depth_scale  # 400 km depth
+        indicator_deep = 0.5 * (1 + np.tanh((r_deep - lith_base) / transition_width_nondim))
+        assert indicator_deep < 0.01, "Deep point should have ~0 indicator for 200 km thickness"
+
+        # At the boundary itself
+        indicator_boundary = 0.5 * (1 + np.tanh((lith_base - lith_base) / transition_width_nondim))
+        np.testing.assert_allclose(indicator_boundary, 0.5, rtol=1e-10)
+
+    def test_constant_float_and_int_both_accepted(self):
+        """Verify both float and int scalars produce valid indicator profiles."""
+        r_outer = 2.208
+        depth_scale = 2890.0
+        transition_width_nondim = 10.0 / depth_scale
+
+        for thickness in [200.0, 200]:
+            lith_base = r_outer - float(thickness) / depth_scale
+            r = r_outer - 50.0 / depth_scale  # 50 km depth, well inside
+            indicator = 0.5 * (1 + np.tanh((r - lith_base) / transition_width_nondim))
+            assert indicator > 0.99, f"Indicator should be ~1 for thickness={thickness}"
 
 
 class TestInterpolation:
@@ -829,6 +904,7 @@ class TestCratonConnectorFunctional:
         connector = CratonConnector(
             gplates_connector=gplates_connector,
             craton_polygons=craton_shapefile,
+            craton_thickness_data=200.0,
         )
 
         assert connector.gplates_connector is gplates_connector
@@ -837,22 +913,24 @@ class TestCratonConnectorFunctional:
 
     def test_craton_connector_with_config(self, gplates_connector, craton_shapefile):
         """Test CratonConnector with custom config."""
-        config = CratonConfig(n_points=10000, smooth_width=0.03)
+        config = CratonConfig(n_points=10000, distance_threshold=0.03)
 
         connector = CratonConnector(
             gplates_connector=gplates_connector,
             craton_polygons=craton_shapefile,
+            craton_thickness_data=200.0,
             config=config,
         )
 
         assert connector.config.n_points == 10000
-        assert connector.config.smooth_width == 0.03
+        assert connector.config.distance_threshold == 0.03
 
     def test_craton_connector_time_conversion(self, gplates_connector, craton_shapefile):
         """Test time conversion delegates to gplates_connector."""
         connector = CratonConnector(
             gplates_connector=gplates_connector,
             craton_polygons=craton_shapefile,
+            craton_thickness_data=200.0,
         )
 
         # Test round-trip conversion
@@ -867,6 +945,7 @@ class TestCratonConnectorFunctional:
         connector = CratonConnector(
             gplates_connector=gplates_connector,
             craton_polygons=craton_shapefile,
+            craton_thickness_data=200.0,
             config_extra={"n_points": 5000},  # Smaller for faster test
         )
 
@@ -891,11 +970,41 @@ class TestCratonConnectorFunctional:
         assert indicator.min() >= 0
         assert indicator.max() <= 1
 
+    def test_constant_craton_thickness(self, gplates_connector, craton_shapefile):
+        """Test CratonConnector with a constant craton thickness value."""
+        connector = CratonConnector(
+            gplates_connector=gplates_connector,
+            craton_polygons=craton_shapefile,
+            craton_thickness_data=200.0,
+            config_extra={"n_points": 5000},
+        )
+
+        n_points = 50
+        np.random.seed(321)
+        theta = np.random.uniform(0, 2*np.pi, n_points)
+        phi = np.random.uniform(0, np.pi, n_points)
+        r = np.random.uniform(1.5, 2.2, n_points)
+
+        coords = np.column_stack([
+            r * np.sin(phi) * np.cos(theta),
+            r * np.sin(phi) * np.sin(theta),
+            r * np.cos(phi)
+        ])
+
+        ndtime = connector.age2ndtime(100.0)
+        indicator = connector.get_indicator(coords, ndtime)
+
+        assert indicator.shape == (n_points,)
+        assert np.all(np.isfinite(indicator))
+        assert indicator.min() >= 0
+        assert indicator.max() <= 1
+
     def test_craton_indicator_caching(self, gplates_connector, craton_shapefile):
         """Test that results are cached when time doesn't change."""
         connector = CratonConnector(
             gplates_connector=gplates_connector,
             craton_polygons=craton_shapefile,
+            craton_thickness_data=200.0,
             config_extra={"n_points": 5000},
         )
 
@@ -997,6 +1106,7 @@ class TestCratonGplatesScalarFunction:
         return CratonConnector(
             gplates_connector=gplates_connector,
             craton_polygons=str(craton_path),
+            craton_thickness_data=200.0,
             config_extra={"n_points": 5000},  # Smaller for faster tests
         )
 
