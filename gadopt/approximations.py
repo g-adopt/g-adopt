@@ -21,7 +21,8 @@ __all__ = [
     "TruncatedAnelasticLiquidApproximation",
     "AnelasticLiquidApproximation",
     "IncompressibleMaxwellApproximation",
-    "QuasiCompressibleInternalVariableApproximation",
+    "AsymmetricQuasiCompressibleInternalVariableApproximation",
+    "AsymmetricCompressibleInternalVariableApproximation",
     "CompressibleInternalVariableApproximation",
     "MaxwellApproximation",
 ]
@@ -463,9 +464,7 @@ class BaseGIAApproximation:
         self.B_mu = ensure_constant(B_mu)
 
     def buoyancy(self, displacement):
-        # Buoyancy term due to the advection of the background density field
-        # written on RHS of equations
-        return self.B_mu * self.g * inner(displacement, grad(self.density))
+        return 0
 
     def rho_continuity(self):
         # StokesSolverBase in stokes_integrators.py currently requires rho_continuity
@@ -488,15 +487,6 @@ class BaseGIAApproximation:
         return 0
 
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
-        return 0
-
-    def compressible_adv_hyd_pre(
-        self, u_r: Function | ufl.core.expr.Expr
-    ) -> ufl.core.expr.Expr:
-        # Hydrostatic prestress advection term which is applied
-        # as a `normal_stress` boundary condition when the `free_surface` tag is
-        # specified in the `bcs` dictionary of the `InternalVariableSolver`
-        # through the `set_free_surface_boundary` method.
         return 0
 
 
@@ -568,9 +558,14 @@ class IncompressibleMaxwellApproximation(BaseGIAApproximation):
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
         return delta_rho_fs * self.g * eta
 
+    def buoyancy(self, displacement):
+        # Buoyancy term due to the advection of the background density field
+        # written on RHS of equations
+        return self.B_mu * self.g * inner(displacement, grad(self.density))
 
-class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
-    '''Quasi compressible viscoelasticty via internal variables
+
+class CompressibleInternalVariableApproximation(BaseGIAApproximation):
+    """Compressible viscoelastic rheology via the internal variable formulation.
 
     This class implements compressible viscoelasticity following the formulation
     adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018), in
@@ -584,17 +579,11 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     and using a series of internal variables permits approximation of a continuous
     range of relaxation timescales for more complicated rheologies.
 
-    This class implements the substitution method where the time-dependent internal
-    variable equation is substituted into the momentum equation assuming a Backward
-    Euler time discretisation. Therefore, the displacement field is the only unknown.
-    For more information regarding the specific implementation in G-ADOPT please see
-    Scott et al. 2025.
-
-    N.b. this class neglects two key terms: compressible buoyancy and the volume
-    integral after integrating the advection of hydrostatic prestress term by parts.
-    This allows us to reproduce simplified analytical cases such as the
-    # Cathles 2024 benchmark in /tests/glacial_isostatic_adjustment/iv_ve_fs.py
-    where we need to remove these effect.
+    N.b. the buoyancy term and hydrostatic prestress advection term are combined to
+    form an explicitly symmetric term, following Eqs. B22-B29 in Appendix B of
+    Al-Attar et al. 2014. The assciated G-ADOPT code for these terms is in
+    gadopt/momentum_equation.py. For more information regarding the specific
+    implementation in G-ADOPT please see Scott et al. 2025.
 
     Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
     based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
@@ -610,15 +599,33 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     Automated forward and adjoint modelling of viscoelastic deformation of the solid
     Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
     Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
-    '''
+
+    Arguments:
+      bulk_modulus:             bulk modulus
+      density:                  background density
+      shear_modulus:            shear modulus
+      viscosity:                viscosity
+      bulk_shear_ratio:         Ratio of bulk to shear modulus
+      g:                        gravitational acceleration
+      B_mu:                     Nondimensional number describing ratio of buoyancy to
+                                elastic shear strength used for nondimensionalisation.
+                                $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                                where $\bar{\rho}$ is a characteristic density scale
+                                (kg / m^3), $\bar{g}$ is a characteristic gravity
+                                scale (m / s^2), $L$ is a characteristic length scale,
+                                often Mantle depth (m), $\\mu$ is a characteristic
+                                shear modulus (Pa).
+
+    """
+
     compressible = True
 
     def __init__(
         self,
         bulk_modulus: Function | Number,
         density: Function | Number,
-        shear_modulus: Function | Number | list,
-        viscosity: Function | Number | list,
+        shear_modulus: Function | Number | list[Function | Number],
+        viscosity: Function | Number | list[Function | Number],
         *,
         bulk_shear_ratio: Function | Number = 1,
         **kwargs,
@@ -680,6 +687,50 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
             stress -= 2 * mu * m
         return stress
 
+
+class AsymmetricQuasiCompressibleInternalVariableApproximation(CompressibleInternalVariableApproximation):
+    '''Quasi compressible viscoelasticty via internal variables
+
+    N.b. this class neglects two key terms: compressible buoyancy and the volume
+    integral after integrating the advection of hydrostatic prestress term by parts.
+    This allows us to reproduce simplified analytical cases such as the
+    # Cathles 2024 benchmark in /tests/glacial_isostatic_adjustment/iv_ve_fs.py
+    where we need to remove these effects.
+
+    # Using this class leads to an asymmetric form of the governing equations. For the (default)
+    # symmetric formulation please see `CompressibleInternalVariableApproximation`.
+
+    Incompressible materials can be approximated by setting `bulk_shear_ratio` to
+    a sufficiently high number ~100 to 1000, though this may affect solver robustness.
+
+    '''
+    compressible = True
+    assymetric = True  # Using this class leads to an asymmetric form of the governing equations
+
+    def __init__(
+        self,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number | list,
+        viscosity: Function | Number | list,
+        *,
+        bulk_shear_ratio: Function | Number = 1,
+        **kwargs,
+    ):
+        super().__init__(
+            bulk_modulus,
+            density,
+            shear_modulus,
+            viscosity,
+            bulk_shear_ratio=bulk_shear_ratio,
+            **kwargs,
+        )
+
+    def buoyancy(self, displacement):
+        # Buoyancy term due to the advection of the background density field
+        # written on RHS of equations
+        return self.B_mu * self.g * inner(displacement, grad(self.density))
+
     def hydrostatic_prestress_advection(
         self, u_r: Function | ufl.core.expr.Expr
     ) -> ufl.core.expr.Expr:
@@ -689,45 +740,33 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
         # through the `set_free_surface_boundary` method.
         return self.B_mu * self.density * self.g * u_r
 
+    def compressible_adv_hyd_pre(
+        self, u_r: Function | ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
+        # Compressible part of hydrostatic prestress advection after integration
+        # by parts. Usually this term is included but in some cases e.g. to
+        # reproduce simplified analytical cases such as the Cathles 2024 benchmark
+        # in /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
+        # this effect.
+        return 0
 
-class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariableApproximation):
-    """Compressible viscoelastic rheology via the internal variable formulation.
 
+class AsymmetricCompressibleInternalVariableApproximation(AsymmetricQuasiCompressibleInternalVariableApproximation):
+    '''Quasi compressible viscoelasticty via internal variables
 
-    N.b. this class includes the two additional terms neglected in the
-    `QuasiCompressibleInternalVariableApproximation`: compressible buoyancy and the
-    volume integral after integrating the advection of hydrostatic prestress term by
-    parts.
+    # Using this class leads to an asymmetric form of the governing equations. For the (default)
+    # symmetric formulation please see `CompressibleInternalVariableApproximation`.
 
-    For more information on the methodology and references please see the
-    documentation of the parent class.
-
-    Arguments:
-      bulk_modulus:             bulk modulus
-      density:                  background density
-      shear_modulus:            shear modulus
-      viscosity:                viscosity
-      bulk_shear_ratio:         Ratio of bulk to shear modulus
-      g:                        gravitational acceleration
-      B_mu:                     Nondimensional number describing ratio of buoyancy to
-                                elastic shear strength used for nondimensionalisation.
-                                $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
-                                where $\bar{\rho}$ is a characteristic density scale
-                                (kg / m^3), $\bar{g}$ is a characteristic gravity
-                                scale (m / s^2), $L$ is a characteristic length scale,
-                                often Mantle depth (m), $\\mu$ is a characteristic
-                                shear modulus (Pa).
-
-    """
-
+    '''
     compressible = True
+    assymetric = True  # Using this class leads to an asymmetric form of the governing equations
 
     def __init__(
         self,
         bulk_modulus: Function | Number,
         density: Function | Number,
-        shear_modulus: Function | Number | list[Function | Number],
-        viscosity: Function | Number | list[Function | Number],
+        shear_modulus: Function | Number | list,
+        viscosity: Function | Number | list,
         *,
         bulk_shear_ratio: Function | Number = 1,
         **kwargs,

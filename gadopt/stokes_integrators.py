@@ -789,8 +789,13 @@ class InternalVariableSolver(StokesSolverBase):
         stress = self.approximation.stress(
             self.solution, internal_variables=self.internal_variables_update
         )
-        #source = self.approximation.buoyancy(self.solution) * self.k
-        source = 0 * self.k
+
+        if self.approximation.__class__.__name__ == "QuasiCompressibleInternalVariableApproximation":
+            source = self.approximation.buoyancy(self.solution) * self.k
+        else:
+            # Fully compressible case already accounts for buoyancy term in
+            # combined_hpsa_buoy_term in momentum_equation.py
+            source = 0 * self.k
 
         eq_attrs = {"stress": stress, "source": source}
 
@@ -810,14 +815,18 @@ class InternalVariableSolver(StokesSolverBase):
         self, params_fs: dict[str, int | bool], bc_id: int
     ) -> Expr:
         normal_stress = params_fs.get("normal_stress", 0.0)
-        # Add free surface stress term. This is also referred to as the Hydrostatic
-        # Prestress advection term in the GIA literature.
-        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
-            vertical_component(self.solution)
-        )
 
-        return normal_stress #combined_normal_stress
-#        return combined_normal_stress
+        if self.approximation.__class__.__name__ == "QuasiCompressibleInternalVariableApproximation":
+            # Add free surface stress feedback from hydrostatic prestress advection term that has been
+            # integrated by parts.
+            combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
+                vertical_component(self.solution)
+            )
+            return combined_normal_stress
+        else:
+            # Fully compressible case already accounts for this term in combined_hpsa_buoy_term
+            # in momentum_equation.py.
+            return normal_stress
 
     def update_m(
         self, m: fd.Function, maxwell_time: fd.Function | Expr

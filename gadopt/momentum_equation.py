@@ -204,7 +204,6 @@ def advection_hydrostatic_prestress_term(
     rho0 = eq.approximation.density
     g = eq.approximation.g
     u_r = vertical_component(trial)
-    '''
     # Only include jump term for discontinuous density spaces
     if is_continuous(rho0.function_space()):
         F = 0
@@ -222,7 +221,19 @@ def advection_hydrostatic_prestress_term(
     # so we neglect this term but keep the free surface term that accounts for
     # viscous feedback at isostatic equibrium
     F -= div(eq.test) * eq.approximation.compressible_adv_hyd_pre(u_r) * eq.dx
-    '''
+
+    return -F
+
+
+def combined_ahps_buoy_term(
+    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+) -> Form:
+    # Combined advection of hydrostatic prestress term and buoyancy
+    # into an explicitly symmetric form
+    B_mu = eq.approximation.B_mu
+    rho0 = eq.approximation.density
+    g = eq.approximation.g
+    u_r = vertical_component(trial)
     
     grad_phi = g * upward_normal(eq.mesh)
 
@@ -245,13 +256,15 @@ momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
 advection_hydrostatic_prestress_term.required_attrs = set()
 advection_hydrostatic_prestress_term.optional_attrs = set()
+combined_ahps_buoy_term.required_attrs = set()
+combined_ahps_buoy_term.optional_attrs = set()
 
 momentum_terms = [momentum_source_term, pressure_gradient_term, viscosity_term]
 mass_terms = divergence_term
 stokes_terms = [momentum_terms, mass_terms]
 
 compressible_viscoelastic_terms = [
-    advection_hydrostatic_prestress_term,
+    combined_ahps_buoy_term,
     momentum_source_term,
     viscosity_term,
 ]
