@@ -1,4 +1,4 @@
-cases := analytical_comparisons multi_material optimisation_checkpointing scalar_advection scalar_advection_DG scalar_advection_diffusion Drucker-Prager_rheology adjoint 2d_cylindrical_TALA_DG viscoplastic_case_DG free_surface viscoelastic base_gmsh viscoelastic_internalvariable 3d_weerdesteijn 3d_spada 3d_sphere_burgers
+cases := analytical_comparisons multi_material optimisation_checkpointing scalar_advection scalar_advection_DGlim scalar_advection_diffusion Drucker-Prager_rheology adjoint 2d_cylindrical_TALA_DG viscoplastic_case_DG free_surface viscoelastic base_gmsh viscoelastic_internalvariable 3d_weerdesteijn 3d_spada 3d_sphere_burgers
 long_cases := analytical_comparisons parallel_scaling adjoint_2d_cylindrical
 
 .PHONY: all longtest longtest_output $(cases) $(long_cases) clean check longcheck
