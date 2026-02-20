@@ -8,5 +8,5 @@ deps = [
         "notebook": "2d_cylindrical_lvv.ipynb",
     },
 ]
-outputs = ["functional.txt"]
+outputs = ["functional.txt", "taylor_test_minconv.txt"]
 pytest = "local"

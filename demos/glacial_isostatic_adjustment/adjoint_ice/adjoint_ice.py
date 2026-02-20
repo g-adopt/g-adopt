@@ -513,6 +513,7 @@ updated_out_file = VTKFile("updated_out.pvd")
 
 final_target_displacement = forward_checkpoint.load_function(mesh, name="displacement", idx=max_timesteps)
 final_target_velocity = forward_checkpoint.load_function(mesh, name="velocity", idx=max_timesteps)
+forward_checkpoint.close()
 
 functional_values = []
 
