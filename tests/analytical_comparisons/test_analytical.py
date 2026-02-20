@@ -4,13 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import itertools
-import sys
 
-
-# Need to do this in order to have the imports from
-# analytical work in the top-level directory of the repo
-sys.path.insert(0, str(Path(__file__).parent))
-from analytical import cases, get_case  # noqa: E402
+from .analytical import cases, get_case
 
 enabled_cases = {
     "smooth_cylindrical_freeslip": {
