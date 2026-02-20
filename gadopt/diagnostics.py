@@ -10,11 +10,13 @@ from ufl.core.expr import Expr
 from ufl.core.operator import Operator
 from ufl.core.terminal import Terminal
 from mpi4py import MPI
-from functools import cache, cached_property
+from functools import cache, cached_property, partial, _make_key
 
 from firedrake.ufl_expr import extract_unique_domain
 from .utility import CombinedSurfaceMeasure, vertical_component
-from typing import Sequence
+from collections.abc import Sequence
+from typing import Literal
+from collections import defaultdict
 
 __all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics", "GIADiagnostics"]
 
@@ -42,6 +44,145 @@ def get_normal(mesh):
 @cache
 def get_volume(dx):
     return fd.assemble(fd.Constant(1) * dx)
+
+
+@cache
+def extract_functions(func_or_op: Expr) -> set[fd.Function]:
+    """Extract all Firedrake functions associated with a UFL expression.
+
+    This function recursively searches through any UFL expression for Firedrake
+    `Function` objects.
+
+    Args:
+        func_or_op: The UFL expression to search through
+
+    Raises:
+        TypeError: An object that was neither a UFL Operator or UFL Terminal
+        was encountered
+
+    Returns:
+        The set of found Firedrake Functions
+    """
+    if isinstance(func_or_op, fd.Function):
+        return {func_or_op}
+    elif isinstance(func_or_op, Operator):
+        funcs = set()
+        for f in func_or_op.ufl_operands:
+            funcs |= extract_functions(f)
+        return funcs
+    elif isinstance(func_or_op, Terminal):
+        # Some other UFL object
+        return set()
+    else:
+        raise TypeError("Invalid type")
+
+
+def ts_cache(
+    _func=None,
+    *,
+    input_funcs: str | Sequence[str] | None = None,
+    make_key=partial(_make_key, typed=False),
+):
+    """Cache the results of a diagnostic function on a per-timestep basis
+
+    This function creates a decorator that caches the results of any diagnostic
+    function found in a BaseDiagnostic object (or any subclass thereof) for as long
+    as the underlying Firedrake functions remain unmodified. The modification of
+    Firedrake functions is tracked by the `dat_version` attribute of the `dat` object
+    which is based on the 'state' of the underlying PETSc object (see e.g.
+    https://petsc.org/release/manualpages/Sys/PetscObjectStateGet/). Pyop2 also
+    maintains a similar counter for non-PETSc objects.
+
+    The purpose of this decorator is to allow multiple calls to the same diagnostic
+    function within a timestep to reuse already computed quantities (e.g. Nusselt
+    numbers on top/bottom boundaries in energy conservation calculations) or for
+    underlying diagnostic algorithms to calculate multiple diagnostics at once when
+    it is efficient to do so (e.g. min/max field values - in large parallel applications
+    small reductions are dominated by network communication time, so it costs almost no
+    extra calculate both the minimum and maximum value of the same field
+    simultaneously).
+
+    Args:
+        _func (optional):
+            Used to determine if the decorator is being called with or without
+            parentheses.
+        input_funcs (optional):
+            A string or Sequence of strings of Firedrake functions that the cached
+            results depend on. The decorator will automatically detect Firedrake
+            functions in its arguments, this allows custom diagnostics that do not
+            take functions as arguments to correctly track dependent functions.
+            Default behaviour is to track automatically detected functions only.
+        make_key (optional):
+            A function to turn *args and **kwargs into a valid  dictionary key.
+            Defaults to the same method used by functools.cache with typed=False.
+
+    Raises:
+        TypeError:
+            The decorator has been used on an object that is not a G-ADOPT
+            BaseDiagnostic object
+            An attribute specified in `input_funcs` is not a Firedrake function
+
+        AttributeError:
+            The BaseDiagnostic object does not have an attribute named in the
+            `input_funcs` argument.
+    """
+
+    def ts_cache_decorator(diag_func):
+        cache = {}
+        funcs = defaultdict(set)
+        object_state = defaultdict(lambda: defaultdict(lambda: int(-1)))
+        check_funcs = set()
+        if input_funcs is not None:
+            check_funcs |= set(
+                (input_funcs,) if isinstance(input_funcs, str) else input_funcs
+            )
+
+        def wrapper(*args, **kwargs):
+            key = make_key(args, kwargs)
+            if key not in cache:
+                # Do all sanity checking on the first call to the decorator
+                if len(args) == 0 or not isinstance(args[0], BaseDiagnostics):
+                    raise TypeError(
+                        "This decorator can only be used on G-ADOPT Diagnostics functions"
+                    )
+                # Find all Firedrake functions in the arguments to this decorator
+                for arg in args[1:]:
+                    if isinstance(arg, Expr):
+                        funcs[key] |= extract_functions(arg)
+                for arg in kwargs.values():
+                    if isinstance(arg, Expr):
+                        funcs[key] |= extract_functions(arg)
+                # Add any functions that were specified in the arguments to the
+                # decorator factory
+                for f in check_funcs:
+                    if hasattr(args[0], f):
+                        func = getattr(args[0], f)
+                    else:
+                        raise AttributeError(
+                            f"No function named {f} found registered to this diagnostic object"
+                        )
+                    if not isinstance(func, fd.Function):
+                        raise TypeError(
+                            f"This diagnostic object has an attribute named {f} but it is not a Firedrake function"
+                        )
+                    funcs[key].add(func)
+            if (
+                any(object_state[key][f] != f.dat.dat_version for f in funcs[key])
+                or not funcs[key]
+            ):
+                cache[key] = diag_func(*args, **kwargs)
+                for f in funcs[key]:
+                    object_state[key][f] = f.dat.dat_version
+            return cache[key]
+
+        return wrapper
+
+    # See if we're being called as @ts_cache or @ts_cache().
+    if _func is None:
+        # We're called with parens.
+        return ts_cache_decorator
+    # We're called as @ts_cache without parens.
+    return ts_cache_decorator(_func)
 
 
 class FunctionContext:
@@ -268,35 +409,6 @@ class BaseDiagnostics:
     #            Generally intended for internal use only, though can be used to
     #            cache common UFL expressions (e.g. get_upward_component)
     #
-    @cache
-    def _extract_functions(self, func_or_op: Expr) -> set[fd.Function]:
-        """Extract all Firedrake functions associated with a UFL expression.
-
-        This function recursively searches through any UFL expression for Firedrake
-        `Function` objects.
-
-        Args:
-            func_or_op: The UFL expression to search through
-
-        Raises:
-            TypeError: An object that was neither a UFL Operator or UFL Terminal
-            was encountered
-
-        Returns:
-            The set of found Firedrake Functions
-        """
-        if isinstance(func_or_op, fd.Function):
-            return {func_or_op}
-        elif isinstance(func_or_op, Operator):
-            funcs = set()
-            for f in func_or_op.ufl_operands:
-                funcs |= self._extract_functions(f)
-            return funcs
-        elif isinstance(func_or_op, Terminal):
-            # Some other UFL object
-            return set()
-        else:
-            raise TypeError("Invalid type")
 
     @cache
     def _check_present(self, func_or_op: Expr) -> None:
@@ -313,7 +425,7 @@ class BaseDiagnostics:
             KeyError: The functions associated with the expression were not found in
             this instance.
         """
-        for func in self._extract_functions(func_or_op):
+        for func in extract_functions(func_or_op):
             if func not in self._function_contexts:
                 raise KeyError(
                     f"Function {func} is not present in this diagnostic object"
@@ -373,7 +485,7 @@ class BaseDiagnostics:
             volume measure.
         """
         self._check_boundary_id(func_or_op, boundary_id)
-        for func in self._extract_functions(func_or_op):
+        for func in extract_functions(func_or_op):
             self._check_present(func)
             if boundary_id is None:
                 return self._function_contexts[func].dx
@@ -405,7 +517,7 @@ class BaseDiagnostics:
 
         if op not in self._function_contexts:
             target_shape = op.ufl_shape
-            for func in self._extract_functions(op):
+            for func in extract_functions(op):
                 if func.ufl_shape == target_shape:
                     fs = self._function_contexts[func].function_space
                     break
@@ -413,7 +525,7 @@ class BaseDiagnostics:
                 # The choice of function space isn't critically important, however we
                 # want the basic element to match whatever the input space was. If
                 # we've fallen through to here, use the last func to come out of
-                # `_extract_functions` as our starting point. If the FunctionSpace
+                # `extract_functions` as our starting point. If the FunctionSpace
                 # element is not scalar, reduce it to a scalar element. When a given
                 # scalar element is passed into VectorFunctionSpace or TensorFunction
                 # space, Firedrake will automatically construct the necessary
@@ -464,12 +576,13 @@ class BaseDiagnostics:
     #            Shared implementations for user-facing functions go here
     #
 
+    @ts_cache
     def _minmax(
         self,
         func_or_op: fd.Function | Operator,
         boundary_id: Sequence[int | str] | int | str | None = None,
         dim: int | None = None,
-    ) -> np.ndarray[float, float]:
+    ) -> np.ndarray[tuple[Literal[2]], np.dtype[np.float64]]:
         """Calculate the minimum and maximum value of a Firedrake function
 
         Use the `dat.dat_ro` object of a Firedrake function to extract the values
@@ -540,6 +653,7 @@ class BaseDiagnostics:
         """
         return -self._minmax(func_or_op, boundary_id, dim)[1]
 
+    @ts_cache
     def integral(
         self,
         f: fd.Function,
@@ -560,6 +674,7 @@ class BaseDiagnostics:
         measure = self._get_measure(f, boundary_id)
         return fd.assemble(f * measure)
 
+    @ts_cache
     def l1norm(
         self, f: fd.Function, boundary_id: Sequence[int | str] | int | str | None = None
     ) -> float:
@@ -578,6 +693,7 @@ class BaseDiagnostics:
         measure = self._get_measure(f, boundary_id)
         return fd.assemble(abs(f) * measure)
 
+    @ts_cache
     def l2norm(
         self, f: fd.Function, boundary_id: Sequence[int | str] | int | str | None = None
     ) -> float:
@@ -596,6 +712,7 @@ class BaseDiagnostics:
         measure = self._get_measure(f, boundary_id)
         return fd.sqrt(fd.assemble(fd.dot(f, f) * measure))
 
+    @ts_cache
     def rms(self, f: fd.Function) -> float:
         """Calculate the RMS of a function over the domain associated with it
 
@@ -664,6 +781,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
     def u_rms_top(self) -> float:
         return self.l2norm(self.u, self.top_id)
 
+    @ts_cache(input_funcs=["T"])
     def Nu_top(self, scale: float = 1.0):
         return (
             -scale
@@ -674,6 +792,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
             / self._function_contexts[self.T].surface_area(self.top_id)
         )
 
+    @ts_cache(input_funcs="T")
     def Nu_bottom(self, scale: float = 1.0):
         return (
             scale
