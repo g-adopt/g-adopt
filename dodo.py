@@ -118,7 +118,7 @@ def hpcrun_command(cfg: CaseMetaDict) -> str:
     return f"{hpcrun_command}python3 {entrypoint} {args}"
 
 
-def mpi_command(cfg: CaseMetaDict) -> str:
+def mpi_command(name: str, cfg: CaseMetaDict) -> str:
     """Retrieve the run command for a `run_case` task.
 
     This uses 4 properties from the meta dictionary:
@@ -133,6 +133,7 @@ def mpi_command(cfg: CaseMetaDict) -> str:
     cause the step to be executed immediately.
 
     Args:
+      name: The name of the case for tagging in tsp.
       cfg: Meta dictionary for a step.
 
     Returns:
@@ -153,7 +154,7 @@ def mpi_command(cfg: CaseMetaDict) -> str:
 
     tsp_command = ""
     if batch_mode == "YES" and cfg.get("use_tsp", True):
-        tsp_command = f"tsp -N {cores} -f "
+        tsp_command = f"tsp -N {cores} -f -L '{name}' "
 
     return f"{tsp_command}{mpi_command}python3 {entrypoint} {args}"
 
@@ -259,7 +260,7 @@ def make_run_task(
             case "hpc":
                 actions.append(CmdAction((hpcrun_command, [cfg], {}), cwd=case_dir))
             case None:
-                actions.append(CmdAction((mpi_command, [cfg], {}), cwd=case_dir))
+                actions.append(CmdAction((mpi_command, [name, cfg], {}), cwd=case_dir))
 
     for dep in cfg.get("deps", []):
         if "artifact" in dep:
