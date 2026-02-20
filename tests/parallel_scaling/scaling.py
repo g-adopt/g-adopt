@@ -41,7 +41,7 @@ def get_data(level, base_path=None):
     data = {}
 
     iteration_component_map = {
-        "ImplicitMidpoint-Equation_stage0_": "energy",
+        "ImplicitMidpoint-Equation_": "energy",
         "Stokes_fieldsplit_0_": "velocity",
         "Stokes_fieldsplit_1_": "pressure",
     }
@@ -54,7 +54,10 @@ def get_data(level, base_path=None):
 
     with open(output_path, "r") as f:
         for line in f:
-            if m := re.match(r"\s+Linear (\S+) solve converged due to CONVERGED_RTOL iterations (\d+)", line):
+            if m := re.match(
+                r"\s+Linear (\S+) solve converged due to CONVERGED_RTOL iterations (\d+)",
+                line,
+            ):
                 iterations[iteration_component_map[m.group(1)]].append(int(m.group(2)))
 
     for k, v in iterations.items():
@@ -82,35 +85,18 @@ def get_data(level, base_path=None):
     return data
 
 
-def run_subcommand(args):
-    from stokes_cubed_sphere import model
-
-    layers = cases[args.level]["layers"]
-    timestep = cases[args.level]["timestep"]
-    model(args.level, layers, timestep, steps=args.steps)
-
-
-def get_ncpus_subcommand(args):
-    print(cases[args.level]["cores"])
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="scaling",
         description="Run/submit parallel scaling test case",
     )
-    subparsers = parser.add_subparsers(title="subcommands")
-
-    parser_run = subparsers.add_parser(
-        "run", help="run a specific configuration of a case (usually not manually invoked)"
-    )
-    parser_run.add_argument("level", type=int)
-    parser_run.add_argument("-n", "--steps", type=int, help="number of timesteps to run")
-    parser_run.set_defaults(func=run_subcommand)
-    parser_submit = subparsers.add_parser("get_ncpus", help="get core count for a specific configuration")
-    parser_submit.add_argument("level", type=int)
-    parser_submit.set_defaults(func=get_ncpus_subcommand)
-
+    parser.add_argument("level", type=int)
+    parser.add_argument("-n", "--steps", type=int, help="number of timesteps to run")
     args = parser.parse_args()
 
-    args.func(args)
+    # Prevent importing all of firedrake when scanning for tests
+    from stokes_cubed_sphere import model
+
+    layers = cases[args.level]["layers"]
+    timestep = cases[args.level]["timestep"]
+    model(args.level, layers, timestep, steps=args.steps)

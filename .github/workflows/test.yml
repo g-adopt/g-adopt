@@ -162,10 +162,9 @@ jobs:
           tsp --timeout -T 7200
           tsp --memprof
           . .venv/bin/activate
-          make -j test
+          uv run doit run --process $(nproc --all) --continue --always-execute run_case || true
         env:
           GADOPT_LOGLEVEL: INFO
-          BATCH_MODE: 1
 
       - name: Pytest
         id: run_pytest
