@@ -1192,7 +1192,8 @@ class LithosphereConnector(IndicatorConnector):
             cloud.add_property(self.config.property_name, np.asarray(values))
         elif isinstance(data, (int, float)):
             from gtrack.mesh import create_sphere_mesh_latlon
-            latlon = create_sphere_mesh_latlon(self.config.n_points)
+            lats, lons = create_sphere_mesh_latlon(self.config.n_points)
+            latlon = np.column_stack([lats, lons])
             cloud = PointCloud.from_latlon(latlon)
             cloud.add_property(self.config.property_name, np.full(len(latlon), float(data)))
         else:
@@ -1622,7 +1623,8 @@ class CratonConnector(IndicatorConnector):
             cloud.add_property(self.config.property_name, np.asarray(values))
         elif isinstance(data, (int, float)):
             from gtrack.mesh import create_sphere_mesh_latlon
-            latlon = create_sphere_mesh_latlon(self.config.n_points)
+            lats, lons = create_sphere_mesh_latlon(self.config.n_points)
+            latlon = np.column_stack([lats, lons])
             cloud = PointCloud.from_latlon(latlon)
             cloud.add_property(self.config.property_name, np.full(len(latlon), float(data)))
         else:
