@@ -146,6 +146,12 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
         # Initialise as a Firedrake Function
         super().__init__(function_space, *args, **kwargs)
 
+        # When gplates_connector is None (e.g. during adjoint perturbations via
+        # _ad_mul/_ad_add, or when Firedrake internally creates subfunctions),
+        # skip all the plate reconstruction setup.
+        if gplates_connector is None:
+            return
+
         # Set the class name required by SolverConfigurationMixin
         self._class_name = self.__class__.__name__
 
@@ -260,6 +266,16 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
         self.dat.data_wo_with_halos[self.dbc.nodes, :] = (
             self.tangential_velocity.dat.data_ro_with_halos[self.dbc.nodes, :]
         )
+
+    def _ad_mul(self, other):
+        r = GplatesVelocityFunction(self.function_space())
+        r.assign(other * self)
+        return r
+
+    def _ad_add(self, other):
+        r = GplatesVelocityFunction(self.function_space())
+        fd.Function.assign(r, self + other)
+        return r
 
 
 class pyGplatesConnector(object):
@@ -1977,19 +1993,38 @@ class GplatesScalarFunction(fd.Function):
         """Update indicator field for given non-dimensional time.
 
         Delegates to indicator_connector.get_indicator() which handles:
-        - Time caching (skip if time hasn't changed significantly)
         - Data loading and gtrack operations
         - Interpolation to mesh coordinates
         - Smooth indicator computation
 
+        Only updates and creates a new block variable when the reconstruction
+        age has changed beyond delta_t. This mirrors GplatesVelocityFunction's
+        approach: within a delta_t window, the same block variable is reused
+        so adjoint sensitivities accumulate correctly.
+
         Args:
             ndtime: Non-dimensional time.
         """
+        connector = self.indicator_connector
+        age = connector.ndtime2age(ndtime)
+
+        if connector.reconstruction_age is not None:
+            if abs(age - connector.reconstruction_age) < connector.delta_t:
+                return
+
         with stop_annotating():
-            values = self.indicator_connector.get_indicator(
-                self.mesh_coords, ndtime
-            )
+            values = connector.get_indicator(self.mesh_coords, ndtime)
             self.dat.data_with_halos[:] = values
 
         if annotate_tape():
             self.create_block_variable()
+
+    def _ad_mul(self, other):
+        r = GplatesScalarFunction(self.function_space())
+        r.assign(other * self)
+        return r
+
+    def _ad_add(self, other):
+        r = GplatesScalarFunction(self.function_space())
+        fd.Function.assign(r, self + other)
+        return r
