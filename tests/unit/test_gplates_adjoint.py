@@ -17,7 +17,6 @@ from firedrake.adjoint import *
 from pyadjoint.tape import (
     get_working_tape, set_working_tape, Tape,
     continue_annotation, pause_annotation,
-    annotate_tape, stop_annotating,
 )
 
 from gadopt.gplates import (
