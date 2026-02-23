@@ -491,15 +491,6 @@ class BaseGIAApproximation:
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         return 0
 
-    def compressible_adv_hyd_pre(
-        self, u_r: Function | ufl.core.expr.Expr
-    ) -> ufl.core.expr.Expr:
-        # Hydrostatic prestress advection term which is applied
-        # as a `normal_stress` boundary condition when the `free_surface` tag is
-        # specified in the `bcs` dictionary of the `InternalVariableSolver`
-        # through the `set_free_surface_boundary` method.
-        return 0
-
 
 class IncompressibleMaxwellApproximation(BaseGIAApproximation):
     """Incompressible Maxwell rheology via the incremental displacement formulation.
@@ -570,8 +561,8 @@ class IncompressibleMaxwellApproximation(BaseGIAApproximation):
         return delta_rho_fs * self.g * eta
 
 
-class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
-    '''Quasi compressible viscoelasticty via internal variables
+class InternalVariableApproximation(BaseGIAApproximation):
+    '''Base class for viscoelastic stress relaxation via internal variables.
 
     This class implements compressible viscoelasticity following the formulation
     adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018), in
@@ -585,17 +576,8 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     and using a series of internal variables permits approximation of a continuous
     range of relaxation timescales for more complicated rheologies.
 
-    This class implements the substitution method where the time-dependent internal
-    variable equation is substituted into the momentum equation assuming a Backward
-    Euler time discretisation. Therefore, the displacement field is the only unknown.
     For more information regarding the specific implementation in G-ADOPT please see
     Scott et al. 2025.
-
-    N.b. this class neglects two key terms: compressible buoyancy and the volume
-    integral after integrating the advection of hydrostatic prestress term by parts.
-    This allows us to reproduce simplified analytical cases such as the
-    # Cathles 2024 benchmark in /tests/glacial_isostatic_adjustment/iv_ve_fs.py
-    where we need to remove these effect.
 
     Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
     based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
@@ -611,6 +593,7 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     Automated forward and adjoint modelling of viscoelastic deformation of the solid
     Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
     Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
+
     '''
     compressible = True
 
@@ -681,27 +664,65 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
             stress -= 2 * mu * m
         return stress
 
+
+class QuasiCompressibleInternalVariableApproximation(InternalVariableApproximation):
+    '''Quasi compressible viscoelasticty via internal variables
+
+    N.b. this class neglects two key terms: compressible buoyancy and the volume
+    integral after integrating the advection of hydrostatic prestress term by parts.
+    This allows us to reproduce simplified analytical cases such as the
+    Cathles 2024 benchmark in `g-adopt/test/viscoelastic_internal_variable/`
+    where these terms are not accounted for in the analytical solution.
+
+    For more information on the formulation see the documentation of the parent class
+    `InternalVariableApproximation`
+    '''
+    compressible = True
+
+    def __init__(
+        self,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number | list[Function | Number],
+        viscosity: Function | Number | list[Function | Number],
+        *,
+        bulk_shear_ratio: Function | Number = 1,
+        **kwargs,
+    ):
+
+        warn(
+            '''The QuasiCompressibleInternalVariableApproximation has specifically
+            been designed to reproduce the simplified analytical benchmarks of
+            Cathles 2024, e.g. see `g-adopt/tests/viscoelastic_internal_variable`.
+            We recommend using `MaxwellApproximation` together with the
+            `InternalVariableSolver` for viscoelastic applications in G-ADOPT.
+        ''')
+
+        super().__init__(
+            bulk_modulus,
+            density,
+            shear_modulus,
+            viscosity,
+            bulk_shear_ratio=bulk_shear_ratio,
+            **kwargs,
+        )
+
     def hydrostatic_prestress_advection(
         self, u_r: Function | ufl.core.expr.Expr
     ) -> ufl.core.expr.Expr:
-        # Hydrostatic prestress advection term which is applied
-        # as a `normal_stress` boundary condition when the `free_surface` tag is
-        # specified in the `bcs` dictionary of the `InternalVariableSolver`
-        # through the `set_free_surface_boundary` method.
+        # 'Free-surface' feedback associated with integrating the hydrostatic prestress
+        # advection term by parts. This is applied as a `normal_stress` boundary
+        # condition when the `free_surface` tag is specified in the `bcs` dictionary
+        # of the `InternalVariableSolver` through the `set_free_surface_boundary`
+        # method in `stokes_integrators.py`.
         return self.B_mu * self.density * self.g * u_r
 
 
-class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariableApproximation):
+class CompressibleInternalVariableApproximation(InternalVariableApproximation):
     """Compressible viscoelastic rheology via the internal variable formulation.
 
-
-    N.b. this class includes the two additional terms neglected in the
-    `QuasiCompressibleInternalVariableApproximation`: compressible buoyancy and the
-    volume integral after integrating the advection of hydrostatic prestress term by
-    parts.
-
-    For more information on the methodology and references please see the
-    documentation of the parent class.
+    For more information on the formulation see the documentation of the parent class
+    `InternalVariableApproximation`.
 
     Arguments:
       bulk_modulus:             bulk modulus
@@ -733,6 +754,7 @@ class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariabl
         bulk_shear_ratio: Function | Number = 1,
         **kwargs,
     ):
+
         super().__init__(
             bulk_modulus,
             density,
@@ -743,25 +765,20 @@ class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariabl
         )
 
     def buoyancy(self, displacement: Function) -> ufl.core.expr.Expr:
-        # Compressible part of buoyancy term due to the density perturbation
-        # written on rhs of equations
-        buoyancy = super().buoyancy(displacement)
-        # Usually this term is included but in some cases e.g. to reproduce
-        # simplified analytical cases such as the Cathles 2024 benchmark in
-        # /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
-        # this effect.
-        buoyancy += self.B_mu * self.g * self.density * div(displacement)
-        return buoyancy
+        # The buoyancy term is combined with the advection of hydrostatic prestress
+        # to form an explicitly symmetric term, following Eqs. B22-B29 in
+        # Appendix B of Al-Attar et al. 2014. The associated G-ADOPT code for these
+        # terms is in `gadopt/momentum_equation.py`.
+        return 0
 
-    def compressible_adv_hyd_pre(
+    def hydrostatic_prestress_advection(
         self, u_r: Function | ufl.core.expr.Expr
     ) -> ufl.core.expr.Expr:
-        # Compressible part of hydrostatic prestress advection after integration
-        # by parts. Usually this term is included but in some cases e.g. to
-        # reproduce simplified analytical cases such as the Cathles 2024 benchmark
-        # in /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
-        # this effect.
-        return self.hydrostatic_prestress_advection(u_r)
+        # The advection of hydrostatic prestress term is combined with the buoyancy
+        # to form an explicitly symmetric term, following Eqs. B22-B29 in
+        # Appendix B of Al-Attar et al. 2014. The associated G-ADOPT code for these
+        # terms is in `gadopt/momentum_equation.py`.
+        return 0
 
 
 class MaxwellApproximation(CompressibleInternalVariableApproximation):
