@@ -169,7 +169,7 @@ def momentum_source_term(eq: Equation, trial: Argument | Indexed | Function) -> 
 
 
 def advhydpre_buoy_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     # The advection of hydrostatic prestress and buoyancy terms are combined
     # to form an explicitly symmetric term, following Eqs. B22-B29 in
