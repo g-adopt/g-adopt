@@ -96,3 +96,43 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
         # test symmetry of entire matrix
         M = fd.assemble(fd.derivative(solver.F, z), mat_type='aij')
         assert M.petscmat.isSymmetric(1e-13)
+
+
+def test_internal_variable_symmetry(mesh):
+    """Test symmetry of discretised (viscoelastic) Stokes matrix where expected
+
+    In particular, tests symmetry of weak bc terms."""
+    mesh.cartesian = True
+    V = fd.VectorFunctionSpace(mesh, "CG", 2)
+    S = fd.TensorFunctionSpace(mesh, "DG", 1)
+    DG0 = fd.FunctionSpace(mesh, "DG", 0)
+    u = fd.Function(V)
+    m = fd.Function(S)
+    # use a velocity that's not divergence free, to test symmetry of div(u) terms:
+    X = fd.SpatialCoordinate(mesh)
+    u.interpolate(X)
+    density = fd.Function(DG0).assign(1)
+    approximation = gadopt.MaxwellApproximation(
+        bulk_modulus=1,
+        viscosity=1,
+        shear_modulus=1,
+        B_mu=1.27,
+        density=density)
+    boundary = gadopt.get_boundary_ids(mesh)
+    bids = list(vars(boundary).values())
+    bcs = {bids[0]: {'un': 0}, bids[1]: {'free_surface': {}}}
+    # cylindrical/spherical meshes only have 2 boundaries
+    # if we have more, let's test some more bc types
+    if len(bids) > 2:
+        dim = mesh.geometric_dimension
+        zero_vec = fd.Constant([0] * dim)
+        bcs[bids[2]] = {'stress': zero_vec}
+        # note that we are only testing the weak bc terms here
+        # weak "u" is not actually supported at the moment
+        # (but will need to be for future element pairs)
+        # at the moment type "u" is convert to a strong DirichletBC()
+        bcs[bids[3]] = {'u': zero_vec}
+    solver = gadopt.InternalVariableSolver(u, approximation, dt=1, internal_variables=m, bcs=bcs)
+
+    M = fd.assemble(fd.derivative(solver.F, u), mat_type='aij')
+    assert M.petscmat.isSymmetric(1e-13)
