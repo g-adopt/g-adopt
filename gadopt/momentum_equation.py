@@ -168,7 +168,7 @@ def momentum_source_term(eq: Equation, trial: Argument | Indexed | Function) -> 
     return -dot(eq.test, eq.source) * eq.dx
 
 
-def advhydpre_buoy_term(
+def hydrostatic_prestress_advection_and_buoyancy_term(
     eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
     # The advection of hydrostatic prestress and buoyancy terms are combined
@@ -203,15 +203,15 @@ divergence_term.required_attrs = {"u", "rho_continuity"}
 divergence_term.optional_attrs = set()
 momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
-advhydpre_buoy_term.required_attrs = set()
-advhydpre_buoy_term.optional_attrs = set()
+hydrostatic_prestress_advection_and_buoyancy_term.required_attrs = set()
+hydrostatic_prestress_advection_and_buoyancy_term.optional_attrs = set()
 
 momentum_terms = [momentum_source_term, pressure_gradient_term, viscosity_term]
 mass_terms = divergence_term
 stokes_terms = [momentum_terms, mass_terms]
 
 compressible_viscoelastic_terms = [
-    advhydpre_buoy_term,
+    hydrostatic_prestress_advection_and_buoyancy_term,
     momentum_source_term,
     viscosity_term,
 ]
