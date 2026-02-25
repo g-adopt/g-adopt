@@ -1,9 +1,11 @@
 from pathlib import Path
 
-import analytical
 import numpy as np
 import pandas as pd
 import pytest
+import itertools
+
+from .analytical import cases, get_case
 
 enabled_cases = {
     "smooth_cylindrical_freeslip": {
@@ -45,13 +47,22 @@ longtest_cases = [
 
 params = {
     f"{l1}_{l2}_{l3}": v3
-    for l1, v1 in analytical.cases.items()
+    for l1, v1 in cases.items()
     for l2, v2 in v1.items()
     for l3, v3 in v2.items()
     if f"{l1}_{l2}_{l3}" in enabled_cases.keys()
 }
 
+
+def param_sets(config, permutate=False):
+    if permutate:
+        return itertools.product(*config.values())
+
+    return zip(*config.values())
+
+
 configs = []
+param_sets_list = []
 for name, conf in params.items():
     # these two keys don't form a part of the parameter matrix
     conf = conf.copy()
@@ -59,12 +70,13 @@ for name, conf in params.items():
     conf.pop("levels")
     permutate = conf.pop("permutate", True)
 
-    for combination in analytical.param_sets(conf, permutate):
+    for combination in param_sets(conf, permutate):
         conf_tuple = (name, enabled_cases[name], dict(zip(conf.keys(), combination)))
+        configs.append(conf_tuple)
         if name in longtest_cases:
-            configs.append(pytest.param(*conf_tuple, marks=pytest.mark.longtest))
+            param_sets_list.append(pytest.param(*conf_tuple, marks=pytest.mark.longtest))
         else:
-            configs.append(conf_tuple)
+            param_sets_list.append(conf_tuple)
 
 
 def idfn(val):
@@ -72,9 +84,9 @@ def idfn(val):
         return "-".join([f"{k}{v}" for k, v in val.items()])
 
 
-@pytest.mark.parametrize("name,expected,config", configs, ids=idfn)
+@pytest.mark.parametrize("name,expected,config", param_sets_list, ids=idfn)
 def test_analytical(name, expected, config):
-    levels = analytical.get_case(analytical.cases, name)["levels"]
+    levels = get_case(cases, name)["levels"]
 
     b = Path(__file__).parent.resolve()
 
