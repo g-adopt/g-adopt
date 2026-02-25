@@ -54,7 +54,7 @@ jobs:
 
           uv venv --system-site-packages
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
-          uv pip install git+https://github.com/mesh-adaptation/animate
+          uv pip install --no-build-isolation git+https://github.com/mesh-adaptation/animate
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
