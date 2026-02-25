@@ -340,7 +340,9 @@ def generate_inverse_problem(alpha_T=1.0, alpha_u=-1, alpha_d=-1, alpha_s=-1, ch
             # args[0, 1, 2] are functional, gradient, control
             self.iteration += 1
             self.values.append(args[0])
-            self.derivatives.append(Function(args[1][0].function_space(), name="dJdm").assign(args[1][0]))
+            deriv = args[1][0].riesz_representation("L2")
+            deriv.rename("dJdm")
+            self.derivatives.append(deriv)
             self.controls.append(Function(args[2][0].function_space(), name="m").assign(args[2][0]))
             return args[1]
 

@@ -83,9 +83,9 @@ jobs:
           export GADOPT_RENDER=true
           Xvfb $DISPLAY -screen 0 1024x768x24 > /dev/null 2>&1 &
           sleep 3
-          make -j convert_demos
+          uv run doit run --process $(nproc --all) --always-execute convert
           rm -rf rendered && mkdir rendered
-          tar -xf demos/artifact.tar -C rendered
+          tar -xf artifact.tar -C rendered
         env:
           GADOPT_LOGLEVEL: WARN
       - uses: actions/upload-artifact@v4
