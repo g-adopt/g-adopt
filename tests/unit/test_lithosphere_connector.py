@@ -1,8 +1,8 @@
-"""Tests for LithosphereConnector, CratonConnector, and GplatesScalarFunction.
+"""Tests for LithosphereConnector, PolygonConnector, and GplatesScalarFunction.
 
 These tests verify the indicator connector functionality:
 - LithosphereConnector: oceanic (age-tracked) + continental (back-rotated) data
-- CratonConnector: craton polygon filtering and back-rotation
+- PolygonConnector: polygon filtering and back-rotation
 Both produce smooth 3D indicator fields (~1 in region, ~0 outside).
 """
 
@@ -16,8 +16,12 @@ from gadopt.gplates import (
     IndicatorConnector,
     LithosphereConnector,
     LithosphereConfig,
-    CratonConnector,
-    CratonConfig,
+    LithosphereGeotherm,
+    PolygonConnector,
+    PolygonConfig,
+    PolygonGeotherm,
+    ocean_erf_normalized,
+    continental_linear,
     pyGplatesConnector,
     ensure_reconstruction
 )
@@ -769,17 +773,17 @@ class TestIndicatorConnectorInheritance:
         """Test LithosphereConnector inherits from IndicatorConnector."""
         assert issubclass(LithosphereConnector, IndicatorConnector)
 
-    def test_craton_connector_is_indicator_connector(self):
-        """Test CratonConnector inherits from IndicatorConnector."""
-        assert issubclass(CratonConnector, IndicatorConnector)
+    def test_polygon_connector_is_indicator_connector(self):
+        """Test PolygonConnector inherits from IndicatorConnector."""
+        assert issubclass(PolygonConnector, IndicatorConnector)
 
 
-class TestCratonConfig:
-    """Test CratonConfig dataclass."""
+class TestPolygonConfig:
+    """Test PolygonConfig dataclass."""
 
     def test_default_values(self):
         """Test that default values are set correctly."""
-        config = CratonConfig()
+        config = PolygonConfig()
 
         assert config.n_points == 20000
         assert config.k_neighbors == 50
@@ -792,7 +796,7 @@ class TestCratonConfig:
 
     def test_custom_values(self):
         """Test setting custom values."""
-        config = CratonConfig(
+        config = PolygonConfig(
             n_points=50000,
             transition_width=5.0,
         )
@@ -804,7 +808,7 @@ class TestCratonConfig:
 
     def test_to_dict(self):
         """Test config serialization to dict."""
-        config = CratonConfig(n_points=30000)
+        config = PolygonConfig(n_points=30000)
         d = config.to_dict()
 
         assert isinstance(d, dict)
@@ -815,7 +819,7 @@ class TestCratonConfig:
     def test_from_dict(self):
         """Test config creation from dict."""
         d = {"n_points": 40000, "transition_width": 5.0}
-        config = CratonConfig.from_dict(d)
+        config = PolygonConfig.from_dict(d)
 
         assert config.n_points == 40000
         assert config.transition_width == 5.0
@@ -824,7 +828,7 @@ class TestCratonConfig:
 
     def test_with_overrides(self):
         """Test creating new config with overrides."""
-        base = CratonConfig(n_points=20000)
+        base = PolygonConfig(n_points=20000)
         modified = base.with_overrides({"n_points": 50000, "transition_width": 5.0})
 
         assert modified.n_points == 50000
@@ -836,41 +840,41 @@ class TestCratonConfig:
     def test_validation_n_points(self):
         """Test validation of n_points."""
         with pytest.raises(ValueError, match="n_points must be at least 100"):
-            CratonConfig(n_points=50)
+            PolygonConfig(n_points=50)
 
     def test_validation_k_neighbors(self):
         """Test validation of k_neighbors."""
         with pytest.raises(ValueError, match="k_neighbors must be at least 1"):
-            CratonConfig(k_neighbors=0)
+            PolygonConfig(k_neighbors=0)
 
     def test_validation_distance_threshold(self):
         """Test validation of distance_threshold."""
         with pytest.raises(ValueError, match="distance_threshold must be positive"):
-            CratonConfig(distance_threshold=-0.1)
+            PolygonConfig(distance_threshold=-0.1)
 
     def test_validation_default_thickness(self):
         """Test validation of default_thickness."""
         with pytest.raises(ValueError, match="default_thickness must be non-negative"):
-            CratonConfig(default_thickness=-10.0)
+            PolygonConfig(default_thickness=-10.0)
 
     def test_validation_r_outer(self):
         """Test validation of r_outer."""
         with pytest.raises(ValueError, match="r_outer must be positive"):
-            CratonConfig(r_outer=-1.0)
+            PolygonConfig(r_outer=-1.0)
 
     def test_validation_depth_scale(self):
         """Test validation of depth_scale."""
         with pytest.raises(ValueError, match="depth_scale must be positive"):
-            CratonConfig(depth_scale=0.0)
+            PolygonConfig(depth_scale=0.0)
 
     def test_validation_transition_width(self):
         """Test validation of transition_width."""
         with pytest.raises(ValueError, match="transition_width must be positive"):
-            CratonConfig(transition_width=-5.0)
+            PolygonConfig(transition_width=-5.0)
 
 
-class TestCratonConnectorFunctional:
-    """Functional tests for CratonConnector with real gtrack operations."""
+class TestPolygonConnectorFunctional:
+    """Functional tests for PolygonConnector with real gtrack operations."""
 
     @pytest.fixture
     def gplates_connector(self):
@@ -899,38 +903,38 @@ class TestCratonConnectorFunctional:
             pytest.skip("Craton shapefile not available")
         return str(craton_path)
 
-    def test_craton_connector_creation(self, gplates_connector, craton_shapefile):
-        """Test CratonConnector can be created."""
-        connector = CratonConnector(
+    def test_polygon_connector_creation(self, gplates_connector, craton_shapefile):
+        """Test PolygonConnector can be created."""
+        connector = PolygonConnector(
             gplates_connector=gplates_connector,
-            craton_polygons=craton_shapefile,
-            craton_thickness_data=200.0,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
         )
 
         assert connector.gplates_connector is gplates_connector
         assert connector.config is not None
         assert isinstance(connector, IndicatorConnector)
 
-    def test_craton_connector_with_config(self, gplates_connector, craton_shapefile):
-        """Test CratonConnector with custom config."""
-        config = CratonConfig(n_points=10000, distance_threshold=0.03)
+    def test_polygon_connector_with_config(self, gplates_connector, craton_shapefile):
+        """Test PolygonConnector with custom config."""
+        config = PolygonConfig(n_points=10000, distance_threshold=0.03)
 
-        connector = CratonConnector(
+        connector = PolygonConnector(
             gplates_connector=gplates_connector,
-            craton_polygons=craton_shapefile,
-            craton_thickness_data=200.0,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
             config=config,
         )
 
         assert connector.config.n_points == 10000
         assert connector.config.distance_threshold == 0.03
 
-    def test_craton_connector_time_conversion(self, gplates_connector, craton_shapefile):
+    def test_polygon_connector_time_conversion(self, gplates_connector, craton_shapefile):
         """Test time conversion delegates to gplates_connector."""
-        connector = CratonConnector(
+        connector = PolygonConnector(
             gplates_connector=gplates_connector,
-            craton_polygons=craton_shapefile,
-            craton_thickness_data=200.0,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
         )
 
         # Test round-trip conversion
@@ -940,12 +944,12 @@ class TestCratonConnectorFunctional:
 
         np.testing.assert_allclose(age, age_back, rtol=1e-10)
 
-    def test_craton_get_indicator_returns_correct_shape(self, gplates_connector, craton_shapefile):
+    def test_polygon_get_indicator_returns_correct_shape(self, gplates_connector, craton_shapefile):
         """Test that get_indicator returns array of correct shape."""
-        connector = CratonConnector(
+        connector = PolygonConnector(
             gplates_connector=gplates_connector,
-            craton_polygons=craton_shapefile,
-            craton_thickness_data=200.0,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
             config_extra={"n_points": 5000},  # Smaller for faster test
         )
 
@@ -971,11 +975,11 @@ class TestCratonConnectorFunctional:
         assert indicator.max() <= 1
 
     def test_constant_craton_thickness(self, gplates_connector, craton_shapefile):
-        """Test CratonConnector with a constant craton thickness value."""
-        connector = CratonConnector(
+        """Test PolygonConnector with a constant thickness value."""
+        connector = PolygonConnector(
             gplates_connector=gplates_connector,
-            craton_polygons=craton_shapefile,
-            craton_thickness_data=200.0,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
             config_extra={"n_points": 5000},
         )
 
@@ -1001,10 +1005,10 @@ class TestCratonConnectorFunctional:
 
     def test_craton_indicator_caching(self, gplates_connector, craton_shapefile):
         """Test that results are cached when time doesn't change."""
-        connector = CratonConnector(
+        connector = PolygonConnector(
             gplates_connector=gplates_connector,
-            craton_polygons=craton_shapefile,
-            craton_thickness_data=200.0,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
             config_extra={"n_points": 5000},
         )
 
@@ -1020,7 +1024,7 @@ class TestCratonConnectorFunctional:
         np.testing.assert_array_equal(result1, result2)
 
 
-class TestCratonIndicatorComputation:
+class TestPolygonIndicatorComputation:
     """Test the craton indicator computation logic."""
 
     def test_tanh_transition_at_boundary(self):
@@ -1067,8 +1071,8 @@ class TestCratonIndicatorComputation:
         assert narrow < wide
 
 
-class TestCratonGplatesScalarFunction:
-    """Test GplatesScalarFunction with CratonConnector."""
+class TestPolygonGplatesScalarFunction:
+    """Test GplatesScalarFunction with PolygonConnector."""
 
     @pytest.fixture
     def mesh_and_function_space(self):
@@ -1083,7 +1087,7 @@ class TestCratonGplatesScalarFunction:
 
     @pytest.fixture
     def craton_connector(self):
-        """Create CratonConnector for tests."""
+        """Create PolygonConnector for tests."""
         gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
 
         if not (gplates_data_path / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2").exists():
@@ -1103,15 +1107,15 @@ class TestCratonGplatesScalarFunction:
             static_polygons=muller_files.get("static_polygons"),
         )
 
-        return CratonConnector(
+        return PolygonConnector(
             gplates_connector=gplates_connector,
-            craton_polygons=str(craton_path),
-            craton_thickness_data=200.0,
+            polygons=str(craton_path),
+            thickness_data=200.0,
             config_extra={"n_points": 5000},  # Smaller for faster tests
         )
 
     def test_scalar_function_with_craton_connector(self, mesh_and_function_space, craton_connector):
-        """Test GplatesScalarFunction works with CratonConnector."""
+        """Test GplatesScalarFunction works with PolygonConnector."""
         mesh, Q, rmax = mesh_and_function_space
 
         scalar_func = GplatesScalarFunction(
@@ -1121,7 +1125,7 @@ class TestCratonGplatesScalarFunction:
         )
 
         assert scalar_func.name() == "Craton_Indicator"
-        assert isinstance(scalar_func.indicator_connector, CratonConnector)
+        assert isinstance(scalar_func.indicator_connector, PolygonConnector)
 
     def test_craton_scalar_function_update(self, mesh_and_function_space, craton_connector):
         """Test GplatesScalarFunction.update_plate_reconstruction() with cratons."""
@@ -1134,6 +1138,453 @@ class TestCratonGplatesScalarFunction:
         )
 
         ndtime = craton_connector.age2ndtime(100.0)
+        scalar_func.update_plate_reconstruction(ndtime)
+
+        data = scalar_func.dat.data_ro
+        assert np.all(np.isfinite(data))
+        assert data.min() >= 0
+        assert data.max() <= 1
+
+
+# ---------------------------------------------------------------------------
+# Geotherm function unit tests (no plate model data needed)
+# ---------------------------------------------------------------------------
+
+class TestGeothermFunctions:
+    """Unit tests for default geotherm functions."""
+
+    def test_ocean_erf_surface_is_zero(self):
+        """erf geotherm must return 0 at the surface (depth=0)."""
+        z_lab = np.array([100e3, 50e3, 150e3])
+        depth = np.zeros_like(z_lab)
+        age = np.array([50.0, 100.0, 10.0])
+        result = ocean_erf_normalized(depth, z_lab, age_myr=age, kappa=1e-6)
+        np.testing.assert_allclose(result, 0.0, atol=1e-12)
+
+    def test_ocean_erf_lab_is_one(self):
+        """erf geotherm must return 1 at z = z_lab."""
+        z_lab = np.array([100e3, 50e3, 150e3])
+        depth = z_lab.copy()
+        age = np.array([50.0, 100.0, 10.0])
+        result = ocean_erf_normalized(depth, z_lab, age_myr=age, kappa=1e-6)
+        np.testing.assert_allclose(result, 1.0, atol=1e-6)
+
+    def test_ocean_erf_monotonic(self):
+        """erf geotherm should increase monotonically with depth."""
+        z_lab = 100e3
+        depths = np.linspace(0, z_lab, 50)
+        z_labs = np.full_like(depths, z_lab)
+        ages = np.full_like(depths, 80.0)
+        result = ocean_erf_normalized(depths, z_labs, age_myr=ages, kappa=1e-6)
+        assert np.all(np.diff(result) >= 0)
+
+    def test_ocean_erf_no_age_falls_back_to_linear(self):
+        """Without age, erf geotherm should fall back to linear."""
+        z_lab = np.array([100e3])
+        depth = np.array([50e3])
+        result = ocean_erf_normalized(depth, z_lab, age_myr=None)
+        np.testing.assert_allclose(result, 0.5, atol=1e-6)
+
+    def test_ocean_erf_clipped(self):
+        """erf geotherm should be clipped to [0, 1]."""
+        z_lab = np.array([100e3])
+        depth = np.array([200e3])  # Deeper than LAB
+        age = np.array([80.0])
+        result = ocean_erf_normalized(depth, z_lab, age_myr=age, kappa=1e-6)
+        assert np.all(result <= 1.0)
+        assert np.all(result >= 0.0)
+
+    def test_ocean_erf_young_vs_old(self):
+        """Younger ocean should have steeper profile (thinner boundary layer)."""
+        z_lab = 100e3
+        depth = 50e3  # Half the LAB depth
+        young = ocean_erf_normalized(np.array([depth]), np.array([z_lab]),
+                                     age_myr=np.array([5.0]), kappa=1e-6)
+        old = ocean_erf_normalized(np.array([depth]), np.array([z_lab]),
+                                   age_myr=np.array([200.0]), kappa=1e-6)
+        # Young ocean: steep erf means higher T at mid-depth
+        # Old ocean: erf approaches linear, T at mid-depth ≈ 0.5
+        assert young[0] > old[0]
+
+    def test_continental_linear_surface_is_zero(self):
+        """Linear geotherm must return 0 at the surface."""
+        z_lab = np.array([200e3, 150e3])
+        depth = np.zeros_like(z_lab)
+        result = continental_linear(depth, z_lab)
+        np.testing.assert_allclose(result, 0.0, atol=1e-12)
+
+    def test_continental_linear_lab_is_one(self):
+        """Linear geotherm must return 1 at z = z_lab."""
+        z_lab = np.array([200e3, 150e3])
+        depth = z_lab.copy()
+        result = continental_linear(depth, z_lab)
+        np.testing.assert_allclose(result, 1.0, atol=1e-12)
+
+    def test_continental_linear_midpoint(self):
+        """Linear geotherm should give 0.5 at half-depth."""
+        z_lab = np.array([200e3])
+        depth = np.array([100e3])
+        result = continental_linear(depth, z_lab)
+        np.testing.assert_allclose(result, 0.5, atol=1e-12)
+
+    def test_continental_linear_clipped(self):
+        """Linear geotherm should be clipped to [0, 1]."""
+        z_lab = np.array([100e3])
+        depth = np.array([200e3])
+        result = continental_linear(depth, z_lab)
+        assert np.all(result <= 1.0)
+        assert np.all(result >= 0.0)
+
+    def test_continental_linear_zero_lab(self):
+        """Linear geotherm should handle z_lab=0 gracefully."""
+        z_lab = np.array([0.0])
+        depth = np.array([50e3])
+        result = continental_linear(depth, z_lab)
+        np.testing.assert_allclose(result, 0.0, atol=1e-12)
+
+    def test_geotherm_kwargs_ignored(self):
+        """Both functions should accept and ignore extra kwargs."""
+        depth = np.array([50e3])
+        z_lab = np.array([100e3])
+        # Extra kwargs should not raise
+        ocean_erf_normalized(depth, z_lab, age_myr=np.array([80.0]),
+                             kappa=1e-6, extra_param=42)
+        continental_linear(depth, z_lab, extra_param=42)
+
+
+# ---------------------------------------------------------------------------
+# Geotherm connector functional tests (require plate model data)
+# ---------------------------------------------------------------------------
+
+class TestLithosphereGeothermFunctional:
+    """Functional tests for LithosphereGeotherm."""
+
+    @pytest.fixture
+    def plate_model_with_polygons(self):
+        gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
+        muller_files = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
+        return pyGplatesConnector(
+            rotation_filenames=muller_files["rotation_filenames"],
+            topology_filenames=muller_files["topology_filenames"],
+            oldest_age=200,
+            continental_polygons=muller_files.get("continental_polygons"),
+            static_polygons=muller_files.get("static_polygons"),
+        )
+
+    @pytest.fixture
+    def synthetic_continental_data(self):
+        np.random.seed(42)
+        n_points = 1000
+        phi = np.random.uniform(0, 2*np.pi, n_points)
+        theta = np.arccos(np.random.uniform(-1, 1, n_points))
+        lat = 90 - np.degrees(theta)
+        lon = np.degrees(phi) - 180
+        thickness = 150 + 100 * np.random.rand(n_points)
+        return (np.column_stack([lat, lon]), thickness)
+
+    def test_creation(self, plate_model_with_polygons, synthetic_continental_data):
+        """LithosphereGeotherm should be creatable and is an IndicatorConnector."""
+        connector = LithosphereGeotherm(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_continental_data,
+            age_to_property=half_space_cooling,
+        )
+        assert isinstance(connector, LithosphereConnector)
+        assert isinstance(connector, IndicatorConnector)
+
+    def test_custom_geotherm(self, plate_model_with_polygons, synthetic_continental_data):
+        """LithosphereGeotherm should accept custom geotherm function."""
+        connector = LithosphereGeotherm(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_continental_data,
+            age_to_property=half_space_cooling,
+            geotherm=continental_linear,
+        )
+        assert connector._geotherm is continental_linear
+
+    def test_get_indicator_returns_correct_shape(self, plate_model_with_polygons, synthetic_continental_data):
+        """Output must match target coordinate count with values in [0, 1]."""
+        connector = LithosphereGeotherm(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_continental_data,
+            age_to_property=half_space_cooling,
+            config_extra={"k_neighbors": 10},
+        )
+
+        n_targets = 100
+        np.random.seed(123)
+        phi = np.random.uniform(0, 2*np.pi, n_targets)
+        theta = np.arccos(np.random.uniform(-1, 1, n_targets))
+        r = np.linspace(1.208, 2.208, n_targets)
+        target_coords = np.column_stack([
+            r * np.sin(theta) * np.cos(phi),
+            r * np.sin(theta) * np.sin(phi),
+            r * np.cos(theta)
+        ])
+
+        ndtime = connector.age2ndtime(100.0)
+        result = connector.get_indicator(target_coords, ndtime)
+
+        assert result.shape == (n_targets,)
+        assert np.all(np.isfinite(result))
+        assert np.all(result >= 0)
+        assert np.all(result <= 1)
+
+    def test_surface_near_zero_deep_near_one(self, plate_model_with_polygons, synthetic_continental_data):
+        """Surface points should have low T_norm, deep points should have high T_norm."""
+        connector = LithosphereGeotherm(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_continental_data,
+            age_to_property=half_space_cooling,
+            config_extra={"k_neighbors": 10},
+        )
+
+        phi, theta = 0.5, 1.0
+        r_surface = 2.208
+        surface_coords = np.array([[
+            r_surface * np.sin(theta) * np.cos(phi),
+            r_surface * np.sin(theta) * np.sin(phi),
+            r_surface * np.cos(theta)
+        ]])
+        r_deep = 1.5
+        deep_coords = np.array([[
+            r_deep * np.sin(theta) * np.cos(phi),
+            r_deep * np.sin(theta) * np.sin(phi),
+            r_deep * np.cos(theta)
+        ]])
+
+        ndtime = connector.age2ndtime(100.0)
+        surface_val = connector.get_indicator(surface_coords, ndtime)
+        # Reset cache for new coords
+        connector._cached_result = None
+        connector._cached_coords_hash = None
+        deep_val = connector.get_indicator(deep_coords, ndtime)
+
+        # At the surface, depth=0 so T_norm ≈ 0
+        assert surface_val[0] < 0.1
+        # Well below LAB, T_norm should be clipped to 1
+        assert deep_val[0] > surface_val[0]
+
+    def test_caching(self, plate_model_with_polygons, synthetic_continental_data):
+        """Repeated calls with same time should return cached result."""
+        connector = LithosphereGeotherm(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_continental_data,
+            age_to_property=half_space_cooling,
+            config_extra={"k_neighbors": 10},
+        )
+
+        coords = np.array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0]])
+        ndtime = connector.age2ndtime(100.0)
+
+        result1 = connector.get_indicator(coords, ndtime)
+        result2 = connector.get_indicator(coords, ndtime)
+        np.testing.assert_array_equal(result1, result2)
+
+
+class TestPolygonGeothermFunctional:
+    """Functional tests for PolygonGeotherm."""
+
+    @pytest.fixture
+    def gplates_connector(self):
+        gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
+        if not (gplates_data_path / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2").exists():
+            pytest.skip("Plate reconstruction data not available")
+        muller_files = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
+        return pyGplatesConnector(
+            rotation_filenames=muller_files["rotation_filenames"],
+            topology_filenames=muller_files["topology_filenames"],
+            oldest_age=200,
+            continental_polygons=muller_files.get("continental_polygons"),
+            static_polygons=muller_files.get("static_polygons"),
+        )
+
+    @pytest.fixture
+    def craton_shapefile(self):
+        craton_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_lithosphere/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2/shapes_cratons.shp"
+        if not craton_path.exists():
+            pytest.skip("Craton shapefile not available")
+        return str(craton_path)
+
+    def test_creation(self, gplates_connector, craton_shapefile):
+        """PolygonGeotherm should be creatable and is an IndicatorConnector."""
+        connector = PolygonGeotherm(
+            gplates_connector=gplates_connector,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
+            config_extra={"n_points": 5000},
+        )
+        assert isinstance(connector, PolygonConnector)
+        assert isinstance(connector, IndicatorConnector)
+
+    def test_custom_geotherm(self, gplates_connector, craton_shapefile):
+        """PolygonGeotherm should accept custom geotherm function."""
+        connector = PolygonGeotherm(
+            gplates_connector=gplates_connector,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
+            geotherm=ocean_erf_normalized,
+            config_extra={"n_points": 5000},
+        )
+        assert connector._geotherm is ocean_erf_normalized
+
+    def test_get_indicator_returns_correct_shape(self, gplates_connector, craton_shapefile):
+        """Output must match target coordinate count with values in [0, 1]."""
+        connector = PolygonGeotherm(
+            gplates_connector=gplates_connector,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
+            config_extra={"n_points": 5000},
+        )
+
+        n_points = 100
+        np.random.seed(456)
+        theta = np.random.uniform(0, 2*np.pi, n_points)
+        phi = np.random.uniform(0, np.pi, n_points)
+        r = np.random.uniform(1.5, 2.2, n_points)
+        coords = np.column_stack([
+            r * np.sin(phi) * np.cos(theta),
+            r * np.sin(phi) * np.sin(theta),
+            r * np.cos(phi)
+        ])
+
+        ndtime = connector.age2ndtime(100.0)
+        result = connector.get_indicator(coords, ndtime)
+
+        assert result.shape == (n_points,)
+        assert np.all(np.isfinite(result))
+        assert np.all(result >= 0)
+        assert np.all(result <= 1)
+
+    def test_empty_region_returns_ones(self, gplates_connector, craton_shapefile):
+        """When source data is empty, PolygonGeotherm should return 1.0 (mantle T)."""
+        connector = PolygonGeotherm(
+            gplates_connector=gplates_connector,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
+            config_extra={"n_points": 5000},
+        )
+
+        coords = np.array([[2.0, 0.0, 0.0]])
+        result = connector._compute_indicator(None, None, coords)
+        np.testing.assert_allclose(result, 1.0)
+
+        result = connector._compute_indicator(np.array([]).reshape(0, 3), np.array([]), coords)
+        np.testing.assert_allclose(result, 1.0)
+
+    def test_caching(self, gplates_connector, craton_shapefile):
+        """Repeated calls with same time should return cached result."""
+        connector = PolygonGeotherm(
+            gplates_connector=gplates_connector,
+            polygons=craton_shapefile,
+            thickness_data=200.0,
+            config_extra={"n_points": 5000},
+        )
+
+        coords = np.array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0]])
+        ndtime = connector.age2ndtime(100.0)
+
+        result1 = connector.get_indicator(coords, ndtime)
+        result2 = connector.get_indicator(coords, ndtime)
+        np.testing.assert_array_equal(result1, result2)
+
+
+class TestGeothermGplatesScalarFunction:
+    """Test GplatesScalarFunction works with geotherm connectors."""
+
+    @pytest.fixture
+    def mesh_and_function_space(self):
+        rmin, rmax = 1.208, 2.208
+        mesh2d = CubedSphereMesh(rmin, refinement_level=2, degree=2)
+        mesh = ExtrudedMesh(mesh2d, layers=4, extrusion_type="radial")
+        mesh.cartesian = False
+        Q = FunctionSpace(mesh, "CG", 2)
+        return mesh, Q, rmax
+
+    @pytest.fixture
+    def lith_geotherm_connector(self):
+        gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
+        muller_files = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
+
+        gplates_connector = pyGplatesConnector(
+            rotation_filenames=muller_files["rotation_filenames"],
+            topology_filenames=muller_files["topology_filenames"],
+            oldest_age=200,
+            continental_polygons=muller_files.get("continental_polygons"),
+            static_polygons=muller_files.get("static_polygons"),
+        )
+
+        np.random.seed(42)
+        n_points = 1000
+        phi = np.random.uniform(0, 2*np.pi, n_points)
+        theta = np.arccos(np.random.uniform(-1, 1, n_points))
+        lat = 90 - np.degrees(theta)
+        lon = np.degrees(phi) - 180
+        thickness = 150 + 100 * np.random.rand(n_points)
+
+        return LithosphereGeotherm(
+            gplates_connector=gplates_connector,
+            continental_data=(np.column_stack([lat, lon]), thickness),
+            age_to_property=half_space_cooling,
+            config_extra={"k_neighbors": 10},
+        )
+
+    @pytest.fixture
+    def polygon_geotherm_connector(self):
+        gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
+        if not (gplates_data_path / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2").exists():
+            pytest.skip("Plate reconstruction data not available")
+
+        craton_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_lithosphere/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2/shapes_cratons.shp"
+        if not craton_path.exists():
+            pytest.skip("Craton shapefile not available")
+
+        muller_files = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
+
+        gplates_connector = pyGplatesConnector(
+            rotation_filenames=muller_files["rotation_filenames"],
+            topology_filenames=muller_files["topology_filenames"],
+            oldest_age=200,
+            continental_polygons=muller_files.get("continental_polygons"),
+            static_polygons=muller_files.get("static_polygons"),
+        )
+
+        return PolygonGeotherm(
+            gplates_connector=gplates_connector,
+            polygons=str(craton_path),
+            thickness_data=200.0,
+            config_extra={"n_points": 5000},
+        )
+
+    def test_scalar_function_with_lith_geotherm(self, mesh_and_function_space, lith_geotherm_connector):
+        """GplatesScalarFunction should work with LithosphereGeotherm."""
+        mesh, Q, rmax = mesh_and_function_space
+
+        scalar_func = GplatesScalarFunction(
+            Q,
+            indicator_connector=lith_geotherm_connector,
+            name="Geotherm_Erf"
+        )
+
+        ndtime = lith_geotherm_connector.age2ndtime(100.0)
+        scalar_func.update_plate_reconstruction(ndtime)
+
+        data = scalar_func.dat.data_ro
+        assert np.all(np.isfinite(data))
+        assert data.min() >= 0
+        assert data.max() <= 1
+
+    def test_scalar_function_with_polygon_geotherm(self, mesh_and_function_space, polygon_geotherm_connector):
+        """GplatesScalarFunction should work with PolygonGeotherm."""
+        mesh, Q, rmax = mesh_and_function_space
+
+        scalar_func = GplatesScalarFunction(
+            Q,
+            indicator_connector=polygon_geotherm_connector,
+            name="Geotherm_Linear"
+        )
+
+        ndtime = polygon_geotherm_connector.age2ndtime(100.0)
         scalar_func.update_plate_reconstruction(ndtime)
 
         data = scalar_func.dat.data_ro

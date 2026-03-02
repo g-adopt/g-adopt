@@ -9,7 +9,7 @@ from gadopt.gplates import (
     pyGplatesConnector,
     ensure_reconstruction,
     LithosphereConnector,
-    CratonConnector,
+    PolygonConnector,
 )
 
 
@@ -204,12 +204,12 @@ class TestLithosphereConnectorAgeValidation:
             assert result.shape == (len(test_coords),)
 
 
-class TestCratonConnectorAgeValidation:
-    """Test age validation in CratonConnector."""
+class TestPolygonConnectorAgeValidation:
+    """Test age validation in PolygonConnector."""
 
     @pytest.fixture
-    def craton_connector(self, plate_model_with_polygons, synthetic_data):
-        """Create CratonConnector for testing."""
+    def polygon_connector(self, plate_model_with_polygons, synthetic_data):
+        """Create PolygonConnector for testing."""
         craton_shapefile = (
             Path(__file__).resolve().parents[2]
             / "demos/mantle_convection/gplates_lithosphere"
@@ -219,45 +219,45 @@ class TestCratonConnectorAgeValidation:
         if not craton_shapefile.exists():
             pytest.skip("Craton shapefile not available")
 
-        return CratonConnector(
+        return PolygonConnector(
             gplates_connector=plate_model_with_polygons,
-            craton_polygons=str(craton_shapefile),
-            craton_thickness_data=synthetic_data,
+            polygons=str(craton_shapefile),
+            thickness_data=synthetic_data,
         )
 
-    def test_valid_age_works(self, craton_connector, test_coords, plate_model_with_polygons):
+    def test_valid_age_works(self, polygon_connector, test_coords, plate_model_with_polygons):
         """Test that valid ages within bounds work correctly."""
         ndtime = plate_model_with_polygons.age2ndtime(100)
-        result = craton_connector.get_indicator(test_coords, ndtime)
+        result = polygon_connector.get_indicator(test_coords, ndtime)
 
         assert result.shape == (len(test_coords),)
         assert np.all(np.isfinite(result))
 
-    def test_age_older_than_oldest_raises_error(self, craton_connector, test_coords, plate_model_with_polygons):
+    def test_age_older_than_oldest_raises_error(self, polygon_connector, test_coords, plate_model_with_polygons):
         """Test that requesting age > oldest_age raises ValueError."""
         ndtime = plate_model_with_polygons.age2ndtime(250)
 
         with pytest.raises(ValueError, match="older than the plate model's oldest age"):
-            craton_connector.get_indicator(test_coords, ndtime)
+            polygon_connector.get_indicator(test_coords, ndtime)
 
-    def test_negative_age_raises_error(self, craton_connector, test_coords, plate_model_with_polygons):
+    def test_negative_age_raises_error(self, polygon_connector, test_coords, plate_model_with_polygons):
         """Test that requesting negative age (future) raises ValueError."""
         ndtime = plate_model_with_polygons.age2ndtime(-10)
 
         with pytest.raises(ValueError, match="negative.*future"):
-            craton_connector.get_indicator(test_coords, ndtime)
+            polygon_connector.get_indicator(test_coords, ndtime)
 
-    def test_any_order_works(self, craton_connector, test_coords, plate_model_with_polygons):
-        """Test that CratonConnector allows any age order (unlike LithosphereConnector)."""
-        # CratonConnector uses rotation only, so any order should work
+    def test_any_order_works(self, polygon_connector, test_coords, plate_model_with_polygons):
+        """Test that PolygonConnector allows any age order (unlike LithosphereConnector)."""
+        # PolygonConnector uses rotation only, so any order should work
 
         # First go to 50 Ma
         ndtime_50 = plate_model_with_polygons.age2ndtime(50)
-        craton_connector.get_indicator(test_coords, ndtime_50)
+        polygon_connector.get_indicator(test_coords, ndtime_50)
 
-        # Then go back to 150 Ma (should work for CratonConnector)
+        # Then go back to 150 Ma (should work for PolygonConnector)
         ndtime_150 = plate_model_with_polygons.age2ndtime(150)
-        result = craton_connector.get_indicator(test_coords, ndtime_150)
+        result = polygon_connector.get_indicator(test_coords, ndtime_150)
 
         assert result.shape == (len(test_coords),)
         assert np.all(np.isfinite(result))

@@ -158,10 +158,10 @@ lithosphere_connector = LithosphereConnector(
     age_to_property=half_space_cooling,
     config_extra={
         "r_outer": rmax,
-        "n_points": 10000,
-        "k_neighbors": 20,
-        "distance_threshold": 0.2,
-        "reinit_interval_myr": 20,
+        "n_points": 20000,
+        "k_neighbors": 50,
+        "distance_threshold": 0.15,
+        "transition_width": 10.0,
     },
     comm=mesh.comm,
 )
@@ -182,30 +182,70 @@ lithosphere_indicator = GplatesScalarFunction(
 )
 # -
 
-# ## Setting up the CratonConnector
+# ## Setting up the Continental Crust Indicator
+#
+# The continental crust (top ~50 km of continental regions) is less
+# dense than the mantle.  We model this as a uniform 50 km thick
+# layer identified by the plate model's continental polygons.  The
+# `PolygonConnector` is used here with continent polygons (rather
+# than craton polygons) to identify continental regions, and a
+# constant 50 km thickness for the indicator.  In a full simulation
+# this indicator drives an upward buoyancy force that represents the
+# density deficit of continental crust (~2700 kg/m^3) relative to the
+# mantle (~3200 kg/m^3).
+
+# +
+continental_crust_connector = PolygonConnector(
+    gplates_connector=plate_model,
+    polygons=muller_2022_files.get("continental_polygons"),
+    thickness_data=50.0,  # uniform 50 km crustal thickness
+    config_extra={
+        "r_outer": rmax,
+        "n_points": 20000,
+        "k_neighbors": 50,
+        "distance_threshold": 0.15,
+        "transition_width": 10.0,
+    },
+    comm=mesh.comm,
+)
+
+continental_crust_indicator = GplatesScalarFunction(
+    Q,
+    indicator_connector=continental_crust_connector,
+    name="Continental_Crust_Indicator",
+)
+# -
+
+# ## Setting up the Craton Indicator
 #
 # Cratons are the ancient, stable cores of continents.  Their thick
 # (~200–300 km), cold lithospheric roots are thought to protect them
 # from tectonic reworking over billions of years.  The
-# `CratonConnector` identifies cratonic regions by filtering
+# `PolygonConnector` identifies cratonic regions by filtering
 # thickness data through craton polygon boundaries provided as a
 # shapefile.  The resulting indicator is ~1 inside the craton root
 # and ~0 elsewhere.
+#
+# In a full simulation, an isopycnic buoyancy correction is applied
+# inside craton roots: the chemical buoyancy exactly cancels the
+# lateral thermal buoyancy anomaly, making the root neutrally
+# buoyant relative to the surrounding mantle at each depth.
 #
 # We download craton boundary polygons from the [EarthByte Craton
 # Boundaries repository](https://github.com/EarthByte/Craton_Boundaries_Inferred)
 # (via `make data`).
 
 # +
-craton_connector = CratonConnector(
+craton_connector = PolygonConnector(
     gplates_connector=plate_model,
-    craton_polygons="Craton_Boundaries_Inferred.shp",
-    craton_thickness_data=continental_data,
+    polygons="Craton_Boundaries_Inferred.shp",
+    thickness_data=continental_data,
     config_extra={
         "r_outer": rmax,
-        "k_neighbors": 1,
+        "n_points": 20000,
+        "k_neighbors": 50,
         "distance_threshold": 0.15,
-        "transition_width": 0.05,
+        "transition_width": 10.0,
     },
     comm=mesh.comm,
 )
@@ -228,17 +268,26 @@ craton_indicator = GplatesScalarFunction(
 # +
 output_file = VTKFile("lithosphere_output.pvd")
 
+plog = ParameterLog("params.log", mesh)
+plog.log_str("age lith_int craton_int crust_int")
+
 ndtime = plate_model.age2ndtime(200)
 lithosphere_indicator.update_plate_reconstruction(ndtime)
+continental_crust_indicator.update_plate_reconstruction(ndtime)
 craton_indicator.update_plate_reconstruction(ndtime)
-output_file.write(lithosphere_indicator, craton_indicator)
+output_file.write(lithosphere_indicator, continental_crust_indicator, craton_indicator)
+plog.log_str(f"{plate_model.ndtime2age(ndtime)} {assemble(lithosphere_indicator * dx)} "
+             f"{assemble(craton_indicator * dx)} {assemble(continental_crust_indicator * dx)}")
 log("Written output for 200 Ma")
 # -
 
-# We extract contour isosurfaces at a threshold of 0.8 for both
-# indicators.  The lithosphere base (blue) marks where the indicator
-# drops below 0.8, while the craton roots (red) highlight the deep
-# keels beneath ancient continental cores.
+# We extract the lithosphere base isosurface (indicator = 0.5) and
+# colour it by its radial depth, so the shape of the lithosphere
+# base is displayed as a surface on the sphere where the colour
+# tells you how deep the base extends at each point.  Contour lines
+# at depth intervals of 0.02 non-dimensional units (~58 km) make
+# the depth structure immediately visible.  Craton and continental
+# crust isosurfaces at 0.8 are overlaid for context.
 
 # + tags=["active-ipynb"]
 # import pyvista as pv
@@ -253,12 +302,29 @@ log("Written output for 200 Ma")
 # if os.environ.get("GADOPT_RENDER", "false").lower() == "true":
 #     backend = "static"
 #
-# lith_base = dataset.contour(isosurfaces=[0.8], scalars="Lithosphere_Indicator")
-# plotter.add_mesh(lith_base, color="steelblue", opacity=0.6, label="Lithosphere base")
+# r_outer = rmax
+# lith_iso = dataset.contour(isosurfaces=[0.5], scalars="Lithosphere_Indicator")
+# if lith_iso.n_points > 0:
+#     pts = lith_iso.points
+#     depth = r_outer - np.sqrt(np.sum(pts**2, axis=1))
+#     lith_iso["Depth"] = depth
+#     plotter.add_mesh(lith_iso, scalars="Depth", cmap="viridis",
+#                      opacity=0.7, scalar_bar_args={"title": "Depth (non-dim)"})
+#     contour_vals = np.arange(0.02, depth.max() + 0.02, 0.02)
+#     if len(contour_vals) > 0:
+#         contours = lith_iso.contour(isosurfaces=contour_vals.tolist(), scalars="Depth")
+#         if contours.n_points > 0:
+#             plotter.add_mesh(contours, color="black", line_width=2)
 #
 # craton_base = dataset.contour(isosurfaces=[0.8], scalars="Craton_Indicator")
-# plotter.add_mesh(craton_base, color="firebrick", opacity=0.8, label="Craton base")
+# if craton_base.n_points > 0:
+#     plotter.add_mesh(craton_base, color="firebrick", opacity=0.8, label="Craton")
 #
+# crust_base = dataset.contour(isosurfaces=[0.8], scalars="Continental_Crust_Indicator")
+# if crust_base.n_points > 0:
+#     plotter.add_mesh(crust_base, color="sandybrown", opacity=0.5, label="Continental crust")
+#
+# plotter.add_legend()
 # plotter.camera_position = [(10.0, 10.0, 10.0), (0.0, 0.0, 0), (0, 1, 0)]
 # plotter.show(jupyter_backend=backend)
 # -
@@ -272,8 +338,11 @@ log("Written output for 200 Ma")
 # +
 ndtime = plate_model.age2ndtime(100)
 lithosphere_indicator.update_plate_reconstruction(ndtime)
+continental_crust_indicator.update_plate_reconstruction(ndtime)
 craton_indicator.update_plate_reconstruction(ndtime)
-output_file.write(lithosphere_indicator, craton_indicator)
+output_file.write(lithosphere_indicator, continental_crust_indicator, craton_indicator)
+plog.log_str(f"{plate_model.ndtime2age(ndtime)} {assemble(lithosphere_indicator * dx)} "
+             f"{assemble(craton_indicator * dx)} {assemble(continental_crust_indicator * dx)}")
 log("Written output for 100 Ma")
 # -
 
@@ -287,12 +356,29 @@ log("Written output for 100 Ma")
 # if os.environ.get("GADOPT_RENDER", "false").lower() == "true":
 #     backend = "static"
 #
-# lith_base = dataset.contour(isosurfaces=[0.8], scalars="Lithosphere_Indicator")
-# plotter.add_mesh(lith_base, color="steelblue", opacity=0.6, label="Lithosphere base")
+# r_outer = rmax
+# lith_iso = dataset.contour(isosurfaces=[0.5], scalars="Lithosphere_Indicator")
+# if lith_iso.n_points > 0:
+#     pts = lith_iso.points
+#     depth = r_outer - np.sqrt(np.sum(pts**2, axis=1))
+#     lith_iso["Depth"] = depth
+#     plotter.add_mesh(lith_iso, scalars="Depth", cmap="viridis",
+#                      opacity=0.7, scalar_bar_args={"title": "Depth (non-dim)"})
+#     contour_vals = np.arange(0.02, depth.max() + 0.02, 0.02)
+#     if len(contour_vals) > 0:
+#         contours = lith_iso.contour(isosurfaces=contour_vals.tolist(), scalars="Depth")
+#         if contours.n_points > 0:
+#             plotter.add_mesh(contours, color="black", line_width=2)
 #
 # craton_base = dataset.contour(isosurfaces=[0.8], scalars="Craton_Indicator")
-# plotter.add_mesh(craton_base, color="firebrick", opacity=0.8, label="Craton base")
+# if craton_base.n_points > 0:
+#     plotter.add_mesh(craton_base, color="firebrick", opacity=0.8, label="Craton")
 #
+# crust_base = dataset.contour(isosurfaces=[0.8], scalars="Continental_Crust_Indicator")
+# if crust_base.n_points > 0:
+#     plotter.add_mesh(crust_base, color="sandybrown", opacity=0.5, label="Continental crust")
+#
+# plotter.add_legend()
 # plotter.camera_position = [(10.0, 10.0, 10.0), (0.0, 0.0, 0), (0, 1, 0)]
 # plotter.show(jupyter_backend=backend)
 # -
@@ -306,9 +392,13 @@ log("Written output for 100 Ma")
 # +
 ndtime = plate_model.age2ndtime(0)
 lithosphere_indicator.update_plate_reconstruction(ndtime)
+continental_crust_indicator.update_plate_reconstruction(ndtime)
 craton_indicator.update_plate_reconstruction(ndtime)
-output_file.write(lithosphere_indicator, craton_indicator)
+output_file.write(lithosphere_indicator, continental_crust_indicator, craton_indicator)
+plog.log_str(f"{plate_model.ndtime2age(ndtime)} {assemble(lithosphere_indicator * dx)} "
+             f"{assemble(craton_indicator * dx)} {assemble(continental_crust_indicator * dx)}")
 log("Written output for 0 Ma")
+plog.close()
 # -
 
 # + tags=["active-ipynb"]
@@ -321,12 +411,29 @@ log("Written output for 0 Ma")
 # if os.environ.get("GADOPT_RENDER", "false").lower() == "true":
 #     backend = "static"
 #
-# lith_base = dataset.contour(isosurfaces=[0.8], scalars="Lithosphere_Indicator")
-# plotter.add_mesh(lith_base, color="steelblue", opacity=0.6, label="Lithosphere base")
+# r_outer = rmax
+# lith_iso = dataset.contour(isosurfaces=[0.5], scalars="Lithosphere_Indicator")
+# if lith_iso.n_points > 0:
+#     pts = lith_iso.points
+#     depth = r_outer - np.sqrt(np.sum(pts**2, axis=1))
+#     lith_iso["Depth"] = depth
+#     plotter.add_mesh(lith_iso, scalars="Depth", cmap="viridis",
+#                      opacity=0.7, scalar_bar_args={"title": "Depth (non-dim)"})
+#     contour_vals = np.arange(0.02, depth.max() + 0.02, 0.02)
+#     if len(contour_vals) > 0:
+#         contours = lith_iso.contour(isosurfaces=contour_vals.tolist(), scalars="Depth")
+#         if contours.n_points > 0:
+#             plotter.add_mesh(contours, color="black", line_width=2)
 #
 # craton_base = dataset.contour(isosurfaces=[0.8], scalars="Craton_Indicator")
-# plotter.add_mesh(craton_base, color="firebrick", opacity=0.8, label="Craton base")
+# if craton_base.n_points > 0:
+#     plotter.add_mesh(craton_base, color="firebrick", opacity=0.8, label="Craton")
 #
+# crust_base = dataset.contour(isosurfaces=[0.8], scalars="Continental_Crust_Indicator")
+# if crust_base.n_points > 0:
+#     plotter.add_mesh(crust_base, color="sandybrown", opacity=0.5, label="Continental crust")
+#
+# plotter.add_legend()
 # plotter.camera_position = [(10.0, 10.0, 10.0), (0.0, 0.0, 0), (0, 1, 0)]
 # plotter.show(jupyter_backend=backend)
 # -

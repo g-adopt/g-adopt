@@ -7,7 +7,7 @@ viscosity in geodynamic simulations.
 
 Examples of indicator connectors:
 - LithosphereConnector: Lithosphere indicator from ocean ages + continental data
-- CratonConnector: Craton indicator from polygon shapefiles
+- PolygonConnector: Polygon-based indicator from shapefiles (cratons, continental crust, etc.)
 
 All indicator connectors share a common interface:
 - get_indicator(target_coords, ndtime) -> np.ndarray

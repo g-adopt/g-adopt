@@ -5,9 +5,13 @@ from .gplates import (
     LithosphereConnector,
     LithosphereConfig,
     LithosphereConnectorDefault,
-    CratonConnector,
-    CratonConfig,
-    CratonConnectorDefault,
+    LithosphereGeotherm,
+    PolygonConnector,
+    PolygonConfig,
+    PolygonConnectorDefault,
+    PolygonGeotherm,
+    ocean_erf_normalized,
+    continental_linear,
     pyGplatesConnector
 )
 from .gplatesfiles import ensure_reconstruction
@@ -20,9 +24,13 @@ __all__ = [
     "LithosphereConnector",
     "LithosphereConfig",
     "LithosphereConnectorDefault",
-    "CratonConnector",
-    "CratonConfig",
-    "CratonConnectorDefault",
+    "LithosphereGeotherm",
+    "PolygonConnector",
+    "PolygonConfig",
+    "PolygonConnectorDefault",
+    "PolygonGeotherm",
+    "ocean_erf_normalized",
+    "continental_linear",
     "pyGplatesConnector",
     "ensure_reconstruction"
 ]

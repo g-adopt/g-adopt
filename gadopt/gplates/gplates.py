@@ -29,9 +29,13 @@ __all__ = [
     "LithosphereConnector",
     "LithosphereConfig",
     "LithosphereConnectorDefault",
-    "CratonConnector",
-    "CratonConfig",
-    "CratonConnectorDefault",
+    "LithosphereGeotherm",
+    "PolygonConnector",
+    "PolygonConfig",
+    "PolygonConnectorDefault",
+    "PolygonGeotherm",
+    "ocean_erf_normalized",
+    "continental_linear",
     "pyGplatesConnector"
 ]
 
@@ -1120,35 +1124,12 @@ class LithosphereConnector(IndicatorConnector):
 
         # Rank 0 performs all gtrack operations, others wait for broadcast
         if self._is_root:
-            # Initialize ocean tracker if needed
-            if not self._initialized:
-                starting_age = int(self.gplates_connector.oldest_age)
-                debug_log(f"LithosphereConnector: Initializing ocean tracker at {starting_age} Ma.")
-                self._ocean_tracker.initialize(starting_age=starting_age)
-                self._initialized = True
-                self._last_reinit_age = starting_age
-
-            # Check for reinitialisation
-            if self._last_reinit_age is not None:
-                if abs(self._last_reinit_age - age) >= self.config.reinit_interval_myr:
-                    debug_log(f"LithosphereConnector: Reinitializing ocean tracker at {age:.2f} Ma.")
-                    self._ocean_tracker.reinitialize(n_points=self.config.n_points)
-                    self._last_reinit_age = age
-
-            # Get ocean lithosphere
-            # Note: gtrack has a bug where step_to fails if int(current_age) == int(target_age)
-            # due to float accumulation. We work around this by using integer ages.
-            ocean_cloud = self._ocean_tracker.step_to(int(round(age)))
+            ocean_cloud = self._step_ocean_to(age)
             ocean_ages = ocean_cloud.get_property('age')
             ocean_values = self.age_to_property(ocean_ages)
             ocean_cloud.add_property(self.config.property_name, ocean_values)
 
-            # Get rotated continental lithosphere
-            cont_cloud = self._rotator.rotate(
-                self._continental_present,
-                from_age=0.0,
-                to_age=age
-            )
+            cont_cloud = self._rotate_continental_to(age)
 
             # Combine into single PointCloud
             # warn=False because ocean cloud doesn't have plate_ids (expected behavior)
@@ -1181,6 +1162,51 @@ class LithosphereConnector(IndicatorConnector):
         self._cached_coords_hash = (target_coords.shape, target_coords[0, 0] if len(target_coords) > 0 else 0)
 
         return result
+
+    def _step_ocean_to(self, age):
+        """Initialize/reinit ocean tracker and step to target age.
+
+        Returns ocean PointCloud with 'age' property. Must be called on rank 0 only.
+
+        Args:
+            age: Target geological age in Ma.
+
+        Returns:
+            PointCloud with ocean points and their 'age' property.
+        """
+        if not self._initialized:
+            starting_age = int(self.gplates_connector.oldest_age)
+            debug_log(f"LithosphereConnector: Initializing ocean tracker at {starting_age} Ma.")
+            self._ocean_tracker.initialize(starting_age=starting_age)
+            self._initialized = True
+            self._last_reinit_age = starting_age
+
+        if self._last_reinit_age is not None:
+            if abs(self._last_reinit_age - age) >= self.config.reinit_interval_myr:
+                debug_log(f"LithosphereConnector: Reinitializing ocean tracker at {age:.2f} Ma.")
+                self._ocean_tracker.reinitialize(n_points=self.config.n_points)
+                self._last_reinit_age = age
+
+        # Note: gtrack has a bug where step_to fails if int(current_age) == int(target_age)
+        # due to float accumulation. We work around this by using integer ages.
+        return self._ocean_tracker.step_to(int(round(age)))
+
+    def _rotate_continental_to(self, age):
+        """Rotate present-day continental data to target age.
+
+        Returns continental PointCloud. Must be called on rank 0 only.
+
+        Args:
+            age: Target geological age in Ma.
+
+        Returns:
+            PointCloud with continental points rotated to target age.
+        """
+        return self._rotator.rotate(
+            self._continental_present,
+            from_age=0.0,
+            to_age=age
+        )
 
     def _load_continental_data(self, data):
         """Load and prepare continental data.
@@ -1367,19 +1393,19 @@ class LithosphereConnector(IndicatorConnector):
 
 
 @dataclass
-class CratonConfig:
-    """Configuration for craton indicator computation.
+class PolygonConfig:
+    """Configuration for polygon-based indicator computation.
 
-    Groups all tunable parameters for CratonConnector into a single
+    Groups all tunable parameters for PolygonConnector into a single
     configuration object. Similar to LithosphereConfig but without
     ocean age tracking parameters.
 
-    Use with CratonConnector:
-        >>> config = CratonConfig(n_points=40000, transition_width=5.0)
-        >>> connector = CratonConnector(gplates, polygons, thickness_data, config=config)
+    Use with PolygonConnector:
+        >>> config = PolygonConfig(n_points=40000, transition_width=5.0)
+        >>> connector = PolygonConnector(gplates, polygons, thickness_data, config=config)
 
     Or override specific values with config_extra:
-        >>> connector = CratonConnector(
+        >>> connector = PolygonConnector(
         ...     gplates, polygons, thickness_data,
         ...     config_extra={"n_points": 40000}
         ... )
@@ -1390,7 +1416,7 @@ class CratonConfig:
     ~~~~~~~~~~~~~~~~~~~
     n_points : int
         Number of sample points on fibonacci sphere for polygon coverage.
-        Higher values give better resolution of craton boundaries.
+        Higher values give better resolution of polygon boundaries.
         Default: 20000
 
     Interpolation Parameters
@@ -1404,7 +1430,7 @@ class CratonConfig:
         Default: 0.1 (~570 km at Earth's surface)
     default_thickness : float
         Thickness (km) assigned to points with no nearby data.
-        Default: 200.0 (typical cratonic root depth)
+        Default: 200.0
 
     Mesh Geometry Parameters
     ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1415,7 +1441,7 @@ class CratonConfig:
         Physical depth (km) corresponding to 1 non-dimensional unit.
         For Earth's mantle: 2890 km. Default: 2890.0
     transition_width : float
-        Width of tanh transition at craton base in km. Controls
+        Width of tanh transition at region base in km. Controls
         smoothness of the indicator field. Default: 10.0
 
     Data Parameters
@@ -1426,10 +1452,10 @@ class CratonConfig:
     Examples
     --------
     >>> # Use all defaults
-    >>> config = CratonConfig()
+    >>> config = PolygonConfig()
     >>>
     >>> # Higher resolution with sharper boundaries
-    >>> config = CratonConfig(
+    >>> config = PolygonConfig(
     ...     n_points=50000,
     ...     transition_width=5.0,
     ... )
@@ -1479,33 +1505,35 @@ class CratonConfig:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, config_dict: dict) -> "CratonConfig":
+    def from_dict(cls, config_dict: dict) -> "PolygonConfig":
         """Create configuration from dictionary."""
         known_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in config_dict.items() if k in known_fields}
         return cls(**filtered)
 
-    def with_overrides(self, overrides: dict) -> "CratonConfig":
+    def with_overrides(self, overrides: dict) -> "PolygonConfig":
         """Create a new config with specified overrides."""
         current = self.to_dict()
         current.update(overrides)
         return self.from_dict(current)
 
 
-# Default configuration instance for CratonConnector.
-CratonConnectorDefault = CratonConfig()
+# Default configuration instance for PolygonConnector.
+PolygonConnectorDefault = PolygonConfig()
 
 
-class CratonConnector(IndicatorConnector):
-    """Connector for craton indicator field through geological time.
+class PolygonConnector(IndicatorConnector):
+    """Connector for polygon-based indicator field through geological time.
 
-    Computes a smooth 3D indicator field for cratonic lithosphere by combining:
-    - Craton polygons (back-rotated to target age via gtrack's PolygonFilter)
-    - Cratonic thickness data (back-rotated via gtrack's PointRotator)
+    Computes a smooth 3D indicator field for regions defined by polygon
+    boundaries by combining:
+    - Region polygons (back-rotated to target age via gtrack's PolygonFilter)
+    - Thickness data (back-rotated via gtrack's PointRotator)
 
-    The indicator is ~1 inside cratonic lithosphere, ~0 in mantle, with a
-    smooth tanh transition at the craton base. This is similar to
-    LithosphereConnector but specific to cratonic regions.
+    The indicator is ~1 inside the region, ~0 outside, with a smooth tanh
+    transition at the region base. This can be used for cratons, continental
+    crust, or any region defined by polygon boundaries with associated
+    thickness data.
 
     Uses pyGplatesConnector for plate model access and time conversion.
 
@@ -1516,35 +1544,37 @@ class CratonConnector(IndicatorConnector):
 
     Attributes:
         gplates_connector: The pyGplatesConnector for time conversion and plate model.
-        config: The CratonConfig with all tunable parameters.
+        config: The PolygonConfig with all tunable parameters.
         reconstruction_age: Last computed geological age (Ma), used for caching.
         comm: MPI communicator (None for serial execution).
 
     Args:
         gplates_connector (pyGplatesConnector): Connector with plate model files.
             Must have `static_polygons` set for rotation.
-        craton_polygons: Path to craton polygon shapefile (e.g., shapes_cratons.shp).
-        craton_thickness_data: Present-day cratonic thickness data. Can be:
+        polygons: Path to polygon shapefile (e.g., shapes_cratons.shp,
+            continental_polygons.gpml).
+        thickness_data: Present-day thickness data for the region. Can be:
             - gtrack.PointCloud with the thickness property
             - Path to HDF5/NetCDF file
             - Tuple of (latlon_array, thickness_values_km)
-        config (CratonConfig, optional): Configuration object. If None, uses defaults.
+            - Scalar (int or float): uniform thickness for all points
+        config (PolygonConfig, optional): Configuration object. If None, uses defaults.
         config_extra (dict, optional): Dictionary of parameter overrides.
         comm: MPI communicator for parallel execution.
 
     Examples:
-        >>> # Using default configuration
-        >>> connector = CratonConnector(
+        >>> # Craton indicator
+        >>> connector = PolygonConnector(
         ...     gplates_connector=plate_model,
-        ...     craton_polygons='shapes_cratons.shp',
-        ...     craton_thickness_data='craton_thickness.h5',
+        ...     polygons='shapes_cratons.shp',
+        ...     thickness_data='craton_thickness.h5',
         ... )
         >>>
-        >>> # With data as tuple
-        >>> connector = CratonConnector(
+        >>> # Continental crust indicator
+        >>> connector = PolygonConnector(
         ...     gplates_connector=plate_model,
-        ...     craton_polygons='shapes_cratons.shp',
-        ...     craton_thickness_data=(latlon_array, thickness_km),
+        ...     polygons=continental_polygons,
+        ...     thickness_data=50.0,  # uniform 50 km crust
         ...     comm=mesh.comm,
         ... )
         >>>
@@ -1554,9 +1584,9 @@ class CratonConnector(IndicatorConnector):
     def __init__(
         self,
         gplates_connector: "pyGplatesConnector",
-        craton_polygons,
-        craton_thickness_data,
-        config: CratonConfig = None,
+        polygons,
+        thickness_data,
+        config: PolygonConfig = None,
         config_extra: dict = None,
         comm=None,
     ):
@@ -1566,7 +1596,7 @@ class CratonConnector(IndicatorConnector):
 
         # Build effective configuration
         if config is None:
-            config = CratonConnectorDefault
+            config = PolygonConnectorDefault
         if config_extra is not None:
             config = config.with_overrides(config_extra)
         self.config = config
@@ -1588,9 +1618,9 @@ class CratonConnector(IndicatorConnector):
 
         # Only rank 0 creates gtrack objects and loads data
         if self._is_root:
-            # Create polygon filter for craton regions
-            self._craton_filter = PolygonFilter(
-                polygon_files=craton_polygons,
+            # Create polygon filter for the region
+            self._polygon_filter = PolygonFilter(
+                polygon_files=polygons,
                 rotation_files=gplates_connector.rotation_filenames,
             )
 
@@ -1600,20 +1630,20 @@ class CratonConnector(IndicatorConnector):
                 static_polygons=gplates_connector.static_polygons,
             )
 
-            # Load and prepare craton thickness data
-            self._craton_present = self._load_craton_data(craton_thickness_data, craton_polygons)
+            # Load and prepare thickness data
+            self._region_present = self._load_region_data(thickness_data, polygons)
         else:
-            self._craton_filter = None
+            self._polygon_filter = None
             self._rotator = None
-            self._craton_present = None
+            self._region_present = None
 
         # State management
         self.reconstruction_age = None
         self._cached_result = None
         self._cached_coords_hash = None
 
-    def _load_craton_data(self, data, craton_polygons):
-        """Load and prepare craton thickness data.
+    def _load_region_data(self, data, polygons):
+        """Load and prepare thickness data for the polygon-defined region.
 
         Args:
             data: One of:
@@ -1621,10 +1651,10 @@ class CratonConnector(IndicatorConnector):
                 - Path to HDF5/NetCDF file
                 - Tuple of (latlon_array, values_array)
                 - Scalar (int or float): uniform thickness for all points
-            craton_polygons: Path to craton polygon file for filtering.
+            polygons: Path to polygon file for filtering.
 
         Returns:
-            PointCloud filtered to craton regions with plate IDs assigned.
+            PointCloud filtered to the region with plate IDs assigned.
         """
         PointCloud = self._PointCloud
 
@@ -1645,19 +1675,19 @@ class CratonConnector(IndicatorConnector):
             cloud.add_property(self.config.property_name, np.full(len(latlon), float(data)))
         else:
             raise TypeError(
-                f"Unsupported craton_thickness_data type: {type(data)}. "
+                f"Unsupported thickness_data type: {type(data)}. "
                 "Expected PointCloud, file path, (latlon, values) tuple, or scalar."
             )
 
-        # Filter to craton regions at present day
+        # Filter to polygon region at present day
         n_before = cloud.n_points
-        log(f"CratonConnector: Filtering {n_before} continental points to craton polygons...")
-        cloud = self._craton_filter.filter_inside(cloud, at_age=0.0)
-        log(f"CratonConnector: After craton filtering: {cloud.n_points} points ({100*cloud.n_points/n_before:.1f}% retained)")
+        log(f"PolygonConnector: Filtering {n_before} points to polygon region...")
+        cloud = self._polygon_filter.filter_inside(cloud, at_age=0.0)
+        log(f"PolygonConnector: After filtering: {cloud.n_points} points ({100*cloud.n_points/n_before:.1f}% retained)")
 
         # Assign plate IDs for rotation
         cloud = self._rotator.assign_plate_ids(cloud, at_age=0.0, remove_undefined=True)
-        debug_log(f"CratonConnector: After plate ID assignment: {cloud.n_points} points.")
+        debug_log(f"PolygonConnector: After plate ID assignment: {cloud.n_points} points.")
 
         return cloud
 
@@ -1677,7 +1707,7 @@ class CratonConnector(IndicatorConnector):
         """
         PointCloud = self._PointCloud
 
-        debug_log(f"CratonConnector: Loading data from {filepath}.")
+        debug_log(f"PolygonConnector: Loading data from {filepath}.")
 
         with h5py.File(filepath, 'r') as f:
             lon = f['lon'][:]
@@ -1710,7 +1740,7 @@ class CratonConnector(IndicatorConnector):
         cloud = PointCloud.from_latlon(latlon)
         cloud.add_property(self.config.property_name, values)
 
-        debug_log(f"CratonConnector: Loaded {cloud.n_points} points from file.")
+        debug_log(f"PolygonConnector: Loaded {cloud.n_points} points from file.")
 
         return cloud
 
@@ -1719,16 +1749,16 @@ class CratonConnector(IndicatorConnector):
         target_coords: np.ndarray,
         ndtime: float
     ) -> np.ndarray:
-        """Get smooth craton indicator at target coordinates for given time.
+        """Get smooth indicator at target coordinates for given time.
 
-        Returns a 3D field that is ~1 inside cratonic lithosphere and ~0 outside,
-        with a smooth tanh transition at the craton base.
+        Returns a 3D field that is ~1 inside the polygon-defined region and
+        ~0 outside, with a smooth tanh transition at the region base.
 
         For each target point:
         1. Computes its radial position r
-        2. Looks up thickness at its (lon, lat) from back-rotated craton data
-        3. Computes craton base: craton_base_r = r_outer - thickness_nondim
-        4. Returns smooth indicator: 0.5 * (1 + tanh((r - craton_base_r) / width))
+        2. Looks up thickness at its (lon, lat) from back-rotated region data
+        3. Computes region base: region_base_r = r_outer - thickness_nondim
+        4. Returns smooth indicator: 0.5 * (1 + tanh((r - region_base_r) / width))
 
         When running with MPI, rank 0 performs gtrack computations and
         broadcasts results. All ranks then interpolate to local mesh points.
@@ -1742,10 +1772,10 @@ class CratonConnector(IndicatorConnector):
         """
         age = self.ndtime2age(ndtime)
 
-        debug_log(f"CratonConnector: Computing craton indicator for {age:.2f} Ma.")
+        debug_log(f"PolygonConnector: Computing indicator for {age:.2f} Ma.")
 
         # Validate requested age
-        # For CratonConnector, rotation works for any valid age (no time-stepping constraint)
+        # PolygonConnector uses rotation only, so any valid age order works
         oldest_age = self.gplates_connector.oldest_age
         if age > oldest_age:
             raise ValueError(
@@ -1763,23 +1793,23 @@ class CratonConnector(IndicatorConnector):
             if abs(age - self.reconstruction_age) < self.gplates_connector.delta_t:
                 coords_hash = (target_coords.shape, target_coords[0, 0] if len(target_coords) > 0 else 0)
                 if self._cached_result is not None and coords_hash == self._cached_coords_hash:
-                    log(f"CratonConnector: Age {age:.2f} Ma unchanged (within delta_t={self.gplates_connector.delta_t}), using cached result.")
+                    log(f"PolygonConnector: Age {age:.2f} Ma unchanged (within delta_t={self.gplates_connector.delta_t}), using cached result.")
                     return self._cached_result
 
         # Rank 0 performs gtrack operations
         if self._is_root:
-            # Rotate craton thickness data to target age
-            craton_cloud = self._rotator.rotate(
-                self._craton_present,
+            # Rotate region thickness data to target age
+            region_cloud = self._rotator.rotate(
+                self._region_present,
                 from_age=0.0,
                 to_age=age
             )
 
-            debug_log(f"CratonConnector: {craton_cloud.n_points} craton points at {age:.2f} Ma.")
+            debug_log(f"PolygonConnector: {region_cloud.n_points} region points at {age:.2f} Ma.")
 
             # Extract numpy arrays for broadcast
-            source_xyz = craton_cloud.xyz.copy()
-            source_thickness = craton_cloud.get_property(self.config.property_name).copy()
+            source_xyz = region_cloud.xyz.copy()
+            source_thickness = region_cloud.get_property(self.config.property_name).copy()
         else:
             source_xyz = None
             source_thickness = None
@@ -1805,15 +1835,15 @@ class CratonConnector(IndicatorConnector):
         source_thickness_km: np.ndarray,
         target_coords: np.ndarray
     ) -> np.ndarray:
-        """Compute smooth craton indicator for target coordinates.
+        """Compute smooth indicator for target coordinates.
 
         For each target point:
         1. Compute its radial position r
         2. Look up thickness at its (lon, lat) via inverse-distance interpolation
-        3. Compute craton base: craton_base_r = r_outer - thickness_nondim
-        4. Return smooth indicator: 0.5 * (1 + tanh((r - craton_base_r) / width))
+        3. Compute region base: region_base_r = r_outer - thickness_nondim
+        4. Return smooth indicator: 0.5 * (1 + tanh((r - region_base_r) / width))
 
-        Points far from any craton data get indicator = 0 (not in craton).
+        Points far from any region data get indicator = 0 (not in region).
 
         Args:
             source_xyz: (N, 3) source point coordinates (from gtrack, in meters).
@@ -1821,9 +1851,9 @@ class CratonConnector(IndicatorConnector):
             target_coords: (M, 3) target mesh coordinates.
 
         Returns:
-            (M,) indicator values: ~1 inside craton, ~0 outside.
+            (M,) indicator values: ~1 inside region, ~0 outside.
         """
-        # Handle empty craton case
+        # Handle empty region case
         if source_xyz is None or len(source_xyz) == 0:
             return np.zeros(len(target_coords))
 
@@ -1855,7 +1885,7 @@ class CratonConnector(IndicatorConnector):
             # Handle exact matches
             exact_match = dists[:, 0] < epsilon
 
-            # Identify points with no nearby source data (outside cratons)
+            # Identify points with no nearby source data (outside region)
             too_far = dists[:, 0] > self.config.distance_threshold
 
             # Safe distances for division
@@ -1874,21 +1904,372 @@ class CratonConnector(IndicatorConnector):
         # Convert thickness to mesh units
         thickness_nondim = thickness_km / self.config.depth_scale
 
-        # Compute craton base radius
-        craton_base_r = self.config.r_outer - thickness_nondim
+        # Compute region base radius
+        region_base_r = self.config.r_outer - thickness_nondim
 
         # Compute smooth indicator using tanh
-        # indicator = 0.5 * (1 + tanh((r - craton_base) / width))
-        # This gives ~1 when r > craton_base (inside craton)
-        # and ~0 when r < craton_base (below craton)
+        # indicator = 0.5 * (1 + tanh((r - region_base) / width))
+        # This gives ~1 when r > region_base (inside region)
+        # and ~0 when r < region_base (below region)
         indicator = 0.5 * (1.0 + np.tanh(
-            (r_target - craton_base_r) / self._transition_width_nondim
+            (r_target - region_base_r) / self._transition_width_nondim
         ))
 
-        # Points far from any craton data are outside cratons -> indicator = 0
+        # Points far from any region data are outside the region -> indicator = 0
         indicator[too_far] = 0.0
 
         return indicator
+
+
+# ---------------------------------------------------------------------------
+# Default geotherm functions
+# ---------------------------------------------------------------------------
+
+def ocean_erf_normalized(depth_m, z_lab_m, age_myr=None, kappa=1e-6, **kwargs):
+    """Normalized erf geotherm for oceanic lithosphere.
+
+    Returns T_norm = erf(z / a) / erf(z_lab / a), where a = 2 * sqrt(kappa * t).
+    This gives T = 0 at the surface and T = 1 at the LAB depth, with the shape
+    controlled by seafloor age through the thermal diffusion length scale.
+
+    Args:
+        depth_m: Depth below the surface in meters (array).
+        z_lab_m: LAB depth in meters (array, same shape as depth_m).
+        age_myr: Seafloor age in Myr (array, same shape as depth_m).
+            If None or zero, falls back to linear profile.
+        kappa: Thermal diffusivity in m^2/s. Default: 1e-6.
+
+    Returns:
+        Normalized temperature in [0, 1]. T=0 at surface, T=1 at LAB.
+    """
+    from scipy.special import erf
+
+    depth_m = np.asarray(depth_m, dtype=float)
+    z_lab_m = np.asarray(z_lab_m, dtype=float)
+
+    result = np.zeros_like(depth_m)
+
+    if age_myr is None:
+        # No age info: fall back to linear
+        valid = z_lab_m > 0
+        result[valid] = depth_m[valid] / z_lab_m[valid]
+        return np.clip(result, 0.0, 1.0)
+
+    age_myr = np.asarray(age_myr, dtype=float)
+    age_sec = np.maximum(age_myr, 0.0) * 3.15576e13  # Myr to seconds
+
+    # Diffusion length scale: a = 2 * sqrt(kappa * t)
+    a = 2.0 * np.sqrt(kappa * np.maximum(age_sec, 1.0))
+
+    # erf(z/a) / erf(z_lab/a), with guard for z_lab == 0
+    valid = z_lab_m > 0
+    erf_z = erf(depth_m[valid] / a[valid])
+    erf_zlab = erf(z_lab_m[valid] / a[valid])
+    # Guard against erf_zlab ≈ 0 (very young ocean)
+    safe = erf_zlab > 1e-10
+    result[valid] = np.where(safe, erf_z / np.maximum(erf_zlab, 1e-10),
+                             depth_m[valid] / z_lab_m[valid])
+
+    return np.clip(result, 0.0, 1.0)
+
+
+def continental_linear(depth_m, z_lab_m, **kwargs):
+    """Linear geotherm for continental lithosphere.
+
+    Returns T_norm = z / z_lab. Gives T = 0 at the surface and T = 1 at the LAB.
+
+    Args:
+        depth_m: Depth below the surface in meters (array).
+        z_lab_m: LAB depth in meters (array, same shape as depth_m).
+
+    Returns:
+        Normalized temperature in [0, 1]. T=0 at surface, T=1 at LAB.
+    """
+    depth_m = np.asarray(depth_m, dtype=float)
+    z_lab_m = np.asarray(z_lab_m, dtype=float)
+
+    result = np.zeros_like(depth_m)
+    valid = z_lab_m > 0
+    result[valid] = depth_m[valid] / z_lab_m[valid]
+    return np.clip(result, 0.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Geotherm connector subclasses
+# ---------------------------------------------------------------------------
+
+class LithosphereGeotherm(LithosphereConnector):
+    """Returns normalized geotherm temperature instead of tanh indicator.
+
+    Inherits all of LithosphereConnector's ocean age tracking and continental
+    rotation machinery but overrides get_indicator to produce a temperature
+    profile instead of a binary indicator. Ocean age is preserved so that
+    age-dependent geotherm functions (e.g. the erf profile) can use it.
+
+    Values represent (T - Ts) / (Tlab - Ts) in [0, 1]:
+    - 0 at the surface (T = Ts)
+    - 1 at the LAB depth (T = Tlab)
+
+    This is designed for composition with indicator connectors:
+        T_litho = T_lin * I_cont + T_erf * (1 - I_cont)
+        T.interpolate(Ts + (Tlab - Ts) * (T_litho * I_lith + T_bg * (1 - I_lith)))
+
+    Args:
+        gplates_connector: pyGplatesConnector with plate model files.
+        continental_data: Present-day continental thickness data.
+        age_to_property: Function converting seafloor age (Myr) to thickness (km).
+        geotherm: Geotherm function with signature
+            f(depth_m, z_lab_m, age_myr=None, kappa=None, **kwargs) -> T_norm.
+            Defaults to ocean_erf_normalized.
+        kappa: Thermal diffusivity in m^2/s. Default: 1e-6.
+        default_continental_age: Age (Myr) assigned to continental points for
+            the geotherm function. Since continents don't have a meaningful
+            seafloor age, this provides a large default so the erf profile
+            approaches linear. Default: 500.0.
+        config: LithosphereConfig (optional).
+        config_extra: dict of parameter overrides (optional).
+        comm: MPI communicator (optional).
+
+    Examples:
+        >>> geotherm_connector = LithosphereGeotherm(
+        ...     gplates, continental_data, half_space_cooling,
+        ...     geotherm=ocean_erf_normalized,
+        ...     kappa=1e-6, comm=mesh.comm)
+        >>> T_erf = GplatesScalarFunction(Q, indicator_connector=geotherm_connector)
+        >>> T_erf.update_plate_reconstruction(ndtime)
+    """
+
+    def __init__(self, *args, geotherm=None, kappa=1e-6,
+                 default_continental_age=500.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._geotherm = geotherm or ocean_erf_normalized
+        self._kappa = kappa
+        self._default_continental_age = default_continental_age
+
+    def get_indicator(self, target_coords, ndtime):
+        age = self.ndtime2age(ndtime)
+
+        debug_log(f"LithosphereGeotherm: Computing geotherm for {age:.2f} Ma.")
+
+        # Validate requested age (same checks as parent)
+        oldest_age = self.gplates_connector.oldest_age
+        if age > oldest_age:
+            raise ValueError(
+                f"Requested age {age:.2f} Ma is older than the plate model's oldest age "
+                f"({oldest_age:.2f} Ma)."
+            )
+        if age < 0:
+            raise ValueError(
+                f"Requested age {age:.2f} Ma is negative (in the future). "
+                f"Ages must be >= 0 (present day)."
+            )
+
+        if self._initialized and self._is_root:
+            current_tracker_age = self._ocean_tracker.current_age
+            if current_tracker_age is not None and age > current_tracker_age:
+                raise ValueError(
+                    f"Requested age {age:.2f} Ma is older than the ocean tracker's current "
+                    f"position ({current_tracker_age:.2f} Ma). The ocean tracker can only "
+                    f"evolve forward in time (decreasing age). Ages must be requested in "
+                    f"decreasing order (e.g., 200, 150, 100, 50, 0 Ma)."
+                )
+
+        # Check cache
+        if self.reconstruction_age is not None:
+            if abs(age - self.reconstruction_age) < self.gplates_connector.delta_t:
+                coords_hash = (target_coords.shape, target_coords[0, 0] if len(target_coords) > 0 else 0)
+                if self._cached_result is not None and coords_hash == self._cached_coords_hash:
+                    log(f"LithosphereGeotherm: Age {age:.2f} Ma unchanged, using cached result.")
+                    return self._cached_result
+
+        # Rank 0 performs gtrack operations
+        if self._is_root:
+            ocean_cloud = self._step_ocean_to(age)
+            ocean_ages = ocean_cloud.get_property('age')
+            ocean_thickness = self.age_to_property(ocean_ages)
+            ocean_cloud.add_property(self.config.property_name, ocean_thickness)
+
+            cont_cloud = self._rotate_continental_to(age)
+            cont_thickness = cont_cloud.get_property(self.config.property_name)
+
+            # Assign default age to continental points so age survives concatenation
+            cont_cloud.add_property('age', np.full(cont_cloud.n_points, self._default_continental_age))
+
+            combined = self._PointCloud.concatenate([ocean_cloud, cont_cloud], warn=False)
+
+            source_xyz = combined.xyz.copy()
+            source_thickness = combined.get_property(self.config.property_name).copy()
+            source_age = combined.get_property('age').copy()
+        else:
+            source_xyz = None
+            source_thickness = None
+            source_age = None
+
+        # Broadcast all three arrays
+        if self.comm is not None:
+            source_xyz = self.comm.bcast(source_xyz, root=0)
+            source_thickness = self.comm.bcast(source_thickness, root=0)
+            source_age = self.comm.bcast(source_age, root=0)
+
+        result = self._compute_geotherm(
+            source_xyz, source_thickness, source_age, target_coords)
+
+        # Cache result
+        self.reconstruction_age = age
+        self._cached_result = result
+        self._cached_coords_hash = (target_coords.shape, target_coords[0, 0] if len(target_coords) > 0 else 0)
+
+        return result
+
+    def _compute_geotherm(self, source_xyz, source_thickness_km,
+                          source_age_myr, target_coords):
+        """Compute normalized temperature using geotherm function.
+
+        Same KDTree + IDW interpolation as _compute_indicator, but interpolates
+        both thickness and age, then applies the geotherm function instead of tanh.
+
+        Args:
+            source_xyz: (N, 3) source point coordinates (from gtrack, in meters).
+            source_thickness_km: (N,) thickness values in km.
+            source_age_myr: (N,) seafloor age in Myr.
+            target_coords: (M, 3) target mesh coordinates.
+
+        Returns:
+            (M,) normalized temperature values in [0, 1].
+        """
+        r_target = np.linalg.norm(target_coords, axis=1)
+        depth_m = (self.config.r_outer - r_target) * self.config.depth_scale * 1e3
+
+        # Normalize to unit sphere for KDTree lookup
+        unit_target = target_coords / np.maximum(r_target[:, np.newaxis], 1e-10)
+        r_source = np.linalg.norm(source_xyz, axis=1)
+        unit_source = source_xyz / np.maximum(r_source[:, np.newaxis], 1e-10)
+
+        tree = cKDTree(unit_source)
+        dists, idx = tree.query(unit_target, k=self.config.k_neighbors)
+
+        epsilon = 1e-10
+
+        if self.config.k_neighbors == 1:
+            thickness_km = source_thickness_km[idx].copy()
+            age_myr = source_age_myr[idx].copy()
+            too_far = dists > self.config.distance_threshold
+            thickness_km[too_far] = self.config.default_thickness
+            age_myr[too_far] = self._default_continental_age
+        else:
+            exact_match = dists[:, 0] < epsilon
+            too_far = dists[:, 0] > self.config.distance_threshold
+            safe_dists = np.maximum(dists, epsilon)
+            weights = 1.0 / safe_dists
+            weights /= weights.sum(axis=1, keepdims=True)
+
+            thickness_km = np.sum(weights * source_thickness_km[idx], axis=1)
+            age_myr = np.sum(weights * source_age_myr[idx], axis=1)
+
+            thickness_km[exact_match] = source_thickness_km[idx[exact_match, 0]]
+            age_myr[exact_match] = source_age_myr[idx[exact_match, 0]]
+
+            thickness_km[too_far] = self.config.default_thickness
+            age_myr[too_far] = self._default_continental_age
+
+        z_lab_m = thickness_km * 1e3
+
+        T_norm = self._geotherm(depth_m, z_lab_m, age_myr=age_myr, kappa=self._kappa)
+        return np.clip(T_norm, 0.0, 1.0)
+
+
+class PolygonGeotherm(PolygonConnector):
+    """Returns normalized geotherm temperature instead of tanh indicator.
+
+    Inherits all of PolygonConnector's polygon filtering and rotation machinery
+    but overrides _compute_indicator to produce a temperature profile instead
+    of a binary indicator. Suited for age-independent geotherms like linear
+    continental profiles.
+
+    Values represent (T - Ts) / (Tlab - Ts) in [0, 1]:
+    - 0 at the surface (T = Ts)
+    - 1 at the LAB depth (T = Tlab)
+
+    This is designed for composition with indicator connectors:
+        T_litho = T_lin * I_cont + T_erf * (1 - I_cont)
+        T.interpolate(Ts + (Tlab - Ts) * (T_litho * I_lith + T_bg * (1 - I_lith)))
+
+    Args:
+        gplates_connector: pyGplatesConnector with plate model files.
+        polygons: Path to polygon shapefile.
+        thickness_data: Present-day thickness data for the region.
+        geotherm: Geotherm function with signature
+            f(depth_m, z_lab_m, **kwargs) -> T_norm.
+            Defaults to continental_linear.
+        config: PolygonConfig (optional).
+        config_extra: dict of parameter overrides (optional).
+        comm: MPI communicator (optional).
+
+    Examples:
+        >>> geotherm_connector = PolygonGeotherm(
+        ...     gplates, craton_polygons, craton_thickness,
+        ...     geotherm=continental_linear, comm=mesh.comm)
+        >>> T_lin = GplatesScalarFunction(Q, indicator_connector=geotherm_connector)
+        >>> T_lin.update_plate_reconstruction(ndtime)
+    """
+
+    def __init__(self, *args, geotherm=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._geotherm = geotherm or continental_linear
+
+    def _compute_indicator(self, source_xyz, source_thickness_km, target_coords):
+        """Compute normalized temperature using geotherm function.
+
+        Same KDTree + IDW interpolation as parent, but applies the geotherm
+        function instead of tanh. Points far from any source data get T_norm = 1
+        (mantle temperature), so blending with indicator gives background T.
+
+        Args:
+            source_xyz: (N, 3) source point coordinates.
+            source_thickness_km: (N,) thickness values in km.
+            target_coords: (M, 3) target mesh coordinates.
+
+        Returns:
+            (M,) normalized temperature values in [0, 1].
+        """
+        if source_xyz is None or len(source_xyz) == 0:
+            return np.ones(len(target_coords))
+
+        r_target = np.linalg.norm(target_coords, axis=1)
+        depth_m = (self.config.r_outer - r_target) * self.config.depth_scale * 1e3
+
+        unit_target = target_coords / np.maximum(r_target[:, np.newaxis], 1e-10)
+        r_source = np.linalg.norm(source_xyz, axis=1)
+        unit_source = source_xyz / np.maximum(r_source[:, np.newaxis], 1e-10)
+
+        tree = cKDTree(unit_source)
+        k = min(self.config.k_neighbors, len(source_xyz))
+        dists, idx = tree.query(unit_target, k=k)
+
+        epsilon = 1e-10
+
+        if k == 1:
+            thickness_km = source_thickness_km[idx].copy()
+            too_far = dists > self.config.distance_threshold
+        else:
+            exact_match = dists[:, 0] < epsilon
+            too_far = dists[:, 0] > self.config.distance_threshold
+            safe_dists = np.maximum(dists, epsilon)
+            weights = 1.0 / safe_dists
+            weights /= weights.sum(axis=1, keepdims=True)
+
+            thickness_km = np.sum(weights * source_thickness_km[idx], axis=1)
+            thickness_km[exact_match] = source_thickness_km[idx[exact_match, 0]]
+
+        z_lab_m = thickness_km * 1e3
+
+        T_norm = self._geotherm(depth_m, z_lab_m)
+        T_norm = np.clip(T_norm, 0.0, 1.0)
+
+        # Points far from any source data get mantle temperature
+        T_norm[too_far] = 1.0
+
+        return T_norm
 
 
 class GplatesScalarFunction(fd.Function):
@@ -1900,7 +2281,7 @@ class GplatesScalarFunction(fd.Function):
 
     Works with any IndicatorConnector subclass:
     - LithosphereConnector: Lithosphere indicator (ocean ages + continental thickness)
-    - CratonConnector: Craton indicator (polygon-based)
+    - PolygonConnector: Polygon-based indicator (cratons, continental crust, etc.)
 
     MPI Parallelization:
         For efficient parallel execution, pass `comm=mesh.comm` when creating
@@ -1914,7 +2295,7 @@ class GplatesScalarFunction(fd.Function):
     Args:
         function_space: Scalar function space (e.g., Q).
         indicator_connector: Any IndicatorConnector subclass (LithosphereConnector,
-            CratonConnector, etc.). For parallel execution, create with `comm=mesh.comm`.
+            PolygonConnector, etc.). For parallel execution, create with `comm=mesh.comm`.
         name: Optional name for the function.
         **kwargs: Additional arguments passed to Firedrake Function.
 
@@ -1927,11 +2308,11 @@ class GplatesScalarFunction(fd.Function):
         ...     name="Lithosphere"
         ... )
         >>>
-        >>> # Craton indicator
-        >>> craton_connector = CratonConnector(..., comm=mesh.comm)
+        >>> # Polygon-based indicator (cratons, continental crust, etc.)
+        >>> polygon_connector = PolygonConnector(..., comm=mesh.comm)
         >>> cratons = GplatesScalarFunction(
         ...     Q,
-        ...     indicator_connector=craton_connector,
+        ...     indicator_connector=polygon_connector,
         ...     name="Cratons"
         ... )
         >>>
