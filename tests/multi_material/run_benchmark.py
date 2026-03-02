@@ -264,7 +264,7 @@ t_adapt = ga.TimestepAdaptor(
     timestep,
     velocity,
     stokes_function.subfunctions[0].function_space(),
-    target_cfl=0.55 * adv_kwargs.get("subcycles", 1),
+    target_cfl=0.2 * adv_kwargs.get("subcycles", 1),
     maximum_timestep=simulation.dump_period,
 )
 output_file = fd.VTKFile(
