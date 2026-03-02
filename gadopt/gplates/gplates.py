@@ -2028,7 +2028,6 @@ class LithosphereGeotherm(LithosphereConnector):
             ocean_cloud.add_property(self.config.property_name, ocean_thickness)
 
             cont_cloud = self._rotate_continental_to(age)
-            cont_thickness = cont_cloud.get_property(self.config.property_name)
 
             # Assign default age to continental points so age survives concatenation
             cont_cloud.add_property('age', np.full(cont_cloud.n_points, self._default_continental_age))
