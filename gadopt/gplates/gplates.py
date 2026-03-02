@@ -723,67 +723,41 @@ class LithosphereConfig:
         ...     config_extra={"n_points": 40000}
         ... )
 
-    Attributes
-    ----------
-    Ocean Tracker Parameters
-    ~~~~~~~~~~~~~~~~~~~~~~~~
-    time_step : float
-        Time step for ocean age tracker in Myr. Default: 1.0
-    n_points : int
-        Number of points for ocean tracker mesh. Higher values give
-        better resolution but slower computation. Default: 10000
-    reinit_interval_myr : float
-        Reinitialize ocean tracker every N Myr to prevent drift
-        accumulation. Default: 50.0
+    Attributes:
+        time_step: Time step for ocean age tracker in Myr. Default: 1.0.
+        n_points: Number of points for ocean tracker mesh. Higher values
+            give better resolution but slower computation. Default: 10000.
+        reinit_interval_myr: Reinitialize ocean tracker every N Myr to
+            prevent drift accumulation. Default: 50.0.
+        k_neighbors: Number of nearest neighbors for thickness
+            interpolation. Default: 50.
+        distance_threshold: Maximum angular distance (radians on unit
+            sphere) for valid interpolation. Points beyond this receive
+            default_thickness. Default: 0.1 (~570 km at Earth's surface).
+        default_thickness: Thickness (km) assigned to points with no
+            nearby data. Default: 100.0.
+        r_outer: Outer radius of mesh in non-dimensional units. This is
+            the radial coordinate of Earth's surface in the mesh.
+            Default: 2.208 (for r_inner=1.208, giving mantle depth ratio).
+        depth_scale: Physical depth (km) corresponding to 1 non-dimensional
+            unit. For Earth's mantle: 2890 km. Default: 2890.0.
+        transition_width: Width of tanh transition at lithosphere base in
+            km. Controls smoothness of the indicator field. Default: 10.0.
+        property_name: Name of the thickness property in data files.
+            Default: 'thickness'.
 
-    Interpolation Parameters
-    ~~~~~~~~~~~~~~~~~~~~~~~~
-    k_neighbors : int
-        Number of nearest neighbors for thickness interpolation.
-        Default: 50
-    distance_threshold : float
-        Maximum angular distance (radians on unit sphere) for valid
-        interpolation. Points beyond this receive default_thickness.
-        Default: 0.1 (~570 km at Earth's surface)
-    default_thickness : float
-        Thickness (km) assigned to points with no nearby data.
-        Default: 100.0
+    Examples::
 
-    Mesh Geometry Parameters
-    ~~~~~~~~~~~~~~~~~~~~~~~~
-    r_outer : float
-        Outer radius of mesh in non-dimensional units. This is the
-        radial coordinate of Earth's surface in the mesh.
-        Default: 2.208 (for r_inner=1.208, giving mantle depth ratio)
-    depth_scale : float
-        Physical depth (km) corresponding to 1 non-dimensional unit.
-        For Earth's mantle: 2890 km. Default: 2890.0
-    transition_width : float
-        Width of tanh transition at lithosphere base in km. Controls
-        smoothness of the indicator field. Default: 10.0
-
-    Data Parameters
-    ~~~~~~~~~~~~~~~
-    property_name : str
-        Name of the thickness property in data files. Default: 'thickness'
-
-    Examples
-    --------
-    >>> # Use all defaults
-    >>> config = LithosphereConfig()
-    >>>
-    >>> # High-resolution ocean tracking
-    >>> config = LithosphereConfig(
-    ...     n_points=40000,
-    ...     time_step=0.5,
-    ...     reinit_interval_myr=25.0,
-    ... )
-    >>>
-    >>> # Different mesh geometry (e.g., different r_inner)
-    >>> config = LithosphereConfig(
-    ...     r_outer=2.5,
-    ...     depth_scale=2890.0,
-    ... )
+        >>> config = LithosphereConfig()
+        >>> config = LithosphereConfig(
+        ...     n_points=40000,
+        ...     time_step=0.5,
+        ...     reinit_interval_myr=25.0,
+        ... )
+        >>> config = LithosphereConfig(
+        ...     r_outer=2.5,
+        ...     depth_scale=2890.0,
+        ... )
     """
 
     # Ocean tracker parameters
@@ -836,9 +810,7 @@ class LithosphereConfig:
     def to_dict(self) -> dict:
         """Convert configuration to dictionary.
 
-        Returns
-        -------
-        dict
+        Returns:
             Configuration as dictionary, suitable for serialization.
         """
         return asdict(self)
@@ -847,14 +819,11 @@ class LithosphereConfig:
     def from_dict(cls, config_dict: dict) -> "LithosphereConfig":
         """Create configuration from dictionary.
 
-        Parameters
-        ----------
-        config_dict : dict
-            Dictionary with configuration parameters. Unknown keys are ignored.
+        Args:
+            config_dict: Dictionary with configuration parameters.
+                Unknown keys are ignored.
 
-        Returns
-        -------
-        LithosphereConfig
+        Returns:
             Configuration object with values from dictionary.
         """
         # Filter to only known fields
@@ -865,20 +834,11 @@ class LithosphereConfig:
     def with_overrides(self, overrides: dict) -> "LithosphereConfig":
         """Create a new config with specified overrides.
 
-        Parameters
-        ----------
-        overrides : dict
-            Dictionary of parameter overrides.
+        Args:
+            overrides: Dictionary of parameter overrides.
 
-        Returns
-        -------
-        LithosphereConfig
+        Returns:
             New configuration with overrides applied.
-
-        Examples
-        --------
-        >>> base = LithosphereConfig()
-        >>> high_res = base.with_overrides({"n_points": 40000})
         """
         current = self.to_dict()
         current.update(overrides)
@@ -1410,55 +1370,33 @@ class PolygonConfig:
         ...     config_extra={"n_points": 40000}
         ... )
 
-    Attributes
-    ----------
-    Sampling Parameters
-    ~~~~~~~~~~~~~~~~~~~
-    n_points : int
-        Number of sample points on fibonacci sphere for polygon coverage.
-        Higher values give better resolution of polygon boundaries.
-        Default: 20000
+    Attributes:
+        n_points: Number of sample points on fibonacci sphere for polygon
+            coverage. Higher values give better resolution of polygon
+            boundaries. Default: 20000.
+        k_neighbors: Number of nearest neighbors for thickness
+            interpolation. Default: 50.
+        distance_threshold: Maximum angular distance (radians on unit
+            sphere) for valid interpolation. Points beyond this receive
+            default_thickness. Default: 0.1 (~570 km at Earth's surface).
+        default_thickness: Thickness (km) assigned to points with no
+            nearby data. Default: 200.0.
+        r_outer: Outer radius of mesh in non-dimensional units.
+            Default: 2.208 (for r_inner=1.208).
+        depth_scale: Physical depth (km) corresponding to 1 non-dimensional
+            unit. For Earth's mantle: 2890 km. Default: 2890.0.
+        transition_width: Width of tanh transition at region base in km.
+            Controls smoothness of the indicator field. Default: 10.0.
+        property_name: Name of the thickness property in data files.
+            Default: 'thickness'.
 
-    Interpolation Parameters
-    ~~~~~~~~~~~~~~~~~~~~~~~~
-    k_neighbors : int
-        Number of nearest neighbors for thickness interpolation.
-        Default: 50
-    distance_threshold : float
-        Maximum angular distance (radians on unit sphere) for valid
-        interpolation. Points beyond this receive default_thickness.
-        Default: 0.1 (~570 km at Earth's surface)
-    default_thickness : float
-        Thickness (km) assigned to points with no nearby data.
-        Default: 200.0
+    Examples::
 
-    Mesh Geometry Parameters
-    ~~~~~~~~~~~~~~~~~~~~~~~~
-    r_outer : float
-        Outer radius of mesh in non-dimensional units.
-        Default: 2.208 (for r_inner=1.208)
-    depth_scale : float
-        Physical depth (km) corresponding to 1 non-dimensional unit.
-        For Earth's mantle: 2890 km. Default: 2890.0
-    transition_width : float
-        Width of tanh transition at region base in km. Controls
-        smoothness of the indicator field. Default: 10.0
-
-    Data Parameters
-    ~~~~~~~~~~~~~~~
-    property_name : str
-        Name of the thickness property in data files. Default: 'thickness'
-
-    Examples
-    --------
-    >>> # Use all defaults
-    >>> config = PolygonConfig()
-    >>>
-    >>> # Higher resolution with sharper boundaries
-    >>> config = PolygonConfig(
-    ...     n_points=50000,
-    ...     transition_width=5.0,
-    ... )
+        >>> config = PolygonConfig()
+        >>> config = PolygonConfig(
+        ...     n_points=50000,
+        ...     transition_width=5.0,
+        ... )
     """
 
     # Sampling parameters

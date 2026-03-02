@@ -63,14 +63,10 @@ class IndicatorConfigBase:
     def with_overrides(self, overrides: dict):
         """Create a new config with specified overrides.
 
-        Parameters
-        ----------
-        overrides : dict
-            Dictionary of parameter overrides.
+        Args:
+            overrides: Dictionary of parameter overrides.
 
-        Returns
-        -------
-        Config
+        Returns:
             New configuration with overrides applied.
         """
         current = self.to_dict()
@@ -105,24 +101,22 @@ class IndicatorConnector(ABC):
         then broadcast results to other ranks. Each rank interpolates to its
         local mesh points.
 
-    Examples
-    --------
-    >>> # Creating a custom indicator connector
-    >>> class MyConnector(IndicatorConnector):
-    ...     def __init__(self, gplates_connector, config=None, config_extra=None, comm=None):
-    ...         self.gplates_connector = gplates_connector
-    ...         self.comm = comm
-    ...         self.reconstruction_age = None
-    ...         # Build config with defaults and overrides
-    ...         if config is None:
-    ...             config = MyConfigDefault
-    ...         if config_extra is not None:
-    ...             config = config.with_overrides(config_extra)
-    ...         self.config = config
-    ...
-    ...     def get_indicator(self, target_coords, ndtime):
-    ...         # Implementation here
-    ...         pass
+    Examples::
+
+        >>> class MyConnector(IndicatorConnector):
+        ...     def __init__(self, gplates_connector, config=None, config_extra=None, comm=None):
+        ...         self.gplates_connector = gplates_connector
+        ...         self.comm = comm
+        ...         self.reconstruction_age = None
+        ...         if config is None:
+        ...             config = MyConfigDefault
+        ...         if config_extra is not None:
+        ...             config = config.with_overrides(config_extra)
+        ...         self.config = config
+        ...
+        ...     def get_indicator(self, target_coords, ndtime):
+        ...         # Implementation here
+        ...         pass
     """
 
     # Required attributes (set by subclasses)
@@ -145,17 +139,12 @@ class IndicatorConnector(ABC):
         When running with MPI (comm is set), rank 0 performs heavy computation
         and broadcasts results. All ranks then interpolate to local mesh points.
 
-        Parameters
-        ----------
-        target_coords : np.ndarray
-            (M, 3) array of mesh coordinates in mesh units.
-            Each MPI rank provides its local mesh coordinates.
-        ndtime : float
-            Non-dimensional time.
+        Args:
+            target_coords: (M, 3) array of mesh coordinates in mesh units.
+                Each MPI rank provides its local mesh coordinates.
+            ndtime: Non-dimensional time.
 
-        Returns
-        -------
-        np.ndarray
+        Returns:
             (M,) array of indicator values in [0, 1].
         """
         ...
@@ -165,14 +154,10 @@ class IndicatorConnector(ABC):
 
         Delegates to gplates_connector.
 
-        Parameters
-        ----------
-        ndtime : float
-            Non-dimensional time.
+        Args:
+            ndtime: Non-dimensional time.
 
-        Returns
-        -------
-        float
+        Returns:
             Geological age in millions of years before present.
         """
         return self.gplates_connector.ndtime2age(ndtime)
@@ -182,14 +167,10 @@ class IndicatorConnector(ABC):
 
         Delegates to gplates_connector.
 
-        Parameters
-        ----------
-        age : float
-            Geological age in millions of years before present.
+        Args:
+            age: Geological age in millions of years before present.
 
-        Returns
-        -------
-        float
+        Returns:
             Non-dimensional time.
         """
         return self.gplates_connector.age2ndtime(age)
@@ -201,9 +182,7 @@ class IndicatorConnector(ABC):
         If the time change is less than delta_t, cached results may be reused.
         Delegates to gplates_connector.delta_t.
 
-        Returns
-        -------
-        float
+        Returns:
             Time window in Myr.
         """
         return self.gplates_connector.delta_t
