@@ -7,12 +7,13 @@ depending on what they would like to achieve.
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement, DirichletBC, utils, interpolate, conditional
+from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
+from functools import cached_property
 from mpi4py import MPI
 import numpy as np
 import logging
@@ -442,7 +443,7 @@ def timer_decorator(func):
 
 class InteriorBC(DirichletBC):
     """DirichletBC applied to anywhere that is *not* on the specified boundary"""
-    @utils.cached_property
+    @cached_property
     def nodes(self):
         return np.array(list(set(range(self._function_space.node_count)) - set(super().nodes)))
 
