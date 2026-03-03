@@ -140,7 +140,7 @@ def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     return mass_scaling * eq.test * Dt(trial) * eq.dx
 
 
-def mass_term_without_irksome(eq: Equation, trial: Argument | ufl.indexed.Indexed | Function) -> Form:
+def mass_term_without_irksome(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     """UFL form for the mass term used in the time discretisation without using Irksome.
 
     Args:
