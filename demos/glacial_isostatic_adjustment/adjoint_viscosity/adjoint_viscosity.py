@@ -130,7 +130,6 @@ continue_annotation()
 forward_checkpoint_file = "forward-2d-cylindrical-disp-vel.h5"
 forward_checkpoint = CheckpointFile(forward_checkpoint_file, "r")
 mesh = forward_checkpoint.load_mesh(name='surface_mesh_extruded')
-bottom_id, top_id = "bottom", "top"
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
 
@@ -138,7 +137,7 @@ boundary = get_boundary_ids(mesh)
 
 # +
 V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space
-S = TensorFunctionSpace(mesh, "DQ", 1)  # Stress tensor function space
+S = TensorFunctionSpace(mesh, "DQ", 1)  # Internal variable function space
 DG0 = FunctionSpace(mesh, "DQ", 0)  # Density and shear modulus function space
 DG1 = FunctionSpace(mesh, "DQ", 1)  # Viscosity function space
 P1 = FunctionSpace(mesh, "CG", 1)  # Ice thickness function space
@@ -228,7 +227,6 @@ target_viscosity = setup_heterogenous_viscosity(X, background_viscosity)
 visc_file = VTKFile('viscosity.pvd').write(background_viscosity, target_viscosity)
 # -
 
-
 # Now let's set up the ice load that drives the simulation.
 
 # +
@@ -268,8 +266,6 @@ ice_file.write(ice_thickness)
 #                'scalar_bar_y':0.1}
 #
 # text_pos = (1,600)
-#
-#
 #
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
@@ -522,7 +518,6 @@ reduced_functional = ReducedFunctional(J, control, eval_cb_post=eval_cb)
 
 # ### Verifying the forward tape
 #
-#
 # A good check to see if the forward taping worked is to rerun the forward model based on
 # the operations stored on the tape. We can do this by providing the control to the
 # reduced functional and print out the answer - it is good to see they are the same!
@@ -640,7 +635,6 @@ updated_viscosity_file = VTKFile("updated_viscosity.pvd")
 updated_out_file = VTKFile("updated_out.pvd")
 functional_values = []
 # -
-
 
 # ### Running the inversion
 #
