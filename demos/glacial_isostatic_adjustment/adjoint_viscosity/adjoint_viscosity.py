@@ -2,7 +2,7 @@
 # =======================================================
 # In the previous tutorials we have seen how to run Glacial Isostatic Adjustment (GIA)
 # models forward in time. Two of the key ingredients are an ice loading history and
-# a viscosity structure of the mantle. However, like many problems in Earth Sciences,
+# a mantle viscosity structure. However, like many problems in Earth Sciences,
 # these inputs are not known. We need to infer these unknown inputs based on any
 # geological and geophysical observations that we can get our hands on! In the GIA
 # problem this is often in the form of paleo relative sea level markers and present
@@ -23,7 +23,7 @@
 #
 # [The reference case](../2d_cylindrical_lvv) for this tutorial is the 2D
 # cylindrical tutorial with lateral viscosity variations we saw previously.
-# We have run the model forwards in time and stored the model output as a checkpoint
+# We have run the model forward in time and stored the model output as a checkpoint
 # file on our servers. To download the reference benchmark checkpoint file if it
 # doesn't already exist, execute the following command:
 
@@ -44,7 +44,7 @@
 # choose! Generally, with 3D finite element models these kind of direct search methods
 # are not practical.
 #
-# The trick up our sleeve is that *G-ADOPT* (thanks to *Firedrake* and *Pyadjoint*),
+# The trick up our sleeve is that *G-ADOPT* (thanks to *Firedrake* and *pyadjoint*),
 # is able to calculate the gradient of an output functional from the forward model,
 # for example a misfit between model predictions and observations, with respect to
 # input parameters via an automatically generated *Adjoint* model. Using this
@@ -53,12 +53,12 @@
 # generating the adjoint model is usually a fraction of the (nonlinear) forward model.
 # If you are interested to learn more about Adjoint models, please see this nice
 # [introduction](https://www.dolfin-adjoint.org/en/latest/documentation/maths/)
-# from the Dolfin-Adjoint website.
+# from the dolfin-adjoint website.
 #
 # Once we have the adjoint model, we can use the gradient information to speed up our
 # inversion by finding efficient search directions to adjust the unknown input
 # parameters. This forms the basis of an iterative procedure, where we find the
-# gradient of the misfit w.r.t the model inputs, update the model inputs to
+# gradient of the misfit w.r.t. the model inputs, update the model inputs to
 # (hopefully!) decrease the misfit and then find the new gradient and so on...
 # (N.b. the optimisation algorithm we use later on actually also approximates the
 # Hessian, i.e. second order derivatives, to make the inversion process more efficient.)
@@ -123,7 +123,7 @@ print(tape.get_blocks())
 continue_annotation()
 
 # In this tutorial we are going to load the mesh from the checkpoint created by the
-# [the forward case](../2d_cylindrical_lvv). This makes it
+# [forward case](../2d_cylindrical_lvv). This makes it
 # easier to load the synthetic data from the previous tutorial for our 'twin'
 # experiment.
 
@@ -156,8 +156,8 @@ X = SpatialCoordinate(mesh)
 
 # Layer properties from Spada et al. (2011)
 radius_values = [6371e3, 6301e3, 5951e3, 5701e3, 3480e3]  # radius values in m
-domain_depth = radius_values[0]-radius_values[-1]
-radius_values_nondim = np.array(radius_values)/domain_depth
+domain_depth = radius_values[0] - radius_values[-1]
+radius_values_nondim = np.array(radius_values) / domain_depth
 
 density_values = [3037, 3438, 3871, 4978]  # Density in [kg/m^3]
 shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]  # Shear modulus in [Pa]
@@ -169,9 +169,9 @@ shear_modulus_scale = 1e11
 viscosity_scale = 1e21
 characteristic_maxwell_time = viscosity_scale / shear_modulus_scale
 
-density_values_nondim = np.array(density_values)/density_scale
-shear_modulus_values_nondim = np.array(shear_modulus_values)/shear_modulus_scale
-viscosity_values_nondim = np.array(viscosity_values)/viscosity_scale
+density_values_nondim = np.array(density_values) / density_scale
+shear_modulus_values_nondim = np.array(shear_modulus_values) / shear_modulus_scale
+viscosity_values_nondim = np.array(viscosity_values) / viscosity_scale
 
 density = Function(DG0, name="density")
 initialise_background_field(
@@ -197,13 +197,13 @@ initialise_background_field(
 # that we are inverting for. In our case, this is the viscosity field.
 # For this tutorial we will start with a background viscosity that only varies in the
 # radial direction, but our target viscosity field will be the same laterally varying
-# field in the [previous demo](../2d_cylindrical_lvv).
+# field as in the [previous demo](../2d_cylindrical_lvv).
 #
 # Generally, it is a good idea to rescale the unknown control parameters, because
 # optimisation algorithms find it harder to minimise a misfit if the control varies
 # over many orders of mangitude. Here we have recast the problem in terms of the
 # logarithm of viscosity so that we expect the control viscosity field to vary between
-# -1 and 1. Let's setup the viscosity control field now.
+# -1 and 1. Let's set up the viscosity control field now.
 
 # +
 viscosity_control = Function(P1, name="Viscosity (control)")
@@ -219,8 +219,8 @@ viscosity = background_viscosity * 10**viscosity_control
 # to the control vector’s discrete degrees of freedom. The L2 formulation is
 # more appropriate because it properly accounts for variations in mesh cell size.
 
-# We can also setup a target viscosity field for comparison later using the helper
-# function defined in [previous demo](../2d_cylindrical_lvv)
+# We can also set up a target viscosity field for comparison later using the helper
+# function defined in the [previous demo](../2d_cylindrical_lvv)
 
 # +
 target_viscosity = setup_heterogenous_viscosity(X, background_viscosity)
@@ -229,7 +229,7 @@ visc_file = VTKFile('viscosity.pvd').write(background_viscosity, target_viscosit
 # -
 
 
-# Now let's setup the ice load that drives the simulation.
+# Now let's set up the ice load that drives the simulation.
 
 # +
 # Initialise ice loading
@@ -257,7 +257,7 @@ ice_file = VTKFile('ice.pvd')
 ice_file.write(ice_thickness)
 # -
 
-# Let's visualise the viscosity using pyvista.
+# Let's visualise the viscosity using PyVista.
 
 # + tags=["active-ipynb"]
 # import pyvista as pv
@@ -357,7 +357,7 @@ stokes_solver = InternalVariableSolver(
 # -
 
 # We next set up our output in VTK format. This format can be read by programs like
-# pyvista and Paraview.
+# PyVista and ParaView.
 
 # +
 # Create a velocity function for plotting
@@ -377,7 +377,7 @@ checkpoint_filename = "viscoelastic_loading-chk.h5"
 gd = GIADiagnostics(u, bottom_id=boundary.bottom, top_id=boundary.top)
 # -
 
-# Now is a good time to setup a helper function for defining the time integrated misfit
+# Now is a good time to set up a helper function for defining the time-integrated misfit
 # that we need later as part of our overall objective function. This is going to be
 # called at each timestep of the forward run to calculate the difference between the
 # displacement and velocity at the surface compared to our reference forward simulation.
@@ -542,11 +542,11 @@ dJdm = reduced_functional.derivative(apply_riesz=True)
 grad_file = VTKFile("adj_visc.pvd").write(dJdm)
 # -
 
-# Let's plot derivative using pyvista! In the plot below, since the gradient always
+# Let's plot derivative using PyVista! In the plot below, since the gradient always
 # points uphill, red indicates that increasing the viscosity would increase
-# our objective function and blue areas indicates that increasing the viscosity
+# our objective function and blue indicates that increasing the viscosity
 # here would decrease our objective function. We can see that the dominant
-# sensitivity region is in the location of the low viscosity zone near the bottom
+# sensitivity region is in the location of the low-viscosity zone near the bottom
 # left corner of the domain, where the sign of the gradient implies we need to
 # decrease the viscosity to reduce the misfit as expected.
 
@@ -620,7 +620,7 @@ viscosity_ub.assign(6)
 bounds = [viscosity_lb, viscosity_ub]
 # -
 
-# Next we setup a pyadjoint minimization problem. We tweak G-ADOPT's default minimisation
+# Next we setup a pyadjoint minimisation problem. We tweak G-ADOPT's default minimisation
 # parameters (found in `gadopt/inverse.py`) for our problem. We limit the number of
 # iterations to 5 just so that the demo is quick to run. (N.b. 100 iterations gives a
 # very accurate answer.)
