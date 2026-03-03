@@ -923,11 +923,6 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         source = self.approximation.buoyancy(u) * self.k
         strain = self.approximation.deviatoric_strain(u)
         maxwell_times = self.approximation.maxwell_times
-        if self.approximation.power_law:
-            dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
-            visc_factor = self.approximation.power_law_factor(dev_stress)
-            for i in range(len(maxwell_times)):
-                maxwell_times[i] *= visc_factor
 
         residual_terms = [
             compressible_viscoelastic_terms,
