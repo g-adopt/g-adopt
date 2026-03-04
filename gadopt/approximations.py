@@ -594,6 +594,28 @@ class InternalVariableApproximation(BaseGIAApproximation):
     Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
     Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
 
+    Arguments:
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      power_law:         Flag for using composite power-law rheology formulation
+      exponent:          Power-law exponent for composite power-law formulation
+      transition_stress: Stress level in MPa where nonlinear, dislocation creep begins
+                         to dominate over linear, diffusion creep for composite power
+                         law rheology
+      background_stress: Background stress field to apply with composite power-law
+                         rheology , e.g. from mantle convection simulation
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
+
     '''
     compressible = True
 
@@ -700,6 +722,28 @@ class QuasiCompressibleInternalVariableApproximation(InternalVariableApproximati
 
     For more information on the formulation see the documentation of the parent class
     `InternalVariableApproximation`
+
+    Arguments:
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      power_law:         Flag for using composite power-law rheology formulation
+      exponent:          Power-law exponent for composite power-law formulation
+      transition_stress: Stress level in MPa where nonlinear, dislocation creep begins
+                         to dominate over linear, diffusion creep for composite power
+                         law rheology
+      background_stress: Background stress field to apply with composite power-law
+                         rheology , e.g. from mantle convection simulation
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
     '''
     compressible = True
 
@@ -749,21 +793,26 @@ class CompressibleInternalVariableApproximation(InternalVariableApproximation):
     `InternalVariableApproximation`.
 
     Arguments:
-      bulk_modulus:             bulk modulus
-      density:                  background density
-      shear_modulus:            shear modulus
-      viscosity:                viscosity
-      bulk_shear_ratio:         Ratio of bulk to shear modulus
-      g:                        gravitational acceleration
-      B_mu:                     Nondimensional number describing ratio of buoyancy to
-                                elastic shear strength used for nondimensionalisation.
-                                $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
-                                where $\bar{\rho}$ is a characteristic density scale
-                                (kg / m^3), $\bar{g}$ is a characteristic gravity
-                                scale (m / s^2), $L$ is a characteristic length scale,
-                                often Mantle depth (m), $\\mu$ is a characteristic
-                                shear modulus (Pa).
-
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      power_law:         Flag for using composite power-law rheology formulation
+      exponent:          Power-law exponent for composite power-law formulation
+      transition_stress: Stress level in MPa where nonlinear, dislocation creep begins
+                         to dominate over linear, diffusion creep for composite power
+                         law rheology
+      background_stress: Background stress field to apply with composite power-law
+                         rheology , e.g. from mantle convection simulation
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
     """
 
     compressible = True
