@@ -89,22 +89,19 @@ from gadopt.inverse import *
 
 # We also import some G-ADOPT utilities for later use.
 
-from gadopt.utility import (
-    CombinedSurfaceMeasure,
-    initialise_background_field
-)
+from gadopt.utility import CombinedSurfaceMeasure, initialise_background_field
 from gadopt.demos.glacial_isostatic_adjustment.utils import (
     ice_sheet_disc,
-    setup_heterogenous_viscosity
+    setup_heterogenous_viscosity,
 )
 import numpy as np
 
 # + tags=["active-ipynb"]
 # from gadopt_demo_utils.gia_demo_utils import (
-#    plot_adj_viscosity,
-#    plot_displacement,
-#    plot_ice_ring,
-#    plot_viscosity,
+#     plot_adj_viscosity,
+#     plot_displacement,
+#     plot_ice_ring,
+#     plot_viscosity,
 # )
 # -
 
@@ -129,7 +126,7 @@ continue_annotation()
 
 forward_checkpoint_file = "forward-2d-cylindrical-disp-vel.h5"
 forward_checkpoint = CheckpointFile(forward_checkpoint_file, "r")
-mesh = forward_checkpoint.load_mesh(name='surface_mesh_extruded')
+mesh = forward_checkpoint.load_mesh(name="surface_mesh_extruded")
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
 
@@ -143,7 +140,7 @@ DG1 = FunctionSpace(mesh, "DQ", 1)  # Viscosity function space
 P1 = FunctionSpace(mesh, "CG", 1)  # Ice thickness function space
 R = FunctionSpace(mesh, "R", 0)  # Real function space (for constants)
 
-u = Function(V, name='displacement')
+u = Function(V, name="displacement")
 m = Function(S, name="internal variable")
 # -
 
@@ -159,7 +156,8 @@ domain_depth = radius_values[0] - radius_values[-1]
 radius_values_nondim = np.array(radius_values) / domain_depth
 
 density_values = [3037, 3438, 3871, 4978]  # Density in [kg/m^3]
-shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]  # Shear modulus in [Pa]
+# Shear modulus in [Pa]
+shear_modulus_values = [0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11]
 bulk_shear_ratio = 1.94  # ratio of bulk modulus to shear modulus
 viscosity_values = [1e25, 1e21, 1e21, 2e21]  # Viscosity in [Pa s]
 
@@ -173,20 +171,22 @@ shear_modulus_values_nondim = np.array(shear_modulus_values) / shear_modulus_sca
 viscosity_values_nondim = np.array(viscosity_values) / viscosity_scale
 
 density = Function(DG0, name="density")
-initialise_background_field(
-    density, density_values_nondim, X, radius_values_nondim)
+initialise_background_field(density, density_values_nondim, X, radius_values_nondim)
 
 shear_modulus = Function(DG0, name="shear modulus")
 initialise_background_field(
-    shear_modulus, shear_modulus_values_nondim, X, radius_values_nondim)
+    shear_modulus, shear_modulus_values_nondim, X, radius_values_nondim
+)
 
 bulk_modulus = Function(DG0, name="bulk modulus")
 initialise_background_field(
-    bulk_modulus, shear_modulus_values_nondim, X, radius_values_nondim)
+    bulk_modulus, shear_modulus_values_nondim, X, radius_values_nondim
+)
 
 background_viscosity = Function(DG1, name="background viscosity")
 initialise_background_field(
-    background_viscosity, viscosity_values_nondim, X, radius_values_nondim)
+    background_viscosity, viscosity_values_nondim, X, radius_values_nondim
+)
 # -
 
 # Defining the Control
@@ -224,7 +224,7 @@ viscosity = background_viscosity * 10**viscosity_control
 # +
 target_viscosity = setup_heterogenous_viscosity(X, background_viscosity)
 
-visc_file = VTKFile('viscosity.pvd').write(background_viscosity, target_viscosity)
+visc_file = VTKFile("viscosity.pvd").write(background_viscosity, target_viscosity)
 # -
 
 # Now let's set up the ice load that drives the simulation.
@@ -239,10 +239,10 @@ Hice1 = 1000 / domain_depth
 Hice2 = 2000 / domain_depth
 
 # Setup a disc ice load but with a smooth transition given by a tanh profile
-disc_centre1 = (2*pi/360) * 25  # Centre of disc 1 in radians
+disc_centre1 = (2 * pi / 360) * 25  # Centre of disc 1 in radians
 disc_centre2 = pi  # Centre of disc 2 in radians
-disc_halfwidth1 = (2*pi/360) * 10  # Disc 1 half width in radians
-disc_halfwidth2 = (2*pi/360) * 20  # Disc 2 half width in radians
+disc_halfwidth1 = (2 * pi / 360) * 10  # Disc 1 half width in radians
+disc_halfwidth2 = (2 * pi / 360) * 20  # Disc 2 half width in radians
 disc1 = ice_sheet_disc(X, disc_centre1, disc_halfwidth1)
 disc2 = ice_sheet_disc(X, disc_centre2, disc_halfwidth2)
 
@@ -250,8 +250,8 @@ ice_load = B_mu * rho_ice * (Hice1 * disc1 + Hice2 * disc2)
 
 # write out ice thickness for plotting
 ice_thickness = Function(P1, name="Ice thickness")
-ice_thickness.interpolate(Hice1 * disc1 + Hice2*disc2)
-ice_file = VTKFile('ice.pvd')
+ice_thickness.interpolate(Hice1 * disc1 + Hice2 * disc2)
+ice_file = VTKFile("ice.pvd")
 ice_file.write(ice_thickness)
 # -
 
@@ -260,28 +260,26 @@ ice_file.write(ice_thickness)
 # + tags=["active-ipynb"]
 # import pyvista as pv
 # import matplotlib.pyplot as plt
-#
-# plot_kwargs = {'scalar_bar_vertical': False,
-#                'scalar_bar_x': 0.2,
-#                'scalar_bar_y':0.1}
-#
-# text_pos = (1,600)
-#
+
+# plot_kwargs = {"scalar_bar_vertical": False, "scalar_bar_x": 0.2, "scalar_bar_y": 0.1}
+
+# text_pos = (1, 600)
+
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
-#
+
 # plotter.subplot(0, 0)
-# plot_ice_ring(plotter, scalar='Ice thickness', **plot_kwargs)
-# plot_viscosity(plotter,show_scalar_bar=False)
+# plot_ice_ring(plotter, scalar="Ice thickness", **plot_kwargs)
+# plot_viscosity(plotter, show_scalar_bar=False)
 # plotter.add_text("Target", position=text_pos)
-# plotter.camera_position = 'xy'
-#
+# plotter.camera_position = "xy"
+
 # plotter.subplot(0, 1)
-# plot_ice_ring(plotter, scalar='Ice thickness')
-# plot_viscosity(plotter, scalar='background viscosity', **plot_kwargs)
+# plot_ice_ring(plotter, scalar="Ice thickness")
+# plot_viscosity(plotter, scalar="background viscosity", **plot_kwargs)
 # plotter.add_text("Initial Guess", position=text_pos)
-# plotter.camera_position = 'xy'
-#
+# plotter.camera_position = "xy"
+
 # plotter.show(jupyter_backend="static", interactive=False)
 # plotter.close()
 # -
@@ -291,17 +289,19 @@ ice_file.write(ice_thickness)
 # +
 # Timestepping parameters
 Tstart = 0
-year_in_seconds = 3600*24*365.25
+year_in_seconds = 3600 * 24 * 365.25
 time = Function(R).assign(Tstart * year_in_seconds)
 
 dt_years = 250
-dt = Constant(dt_years * year_in_seconds/characteristic_maxwell_time)
+dt = Constant(dt_years * year_in_seconds / characteristic_maxwell_time)
 Tend_years = 10e3
-Tend = Constant(Tend_years * year_in_seconds/characteristic_maxwell_time)
+Tend = Constant(Tend_years * year_in_seconds / characteristic_maxwell_time)
 dt_out_years = 1e3
-dt_out = Constant(dt_out_years * year_in_seconds/characteristic_maxwell_time)
+dt_out = Constant(dt_out_years * year_in_seconds / characteristic_maxwell_time)
 
-max_timesteps = round((Tend - Tstart * year_in_seconds/characteristic_maxwell_time) / dt)
+max_timesteps = round(
+    (Tend - Tstart * year_in_seconds / characteristic_maxwell_time) / dt
+)
 
 output_frequency = round(dt_out / dt)
 # -
@@ -310,9 +310,10 @@ output_frequency = round(dt_out / dt)
 # finally the Stokes solver.
 
 # +
-stokes_bcs = {boundary.top: {'free_surface': {'normal_stress': ice_load}},
-              boundary.bottom: {'un': 0}
-              }
+stokes_bcs = {
+    boundary.top: {"free_surface": {"normal_stress": ice_load}},
+    boundary.bottom: {"un": 0},
+}
 
 approximation = MaxwellApproximation(
     bulk_modulus=bulk_modulus,
@@ -320,21 +321,23 @@ approximation = MaxwellApproximation(
     shear_modulus=shear_modulus,
     viscosity=viscosity,
     B_mu=B_mu,
-    bulk_shear_ratio=bulk_shear_ratio)
+    bulk_shear_ratio=bulk_shear_ratio,
+)
 
-iterative_parameters = {"mat_type": "matfree",
-                        "snes_type": "ksponly",
-                        "ksp_type": "gmres",
-                        "ksp_rtol": 1e-5,
-                        "pc_type": "python",
-                        "pc_python_type": "firedrake.AssembledPC",
-                        "assembled_pc_type": "gamg",
-                        "assembled_mg_levels_pc_type": "sor",
-                        "assembled_pc_gamg_threshold": 0.01,
-                        "assembled_pc_gamg_square_graph": 100,
-                        "assembled_pc_gamg_coarse_eq_limit": 1000,
-                        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-                        }
+iterative_parameters = {
+    "mat_type": "matfree",
+    "snes_type": "ksponly",
+    "ksp_type": "gmres",
+    "ksp_rtol": 1e-5,
+    "pc_type": "python",
+    "pc_python_type": "firedrake.AssembledPC",
+    "assembled_pc_type": "gamg",
+    "assembled_mg_levels_pc_type": "sor",
+    "assembled_pc_gamg_threshold": 0.01,
+    "assembled_pc_gamg_square_graph": 100,
+    "assembled_pc_gamg_coarse_eq_limit": 1000,
+    "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+}
 
 nullspace = rigid_body_modes(V, rotational=True)
 near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1])
@@ -348,7 +351,7 @@ stokes_solver = InternalVariableSolver(
     solver_parameters=iterative_parameters,
     nullspace=nullspace,
     transpose_nullspace=nullspace,
-    near_nullspace=near_nullspace
+    near_nullspace=near_nullspace,
 )
 # -
 
@@ -364,9 +367,7 @@ output_file = VTKFile("output.pvd")
 output_file.write(u, m, velocity)
 
 plog = ParameterLog("params.log", mesh)
-plog.log_str(
-    "timestep time dt u_rms u_rms_surf uv_min"
-)
+plog.log_str("timestep time dt u_rms u_rms_surf uv_min")
 
 checkpoint_filename = "viscoelastic_loading-chk.h5"
 
@@ -384,16 +385,28 @@ ds = CombinedSurfaceMeasure(mesh, degree=6)
 
 
 def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
-    target_displacement = forward_checkpoint.load_function(mesh, name="displacement", idx=timestep)
-    target_velocity = forward_checkpoint.load_function(mesh, name="velocity", idx=timestep)
+    target_displacement = forward_checkpoint.load_function(
+        mesh, name="displacement", idx=timestep
+    )
+    target_velocity = forward_checkpoint.load_function(
+        mesh, name="velocity", idx=timestep
+    )
     circumference = 2 * pi * radius_values_nondim[0]
     velocity_error = velocity - target_velocity
     velocity_scale = 1e-5
-    velocity_misfit += assemble(dot(velocity_error, velocity_error) / (circumference * velocity_scale**2) * ds(boundary.top))
+    velocity_misfit += assemble(
+        dot(velocity_error, velocity_error)
+        / (circumference * velocity_scale**2)
+        * ds(boundary.top)
+    )
 
     displacement_error = u - target_displacement
     displacement_scale = 1e-4
-    displacement_misfit += assemble(dot(displacement_error, displacement_error) / (circumference * displacement_scale**2) * ds(boundary.top))
+    displacement_misfit += assemble(
+        dot(displacement_error, displacement_error)
+        / (circumference * displacement_scale**2)
+        * ds(boundary.top)
+    )
     return velocity_misfit, displacement_misfit
 
 
@@ -406,21 +419,23 @@ def integrated_time_misfit(timestep, velocity_misfit, displacement_misfit):
 velocity_misfit = 0
 displacement_misfit = 0
 
-for timestep in range(1, max_timesteps+1):
-
-    time.assign(time+dt)
+for timestep in range(1, max_timesteps + 1):
+    time.assign(time + dt)
     stokes_solver.solve()
 
-    velocity.interpolate((u - disp_old)/dt)
+    velocity.interpolate((u - disp_old) / dt)
     disp_old.assign(u)
 
-    velocity_misfit, displacement_misfit = integrated_time_misfit(timestep, velocity_misfit, displacement_misfit)
+    velocity_misfit, displacement_misfit = integrated_time_misfit(
+        timestep, velocity_misfit, displacement_misfit
+    )
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time} {float(dt)} {gd.u_rms()} "
-                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uv_min(boundary.top)}"
-                 )
+    plog.log_str(
+        f"{timestep} {time} {float(dt)} {gd.u_rms()} "
+        f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+        f"{gd.uv_min(boundary.top)}"
+    )
 
     if timestep % output_frequency == 0:
         log("timestep", timestep)
@@ -437,12 +452,12 @@ for timestep in range(1, max_timesteps+1):
 # + tags=["active-ipynb"]
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 1), border=False, notebook=True, off_screen=False)
-#
-# plot_displacement(plotter, disp='displacement', vel='velocity', timestep=10)
-#
-# plot_ice_ring(plotter, scalar='Ice thickness')
-#
-# plotter.camera_position = 'xy'
+
+# plot_displacement(plotter, disp="displacement", vel="velocity", timestep=10)
+
+# plot_ice_ring(plotter, scalar="Ice thickness")
+
+# plotter.camera_position = "xy"
 # plotter.add_text("Time = 10 ka")
 # plotter.show(jupyter_backend="static", interactive=False)
 # plotter.close()
@@ -471,8 +486,12 @@ updated_displacement = Function(V, name="Displacement (updated)")
 updated_velocity = Function(V, name="Velocity (updated)")
 updated_out_file = VTKFile("updated_out.pvd")
 
-final_target_displacement = forward_checkpoint.load_function(mesh, name="displacement", idx=max_timesteps)
-final_target_velocity = forward_checkpoint.load_function(mesh, name="velocity", idx=max_timesteps)
+final_target_displacement = forward_checkpoint.load_function(
+    mesh, name="displacement", idx=max_timesteps
+)
+final_target_velocity = forward_checkpoint.load_function(
+    mesh, name="velocity", idx=max_timesteps
+)
 forward_checkpoint.close()
 
 functional_values = []
@@ -485,12 +504,16 @@ def eval_cb(J, m):
         functional_values.append(J)
 
     # Define the component terms of the overall objective functional
-    log("displacement misfit", displacement_misfit.block_variable.checkpoint / max_timesteps)
+    log(
+        "displacement misfit",
+        displacement_misfit.block_variable.checkpoint / max_timesteps,
+    )
     log("velocity misfit", velocity_misfit.block_variable.checkpoint / max_timesteps)
 
     # Write out values of control and final forward model results
     updated_viscosity.interpolate(
-        background_viscosity * 10**viscosity_control.block_variable.checkpoint)
+        background_viscosity * 10**viscosity_control.block_variable.checkpoint
+    )
     updated_viscosity_file.write(updated_viscosity)
     updated_displacement.interpolate(u.block_variable.checkpoint)
     updated_velocity.interpolate(velocity.block_variable.checkpoint)
@@ -498,7 +521,8 @@ def eval_cb(J, m):
         updated_displacement,
         final_target_displacement,
         updated_velocity,
-        final_target_velocity)
+        final_target_velocity,
+    )
 
 
 # -
@@ -548,14 +572,14 @@ grad_file = VTKFile("adj_visc.pvd").write(dJdm)
 # + tags=["active-ipynb"]
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
 # plotter.subplot(0, 0)
-# plot_ice_ring(plotter, scalar='Ice thickness', **plot_kwargs)
+# plot_ice_ring(plotter, scalar="Ice thickness", **plot_kwargs)
 # plot_viscosity(plotter, show_scalar_bar=False)
 # plotter.add_text("Target", position=text_pos)
-# plotter.camera_position = 'xy'
+# plotter.camera_position = "xy"
 # plotter.subplot(0, 1)
-# plot_ice_ring(plotter, scalar='Ice thickness')
+# plot_ice_ring(plotter, scalar="Ice thickness")
 # plot_adj_viscosity(plotter, **plot_kwargs)
-# plotter.camera_position = 'xy'
+# plotter.camera_position = "xy"
 # plotter.add_text("Initial Guess", position=text_pos)
 # plotter.show(jupyter_backend="static", interactive=False)
 # # Closes and finalizes movie
@@ -607,8 +631,12 @@ with open("taylor_test_minconv.txt", "w") as f:
 # First of all we will define some bounds that we enforce the control to lie within.
 
 # +
-viscosity_lb = Function(viscosity_control.function_space(), name="Viscosity (lower bound)")
-viscosity_ub = Function(viscosity_control.function_space(), name="Viscosity (upper bound)")
+viscosity_lb = Function(
+    viscosity_control.function_space(), name="Viscosity (lower bound)"
+)
+viscosity_ub = Function(
+    viscosity_control.function_space(), name="Viscosity (upper bound)"
+)
 viscosity_lb.assign(-3)
 viscosity_ub.assign(6)
 
@@ -654,19 +682,25 @@ continue_annotation()
 # # Create a plotter object
 # plotter = pv.Plotter(shape=(1, 2), border=False, notebook=True, off_screen=False)
 # plotter.subplot(0, 0)
-# plot_viscosity(plotter,show_scalar_bar=False)
+# plot_viscosity(plotter, show_scalar_bar=False)
 # plotter.add_text("Target")
-#
+
 # plotter.subplot(0, 1)
-# plot_viscosity(plotter, fname='updated_viscosity.pvd', scalar='Viscosity (updated)', timestep=5, **plot_kwargs)
-#
+# plot_viscosity(
+#     plotter,
+#     fname="updated_viscosity.pvd",
+#     scalar="Viscosity (updated)",
+#     timestep=5,
+#     **plot_kwargs,
+# )
+
 # plotter.subplot(0, 0)
-# plot_ice_ring(plotter, scalar='Ice thickness', **plot_kwargs)
-# plotter.camera_position = 'xy'
+# plot_ice_ring(plotter, scalar="Ice thickness", **plot_kwargs)
+# plotter.camera_position = "xy"
 # plotter.subplot(0, 1)
-# plot_ice_ring(plotter, scalar='Ice thickness')
-#
-# plotter.camera_position = 'xy'
+# plot_ice_ring(plotter, scalar="Ice thickness")
+
+# plotter.camera_position = "xy"
 # plotter.add_text("Optimised")
 # plotter.show(jupyter_backend="static", interactive=False)
 # plotter.close()
