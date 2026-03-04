@@ -142,15 +142,6 @@ def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     if use_irksome:
         dt_trial = Dt(trial)
     else:
-        if "dt" not in eq:
-            raise KeyError(
-                "Timestep, `dt`, required in `mass_term` when not using Irksome"
-            )
-        if "trial_old" not in eq:
-            raise KeyError(
-                "Old solution, `trial_old`, required in `mass_term` when not using Irksome"
-            )
-
         dt_trial = (trial - eq.trial_old) / eq.dt
 
     return mass_scaling * inner(eq.test, dt_trial) * eq.dx
@@ -166,5 +157,3 @@ source_term.required_attrs = {"source"}
 source_term.optional_attrs = set()
 sink_term.required_attrs = {"sink_coeff"}
 sink_term.optional_attrs = set()
-mass_term_without_irksome.required_attrs = {"trial_old", "dt"}
-mass_term_without_irksome.optional_attrs = {"mass_scaling"}
