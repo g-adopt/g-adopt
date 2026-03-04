@@ -11,17 +11,7 @@ from typing import Any
 import firedrake as fd
 import numpy as np
 from irksome import MeshConstant, TimeStepper
-from irksome.ButcherTableaux import (
-    Alexander,
-    BackwardEuler,
-    ButcherTableau,
-    GaussLegendre,
-    LobattoIIIA,
-    LobattoIIIC,
-    PareschiRusso,
-    QinZhang,
-    RadauIIA,
-)
+from irksome.ButcherTableaux import *
 
 from .equations import Equation
 from .utility import ensure_constant
