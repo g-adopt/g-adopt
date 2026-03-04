@@ -870,6 +870,8 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         G-ADOPT approximation defining terms in the system of equations
       dt:
         Float quantifying the time step used for time integration
+      theta:
+        Float quantifying the implicit contribution in a coupled time integration
       additional_forcing_term:
         Firedrake form specifying an additional term contributing to the residual
       bcs:
@@ -933,15 +935,15 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         scaling_factors = [self.scaling_factor]
 
         # Loop over number of internal variables
-        for i in range(len(maxwell_times)):
+        for i, maxwell_time in enumerate(maxwell_times):
             residual_terms.append(internal_variable_terms)
             scaling_factors.append(-self.theta*self.scaling_factor)
-            eqs_attrs.append(
-                {"source": strain / maxwell_times[i],
-                 "sink_coeff": 1 / maxwell_times[i],
+            eqs_attrs.append({
+                "source": strain / maxwell_time,
+                 "sink_coeff": 1 / maxwell_time,
                  "trial_old": self.solution_old_split[i+1],
-                 "dt": self.dt}
-            )
+                 "dt": self.dt,
+            })
 
         for i in range(len(self.tests)):
             self.equations.append(
