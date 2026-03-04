@@ -27,7 +27,7 @@ def mass_term(eq: Equation, trial: fd.Argument | Indexed | fd.Function) -> fd.Fo
 
     Note: This mass term does not use Irksome's `Dt` operator; `StokesSolver` manually
     implements the time discretisation: `(eta - eta_old) / dt`.
-    
+
     Args:
         eq:
           G-ADOPT Equation.
