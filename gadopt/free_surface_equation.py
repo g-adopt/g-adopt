@@ -27,7 +27,7 @@ def mass_term(eq: Equation, trial: fd.Argument | Indexed | fd.Function) -> fd.Fo
 
     Note: This mass term does not use Irksome's `Dt` operator; `StokesSolver` manually
     implements the time discretisation: `(eta - eta_old) / dt`.
-
+    
     Args:
         eq:
           G-ADOPT Equation.
@@ -40,10 +40,10 @@ def mass_term(eq: Equation, trial: fd.Argument | Indexed | fd.Function) -> fd.Fo
     """
     n_up = vertical_component(eq.n)
 
-    return eq.buoyancy_scale * eq.test * trial * n_up * eq.ds(eq.boundary_id)
+    return eq.buoyancy_scale * eq.test * (trial - eq.trial_old) / eq.dt * n_up * eq.ds(eq.boundary_id)
 
 
-mass_term.required_attrs = {"buoyancy_scale", "boundary_id"}
+mass_term.required_attrs = {"buoyancy_scale", "boundary_id", "dt", "trial_old"}
 mass_term.optional_attrs = set()
 surface_velocity_term.required_attrs = {"u", "buoyancy_scale", "boundary_id"}
 surface_velocity_term.optional_attrs = set()

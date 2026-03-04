@@ -535,39 +535,24 @@ class StokesSolver(StokesSolverBase):
             )
 
         for bc_id, (eta_ind, buoyancy) in self.free_surface_map.items():
-            mass_term, surface_velocity_term = free_surface_terms
-            eq_attrs = {"boundary_id": bc_id, "buoyancy_scale": buoyancy}
+            eq_attrs = {
+                "boundary_id": bc_id,
+                "buoyancy_scale": buoyancy,
+                "dt": self.dt,
+                "trial_old": self.solution_old_split[eta_ind],
+                "u": u,
+            }
 
             self.equations.append(
                 Equation(
                     self.tests[eta_ind],
                     self.solution_space[eta_ind],
-                    surface_velocity_term,
-                    eq_attrs=eq_attrs | {"u": u},
-                    quad_degree=self.quad_degree,
-                    scaling_factor=-self.theta,
-                )
-            )
-            self.free_surface_equations.append(
-                Equation(
-                    self.tests[eta_ind],
-                    self.solution_space[eta_ind],
-                    mass_term,
+                    free_surface_terms,
                     eq_attrs=eq_attrs,
                     quad_degree=self.quad_degree,
                     scaling_factor=-self.theta,
                 )
             )
-
-    def set_form(self) -> None:
-        super().set_form()
-
-        for eq, sol, sol_old in zip(
-            self.free_surface_equations,
-            self.solution_split[2:],
-            self.solution_old_split[2:],
-        ):
-            self.F += eq.residual((sol - sol_old) / self.dt)
 
     def set_solver_options(
         self, solver_preset: ConfigType | None, solver_extras: ConfigType | None
