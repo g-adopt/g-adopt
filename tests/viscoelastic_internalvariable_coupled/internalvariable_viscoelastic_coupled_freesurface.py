@@ -28,7 +28,13 @@ parser.add_argument(
     "--case",
     default="viscoelastic-compressible",
     type=str,
-    help="Test case to run: elastic limit (dt << maxwell time, 1 step), viscoelastic (dt ~ maxwell time), viscous limit (dt >> maxwell time) ",
+    help='''Test cases run as part of the CI are:
+    1) `elastic-compressible` - elastic limit (dt << maxwell time, 1 step),
+    2) `viscoelastic-compressible`: viscoelastic (dt ~ maxwell time, 2 viscous relaxtion times)
+    3) `viscoelastic-compressible-burgers` (as for 2) except
+    introduces a second internal variable. Shear modulus and viscosity
+    values for each internal variable are halved to give the same
+    behaviour as a purely Maxwell rheology''',
     required=False,
 )
 args = parser.parse_args()
