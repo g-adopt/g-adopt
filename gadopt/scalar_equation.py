@@ -137,24 +137,14 @@ def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     """
     mass_scaling = getattr(eq, "mass_scaling", 1.0)
 
-    return mass_scaling * eq.test * Dt(trial) * eq.dx
+    use_irksome = getattr(eq, "use_irksome", True)
 
+    if use_irksome:
+        dt_trial = Dt(trial)
+    else:
+        dt_trial = (trial - eq.trial_old) / eq.dt
 
-def mass_term_without_irksome(eq: Equation, trial: Argument | Indexed | Function) -> Form:
-    """UFL form for the mass term used in the time discretisation without using Irksome.
-
-    Args:
-        eq:
-          G-ADOPT Equation.
-        trial:
-          Firedrake trial function.
-
-    Returns:
-        The UFL form associated with the mass term of the equation.
-
-    """
-    mass_scaling = getattr(eq, "mass_scaling", 1.0)
-    return mass_scaling * inner(eq.test, (trial - eq.trial_old)/eq.dt) * eq.dx
+    return mass_scaling * inner(eq.test, dt_trial) * eq.dx
 
 
 advection_term.required_attrs = {"u"}
@@ -162,13 +152,8 @@ advection_term.optional_attrs = {"advective_velocity_scaling", "su_nubar"}
 diffusion_term.required_attrs = {"diffusivity"}
 diffusion_term.optional_attrs = {"reference_for_diffusion", "interior_penalty"}
 mass_term.required_attrs = set()
-mass_term.optional_attrs = {"mass_scaling"}
+mass_term.optional_attrs = {"dt", "mass_scaling", "trial_old", "use_irksome"}
 source_term.required_attrs = {"source"}
 source_term.optional_attrs = set()
 sink_term.required_attrs = {"sink_coeff"}
 sink_term.optional_attrs = set()
-mass_term_without_irksome.required_attrs = {"trial_old", "dt"}
-mass_term_without_irksome.optional_attrs = {"mass_scaling"}
-
-# N.b. Internal variable is really a tensor not a scalar
-internal_variable_terms = [mass_term_without_irksome, source_term, sink_term]

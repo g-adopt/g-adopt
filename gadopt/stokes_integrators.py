@@ -23,7 +23,7 @@ from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
-from .scalar_equation import internal_variable_terms
+from .scalar_equation import mass_term, sink_term, source_term
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
     DEBUG,
@@ -535,39 +535,24 @@ class StokesSolver(StokesSolverBase):
             )
 
         for bc_id, (eta_ind, buoyancy) in self.free_surface_map.items():
-            mass_term, surface_velocity_term = free_surface_terms
-            eq_attrs = {"boundary_id": bc_id, "buoyancy_scale": buoyancy}
+            eq_attrs = {
+                "boundary_id": bc_id,
+                "buoyancy_scale": buoyancy,
+                "dt": self.dt,
+                "trial_old": self.solution_old_split[eta_ind],
+                "u": u,
+            }
 
             self.equations.append(
                 Equation(
                     self.tests[eta_ind],
                     self.solution_space[eta_ind],
-                    surface_velocity_term,
-                    eq_attrs=eq_attrs | {"u": u},
-                    quad_degree=self.quad_degree,
-                    scaling_factor=-self.theta,
-                )
-            )
-            self.free_surface_equations.append(
-                Equation(
-                    self.tests[eta_ind],
-                    self.solution_space[eta_ind],
-                    mass_term,
+                    free_surface_terms,
                     eq_attrs=eq_attrs,
                     quad_degree=self.quad_degree,
                     scaling_factor=-self.theta,
                 )
             )
-
-    def set_form(self) -> None:
-        super().set_form()
-
-        for eq, sol, sol_old in zip(
-            self.free_surface_equations,
-            self.solution_split[2:],
-            self.solution_old_split[2:],
-        ):
-            self.F += eq.residual((sol - sol_old) / self.dt)
 
     def set_solver_options(
         self, solver_preset: ConfigType | None, solver_extras: ConfigType | None
@@ -897,7 +882,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         body modes)
     """
 
-    name = "InternalVariable"
+    name = "CoupledInternalVariable"
 
     def __init__(
         self,
@@ -933,13 +918,11 @@ class CoupledInternalVariableSolver(StokesSolverBase):
             for i in range(len(maxwell_times)):
                 maxwell_times[i] *= visc_factor
 
-        residual_terms = [
-            compressible_viscoelastic_terms,
-        ]
-        eqs_attrs = [
-            {"stress": stress, "source": source},
-        ]
+        residual_terms = [compressible_viscoelastic_terms]
+        eqs_attrs = [{"stress": stress, "source": source}]
         scaling_factors = [self.scaling_factor]
+
+        internal_variable_terms = [mass_term, sink_term, source_term]
 
         # Loop over number of internal variables
         for i, maxwell_time in enumerate(maxwell_times):
@@ -948,8 +931,9 @@ class CoupledInternalVariableSolver(StokesSolverBase):
             eqs_attrs.append({
                 "source": strain / maxwell_time,
                 "sink_coeff": 1 / maxwell_time,
-                "trial_old": self.solution_old_split[i+1],
                 "dt": self.dt,
+                "trial_old": self.solution_old_split[i+1],
+                "use_irksome": False,
             })
 
         for i in range(len(self.tests)):

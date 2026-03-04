@@ -1,13 +1,13 @@
 # Test case based on simple harmonic loading and unloading problems
 # from `Viscosity of the Earth's Mantle' by Cathles (1975). The specific
-# analytic solution is actually based off of Equation 2 in `On calculating
+# analytic solution is actually based on Equation 2 in `On calculating
 # glacial isostatic adjustment', Cathles (2024). The decay time is the viscous
-# relaxation timescale plus the maxwell time, including the elastic buoyancy
+# relaxation timescale plus the Maxwell time, including the elastic buoyancy
 # effects. Note that we are solving a loading problem not an unloading problem.
 # There are three default tests:
-# 1) elastic-compressible case limit (dt << maxwell time, 1 step)
-# 2) viscoelastic-compressible (dt ~ maxwell time)
-# 3) viscous limit-compressible-burgers (as above but with burgers rheology)
+# 1) elastic-compressible case limit (dt << Maxwell time, 1 step)
+# 2) viscoelastic-compressible (dt ~ Maxwell time)
+# 3) viscous limit-compressible-burgers (as above but with Burgers rheology)
 
 # Additionally there are quasi-incompressible elastic and viscoelastic cases
 # with different values of bulk/shear modulus ratio.
@@ -56,9 +56,7 @@ def viscoelastic_model(
     L = D / (lam_factor / 4)  # Depth of the domain in m
     D_tilde = 1
     L_tilde = L / D
-    mesh = RectangleMesh(
-        nx, nz, L_tilde, D_tilde
-    )
+    mesh = RectangleMesh(nx, nz, L_tilde, D_tilde)
     mesh.cartesian = True
 
     # Squash mesh to refine near top boundary modified from the ocean model
