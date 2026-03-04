@@ -897,7 +897,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         body modes)
     """
 
-    name = "InternalVariable"
+    name = "CoupledInternalVariable"
 
     def __init__(
         self,
@@ -928,12 +928,8 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         strain = self.approximation.deviatoric_strain(u)
         maxwell_times = self.approximation.maxwell_times
 
-        residual_terms = [
-            compressible_viscoelastic_terms,
-        ]
-        eqs_attrs = [
-            {"stress": stress, "source": source},
-        ]
+        residual_terms = [compressible_viscoelastic_terms]
+        eqs_attrs = [{"stress": stress, "source": source}]
         scaling_factors = [self.scaling_factor]
 
         # Loop over number of internal variables
