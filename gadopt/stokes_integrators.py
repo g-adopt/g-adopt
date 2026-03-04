@@ -23,7 +23,7 @@ from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
-from .scalar_equation import internal_variable_terms
+from .scalar_equation import mass_term, sink_term, source_term
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
     DEBUG,
@@ -917,6 +917,8 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         eqs_attrs = [{"stress": stress, "source": source}]
         scaling_factors = [self.scaling_factor]
 
+        internal_variable_terms = [mass_term, sink_term, source_term]
+
         # Loop over number of internal variables
         for i, maxwell_time in enumerate(maxwell_times):
             residual_terms.append(internal_variable_terms)
@@ -924,8 +926,9 @@ class CoupledInternalVariableSolver(StokesSolverBase):
             eqs_attrs.append({
                 "source": strain / maxwell_time,
                 "sink_coeff": 1 / maxwell_time,
-                "trial_old": self.solution_old_split[i+1],
                 "dt": self.dt,
+                "trial_old": self.solution_old_split[i+1],
+                "use_irksome": False,
             })
 
         for i in range(len(self.tests)):
