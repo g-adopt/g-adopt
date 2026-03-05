@@ -850,9 +850,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
     """Solver for coupled internal variable viscoelastic formulation.
 
     Solves the momentum equation and internal variable evolution equations
-    simultaneously as a single coupled nonlinear variational problem. This
-    eliminates the operator-splitting error present in `InternalVariableSolver`,
-    which solves the two systems sequentially.
+    simultaneously as a single coupled nonlinear variational problem.
 
     The internal variable evolution equation is:
 
