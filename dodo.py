@@ -463,13 +463,19 @@ def task_convert() -> Iterator[DoitTask]:
 
             outputs = [
                 case_dir / output
-                for output in cfg.get("notebook_outputs", []) + [cfg["notebook"]]
+                for output in [cfg["notebook"]] + cfg.get("notebook_outputs", [])
             ]
             notebook_deps.extend(outputs)
-            paths = " ".join(str(o.relative_to(demo_path)) for o in outputs)
+            paths = [o.relative_to(demo_path) for o in outputs]
+            notebook_path, *output_paths = paths
+            output_paths = " ".join(str(o) for o in output_paths)
             actions.append(
-                f"tar --transform='s|/.*/|/|' --append --file artifact.tar --directory demos {paths}"
+                f"tar --transform='s|/.*/|/|' --append --file artifact.tar --directory demos {notebook_path}"
             )
+            if output_paths:
+                actions.append(
+                    f"tar --append --file artifact.tar --directory demos {output_paths}"
+                )
 
             yield make_convert_task(case_dir, step, cfg)
 
