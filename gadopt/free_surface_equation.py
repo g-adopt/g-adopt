@@ -10,6 +10,7 @@ $$
 
 import firedrake as fd
 from ufl.indexed import Indexed
+from irksome import Dt
 
 from .equations import Equation
 from .utility import vertical_component
@@ -35,8 +36,6 @@ def mass_term(eq: Equation, trial: fd.Argument | Indexed | fd.Function) -> fd.Fo
         The UFL form associated with the mass term of the equation.
 
     """
-    from irksome import Dt
-
     n_up = vertical_component(eq.n)
     use_irksome = getattr(eq, "use_irksome", False)
 
