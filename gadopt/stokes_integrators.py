@@ -540,6 +540,7 @@ class StokesSolver(StokesSolverBase):
                 "buoyancy_scale": buoyancy,
                 "dt": self.dt,
                 "trial_old": self.solution_old_split[eta_ind],
+                "use_irksome": False,
                 "u": u,
             }
 
@@ -848,17 +849,35 @@ class InternalVariableSolver(StokesSolverBase):
 class CoupledInternalVariableSolver(StokesSolverBase):
     """Solver for coupled internal variable viscoelastic formulation.
 
+    Solves the momentum equation and internal variable evolution equations
+    simultaneously as a single coupled nonlinear variational problem.
+
+    The internal variable evolution equation is:
+
+        dm/dt = deviatoric_strain(u)/tau - m/tau
+
+    discretised using backward Euler:
+
+        (m_new - m_old)/dt + m_new/tau - deviatoric_strain(u_new)/tau = 0
+
+    Only backward Euler time-stepping is currently implemented. Both the strain
+    rate and the internal variable m are evaluated at the new time level, which
+    is consistent with a fully implicit (backward Euler) discretisation. A
+    proper theta scheme would require theta-weighting of both the strain rate
+    and the sink term. In the future, this should be unified with Irksome,
+    either by using Irksome directly or by using Irksome's Dt operator together
+    with expand_time_derivatives and UFL replace.
+
     Args:
       solution:
-        Firedrake function representing the displacement solution
+        Firedrake function representing the field over the mixed space (displacement
+        and internal variables)
       approximation:
         G-ADOPT approximation defining terms in the system of equations
       dt:
         Float quantifying the time step used for time integration
       scaling_factor:
         A constant factor used to rescale residual terms.
-      theta:
-        Float quantifying the implicit contribution in a coupled time integration
       additional_forcing_term:
         Firedrake form specifying an additional term contributing to the residual
       bcs:
@@ -883,6 +902,9 @@ class CoupledInternalVariableSolver(StokesSolverBase):
     """
 
     name = "CoupledInternalVariable"
+    # Backward Euler: all terms evaluated at the new time level.
+    # This is the only time-stepping scheme currently supported and tested.
+    _theta = 1.0
 
     def __init__(
         self,
@@ -892,7 +914,6 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         *,
         dt: float,
         scaling_factor: float = 1,
-        theta: float = 1,
         **kwargs,
     ) -> None:
 
@@ -903,7 +924,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         approximation.mu = approximation.effective_viscosity(dt)
         self.scaling_factor = scaling_factor
 
-        super().__init__(solution, approximation, dt=dt, theta=theta, **kwargs)
+        super().__init__(solution, approximation, dt=dt, theta=self._theta, **kwargs)
 
     def set_equations(self) -> None:
         u, *internal_variables = self.solution_split
@@ -924,10 +945,14 @@ class CoupledInternalVariableSolver(StokesSolverBase):
 
         internal_variable_terms = [mass_term, sink_term, source_term]
 
+        # Each internal variable equation has the form:
+        #   (m_new - m_old)/dt + m_new/tau - strain(u_new)/tau = 0
+        # written as residual terms (mass + sink + source), then negated via
+        # scaling_factor so the sign convention matches the Stokes block.
         # Loop over number of internal variables
         for i, maxwell_time in enumerate(maxwell_times):
             residual_terms.append(internal_variable_terms)
-            scaling_factors.append(-self.theta*self.scaling_factor)
+            scaling_factors.append(-self._theta * self.scaling_factor)
             eqs_attrs.append({
                 "source": strain / maxwell_time,
                 "sink_coeff": 1 / maxwell_time,

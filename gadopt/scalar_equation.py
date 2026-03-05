@@ -136,12 +136,16 @@ def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
     """
     mass_scaling = getattr(eq, "mass_scaling", 1.0)
-
     use_irksome = getattr(eq, "use_irksome", True)
 
     if use_irksome:
         dt_trial = Dt(trial)
     else:
+        if not hasattr(eq, "dt") or not hasattr(eq, "trial_old"):
+            raise ValueError(
+                "mass_term requires 'dt' and 'trial_old' equation attributes "
+                "when use_irksome=False."
+            )
         dt_trial = (trial - eq.trial_old) / eq.dt
 
     return mass_scaling * inner(eq.test, dt_trial) * eq.dx
