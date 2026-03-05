@@ -472,9 +472,10 @@ def task_convert() -> Iterator[DoitTask]:
             actions.append(
                 f"tar --transform='s|/.*/|/|' --append --file artifact.tar --directory demos {notebook_path}"
             )
-            actions.append(
-                f"tar --append --file artifact.tar --directory demos {output_paths}"
-            )
+            if output_paths:
+                actions.append(
+                    f"tar --append --file artifact.tar --directory demos {output_paths}"
+                )
 
             yield make_convert_task(case_dir, step, cfg)
 
