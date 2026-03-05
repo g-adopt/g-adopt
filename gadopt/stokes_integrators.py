@@ -23,6 +23,7 @@ from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
+from .scalar_equation import mass_term, sink_term, source_term
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
     DEBUG,
@@ -534,39 +535,25 @@ class StokesSolver(StokesSolverBase):
             )
 
         for bc_id, (eta_ind, buoyancy) in self.free_surface_map.items():
-            mass_term, surface_velocity_term = free_surface_terms
-            eq_attrs = {"boundary_id": bc_id, "buoyancy_scale": buoyancy}
+            eq_attrs = {
+                "boundary_id": bc_id,
+                "buoyancy_scale": buoyancy,
+                "dt": self.dt,
+                "trial_old": self.solution_old_split[eta_ind],
+                "use_irksome": False,
+                "u": u,
+            }
 
             self.equations.append(
                 Equation(
                     self.tests[eta_ind],
                     self.solution_space[eta_ind],
-                    surface_velocity_term,
-                    eq_attrs=eq_attrs | {"u": u},
-                    quad_degree=self.quad_degree,
-                    scaling_factor=-self.theta,
-                )
-            )
-            self.free_surface_equations.append(
-                Equation(
-                    self.tests[eta_ind],
-                    self.solution_space[eta_ind],
-                    mass_term,
+                    free_surface_terms,
                     eq_attrs=eq_attrs,
                     quad_degree=self.quad_degree,
                     scaling_factor=-self.theta,
                 )
             )
-
-    def set_form(self) -> None:
-        super().set_form()
-
-        for eq, sol, sol_old in zip(
-            self.free_surface_equations,
-            self.solution_split[2:],
-            self.solution_old_split[2:],
-        ):
-            self.F += eq.residual((sol - sol_old) / self.dt)
 
     def set_solver_options(
         self, solver_preset: ConfigType | None, solver_extras: ConfigType | None
@@ -857,6 +844,143 @@ class InternalVariableSolver(StokesSolverBase):
         # Update internal variable term for using as a RHS explicit forcing in the next timestep
         for m, m_new in zip(self.internal_variables, self.internal_variables_update):
             m.interpolate(m_new)
+
+
+class CoupledInternalVariableSolver(StokesSolverBase):
+    """Solver for coupled internal variable viscoelastic formulation.
+
+    Solves the momentum equation and internal variable evolution equations
+    simultaneously as a single coupled nonlinear variational problem.
+
+    The internal variable evolution equation is:
+
+        dm/dt = deviatoric_strain(u)/tau - m/tau
+
+    discretised using backward Euler:
+
+        (m_new - m_old)/dt + m_new/tau - deviatoric_strain(u_new)/tau = 0
+
+    Only backward Euler time-stepping is currently implemented. Both the strain
+    rate and the internal variable m are evaluated at the new time level, which
+    is consistent with a fully implicit (backward Euler) discretisation. A
+    proper theta scheme would require theta-weighting of both the strain rate
+    and the sink term. In the future, this should be unified with Irksome,
+    either by using Irksome directly or by using Irksome's Dt operator together
+    with expand_time_derivatives and UFL replace.
+
+    Args:
+      solution:
+        Firedrake function representing the field over the mixed space (displacement
+        and internal variables)
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations
+      dt:
+        Float quantifying the time step used for time integration
+      scaling_factor:
+        A constant factor used to rescale residual terms.
+      additional_forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      quad_degree:
+        Integer denoting the quadrature degree
+      solver_parameters:
+        Dictionary of PETSc solver options or string matching one of the default sets
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
+      J:
+        Firedrake function representing the Jacobian of the mixed Stokes system
+      constant_jacobian:
+        Boolean specifying whether the Jacobian of the system is constant
+      nullspace:
+        A `MixedVectorSpaceBasis` for the operator's kernel
+      transpose_nullspace:
+        A `MixedVectorSpaceBasis` for the kernel of the operator's transpose
+      near_nullspace:
+        A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
+        body modes)
+    """
+
+    name = "CoupledInternalVariable"
+    # Backward Euler: all terms evaluated at the new time level.
+    # This is the only time-stepping scheme currently supported and tested.
+    _theta = 1.0
+
+    def __init__(
+        self,
+        solution: fd.Function,
+        approximation: BaseGIAApproximation,
+        /,
+        *,
+        dt: float,
+        scaling_factor: float = 1,
+        **kwargs,
+    ) -> None:
+
+        # provide an `effective viscosity' to the approximation used
+        # for SIPG terms in the viscosity term of momentum_equation.py
+        # N.b. the potential for confusion as GIA modellers often use
+        # mu to represent the shear modulus.
+        approximation.mu = approximation.effective_viscosity(dt)
+        self.scaling_factor = scaling_factor
+
+        super().__init__(solution, approximation, dt=dt, theta=self._theta, **kwargs)
+
+    def set_equations(self) -> None:
+        u, *internal_variables = self.solution_split
+        stress = self.approximation.stress(
+            u, internal_variables=internal_variables)
+        source = self.approximation.buoyancy(u) * self.k
+        strain = self.approximation.deviatoric_strain(u)
+        maxwell_times = self.approximation.maxwell_times
+
+        residual_terms = [compressible_viscoelastic_terms]
+        eqs_attrs = [{"stress": stress, "source": source}]
+        scaling_factors = [self.scaling_factor]
+
+        internal_variable_terms = [mass_term, sink_term, source_term]
+
+        # Each internal variable equation has the form:
+        #   (m_new - m_old)/dt + m_new/tau - strain(u_new)/tau = 0
+        # written as residual terms (mass + sink + source), then negated via
+        # scaling_factor so the sign convention matches the Stokes block.
+        # Loop over number of internal variables
+        for i, maxwell_time in enumerate(maxwell_times):
+            residual_terms.append(internal_variable_terms)
+            scaling_factors.append(-self._theta * self.scaling_factor)
+            eqs_attrs.append({
+                "source": strain / maxwell_time,
+                "sink_coeff": 1 / maxwell_time,
+                "dt": self.dt,
+                "trial_old": self.solution_old_split[i+1],
+                "use_irksome": False,
+            })
+
+        for i in range(len(self.tests)):
+            self.equations.append(
+                Equation(
+                    self.tests[i],
+                    self.solution_space[i],
+                    residual_terms[i],
+                    eq_attrs=eqs_attrs[i],
+                    approximation=self.approximation,
+                    bcs=self.weak_bcs,
+                    quad_degree=self.quad_degree,
+                    scaling_factor=scaling_factors[i],
+                )
+            )
+
+    def set_free_surface_boundary(
+        self, params_fs: dict[str, int | bool], bc_id: int
+    ) -> Expr:
+        normal_stress = params_fs.get("normal_stress", 0.0)
+        # Add free surface stress term. This is also referred to as the Hydrostatic
+        # Prestress advection term in the GIA literature.
+        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
+            vertical_component(self.solution_split[0])
+        )
+
+        return combined_normal_stress
 
 
 class BoundaryNormalStressSolver(SolverConfigurationMixin):
