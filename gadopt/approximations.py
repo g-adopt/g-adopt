@@ -744,9 +744,13 @@ class InternalVariableApproximation(BaseGIAApproximation):
         n = self.exponent
         a = self.background_stress / self.transition_stress
         b = (sigma + self.background_stress) / self.transition_stress
-        # Guard against 0^0: when the base is zero, the correct value of x^0 is 1.
-        a_pow = ufl.conditional(ufl.eq(self.background_stress, 0), ufl.as_ufl(1), a ** (n - 1))
-        b_pow = ufl.conditional(ufl.eq(sigma + self.background_stress, 0), ufl.as_ufl(1), b ** (n - 1))
+        # Guard against 0^0: UFL evaluates 0^0 as 0 rather than 1. This
+        # only arises when n=1 (exponent n-1 = 0); for n>1, a zero base
+        # raised to a positive power correctly evaluates to 0. Conditioning
+        # on the exponent rather than the base avoids incorrectly setting
+        # a^(n-1) = 1 for n>1 when background_stress = 0.
+        a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), a ** (n - 1))
+        b_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), b ** (n - 1))
         return (1 + a_pow) / (1 + b_pow)
 
 
