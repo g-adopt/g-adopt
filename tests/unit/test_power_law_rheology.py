@@ -13,7 +13,7 @@ changes:
 
 import pytest
 import firedrake as fd
-from firedrake import inner, sym, grad, sqrt, assemble, dx
+from firedrake import assemble, dx
 import numpy as np
 
 from gadopt import MaxwellApproximation
