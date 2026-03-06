@@ -198,13 +198,6 @@ else:
     shear_modulus_values_tilde = np.array(shear_modulus_values)/shear_modulus_scale
     viscosity_values_tilde = np.array(viscosity_values)/viscosity_scale
 
-if args.power_law:
-    # multiply background field by 2 if n=1 because
-    # otherwise viscosity halved. i.e. factor = 1 / (1 + tau**(n-1)) = 0.5
-    # if n = 1.
-    viscosity_values_tilde[0] *= 2
-    viscosity_values_tilde[-1] *= 2
-
 density = Function(DG0, name="density")
 initialise_background_field(
     density, density_values_tilde, X, radius_values_tilde,
@@ -258,12 +251,14 @@ else:
         viscosity, viscosity_values_tilde, X, radius_values_tilde,
         shift=radius_values_tilde[-1])
 
-# only used if arg.power_law set to true
+# n=1 (Newtonian) layers use the same formula as n>1; power_law_factor returns 1 for n=1.
 exponent = Function(DG0, name="n exponent")
 initialise_background_field(
     exponent, exponent_values, X, radius_values_tilde,
     shift=radius_values_tilde[-1])
-transition_stress = args.transition_stress * 1e6 / shear_modulus_scale
+# Divide by sqrt(2): second_stress_invariant now computes sqrt(J2) = sqrt(0.5*s_ij*s_ij)
+# rather than sqrt(2*J2), so transition_stress must be in the same sqrt(J2) units.
+transition_stress = args.transition_stress * 1e6 / shear_modulus_scale / 2**0.5
 
 # Next let's define the length of our time step. If we want to accurately resolve the
 # elastic response we should choose a timestep lower than the Maxwell time,
@@ -368,55 +363,11 @@ stokes_bcs = {
 approximation = approx(
     bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_mod_list,
     viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio,
-    power_law=args.power_law, exponent=exponent,
-    transition_stress=transition_stress)
+    exponent=exponent, transition_stress=transition_stress)
 
 stress.interpolate(approximation.deviatoric_stress(z.subfunctions[0], [z.subfunctions[1]]))
 dev_stress_2.interpolate(approximation.second_stress_invariant(stress))
 power_factor.interpolate(approximation.power_law_factor(stress))
-
-iterative_parameters = {"mat_type": "matfree",
-                        "snes_type": "ksponly",
-                        "ksp_type": "gmres",
-                        "ksp_rtol": 1e-3,
-                        "ksp_converged_reason": None,
-                        "ksp_monitor": None,
-                        "pc_type": "fieldsplit",
-                        "pc_fieldsplit_type": "symmetric_multiplicative",
-
-                        "fieldsplit_0_ksp_converged_reason": None,
-                        "fieldsplit_0_ksp_monitor": None,
-                        "fieldsplit_0_ksp_type": "cg",
-                        "fieldsplit_0_pc_type": "python",
-                        "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
-                        "fieldsplit_0_assembled_pc_type": "gamg",
-                        "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
-                        "fieldsplit_0_ksp_rtol": 1e-5,
-                        "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
-                        "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
-                        "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
-                        "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-
-                        "fieldsplit_1_ksp_converged_reason": None,
-                        "fieldsplit_1_ksp_monitor": None,
-                        "fieldsplit_1_ksp_type": "cg",
-                        "fieldsplit_1_pc_type": "python",
-                        "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
-                        "fieldsplit_1_assembled_pc_type": "sor",
-                        "fieldsplit_1_ksp_rtol": 1e-5,
-                        }
-
-if args.power_law:
-    nonlinear_parameters = {
-        "snes_monitor": None,
-        "snes_converged_reason": None,
-        "snes_type": "newtonls",
-        "snes_linesearch_type": "l2",
-        "snes_max_it": 100,
-        "snes_atol": 1e-15,
-        "snes_rtol": 1e-4,
-    }
-    iterative_parameters = iterative_parameters | nonlinear_parameters
 
 Z_nullspace = None  # Default: don't add nullspace for now
 Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot,
@@ -427,7 +378,6 @@ coupled_solver = CoupledInternalVariableSolver(
     approximation,
     dt=dt,
     bcs=stokes_bcs,
-    solver_parameters=iterative_parameters,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
