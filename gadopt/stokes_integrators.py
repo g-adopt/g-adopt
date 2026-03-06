@@ -137,6 +137,43 @@ Note:
   new pairs of keys and values to extend the default ones.
 """
 
+coupled_gia_solver_parameters = {
+    "mat_type": "matfree",
+    "snes_type": "newtonls",
+    "snes_linesearch_type": "l2",
+    "snes_max_it": 100,
+    "snes_atol": 1e-15,
+    "snes_rtol": 1e-4,
+    "ksp_type": "gmres",
+    "ksp_rtol": 1e-3,
+    "pc_type": "fieldsplit",
+    "pc_fieldsplit_type": "symmetric_multiplicative",
+    "fieldsplit_0_ksp_type": "cg",
+    "fieldsplit_0_pc_type": "python",
+    "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
+    "fieldsplit_0_assembled_pc_type": "gamg",
+    "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
+    "fieldsplit_0_ksp_rtol": 1e-5,
+    "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
+    "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
+    "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
+    "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+    "fieldsplit_1_ksp_type": "cg",
+    "fieldsplit_1_pc_type": "python",
+    "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
+    "fieldsplit_1_assembled_pc_type": "sor",
+    "fieldsplit_1_ksp_rtol": 1e-5,
+}
+"""Default iterative solver parameters for CoupledInternalVariableSolver (GIA problems).
+
+Uses a Newton SNES outer loop with a GMRES/fieldsplit preconditioned inner solve. SNES
+is always active: for a Newtonian rheology (exponent=1) the power-law factor is
+identically 1 and the system is linear, so SNES converges in a single iteration at
+negligible extra cost. For power-law rheology (exponent > 1) the full Newton iteration
+is required. The snes_rtol is set looser than ksp_rtol so that the single-iteration
+Newtonian case is accepted without additional SNES iterations.
+"""
+
 
 class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
     """Solver for a system involving mass and momentum conservation.
@@ -932,7 +969,11 @@ class CoupledInternalVariableSolver(StokesSolverBase):
             u, internal_variables=internal_variables)
         source = self.approximation.buoyancy(u) * self.k
         strain = self.approximation.deviatoric_strain(u)
-        maxwell_times = self.approximation.maxwell_times
+        dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
+        visc_factor = self.approximation.power_law_factor(dev_stress)
+        # Build a local list so that self.approximation.maxwell_times is never mutated.
+        # For n=1 (Newtonian) visc_factor is identically 1 and has no effect.
+        maxwell_times = [mt * visc_factor for mt in self.approximation.maxwell_times]
 
         residual_terms = [compressible_viscoelastic_terms]
         eqs_attrs = [{"stress": stress, "source": source}]
@@ -969,6 +1010,48 @@ class CoupledInternalVariableSolver(StokesSolverBase):
                     scaling_factor=scaling_factors[i],
                 )
             )
+
+    def set_solver_options(
+        self,
+        solver_preset: ConfigType | str | None,
+        solver_extras: ConfigType | None,
+    ) -> None:
+        """Sets PETSc solver options for the coupled GIA system.
+
+        Overrides the base class to ensure SNES Newton is always active.
+        For Newtonian rheology (exponent=1) the power-law factor is identically
+        1 and the system is linear, so SNES converges in a single iteration.
+        For power-law rheology (exponent > 1) full Newton iteration is performed.
+
+        When solver_preset is a Mapping it is honoured verbatim. The string
+        preset "direct" uses direct_stokes_solver_parameters plus Newton SNES.
+        The string preset "iterative" and the default None both use
+        coupled_gia_solver_parameters, which already includes Newton SNES and
+        the GIA-specific fieldsplit preconditioner. iterative_stokes_solver_parameters
+        is intentionally not used here: its Schur-complement structure is designed
+        for the standard Stokes system, not the larger coupled GIA block.
+        """
+        if isinstance(solver_preset, Mapping):
+            super().set_solver_options(solver_preset, solver_extras)
+            return
+
+        if solver_preset == "direct":
+            # Delegate to base class for direct_stokes_solver_parameters and
+            # monitoring, then override SNES from ksponly to Newton.
+            super().set_solver_options(solver_preset, solver_extras)
+            self.add_to_solver_config(newton_stokes_solver_parameters)
+            return
+
+        if solver_preset not in (None, "iterative"):
+            raise ValueError("Solver type must be 'direct' or 'iterative'.")
+
+        # "iterative" or no preset: use the GIA-specific coupled solver defaults.
+        # Newton SNES is already included in coupled_gia_solver_parameters.
+        self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
+        self.add_to_solver_config(coupled_gia_solver_parameters)
+        if solver_extras:
+            self.add_to_solver_config(solver_extras)
+        self.register_update_callback(self.set_solver)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int

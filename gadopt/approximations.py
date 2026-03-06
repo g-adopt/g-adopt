@@ -11,7 +11,7 @@ from numbers import Number
 from typing import Optional
 from warnings import warn
 
-from firedrake import Function, Identity, div, grad, inner, sym, tr
+from firedrake import Function, Identity, div, grad, inner, sqrt, sym, tr
 import ufl
 
 from .utility import ensure_constant, vertical_component
@@ -594,6 +594,34 @@ class InternalVariableApproximation(BaseGIAApproximation):
     Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
     Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
 
+    Arguments:
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      exponent:          Power-law stress exponent n. Defaults to 1, which recovers
+                         Newtonian (linear) viscosity with no special casing. Set n > 1
+                         for composite (diffusion + dislocation) creep. The power-law
+                         factor is always evaluated; for n=1 it is identically 1.
+      transition_stress: Stress level (in sqrt(J2) units, consistent with
+                         second_stress_invariant) at which diffusion and dislocation
+                         creep contribute equally. Defaults to 1; the value is
+                         irrelevant when exponent=1.
+      background_stress: Background stress magnitude (sqrt(J2)) representing a
+                         pre-existing stress state, e.g. from mantle convection.
+                         Defaults to 0. The total stress entering the power-law factor
+                         is sigma_GIA + background_stress, a scalar combination that
+                         assumes the two fields are approximately aligned.
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
+
     '''
     compressible = True
 
@@ -605,6 +633,9 @@ class InternalVariableApproximation(BaseGIAApproximation):
         viscosity: Function | Number | list,
         *,
         bulk_shear_ratio: Function | Number = 1,
+        exponent: Function | Number = 1,
+        transition_stress: Function | Number = 1,
+        background_stress: Function | Number = 0,
         **kwargs,
     ):
         self.bulk_modulus = ensure_constant(bulk_modulus)
@@ -629,6 +660,11 @@ class InternalVariableApproximation(BaseGIAApproximation):
             for visc, mu in zip(self.viscosity, self.shear_modulus)
         ]
         self.mu0 = ensure_constant(sum(self.shear_modulus))
+
+        # Power law arguments
+        self.exponent = exponent
+        self.transition_stress = transition_stress
+        self.background_stress = background_stress
 
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         dim = len(u)
@@ -656,13 +692,66 @@ class InternalVariableApproximation(BaseGIAApproximation):
             )
 
         div_u = div(u) * Identity(len(u))
-        d = self.deviatoric_strain(u)
-
         stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
-        stress += 2 * self.mu0 * d
-        for mu, m in zip(self.shear_modulus, internal_variables):
-            stress -= 2 * mu * m
+        stress += self.deviatoric_stress(u, internal_variables)
         return stress
+
+    def deviatoric_stress(self, u, internal_variables):
+        d = self.deviatoric_strain(u)
+        dev_stress = 2 * self.mu0 * d
+        for mu, m in zip(self.shear_modulus, internal_variables):
+            dev_stress -= 2 * mu * m
+        return dev_stress
+
+    def second_stress_invariant(self, dev_stress):
+        """Return the second deviatoric stress invariant sqrt(J2).
+
+        Computes sqrt(J2) = sqrt(0.5 * s_ij * s_ij), the standard second
+        invariant used in mantle rheology power-law formulations. The
+        `transition_stress` parameter throughout this class must be supplied
+        in the same units, i.e. as a sqrt(J2) value.
+        """
+        return sqrt(0.5 * inner(dev_stress, dev_stress) + 1e-16)
+
+    def power_law_factor(self, dev_stress):
+        """Return the composite creep viscosity correction factor.
+
+        For composite (diffusion + dislocation) creep the effective viscosity is
+
+            eta_eff(sigma) = eta_diff / (1 + (sigma / sigma*)^(n-1))
+
+        where sigma* is the transition stress (in sqrt(J2) units, consistent with
+        second_stress_invariant) at which both mechanisms contribute equally.
+        The input viscosity field is assumed to represent eta_eff evaluated at
+        `background_stress` (e.g. from a mantle convection simulation). The factor
+        returned here corrects that value to the total stress sigma_GIA + sigma_bg:
+
+            f = (1 + a^(n-1)) / (1 + b^(n-1))
+
+        where a = sigma_bg / sigma* and b = (sigma_GIA + sigma_bg) / sigma*.
+
+        Note: sigma_GIA and sigma_bg are combined as scalar magnitudes. This
+        assumes the two stress fields are approximately aligned; it is an accepted
+        simplification in GIA power-law literature but should be borne in mind
+        when interpreting results.
+
+        Note on UFL evaluation: UFL evaluates 0^0 = 0 rather than the
+        mathematically correct value of 1. A conditional is used to guard the
+        exponentiation when the base is zero so that n=1 (Newtonian) layers
+        correctly return f=1 regardless of background_stress.
+        """
+        sigma = self.second_stress_invariant(dev_stress)
+        n = self.exponent
+        a = self.background_stress / self.transition_stress
+        b = (sigma + self.background_stress) / self.transition_stress
+        # Guard against 0^0: UFL evaluates 0^0 as 0 rather than 1. This
+        # only arises when n=1 (exponent n-1 = 0); for n>1, a zero base
+        # raised to a positive power correctly evaluates to 0. Conditioning
+        # on the exponent rather than the base avoids incorrectly setting
+        # a^(n-1) = 1 for n>1 when background_stress = 0.
+        a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), a ** (n - 1))
+        b_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), b ** (n - 1))
+        return (1 + a_pow) / (1 + b_pow)
 
 
 class QuasiCompressibleInternalVariableApproximation(InternalVariableApproximation):
@@ -676,6 +765,24 @@ class QuasiCompressibleInternalVariableApproximation(InternalVariableApproximati
 
     For more information on the formulation see the documentation of the parent class
     `InternalVariableApproximation`
+
+    Arguments:
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      exponent:          Power-law stress exponent n (default 1 = Newtonian)
+      transition_stress: Transition stress in sqrt(J2) units (default 1, irrelevant for n=1)
+      background_stress: Background stress magnitude in sqrt(J2) units (default 0)
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
     '''
     compressible = True
 
@@ -725,21 +832,22 @@ class CompressibleInternalVariableApproximation(InternalVariableApproximation):
     `InternalVariableApproximation`.
 
     Arguments:
-      bulk_modulus:             bulk modulus
-      density:                  background density
-      shear_modulus:            shear modulus
-      viscosity:                viscosity
-      bulk_shear_ratio:         Ratio of bulk to shear modulus
-      g:                        gravitational acceleration
-      B_mu:                     Nondimensional number describing ratio of buoyancy to
-                                elastic shear strength used for nondimensionalisation.
-                                $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
-                                where $\bar{\rho}$ is a characteristic density scale
-                                (kg / m^3), $\bar{g}$ is a characteristic gravity
-                                scale (m / s^2), $L$ is a characteristic length scale,
-                                often Mantle depth (m), $\\mu$ is a characteristic
-                                shear modulus (Pa).
-
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      exponent:          Power-law stress exponent n (default 1 = Newtonian)
+      transition_stress: Transition stress in sqrt(J2) units (default 1, irrelevant for n=1)
+      background_stress: Background stress magnitude in sqrt(J2) units (default 0)
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
     """
 
     compressible = True
