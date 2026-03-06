@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Prefer specific branch, then PR base, then actual branch
-      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
+      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'release', github.base_ref)) || github.ref_name }}
 
     needs: check_commit
     if: ${{ needs.check_commit.outputs.skip != 'true' }}
