@@ -1023,25 +1023,30 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         1 and the system is linear, so SNES converges in a single iteration.
         For power-law rheology (exponent > 1) full Newton iteration is performed.
 
-        When solver_preset is a Mapping or a string ("direct", "iterative"), the
-        base class handles the preset and Newton SNES is added on top. When no
-        preset is given, coupled_gia_solver_parameters are used as the default.
+        When solver_preset is a Mapping it is honoured verbatim. The string
+        preset "direct" uses direct_stokes_solver_parameters plus Newton SNES.
+        The string preset "iterative" and the default None both use
+        coupled_gia_solver_parameters, which already includes Newton SNES and
+        the GIA-specific fieldsplit preconditioner. iterative_stokes_solver_parameters
+        is intentionally not used here: its Schur-complement structure is designed
+        for the standard Stokes system, not the larger coupled GIA block.
         """
         if isinstance(solver_preset, Mapping):
-            # User supplied an explicit dict; honour it exactly as the base class does.
             super().set_solver_options(solver_preset, solver_extras)
             return
 
-        if solver_preset is not None:
-            # String preset ("direct" or "iterative"): delegate to the base class
-            # for the standard parameter set and monitoring, then add Newton SNES
-            # on top (the base class applies ksponly since mu is not
-            # solution-dependent, which we override here).
+        if solver_preset == "direct":
+            # Delegate to base class for direct_stokes_solver_parameters and
+            # monitoring, then override SNES from ksponly to Newton.
             super().set_solver_options(solver_preset, solver_extras)
             self.add_to_solver_config(newton_stokes_solver_parameters)
             return
 
-        # No preset: use GIA-specific defaults with SNES Newton always active.
+        if solver_preset not in (None, "iterative"):
+            raise ValueError("Solver type must be 'direct' or 'iterative'.")
+
+        # "iterative" or no preset: use the GIA-specific coupled solver defaults.
+        # Newton SNES is already included in coupled_gia_solver_parameters.
         self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
         self.add_to_solver_config(coupled_gia_solver_parameters)
         if solver_extras:
