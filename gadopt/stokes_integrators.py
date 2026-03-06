@@ -1018,21 +1018,35 @@ class CoupledInternalVariableSolver(StokesSolverBase):
     ) -> None:
         """Sets PETSc solver options for the coupled GIA system.
 
-        Overrides the base class to use `coupled_gia_solver_parameters` as the
-        default when no explicit solver dict is supplied. SNES Newton is always
-        active: for Newtonian rheology (exponent=1) the power-law factor is 1 and
-        the system is linear, so SNES converges in a single iteration. For
-        power-law rheology (exponent > 1) full Newton iteration is performed.
+        Overrides the base class to ensure SNES Newton is always active.
+        For Newtonian rheology (exponent=1) the power-law factor is identically
+        1 and the system is linear, so SNES converges in a single iteration.
+        For power-law rheology (exponent > 1) full Newton iteration is performed.
+
+        When solver_preset is a Mapping or a string ("direct", "iterative"), the
+        base class handles the preset and Newton SNES is added on top. When no
+        preset is given, coupled_gia_solver_parameters are used as the default.
         """
         if isinstance(solver_preset, Mapping):
             # User supplied an explicit dict; honour it exactly as the base class does.
             super().set_solver_options(solver_preset, solver_extras)
             return
 
+        if solver_preset is not None:
+            # String preset ("direct" or "iterative"): delegate to the base class
+            # for the standard parameter set and monitoring, then add Newton SNES
+            # on top (the base class applies ksponly since mu is not
+            # solution-dependent, which we override here).
+            super().set_solver_options(solver_preset, solver_extras)
+            self.add_to_solver_config(newton_stokes_solver_parameters)
+            return
+
+        # No preset: use GIA-specific defaults with SNES Newton always active.
         self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
         self.add_to_solver_config(coupled_gia_solver_parameters)
         if solver_extras:
             self.add_to_solver_config(solver_extras)
+        self.register_update_callback(self.set_solver)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
