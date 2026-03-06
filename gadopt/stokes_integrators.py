@@ -137,6 +137,43 @@ Note:
   new pairs of keys and values to extend the default ones.
 """
 
+coupled_gia_solver_parameters = {
+    "mat_type": "matfree",
+    "snes_type": "newtonls",
+    "snes_linesearch_type": "l2",
+    "snes_max_it": 100,
+    "snes_atol": 1e-15,
+    "snes_rtol": 1e-4,
+    "ksp_type": "gmres",
+    "ksp_rtol": 1e-3,
+    "pc_type": "fieldsplit",
+    "pc_fieldsplit_type": "symmetric_multiplicative",
+    "fieldsplit_0_ksp_type": "cg",
+    "fieldsplit_0_pc_type": "python",
+    "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
+    "fieldsplit_0_assembled_pc_type": "gamg",
+    "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
+    "fieldsplit_0_ksp_rtol": 1e-5,
+    "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
+    "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
+    "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
+    "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+    "fieldsplit_1_ksp_type": "cg",
+    "fieldsplit_1_pc_type": "python",
+    "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
+    "fieldsplit_1_assembled_pc_type": "sor",
+    "fieldsplit_1_ksp_rtol": 1e-5,
+}
+"""Default iterative solver parameters for CoupledInternalVariableSolver (GIA problems).
+
+Uses a Newton SNES outer loop with a GMRES/fieldsplit preconditioned inner solve. SNES
+is always active: for a Newtonian rheology (exponent=1) the power-law factor is
+identically 1 and the system is linear, so SNES converges in a single iteration at
+negligible extra cost. For power-law rheology (exponent > 1) the full Newton iteration
+is required. The snes_rtol is set looser than ksp_rtol so that the single-iteration
+Newtonian case is accepted without additional SNES iterations.
+"""
+
 
 class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
     """Solver for a system involving mass and momentum conservation.
@@ -932,12 +969,11 @@ class CoupledInternalVariableSolver(StokesSolverBase):
             u, internal_variables=internal_variables)
         source = self.approximation.buoyancy(u) * self.k
         strain = self.approximation.deviatoric_strain(u)
-        maxwell_times = self.approximation.maxwell_times
-        if self.approximation.power_law:
-            dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
-            visc_factor = self.approximation.power_law_factor(dev_stress)
-            for i in range(len(maxwell_times)):
-                maxwell_times[i] *= visc_factor
+        dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
+        visc_factor = self.approximation.power_law_factor(dev_stress)
+        # Build a local list so that self.approximation.maxwell_times is never mutated.
+        # For n=1 (Newtonian) visc_factor is identically 1 and has no effect.
+        maxwell_times = [mt * visc_factor for mt in self.approximation.maxwell_times]
 
         residual_terms = [compressible_viscoelastic_terms]
         eqs_attrs = [{"stress": stress, "source": source}]
@@ -974,6 +1010,29 @@ class CoupledInternalVariableSolver(StokesSolverBase):
                     scaling_factor=scaling_factors[i],
                 )
             )
+
+    def set_solver_options(
+        self,
+        solver_preset: ConfigType | str | None,
+        solver_extras: ConfigType | None,
+    ) -> None:
+        """Sets PETSc solver options for the coupled GIA system.
+
+        Overrides the base class to use `coupled_gia_solver_parameters` as the
+        default when no explicit solver dict is supplied. SNES Newton is always
+        active: for Newtonian rheology (exponent=1) the power-law factor is 1 and
+        the system is linear, so SNES converges in a single iteration. For
+        power-law rheology (exponent > 1) full Newton iteration is performed.
+        """
+        if isinstance(solver_preset, Mapping):
+            # User supplied an explicit dict; honour it exactly as the base class does.
+            super().set_solver_options(solver_preset, solver_extras)
+            return
+
+        self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
+        self.add_to_solver_config(coupled_gia_solver_parameters)
+        if solver_extras:
+            self.add_to_solver_config(solver_extras)
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
