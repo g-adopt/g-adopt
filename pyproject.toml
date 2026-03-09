@@ -32,3 +32,4 @@ packages = ["gadopt", "gadopt.gplates", "gadopt.demos"]
 package-dir = { "gadopt.demos" = "demos" }
 
 [tool.setuptools_scm]
+scm.git.describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--abbrev=40", "--match", "*[0-9]*", "--exclude", "Zenodo*"]
