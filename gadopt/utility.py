@@ -31,8 +31,14 @@ except ImportError:
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
 
 
-def log(*args):
-    """Log output to stdout from root processor only"""
+def log(*args, level=None):
+    """Log output to stdout from root processor only.
+
+    If level is provided, the message is only printed when that level is
+    enabled by the GADOPT_LOGLEVEL environment variable.
+    """
+    if level is not None and level < log_level:
+        return
     PETSc.Sys.Print(*args)
 
 

@@ -1466,10 +1466,12 @@ class TestPolygonGeothermFunctional:
         )
 
         coords = np.array([[2.0, 0.0, 0.0]])
-        result = connector._compute_indicator(None, None, coords)
+        sources = {"xyz": None, "thickness": None}
+        result = connector._compute_indicator(sources, coords)
         np.testing.assert_allclose(result, 1.0)
 
-        result = connector._compute_indicator(np.array([]).reshape(0, 3), np.array([]), coords)
+        sources = {"xyz": np.array([]).reshape(0, 3), "thickness": np.array([])}
+        result = connector._compute_indicator(sources, coords)
         np.testing.assert_allclose(result, 1.0)
 
     def test_caching(self, gplates_connector, craton_shapefile):
