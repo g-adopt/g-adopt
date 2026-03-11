@@ -11,7 +11,7 @@ from typing import Any
 import firedrake as fd
 import numpy as np
 from irksome import MeshConstant, TimeStepper
-from irksome.ButcherTableaux import (
+from irksome.tableaux.ButcherTableaux import (
     Alexander,
     BackwardEuler,
     ButcherTableau,

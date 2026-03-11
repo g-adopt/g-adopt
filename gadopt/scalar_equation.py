@@ -113,13 +113,13 @@ def diffusion_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
 def source_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar source term `s_T`."""
-    return -dot(eq.test, eq.source) * eq.dx
+    return -inner(eq.test, eq.source) * eq.dx
 
 
 def sink_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar sink term `\alpha_T T`."""
     # Implement sink term implicitly at current time step.
-    return dot(eq.test, eq.sink_coeff * trial) * eq.dx
+    return inner(eq.test, eq.sink_coeff * trial) * eq.dx
 
 
 def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
@@ -136,8 +136,19 @@ def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
     """
     mass_scaling = getattr(eq, "mass_scaling", 1.0)
+    use_irksome = getattr(eq, "use_irksome", True)
 
-    return mass_scaling * eq.test * Dt(trial) * eq.dx
+    if use_irksome:
+        dt_trial = Dt(trial)
+    else:
+        if not hasattr(eq, "dt") or not hasattr(eq, "trial_old"):
+            raise ValueError(
+                "mass_term requires 'dt' and 'trial_old' equation attributes "
+                "when use_irksome=False."
+            )
+        dt_trial = (trial - eq.trial_old) / eq.dt
+
+    return mass_scaling * inner(eq.test, dt_trial) * eq.dx
 
 
 advection_term.required_attrs = {"u"}
@@ -145,7 +156,7 @@ advection_term.optional_attrs = {"advective_velocity_scaling", "su_nubar"}
 diffusion_term.required_attrs = {"diffusivity"}
 diffusion_term.optional_attrs = {"reference_for_diffusion", "interior_penalty"}
 mass_term.required_attrs = set()
-mass_term.optional_attrs = {"mass_scaling"}
+mass_term.optional_attrs = {"dt", "mass_scaling", "trial_old", "use_irksome"}
 source_term.required_attrs = {"source"}
 source_term.optional_attrs = set()
 sink_term.required_attrs = {"sink_coeff"}
