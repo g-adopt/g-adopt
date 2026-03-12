@@ -11,15 +11,18 @@ and indicator computation. Subclasses only need to implement _prepare_sources(ag
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, fields
 from pathlib import Path
+# TYPE_CHECKING: False at runtime, True for static type checkers (avoids runtime overhead)
 from typing import TYPE_CHECKING, Any
 
 import h5py
 import numpy as np
+from mpi4py import MPI
 from scipy.spatial import cKDTree
 
 from ..utility import log, DEBUG
 
 if TYPE_CHECKING:
+    from gtrack import PointCloud
     from .gplates import pyGplatesConnector
 
 
@@ -98,9 +101,16 @@ class IndicatorConnector(ABC):
 
         self._validate_age(age)
 
-        cached = self._check_cache(age, target_coords)
-        if cached is not None:
-            return cached
+        use_cache = self._check_cache(age, target_coords) is not None
+
+        # Ensure all MPI ranks agree on the cache decision. If any rank
+        # sees changed coordinates, all ranks must recompute to avoid
+        # hanging on the collective broadcast that follows.
+        if self.comm is not None:
+            use_cache = self.comm.allreduce(use_cache, op=MPI.MIN)
+
+        if use_cache:
+            return self._cached_result
 
         if self._is_root:
             sources = self._prepare_sources(age)
