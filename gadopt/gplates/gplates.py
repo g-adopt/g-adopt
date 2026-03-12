@@ -19,11 +19,14 @@ from scipy.spatial import cKDTree
 from ..solver_options_manager import SolverConfigurationMixin
 from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
 from .connectors import IndicatorConfigBase, IndicatorConnector
+from .gplatesfiles import ensure_reconstruction
 
 
 __all__ = [
+    "ensure_reconstruction",
     "GplatesVelocityFunction",
     "GplatesScalarFunction",
+    "IndicatorConfigBase",
     "IndicatorConnector",
     "LithosphereConnector",
     "LithosphereConfig",
