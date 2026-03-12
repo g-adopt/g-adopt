@@ -5,7 +5,10 @@ from typing import Callable
 import firedrake as fd
 import numpy as np
 import pygplates
+from finat.ufl import VectorElement
+from mpi4py import MPI
 from firedrake.ufl_expr import extract_unique_domain
+from scipy.special import erf
 from gtrack import (
     SeafloorAgeTracker, PointRotator, PolygonFilter,
     PointCloud, TracerConfig,
@@ -840,12 +843,14 @@ class LithosphereConnector(IndicatorConnector):
         age_to_property: Callable[[np.ndarray], np.ndarray],
         config: LithosphereConfig | None = None,
         config_extra: dict | None = None,
-        comm=None,
+        # Ideally the same as mesh.comm; defaults to COMM_WORLD which
+        # is correct for single-communicator runs.
+        comm: MPI.Comm = MPI.COMM_WORLD,
     ):
         self.gplates_connector = gplates_connector
         self.age_to_property = age_to_property
         self.comm = comm
-        self._is_root = (comm is None or comm.rank == 0)
+        self._is_root = (comm.rank == 0)
 
         if config is None:
             config = LithosphereConfig()
@@ -1041,11 +1046,13 @@ class PolygonConnector(IndicatorConnector):
         thickness_data,
         config: PolygonConfig | None = None,
         config_extra: dict | None = None,
-        comm=None,
+        # Ideally the same as mesh.comm; defaults to COMM_WORLD which
+        # is correct for single-communicator runs.
+        comm: MPI.Comm = MPI.COMM_WORLD,
     ):
         self.gplates_connector = gplates_connector
         self.comm = comm
-        self._is_root = (comm is None or comm.rank == 0)
+        self._is_root = (comm.rank == 0)
 
         if config is None:
             config = PolygonConfig()
@@ -1120,8 +1127,6 @@ def ocean_erf_normalized(depth_m, z_lab_m, age_myr=None, kappa=1e-6, **kwargs):
     Returns:
         Normalized temperature in [0, 1].
     """
-    from scipy.special import erf
-
     depth_m = np.asarray(depth_m, dtype=float)
     z_lab_m = np.asarray(z_lab_m, dtype=float)
 
@@ -1341,16 +1346,6 @@ class GplatesScalarFunction(fd.Function):
 
         mesh = extract_unique_domain(self)
 
-        if mesh.comm.size > 1 and indicator_connector.comm is None:
-            warnings.warn(
-                f"Running in parallel but {type(indicator_connector).__name__} "
-                "has no communicator. Each MPI rank will independently load data "
-                "and compute gtrack operations. For efficiency, create connector "
-                "with comm=mesh.comm.",
-                category=RuntimeWarning,
-            )
-
-        from finat.ufl import VectorElement
         scalar_element = function_space.ufl_element()
         vector_element = VectorElement(scalar_element)
         coords_space = fd.FunctionSpace(mesh, vector_element)

@@ -71,7 +71,7 @@ class IndicatorConnector(ABC):
     # Required attributes (set by subclasses in __init__)
     gplates_connector: "pyGplatesConnector"
     config: Any
-    comm: Any
+    comm: MPI.Comm
     reconstruction_age: float | None
     _is_root: bool
     _cached_result: np.ndarray | None
@@ -106,8 +106,7 @@ class IndicatorConnector(ABC):
         # Ensure all MPI ranks agree on the cache decision. If any rank
         # sees changed coordinates, all ranks must recompute to avoid
         # hanging on the collective broadcast that follows.
-        if self.comm is not None:
-            use_cache = self.comm.allreduce(use_cache, op=MPI.MIN)
+        use_cache = self.comm.allreduce(use_cache, op=MPI.MIN)
 
         if use_cache:
             return self._cached_result
@@ -197,8 +196,6 @@ class IndicatorConnector(ABC):
 
     def _broadcast_sources(self, sources: dict | None) -> dict:
         """Broadcast source arrays from rank 0 to all MPI ranks."""
-        if self.comm is None:
-            return sources
         keys = self.comm.bcast(
             list(sources.keys()) if self._is_root else None, root=0
         )

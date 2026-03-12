@@ -14,6 +14,7 @@ from numpy.testing import assert_allclose
 
 import firedrake as fd
 from firedrake.adjoint import *
+from mpi4py import MPI
 from pyadjoint.tape import (
     get_working_tape, set_working_tape, Tape,
     continue_annotation, pause_annotation,
@@ -85,7 +86,7 @@ class MockIndicatorConnector(IndicatorConnector):
     Tracks call count so tests can verify caching behaviour.
     """
 
-    def __init__(self, gplates_connector, value=1.0, comm=None):
+    def __init__(self, gplates_connector, value=1.0, comm=MPI.COMM_WORLD):
         self.gplates_connector = gplates_connector
         self.comm = comm
         self.reconstruction_age = None
