@@ -160,7 +160,7 @@ approximation = BoussinesqApproximation(Ra, RaB=RaB, mu=mu)
 time_now = 0.0  # Initial time
 output_frequency = 5e-4  # Frequency (based on simulation time) at which to output
 t_adapt = TimestepAdaptor(
-    time_step, u, V, target_cfl=0.6, maximum_timestep=output_frequency
+    time_step, u, V, target_cfl=0.55, maximum_timestep=output_frequency
 )  # Current level-set advection requires a CFL condition that does not exceed 0.6.
 
 # The Stokes system defined here admits null modes, and we define a null-space object
