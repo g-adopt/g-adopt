@@ -1,17 +1,42 @@
 import warnings
+from dataclasses import dataclass
+from typing import Callable
+
 import firedrake as fd
 import numpy as np
+import pygplates
+from finat.ufl import VectorElement
+from mpi4py import MPI
 from firedrake.ufl_expr import extract_unique_domain
+from scipy.special import erf
+from gtrack import (
+    SeafloorAgeTracker, PointRotator, PolygonFilter,
+    PointCloud, TracerConfig,
+)
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
-from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
-from ..solver_options_manager import SolverConfigurationMixin
 
-import pygplates
+from ..solver_options_manager import SolverConfigurationMixin
+from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
+from .connectors import IndicatorConfigBase, IndicatorConnector
+from .gplatesfiles import ensure_reconstruction
+
 
 __all__ = [
+    "ensure_reconstruction",
     "GplatesVelocityFunction",
-    "pyGplatesConnector"
+    "GplatesScalarFunction",
+    "IndicatorConfigBase",
+    "IndicatorConnector",
+    "LithosphereConnector",
+    "LithosphereConfig",
+    "LithosphereGeotherm",
+    "PolygonConnector",
+    "PolygonConfig",
+    "PolygonGeotherm",
+    "ocean_erf_normalized",
+    "continental_linear",
+    "pyGplatesConnector",
 ]
 
 
@@ -124,6 +149,12 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
     def __init__(self, function_space, *args, gplates_connector=None, top_boundary_marker="top", quad_degree=None, solver_parameters=None, **kwargs):
         # Initialise as a Firedrake Function
         super().__init__(function_space, *args, **kwargs)
+
+        # When gplates_connector is None (e.g. during adjoint perturbations via
+        # _ad_mul/_ad_add, or when Firedrake internally creates subfunctions),
+        # skip all the plate reconstruction setup.
+        if gplates_connector is None:
+            return
 
         # Set the class name required by SolverConfigurationMixin
         self._class_name = self.__class__.__name__
@@ -240,6 +271,16 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
             self.tangential_velocity.dat.data_ro_with_halos[self.dbc.nodes, :]
         )
 
+    def _ad_mul(self, other):
+        r = GplatesVelocityFunction(self.function_space())
+        r.assign(other * self)
+        return r
+
+    def _ad_add(self, other):
+        r = GplatesVelocityFunction(self.function_space())
+        fd.Function.assign(r, self + other)
+        return r
+
 
 class pyGplatesConnector(object):
     # Non-dimensionalisation constants
@@ -266,7 +307,9 @@ class pyGplatesConnector(object):
                  scaling_factor=1.0,
                  nseeds=1e5,
                  nneighbours=4,
-                 kappa=1e-6):
+                 kappa=1e-6,
+                 continental_polygons=None,
+                 static_polygons=None):
         """An interface to PyGPlates, used for updating top Dirichlet boundary conditions
         using plate tectonic reconstructions.
 
@@ -288,11 +331,28 @@ class pyGplatesConnector(object):
                     the finer velocity variations will then result in more challenging Stokes solves.
             nneighbours (Optional[int]): Number of neighbouring points when interpolating velocity for each grid point. Default is 4.
             kappa: (Optional[float]): Diffusion constant used for don-dimensionalising time. Default is 1e-6.
+            continental_polygons (Optional[Union[str, List[str]]]): Path(s) to continental polygon files.
+                    Required for LithosphereConnector to filter continental regions.
+            static_polygons (Optional[Union[str, List[str]]]): Path(s) to static polygon files for plate ID assignment.
+                    Required for LithosphereConnector to assign plate IDs for rotation.
 
         Examples:
             >>> connector = pyGplatesConnector(rotation_filenames, topology_filenames, oldest_age)
             >>> connector.get_plate_velocities(ndtime=100)
+
+            >>> # With polygon files for lithosphere tracking
+            >>> connector = pyGplatesConnector(
+            ...     rotation_filenames, topology_filenames, oldest_age,
+            ...     continental_polygons='continental_polygons.gpml',
+            ...     static_polygons='static_polygons.gpml'
+            ... )
         """
+
+        # Store original filenames for downstream use (e.g., LithosphereConnector)
+        self.rotation_filenames = rotation_filenames
+        self.topology_filenames = topology_filenames
+        self.continental_polygons = continental_polygons
+        self.static_polygons = static_polygons
 
         # Rotation model(s)
         self.rotation_model = pygplates.RotationModel(rotation_filenames)
@@ -644,3 +704,683 @@ class pyGplatesConnector(object):
         x = np.cos(theta) * radius
         z = np.sin(theta) * radius
         return np.array([[x[i], y[i], z[i]] for i in range(len(x))])
+
+
+@dataclass
+class LithosphereConfig(IndicatorConfigBase):
+    """Configuration for lithosphere indicator computation.
+
+    Groups all tunable parameters for LithosphereConnector into a single
+    configuration object. Provides sensible defaults for Earth's mantle.
+
+    Use with LithosphereConnector:
+        >>> config = LithosphereConfig(n_points=40000, transition_width=5.0)
+        >>> connector = LithosphereConnector(gplates, data, age_func, config=config)
+
+    Or override specific values with config_extra:
+        >>> connector = LithosphereConnector(
+        ...     gplates, data, age_func,
+        ...     config_extra={"n_points": 40000}
+        ... )
+
+    Args:
+        time_step: Time step for ocean age tracker in Myr. Default: 1.0.
+        n_points: Number of points for ocean tracker mesh. Higher values
+            give better resolution but slower computation. Default: 10000.
+        reinit_interval_myr: Reinitialize ocean tracker every N Myr to
+            prevent drift accumulation. Default: 50.0.
+        k_neighbors: Number of nearest neighbors for thickness
+            interpolation. Default: 50.
+        distance_threshold: Maximum angular distance (radians on unit
+            sphere) for valid interpolation. Points beyond this receive
+            default_thickness. Default: 0.1 (~640 km at Earth's surface).
+        default_thickness: Thickness (km) assigned to points with no
+            nearby data. Default: 100.0.
+        r_outer: Outer radius of mesh in non-dimensional units. This is
+            the radial coordinate of Earth's surface in the mesh.
+            Default: 2.208 (for r_inner=1.208, giving mantle depth ratio).
+        depth_scale: Physical depth (km) corresponding to 1 non-dimensional
+            unit. For Earth's mantle: 2890 km. Default: 2890.0.
+        transition_width: Width of tanh transition at lithosphere base in
+            km. Controls smoothness of the indicator field. Default: 10.0.
+        property_name: Name of the thickness property in data files.
+            Default: 'thickness'.
+    """
+
+    # Ocean tracker parameters
+    time_step: float = 1.0
+    n_points: int = 10000
+    reinit_interval_myr: float = 50.0
+
+    # Interpolation parameters
+    k_neighbors: int = 50
+    distance_threshold: float = 0.1
+    default_thickness: float = 100.0
+
+    # Mesh geometry parameters
+    r_outer: float = 2.208
+    depth_scale: float = 2890.0
+    transition_width: float = 10.0
+
+    # Data parameters
+    property_name: str = "thickness"
+
+    def __post_init__(self):
+        if self.time_step <= 0:
+            raise ValueError(f"time_step must be positive, got {self.time_step}")
+        if self.n_points < 100:
+            raise ValueError(f"n_points must be at least 100, got {self.n_points}")
+        if self.reinit_interval_myr <= 0:
+            raise ValueError(
+                f"reinit_interval_myr must be positive, got {self.reinit_interval_myr}"
+            )
+        if self.k_neighbors < 1:
+            raise ValueError(f"k_neighbors must be at least 1, got {self.k_neighbors}")
+        if self.distance_threshold <= 0:
+            raise ValueError(
+                f"distance_threshold must be positive, got {self.distance_threshold}"
+            )
+        if self.default_thickness < 0:
+            raise ValueError(
+                f"default_thickness must be non-negative, got {self.default_thickness}"
+            )
+        if self.r_outer <= 0:
+            raise ValueError(f"r_outer must be positive, got {self.r_outer}")
+        if self.depth_scale <= 0:
+            raise ValueError(f"depth_scale must be positive, got {self.depth_scale}")
+        if self.transition_width <= 0:
+            raise ValueError(
+                f"transition_width must be positive, got {self.transition_width}"
+            )
+
+
+class LithosphereConnector(IndicatorConnector):
+    """Connector for lithosphere indicator field through geological time.
+
+    Combines oceanic lithosphere (age-tracked via gtrack's SeafloorAgeTracker,
+    converted to thickness) with continental lithosphere (back-rotated
+    present-day thickness data via gtrack's PointRotator) to produce a smooth
+    3D indicator field: 1 inside lithosphere, 0 in mantle.
+
+    The indicator uses a tanh transition for numerical stability:
+        indicator = 0.5 * (1 + tanh((r - lith_base) / transition_width))
+
+    where lith_base = r_outer - thickness (in mesh units).
+
+    MPI Parallelization:
+        When a communicator is provided, only rank 0 performs I/O and gtrack
+        computations. The resulting thickness data is broadcast to all ranks,
+        and each rank interpolates to its local mesh points.
+
+    Args:
+        gplates_connector (pyGplatesConnector): Connector with plate model files.
+            Must have `continental_polygons` and `static_polygons` set.
+        continental_data: Present-day continental thickness data. Can be:
+            - gtrack.PointCloud with the thickness property
+            - Path to HDF5/NetCDF file
+            - Tuple of (latlon_array, thickness_values_km)
+        age_to_property (Callable): Function mapping seafloor age arrays (Myr) to
+            thickness arrays (km). Signature: np.ndarray -> np.ndarray.
+        config (LithosphereConfig, optional): If None, uses LithosphereConfig().
+        config_extra (dict, optional): Parameter overrides on top of config.
+        comm: MPI communicator for parallel execution.
+
+    Examples:
+        >>> def half_space_cooling(age_myr):
+        ...     age_sec = age_myr * 3.15576e13
+        ...     return 2.32 * np.sqrt(1e-6 * age_sec) / 1e3  # km
+        >>>
+        >>> connector = LithosphereConnector(
+        ...     gplates_connector=plate_model,
+        ...     continental_data='SL2013sv.nc',
+        ...     age_to_property=half_space_cooling,
+        ...     comm=mesh.comm,
+        ... )
+        >>> indicator = connector.get_indicator(mesh_coords, ndtime)
+    """
+
+    def __init__(
+        self,
+        gplates_connector: "pyGplatesConnector",
+        continental_data,
+        age_to_property: Callable[[np.ndarray], np.ndarray],
+        config: LithosphereConfig | None = None,
+        config_extra: dict | None = None,
+        # Ideally the same as mesh.comm; defaults to COMM_WORLD which
+        # is correct for single-communicator runs.
+        comm: MPI.Comm = MPI.COMM_WORLD,
+    ):
+        self.gplates_connector = gplates_connector
+        self.age_to_property = age_to_property
+        self.comm = comm
+        self._is_root = (comm.rank == 0)
+
+        if config is None:
+            config = LithosphereConfig()
+        if config_extra is not None:
+            config = config.with_overrides(config_extra)
+        self.config = config
+
+        self._transition_width_nondim = config.transition_width / config.depth_scale
+
+        if gplates_connector.continental_polygons is None:
+            raise ValueError(
+                "gplates_connector must have continental_polygons set. "
+                "Pass continental_polygons to pyGplatesConnector constructor."
+            )
+        if gplates_connector.static_polygons is None:
+            raise ValueError(
+                "gplates_connector must have static_polygons set. "
+                "Pass static_polygons to pyGplatesConnector constructor."
+            )
+
+        self._PointCloud = PointCloud
+
+        if self._is_root:
+            tracer_config = TracerConfig(
+                time_step=config.time_step,
+                default_mesh_points=config.n_points,
+            )
+            self._ocean_tracker = SeafloorAgeTracker(
+                rotation_files=gplates_connector.rotation_filenames,
+                topology_files=gplates_connector.topology_filenames,
+                continental_polygons=gplates_connector.continental_polygons,
+                config=tracer_config,
+            )
+            self._rotator = PointRotator(
+                rotation_files=gplates_connector.rotation_filenames,
+                static_polygons=gplates_connector.static_polygons,
+            )
+            self._polygon_filter = PolygonFilter(
+                polygon_files=gplates_connector.continental_polygons,
+                rotation_files=gplates_connector.rotation_filenames,
+            )
+            self._continental_present = self._load_data(continental_data)
+        else:
+            self._ocean_tracker = None
+            self._rotator = None
+            self._polygon_filter = None
+            self._continental_present = None
+
+        self._initialized = False
+        self._last_reinit_age = None
+        self.reconstruction_age = None
+        self._cached_result = None
+        self._cached_coords_hash = None
+
+    def _validate_age_extra(self, age: float):
+        """Check that the ocean tracker is not asked to go backward."""
+        if self._initialized and self._is_root:
+            current_tracker_age = self._ocean_tracker.current_age
+            if current_tracker_age is not None and age > current_tracker_age:
+                raise ValueError(
+                    f"Requested age {age:.2f} Ma is older than the ocean tracker's "
+                    f"current position ({current_tracker_age:.2f} Ma). The ocean "
+                    f"tracker can only evolve forward in time (decreasing age)."
+                )
+
+    def _prepare_sources(self, age: float) -> dict[str, np.ndarray]:
+        """Step ocean tracker + rotate continental data, combine into source arrays."""
+        ocean_cloud = self._step_ocean_to(age)
+        ocean_ages = ocean_cloud.get_property("age")
+        ocean_cloud.add_property(
+            self.config.property_name, self.age_to_property(ocean_ages)
+        )
+
+        cont_cloud = self._rotator.rotate(
+            self._continental_present, from_age=0.0, to_age=age
+        )
+
+        combined = PointCloud.concatenate([ocean_cloud, cont_cloud], warn=False)
+        return {
+            "xyz": combined.xyz.copy(),
+            "thickness": combined.get_property(self.config.property_name).copy(),
+        }
+
+    def _step_ocean_to(self, age: float) -> "PointCloud":
+        """Initialize/reinit ocean tracker and step to target age.
+
+        Must be called on rank 0 only.
+        """
+        if not self._initialized:
+            starting_age = int(self.gplates_connector.oldest_age)
+            log(f"LithosphereConnector: Initializing ocean tracker at "
+                f"{starting_age} Ma.", level=DEBUG)
+            self._ocean_tracker.initialize(starting_age=starting_age)
+            self._initialized = True
+            self._last_reinit_age = starting_age
+
+        if self._last_reinit_age is not None:
+            if abs(self._last_reinit_age - age) >= self.config.reinit_interval_myr:
+                log(f"LithosphereConnector: Reinitializing ocean tracker at "
+                    f"{age:.2f} Ma.", level=DEBUG)
+                self._ocean_tracker.reinitialize(n_points=self.config.n_points)
+                self._last_reinit_age = age
+
+        return self._ocean_tracker.step_to(int(round(age)))
+
+
+@dataclass
+class PolygonConfig(IndicatorConfigBase):
+    """Configuration for polygon-based indicator computation.
+
+    Groups all tunable parameters for PolygonConnector into a single
+    configuration object. Similar to LithosphereConfig but without
+    ocean age tracking parameters.
+
+    Args:
+        n_points: Number of sample points for polygon coverage. Default: 20000.
+        k_neighbors: Number of nearest neighbors for interpolation. Default: 50.
+        distance_threshold: Maximum angular distance (radians) for valid
+            interpolation. Default: 0.1 (~640 km).
+        default_thickness: Thickness (km) for points with no nearby data.
+            Default: 200.0.
+        r_outer: Outer mesh radius in non-dimensional units. Default: 2.208.
+        depth_scale: Physical depth (km) per non-dimensional unit. Default: 2890.0.
+        transition_width: Tanh transition width in km. Default: 10.0.
+        property_name: Thickness property name in data files. Default: 'thickness'.
+    """
+
+    n_points: int = 20000
+    k_neighbors: int = 50
+    distance_threshold: float = 0.1
+    default_thickness: float = 200.0
+    r_outer: float = 2.208
+    depth_scale: float = 2890.0
+    transition_width: float = 10.0
+    property_name: str = "thickness"
+
+    def __post_init__(self):
+        if self.n_points < 100:
+            raise ValueError(f"n_points must be at least 100, got {self.n_points}")
+        if self.k_neighbors < 1:
+            raise ValueError(f"k_neighbors must be at least 1, got {self.k_neighbors}")
+        if self.distance_threshold <= 0:
+            raise ValueError(
+                f"distance_threshold must be positive, got {self.distance_threshold}"
+            )
+        if self.default_thickness < 0:
+            raise ValueError(
+                f"default_thickness must be non-negative, got {self.default_thickness}"
+            )
+        if self.r_outer <= 0:
+            raise ValueError(f"r_outer must be positive, got {self.r_outer}")
+        if self.depth_scale <= 0:
+            raise ValueError(f"depth_scale must be positive, got {self.depth_scale}")
+        if self.transition_width <= 0:
+            raise ValueError(
+                f"transition_width must be positive, got {self.transition_width}"
+            )
+
+
+class PolygonConnector(IndicatorConnector):
+    """Connector for polygon-based indicator field through geological time.
+
+    Computes a smooth 3D indicator field for regions defined by polygon
+    boundaries. The indicator is ~1 inside the region, ~0 outside, with a
+    smooth tanh transition at the region base.
+
+    Differs from the base-class tanh behaviour: points far from any source
+    data receive indicator = 0 (outside the polygon region).
+
+    Args:
+        gplates_connector (pyGplatesConnector): Connector with plate model files.
+            Must have `static_polygons` set for rotation.
+        polygons: Path to polygon shapefile.
+        thickness_data: Present-day thickness data (PointCloud, path, tuple, or scalar).
+        config (PolygonConfig, optional): If None, uses PolygonConfig().
+        config_extra (dict, optional): Parameter overrides.
+        comm: MPI communicator for parallel execution.
+
+    Examples:
+        >>> connector = PolygonConnector(
+        ...     gplates_connector=plate_model,
+        ...     polygons='shapes_cratons.shp',
+        ...     thickness_data='craton_thickness.h5',
+        ...     comm=mesh.comm,
+        ... )
+        >>> indicator = connector.get_indicator(mesh_coords, ndtime)
+    """
+
+    def __init__(
+        self,
+        gplates_connector: "pyGplatesConnector",
+        polygons,
+        thickness_data,
+        config: PolygonConfig | None = None,
+        config_extra: dict | None = None,
+        # Ideally the same as mesh.comm; defaults to COMM_WORLD which
+        # is correct for single-communicator runs.
+        comm: MPI.Comm = MPI.COMM_WORLD,
+    ):
+        self.gplates_connector = gplates_connector
+        self.comm = comm
+        self._is_root = (comm.rank == 0)
+
+        if config is None:
+            config = PolygonConfig()
+        if config_extra is not None:
+            config = config.with_overrides(config_extra)
+        self.config = config
+
+        self._transition_width_nondim = config.transition_width / config.depth_scale
+
+        if gplates_connector.static_polygons is None:
+            raise ValueError(
+                "gplates_connector must have static_polygons set. "
+                "Pass static_polygons to pyGplatesConnector constructor."
+            )
+
+        self._PointCloud = PointCloud
+
+        if self._is_root:
+            self._polygon_filter = PolygonFilter(
+                polygon_files=polygons,
+                rotation_files=gplates_connector.rotation_filenames,
+            )
+            self._rotator = PointRotator(
+                rotation_files=gplates_connector.rotation_filenames,
+                static_polygons=gplates_connector.static_polygons,
+            )
+            self._region_present = self._load_data(thickness_data)
+        else:
+            self._polygon_filter = None
+            self._rotator = None
+            self._region_present = None
+
+        self.reconstruction_age = None
+        self._cached_result = None
+        self._cached_coords_hash = None
+
+    def _prepare_sources(self, age: float) -> dict[str, np.ndarray]:
+        """Rotate region data to target age."""
+        region_cloud = self._rotator.rotate(
+            self._region_present, from_age=0.0, to_age=age
+        )
+        log(f"PolygonConnector: {region_cloud.n_points} region points at "
+            f"{age:.2f} Ma.", level=DEBUG)
+        return {
+            "xyz": region_cloud.xyz.copy(),
+            "thickness": region_cloud.get_property(self.config.property_name).copy(),
+        }
+
+    def _apply_indicator(self, r_target, thickness_km, too_far):
+        """Zero out indicator for points far from any polygon data."""
+        indicator = super()._apply_indicator(r_target, thickness_km, too_far)
+        indicator[too_far] = 0.0
+        return indicator
+
+
+# ---------------------------------------------------------------------------
+# Default geotherm functions
+# ---------------------------------------------------------------------------
+
+def ocean_erf_normalized(depth_m, z_lab_m, age_myr=None, kappa=1e-6, **kwargs):
+    """Normalized erf geotherm for oceanic lithosphere.
+
+    Returns T_norm = erf(z / a) / erf(z_lab / a), where a = 2 * sqrt(kappa * t).
+    T = 0 at the surface and T = 1 at the LAB depth.
+
+    Args:
+        depth_m: Depth below the surface in meters.
+        z_lab_m: LAB depth in meters.
+        age_myr: Seafloor age in Myr. Falls back to linear if None or zero.
+        kappa: Thermal diffusivity in m^2/s. Default: 1e-6.
+
+    Returns:
+        Normalized temperature in [0, 1].
+    """
+    depth_m = np.asarray(depth_m, dtype=float)
+    z_lab_m = np.asarray(z_lab_m, dtype=float)
+
+    result = np.zeros_like(depth_m)
+
+    if age_myr is None:
+        valid = z_lab_m > 0
+        result[valid] = depth_m[valid] / z_lab_m[valid]
+        return np.clip(result, 0.0, 1.0)
+
+    age_myr = np.asarray(age_myr, dtype=float)
+    age_sec = np.maximum(age_myr, 0.0) * 3.15576e13
+
+    a = 2.0 * np.sqrt(kappa * np.maximum(age_sec, 1.0))
+
+    valid = z_lab_m > 0
+    erf_z = erf(depth_m[valid] / a[valid])
+    erf_zlab = erf(z_lab_m[valid] / a[valid])
+    safe = erf_zlab > 1e-10
+    result[valid] = np.where(safe, erf_z / np.maximum(erf_zlab, 1e-10),
+                             depth_m[valid] / z_lab_m[valid])
+
+    return np.clip(result, 0.0, 1.0)
+
+
+def continental_linear(depth_m, z_lab_m, **kwargs):
+    """Linear geotherm for continental lithosphere.
+
+    Returns T_norm = z / z_lab. T = 0 at surface, T = 1 at LAB.
+
+    Args:
+        depth_m: Depth below the surface in meters.
+        z_lab_m: LAB depth in meters.
+
+    Returns:
+        Normalized temperature in [0, 1].
+    """
+    depth_m = np.asarray(depth_m, dtype=float)
+    z_lab_m = np.asarray(z_lab_m, dtype=float)
+
+    result = np.zeros_like(depth_m)
+    valid = z_lab_m > 0
+    result[valid] = depth_m[valid] / z_lab_m[valid]
+    return np.clip(result, 0.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Geotherm connector subclasses
+# ---------------------------------------------------------------------------
+
+class LithosphereGeotherm(LithosphereConnector):
+    """Returns normalized geotherm temperature instead of tanh indicator.
+
+    Inherits all of LithosphereConnector's ocean age tracking and continental
+    rotation machinery but overrides _compute_indicator to produce a
+    temperature profile. Ocean age is preserved so that age-dependent
+    geotherm functions (e.g. the erf profile) can use it.
+
+    Values represent (T - Ts) / (Tlab - Ts) in [0, 1].
+
+    Args:
+        *args: Forwarded to LithosphereConnector.
+        geotherm: Geotherm function (default: ocean_erf_normalized).
+        kappa: Thermal diffusivity in m^2/s. Default: 1e-6.
+        default_continental_age: Age (Myr) for continental points. Default: 500.0.
+        **kwargs: Forwarded to LithosphereConnector.
+
+    Examples:
+        >>> geotherm_connector = LithosphereGeotherm(
+        ...     gplates, continental_data, half_space_cooling,
+        ...     geotherm=ocean_erf_normalized,
+        ...     kappa=1e-6, comm=mesh.comm)
+        >>> T_erf = GplatesScalarFunction(Q, indicator_connector=geotherm_connector)
+    """
+
+    def __init__(self, *args, geotherm=None, kappa=1e-6,
+                 default_continental_age=500.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._geotherm = geotherm or ocean_erf_normalized
+        self._kappa = kappa
+        self._default_continental_age = default_continental_age
+
+    def _prepare_sources(self, age: float) -> dict[str, np.ndarray]:
+        """Like parent but also includes ocean age in the source dict."""
+        ocean_cloud = self._step_ocean_to(age)
+        ocean_ages = ocean_cloud.get_property("age")
+        ocean_cloud.add_property(
+            self.config.property_name, self.age_to_property(ocean_ages)
+        )
+
+        cont_cloud = self._rotator.rotate(
+            self._continental_present, from_age=0.0, to_age=age
+        )
+        cont_cloud.add_property(
+            "age", np.full(cont_cloud.n_points, self._default_continental_age)
+        )
+
+        combined = PointCloud.concatenate([ocean_cloud, cont_cloud], warn=False)
+        return {
+            "xyz": combined.xyz.copy(),
+            "thickness": combined.get_property(self.config.property_name).copy(),
+            "age": combined.get_property("age").copy(),
+        }
+
+    def _compute_indicator(self, sources, target_coords):
+        """Apply geotherm function instead of tanh."""
+        source_xyz = sources["xyz"]
+        if source_xyz is None or len(source_xyz) == 0:
+            return self._empty_indicator(len(target_coords))
+
+        r_target = np.linalg.norm(target_coords, axis=1)
+        depth_m = (self.config.r_outer - r_target) * self.config.depth_scale * 1e3
+
+        (thickness_km, age_myr), too_far = self._interpolate_idw(
+            source_xyz, target_coords, sources["thickness"], sources["age"]
+        )
+        thickness_km[too_far] = self.config.default_thickness
+        age_myr[too_far] = self._default_continental_age
+
+        z_lab_m = thickness_km * 1e3
+        T_norm = self._geotherm(depth_m, z_lab_m, age_myr=age_myr, kappa=self._kappa)
+        return np.clip(T_norm, 0.0, 1.0)
+
+
+class PolygonGeotherm(PolygonConnector):
+    """Returns normalized geotherm temperature instead of tanh indicator.
+
+    Inherits all of PolygonConnector's polygon filtering and rotation
+    machinery but overrides _compute_indicator to produce a temperature
+    profile. Suited for age-independent geotherms like linear continental
+    profiles.
+
+    Values represent (T - Ts) / (Tlab - Ts) in [0, 1].
+
+    Args:
+        *args: Forwarded to PolygonConnector.
+        geotherm: Geotherm function (default: continental_linear).
+        **kwargs: Forwarded to PolygonConnector.
+
+    Examples:
+        >>> geotherm_connector = PolygonGeotherm(
+        ...     gplates, craton_polygons, craton_thickness,
+        ...     geotherm=continental_linear, comm=mesh.comm)
+        >>> T_lin = GplatesScalarFunction(Q, indicator_connector=geotherm_connector)
+    """
+
+    def __init__(self, *args, geotherm=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._geotherm = geotherm or continental_linear
+
+    def _empty_indicator(self, n):
+        """Outside any polygon region, use mantle temperature."""
+        return np.ones(n)
+
+    def _compute_indicator(self, sources, target_coords):
+        """Apply geotherm function instead of tanh."""
+        source_xyz = sources["xyz"]
+        if source_xyz is None or len(source_xyz) == 0:
+            return self._empty_indicator(len(target_coords))
+
+        r_target = np.linalg.norm(target_coords, axis=1)
+        depth_m = (self.config.r_outer - r_target) * self.config.depth_scale * 1e3
+
+        (thickness_km,), too_far = self._interpolate_idw(
+            source_xyz, target_coords, sources["thickness"]
+        )
+
+        z_lab_m = thickness_km * 1e3
+        T_norm = self._geotherm(depth_m, z_lab_m)
+        T_norm = np.clip(T_norm, 0.0, 1.0)
+
+        # Points far from any source data → mantle temperature
+        T_norm[too_far] = 1.0
+        return T_norm
+
+
+class GplatesScalarFunction(fd.Function):
+    """Firedrake Function for scalar indicator fields from plate reconstructions.
+
+    Works with any IndicatorConnector subclass. Creates a 3D scalar field
+    that is ~1 in regions of interest and ~0 elsewhere, with smooth
+    transitions at boundaries.
+
+    Args:
+        function_space: Scalar function space.
+        indicator_connector: Any IndicatorConnector subclass.
+        name: Optional name for the function.
+        **kwargs: Additional arguments passed to Firedrake Function.
+
+    Examples:
+        >>> lith_connector = LithosphereConnector(..., comm=mesh.comm)
+        >>> lithosphere = GplatesScalarFunction(
+        ...     Q, indicator_connector=lith_connector, name="Lithosphere")
+        >>> lithosphere.update_plate_reconstruction(ndtime=0.5)
+    """
+
+    def __init__(
+        self,
+        function_space,
+        *args,
+        indicator_connector: IndicatorConnector | None = None,
+        name: str | None = None,
+        **kwargs
+    ):
+        super().__init__(function_space, *args, name=name, **kwargs)
+
+        if indicator_connector is None:
+            return
+
+        if not isinstance(indicator_connector, IndicatorConnector):
+            raise TypeError(
+                f"indicator_connector must be an IndicatorConnector subclass, "
+                f"got {type(indicator_connector).__name__}"
+            )
+
+        self.indicator_connector = indicator_connector
+
+        mesh = extract_unique_domain(self)
+
+        scalar_element = function_space.ufl_element()
+        vector_element = VectorElement(scalar_element)
+        coords_space = fd.FunctionSpace(mesh, vector_element)
+        coords_func = fd.Function(coords_space)
+        coords_func.interpolate(fd.SpatialCoordinate(mesh))
+        self.mesh_coords = coords_func.dat.data_ro_with_halos.copy()
+
+    def update_plate_reconstruction(self, ndtime: float):
+        """Update indicator field for given non-dimensional time.
+
+        Only updates when the reconstruction age has changed beyond delta_t.
+        """
+        connector = self.indicator_connector
+        age = connector.ndtime2age(ndtime)
+
+        if connector.reconstruction_age is not None:
+            if abs(age - connector.reconstruction_age) < connector.delta_t:
+                return
+
+        with stop_annotating():
+            values = connector.get_indicator(self.mesh_coords, ndtime)
+            self.dat.data_with_halos[:] = values
+
+        if annotate_tape():
+            self.create_block_variable()
+
+    def _ad_mul(self, other):
+        r = GplatesScalarFunction(self.function_space())
+        r.assign(other * self)
+        return r
+
+    def _ad_add(self, other):
+        r = GplatesScalarFunction(self.function_space())
+        fd.Function.assign(r, self + other)
+        return r
