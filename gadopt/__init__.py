@@ -49,6 +49,8 @@ from .utility import (
     node_coordinates,
     timer_decorator,
     get_boundary_ids,
+    data_2_function,
+    load_spatial_field,
 )
 
 PETSc.Sys.popErrorHandler()
