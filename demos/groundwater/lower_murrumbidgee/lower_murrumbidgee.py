@@ -2,8 +2,6 @@ from RichardsSolver import *
 from surface_mesh import *
 import time
 
-import numpy as np
-
 
 """
 Lower Murrumbidgee River Basin
@@ -17,28 +15,47 @@ and depth-dependent soil properties.
 
 def setup_mesh_and_spaces():
 
-
     # --- Function spaces ---
+
     horiz_elt = FiniteElement("DG", triangle, 1)
     vert_elt  = FiniteElement("DG", interval, 1)
     factor = 1.00
 
     refinement_levels     = 0
     refinement_ratio      = 1
-    horizontal_resolution = 2000*(2**refinement_levels)/factor  # Coarsest resolution if using mg
-    number_layers         = round(factor*300/(1))
-    layer_height          = 1.00/number_layers
+    horizontal_resolution = 620*(2**refinement_levels)/factor  # Coarsest resolution if using mg
+    number_layers         = round(300)
 
     # --- build 2d heiracy mesh ---
     surface_mesh(horizontal_resolution)
     m2d = Mesh("Murrumbidgee_SurfaceMesh.msh")
     mh2d = MeshHierarchy(m2d, refinement_levels=refinement_levels)
 
-    # 2. Extrude the hierarchy
-    # Note: Keep it flat at first (height=1.0)
-    mh3d = ExtrudedMeshHierarchy(mh2d, height=1.0, base_layer=number_layers, refinement_ratio=refinement_ratio)
+    # Extrude the hierarchy
+    mh3d = ExtrudedMeshHierarchy(mh2d, 
+                                height=1.0, 
+                                base_layer=number_layers, 
+                                refinement_ratio=refinement_ratio)
 
-    V0  = FunctionSpace(mh3d[0], "CG", 1)
+    # Apply non-uniform extrusion to each level of hierarchy
+    for mesh in mh3d:
+
+        coords_old  = mesh.coordinates
+        coord_space = coords_old.function_space()
+
+        x, y, s = split(coords_old)
+
+        new_z = s**1.00 # 0.60
+
+        # 4. Create the vector expression
+        new_coords_expr = as_vector([x, y, new_z])
+        new_coords_fn   = project(new_coords_expr, coord_space)
+        
+        # 6. Final assignment
+        mesh.coordinates.assign(new_coords_fn)
+
+    # Transform each level of the hierarhy to terrain
+    V0 = FunctionSpace(mh3d[0], "CG", 1)
     coords_coarse = mh3d[0].coordinates
 
     bed0 = Function(V0); bed0.dat.data[:] = data_2_function(coords_coarse.dat.data_ro, 'bedrock_data.csv')
@@ -62,7 +79,7 @@ def setup_mesh_and_spaces():
 
 
     mh3d_moved = HierarchyBase(
-        list(mh3d),                           # moved levels in order
+        list(mh3d),                    
         mh3d.coarse_to_fine_cells,
         mh3d.fine_to_coarse_cells,
         refinements_per_level=mh3d.refinements_per_level,
@@ -114,7 +131,7 @@ def define_time_parameters():
 
     """Sets simulation time and time-stepping constants."""
 
-    t_final_years = 0.20
+    t_final_years = 0.40
     t_final = t_final_years * 3.156e+7  # in seconds
 
     dt_days = 0.5
@@ -155,7 +172,7 @@ def define_soil_curves(mesh, V, spatial_data):
 
     # Specify the hydrological parameters
     soil_curve = HaverkampCurve(
-        theta_r = 0.399*S_depth,         # Residual water content [-]
+        theta_r = 0.025,         # Residual water content [-]
         theta_s = 0.40*S_depth,  # Saturated water content [-]
         Ks      = Ks,            # Saturated hydraulic conductivity [m/s]
         alpha   = 0.44,          # Fitting parameter [m]
@@ -239,19 +256,19 @@ def main():
     watertable = spatial_data['watertable']
 
     solver_parameters = {"ksp_type": "gmres", 
-                        "pc_type": "bjacobi",
-                        "sub_ksp_type": "preonly",
-                        "sub_pc_type": "ilu",
-                        "sub_pc_factor_levels": 0,
-                        "snes_linesearch_type": "bt",
-                        }
+                         "pc_type": "jacobi",
+                         'ksp_rtol': 1e-06,
+                         "sub_ksp_type": "preonly",
+                         "sub_pc_type": "ilu",
+                         "sub_pc_factor_levels": 0,
+                         #'snes_monitor': None,
+                         #'ksp_monitor': None,
+                         }
 
     PETSc.Sys.Print(solver_parameters)  
 
     # Solver Instantiation
-    eq = RichardsSolver(V=V,
-                        W=W,
-                        mesh=mesh,
+    eq = RichardsEquation(V=V,
                         soil_curves=soil_curves,
                         bcs=richards_bcs,
                         solver_parameters=solver_parameters,
@@ -260,7 +277,6 @@ def main():
                         )
     
     initial_head = Function(V, name="InitialCondition").interpolate(depth - watertable)
-    #initial_head = Function(V, name="InitialCondition").interpolate(-10)
 
     h     = Function(V, name="PressureHead").assign(initial_head)
     h_old = Function(V, name="OldSolution").assign(h)
@@ -272,75 +288,65 @@ def main():
     K     = Function(V, name='RelativeConductivity').interpolate(relative_conductivity(h))
 
     # Solver Instantiation
-    richards_solver = richardsSolver(h, h_old, time_var, dt, eq)
+    richards_solver = RichardsSolver(h, h_old, time_var, dt, eq)
 
-    current_time        = 0.0
-    n_steps             = 0.0
-    
-    total_exterior_flux = 0.0
-    total_extracted     = 0.0
-    initial_mass        = assemble(theta*eq.dx)
+    current_time = 0.0
+    n_steps      = int(0)
+    initial_mass = assemble(theta*eq.dx)
 
-    total_nl_it = 0.0
-    total_l_it  = 0.0
-
-    n_steps = 0
-    t_next = 0
-    t_interval = 3.154e+7
+    total_nl_it = int(0)
+    total_l_it  = int(0)
 
     while current_time < t_final:
 
-        time_var.assign(current_time)
+        # Take a new small initial time steps
+        if float(time_var) >= 49*86400:
+            dt.assign(86400*0.01)
 
         # Solve model with retries
         h_old.assign(h)
-        
+
         start_time = time.perf_counter()
         richards_solver.solve()
         end_time = time.perf_counter()
 
+        current_time += float(dt)
+        time_var.assign(current_time)
+
         PETSc.Sys.Print(f"The code block executed in {(end_time - start_time):.4f} seconds")
 
         snes = richards_solver.snes
-        nl_it = snes.getIterationNumber()
-        l_it  = snes.ksp.getIterationNumber()
-
-
-        current_time += float(dt)
+        nl_it, l_it= snes.getIterationNumber(), 0
+        for i in range(snes.getIterationNumber()):
+            l_it += snes.getKSP().getIterationNumber()
 
         theta.interpolate(moisture_content(h))
-        water_content = assemble(theta*eq.dx)
-        K.interpolate(relative_conductivity((h+h_old)/2))
-        q.interpolate(-K*grad((h+h_old)/2 + x[eq.dim-1]))
+        water_mass = assemble(theta*eq.dx)
 
-        # Diagnostics and mass balance
-        n_steps             += 1
-        total_exterior_flux += assemble(dt*dot(q, -eq.n)*eq.ds)
-        total_nl_it         += nl_it
-        total_l_it          += l_it
-        total_extracted += float(dt)*assemble(extraction*dx)
-        exterior_flux = 0
+        # Diagnostics
+        n_steps     += 1
+        total_nl_it += nl_it
+        total_l_it  += l_it
 
-        PETSc.Sys.Print( f"t = {current_time/(24*3600):.2f} d | "
+        PETSc.Sys.Print(f"Timestep number: {n_steps} | " 
+                        f"t = {current_time/(24*3600):.2f} d | "
                         f"dt = {float(dt)/(24*3600):.2f} d | "
                         f"NL iters = {nl_it} | "
                         f"L iters = {l_it} | "
-                        f"Water content = {water_content:.5e} | "
-                        f"Exterior flux = {exterior_flux:.5e} | "
-                        f'Water Balabnce =  {(water_content-initial_mass)/(total_extracted+total_exterior_flux):.4f}'
+                        f"Water mass = {water_mass} m^3 | "
                         )
 
-    final_mass = assemble(theta*eq.dx)
+    # Save final solution
+    #K.interpolate(relative_conductivity(h))
+    #q.interpolate(-K*grad(h + x[eq.dim-1]))
+    #outfile.write(h, q, theta, K, time=current_time)
+
     PETSc.Sys.Print(f"Number of timesteps: {n_steps}")
     PETSc.Sys.Print(f"Total number of nonlinear iterations: {total_nl_it}")
     PETSc.Sys.Print(f"Total number of linear iterations: {total_l_it}")
     PETSc.Sys.Print("")
     PETSc.Sys.Print(f"Initial mass: {initial_mass}")
-    PETSc.Sys.Print(f"Final mass: {final_mass}")
-    PETSc.Sys.Print(f"Exterior flux: {exterior_flux}")
-    PETSc.Sys.Print(f"Total extracted: {total_extracted}")
-
-
+    PETSc.Sys.Print(f"Final mass: {water_mass}")
 
 
 if __name__ == "__main__":
