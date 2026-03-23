@@ -1,4 +1,4 @@
-from gadopt import *
+from RichardsSolver import *
 
 """
 Convergence test of Vauclin benchmark
@@ -8,7 +8,7 @@ Convergence test of Vauclin benchmark
 def test_vauclin():
 
     t_final = 28800
-    time_step = 25
+    time_step = 10
     polynomial_degree = 2
     grid_space = 0.035
 
@@ -26,7 +26,7 @@ def test_vauclin():
 
     polynomial_degree = 1
 
-    dx_vec = np.array([0.1, 0.05, 0.025])
+    dx_vec = np.array([0.1666, 0.1, 0.08333, 0.06666, 0.05])
     error_vec = dx_vec*0
 
     for index in range(len(dx_vec)):
@@ -43,11 +43,11 @@ def test_vauclin():
     assert slope >= 1.9, "Optimal convergence rate not achieved."
 
 
-def vauclin_benchmark(t_final=28800, 
-                    time_step=50, 
+def vauclin_benchmark(t_final=28800,
+                    time_step=50,
                     grid_space=0.01,
                     polynomial_degree=1,
-                    time_integration=ImplicitMidpoint,
+                    time_integration='ImplicitMidpoint',
                     ):
 
     """
@@ -79,7 +79,7 @@ def vauclin_benchmark(t_final=28800,
     V = FunctionSpace(mesh, "DQ", polynomial_degree)
     W = VectorFunctionSpace(mesh, 'DQ', polynomial_degree)
 
-    soil_curve = HaverkampCurve(
+    soil_curves = HaverkampCurve(
         theta_r=0.00,   # Residual water content [-]
         theta_s=0.37,   # Saturated water content [-]
         Ks=9.722e-05,   # Saturated hydraulic conductivity [m/s]
@@ -107,20 +107,19 @@ def vauclin_benchmark(t_final=28800,
     top_flux = tanh(0.000125 * time_var) * recharge_rate * recharge_region_indicator
 
     # Boundary conditions
-    boundary_ids = get_boundary_ids(mesh)
     richards_bcs = {
-        boundary_ids.left: {'flux': 0.0},
-        boundary_ids.right: {'h': 0.65 - X[1]},
-        boundary_ids.bottom: {'flux': 0.0},
-        boundary_ids.top: {'flux': top_flux},
+        1: {'flux': 0.0},
+        2: {'h': 0.65 - X[1]},
+        3: {'flux': 0.0},
+        4: {'flux': top_flux},
     }
 
-    richards_solver = RichardsSolver(
-        h,
-        soil_curve,
-        delta_t=dt,
-        timestepper=time_integration,
-        bcs=richards_bcs)
+    eq = RichardsEquation(V=V,
+                        soil_curves=soil_curves,
+                        bcs=richards_bcs,
+                        time_integrator=time_integration,
+                        )
+    richards_solver = RichardsSolver(h, h_old, time_var, dt, eq)
 
     time = 0
 
