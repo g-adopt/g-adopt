@@ -23,7 +23,16 @@ from .level_set_tools import (
 from .limiter import VertexBasedP1DGLimiter
 from .nullspaces import create_stokes_nullspace, rigid_body_modes
 from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
-from .richards_solver import RichardsSolver
+from .richards_solver import (
+    RichardsSolver,
+    richards_mass_term,
+    richards_diffusion_term,
+    richards_gravity_advection,
+    richards_source_term,
+)
+from .richards_equation import (
+    RichardsEquation
+)
 from .soil_curves import (
     SoilCurve,
     HaverkampCurve,
