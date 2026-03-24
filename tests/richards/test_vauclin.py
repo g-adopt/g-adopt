@@ -1,4 +1,4 @@
-from RichardsSolver import *
+from gadopt import *
 
 """
 Convergence test of Vauclin benchmark
