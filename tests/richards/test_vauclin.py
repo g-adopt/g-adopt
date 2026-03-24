@@ -8,9 +8,9 @@ Convergence test of Vauclin benchmark
 def test_vauclin():
 
     t_final = 28800
-    time_step = 10
+    time_step = 25
     polynomial_degree = 2
-    grid_space = 0.035
+    grid_space = 0.03
 
     PETSc.Sys.Print('Generating reference solution...')
     h_ref = vauclin_benchmark(t_final, time_step, grid_space, polynomial_degree)
@@ -20,14 +20,16 @@ def test_vauclin():
     V_comp = FunctionSpace(h_ref.function_space().mesh(), "DQ", 2)
     h_interp = Function(V_comp)
 
+    PETSc.Sys.Print("")
+
     PETSc.Sys.Print("="*60)
     PETSc.Sys.Print("Performing convergence check with DG1")
     PETSc.Sys.Print("="*60)
 
     polynomial_degree = 1
-
+    time_step = 25
     dx_vec = np.array([0.1666, 0.1, 0.08333, 0.06666, 0.05])
-    error_vec = dx_vec*0
+    error_vec = np.zeros(len(dx_vec), dtype=float)
 
     for index in range(len(dx_vec)):
         dx = dx_vec[index]

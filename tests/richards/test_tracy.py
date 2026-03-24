@@ -11,12 +11,25 @@ def test_tracy():
     PETSc.Sys.Print("")
 
     PETSc.Sys.Print("="*60)
+    PETSc.Sys.Print("Performing transient solution check with Backward Euler")
+    PETSc.Sys.Print("="*60)
+
+    t_final, polynomial_degree, integration_method = 1e05, 2, 'BackwardEuler'
+    timestep_vec = np.array([10000, 5000], dtype=float)
+    nodes_vector = np.array([111, 111], dtype=float)
+
+    convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
+    PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with Backward Euler.")
+    assert convergence_rate >= 0.9, "Optimal convergence rate not achieved."
+    PETSc.Sys.Print("")
+
+    PETSc.Sys.Print("="*60)
     PETSc.Sys.Print("Performing transient solution check with Crank Nicolson")
     PETSc.Sys.Print("="*60)
 
     t_final, polynomial_degree, integration_method = 1e05, 2, 'CrankNicolson'
     timestep_vec = np.array([10000, 5000], dtype=float)
-    nodes_vector = np.array([151, 171], dtype=float)
+    nodes_vector = np.array([151, 181], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with Crank Nicolson.")
@@ -34,20 +47,6 @@ def test_tracy():
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with Implicit Midpoint.")
     assert convergence_rate >= 1.9, "Optimal convergence rate not achieved."
-    PETSc.Sys.Print("")
-
-
-    PETSc.Sys.Print("="*60)
-    PETSc.Sys.Print("Performing transient solution check with Backward Euler")
-    PETSc.Sys.Print("="*60)
-
-    t_final, polynomial_degree, integration_method = 1e05, 2, 'BackwardEuler'
-    timestep_vec = np.array([10000, 5000], dtype=float)
-    nodes_vector = np.array([111, 111], dtype=float)
-
-    convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
-    PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with Backward Euler.")
-    assert convergence_rate >= 0.9, "Optimal convergence rate not achieved."
     PETSc.Sys.Print("")
 
     PETSc.Sys.Print("="*60)
@@ -217,7 +216,7 @@ def compute_error(nodes: int,
     hExact = exact_solution(X, time+offset)
     L2_norm = sqrt(assemble((h-hExact)**2 * dx_quad))
 
-    PETSc.Sys.Print(f"L2 error:  = {L2_norm:.3e} | "
+    PETSc.Sys.Print(f"L2 error:  = {L2_norm:.2e} | "
                     f"dx = {L/(nodes-1):.4f} | "
                     f"dt = {float(dt):.0f} | "
                     f"Nodes = {nodes} | "

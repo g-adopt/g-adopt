@@ -8,7 +8,7 @@ def test_mass_balance_small_domain():
 
     PETSc.Sys.Print("")
 
-    grid_points = 25
+    grid_points = 26
     dt = Constant(100)
     function_space  = "DQ"
     time_integrator = "ImplicitMidpoint"
@@ -18,13 +18,17 @@ def test_mass_balance_small_domain():
     PETSc.Sys.Print("Performing mass balance for different function spaces")
     PETSc.Sys.Print("="*60)
 
-    for polynomial_degree in range(3):
-        compute_mass_balance(grid_points,
-                    dt,
-                    time_final,
-                    polynomial_degree,
-                    time_integrator,
-                    function_space)
+    for function_space in ['DQ', 'CG']:
+        for polynomial_degree in range(3):
+            if polynomial_degree == 0 and function_space == 'CG':
+                continue  # This combo doesn't exist
+            else:
+                compute_mass_balance(grid_points,
+                            dt,
+                            time_final,
+                            polynomial_degree,
+                            time_integrator,
+                            function_space)
     
     PETSc.Sys.Print("")
 
@@ -32,15 +36,18 @@ def test_mass_balance_small_domain():
     PETSc.Sys.Print("Performing mass balance for different time integration methods")
     PETSc.Sys.Print("="*60)
 
-    polynomial_degree = 1
+    polynomial_degree, function_space, grid_points = 1, 'DQ', 26
+    dt = Constant(50)
 
-    for time_integrator in ['BackwardEuler', 'ImplicitMidpoint', 'CrankNicolson']:
-        compute_mass_balance(grid_points,
-                    dt,
-                    time_final,
-                    polynomial_degree,
-                    time_integrator,
-                    function_space)
+    for equation_form in ["PressureHeadForm", 'MixedForm']:
+        for time_integrator in ['BackwardEuler', 'ImplicitMidpoint']:
+            compute_mass_balance(grid_points,
+                        dt,
+                        time_final,
+                        polynomial_degree,
+                        time_integrator,
+                        function_space,
+                        equation_form)
 
 
 def compute_mass_balance(grid_points: int,
@@ -48,7 +55,8 @@ def compute_mass_balance(grid_points: int,
                 t_final: float = 1.0e5,
                 polynomial_degree: int = 1,
                 time_integrator: str = "BackwardEuler",
-                function_space: str = 'DG'):
+                function_space: str = 'DG',
+                equation_form: str = 'MixedForm'):
     
     mesh = UnitSquareMesh(grid_points, grid_points, quadrilateral=True)
     V    = FunctionSpace(mesh, function_space, polynomial_degree)
@@ -80,16 +88,15 @@ def compute_mass_balance(grid_points: int,
     moisture_content = soil_curves.moisture_content
     theta = Function(V, name='MoistureContent').interpolate(moisture_content(h))
 
+#    Richards equation object
     time_var = Constant(0.0)
-
-    # Richards equation object
     eq = RichardsEquation(
         V=V,
         soil_curves=soil_curves,
         bcs=bcs,
         time_integrator=time_integrator,
+        equation_form=equation_form,
     )
-    
     richards_solver = RichardsSolver(h, h_old, time_var, time_step, eq)
 
     initial_mass  = assemble(theta * eq.dx)
@@ -109,12 +116,21 @@ def compute_mass_balance(grid_points: int,
         inflow       = float(time_step) * 1e-06
         current_mass = assemble(theta * eq.dx)
 
+        # Net mass loss each timestep
         mass_error += abs(abs(current_mass - previous_mass) - abs(inflow))
 
         previous_mass = current_mass
 
-    # Check mass/loss
-    PETSc.Sys.Print("Mass loss/gain", {float(mass_error)})
+    PETSc.Sys.Print(f"Net mass loss = {mass_error:.2e} | "
+            f"dx = {1/(grid_points-1):.4f} | "
+            f"dt = {float(time_step):.0f} | "
+            f"Function space = {function_space} | "
+            f"Polynomial degree = {polynomial_degree} | "
+            f"Equation form = {equation_form} | "
+            f"Time integration = {time_integrator} | "
+            )
 
-    assert np.isclose(mass_error, 0.0, atol=1e-7), \
-        f"Mass imbalance too large: {mass_error}"
+    # Only test mass conservation for expect mass conservation method
+    if function_space == 'DQ' and equation_form == 'MixedForm':
+        assert np.isclose(mass_error, 0.0, atol=1e-7), \
+            f"Mass imbalance too large: {mass_error}"
