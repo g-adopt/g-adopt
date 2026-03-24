@@ -10,18 +10,19 @@ Simulations are formed in a rectangular prism of side length 2.0 x 2.0 x 2.6 m. 
 """
 
 # Set up mesh
-nodesX = 20
+nodesX = 50
 nodesY, nodesZ = nodesX, round(1.3*nodesX)
 Lx, Ly, Lz = 2, 2, 2.6
 
 mesh2D = RectangleMesh(nodesX, nodesY, Lx, Ly, quadrilateral=True)
-mesh = ExtrudedMesh(mesh2D, nodesZ, layer_height=Lz/nodesZ)
+mesh   = ExtrudedMesh(mesh2D, nodesZ, layer_height=Lz/nodesZ)
+
 X = SpatialCoordinate(mesh)
 
-dt = Constant(300.0)  # Time step size
-t_final = float(dt)*250
+dt = Constant(600.0)  # Time step size
+t_final = 259200 # 72 hours in seconds
 
-V = FunctionSpace(mesh, "DQ", 2)
+V = FunctionSpace(mesh, "DQ", 0)
 
 # Construct the heterogeneuous soil
 epsilon = 1/500
@@ -30,7 +31,7 @@ I = sin(3*(X[0]-r[0])) + sin(3*(X[1]-r[1])) + sin(3*(X[2]-r[2])) + sin(3*(X[0]-r
 I = 0.5*(1 + tanh(I/epsilon))
 
 # Specify the hydrological parameters
-soil_curve = VanGenuchtenCurve(
+soil_curves = VanGenuchtenCurve(
     theta_r=0.02*I + 0.035*(1-I),    # Residual water content [-]
     theta_s=0.417*I + 0.401*(1-I),   # Saturated water content [-]
     Ks=5.82e-05*I + 1.69e-05*(1-I),  # Saturated hydraulic conductivity [m/s]
@@ -52,20 +53,33 @@ richards_bcs = {
 }
 
 # Initial condition
-h = Function(V, name="PressureHead").interpolate(bottom_bc - (bottom_bc-top_bc)*exp(5*(X[2]-Lz)))
+moisture_content = soil_curves.moisture_content
+h     = Function(V, name="PressureHead").interpolate(bottom_bc - (bottom_bc-top_bc)*exp(5*(X[2]-Lz)))
+h_old = Function(V, name="PreviousSolution").assign(h)
+theta = Function(V, name='MoistureContent').interpolate(moisture_content(h))
 
-richards_solver = RichardsSolver(
-    h,
-    soil_curve,
-    delta_t=dt,
-    timestepper=ImplicitMidpoint,
-    bcs=richards_bcs,
-    solver_parameters="iterative",
-    quad_degree=5,
-)
+time_var = Constant(0)
+eq = RichardsEquation(V=V,
+                    soil_curves=soil_curves,
+                    bcs=richards_bcs,
+                    time_integrator='ImplicitMidpoint',
+                    )
+richards_solver = RichardsSolver(h, h_old, time_var, dt, eq)
+
+output = VTKFile("cockett.pvd")
+output.write(h, theta, time=0)
 
 time = 0
+plot_iteration = 0
+
 while time < t_final:
 
+    h_old.assign(h)
+    time_var.assign(time)
     richards_solver.solve()
     time += float(dt)
+
+    plot_iteration += 1
+    if plot_iteration % 10 == 0:
+        theta.interpolate(moisture_content(h))
+        output.write(h, theta, time=time)
