@@ -1,4 +1,4 @@
-from RichardsSolver import *
+from gadopt import *
 
 """
 Performs simple conservation of mass test for different polynomial degrees.
