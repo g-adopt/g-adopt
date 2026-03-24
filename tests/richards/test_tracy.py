@@ -1,4 +1,4 @@
-from RichardsSolver import *
+from gadopt import *
 
 """
 Convergence study of Tracy's two dimensional exact solution (steady-state and transient)
