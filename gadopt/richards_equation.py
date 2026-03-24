@@ -23,7 +23,8 @@ class RichardsEquation(ABC):
                  solver_parameters='default',
                  time_integrator="BackwardEuler",
                  source_term=0,
-                 quad_degree=0):
+                 quad_degree=0,
+                 equation_form="MixedForm"):
 
         self.mesh = mesh = V.mesh()
         self.trial_space = V
@@ -39,6 +40,14 @@ class RichardsEquation(ABC):
         else:
             raise TypeError('Time Integrator not recognised')
         self.soil_curves = soil_curves
+
+        # Check equation form is valid
+        accepted_forms = ['MixedForm', 'PressureHeadForm']
+        if equation_form in accepted_forms:
+            self.equation_form = equation_form
+        else:
+            raise TypeError('Equation form not recognised')
+
         self.bcs = bcs
 
         self.source_term = source_term

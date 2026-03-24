@@ -63,7 +63,6 @@ def richards_mass_term(h: fd.Function, h_old: fd.Function, time_step: fd.Constan
     theta = eq.soil_curves.moisture_content
     F_mixed = fd.inner((theta(h) - theta(h_old))/time_step, eq.test_function) * eq.dx
 
-    """
     # Use this if wanting to solve in pressure-head form
     water_retention = eq.soil_curves.water_retention
     match eq.time_integrator:
@@ -75,9 +74,11 @@ def richards_mass_term(h: fd.Function, h_old: fd.Function, time_step: fd.Constan
             C = 0.5*(water_retention(h)+water_retention(h_old))
 
     F_head = fd.inner(C*(h - h_old)/time_step, eq.test_function) * eq.dx
-    """
 
-    return F_mixed
+    if eq.equation_form == 'MixedForm':
+        return F_mixed
+    elif eq.equation_form == 'PressureHeadForm':
+        return F_head
 
 
 def richards_source_term(eq):
