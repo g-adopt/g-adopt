@@ -32,7 +32,7 @@ class SoilCurve(ABC):
 
     All soil curve models must implement methods for:
     - moisture_content: $\theta(h)$ - volumetric water content
-    - relative_permeability: $K(h)$ - hydraulic conductivity
+    - relative_conductivity: $K(h)$ - hydraulic conductivity
     - water_retention: $C(h)$ - specific moisture capacity ($d\theta/dh$)
 
     All models require a specific storage coefficient Ss parameter.
@@ -105,7 +105,7 @@ class SoilCurve(ABC):
         pass
 
     @abstractmethod
-    def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def relative_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
         Calculate relative hydraulic conductivity $K(h)$.
 
@@ -187,7 +187,7 @@ class HaverkampCurve(SoilCurve):
         theta = self.theta_r + self.alpha * (self.theta_s - self.theta_r) / (self.alpha + abs(h)**self.beta)
         return fd.conditional(h <= 0, theta, self.theta_s)
 
-    def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def relative_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
         Haverkamp relative permeability relationship.
 
@@ -259,7 +259,7 @@ class VanGenuchtenCurve(SoilCurve):
         theta = self.theta_r + (self.theta_s - self.theta_r) / ((1 + abs(self.alpha * h)**self.n)**m)
         return fd.conditional(h <= 0, theta, self.theta_s)
 
-    def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def relative_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
         van Genuchten relative permeability relationship.
 
@@ -327,7 +327,7 @@ class ExponentialCurve(SoilCurve):
         theta = self.theta_r + (self.theta_s - self.theta_r) * fd.exp(h * self.alpha)
         return fd.conditional(h <= 0, theta, self.theta_s)
 
-    def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def relative_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
         Exponential relative permeability relationship.
 
