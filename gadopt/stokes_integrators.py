@@ -98,7 +98,7 @@ Note:
 """
 
 p2p0_stokes_solver_parameters = {
-    'mat_type': 'nest',
+    'mat_type': 'aij',
     'ksp_atol': 1e-10,
     'ksp_converged_reason': None,
     'ksp_max_it': 500,
@@ -138,7 +138,7 @@ p2p0_stokes_solver_parameters = {
             'patch_pc_patch_precompute_element_tensors': True,
             'patch_pc_patch_save_operators': True,
             'patch_pc_patch_statistics': False,
-            'patch_pc_patch_sub_mat_type': 'seqdense',
+            'patch_pc_patch_sub_mat_type': 'aij',
             'patch_pc_patch_symmetrise_sweep': False,
             'patch_sub_ksp_type': 'preonly',
             'patch_sub_pc_factor_mat_solver_type': 'petsc',
@@ -148,14 +148,34 @@ p2p0_stokes_solver_parameters = {
         },
         'pc_mg_log': None,
         'pc_mg_type': 'full',
-        'pc_type': 'mg'
+        'pc_type': 'mg',
+        'mat_type': 'aij'
     },
     'fieldsplit_1': {
-        'ksp_type': 'preonly',
+        'ksp_type': 'fgmres',
         'pc_python_type': 'gadopt.P0MassInvPC',
         'pc_type': 'python'
     }
 }
+p2p0_stokes_solver_parameters['fieldsplit_0'] ={
+   "mat_type": "aij",
+   "snes_type": "ksponly",
+   "snes_view": None,
+   "ksp_type": "richardson",
+   "ksp_converged_reason": None,
+   "pc_type": "mg",
+   "pc_mg_type": "multiplicative",
+   "pc_mg_cycles": "v",
+   "mg_levels_ksp_type": "richardson",
+   "mg_levels_ksp_richardson_scale": 0.5,
+   "mg_levels_ksp_max_it": 1,
+   "mg_levels_pc_type": "python",
+   "mg_levels_pc_python_type": "firedrake.ASMStarPC",
+   "mg_levels_pc_star_construct_dim": 0,
+   "mg_levels_pc_star_view_patch_sizes": None
+}
+
+
 """Default iterative solver parameters for the P2P0 FEM pair with Stokes."""
 
 direct_stokes_solver_parameters = {
@@ -548,7 +568,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             from .mg_transfers import VariablePkP0SchoeberlTransfer, NullTransfer
             V = self.solution_space.sub(0)
             Q = self.solution_space.sub(1)
-            tdim = self.mesh.topological_dimension()
+            tdim = self.mesh.topological_dimension
             hierarchy = "uniform"
             restriction = False
             vtransfer = VariablePkP0SchoeberlTransfer(tdim, hierarchy)

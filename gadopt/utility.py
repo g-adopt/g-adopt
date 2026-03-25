@@ -7,7 +7,7 @@ depending on what they would like to achieve.
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional
+from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional, MeshHierarchy
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import time
@@ -676,7 +676,7 @@ def _after(dm, i):
 
 
 def LabeledMeshHierarchy(base_mesh, refinement_levels, **kwargs):
-    """Variant of firedrake's MeshHierachy that labels all facets with 'prolongation'
+    """Variant of firedrake's MeshHierarchy that labels all facets with 'prolongation'
 
     As require by alfi's TransferManagers"""
     assert 'callbacks' not in kwargs

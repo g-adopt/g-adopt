@@ -4,6 +4,8 @@ from mpi4py import MPI
 # Set up geometry:
 nx, ny = 80, 80
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)  # Square mesh generated via firedrake
+mesh.cartesian = True
+
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
 # Set up function spaces - currently using the bilinear Q2Q1 element pair:
@@ -15,6 +17,7 @@ Z = MixedFunctionSpace([V, W])  # Mixed function space.
 # Function to store the solutions:
 z = Function(Z)  # a field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
+mu_func = Function(W, name="Viscosity")
 
 # Output function space information:
 log("Number of Velocity DOF:", V.dim())
@@ -28,10 +31,10 @@ T = Function(Q, name="Temperature")
 T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 
 delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
-Ra = Constant(200)  # Rayleigh number
+Ra = Constant(2000)  # Rayleigh number
 approximation = BoussinesqApproximation(Ra)
 # Rheology:
 gamma_T, gamma_Z = Constant(ln(10**6)), Constant(ln(10))
@@ -44,7 +47,7 @@ mu = (2. * mu_lin * mu_plast) / (mu_lin + mu_plast)
 
 time = 0.0
 steady_state_tolerance = 1e-9
-max_timesteps = 10
+max_timesteps = int(1e5)
 kappa = Constant(1.0)  # Thermal diffusivity
 
 # Nullspaces and near-nullspaces:
@@ -56,16 +59,16 @@ u, p = z.subfunctions  # Do this first to extract individual velocity and pressu
 u.rename("Velocity")
 p.rename("Pressure")
 # Create output file and select output_frequency:
-output_file = File("output.pvd")
+output_file = VTKFile("output.pvd")
 dump_period = 1
 # Frequency of checkpoint files:
-checkpoint_period = dump_period * 4
+checkpoint_period = dump_period * 100
 
 # Open file for logging diagnostic output:
 plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
 
-gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 
 
 temp_bcs = {
@@ -80,10 +83,20 @@ stokes_bcs = {
     right_id: {'ux': 0},
 }
 
+solver_parameters_extra = {
+        'fieldsplit_0': {
+            'ksp_converged_reason': None,
+        },
+        'fieldsplit_1': {
+            'ksp_converged_reason': None,
+        },
+}
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
-                             cartesian=True,
-                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
+stokes_solver = StokesSolver(z, approximation, T, bcs=stokes_bcs,
+                             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
+                             solver_parameters='iterative',
+                             solver_parameters_extra=solver_parameters_extra)
+
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
 checkpoint_file.save_mesh(mesh)
@@ -93,9 +106,10 @@ for timestep in range(0, max_timesteps):
 
     # Write output:
     if timestep % dump_period == 0:
-        output_file.write(u, p, T)
+        mu_func.interpolate(mu)
+        output_file.write(u, p, T, mu_func)
 
-    dt = t_adapt.update_timestep(u)
+    dt = t_adapt.update_timestep()
     time += dt
 
     # Solve Stokes sytem:

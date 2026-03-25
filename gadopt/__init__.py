@@ -22,7 +22,7 @@ from .level_set_tools import (
 )
 from .limiter import VertexBasedP1DGLimiter
 from .nullspaces import create_stokes_nullspace, rigid_body_modes
-from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
+from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC, P0MassInvPC
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
     BoundaryNormalStressSolver,
@@ -43,6 +43,7 @@ from .utility import (
     node_coordinates,
     timer_decorator,
     get_boundary_ids,
+    LabeledMeshHierarchy,
 )
 
 PETSc.Sys.popErrorHandler()

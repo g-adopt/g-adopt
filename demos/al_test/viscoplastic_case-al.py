@@ -6,6 +6,7 @@ nx, ny = 5, 5
 base_mesh = UnitSquareMesh(nx, ny, quadrilateral=False)  # Square mesh generated via firedrake
 mh = LabeledMeshHierarchy(base_mesh, 4, reorder=True)
 mesh = mh[-1]
+mesh.cartesian = True
 
 left_id, right_id, bottom_id, top_id = 1, 2, 3, 4  # Boundary IDs
 
@@ -33,7 +34,7 @@ T = Function(Q, name="Temperature")
 T.interpolate((1.0-X[1]) + (0.05*cos(pi*X[0])*sin(pi*X[1])))
 
 delta_t = Constant(1e-6)  # Initial time-step
-t_adapt = TimestepAdaptor(delta_t, V, maximum_timestep=0.1, increase_tolerance=1.5)
+t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 
 # Stokes related constants (note that since these are included in UFL, they are wrapped inside Constant):
 Ra = Constant(200)  # Rayleigh number
@@ -61,7 +62,7 @@ u, p = z.subfunctions  # Do this first to extract individual velocity and pressu
 u.rename("Velocity")
 p.rename("Pressure")
 # Create output file and select output_frequency:
-output_file = File("output.pvd")
+output_file = VTKFile("output.pvd")
 dump_period = 1
 # Frequency of checkpoint files:
 checkpoint_period = dump_period * 4
@@ -70,7 +71,7 @@ checkpoint_period = dump_period * 4
 plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t")
 
-gd = GeodynamicalDiagnostics(u, p, T, bottom_id, top_id)
+gd = GeodynamicalDiagnostics(z, T, bottom_id=bottom_id, top_id=top_id)
 
 
 temp_bcs = {
@@ -86,9 +87,8 @@ stokes_bcs = {
 }
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
-stokes_solver = StokesSolver(z, T, approximation, bcs=stokes_bcs, mu=mu,
+stokes_solver = StokesSolver(z, approximation, T, bcs=stokes_bcs,
                              gamma=1e2,
-                             cartesian=True,
                              nullspace=Z_nullspace, transpose_nullspace=Z_nullspace)
 
 checkpoint_file = CheckpointFile("Checkpoint_State.h5", "w")
@@ -102,7 +102,7 @@ for timestep in range(0, max_timesteps):
         mu_func.interpolate(mu)
         output_file.write(u, p, T, mu_func)
 
-    dt = t_adapt.update_timestep(u)
+    dt = t_adapt.update_timestep()
     time += dt
 
     # Solve Stokes sytem:
