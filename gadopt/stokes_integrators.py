@@ -157,22 +157,22 @@ p2p0_stokes_solver_parameters = {
         'pc_type': 'python'
     }
 }
-p2p0_stokes_solver_parameters['fieldsplit_0'] ={
-   "mat_type": "aij",
-   "snes_type": "ksponly",
-   "snes_view": None,
-   "ksp_type": "richardson",
-   "ksp_converged_reason": None,
-   "pc_type": "mg",
-   "pc_mg_type": "multiplicative",
-   "pc_mg_cycles": "v",
-   "mg_levels_ksp_type": "richardson",
-   "mg_levels_ksp_richardson_scale": 0.5,
-   "mg_levels_ksp_max_it": 1,
-   "mg_levels_pc_type": "python",
-   "mg_levels_pc_python_type": "firedrake.ASMStarPC",
-   "mg_levels_pc_star_construct_dim": 0,
-   "mg_levels_pc_star_view_patch_sizes": None
+p2p0_stokes_solver_parameters['fieldsplit_0'] = {
+    "mat_type": "aij",
+    "snes_type": "ksponly",
+    "snes_view": None,
+    "ksp_type": "richardson",
+    "ksp_converged_reason": None,
+    "pc_type": "mg",
+    "pc_mg_type": "multiplicative",
+    "pc_mg_cycles": "v",
+    "mg_levels_ksp_type": "richardson",
+    "mg_levels_ksp_richardson_scale": 0.5,
+    "mg_levels_ksp_max_it": 1,
+    "mg_levels_pc_type": "python",
+    "mg_levels_pc_python_type": "firedrake.ASMStarPC",
+    "mg_levels_pc_star_construct_dim": 0,
+    "mg_levels_pc_star_view_patch_sizes": None
 }
 
 
@@ -577,7 +577,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                          Q.ufl_element(): (fd.prolong, fd.restrict, qtransfer.inject)}
             transfermanager = fd.TransferManager(native_transfers=transfers)
             self.solver.set_transfer_manager(transfermanager)
-
 
     def solve(self) -> None:
         """Solves the system."""

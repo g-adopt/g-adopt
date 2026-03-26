@@ -84,12 +84,12 @@ stokes_bcs = {
 }
 
 solver_parameters_extra = {
-        'fieldsplit_0': {
-            'ksp_converged_reason': None,
-        },
-        'fieldsplit_1': {
-            'ksp_converged_reason': None,
-        },
+    'fieldsplit_0': {
+        'ksp_converged_reason': None,
+    },
+    'fieldsplit_1': {
+        'ksp_converged_reason': None,
+    },
 }
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 stokes_solver = StokesSolver(z, approximation, T, bcs=stokes_bcs,

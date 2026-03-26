@@ -163,6 +163,7 @@ def divergence_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
     return F
 
+
 def grad_div_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     if not hasattr(eq, "gamma"):
         return 0
