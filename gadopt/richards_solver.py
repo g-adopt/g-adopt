@@ -1,5 +1,5 @@
 import firedrake as fd
-from RichardsSolver.utilities import interior_penalty_factor
+from .equations import interior_penalty_factor
 import numpy as np
 import ufl
 
