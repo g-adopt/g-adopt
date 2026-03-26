@@ -93,6 +93,9 @@ class MockIndicatorConnector(IndicatorConnector):
         self._value = value
         self.get_indicator_call_count = 0
 
+    def _prepare_sources(self, age):
+        return {"value": np.array([self._value])}
+
     def set_value(self, value):
         self._value = value
 
