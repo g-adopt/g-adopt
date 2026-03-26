@@ -1,4 +1,4 @@
-from RichardsSolver import *
+from gadopt import *
 from surface_mesh import *
 import time
 
