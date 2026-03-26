@@ -31,8 +31,35 @@ class IndicatorConfigBase:
     """Base configuration for indicator connectors.
 
     Not instantiated directly. Subclass with domain-specific fields.
-    Provides serialisation helpers inherited by all config dataclasses.
+    Provides serialisation helpers and shared field validation.
+
+    Shared fields validated here:
+        n_points, k_neighbors, distance_threshold, default_thickness,
+        r_outer, depth_scale, transition_width.
     """
+
+    def __post_init__(self):
+        """Validate fields common to all indicator configs."""
+        if hasattr(self, "n_points") and self.n_points < 100:
+            raise ValueError(f"n_points must be at least 100, got {self.n_points}")
+        if hasattr(self, "k_neighbors") and self.k_neighbors < 1:
+            raise ValueError(f"k_neighbors must be at least 1, got {self.k_neighbors}")
+        if hasattr(self, "distance_threshold") and self.distance_threshold <= 0:
+            raise ValueError(
+                f"distance_threshold must be positive, got {self.distance_threshold}"
+            )
+        if hasattr(self, "default_thickness") and self.default_thickness < 0:
+            raise ValueError(
+                f"default_thickness must be non-negative, got {self.default_thickness}"
+            )
+        if hasattr(self, "r_outer") and self.r_outer <= 0:
+            raise ValueError(f"r_outer must be positive, got {self.r_outer}")
+        if hasattr(self, "depth_scale") and self.depth_scale <= 0:
+            raise ValueError(f"depth_scale must be positive, got {self.depth_scale}")
+        if hasattr(self, "transition_width") and self.transition_width <= 0:
+            raise ValueError(
+                f"transition_width must be positive, got {self.transition_width}"
+            )
 
     def to_dict(self) -> dict:
         """Convert configuration to dictionary."""
@@ -77,6 +104,7 @@ class IndicatorConnector(ABC):
     _cached_result: np.ndarray | None
     _cached_coords_hash: tuple | None
     _transition_width_nondim: float
+    _initialized: bool
 
     # Template method
 
@@ -97,6 +125,20 @@ class IndicatorConnector(ABC):
         Returns:
             (M,) array of indicator values in [0, 1].
         """
+        # Verify subclass set all required attributes in __init__.
+        # Checked once per instance to give a clear TypeError rather than
+        # a confusing AttributeError deep in the template method.
+        if not getattr(self, "_init_checked", False):
+            for attr in ("gplates_connector", "config", "comm", "_is_root",
+                         "reconstruction_age", "_cached_result",
+                         "_cached_coords_hash", "_transition_width_nondim",
+                         "_initialized"):
+                if not hasattr(self, attr):
+                    raise TypeError(
+                        f"{type(self).__name__} must set '{attr}' in __init__"
+                    )
+            self._init_checked = True
+
         age = self.ndtime2age(ndtime)
 
         self._validate_age(age)
@@ -119,6 +161,9 @@ class IndicatorConnector(ABC):
         sources = self._broadcast_sources(sources)
         result = self._compute_indicator(sources, target_coords)
         self._update_cache(age, target_coords, result)
+        # Mark initialised on all ranks so that _validate_age_extra
+        # checks (e.g. backward-time guard) run consistently everywhere.
+        self._initialized = True
         return result
 
     # Hooks for subclasses
@@ -323,8 +368,14 @@ class IndicatorConnector(ABC):
         log(f"{type(self).__name__}: Filtering {n_before} points to region...",
             level=DEBUG)
         cloud = self._polygon_filter.filter_inside(cloud, at_age=0.0)
-        log(f"{type(self).__name__}: After filtering: {cloud.n_points} points "
-            f"({100 * cloud.n_points / n_before:.1f}% retained)", level=DEBUG)
+        # Guard against zero-point input; the f-string is evaluated eagerly
+        # so it would raise ZeroDivisionError even if the log level is off.
+        if n_before > 0:
+            log(f"{type(self).__name__}: After filtering: {cloud.n_points} points "
+                f"({100 * cloud.n_points / n_before:.1f}% retained)", level=DEBUG)
+        else:
+            log(f"{type(self).__name__}: Input had 0 points, nothing to filter.",
+                level=DEBUG)
 
         cloud = self._rotator.assign_plate_ids(
             cloud, at_age=0.0, remove_undefined=True

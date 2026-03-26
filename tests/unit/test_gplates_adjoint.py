@@ -89,7 +89,13 @@ class MockIndicatorConnector(IndicatorConnector):
     def __init__(self, gplates_connector, value=1.0, comm=MPI.COMM_WORLD):
         self.gplates_connector = gplates_connector
         self.comm = comm
+        self._is_root = (comm.rank == 0)
+        self.config = None
+        self._transition_width_nondim = 0.0
+        self._initialized = False
         self.reconstruction_age = None
+        self._cached_result = None
+        self._cached_coords_hash = None
         self._value = value
         self.get_indicator_call_count = 0
 
