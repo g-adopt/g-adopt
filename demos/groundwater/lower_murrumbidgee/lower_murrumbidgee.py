@@ -589,7 +589,7 @@ def main():
     watertable = spatial_data['watertable']
 
     solver_parameters = {"ksp_type": "gmres", 
-                         "pc_type": "jacobi",
+                         "pc_type": "bjacobi",
                          'ksp_rtol': 1e-06,
                          "sub_ksp_type": "preonly",
                          "sub_pc_type": "ilu",
