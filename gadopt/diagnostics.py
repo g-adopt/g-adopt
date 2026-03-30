@@ -739,6 +739,7 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
       bottom_id:    Bottom boundary identifier
       top_id:       Top boundary identifier
       quad_degree:  Degree of polynomial quadrature approximation
+      **funcs:      Additional Firedrake functions for which to compute diagnostics (see example below)
 
     Note:
       All diagnostics are returned as floats.
@@ -753,6 +754,12 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
       T_max: Maximum temperature in domain
       ux_max: Maximum velocity (first component, optionally over a given boundary)
 
+    Examples:
+
+      >>> gd = GeodynamicalDiagnostics(z, T, bottom_id, top_id, tracer=tracer)
+      >>> print("RMS of velocity: ", gd.u_rms())
+      >>> print("RMS of tracer: ", gd.rms(gd.tracer))
+      >>> print("Maximum of tracer at top boundary: ", gd.max(gd.tracer, boundary_id=top_id))
     """
 
     def __init__(
@@ -764,9 +771,10 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         top_id: Sequence[int | str] | int | str | None = None,
         *,
         quad_degree: int = 4,
+        **funcs: fd.Function | None
     ):
         u, p = z.subfunctions[:2]
-        super().__init__(quad_degree, u=u, p=p, T=T)
+        super().__init__(quad_degree, u=u, p=p, T=T, **funcs)
 
         if bottom_id:
             self.bottom_id = bottom_id

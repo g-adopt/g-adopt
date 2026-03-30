@@ -99,6 +99,11 @@ T_dev = Function(Q, name="Temperature_Deviation")
 averager = LayerAveraging(mesh, quad_degree=6)
 averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
 
+# Another useful diagnostic is the horizontal velocity and its divergence
+u_hor = Function(V, name="Horizontal_Velocity")
+div_u_hor = Function(W, name="Horizontal_Velocity_Divergence")
+rhat = X/r
+
 # Nullspaces and near-nullspace objects are next set up,
 
 Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=True)
@@ -126,9 +131,14 @@ output_file = VTKFile("output.pvd")
 output_frequency = 1
 
 plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg")
+plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg "
+             "u_hor_max div_u_hor_min_base div_u_hor_max_base")
 
-gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top, quad_degree=6)
+# In addition to z and T, we also provide div_u_hor and u_hor
+# so that we can compute min/max diagnostics of these.
+gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top,
+                             div_u_hor=div_u_hor, u_hor=u_hor,
+                             quad_degree=6)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
@@ -158,7 +168,7 @@ for timestep in range(0, timesteps):
         averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
         # Compute deviation from layer average
         T_dev.assign(T-T_avg)
-        output_file.write(*z.subfunctions, T, T_dev)
+        output_file.write(*z.subfunctions, T, T_dev, u_hor, div_u_hor)
 
     if timestep != 0:
         dt = t_adapt.update_timestep()
@@ -181,10 +191,18 @@ for timestep in range(0, timesteps):
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
+    # Horizontal velocity diagnostics
+    u_hor.project(u - dot(u, rhat)*rhat)
+    div_u_hor.project(div(u_hor))
+    u_hor_max = gd.max(gd.u_hor)
+    div_u_hor_min_base = gd.min(gd.div_u_hor, boundary_id=boundary.bottom)
+    div_u_hor_max_base = gd.max(gd.div_u_hor, boundary_id=boundary.bottom)
+
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
-                 f"{energy_conservation} {gd.T_avg()} {T_dev_avg} ")
+                 f"{energy_conservation} {gd.T_avg()} {T_dev_avg} "
+                 f"{u_hor_max} {div_u_hor_min_base} {div_u_hor_max_base}")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
