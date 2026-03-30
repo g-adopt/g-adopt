@@ -175,7 +175,7 @@ time_now = 0.0  # Initial time
 time_step = Function(R).assign(1.0)  # Initial time step
 output_frequency = 10.0  # Frequency (based on simulation time) at which to output
 t_adapt = TimestepAdaptor(
-    time_step, u, V, target_cfl=0.6, maximum_timestep=output_frequency
+    time_step, u, V, target_cfl=0.55, maximum_timestep=output_frequency
 )  # Current level-set advection requires a CFL condition that should not exceed 0.6.
 
 # Here, we set up the variational problem for the Stokes and level-set systems. The

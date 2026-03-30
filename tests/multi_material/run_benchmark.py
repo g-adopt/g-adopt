@@ -135,9 +135,7 @@ else:  # Initialise mesh and key functions
         simulation.initialise_temperature(temperature)
 
     # Set up function spaces and functions used in the level-set approach
-    func_space_ls = fd.FunctionSpace(
-        mesh, "DQ", 1 if benchmark == "schmalholz_2011" else 2
-    )  # Stokes solver diverges when using DQ2 for the Schmalholz benchmark
+    func_space_ls = fd.FunctionSpace(mesh, "DQ", 2)
     level_set = [
         fd.Function(func_space_ls, name=f"Level set #{i}")
         for i in range(len(simulation.materials) - 1)
@@ -266,7 +264,7 @@ t_adapt = ga.TimestepAdaptor(
     timestep,
     velocity,
     stokes_function.subfunctions[0].function_space(),
-    target_cfl=0.6 * adv_kwargs.get("subcycles", 1),
+    target_cfl=0.2 * adv_kwargs.get("subcycles", 1),
     maximum_timestep=simulation.dump_period,
 )
 output_file = fd.VTKFile(
