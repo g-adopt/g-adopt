@@ -124,6 +124,12 @@ def vertical_component(u):
         return sum([n_i * u_i for n_i, u_i in zip(n, u)])
 
 
+def horizontal_components(u):
+    """Returns expression for vector u with vertical component removed, i.e. returns the vector UFL expression orthogonal to gravity."""
+    mesh = extract_unique_domain(u)
+    return u - vertical_component(u) * upward_normal(mesh)
+
+
 def ensure_constant(f):
     if isinstance(f, float) or isinstance(f, int):
         return Constant(f)

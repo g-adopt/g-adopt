@@ -126,9 +126,11 @@ output_file = VTKFile("output.pvd")
 output_frequency = 1
 
 plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg")
+plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg "
+             "u_hor_max div_u_hor_min_base div_u_hor_max_base")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top, quad_degree=6)
+u_horizontal = gd.get_horizontal_components(u)
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
@@ -181,10 +183,16 @@ for timestep in range(0, timesteps):
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
+    # Horizontal velocity diagnostics
+    u_hor_max = gd.max(u_horizontal)
+    div_u_hor_min_base = gd.min(div(u_horizontal), boundary_id=boundary.bottom)
+    div_u_hor_max_base = gd.max(div(u_horizontal), boundary_id=boundary.bottom)
+
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
-                 f"{energy_conservation} {gd.T_avg()} {T_dev_avg} ")
+                 f"{energy_conservation} {gd.T_avg()} {T_dev_avg} "
+                 f"{u_hor_max} {div_u_hor_min_base} {div_u_hor_max_base}")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
