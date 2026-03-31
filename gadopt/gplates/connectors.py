@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, fields
 from pathlib import Path
 # TYPE_CHECKING: False at runtime, True for static type checkers (avoids runtime overhead)
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import h5py
 import numpy as np
