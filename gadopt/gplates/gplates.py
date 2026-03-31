@@ -18,7 +18,7 @@ from scipy.spatial import cKDTree
 
 from ..solver_options_manager import SolverConfigurationMixin
 from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
-from .connectors import IndicatorConfigBase, IndicatorConnector
+from .connectors import InterpolationConfig, IndicatorConfigBase, IndicatorConnector
 from .gplatesfiles import ensure_reconstruction
 
 
@@ -26,6 +26,7 @@ __all__ = [
     "ensure_reconstruction",
     "GplatesVelocityFunction",
     "GplatesScalarFunction",
+    "InterpolationConfig",
     "IndicatorConfigBase",
     "IndicatorConnector",
     "LithosphereConnector",
@@ -714,13 +715,18 @@ class LithosphereConfig(IndicatorConfigBase):
     configuration object. Provides sensible defaults for Earth's mantle.
 
     Use with LithosphereConnector:
-        >>> config = LithosphereConfig(n_points=40000, transition_width=5.0)
+        >>> from gadopt.gplates import InterpolationConfig
+        >>> config = LithosphereConfig(
+        ...     n_points=40000,
+        ...     interpolation=InterpolationConfig(kernel="gaussian", k_neighbors=200),
+        ... )
         >>> connector = LithosphereConnector(gplates, data, age_func, config=config)
 
-    Or override specific values with config_extra:
+    Or override specific values with config_extra (flat keys are routed
+    to InterpolationConfig automatically):
         >>> connector = LithosphereConnector(
         ...     gplates, data, age_func,
-        ...     config_extra={"n_points": 40000}
+        ...     config_extra={"k_neighbors": 20, "kernel": "gaussian"}
         ... )
 
     Args:
@@ -729,13 +735,9 @@ class LithosphereConfig(IndicatorConfigBase):
             give better resolution but slower computation. Default: 10000.
         reinit_interval_myr: Reinitialize ocean tracker every N Myr to
             prevent drift accumulation. Default: 50.0.
-        k_neighbors: Number of nearest neighbors for thickness
-            interpolation. Default: 50.
-        distance_threshold: Maximum angular distance (radians on unit
-            sphere) for valid interpolation. Points beyond this receive
-            default_thickness. Default: 0.1 (~640 km at Earth's surface).
-        default_thickness: Thickness (km) assigned to points with no
-            nearby data. Default: 100.0.
+        interpolation: Interpolation parameters (kernel, k_neighbors,
+            distance_threshold, etc.). See :class:`InterpolationConfig`.
+            Default: ``InterpolationConfig(default_value=100.0)``.
         r_outer: Outer radius of mesh in non-dimensional units. This is
             the radial coordinate of Earth's surface in the mesh.
             Default: 2.208 (for r_inner=1.208, giving mantle depth ratio).
@@ -758,10 +760,8 @@ class LithosphereConfig(IndicatorConfigBase):
     n_points: int = 10000
     reinit_interval_myr: float = 50.0
 
-    # Interpolation parameters
-    k_neighbors: int = 50
-    distance_threshold: float = 0.1
-    default_thickness: float = 100.0
+    # Interpolation
+    interpolation: InterpolationConfig = None  # set in __post_init__
 
     # Mesh geometry parameters
     r_outer: float = 2.208
@@ -774,13 +774,23 @@ class LithosphereConfig(IndicatorConfigBase):
     # Pass-through to gtrack's TracerConfig
     gtrack_config: dict | None = None
 
+    # Garbage collection: call gc.collect() every N get_indicator calls; None disables
+    gc_collect_frequency: int | None = 1
+
     def __post_init__(self):
+        if self.interpolation is None:
+            self.interpolation = InterpolationConfig(default_value=100.0)
         super().__post_init__()
         if self.time_step <= 0:
             raise ValueError(f"time_step must be positive, got {self.time_step}")
         if self.reinit_interval_myr <= 0:
             raise ValueError(
                 f"reinit_interval_myr must be positive, got {self.reinit_interval_myr}"
+            )
+        if self.gc_collect_frequency is not None and self.gc_collect_frequency < 1:
+            raise ValueError(
+                f"gc_collect_frequency must be >= 1 or None, "
+                f"got {self.gc_collect_frequency}"
             )
 
 
@@ -999,11 +1009,8 @@ class PolygonConfig(IndicatorConfigBase):
 
     Args:
         n_points: Number of sample points for polygon coverage. Default: 20000.
-        k_neighbors: Number of nearest neighbors for interpolation. Default: 50.
-        distance_threshold: Maximum angular distance (radians) for valid
-            interpolation. Default: 0.1 (~640 km).
-        default_thickness: Thickness (km) for points with no nearby data.
-            Default: 200.0.
+        interpolation: Interpolation parameters. See :class:`InterpolationConfig`.
+            Default: ``InterpolationConfig(default_value=200.0)``.
         r_outer: Outer mesh radius in non-dimensional units. Default: 2.208.
         depth_scale: Physical depth (km) per non-dimensional unit. Default: 2890.0.
         transition_width: Tanh transition width in km. Default: 10.0.
@@ -1011,13 +1018,24 @@ class PolygonConfig(IndicatorConfigBase):
     """
 
     n_points: int = 20000
-    k_neighbors: int = 50
-    distance_threshold: float = 0.1
-    default_thickness: float = 200.0
+    interpolation: InterpolationConfig = None  # set in __post_init__
     r_outer: float = 2.208
     depth_scale: float = 2890.0
     transition_width: float = 10.0
     property_name: str = "thickness"
+
+    # Garbage collection: call gc.collect() every N get_indicator calls; None disables
+    gc_collect_frequency: int | None = 1
+
+    def __post_init__(self):
+        if self.interpolation is None:
+            self.interpolation = InterpolationConfig(default_value=200.0)
+        super().__post_init__()
+        if self.gc_collect_frequency is not None and self.gc_collect_frequency < 1:
+            raise ValueError(
+                f"gc_collect_frequency must be >= 1 or None, "
+                f"got {self.gc_collect_frequency}"
+            )
 
 
 class PolygonConnector(IndicatorConnector):
@@ -1266,10 +1284,10 @@ class LithosphereGeotherm(IndicatorConnector):
         r_target = np.linalg.norm(target_coords, axis=1)
         depth_m = (self.config.r_outer - r_target) * self.config.depth_scale * 1e3
 
-        (thickness_km, age_myr), too_far = self._interpolate_idw(
+        (thickness_km, age_myr), too_far = self._interpolate(
             source_xyz, target_coords, sources["thickness"], sources["age"]
         )
-        thickness_km[too_far] = self.config.default_thickness
+        thickness_km[too_far] = self.config.interpolation.default_value
         age_myr[too_far] = self._default_continental_age
 
         z_lab_m = thickness_km * 1e3
@@ -1336,7 +1354,7 @@ class PolygonGeotherm(IndicatorConnector):
         r_target = np.linalg.norm(target_coords, axis=1)
         depth_m = (self.config.r_outer - r_target) * self.config.depth_scale * 1e3
 
-        (thickness_km,), too_far = self._interpolate_idw(
+        (thickness_km,), too_far = self._interpolate(
             source_xyz, target_coords, sources["thickness"]
         )
 

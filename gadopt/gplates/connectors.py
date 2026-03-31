@@ -8,11 +8,12 @@ get_indicator method orchestrates validation, caching, MPI broadcast, IDW interp
 and indicator computation. Subclasses only need to implement _prepare_sources(age).
 """
 
+import gc
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, fields
 from pathlib import Path
 # TYPE_CHECKING: False at runtime, True for static type checkers (avoids runtime overhead)
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import h5py
 import numpy as np
@@ -27,6 +28,63 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class InterpolationConfig:
+    """Configuration for spherical interpolation of scattered data.
+
+    Controls how source particle properties (e.g., lithospheric thickness)
+    are interpolated onto target mesh coordinates on the unit sphere.
+
+    Args:
+        kernel: Interpolation kernel. ``"idw"`` for inverse-distance
+            weighting (1/d), ``"gaussian"`` for Gaussian RBF
+            (exp(-d^2 / 2*sigma^2)). Default: ``"idw"``.
+        k_neighbors: Number of nearest neighbours queried from the
+            cKDTree. For IDW, 50 is typical. For Gaussian with a wide
+            sigma, increase to 200+ so the kernel can reach distant
+            points. Default: 50.
+        distance_threshold: Maximum angular distance (radians on the
+            unit sphere) for valid interpolation. Target points whose
+            nearest source is farther than this receive
+            ``default_value``. Default: 0.1 (~640 km).
+        default_value: Fallback value assigned to target points beyond
+            ``distance_threshold``. Default: 100.0 (km, for lithospheric
+            thickness).
+        gaussian_sigma: Bandwidth of the Gaussian kernel in radians.
+            Only used when ``kernel="gaussian"``. Controls the length
+            scale over which source points influence the interpolated
+            field; ~0.04 rad (~250 km) bridges the continental margin
+            gap while preserving ridge structure. Default: 0.04.
+    """
+
+    kernel: str = "idw"
+    k_neighbors: int = 50
+    distance_threshold: float = 0.1
+    default_value: float = 100.0
+    gaussian_sigma: float = 0.04
+
+    def __post_init__(self):
+        valid_kernels = ("idw", "gaussian")
+        if self.kernel not in valid_kernels:
+            raise ValueError(
+                f"kernel must be one of {valid_kernels}, got '{self.kernel}'"
+            )
+        if self.k_neighbors < 1:
+            raise ValueError(f"k_neighbors must be at least 1, got {self.k_neighbors}")
+        if self.distance_threshold <= 0:
+            raise ValueError(
+                f"distance_threshold must be positive, got {self.distance_threshold}"
+            )
+        if self.default_value < 0:
+            raise ValueError(
+                f"default_value must be non-negative, got {self.default_value}"
+            )
+        if self.gaussian_sigma <= 0:
+            raise ValueError(
+                f"gaussian_sigma must be positive, got {self.gaussian_sigma}"
+            )
+
+
+@dataclass
 class IndicatorConfigBase:
     """Base configuration for indicator connectors.
 
@@ -34,24 +92,17 @@ class IndicatorConfigBase:
     Provides serialisation helpers and shared field validation.
 
     Shared fields validated here:
-        n_points, k_neighbors, distance_threshold, default_thickness,
-        r_outer, depth_scale, transition_width.
+        n_points, r_outer, depth_scale, transition_width.
+
+    Interpolation parameters (k_neighbors, distance_threshold, kernel,
+    etc.) are grouped in the ``interpolation`` field, an instance of
+    :class:`InterpolationConfig`.
     """
 
     def __post_init__(self):
         """Validate fields common to all indicator configs."""
         if hasattr(self, "n_points") and self.n_points < 100:
             raise ValueError(f"n_points must be at least 100, got {self.n_points}")
-        if hasattr(self, "k_neighbors") and self.k_neighbors < 1:
-            raise ValueError(f"k_neighbors must be at least 1, got {self.k_neighbors}")
-        if hasattr(self, "distance_threshold") and self.distance_threshold <= 0:
-            raise ValueError(
-                f"distance_threshold must be positive, got {self.distance_threshold}"
-            )
-        if hasattr(self, "default_thickness") and self.default_thickness < 0:
-            raise ValueError(
-                f"default_thickness must be non-negative, got {self.default_thickness}"
-            )
         if hasattr(self, "r_outer") and self.r_outer <= 0:
             raise ValueError(f"r_outer must be positive, got {self.r_outer}")
         if hasattr(self, "depth_scale") and self.depth_scale <= 0:
@@ -61,15 +112,51 @@ class IndicatorConfigBase:
                 f"transition_width must be positive, got {self.transition_width}"
             )
 
+    # Field names that belong to InterpolationConfig but may appear at the
+    # top level in legacy config dicts (e.g. config_extra={"k_neighbors": 10}).
+    _INTERPOLATION_KEYS = frozenset(f.name for f in fields(InterpolationConfig))
+    # Legacy alias: old configs used "default_thickness" for what is now
+    # InterpolationConfig.default_value.
+    _LEGACY_INTERP_ALIASES = {"default_thickness": "default_value"}
+
     def to_dict(self) -> dict:
         """Convert configuration to dictionary."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, config_dict: dict):
-        """Create configuration from dictionary, ignoring unknown keys."""
+        """Create configuration from dictionary, ignoring unknown keys.
+
+        Interpolation parameters (k_neighbors, distance_threshold, kernel,
+        gaussian_sigma, default_value) can appear either as top-level keys
+        or nested under an ``"interpolation"`` dict. The legacy key
+        ``default_thickness`` is accepted as an alias for ``default_value``.
+        """
+        d = dict(config_dict)
+
+        # Collect interpolation overrides from flat keys
+        interp_overrides = {}
+        for k in list(d.keys()):
+            mapped = cls._LEGACY_INTERP_ALIASES.get(k, k)
+            if mapped in cls._INTERPOLATION_KEYS:
+                interp_overrides[mapped] = d.pop(k)
+
+        # Merge with any explicit "interpolation" sub-dict
+        if "interpolation" in d:
+            nested = d.pop("interpolation")
+            if isinstance(nested, dict):
+                # Flat overrides take precedence (more specific)
+                merged = {**nested, **interp_overrides}
+                interp_overrides = merged
+
+        if interp_overrides:
+            d["interpolation"] = InterpolationConfig(**{
+                **asdict(InterpolationConfig()),
+                **interp_overrides,
+            })
+
         known_fields = {f.name for f in fields(cls)}
-        filtered = {k: v for k, v in config_dict.items() if k in known_fields}
+        filtered = {k: v for k, v in d.items() if k in known_fields}
         return cls(**filtered)
 
     def with_overrides(self, overrides: dict):
@@ -105,6 +192,7 @@ class IndicatorConnector(ABC):
     _cached_coords_hash: tuple | None
     _transition_width_nondim: float
     _initialized: bool
+    _gc_call_counter: int = 0
 
     # Template method
 
@@ -164,6 +252,12 @@ class IndicatorConnector(ABC):
         # Mark initialised on all ranks so that _validate_age_extra
         # checks (e.g. backward-time guard) run consistently everywhere.
         self._initialized = True
+
+        self._gc_call_counter += 1
+        freq = getattr(self.config, "gc_collect_frequency", None)
+        if freq is not None and self._gc_call_counter % freq == 0:
+            gc.collect()
+
         return result
 
     # Hooks for subclasses
@@ -192,10 +286,10 @@ class IndicatorConnector(ABC):
     ) -> np.ndarray:
         """Convert interpolated thickness to indicator values.
 
-        Default: use default_thickness for far points and apply tanh.
+        Default: use interpolation.default_value for far points and apply tanh.
         PolygonConnector overrides to zero out far points instead.
         """
-        thickness_km[too_far] = self.config.default_thickness
+        thickness_km[too_far] = self.config.interpolation.default_value
         thickness_nondim = thickness_km / self.config.depth_scale
         base_r = self.config.r_outer - thickness_nondim
         indicator = 0.5 * (1.0 + np.tanh(
@@ -249,18 +343,23 @@ class IndicatorConnector(ABC):
             for k in keys
         }
 
-    # IDW interpolation
+    # Spherical interpolation
 
-    def _interpolate_idw(
+    def _interpolate(
         self,
         source_xyz: np.ndarray,
         target_coords: np.ndarray,
         *source_properties: np.ndarray,
     ) -> tuple[list[np.ndarray], np.ndarray]:
-        """Inverse-distance weighted interpolation on the unit sphere.
+        """Interpolate source properties onto target coordinates.
 
-        Normalises source and target to the unit sphere, builds a KDTree,
-        and computes IDW-weighted values for each property array.
+        Normalises source and target to the unit sphere, builds a cKDTree,
+        queries k nearest neighbours, and computes weighted values using
+        the kernel specified in ``self.config.interpolation``.
+
+        Supported kernels:
+            - ``"idw"``: inverse-distance weighting (w = 1/d).
+            - ``"gaussian"``: Gaussian RBF (w = exp(-d^2 / 2*sigma^2)).
 
         Args:
             source_xyz: (N, 3) source coordinates (gtrack metres or mesh units).
@@ -271,6 +370,7 @@ class IndicatorConnector(ABC):
             (interpolated, too_far) where *interpolated* is a list of (M,)
             arrays and *too_far* is a boolean mask of shape (M,).
         """
+        interp = self.config.interpolation
         epsilon = 1e-10
 
         r_source = np.linalg.norm(source_xyz, axis=1)
@@ -280,19 +380,23 @@ class IndicatorConnector(ABC):
         unit_target = target_coords / np.maximum(r_target[:, np.newaxis], epsilon)
 
         tree = cKDTree(unit_source)
-        k = min(self.config.k_neighbors, len(source_xyz))
+        k = min(interp.k_neighbors, len(source_xyz))
         dists, idx = tree.query(unit_target, k=k)
 
         if k == 1:
             results = [prop[idx].copy() for prop in source_properties]
-            too_far = dists > self.config.distance_threshold
+            too_far = dists > interp.distance_threshold
         else:
             exact_match = dists[:, 0] < epsilon
-            too_far = dists[:, 0] > self.config.distance_threshold
+            too_far = dists[:, 0] > interp.distance_threshold
 
-            safe_dists = np.maximum(dists, epsilon)
-            weights = 1.0 / safe_dists
-            weights /= weights.sum(axis=1, keepdims=True)
+            if interp.kernel == "gaussian":
+                weights = np.exp(-dists**2 / (2 * interp.gaussian_sigma**2))
+            else:
+                weights = 1.0 / np.maximum(dists, epsilon)
+
+            weight_sums = weights.sum(axis=1, keepdims=True)
+            weights /= np.maximum(weight_sums, epsilon)
 
             results = []
             for prop in source_properties:
@@ -301,6 +405,10 @@ class IndicatorConnector(ABC):
                 results.append(interpolated)
 
         return results, too_far
+
+    # Keep the old name as an alias for backward compatibility with
+    # subclasses that may call it directly.
+    _interpolate_idw = _interpolate
 
     # Default indicator computation (tanh)
 
@@ -320,7 +428,7 @@ class IndicatorConnector(ABC):
             return self._empty_indicator(len(target_coords))
 
         r_target = np.linalg.norm(target_coords, axis=1)
-        (thickness_km,), too_far = self._interpolate_idw(
+        (thickness_km,), too_far = self._interpolate(
             source_xyz, target_coords, source_thickness
         )
         return self._apply_indicator(r_target, thickness_km, too_far)

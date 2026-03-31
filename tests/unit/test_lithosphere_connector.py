@@ -13,6 +13,7 @@ import pytest
 from gadopt import *
 from gadopt.gplates import (
     GplatesScalarFunction,
+    InterpolationConfig,
     IndicatorConnector,
     LithosphereConnector,
     LithosphereConfig,
@@ -187,8 +188,8 @@ class TestLithosphereConnectorFunctional:
 
         # Check config is populated with defaults
         assert connector.config.property_name == "thickness"
-        assert connector.config.k_neighbors == 50  # default
-        assert connector.config.default_thickness == 100.0  # default
+        assert connector.config.interpolation.k_neighbors == 50  # default
+        assert connector.config.interpolation.default_value == 100.0  # default
         assert connector.config.r_outer == 2.208  # default
         assert connector.config.depth_scale == 2890.0  # default
         assert connector.config.transition_width == 10.0  # default
@@ -615,9 +616,9 @@ class TestLithosphereConfig:
         assert config.time_step == 1.0
         assert config.n_points == 10000
         assert config.reinit_interval_myr == 50.0
-        assert config.k_neighbors == 50
-        assert config.distance_threshold == 0.1
-        assert config.default_thickness == 100.0
+        assert config.interpolation.k_neighbors == 50
+        assert config.interpolation.distance_threshold == 0.1
+        assert config.interpolation.default_value == 100.0
         assert config.r_outer == 2.208
         assert config.depth_scale == 2890.0
         assert config.transition_width == 10.0
@@ -635,7 +636,7 @@ class TestLithosphereConfig:
         assert config.r_outer == 2.5
         assert config.transition_width == 5.0
         # Other values should be defaults
-        assert config.k_neighbors == 50
+        assert config.interpolation.k_neighbors == 50
 
     def test_to_dict(self):
         """Test config serialization to dict."""
@@ -655,7 +656,7 @@ class TestLithosphereConfig:
         assert config.n_points == 30000
         assert config.r_outer == 2.0
         # Defaults for unspecified values
-        assert config.k_neighbors == 50
+        assert config.interpolation.k_neighbors == 50
 
     def test_from_dict_ignores_unknown_keys(self):
         """Test that from_dict ignores unknown keys."""
@@ -707,20 +708,33 @@ class TestLithosphereConfig:
         with pytest.raises(ValueError, match="transition_width must be positive"):
             LithosphereConfig(transition_width=-5.0)
 
-    def test_validation_k_neighbors(self):
-        """Test validation of k_neighbors."""
+    def test_validation_interpolation_k_neighbors(self):
+        """Test validation of k_neighbors via InterpolationConfig."""
         with pytest.raises(ValueError, match="k_neighbors must be at least 1"):
-            LithosphereConfig(k_neighbors=0)
+            LithosphereConfig(
+                interpolation=InterpolationConfig(k_neighbors=0)
+            )
 
-    def test_validation_distance_threshold(self):
-        """Test validation of distance_threshold."""
+    def test_validation_interpolation_distance_threshold(self):
+        """Test validation of distance_threshold via InterpolationConfig."""
         with pytest.raises(ValueError, match="distance_threshold must be positive"):
-            LithosphereConfig(distance_threshold=-0.1)
+            LithosphereConfig(
+                interpolation=InterpolationConfig(distance_threshold=-0.1)
+            )
 
-    def test_validation_default_thickness(self):
-        """Test validation of default_thickness."""
-        with pytest.raises(ValueError, match="default_thickness must be non-negative"):
-            LithosphereConfig(default_thickness=-10.0)
+    def test_validation_interpolation_default_value(self):
+        """Test validation of default_value via InterpolationConfig."""
+        with pytest.raises(ValueError, match="default_value must be non-negative"):
+            LithosphereConfig(
+                interpolation=InterpolationConfig(default_value=-10.0)
+            )
+
+    def test_validation_interpolation_kernel(self):
+        """Test validation of kernel via InterpolationConfig."""
+        with pytest.raises(ValueError, match="kernel must be one of"):
+            LithosphereConfig(
+                interpolation=InterpolationConfig(kernel="invalid")
+            )
 
     def test_validation_reinit_interval_myr(self):
         """Test validation of reinit_interval_myr."""
@@ -777,6 +791,16 @@ class TestIndicatorConnectorInheritance:
         """Test PolygonConnector inherits from IndicatorConnector."""
         assert issubclass(PolygonConnector, IndicatorConnector)
 
+    def test_lithosphere_geotherm_is_indicator_connector(self):
+        """LithosphereGeotherm inherits from IndicatorConnector, not LithosphereConnector."""
+        assert issubclass(LithosphereGeotherm, IndicatorConnector)
+        assert not issubclass(LithosphereGeotherm, LithosphereConnector)
+
+    def test_polygon_geotherm_is_indicator_connector(self):
+        """PolygonGeotherm inherits from IndicatorConnector, not PolygonConnector."""
+        assert issubclass(PolygonGeotherm, IndicatorConnector)
+        assert not issubclass(PolygonGeotherm, PolygonConnector)
+
 
 class TestPolygonConfig:
     """Test PolygonConfig dataclass."""
@@ -786,9 +810,9 @@ class TestPolygonConfig:
         config = PolygonConfig()
 
         assert config.n_points == 20000
-        assert config.k_neighbors == 50
-        assert config.distance_threshold == 0.1
-        assert config.default_thickness == 200.0
+        assert config.interpolation.k_neighbors == 50
+        assert config.interpolation.distance_threshold == 0.1
+        assert config.interpolation.default_value == 200.0
         assert config.r_outer == 2.208
         assert config.depth_scale == 2890.0
         assert config.transition_width == 10.0
@@ -804,7 +828,7 @@ class TestPolygonConfig:
         assert config.n_points == 50000
         assert config.transition_width == 5.0
         # Other values should be defaults
-        assert config.k_neighbors == 50
+        assert config.interpolation.k_neighbors == 50
 
     def test_to_dict(self):
         """Test config serialization to dict."""
@@ -824,7 +848,7 @@ class TestPolygonConfig:
         assert config.n_points == 40000
         assert config.transition_width == 5.0
         # Defaults for unspecified values
-        assert config.k_neighbors == 50
+        assert config.interpolation.k_neighbors == 50
 
     def test_with_overrides(self):
         """Test creating new config with overrides."""
@@ -842,20 +866,26 @@ class TestPolygonConfig:
         with pytest.raises(ValueError, match="n_points must be at least 100"):
             PolygonConfig(n_points=50)
 
-    def test_validation_k_neighbors(self):
-        """Test validation of k_neighbors."""
+    def test_validation_interpolation_k_neighbors(self):
+        """Test validation of k_neighbors via InterpolationConfig."""
         with pytest.raises(ValueError, match="k_neighbors must be at least 1"):
-            PolygonConfig(k_neighbors=0)
+            PolygonConfig(
+                interpolation=InterpolationConfig(k_neighbors=0)
+            )
 
-    def test_validation_distance_threshold(self):
-        """Test validation of distance_threshold."""
+    def test_validation_interpolation_distance_threshold(self):
+        """Test validation of distance_threshold via InterpolationConfig."""
         with pytest.raises(ValueError, match="distance_threshold must be positive"):
-            PolygonConfig(distance_threshold=-0.1)
+            PolygonConfig(
+                interpolation=InterpolationConfig(distance_threshold=-0.1)
+            )
 
-    def test_validation_default_thickness(self):
-        """Test validation of default_thickness."""
-        with pytest.raises(ValueError, match="default_thickness must be non-negative"):
-            PolygonConfig(default_thickness=-10.0)
+    def test_validation_interpolation_default_value(self):
+        """Test validation of default_value via InterpolationConfig."""
+        with pytest.raises(ValueError, match="default_value must be non-negative"):
+            PolygonConfig(
+                interpolation=InterpolationConfig(default_value=-10.0)
+            )
 
     def test_validation_r_outer(self):
         """Test validation of r_outer."""
@@ -917,7 +947,10 @@ class TestPolygonConnectorFunctional:
 
     def test_polygon_connector_with_config(self, gplates_connector, craton_shapefile):
         """Test PolygonConnector with custom config."""
-        config = PolygonConfig(n_points=10000, distance_threshold=0.03)
+        config = PolygonConfig(
+            n_points=10000,
+            interpolation=InterpolationConfig(distance_threshold=0.03, default_value=200.0),
+        )
 
         connector = PolygonConnector(
             gplates_connector=gplates_connector,
@@ -927,7 +960,7 @@ class TestPolygonConnectorFunctional:
         )
 
         assert connector.config.n_points == 10000
-        assert connector.config.distance_threshold == 0.03
+        assert connector.config.interpolation.distance_threshold == 0.03
 
     def test_polygon_connector_time_conversion(self, gplates_connector, craton_shapefile):
         """Test time conversion delegates to gplates_connector."""
@@ -1257,7 +1290,7 @@ class TestGeothermFunctions:
 # ---------------------------------------------------------------------------
 
 class TestLithosphereGeothermFunctional:
-    """Functional tests for LithosphereGeotherm."""
+    """Functional tests for LithosphereGeotherm (composition pattern)."""
 
     @pytest.fixture
     def plate_model_with_polygons(self):
@@ -1282,34 +1315,31 @@ class TestLithosphereGeothermFunctional:
         thickness = 150 + 100 * np.random.rand(n_points)
         return (np.column_stack([lat, lon]), thickness)
 
-    def test_creation(self, plate_model_with_polygons, synthetic_continental_data):
-        """LithosphereGeotherm should be creatable and is an IndicatorConnector."""
-        connector = LithosphereGeotherm(
-            gplates_connector=plate_model_with_polygons,
-            continental_data=synthetic_continental_data,
-            age_to_property=half_space_cooling,
-        )
-        assert isinstance(connector, LithosphereConnector)
-        assert isinstance(connector, IndicatorConnector)
-
-    def test_custom_geotherm(self, plate_model_with_polygons, synthetic_continental_data):
-        """LithosphereGeotherm should accept custom geotherm function."""
-        connector = LithosphereGeotherm(
-            gplates_connector=plate_model_with_polygons,
-            continental_data=synthetic_continental_data,
-            age_to_property=half_space_cooling,
-            geotherm=continental_linear,
-        )
-        assert connector._geotherm is continental_linear
-
-    def test_get_indicator_returns_correct_shape(self, plate_model_with_polygons, synthetic_continental_data):
-        """Output must match target coordinate count with values in [0, 1]."""
-        connector = LithosphereGeotherm(
+    @pytest.fixture
+    def lith_connector(self, plate_model_with_polygons, synthetic_continental_data):
+        return LithosphereConnector(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_continental_data,
             age_to_property=half_space_cooling,
             config_extra={"k_neighbors": 10},
         )
+
+    def test_creation(self, lith_connector):
+        """LithosphereGeotherm wraps a connector and is an IndicatorConnector."""
+        geotherm = LithosphereGeotherm(lith_connector)
+        assert isinstance(geotherm, IndicatorConnector)
+        assert not isinstance(geotherm, LithosphereConnector)
+        assert geotherm._source is lith_connector
+        assert geotherm.config is lith_connector.config
+
+    def test_custom_geotherm(self, lith_connector):
+        """LithosphereGeotherm should accept custom geotherm function."""
+        geotherm = LithosphereGeotherm(lith_connector, geotherm=continental_linear)
+        assert geotherm._geotherm is continental_linear
+
+    def test_get_indicator_returns_correct_shape(self, lith_connector):
+        """Output must match target coordinate count with values in [0, 1]."""
+        geotherm = LithosphereGeotherm(lith_connector)
 
         n_targets = 100
         np.random.seed(123)
@@ -1322,22 +1352,17 @@ class TestLithosphereGeothermFunctional:
             r * np.cos(theta)
         ])
 
-        ndtime = connector.age2ndtime(100.0)
-        result = connector.get_indicator(target_coords, ndtime)
+        ndtime = geotherm.age2ndtime(100.0)
+        result = geotherm.get_indicator(target_coords, ndtime)
 
         assert result.shape == (n_targets,)
         assert np.all(np.isfinite(result))
         assert np.all(result >= 0)
         assert np.all(result <= 1)
 
-    def test_surface_near_zero_deep_near_one(self, plate_model_with_polygons, synthetic_continental_data):
+    def test_surface_near_zero_deep_near_one(self, lith_connector):
         """Surface points should have low T_norm, deep points should have high T_norm."""
-        connector = LithosphereGeotherm(
-            gplates_connector=plate_model_with_polygons,
-            continental_data=synthetic_continental_data,
-            age_to_property=half_space_cooling,
-            config_extra={"k_neighbors": 10},
-        )
+        geotherm = LithosphereGeotherm(lith_connector)
 
         phi, theta = 0.5, 1.0
         r_surface = 2.208
@@ -1353,37 +1378,32 @@ class TestLithosphereGeothermFunctional:
             r_deep * np.cos(theta)
         ]])
 
-        ndtime = connector.age2ndtime(100.0)
-        surface_val = connector.get_indicator(surface_coords, ndtime)
+        ndtime = geotherm.age2ndtime(100.0)
+        surface_val = geotherm.get_indicator(surface_coords, ndtime)
         # Reset cache for new coords
-        connector._cached_result = None
-        connector._cached_coords_hash = None
-        deep_val = connector.get_indicator(deep_coords, ndtime)
+        geotherm._cached_result = None
+        geotherm._cached_coords_hash = None
+        deep_val = geotherm.get_indicator(deep_coords, ndtime)
 
-        # At the surface, depth=0 so T_norm ≈ 0
+        # At the surface, depth=0 so T_norm ~ 0
         assert surface_val[0] < 0.1
         # Well below LAB, T_norm should be clipped to 1
         assert deep_val[0] > surface_val[0]
 
-    def test_caching(self, plate_model_with_polygons, synthetic_continental_data):
+    def test_caching(self, lith_connector):
         """Repeated calls with same time should return cached result."""
-        connector = LithosphereGeotherm(
-            gplates_connector=plate_model_with_polygons,
-            continental_data=synthetic_continental_data,
-            age_to_property=half_space_cooling,
-            config_extra={"k_neighbors": 10},
-        )
+        geotherm = LithosphereGeotherm(lith_connector)
 
         coords = np.array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0]])
-        ndtime = connector.age2ndtime(100.0)
+        ndtime = geotherm.age2ndtime(100.0)
 
-        result1 = connector.get_indicator(coords, ndtime)
-        result2 = connector.get_indicator(coords, ndtime)
+        result1 = geotherm.get_indicator(coords, ndtime)
+        result2 = geotherm.get_indicator(coords, ndtime)
         np.testing.assert_array_equal(result1, result2)
 
 
 class TestPolygonGeothermFunctional:
-    """Functional tests for PolygonGeotherm."""
+    """Functional tests for PolygonGeotherm (composition pattern)."""
 
     @pytest.fixture
     def gplates_connector(self):
@@ -1406,36 +1426,31 @@ class TestPolygonGeothermFunctional:
             pytest.skip("Craton shapefile not available")
         return str(craton_path)
 
-    def test_creation(self, gplates_connector, craton_shapefile):
-        """PolygonGeotherm should be creatable and is an IndicatorConnector."""
-        connector = PolygonGeotherm(
+    @pytest.fixture
+    def polygon_connector(self, gplates_connector, craton_shapefile):
+        return PolygonConnector(
             gplates_connector=gplates_connector,
             polygons=craton_shapefile,
             thickness_data=200.0,
             config_extra={"n_points": 5000},
         )
-        assert isinstance(connector, PolygonConnector)
-        assert isinstance(connector, IndicatorConnector)
 
-    def test_custom_geotherm(self, gplates_connector, craton_shapefile):
+    def test_creation(self, polygon_connector):
+        """PolygonGeotherm wraps a connector and is an IndicatorConnector."""
+        geotherm = PolygonGeotherm(polygon_connector)
+        assert isinstance(geotherm, IndicatorConnector)
+        assert not isinstance(geotherm, PolygonConnector)
+        assert geotherm._source is polygon_connector
+        assert geotherm.config is polygon_connector.config
+
+    def test_custom_geotherm(self, polygon_connector):
         """PolygonGeotherm should accept custom geotherm function."""
-        connector = PolygonGeotherm(
-            gplates_connector=gplates_connector,
-            polygons=craton_shapefile,
-            thickness_data=200.0,
-            geotherm=ocean_erf_normalized,
-            config_extra={"n_points": 5000},
-        )
-        assert connector._geotherm is ocean_erf_normalized
+        geotherm = PolygonGeotherm(polygon_connector, geotherm=ocean_erf_normalized)
+        assert geotherm._geotherm is ocean_erf_normalized
 
-    def test_get_indicator_returns_correct_shape(self, gplates_connector, craton_shapefile):
+    def test_get_indicator_returns_correct_shape(self, polygon_connector):
         """Output must match target coordinate count with values in [0, 1]."""
-        connector = PolygonGeotherm(
-            gplates_connector=gplates_connector,
-            polygons=craton_shapefile,
-            thickness_data=200.0,
-            config_extra={"n_points": 5000},
-        )
+        geotherm = PolygonGeotherm(polygon_connector)
 
         n_points = 100
         np.random.seed(456)
@@ -1448,46 +1463,36 @@ class TestPolygonGeothermFunctional:
             r * np.cos(phi)
         ])
 
-        ndtime = connector.age2ndtime(100.0)
-        result = connector.get_indicator(coords, ndtime)
+        ndtime = geotherm.age2ndtime(100.0)
+        result = geotherm.get_indicator(coords, ndtime)
 
         assert result.shape == (n_points,)
         assert np.all(np.isfinite(result))
         assert np.all(result >= 0)
         assert np.all(result <= 1)
 
-    def test_empty_region_returns_ones(self, gplates_connector, craton_shapefile):
+    def test_empty_region_returns_ones(self, polygon_connector):
         """When source data is empty, PolygonGeotherm should return 1.0 (mantle T)."""
-        connector = PolygonGeotherm(
-            gplates_connector=gplates_connector,
-            polygons=craton_shapefile,
-            thickness_data=200.0,
-            config_extra={"n_points": 5000},
-        )
+        geotherm = PolygonGeotherm(polygon_connector)
 
         coords = np.array([[2.0, 0.0, 0.0]])
         sources = {"xyz": None, "thickness": None}
-        result = connector._compute_indicator(sources, coords)
+        result = geotherm._compute_indicator(sources, coords)
         np.testing.assert_allclose(result, 1.0)
 
         sources = {"xyz": np.array([]).reshape(0, 3), "thickness": np.array([])}
-        result = connector._compute_indicator(sources, coords)
+        result = geotherm._compute_indicator(sources, coords)
         np.testing.assert_allclose(result, 1.0)
 
-    def test_caching(self, gplates_connector, craton_shapefile):
+    def test_caching(self, polygon_connector):
         """Repeated calls with same time should return cached result."""
-        connector = PolygonGeotherm(
-            gplates_connector=gplates_connector,
-            polygons=craton_shapefile,
-            thickness_data=200.0,
-            config_extra={"n_points": 5000},
-        )
+        geotherm = PolygonGeotherm(polygon_connector)
 
         coords = np.array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0]])
-        ndtime = connector.age2ndtime(100.0)
+        ndtime = geotherm.age2ndtime(100.0)
 
-        result1 = connector.get_indicator(coords, ndtime)
-        result2 = connector.get_indicator(coords, ndtime)
+        result1 = geotherm.get_indicator(coords, ndtime)
+        result2 = geotherm.get_indicator(coords, ndtime)
         np.testing.assert_array_equal(result1, result2)
 
 
@@ -1524,12 +1529,13 @@ class TestGeothermGplatesScalarFunction:
         lon = np.degrees(phi) - 180
         thickness = 150 + 100 * np.random.rand(n_points)
 
-        return LithosphereGeotherm(
+        lith_connector = LithosphereConnector(
             gplates_connector=gplates_connector,
             continental_data=(np.column_stack([lat, lon]), thickness),
             age_to_property=half_space_cooling,
             config_extra={"k_neighbors": 10},
         )
+        return LithosphereGeotherm(lith_connector)
 
     @pytest.fixture
     def polygon_geotherm_connector(self):
@@ -1551,12 +1557,13 @@ class TestGeothermGplatesScalarFunction:
             static_polygons=muller_files.get("static_polygons"),
         )
 
-        return PolygonGeotherm(
+        poly_connector = PolygonConnector(
             gplates_connector=gplates_connector,
             polygons=str(craton_path),
             thickness_data=200.0,
             config_extra={"n_points": 5000},
         )
+        return PolygonGeotherm(poly_connector)
 
     def test_scalar_function_with_lith_geotherm(self, mesh_and_function_space, lith_geotherm_connector):
         """GplatesScalarFunction should work with LithosphereGeotherm."""
