@@ -5,7 +5,7 @@ from typing import Callable
 import firedrake as fd
 import numpy as np
 import pygplates
-from finat.ufl import VectorElement
+from firedrake import VectorElement
 from mpi4py import MPI
 from firedrake.ufl_expr import extract_unique_domain
 from scipy.special import erf
