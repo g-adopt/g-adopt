@@ -138,6 +138,12 @@ jobs:
         run: |
           curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
+          unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_fields
+
+      - name: Get gplates_fields extra data
+        run: |
+          cd demos/mantle_convection/gplates_fields
+          make thickness_data craton_data
 
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v4
