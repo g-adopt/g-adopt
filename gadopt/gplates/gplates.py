@@ -1,3 +1,5 @@
+import os
+import re
 import warnings
 from dataclasses import dataclass
 from typing import Callable
@@ -753,6 +755,16 @@ class LithosphereConfig(IndicatorConfigBase):
             velocity_delta_threshold, continental_cache_size). These are
             applied after time_step and n_points, so they can also
             override those if needed. Default: None.
+        checkpoint_interval_myr: Save ocean tracker state every N Myr
+            of evolution. Subsequent runs that find a checkpoint close to
+            their starting age will load it instead of stepping from
+            ``oldest_age``, dramatically reducing idle time on non-root
+            MPI ranks. None disables checkpointing. Default: None.
+        checkpoint_dir: Directory for checkpoint files. When
+            checkpointing is enabled and this is None, defaults to
+            ``./gtrack_checkpoints/``. Checkpoints capture tracer
+            positions and ages only; changing config parameters between
+            runs is safe.
     """
 
     # Ocean tracker parameters
@@ -777,6 +789,14 @@ class LithosphereConfig(IndicatorConfigBase):
     # Garbage collection: call gc.collect() every N get_indicator calls; None disables
     gc_collect_frequency: int | None = 1
 
+    # Checkpointing: save/load ocean tracker state to avoid long spin-up.
+    # None disables checkpointing (default). Set to e.g. 10.0 to write a
+    # checkpoint every 10 Myr of tracker evolution.
+    checkpoint_interval_myr: float | None = None
+    # Directory for checkpoint files. When checkpointing is enabled and
+    # this is None, defaults to ./gtrack_checkpoints/.
+    checkpoint_dir: str | None = None
+
     def __post_init__(self):
         if self.interpolation is None:
             self.interpolation = InterpolationConfig(default_value=100.0)
@@ -791,6 +811,11 @@ class LithosphereConfig(IndicatorConfigBase):
             raise ValueError(
                 f"gc_collect_frequency must be >= 1 or None, "
                 f"got {self.gc_collect_frequency}"
+            )
+        if self.checkpoint_interval_myr is not None and self.checkpoint_interval_myr <= 0:
+            raise ValueError(
+                f"checkpoint_interval_myr must be positive or None, "
+                f"got {self.checkpoint_interval_myr}"
             )
 
 
@@ -907,9 +932,19 @@ class LithosphereConnector(IndicatorConnector):
 
         self._initialized = False
         self._last_reinit_age = None
+        self._last_checkpoint_age = None
         self.reconstruction_age = None
         self._cached_result = None
         self._cached_coords_hash = None
+
+        # Resolve checkpoint directory (rank 0 only needs it, but store on
+        # all ranks so the config is inspectable).
+        if config.checkpoint_interval_myr is not None:
+            self._checkpoint_dir = (
+                config.checkpoint_dir or "./gtrack_checkpoints"
+            )
+        else:
+            self._checkpoint_dir = None
 
     def _validate_age_extra(self, age: float):
         """Check that ages are requested in decreasing order (forward in time).
@@ -925,6 +960,65 @@ class LithosphereConnector(IndicatorConnector):
                     f"age ({self.reconstruction_age:.2f} Ma). The ocean tracker "
                     f"can only evolve forward in time (decreasing age)."
                 )
+
+    @staticmethod
+    def _find_best_checkpoint(checkpoint_dir, target_age):
+        """Find the checkpoint file closest to (but not younger than) target_age.
+
+        Scans checkpoint_dir for files matching ``ocean_checkpoint_<age>Ma.npz``
+        and returns the path whose age is the smallest value >= target_age,
+        i.e. the one that minimises the amount of forward stepping needed.
+
+        Returns None if no suitable checkpoint exists or the directory is
+        missing / empty.
+        """
+        if checkpoint_dir is None or not os.path.isdir(checkpoint_dir):
+            return None
+
+        pattern = re.compile(r"^ocean_checkpoint_(\d+)Ma\.npz$")
+        best_path = None
+        best_age = None
+
+        for fname in os.listdir(checkpoint_dir):
+            m = pattern.match(fname)
+            if m is None:
+                continue
+            ckpt_age = int(m.group(1))
+            if ckpt_age < target_age:
+                continue
+            if best_age is None or ckpt_age < best_age:
+                best_age = ckpt_age
+                best_path = os.path.join(checkpoint_dir, fname)
+
+        return best_path
+
+    def _save_checkpoint_if_due(self, age):
+        """Write a checkpoint if the interval has been reached.
+
+        Failures are logged but never crash the simulation.
+        """
+        if self._checkpoint_dir is None:
+            return
+        interval = self.config.checkpoint_interval_myr
+        if interval is None:
+            return
+        if (self._last_checkpoint_age is not None
+                and abs(self._last_checkpoint_age - age) < interval):
+            return
+
+        rounded_age = int(round(age))
+        filepath = os.path.join(
+            self._checkpoint_dir, f"ocean_checkpoint_{rounded_age}Ma.npz"
+        )
+        try:
+            os.makedirs(self._checkpoint_dir, exist_ok=True)
+            self._ocean_tracker.save_checkpoint(filepath)
+            self._last_checkpoint_age = rounded_age
+            log(f"LithosphereConnector: Saved ocean checkpoint at "
+                f"{rounded_age} Ma to {filepath}.", level=DEBUG)
+        except Exception as exc:
+            log(f"LithosphereConnector: Failed to save checkpoint at "
+                f"{rounded_age} Ma: {exc}", level=INFO)
 
     def _prepare_sources(
         self,
@@ -972,6 +1066,11 @@ class LithosphereConnector(IndicatorConnector):
 
         Must be called on rank 0 only.
 
+        On the first call, attempts to load the most recent checkpoint that
+        is at or before the target age (if checkpointing is configured and
+        a suitable file exists). Falls back to full initialisation from
+        ``oldest_age`` when no checkpoint is available.
+
         Args:
             age: Target geological age (Ma).
             allow_reinit: If False, skip the periodic reinitialisation check.
@@ -979,13 +1078,31 @@ class LithosphereConnector(IndicatorConnector):
                 that only the indicator connector drives reinitialisation.
         """
         if not self._initialized:
-            # PyGPlates uses integer ages (Ma) for reconstruction.
-            starting_age = int(self.gplates_connector.oldest_age)
-            log(f"LithosphereConnector: Initializing ocean tracker at "
-                f"{starting_age} Ma.", level=DEBUG)
-            self._ocean_tracker.initialize(starting_age=starting_age)
+            loaded = False
+            best = self._find_best_checkpoint(self._checkpoint_dir, age)
+            if best is not None:
+                try:
+                    self._ocean_tracker.load_checkpoint(best)
+                    loaded_age = self._ocean_tracker.current_age
+                    log(f"LithosphereConnector: Loaded ocean checkpoint at "
+                        f"{loaded_age} Ma from {best}.", level=DEBUG)
+                    self._last_reinit_age = loaded_age
+                    self._last_checkpoint_age = loaded_age
+                    loaded = True
+                except Exception as exc:
+                    log(f"LithosphereConnector: Failed to load checkpoint "
+                        f"{best}: {exc}. Falling back to full "
+                        f"initialisation.", level=INFO)
+
+            if not loaded:
+                # PyGPlates uses integer ages (Ma) for reconstruction.
+                starting_age = int(self.gplates_connector.oldest_age)
+                log(f"LithosphereConnector: Initializing ocean tracker at "
+                    f"{starting_age} Ma.", level=DEBUG)
+                self._ocean_tracker.initialize(starting_age=starting_age)
+                self._last_reinit_age = starting_age
+
             self._initialized = True
-            self._last_reinit_age = starting_age
 
         if allow_reinit and self._last_reinit_age is not None:
             if abs(self._last_reinit_age - age) >= self.config.reinit_interval_myr:
@@ -996,7 +1113,12 @@ class LithosphereConnector(IndicatorConnector):
 
         # PyGPlates works with integer reconstruction ages (Ma), so we
         # round to the nearest integer before stepping the tracker.
-        return self._ocean_tracker.step_to(int(round(age)))
+        cloud = self._ocean_tracker.step_to(int(round(age)))
+
+        if allow_reinit:
+            self._save_checkpoint_if_due(age)
+
+        return cloud
 
 
 @dataclass

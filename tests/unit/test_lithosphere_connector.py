@@ -1600,3 +1600,169 @@ class TestGeothermGplatesScalarFunction:
         assert np.all(np.isfinite(data))
         assert data.min() >= 0
         assert data.max() <= 1
+
+
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2").exists(),
+    reason="Plate reconstruction files not downloaded"
+)
+class TestCheckpointRoundtrip:
+    """Verify that a checkpoint-resumed run produces the same field as continuous."""
+
+    @pytest.fixture
+    def plate_files(self):
+        """Load Muller 2022 plate reconstruction files."""
+        gplates_data_path = (
+            Path(__file__).resolve().parents[2]
+            / "demos/mantle_convection/gplates_global"
+        )
+        return ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
+
+    @pytest.fixture
+    def synthetic_continental_data(self):
+        np.random.seed(42)
+        n_points = 500
+        phi = np.random.uniform(0, 2 * np.pi, n_points)
+        theta = np.arccos(np.random.uniform(-1, 1, n_points))
+        lat = 90 - np.degrees(theta)
+        lon = np.degrees(phi) - 180
+        thickness = 150 + 100 * np.random.rand(n_points)
+        return (np.column_stack([lat, lon]), thickness)
+
+    @pytest.fixture
+    def mesh_and_Q(self):
+        rmin, rmax = 1.208, 2.208
+        mesh2d = CubedSphereMesh(rmin, refinement_level=3, degree=2)
+        mesh = ExtrudedMesh(mesh2d, layers=4, extrusion_type="radial")
+        mesh.cartesian = False
+        Q = FunctionSpace(mesh, "CG", 2)
+        return mesh, Q
+
+    @pytest.fixture
+    def checkpoint_dir(self, tmp_path):
+        d = tmp_path / "ckpt"
+        d.mkdir()
+        return str(d)
+
+    def _make_connector(self, plate_files, continental_data, checkpoint_dir,
+                        checkpoint_interval=None):
+        gplates = pyGplatesConnector(
+            rotation_filenames=plate_files["rotation_filenames"],
+            topology_filenames=plate_files["topology_filenames"],
+            oldest_age=410,
+            continental_polygons=plate_files.get("continental_polygons"),
+            static_polygons=plate_files.get("static_polygons"),
+        )
+        config_extra = {
+            "k_neighbors": 10,
+            "n_points": 5000,
+            "reinit_interval_myr": 200.0,
+            "checkpoint_dir": checkpoint_dir,
+        }
+        if checkpoint_interval is not None:
+            config_extra["checkpoint_interval_myr"] = checkpoint_interval
+        return LithosphereConnector(
+            gplates_connector=gplates,
+            continental_data=continental_data,
+            age_to_property=half_space_cooling,
+            config_extra=config_extra,
+        )
+
+    def test_checkpoint_roundtrip(self, plate_files, synthetic_continental_data,
+                                  mesh_and_Q, checkpoint_dir):
+        """Continuous 410->300 must match checkpoint-resumed 410->350->load->300."""
+        mesh, Q = mesh_and_Q
+
+        # --- Run 1: continuous 410 -> 300 (no checkpointing) ---
+        conn_cont = self._make_connector(
+            plate_files, synthetic_continental_data, checkpoint_dir,
+            checkpoint_interval=None,
+        )
+        f_continuous = GplatesScalarFunction(
+            Q, indicator_connector=conn_cont, name="continuous"
+        )
+        # Step to 350 first, then to 300 (connector tracks forward only)
+        ndtime_350 = conn_cont.age2ndtime(350.0)
+        f_continuous.update_plate_reconstruction(ndtime_350)
+        ndtime_300 = conn_cont.age2ndtime(300.0)
+        f_continuous.update_plate_reconstruction(ndtime_300)
+
+        # --- Run 2: 410 -> 350 with checkpoint written ---
+        conn_phase1 = self._make_connector(
+            plate_files, synthetic_continental_data, checkpoint_dir,
+            checkpoint_interval=10.0,
+        )
+        f_phase1 = GplatesScalarFunction(
+            Q, indicator_connector=conn_phase1, name="phase1"
+        )
+        ndtime_350 = conn_phase1.age2ndtime(350.0)
+        f_phase1.update_plate_reconstruction(ndtime_350)
+
+        # Verify checkpoint was written
+        ckpt_files = list(Path(checkpoint_dir).glob("ocean_checkpoint_*Ma.npz"))
+        assert len(ckpt_files) > 0, "No checkpoint files written"
+
+        # --- Run 3: fresh connector loads from checkpoint, steps to 300 ---
+        conn_phase2 = self._make_connector(
+            plate_files, synthetic_continental_data, checkpoint_dir,
+            checkpoint_interval=10.0,
+        )
+        f_resumed = GplatesScalarFunction(
+            Q, indicator_connector=conn_phase2, name="resumed"
+        )
+        ndtime_300 = conn_phase2.age2ndtime(300.0)
+        f_resumed.update_plate_reconstruction(ndtime_300)
+
+        # --- Compare: L2 norm of (continuous - resumed) over the domain ---
+        from firedrake import assemble, dx, sqrt
+        l2_err = sqrt(assemble((f_continuous - f_resumed)**2 * dx))
+        vol = assemble(1 * dx(domain=mesh))
+
+        assert l2_err / vol < 1e-10, (
+            f"Checkpoint roundtrip mismatch: L2 error / volume = "
+            f"{(l2_err / vol):.2e}"
+        )
+
+
+class TestFindBestCheckpoint:
+    """Unit tests for _find_best_checkpoint (no plate data needed)."""
+
+    def test_picks_closest_from_above(self, tmp_path):
+        d = str(tmp_path)
+        for age in [400, 380, 350, 300]:
+            (tmp_path / f"ocean_checkpoint_{age}Ma.npz").touch()
+
+        result = LithosphereConnector._find_best_checkpoint(d, 340)
+        assert result is not None
+        assert "350Ma" in result
+
+    def test_exact_match(self, tmp_path):
+        d = str(tmp_path)
+        (tmp_path / "ocean_checkpoint_300Ma.npz").touch()
+
+        result = LithosphereConnector._find_best_checkpoint(d, 300)
+        assert result is not None
+        assert "300Ma" in result
+
+    def test_no_suitable_checkpoint(self, tmp_path):
+        d = str(tmp_path)
+        (tmp_path / "ocean_checkpoint_200Ma.npz").touch()
+
+        result = LithosphereConnector._find_best_checkpoint(d, 300)
+        assert result is None
+
+    def test_empty_dir(self, tmp_path):
+        result = LithosphereConnector._find_best_checkpoint(str(tmp_path), 300)
+        assert result is None
+
+    def test_missing_dir(self):
+        result = LithosphereConnector._find_best_checkpoint("/nonexistent", 300)
+        assert result is None
+
+    def test_ignores_non_matching_files(self, tmp_path):
+        d = str(tmp_path)
+        (tmp_path / "other_file.npz").touch()
+        (tmp_path / "ocean_checkpoint_350Ma.npz").touch()
+
+        result = LithosphereConnector._find_best_checkpoint(d, 300)
+        assert "350Ma" in result
