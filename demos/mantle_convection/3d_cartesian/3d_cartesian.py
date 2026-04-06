@@ -26,6 +26,7 @@
 # provides access to Firedrake and associated functionality.
 
 from gadopt import *
+from time import perf_counter
 
 # We next set up the mesh, function spaces, and specify functions to hold our solutions,
 # as with our previous tutorials.
@@ -38,10 +39,13 @@ from gadopt import *
 # We note that Firedrake exploits the regularity of extruded meshes to enhance performance.
 
 # +
+tic0 = perf_counter()
 a, b, c = 1.0079, 0.6283, 1.0
-nx, ny, nz = 10, int(b/c * 10), 10
+nx, ny, nz = 2, 2, 2
 mesh2d = RectangleMesh(nx, ny, a, b, quadrilateral=True)  # Rectangular 2D mesh
-mesh = ExtrudedMesh(mesh2d, nz)
+base_mh = MeshHierarchy(mesh2d, 3)
+mh = ExtrudedMeshHierarchy(base_mh, c, nz)
+mesh = mh[-1]
 mesh.cartesian = True
 boundary = get_boundary_ids(mesh)
 
@@ -49,6 +53,8 @@ V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
+
+log(f"Dimensions: {V.dim()}, {W.dim()}, {Q.dim()}")
 
 z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
@@ -79,7 +85,7 @@ approximation = BoussinesqApproximation(Ra)
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20000  # Maximum number of timesteps
+timesteps = 5  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 steady_state_tolerance = 1e-7  # Used to determine if solution has reached a steady state.
 
@@ -162,7 +168,7 @@ gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
 solver_settings = {
-    "fieldsplit_0": {"ksp_rtol": 1e-4},
+    "fieldsplit_0": {"ksp_rtol": 1e-4, "ksp_converged_reason": None},
     "fieldsplit_1": {"ksp_rtol": 1e-3},
 }
 
@@ -180,6 +186,7 @@ stokes_solver = StokesSolver(
 
 # We now initiate the time loop, which runs until a steady-state solution has been attained.
 
+tic = perf_counter()
 for timestep in range(0, timesteps):
 
     # Write output:
@@ -206,6 +213,10 @@ for timestep in range(0, timesteps):
                  f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} {gd.Nu_top()} "
                  f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} ")
 
+    toc = perf_counter()
+    log(f"Time: {toc-tic0}, {toc-tic}")
+    tic = toc
+    
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
         log("Steady-state achieved -- exiting time-step loop")
@@ -222,3 +233,6 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
+
+toc = perf_counter()
+log(f"Time final: {toc-tic0}")
