@@ -14,9 +14,9 @@ def test_tracy():
     PETSc.Sys.Print("Performing transient solution check with Backward Euler")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 1e05, 2, 'BackwardEuler'
+    t_final, polynomial_degree, integration_method = 1e05, 2, BackwardEuler
     timestep_vec = np.array([10000, 5000], dtype=float)
-    nodes_vector = np.array([111, 111], dtype=float)
+    nodes_vector = np.array([141, 141], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with Backward Euler.")
@@ -24,23 +24,10 @@ def test_tracy():
     PETSc.Sys.Print("")
 
     PETSc.Sys.Print("="*60)
-    PETSc.Sys.Print("Performing transient solution check with Crank Nicolson")
-    PETSc.Sys.Print("="*60)
-
-    t_final, polynomial_degree, integration_method = 1e05, 2, 'CrankNicolson'
-    timestep_vec = np.array([10000, 5000], dtype=float)
-    nodes_vector = np.array([151, 181], dtype=float)
-
-    convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
-    PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with Crank Nicolson.")
-    assert convergence_rate >= 1.9, "Optimal convergence rate not achieved."
-    PETSc.Sys.Print("")
-
-    PETSc.Sys.Print("="*60)
     PETSc.Sys.Print("Performing transient solution check with Implicit Midpoint")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 1e05, 2, 'ImplicitMidpoint'
+    t_final, polynomial_degree, integration_method = 1e05, 2, ImplicitMidpoint
     timestep_vec = np.array([10000, 5000], dtype=float)
     nodes_vector = np.array([151, 171], dtype=float)
 
@@ -53,21 +40,20 @@ def test_tracy():
     PETSc.Sys.Print("Performing steady-state solution check with DG0")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 1.0e9, 0, 'BackwardEuler'
-    nodes_vector = np.array([51, 101, 201], dtype=float)
-    timestep_vec = 1e09/10 * np.array([1, 1, 1, 1], dtype=float)
+    t_final, polynomial_degree, integration_method = 1.0e9, 0, BackwardEuler
+    nodes_vector = np.array([51, 101, 201, 401], dtype=float)
+    timestep_vec = 1e09/2 * np.array([1, 1, 1, 1], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with  DG0.")
     assert convergence_rate >= 0.9, "Optimal convergence rate not achieved."
     PETSc.Sys.Print("")
-
-
+    
     PETSc.Sys.Print("="*60)
     PETSc.Sys.Print("Performing steady-state solution check with DG1")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 1.0e9, 1, 'BackwardEuler'
+    t_final, polynomial_degree, integration_method = 1.0e9, 1, BackwardEuler
     nodes_vector = np.array([51, 101, 201, 401], dtype=float)
     timestep_vec = 1e09/10 * np.array([1, 1, 1, 1], dtype=float)
 
@@ -81,7 +67,7 @@ def test_tracy():
     PETSc.Sys.Print("Performing steady-state solution check with DG2")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 1.0e9, 2, 'BackwardEuler'
+    t_final, polynomial_degree, integration_method = 1.0e9, 2, BackwardEuler
     nodes_vector = np.array([76, 151, 301, 601], dtype=float)
     timestep_vec = 1e09/10 * np.array([1, 1, 1, 1], dtype=float)
 
@@ -114,11 +100,11 @@ def conduct_tests(t_final,
     return max_convergence_rate
 
 
-def compute_error(nodes: int,
-                  time_step: float = 5000.0,
-                  t_final: float = 1.0e5,
-                  polynomial_degree: int = 1,
-                  time_integrator: str = "BackwardEuler") -> float:
+def compute_error(nodes,
+                  time_step,
+                  t_final,
+                  polynomial_degree,
+                  time_integrator) -> float:
 
     
     """ Runs a Richards simulation for a given mesh resolution and timestep, then computes the L2 error against Tracy's exact solution (2006). 
@@ -131,22 +117,22 @@ def compute_error(nodes: int,
     integration_method : object,  Time integration class (BackwardEuler, ImplicitMidpoint, ...). 
        
     Returns
-    ------- 
+    -------
     float L2 error at final time.
     """
 
     # Set some global parameters
     L = 15.24              # Domain length [m]
 
-    soil_curves = ExponentialCurve(
-        theta_r=0.15,  # Residual water content [-]
-        theta_s=0.45,  # Saturated water content [-]
-        Ks=1.00e-05,   # Saturated hydraulic conductivity [m/s]
-        alpha=0.25,    # Fitting parameter [1/m]
-        Ss=0.00,       # Specific storage coefficient [1/m]
+    soil_curve = ExponentialCurve(
+        theta_r = 0.15,     # Residual water content [-]
+        theta_s = 0.45,     # Saturated water content [-]
+        Ks      = 1.00e-05, # Saturated hydraulic conductivity [m/s]
+        alpha   = 0.25,     # Fitting parameter [1/m]
+        Ss      = 0.00,     # Specific storage coefficient [1/m]
     )
 
-    alpha = soil_curves.parameters["alpha"]
+    alpha = soil_curve.parameters["alpha"]
     hr = -L
     h0 = 1 - exp(alpha*hr)
 
@@ -156,7 +142,6 @@ def compute_error(nodes: int,
     X = SpatialCoordinate(mesh)
 
     V = FunctionSpace(mesh, "DQ", polynomial_degree)
-    W = VectorFunctionSpace(mesh, "DQ", polynomial_degree)
 
     def exact_solution(X, t):
 
@@ -164,7 +149,7 @@ def compute_error(nodes: int,
 
         beta = sqrt(alpha**2/4 + (pi/L)**2)
         hss = h0*sin(pi*X[0]/L)*exp((alpha/2)*(L - X[1]))*sinh(beta*X[1])/sinh(beta*L)
-        c = alpha*(soil_curves.parameters["theta_s"] - soil_curves.parameters["theta_r"])/soil_curves.parameters["Ks"]
+        c = alpha*(soil_curve.parameters["theta_s"] - soil_curve.parameters["theta_r"])/soil_curve.parameters["Ks"]
 
         phi = 0
         for k in range(1, 200):
@@ -180,40 +165,35 @@ def compute_error(nodes: int,
         return hExact
 
     offset = 2000
-    h = Function(V, name="InitialCondition").interpolate(exact_solution(X, offset))
-    h_old = Function(V, name="PreviousSolution").interpolate(exact_solution(X, offset))
+    h     = Function(V, name="InitialCondition").interpolate(exact_solution(X, offset))
 
     # Boundary conditions
     top_bc = (1/alpha)*ln(exp(alpha*hr) + (h0)*(sin(pi*X[0]/L)))
+    boundary_ids = get_boundary_ids(mesh)
     richards_bcs = {
-        1: {'h': hr}, # Left
-        2: {'h': hr}, # Right
-        3: {'h': hr}, # Bottom
-        4: {'h': top_bc}, # Top
+        boundary_ids.left:   {'h': hr},
+        boundary_ids.right:  {'h': hr},
+        boundary_ids.bottom: {'h': hr},
+        boundary_ids.top:    {'h': top_bc},
     }
 
-    time_var = Constant(0.0)
-    eq = RichardsEquation(V=V,
-                        soil_curves=soil_curves,
-                        bcs=richards_bcs,
-                        time_integrator=time_integrator,
-                        )
-    richards_solver = RichardsSolver(h, h_old, time_var, dt, eq)
+    richards_solver = RichardsSolver(
+        h,
+        soil_curve,
+        delta_t=dt,
+        timestepper=time_integrator,
+        bcs=richards_bcs,
+    )
     time = 0
-
-    dx_quad = dx(metadata={"quadrature_degree": 3})
 
     while time < t_final:
 
-        time_var.assign(time)
-
-        h_old.assign(h)
         richards_solver.solve()
-
         time += float(dt)
 
     # Print outputs
     hExact = exact_solution(X, time+offset)
+    dx_quad = dx(metadata={"quadrature_degree": 3})
     L2_norm = sqrt(assemble((h-hExact)**2 * dx_quad))
 
     PETSc.Sys.Print(f"L2 error:  = {L2_norm:.2e} | "

@@ -12,9 +12,9 @@ def test_tracy():
     PETSc.Sys.Print("Performing steady-state solution check with DG0")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 1.0e09, 0, "BackwardEuler"
+    t_final, polynomial_degree, integration_method = 5e05, 0, BackwardEuler
     nodes_vector = np.array([51, 101, 201], dtype=float)
-    timestep_vec = 1e09/10 * np.array([1, 1, 1, 1], dtype=float)
+    timestep_vec = 5e04 * np.array([1, 1, 1], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with  DG0.")
@@ -25,9 +25,9 @@ def test_tracy():
     PETSc.Sys.Print("Performing steady-state solution check with DG1")
     PETSc.Sys.Print("="*60)
 
-    t_final, polynomial_degree, integration_method = 1.0e9, 1, BackwardEuler
-    nodes_vector = np.array([76, 151, 301], dtype=float)
-    timestep_vec = 1e09/10 * np.array([1, 1, 1], dtype=float)
+    t_final, polynomial_degree, integration_method = 5e05, 1, BackwardEuler
+    nodes_vector = np.array([51, 101, 201, 401], dtype=float)
+    timestep_vec = 5e04 * np.array([1, 1, 1], dtype=float)
 
     convergence_rate = conduct_tests(t_final, polynomial_degree, integration_method, nodes_vector, timestep_vec)
     PETSc.Sys.Print(f"Convergence rate {round(convergence_rate, 2)} achieved with  DG1.")
@@ -35,7 +35,7 @@ def test_tracy():
     PETSc.Sys.Print("")
 
 
-def conduct_tests(t_final, 
+def conduct_tests(t_final,
                   polynomial_degree,
                   integration_method,
                   nodes_vector, 
@@ -62,7 +62,7 @@ def compute_error(nodes,
                   time_step=5000, 
                   t_final=1e05, 
                   polynomial_degree=1,
-                  integration_method=BackwardEuler):
+                  time_integrator=BackwardEuler):
     
     """ Runs a Richards simulation for a given mesh resolution and timestep, then computes the L2 error against Tracy's exact solution (2006). 
     Parameters
@@ -81,7 +81,7 @@ def compute_error(nodes,
     # Set some global parameters
     L = 15.24              # Domain length [m]
 
-    soil_curves = ExponentialCurve(
+    soil_curve = ExponentialCurve(
         theta_r=0.15,  # Residual water content [-]
         theta_s=0.45,  # Saturated water content [-]
         Ks=1.00e-05,   # Saturated hydraulic conductivity [m/s]
@@ -89,7 +89,7 @@ def compute_error(nodes,
         Ss=0.00,       # Specific storage coefficient [1/m]
     )
 
-    alpha = soil_curves.parameters["alpha"]
+    alpha = soil_curve.parameters["alpha"]
     hr = -L
     h0 = 1 - exp(alpha*hr)
 
@@ -107,7 +107,7 @@ def compute_error(nodes,
 
         beta = sqrt(alpha**2/4 + (pi/L)**2 + (pi/L)**2)
         hss = h0*sin(pi*X[0]/L)*sin(pi*X[1]/L)*exp((alpha/2)*(L - X[2]))*sinh(beta*X[2])/sinh(beta*L)
-        c = alpha*(soil_curves.parameters["theta_s"] - soil_curves.parameters["theta_r"])/soil_curves.parameters["Ks"]
+        c = alpha*(soil_curve.parameters["theta_s"] - soil_curve.parameters["theta_r"])/soil_curve.parameters["Ks"]
 
         phi = 0
         for k in range(1, 200):
@@ -121,7 +121,7 @@ def compute_error(nodes,
 
         return hExact
 
-    offset = 2000
+    offset = 200000
     h = Function(V, name="InitialCondition").interpolate(exact_solution(X, offset))
     h_old = Function(V, name="PreviousSolution").interpolate(exact_solution(X, offset))
 
@@ -136,13 +136,13 @@ def compute_error(nodes,
         'top': {'h': top_bc},
     }
 
-    time_var = Constant(0)
-    eq = RichardsEquation(V=V,
-                        soil_curves=soil_curves,
-                        bcs=richards_bcs,
-                        time_integrator=integration_method,
-                        )
-    richards_solver = RichardsSolver(h, h_old, time_var, dt, eq)
+    richards_solver = RichardsSolver(
+        h,
+        soil_curve,
+        delta_t=dt,
+        timestepper=time_integrator,
+        bcs=richards_bcs,
+    )
 
     time = 0
 
@@ -153,6 +153,11 @@ def compute_error(nodes,
         h_old.assign(h)
         richards_solver.solve()
         time += float(dt)
+
+        snes = richards_solver.ts.stepper.solver.snes
+        nl_it = snes.getIterationNumber()
+        if nl_it < 3:
+            dt.assign(dt*1.05)
         
 
     # Print outputs

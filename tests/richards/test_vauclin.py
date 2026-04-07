@@ -49,7 +49,7 @@ def vauclin_benchmark(t_final=28800,
                     time_step=50,
                     grid_space=0.01,
                     polynomial_degree=1,
-                    time_integration='ImplicitMidpoint',
+                    time_integrator=ImplicitMidpoint,
                     ):
 
     """
@@ -79,9 +79,8 @@ def vauclin_benchmark(t_final=28800,
     X = SpatialCoordinate(mesh)
 
     V = FunctionSpace(mesh, "DQ", polynomial_degree)
-    W = VectorFunctionSpace(mesh, 'DQ', polynomial_degree)
 
-    soil_curves = HaverkampCurve(
+    soil_curve = HaverkampCurve(
         theta_r=0.00,   # Residual water content [-]
         theta_s=0.37,   # Saturated water content [-]
         Ks=9.722e-05,   # Saturated hydraulic conductivity [m/s]
@@ -95,7 +94,6 @@ def vauclin_benchmark(t_final=28800,
     h_ic = Function(V, name="InitialCondition").interpolate(0.65 - X[1])
 
     h = Function(V, name="PressureHead").interpolate(h_ic)
-    h_old = Function(V, name="PreviousSolution").interpolate(h_ic)
 
     # Set up boundary conditions
     time_var = Constant(0.0)
@@ -116,18 +114,18 @@ def vauclin_benchmark(t_final=28800,
         4: {'flux': top_flux},
     }
 
-    eq = RichardsEquation(V=V,
-                        soil_curves=soil_curves,
-                        bcs=richards_bcs,
-                        time_integrator=time_integration,
-                        )
-    richards_solver = RichardsSolver(h, h_old, time_var, dt, eq)
+    richards_solver = RichardsSolver(
+        h,
+        soil_curve,
+        delta_t=dt,
+        timestepper=time_integrator,
+        bcs=richards_bcs,
+    )
 
     time = 0
 
     while time < t_final:
 
-        h_old.assign(h)
         time += float(dt)
         time_var.assign(time)
         richards_solver.solve()
