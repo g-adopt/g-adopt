@@ -79,7 +79,7 @@ jobs:
 
       - name: Sync repository to ${{matrix.system}}
         run: |
-          rsync -avz --delete --exclude=/.git/ --exclude=/.github/ ./ ${{matrix.system}}:"$REPO_PATH"
+          rsync -avz --delete --exclude=/.github/ ./ ${{matrix.system}}:"$REPO_PATH"
 
       - name: Run test cases
         id: run_tests
@@ -87,7 +87,7 @@ jobs:
           ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && doit run --process 48 --continue --always-execute run_case_hpc"
 
       - name: Test results
-        if: ${{ success() }}
+        if: ${{ !cancelled() }}
         run: |
           ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && python3 -m pytest -m longtest --junit-xml=test_results.xml --ignore=tests/unit tests"
 
