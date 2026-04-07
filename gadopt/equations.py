@@ -13,6 +13,7 @@ from typing import Any, Callable
 from warnings import warn
 
 import firedrake as fd
+from ufl.indexed import Indexed
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .utility import CombinedSurfaceMeasure
@@ -34,8 +35,6 @@ class Equation:
           Firedrake function space of the trial function.
         residual_terms:
           Equation term or a list thereof contributing to the residual.
-        mass_term:
-          Callable returning the equation's mass term.
         eq_attrs:
           Dictionary of fields and parameters used in the equation's weak form.
         approximation:
@@ -46,15 +45,14 @@ class Equation:
           Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
           where p is the polynomial degree of the trial space.
         scaling_factor:
-          A constant factor used to rescale mass and residual terms.
+          A constant factor used to rescale residual terms.
 
     """
 
-    test: fd.Argument | fd.ufl.indexed.Indexed
+    test: fd.Argument | Indexed
     trial_space: fd.functionspaceimpl.WithGeometry
     residual_terms: InitVar[Callable | list[Callable]]
     _: KW_ONLY
-    mass_term: Callable | None = None
     eq_attrs: InitVar[dict[str, Any]] = {}
     approximation: BaseApproximation | BaseGIAApproximation | None = None
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -112,18 +110,8 @@ class Equation:
             self.ds = fd.ds(**measure_kwargs)
             self.dS = fd.dS(**measure_kwargs)
 
-    def mass(
-        self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
-    ) -> fd.Form:
-        """Generates the UFL form corresponding to the mass term."""
-
-        return self.scaling_factor * self.mass_term(self, trial)
-
-    def residual(
-        self, trial: fd.Argument | fd.ufl.indexed.Indexed | fd.Function
-    ) -> fd.Form:
+    def residual(self, trial: fd.Argument | Indexed | fd.Function) -> fd.Form:
         """Generates the UFL form corresponding to the residual terms."""
-
         return self.scaling_factor * sum(
             term(self, trial) for term in self.residual_terms
         )

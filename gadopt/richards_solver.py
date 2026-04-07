@@ -1,151 +1,303 @@
-import firedrake as fd
-from .equations import interior_penalty_factor
-import numpy as np
-import ufl
+"""Solver class for the Richards equation governing variably saturated flow.
 
+This module provides the `RichardsSolver` class for solving the Richards equation,
+which describes movement of fluid phase in a two-phase flow system, if we ignore the
+compressibility of the dry phase. The solver uses time integrators and together with
+soil curve models for hydraulic properties.
+
+Typical usage:
+    >>> from gadopt import *
+    >>> # Define soil curve
+    >>> soil_params = {
+    ...     'theta_r': 0.102, 'theta_s': 0.368,
+    ...     'alpha': 0.0335, 'n': 2.0,
+    ...     'Ks': 0.00922, 'Ss': 1e-5
+    ... }
+    >>> soil_curve = VanGenuchtenCurve(soil_params)
+    >>> # Setup solver
+    >>> richards_solver = RichardsSolver(
+    ...     h, soil_curve, delta_t, DIRK22,
+    ...     bcs={1: {'h': 0.0}, 2: {'flux': -0.01}}
+    ... )
+    >>> # Time loop
+    >>> richards_solver.solve()
 """
-Richards equation solver in mixed form:
 
-    ∂θ/∂t = ∇·(K(h) ∇(h + z))
+from collections.abc import Mapping
+from numbers import Number
+from typing import Any
 
-where:
-    h  = pressure head [L]
-    S  = effective saturation [-]
-    K  = hydraulic conductivity [L/T]
-    z  = vertical coordinate [L]
+from firedrake import *
 
-The solver constructs the weak residual F(h, v) = 0 for a given test function v.
-"""
+from . import richards_equation as richards_eq
+from .equations import Equation
+from .solver_options_manager import SolverConfigurationMixin, ConfigType
+from .soil_curves import SoilCurve
+from .time_stepper import IrksomeIntegrator
+from .utility import DEBUG, INFO, is_continuous, log_level
 
+__all__ = [
+    "RichardsSolver",
+    "direct_richards_solver_parameters",
+    "iterative_richards_solver_parameters",
+]
 
-def RichardsSolver(h: fd.Function,  
-                   h_old: fd.Function, 
-                   time: fd.Constant, 
-                   time_step: fd.Constant, 
-                   eq):
+# Solver options for iterative option (default for 3D)
+iterative_richards_solver_parameters: dict[str, Any] = {
+    # Outer Krylov
+    "ksp_type": "fgmres",
+    'ksp_rtol': 1e-06,
 
-    # Determine the evaluation state for spatial terms
-    match eq.time_integrator:
-        case 'BackwardEuler':
-            h_eval = h
-        case 'ImplicitMidpoint':
-            h_eval = 0.5 * (h + h_old)
-        case 'CrankNicolson':
-            h_eval = None # ImplicitMidpoint is generally better than CN
-        case _:
-            raise ValueError(f"Unknown time integrator '{eq.time_integrator}'")
+    # Multigrid framework
+    "pc_type": "mg",
+    'mg_levels': {
+        'ksp_type': 'chebyshev',
+        'pc_type': 'bjacobi',
+        "ksp_max_it": 1,
+        'sub_pc_type': 'ilu',
+        'mat_type': 'matfree',
+    },
+    "mg_coarse_ksp_type": "gmres",
+    "mg_coarse_pc_type": "bjacobi",
+    "mg_coarse_mat_type": "aij",
+    #'snes_monitor': None,
+    #'ksp_monitor': None,
+}
 
-    # Mass and Source are usually consistent across methods
-    F = richards_mass_term(h, h_old, time_step, eq) + richards_source_term(eq)
-
-    # Add spatial terms
-    if h_eval is not None:
-        F += richards_gravity_advection(h_eval, eq) + richards_diffusion_term(h_eval, eq)
-    else:
-        # True Crank-Nicolson (Average of fluxes)
-        F += 0.5 * (richards_gravity_advection(h, eq) + richards_gravity_advection(h_old, eq))
-        F += 0.5 * (richards_diffusion_term(h, eq) + richards_diffusion_term(h_old, eq))
-
-    problem = fd.NonlinearVariationalProblem(F, h)
-
-    solver_parameters = eq.solver_parameters
-
-    solverRichardsNonlinear = fd.NonlinearVariationalSolver(
-                                problem,
-                                solver_parameters=solver_parameters
-                                )
-
-    return solverRichardsNonlinear
-
-
-def richards_mass_term(h: fd.Function, h_old: fd.Function, time_step: fd.Constant, eq):
-
-    theta = eq.soil_curves.moisture_content
-    F_mixed = fd.inner((theta(h) - theta(h_old))/time_step, eq.test_function) * eq.dx
-
-    # Use this if wanting to solve in pressure-head form
-    water_retention = eq.soil_curves.water_retention
-    match eq.time_integrator:
-        case "ImplicitMidpoint":
-            C = water_retention(0.5*(h+h_old)) 
-        case 'BackwardEuler':
-            C = water_retention(h)
-        case 'CrankNicolson':
-            C = 0.5*(water_retention(h)+water_retention(h_old))
-
-    F_head = fd.inner(C*(h - h_old)/time_step, eq.test_function) * eq.dx
-
-    if eq.equation_form == 'MixedForm':
-        return F_mixed
-    elif eq.equation_form == 'PressureHeadForm':
-        return F_head
+# Solver options for direct option (default for 2D)
+direct_richards_solver_parameters: dict[str, Any] = {
+    "mat_type": "aij",
+    "snes_type": "newtonls",
+    "ksp_type": "preonly",
+    "pc_type": "lu",
+    "snes_linesearch_type": "bt",
+    "snes_force_iteration": True,
+    "pc_factor_mat_solver_type": "mumps",
+    "snes_atol": 1e-11,
+    #'snes_monitor': None,
+    #'ksp_monitor': None,
+}
 
 
-def richards_source_term(eq):
+class RichardsSolver(SolverConfigurationMixin):
+    """Advances Richards equation in time for variably saturated flow.
 
-    F = -fd.inner(eq.source_term, eq.test_function) * eq.dx
+    The Richards equation describes water movement in variably saturated porous media:
 
-    return F
+    $$
+    (S_s S + C) \\frac{\\partial h}{\\partial t} + \\nabla \\cdot (K \\nabla h) + \\nabla \\cdot (K \\nabla z) = 0
+    $$
 
+    where:
+    - $h$ is the pressure head
+    - $S_s$ is the specific storage coefficient (from soil curve)
+    - $S(h)$ is the effective saturation
+    - $C(h) = d\\theta/dh$ is the specific moisture capacity
+    - $K(h)$ is the hydraulic conductivity
+    - $z$ is the vertical coordinate
 
-def richards_diffusion_term(h: fd.Function, eq):
+    **Note**: The solution field is updated in place.
 
-    v = eq.test_function
-    grad_v = fd.grad(v)
-    bcs = eq.bcs
+    Args:
+      solution:
+        Firedrake function for pressure head $h$
+      solution_old:
+        Solution at previous time step
+      soil_curve:
+        gadopt.SoilCurve instance defining hydraulic properties (from soil_curves module)
+      source_term:
+        UFL expression to describe a source/sink term (default is 0)
+      delta_t:
+        Simulation time step
+      timestepper:
+        Runge-Kutta time integrator for an implicit or explicit numerical scheme
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      solver_parameters:
+        Dictionary of solver parameters or a string specifying a default configuration
+        provided to PETSc
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
+      quad_degree:
+        Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
+        where p is the polynomial degree of the trial space
+      interior_penalty:
+        Penalty parameter for SIPG method in DG discretizations. Default is 2.0.
+        Smaller values give weaker boundary enforcement.
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA) or
+        adaptive time-stepping (e.g., {'adaptive_parameters': {'tol': 1e-3}})
 
-    relative_conductivity = eq.soil_curves.relative_conductivity
-    K = relative_conductivity(h)
+    ### Valid keys for boundary conditions
+    |  Condition  |  Type  |              Description               |
+    | :---------- | :----- | :------------------------------------: |
+    | h           | Strong | Pressure head (Dirichlet)              |
+    | flux        | Weak   | Total flux (Neumann)                   |
 
-    # Volume integral
-    F = fd.inner(grad_v, K * fd.grad(h)) * eq.dx
+    Examples:
+        >>> # Dirichlet BC: fixed pressure head at top
+        >>> bcs = {'top': {'h': 0.0}}
+        >>> # Neumann BC: prescribed flux at bottom
+        >>> bcs = {'bottom': {'flux': -0.01}}
+        >>> # Mixed BCs
+        >>> bcs = {'top': {'h': 0.0}, 'bottom': {'flux': -0.01}}
+    """
 
-    # SIPG
-    sigma = interior_penalty_factor(eq, shift=0)
-    sigma_int = sigma * fd.avg(fd.FacetArea(eq.mesh) / fd.CellVolume(eq.mesh))
+    name = "Richards"
 
-    jump_v = fd.jump(v, eq.n)
-    jump_h = fd.jump(h, eq.n)
-    avg_K  = fd.avg(K)
-
-    F += sigma_int * fd.inner(jump_v, avg_K * jump_h) * eq.dS
-    F -= fd.inner(fd.avg(K * grad_v), jump_h) * eq.dS
-    F -= fd.inner(jump_v, fd.avg(K * fd.grad(h))) * eq.dS
-
-    # Impose bcs within the weak formulation
-    for bc_idx, bc_info in bcs.items():
-        boundaryInfo = bc_info
-        boundaryType = next(iter(boundaryInfo))
-        boundaryValue = boundaryInfo[boundaryType]
-        if boundaryType == 'h':
-            sigma_ext = sigma * fd.FacetArea(eq.mesh) / fd.CellVolume(eq.mesh)
-            diff = h - boundaryValue
-
-            F += 2 * sigma_ext * v * K * diff * eq.ds(bc_idx)
-            F -= fd.inner(K * grad_v, eq.n) * diff * eq.ds(bc_idx)
-            F -= fd.inner(v * eq.n, K * fd.grad(h)) * eq.ds(bc_idx)
-        elif boundaryType == 'flux':
-            F -= boundaryValue * eq.test_function * eq.ds(bc_idx)
+    def __init__(
+        self,
+        solution: Function,
+        soil_curve: SoilCurve,
+        /,
+        delta_t: Constant,
+        timestepper: type[IrksomeIntegrator],
+        *,
+        bcs: dict[int | str, dict[str, Number]] = {},
+        solution_old=None,
+        source_term=0,
+        solver_parameters: ConfigType | str | None = None,
+        solver_parameters_extra: ConfigType | None = None,
+        quad_degree: int | None = None,
+        interior_penalty: float | None = None,
+        timestepper_kwargs: dict[str, Any] | None = None,
+    ) -> None:
+        self.solution = solution
+        if solution_old is not None:
+            self.solution_old = solution_old
         else:
-            raise ValueError("Unknown boundary type, must be 'h' or 'flux'")
+            self.solution_old = solution
+        self.soil_curve = soil_curve
+        self.delta_t = delta_t
+        self.timestepper = timestepper
+        self.bcs = bcs
+        self.source_term = source_term
+        self.quad_degree = quad_degree
+        self.interior_penalty = interior_penalty
+        self.timestepper_kwargs = timestepper_kwargs or {}
 
-    return F
+        self.solution_space = solution.function_space()
+        self.mesh = self.solution_space.mesh()
+        self.test = TestFunction(self.solution_space)
 
+        self.continuous_solution = is_continuous(self.solution)
 
-def richards_gravity_advection(h: fd.Function, eq):
+        self.set_boundary_conditions()
+        self.set_equation()
+        self.set_solver_options(solver_parameters, solver_parameters_extra)
+        self.setup_solver()
 
-    v = eq.test_function
-    x = fd.SpatialCoordinate(eq.mesh)
+    def set_boundary_conditions(self) -> None:
+        """Sets up strong and weak boundary conditions."""
+        self.strong_bcs = []
+        self.weak_bcs = {}
 
-    K = eq.soil_curves.relative_conductivity(h)
-    e_z = fd.grad(x[eq.dim - 1])
-    q = K * e_z
+        for bc_id, bc in self.bcs.items():
+            weak_bc = {}
 
-    # Conservative split: - ∫Ω q · ∇v
-    F = -fd.inner(q, fd.grad(v)) * eq.dx
+            for bc_type, value in bc.items():
+                if bc_type == 'h':
+                    # Pressure head BC
+                    if self.continuous_solution:
+                        # Strong Dirichlet for CG
+                        strong_bc = DirichletBC(self.solution_space, value, bc_id)
+                        self.strong_bcs.append(strong_bc)
+                    else:
+                        # Weak Dirichlet for DG (handled in equation)
+                        weak_bc['h'] = value
+                elif bc_type == 'flux':
+                    # Flux BC (always weak)
+                    weak_bc['flux'] = value
+                else:
+                    raise ValueError(
+                        f"Unknown boundary condition type: {bc_type}. "
+                        f"Valid types are 'h' (pressure head) and 'flux'."
+                    )
 
-    # Interior upwind flux:  ∫F (q̂·n) [v]
-    qn = 0.5 * (fd.dot(q, eq.n) + abs(fd.dot(q, eq.n)))  # one-sided “+”
-    F += fd.jump(v) * (qn('+') - qn('-')) * eq.dS
+            if weak_bc:
+                self.weak_bcs[bc_id] = weak_bc
 
-    return -F
+    def set_equation(self) -> None:
+        """Sets up the Richards equation with all terms."""
+        eq_attrs = {
+            'source_term': self.source_term,
+            'soil_curve': self.soil_curve,
+        }
+
+        if self.interior_penalty is not None:
+            eq_attrs['interior_penalty'] = self.interior_penalty
+
+        self.equation = Equation(
+            self.test,
+            self.solution_space,
+            residual_terms=[
+                richards_eq.richards_mass_term,
+                richards_eq.richards_diffusion_term,
+                richards_eq.richards_source_term,
+                richards_eq.richards_gravity_term,
+            ],
+            eq_attrs=eq_attrs,
+            bcs=self.weak_bcs,
+            quad_degree=self.quad_degree,
+        )
+        self.equation.solution_old = self.solution_old
+
+    def set_solver_options(
+        self,
+        solver_preset: ConfigType | str | None,
+        solver_extras: ConfigType | None = None,
+    ) -> None:
+        """Sets PETSc solver parameters."""
+        if isinstance(solver_preset, Mapping):
+            self.add_to_solver_config(solver_preset)
+            self.add_to_solver_config(solver_extras)
+            self.register_update_callback(self.setup_solver)
+            return
+
+        if solver_preset is not None:
+            match solver_preset:
+                case "direct":
+                    self.add_to_solver_config(direct_richards_solver_parameters)
+                case "iterative":
+                    self.add_to_solver_config(iterative_richards_solver_parameters)
+                case _:
+                    raise ValueError("Solver type must be 'direct' or 'iterative'.")
+        elif self.mesh.topological_dimension() == 2:
+            self.add_to_solver_config(direct_richards_solver_parameters)
+        else:
+            self.add_to_solver_config(iterative_richards_solver_parameters)
+
+        #if DEBUG >= log_level:
+        #    self.add_to_solver_config({"ksp_monitor": None, "snes_monitor": None})
+        #elif INFO >= log_level:
+        #    self.add_to_solver_config({"ksp_converged_reason": None, "snes_converged_reason": None})
+
+        self.add_to_solver_config(solver_extras)
+        self.register_update_callback(self.setup_solver)
+
+    def setup_solver(self) -> None:
+        """Sets up the timestepper using specified parameters."""
+        self.ts = self.timestepper(
+            self.equation,
+            self.solution,
+            self.delta_t,
+            solver_parameters=self.solver_parameters,
+            strong_bcs=self.strong_bcs,
+            **self.timestepper_kwargs,
+        )
+
+    def solve(self, t: float | None = None) -> tuple[float, float] | None:
+        """Advances solver in time.
+
+        Args:
+          t:
+            Current simulation time (optional)
+
+        Returns:
+          When adaptive time-stepping is enabled: tuple (error, dt_used) where:
+              - error: Error estimate from the adaptive stepper
+              - dt_used: Actual time step used (may differ from initial dt)
+          When adaptive time-stepping is not enabled: None
+        """
+        return self.ts.advance(t)

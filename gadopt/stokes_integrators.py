@@ -21,9 +21,9 @@ from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
-from .free_surface_equation import free_surface_term
-from .free_surface_equation import mass_term as mass_term_fs
+from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
+from .scalar_equation import mass_term, sink_term, source_term
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
     DEBUG,
@@ -135,6 +135,43 @@ Note:
   default values, the most convenient approach is to provide the modified values as a
   dictionary via the `solver_parameters_extra` argument. This dictionary can also hold
   new pairs of keys and values to extend the default ones.
+"""
+
+coupled_gia_solver_parameters = {
+    "mat_type": "matfree",
+    "snes_type": "newtonls",
+    "snes_linesearch_type": "l2",
+    "snes_max_it": 100,
+    "snes_atol": 1e-15,
+    "snes_rtol": 1e-4,
+    "ksp_type": "gmres",
+    "ksp_rtol": 1e-3,
+    "pc_type": "fieldsplit",
+    "pc_fieldsplit_type": "symmetric_multiplicative",
+    "fieldsplit_0_ksp_type": "cg",
+    "fieldsplit_0_pc_type": "python",
+    "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
+    "fieldsplit_0_assembled_pc_type": "gamg",
+    "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
+    "fieldsplit_0_ksp_rtol": 1e-5,
+    "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
+    "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
+    "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
+    "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+    "fieldsplit_1_ksp_type": "cg",
+    "fieldsplit_1_pc_type": "python",
+    "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
+    "fieldsplit_1_assembled_pc_type": "sor",
+    "fieldsplit_1_ksp_rtol": 1e-5,
+}
+"""Default iterative solver parameters for CoupledInternalVariableSolver (GIA problems).
+
+Uses a Newton SNES outer loop with a GMRES/fieldsplit preconditioned inner solve. SNES
+is always active: for a Newtonian rheology (exponent=1) the power-law factor is
+identically 1 and the system is linear, so SNES converges in a single iteration at
+negligible extra cost. For power-law rheology (exponent > 1) the full Newton iteration
+is required. The snes_rtol is set looser than ksp_rtol so that the single-iteration
+Newtonian case is accepted without additional SNES iterations.
 """
 
 
@@ -259,7 +296,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
         self.rho_continuity = self.approximation.rho_continuity()
         self.equations = []  # G-ADOPT's Equation instances
-        self.F = 0.0  # Weak form of the system
 
         self.set_boundary_conditions()
         self.set_equations()
@@ -333,16 +369,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def set_form(self) -> None:
         """Sets the weak form including linear and bilinear terms."""
-        for equation, solution, solution_old in zip(
-            self.equations, self.solution_split, self.solution_old_split
-        ):
-            if equation.mass_term:
-                if equation.scaling_factor != -self.theta:
-                    raise ValueError(
-                        "Equation scaling does not match employed theta scheme."
-                    )
-                self.F += equation.mass((solution - solution_old) / self.dt)
-            self.F -= equation.residual(solution)
+        self.F = sum(
+            eq.residual(sol) for eq, sol in zip(self.equations, self.solution_split)
+        )
 
     def set_solver_options(
         self,
@@ -402,6 +431,11 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             self.F += self.additional_forcing_term
 
         if self.constant_jacobian:
+            warn(
+                "Constant Jacobian specified for the Stokes system; please ensure that"
+                "the viscosity does not vary in time."
+            )
+
             trial = fd.TrialFunction(self.solution_space)
             F = fd.replace(self.F, {self.solution: trial})
             a, L = fd.lhs(F), fd.rhs(F)
@@ -489,6 +523,7 @@ class StokesSolver(StokesSolverBase):
 
         self.eta_ind = 2
         self.free_surface_map = {}
+        self.free_surface_equations = []
         super().__init__(solution, approximation, **kwargs)
 
     def set_free_surface_boundary(
@@ -537,14 +572,20 @@ class StokesSolver(StokesSolverBase):
             )
 
         for bc_id, (eta_ind, buoyancy) in self.free_surface_map.items():
-            eq_attrs = {"boundary_id": bc_id, "buoyancy_scale": buoyancy, "u": u}
+            eq_attrs = {
+                "boundary_id": bc_id,
+                "buoyancy_scale": buoyancy,
+                "dt": self.dt,
+                "trial_old": self.solution_old_split[eta_ind],
+                "use_irksome": False,
+                "u": u,
+            }
 
             self.equations.append(
                 Equation(
                     self.tests[eta_ind],
                     self.solution_space[eta_ind],
-                    free_surface_term,
-                    mass_term=mass_term_fs,
+                    free_surface_terms,
                     eq_attrs=eq_attrs,
                     quad_degree=self.quad_degree,
                     scaling_factor=-self.theta,
@@ -840,6 +881,189 @@ class InternalVariableSolver(StokesSolverBase):
         # Update internal variable term for using as a RHS explicit forcing in the next timestep
         for m, m_new in zip(self.internal_variables, self.internal_variables_update):
             m.interpolate(m_new)
+
+
+class CoupledInternalVariableSolver(StokesSolverBase):
+    """Solver for coupled internal variable viscoelastic formulation.
+
+    Solves the momentum equation and internal variable evolution equations
+    simultaneously as a single coupled nonlinear variational problem.
+
+    The internal variable evolution equation is:
+
+        dm/dt = deviatoric_strain(u)/tau - m/tau
+
+    discretised using backward Euler:
+
+        (m_new - m_old)/dt + m_new/tau - deviatoric_strain(u_new)/tau = 0
+
+    Only backward Euler time-stepping is currently implemented. Both the strain
+    rate and the internal variable m are evaluated at the new time level, which
+    is consistent with a fully implicit (backward Euler) discretisation. A
+    proper theta scheme would require theta-weighting of both the strain rate
+    and the sink term. In the future, this should be unified with Irksome,
+    either by using Irksome directly or by using Irksome's Dt operator together
+    with expand_time_derivatives and UFL replace.
+
+    Args:
+      solution:
+        Firedrake function representing the field over the mixed space (displacement
+        and internal variables)
+      approximation:
+        G-ADOPT approximation defining terms in the system of equations
+      dt:
+        Float quantifying the time step used for time integration
+      scaling_factor:
+        A constant factor used to rescale residual terms.
+      additional_forcing_term:
+        Firedrake form specifying an additional term contributing to the residual
+      bcs:
+        Dictionary specifying boundary conditions (identifier, type, and value)
+      quad_degree:
+        Integer denoting the quadrature degree
+      solver_parameters:
+        Dictionary of PETSc solver options or string matching one of the default sets
+      solver_parameters_extra:
+        Dictionary of PETSc solver options used to update the default G-ADOPT options
+      J:
+        Firedrake function representing the Jacobian of the mixed Stokes system
+      constant_jacobian:
+        Boolean specifying whether the Jacobian of the system is constant
+      nullspace:
+        A `MixedVectorSpaceBasis` for the operator's kernel
+      transpose_nullspace:
+        A `MixedVectorSpaceBasis` for the kernel of the operator's transpose
+      near_nullspace:
+        A `MixedVectorSpaceBasis` for the operator's smallest eigenmodes (e.g. rigid
+        body modes)
+    """
+
+    name = "CoupledInternalVariable"
+    # Backward Euler: all terms evaluated at the new time level.
+    # This is the only time-stepping scheme currently supported and tested.
+    _theta = 1.0
+
+    def __init__(
+        self,
+        solution: fd.Function,
+        approximation: BaseGIAApproximation,
+        /,
+        *,
+        dt: float,
+        scaling_factor: float = 1,
+        **kwargs,
+    ) -> None:
+
+        # provide an `effective viscosity' to the approximation used
+        # for SIPG terms in the viscosity term of momentum_equation.py
+        # N.b. the potential for confusion as GIA modellers often use
+        # mu to represent the shear modulus.
+        approximation.mu = approximation.effective_viscosity(dt)
+        self.scaling_factor = scaling_factor
+
+        super().__init__(solution, approximation, dt=dt, theta=self._theta, **kwargs)
+
+    def set_equations(self) -> None:
+        u, *internal_variables = self.solution_split
+        stress = self.approximation.stress(
+            u, internal_variables=internal_variables)
+        source = self.approximation.buoyancy(u) * self.k
+        strain = self.approximation.deviatoric_strain(u)
+        dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
+        visc_factor = self.approximation.power_law_factor(dev_stress)
+        # Build a local list so that self.approximation.maxwell_times is never mutated.
+        # For n=1 (Newtonian) visc_factor is identically 1 and has no effect.
+        maxwell_times = [mt * visc_factor for mt in self.approximation.maxwell_times]
+
+        residual_terms = [compressible_viscoelastic_terms]
+        eqs_attrs = [{"stress": stress, "source": source}]
+        scaling_factors = [self.scaling_factor]
+
+        internal_variable_terms = [mass_term, sink_term, source_term]
+
+        # Each internal variable equation has the form:
+        #   (m_new - m_old)/dt + m_new/tau - strain(u_new)/tau = 0
+        # written as residual terms (mass + sink + source), then negated via
+        # scaling_factor so the sign convention matches the Stokes block.
+        # Loop over number of internal variables
+        for i, maxwell_time in enumerate(maxwell_times):
+            residual_terms.append(internal_variable_terms)
+            scaling_factors.append(-self._theta * self.scaling_factor)
+            eqs_attrs.append({
+                "source": strain / maxwell_time,
+                "sink_coeff": 1 / maxwell_time,
+                "dt": self.dt,
+                "trial_old": self.solution_old_split[i+1],
+                "use_irksome": False,
+            })
+
+        for i in range(len(self.tests)):
+            self.equations.append(
+                Equation(
+                    self.tests[i],
+                    self.solution_space[i],
+                    residual_terms[i],
+                    eq_attrs=eqs_attrs[i],
+                    approximation=self.approximation,
+                    bcs=self.weak_bcs,
+                    quad_degree=self.quad_degree,
+                    scaling_factor=scaling_factors[i],
+                )
+            )
+
+    def set_solver_options(
+        self,
+        solver_preset: ConfigType | str | None,
+        solver_extras: ConfigType | None,
+    ) -> None:
+        """Sets PETSc solver options for the coupled GIA system.
+
+        Overrides the base class to ensure SNES Newton is always active.
+        For Newtonian rheology (exponent=1) the power-law factor is identically
+        1 and the system is linear, so SNES converges in a single iteration.
+        For power-law rheology (exponent > 1) full Newton iteration is performed.
+
+        When solver_preset is a Mapping it is honoured verbatim. The string
+        preset "direct" uses direct_stokes_solver_parameters plus Newton SNES.
+        The string preset "iterative" and the default None both use
+        coupled_gia_solver_parameters, which already includes Newton SNES and
+        the GIA-specific fieldsplit preconditioner. iterative_stokes_solver_parameters
+        is intentionally not used here: its Schur-complement structure is designed
+        for the standard Stokes system, not the larger coupled GIA block.
+        """
+        if isinstance(solver_preset, Mapping):
+            super().set_solver_options(solver_preset, solver_extras)
+            return
+
+        if solver_preset == "direct":
+            # Delegate to base class for direct_stokes_solver_parameters and
+            # monitoring, then override SNES from ksponly to Newton.
+            super().set_solver_options(solver_preset, solver_extras)
+            self.add_to_solver_config(newton_stokes_solver_parameters)
+            return
+
+        if solver_preset not in (None, "iterative"):
+            raise ValueError("Solver type must be 'direct' or 'iterative'.")
+
+        # "iterative" or no preset: use the GIA-specific coupled solver defaults.
+        # Newton SNES is already included in coupled_gia_solver_parameters.
+        self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
+        self.add_to_solver_config(coupled_gia_solver_parameters)
+        if solver_extras:
+            self.add_to_solver_config(solver_extras)
+        self.register_update_callback(self.set_solver)
+
+    def set_free_surface_boundary(
+        self, params_fs: dict[str, int | bool], bc_id: int
+    ) -> Expr:
+        normal_stress = params_fs.get("normal_stress", 0.0)
+        # Add free surface stress term. This is also referred to as the Hydrostatic
+        # Prestress advection term in the GIA literature.
+        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
+            vertical_component(self.solution_split[0])
+        )
+
+        return combined_normal_stress
 
 
 class BoundaryNormalStressSolver(SolverConfigurationMixin):
