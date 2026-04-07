@@ -1,15 +1,21 @@
 from gadopt import *
 
-"""
+
+r"""
 Recharge of a two-dimensional water table
 =========================================
 Here we reproduce the test case presented in:
     Vauclin, Khanju, and Vachaud, Water Resources Research, 1979
     Experimental and numerical study of a transient, two-dimensional unsaturated-saturated water table recharge problem
     https://doi.org/10.1029/WR015i005p01089
+
 The simulation is performed in a domain of 3 x 2 metres, and the initial
-condition is chosen such that the region z <= 0.65 m is fully satured ($theta =
-theta_s$), $h(t=0) = z - 0.65$. For the boundary conditions, the bottom and left boundary are no flux ($q cdot n = 0$), the right boundary fixed the height of the water table ($h = z - 0.65$ m). For the top boundary, water is injected at a rate of 14.8 cm/hour  in the region where x <= 0.5 m and 0 otherwise. The simulation is concluded after 8 hours
+condition is chosen such that the region z <= 0.65 m is fully saturated ($\theta =
+\theta_s$), $h(t=0) = z - 0.65$. For the boundary conditions, the bottom and left 
+boundary are no flux ($q \cdot n = 0$), the right boundary fixed the height of the 
+water table ($h = z - 0.65$ m). For the top boundary, water is injected at a rate 
+of 14.8 cm/hour in the region where x <= 0.5 m and 0 otherwise. The simulation 
+is concluded after 8 hours.
 """
 
 Lx, Ly = 3.00, 2.00  # Domain length [m]
@@ -21,11 +27,10 @@ t_final = 28800
 mesh = RectangleMesh(nodes_x, nodes_y, Lx, Ly, name="mesh", quadrilateral=True)
 X = SpatialCoordinate(mesh)
 
-polynomial_degree = 2
-V = FunctionSpace(mesh, "DQ", polynomial_degree)
-W = VectorFunctionSpace(mesh, 'DQ', polynomial_degree)
+V = FunctionSpace(mesh, "DQ", 2)
+W = VectorFunctionSpace(mesh, 'DQ', 2)
 
-soil_curves = HaverkampCurve(
+soil_curve = HaverkampCurve(
     theta_r=0.01,   # Residual water content [-]
     theta_s=0.37,   # Saturated water content [-]
     Ks=9.722e-05,   # Saturated hydraulic conductivity [m/s]
@@ -36,11 +41,12 @@ soil_curves = HaverkampCurve(
     Ss=0.00,        # Specific storage coefficient [1/m]
 )
 
-moisture_content      = soil_curves.moisture_content
-relative_conductivity = soil_curves.relative_conductivity
+moisture_content = soil_curve.moisture_content
+relative_conductivity = soil_curve.relative_conductivity
 
-h     = Function(V, name="PressureHead").interpolate(0.65 - X[1])
-h_old = Function(V, name="PreviousSolution").interpolate(0.65 - X[1])
+h_ic  = Function(V, name="InitialCondition").interpolate(0.65 - X[1])
+h     = Function(V, name="PressureHead").interpolate(h_ic)
+h_old = Function(V, name="PreviousSolution").interpolate(h_ic)
 theta = Function(V, name='MoistureContent').interpolate(moisture_content(h))
 q     = Function(W, name='VolumetricFlux')
 K     = Function(V, name='RelativeConductivity').interpolate(relative_conductivity(h))
@@ -55,24 +61,28 @@ top_flux = tanh(0.000125 * time_var) * 4.11e-05 * (
 # Boundary conditions
 boundary_ids = get_boundary_ids(mesh)
 richards_bcs = {
-    boundary_ids.left: {'flux': 0.0},
-    boundary_ids.right: {'h': 0.65 - X[1]},
+    boundary_ids.left:   {'flux': 0.0},
+    boundary_ids.right:  {'h': h_ic},
     boundary_ids.bottom: {'flux': 0.0},
-    boundary_ids.top: {'flux': top_flux},
+    boundary_ids.top:    {'flux': top_flux},
 }
 
-eq = RichardsEquation(V=V,
-                    soil_curves=soil_curves,
-                    bcs=richards_bcs,
-                    )
-richards_solver = RichardsSolver(h, h_old, time_var, dt, eq)
-
-output = VTKFile("vauclin.pvd")
-output.write(h, theta, q, time=0)
+richards_solver = RichardsSolver(
+    h,
+    soil_curve,
+    delta_t=dt,
+    timestepper=DIRK22,
+    bcs=richards_bcs,
+)
 
 time = 0
 
+ds = Measure("ds", domain=mesh, metadata={"quadrature_degree": 5})
+dx = Measure("dx", domain=mesh, metadata={"quadrature_degree": 5})
+
 plot_iteration = 0
+output = VTKFile("vauclin.pvd")
+output.write(h, theta, q, time=time)
 
 while time < t_final:
 
@@ -86,6 +96,4 @@ while time < t_final:
         theta.interpolate(moisture_content(h))
         K.interpolate(relative_conductivity(h))
         q.interpolate(-K*grad(h + X[1]))
-
         output.write(h, theta, q, time=time)
-
