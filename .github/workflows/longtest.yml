@@ -78,7 +78,7 @@ jobs:
       - name: Run test cases
         id: run_tests
         run: |
-          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && make -j longtest"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && doit run --process $( nproc --all ) --continue --always-execute run_case_hpc"
 
       - name: Test results
         if: ${{ success() }}
@@ -99,7 +99,14 @@ jobs:
           include_passed: true
           annotate_only: true
 
-      - name: Get error output
-        if: ${{ failure() }}
+      - name: Get job logs
+        if: ${{ !cancelled() }}
         run: |
-          ssh ${{ matrix.system }} "cd $REPO_PATH && make longtest_output"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && git ls-files -z -o -x \*pyc -x \*h5 | xargs -0 tar -cv" > longtest_output.tar
+
+      - name: Upload job logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: longtest_logs
+          path: longtest_output.tar
