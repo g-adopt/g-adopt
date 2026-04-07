@@ -77,7 +77,7 @@ jobs:
       - name: Run test cases
         id: run_tests
         run: |
-          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && doit run --process $( nproc --all ) --continue --always-execute run_case_hpc"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && doit run --process 48 --continue --always-execute run_case_hpc"
 
       - name: Test results
         if: ${{ success() }}
