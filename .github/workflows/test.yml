@@ -57,6 +57,7 @@ jobs:
         run: |
           apt update
           apt install -y git-lfs
+          git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - uses: actions/checkout@v4
         with:

@@ -59,7 +59,13 @@ def model(level, l, mm, k, do_write=False):
 
     # RHS provided by assess solution: rho'=r**k Y_lm
     solution = assess.SphericalStokesSolutionSmoothFreeSlip(
-        int(float(l)), int(float(m)), int(float(k)), nu=float(mu), Rp=rmax, Rm=rmin, g=1.0
+        int(float(l)),
+        int(float(m)),
+        int(float(k)),
+        nu=float(mu),
+        Rp=rmax,
+        Rm=rmin,
+        g=1.0,
     )
     u_xyz = Function(V).interpolate(X)
     rhop = Function(Vscl)
