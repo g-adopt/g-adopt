@@ -43,7 +43,7 @@ jobs:
       REPO_PATH: ${{ secrets[format('{0}_REPO_PATH',matrix.system)] }}
       GADOPT_SETUP: ${{ secrets[format('{0}_GADOPT_SETUP',matrix.system)] }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
 
@@ -97,7 +97,7 @@ jobs:
           scp ${{ matrix.system }}:"$REPO_PATH/test_results.xml" .
 
       - name: Pytest report
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v6
         if: ${{ !cancelled() }}
         with:
           check_name: Test suite report
@@ -112,7 +112,7 @@ jobs:
 
       - name: Upload job logs
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: longtest_logs
           path: longtest_output.tar
