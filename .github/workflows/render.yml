@@ -27,7 +27,7 @@ jobs:
         run: |
           apt update
           apt install -y git-lfs
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
 
@@ -46,7 +46,7 @@ jobs:
           git lfs checkout
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: |
