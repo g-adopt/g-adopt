@@ -54,8 +54,8 @@ K     = Function(V, name='RelativeConductivity').interpolate(relative_conductivi
 # Set up boundary conditions
 time_var = Constant(0.0)
 top_flux = tanh(0.000125 * time_var) * 4.11e-03 * (
-    0.5 * (1 + tanh(10 * (X[0] + 50)))
-    - 0.5 * (1 + tanh(10 * (X[0] - 50)))
+    0.5 * (1 + tanh(0.1 * (X[0] + 50)))
+    - 0.5 * (1 + tanh(0.1 * (X[0] - 50)))
 )
 
 # Boundary conditions
