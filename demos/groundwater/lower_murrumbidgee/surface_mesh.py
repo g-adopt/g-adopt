@@ -35,8 +35,8 @@ def surface_mesh(dx_base):
     gmsh.model.geo.synchronize()
     
     # Boundary IDs
-    gmsh.model.addPhysicalGroup(1, [l1, l2, l3, l4, l5, l6, l7], 1)
-    gmsh.model.setPhysicalName(1, 1, "sides")
+    gmsh.model.addPhysicalGroup(1, [l1, l2, l3, l4, l5, l6, l7], 3)
+    gmsh.model.setPhysicalName(1, 3, "sides")
     
     gmsh.model.addPhysicalGroup(2, [surface], 201)
     gmsh.model.setPhysicalName(2, 201, "FluidDomain")
