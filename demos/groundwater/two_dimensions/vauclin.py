@@ -9,19 +9,19 @@ Here we reproduce the test case presented in:
     Experimental and numerical study of a transient, two-dimensional unsaturated-saturated water table recharge problem
     https://doi.org/10.1029/WR015i005p01089
 
-The simulation is performed in a domain of 3 x 2 metres, and the initial
-condition is chosen such that the region z <= 0.65 m is fully saturated ($\theta =
-\theta_s$), $h(t=0) = z - 0.65$. For the boundary conditions, the bottom and left 
+The simulation is performed in a domain of 300 x 200 cm, and the initial
+condition is chosen such that the region z <= 65 cm is fully saturated ($\theta =
+\theta_s$), $h(t=0) = z - 65$. For the boundary conditions, the bottom and left 
 boundary are no flux ($q \cdot n = 0$), the right boundary fixed the height of the 
-water table ($h = z - 0.65$ m). For the top boundary, water is injected at a rate 
+water table ($h = z - 65$ cm). For the top boundary, water is injected at a rate 
 of 14.8 cm/hour in the region where x <= 0.5 m and 0 otherwise. The simulation 
 is concluded after 8 hours.
 """
 
-Lx, Ly = 3.00, 2.00  # Domain length [m]
+Lx, Ly = 300, 200  # Domain length [cm]
 nodes_x, nodes_y = 46, 31
 dt = Constant(50)
-t_final = 28800
+t_final = 28800  # In seconds
 
 # Create rectangular mesh
 mesh = RectangleMesh(nodes_x, nodes_y, Lx, Ly, name="mesh", quadrilateral=True)
@@ -31,20 +31,20 @@ V = FunctionSpace(mesh, "DQ", 2)
 W = VectorFunctionSpace(mesh, 'DQ', 2)
 
 soil_curve = HaverkampCurve(
-    theta_r=0.01,   # Residual water content [-]
-    theta_s=0.37,   # Saturated water content [-]
-    Ks=9.722e-05,   # Saturated hydraulic conductivity [m/s]
-    alpha=0.44,     # Fitting parameter [m]
-    beta=1.2924,    # Fitting parameter [-]
-    A=0.0104,       # Fitting parameter [m]
-    gamma=1.5722,   # Fitting parameter [-]
-    Ss=0.00,        # Specific storage coefficient [1/m]
+    theta_r=0.00,   # Residual water content [-]
+    theta_s=0.30,   # Saturated water content [-]
+    Ks=9.722e-03,   # Saturated hydraulic conductivity [cm/s]
+    alpha=40000,    # Fitting parameter [cm]
+    beta=2.90,      # Fitting parameter [-]
+    A=2.99e6,       # Fitting parameter [cm]
+    gamma=5.00,     # Fitting parameter [-]
+    Ss=0.00,        # Specific storage coefficient [1/cm]
 )
 
 moisture_content = soil_curve.moisture_content
 relative_conductivity = soil_curve.relative_conductivity
 
-h_ic  = Function(V, name="InitialCondition").interpolate(0.65 - X[1])
+h_ic  = Function(V, name="InitialCondition").interpolate(65 - X[1])
 h     = Function(V, name="PressureHead").interpolate(h_ic)
 h_old = Function(V, name="PreviousSolution").interpolate(h_ic)
 theta = Function(V, name='MoistureContent').interpolate(moisture_content(h))
@@ -53,9 +53,9 @@ K     = Function(V, name='RelativeConductivity').interpolate(relative_conductivi
 
 # Set up boundary conditions
 time_var = Constant(0.0)
-top_flux = tanh(0.000125 * time_var) * 4.11e-05 * (
-    0.5 * (1 + tanh(10 * (X[0] + .50)))
-    - 0.5 * (1 + tanh(10 * (X[0] - .50)))
+top_flux = tanh(0.000125 * time_var) * 4.11e-03 * (
+    0.5 * (1 + tanh(10 * (X[0] + 50)))
+    - 0.5 * (1 + tanh(10 * (X[0] - 50)))
 )
 
 # Boundary conditions
@@ -71,7 +71,7 @@ richards_solver = RichardsSolver(
     h,
     soil_curve,
     delta_t=dt,
-    timestepper=DIRK22,
+    timestepper=BackwardEuler,
     bcs=richards_bcs,
 )
 
