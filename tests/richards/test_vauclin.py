@@ -9,8 +9,15 @@ def test_vauclin():
 
     t_final = 28800
     time_step = 200
-    polynomial_degree = 2
-    grid_space = 2
+
+    PETSc.Sys.Print("")
+
+    PETSc.Sys.Print("="*60)
+    PETSc.Sys.Print("Performing convergence check with DG0")
+    PETSc.Sys.Print("="*60)
+
+    polynomial_degree = 0
+    grid_space = 0.25
 
     PETSc.Sys.Print('Generating reference solution...')
     h_ref = vauclin_benchmark(t_final, time_step, grid_space, polynomial_degree)
@@ -20,15 +27,6 @@ def test_vauclin():
     V_comp = FunctionSpace(h_ref.function_space().mesh(), "DQ", polynomial_degree)
     h_interp = Function(V_comp)
 
-    PETSc.Sys.Print("")
-
-    PETSc.Sys.Print("="*60)
-    PETSc.Sys.Print("Performing convergence check with DG0")
-    PETSc.Sys.Print("="*60)
-
-    polynomial_degree = 0
-
-    polynomial_degree = 0
     dx_vec = np.array([4, 3.333, 2.5])
     error_vec = np.zeros(len(dx_vec), dtype=float)
 
@@ -50,6 +48,17 @@ def test_vauclin():
     PETSc.Sys.Print("="*60)
     PETSc.Sys.Print("Performing convergence check with DG1")
     PETSc.Sys.Print("="*60)
+
+    polynomial_degree = 1
+    grid_space = 2.5/4
+
+    PETSc.Sys.Print('Generating reference solution...')
+    h_ref = vauclin_benchmark(t_final, time_step, grid_space, polynomial_degree)
+    PETSc.Sys.Print('Done')
+
+    # Function space to interpolate solutions onto
+    V_comp = FunctionSpace(h_ref.function_space().mesh(), "DQ", polynomial_degree)
+    h_interp = Function(V_comp)
 
     polynomial_degree = 1
     dx_vec = np.array([5, 4, 3.333, 2.5])
