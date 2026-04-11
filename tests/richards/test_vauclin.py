@@ -8,17 +8,42 @@ Convergence test of Vauclin benchmark
 def test_vauclin():
 
     t_final = 28800
-    time_step = 25
+    time_step = 200
     polynomial_degree = 2
-    grid_space = 0.03
+    grid_space = 2
 
     PETSc.Sys.Print('Generating reference solution...')
     h_ref = vauclin_benchmark(t_final, time_step, grid_space, polynomial_degree)
     PETSc.Sys.Print('Done')
 
     # Function space to interpolate solutions onto
-    V_comp = FunctionSpace(h_ref.function_space().mesh(), "DQ", 2)
+    V_comp = FunctionSpace(h_ref.function_space().mesh(), "DQ", polynomial_degree)
     h_interp = Function(V_comp)
+
+    PETSc.Sys.Print("")
+
+    PETSc.Sys.Print("="*60)
+    PETSc.Sys.Print("Performing convergence check with DG0")
+    PETSc.Sys.Print("="*60)
+
+    polynomial_degree = 0
+
+    polynomial_degree = 0
+    dx_vec = np.array([4, 3.333, 2.5])
+    error_vec = np.zeros(len(dx_vec), dtype=float)
+
+    for index in range(len(dx_vec)):
+        dx = dx_vec[index]
+        h = vauclin_benchmark(t_final, time_step, dx, polynomial_degree=0)
+        err = errornorm(h_ref, h_interp.interpolate(h), norm_type="L2", degree_rise=3)
+        PETSc.Sys.Print(f"Error with dx = {dx} is {err:.2e}")
+        error_vec[index] = err
+
+    X = np.log10(dx_vec)
+    Y = np.log10(error_vec)
+    slope, intercept = np.polyfit(X, Y, 1)
+    PETSc.Sys.Print(f"Convergence rate is {slope}")
+    assert slope >= 0.9, "Optimal convergence rate not achieved."
 
     PETSc.Sys.Print("")
 
@@ -27,13 +52,12 @@ def test_vauclin():
     PETSc.Sys.Print("="*60)
 
     polynomial_degree = 1
-    time_step = 25
-    dx_vec = np.array([0.1666, 0.1, 0.08333, 0.06666, 0.05])
+    dx_vec = np.array([5, 4, 3.333, 2.5])
     error_vec = np.zeros(len(dx_vec), dtype=float)
 
     for index in range(len(dx_vec)):
         dx = dx_vec[index]
-        h = vauclin_benchmark(t_final, time_step, dx, polynomial_degree)
+        h = vauclin_benchmark(t_final, time_step, dx, polynomial_degree=1)
         err = errornorm(h_ref, h_interp.interpolate(h), norm_type="L2", degree_rise=3)
         PETSc.Sys.Print(f"Error with dx = {dx} is {err:.2e}")
         error_vec[index] = err
@@ -47,9 +71,9 @@ def test_vauclin():
 
 def vauclin_benchmark(t_final=28800,
                     time_step=50,
-                    grid_space=0.01,
+                    grid_space=1,
                     polynomial_degree=1,
-                    time_integrator=ImplicitMidpoint,
+                    time_integrator=BackwardEuler,
                     ):
 
     """
@@ -69,7 +93,7 @@ def vauclin_benchmark(t_final=28800,
         Final pressure head field.
     """
 
-    Lx, Ly = 3.00, 2.00  # Domain length [m]
+    Lx, Ly = 300, 200  # Domain length [cm]
     nodes_x, nodes_y = round(Lx/grid_space) + 1, round(Ly/grid_space) + 1
 
     dt = Constant(time_step)
@@ -82,16 +106,16 @@ def vauclin_benchmark(t_final=28800,
 
     soil_curve = HaverkampCurve(
         theta_r=0.00,   # Residual water content [-]
-        theta_s=0.37,   # Saturated water content [-]
-        Ks=9.722e-05,   # Saturated hydraulic conductivity [m/s]
-        alpha=0.44,     # Fitting parameter [m]
-        beta=1.2924,    # Fitting parameter [-]
-        A=0.0104,       # Fitting parameter [m]
-        gamma=1.5722,   # Fitting parameter [-]
-        Ss=0e-00,       # Specific storage coefficient [1/m]
+        theta_s=0.30,   # Saturated water content [-]
+        Ks=9.722e-03,   # Saturated hydraulic conductivity [cm/s]
+        alpha=40000,    # Fitting parameter [cm]
+        beta=2.90,      # Fitting parameter [-]
+        A=2.99e6,       # Fitting parameter [cm]
+        gamma=5.00,     # Fitting parameter [-]
+        Ss=0.00,        # Specific storage coefficient [1/cm]
     )
 
-    h_ic = Function(V, name="InitialCondition").interpolate(0.65 - X[1])
+    h_ic = Function(V, name="InitialCondition").interpolate(65 - X[1])
 
     h = Function(V, name="PressureHead").interpolate(h_ic)
 
@@ -99,9 +123,9 @@ def vauclin_benchmark(t_final=28800,
     time_var = Constant(0.0)
 
     # Define the recharge region (0 <= x <= 0.5 m) using tanh smoothing
-    recharge_rate = Constant(4.11e-05) # m/s  # m/s 
-    left_edge = 0.5 * (1 + tanh(10 * (X[0] + 0.50))) 
-    right_edge = 0.5 * (1 + tanh(10 * (X[0] - 0.50))) 
+    recharge_rate = Constant(4.11e-03) # m/s  # m/s 
+    left_edge = 0.5 * (1 + tanh(0.1 * (X[0] + 50))) 
+    right_edge = 0.5 * (1 + tanh(0.1 * (X[0] - 50))) 
     recharge_region_indicator = left_edge - right_edge
 
     top_flux = tanh(0.000125 * time_var) * recharge_rate * recharge_region_indicator
@@ -109,7 +133,7 @@ def vauclin_benchmark(t_final=28800,
     # Boundary conditions
     richards_bcs = {
         1: {'flux': 0.0},
-        2: {'h': 0.65 - X[1]},
+        2: {'h': 65 - X[1]},
         3: {'flux': 0.0},
         4: {'flux': top_flux},
     }
