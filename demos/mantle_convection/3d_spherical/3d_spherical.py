@@ -18,6 +18,8 @@
 from gadopt import *
 import scipy.special
 import math
+from time import perf_counter
+import numpy as np
 
 # We next set up the mesh, function spaces, and specify functions to hold our solutions,
 # as with our previous tutorials. For the mesh, we use Firedrake's built-in *CubedSphereMesh* and extrude it radially through
@@ -27,10 +29,28 @@ import math
 # attribute to False. This ensures the correct configuration of a radially inward vertical direction.
 
 # +
+tic0 = perf_counter()
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
 
-mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
-mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type='radial')
+mesh2d = CubedSphereMesh(rmin, refinement_level=1, degree=2)
+base_mh = MeshHierarchy(mesh2d, ref_level-1)
+base_meshes_p2 = []
+for i, m in enumerate(base_mh):
+    if m.coordinates.ufl_element().degree() == 2:
+        base_meshes_p2.append(m)
+    else:
+        P2 = VectorFunctionSpace(m, "Q", 2)
+        coords = Function(P2).interpolate(m.coordinates)
+        scale = rmin / np.linalg.norm(coords.dat.data, axis=1).reshape(-1, 1)
+        coords.dat.data[:] *= scale
+        base_mesh_p2 = Mesh(coords)
+        base_meshes_p2.append(base_mesh_p2)
+
+base_mh_p2 = HierarchyBase(base_meshes_p2, base_mh.coarse_to_fine_cells,
+                           base_mh.fine_to_coarse_cells, nested=True)
+
+mh = ExtrudedMeshHierarchy(base_mh_p2, rmax-rmin, layers=[1, 2, 4, 8], extrusion_type='radial')
+mesh = mh[-1]
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
 domain_volume = assemble(1*dx(domain=mesh))  # Required for a diagnostic calculation.
@@ -39,6 +59,8 @@ V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
+
+log(f"Dimensions: {V.dim()}, {W.dim()}, {Q.dim()}")
 
 z = Function(Z)  # A field over the mixed function space Z.
 u, p = split(z)  # Returns symbolic UFL expression for u and p
@@ -60,7 +82,7 @@ approximation = BoussinesqApproximation(Ra)
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20  # Maximum number of timesteps
+timesteps = 10  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 steady_state_tolerance = 1e-6  # Used to determine if solution has reached a steady state.
 
@@ -137,6 +159,10 @@ gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top, quad_degree=6)
 # +
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
+solver_settings = {
+        "fieldsplit_0": {"ksp_converged_reason": None},
+}
+
 stokes_solver = StokesSolver(
     z,
     approximation,
@@ -145,11 +171,13 @@ stokes_solver = StokesSolver(
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
+    solver_parameters_extra=solver_settings,
 )
 # -
 
 # We now initiate the time loop, which runs until a steady-state solution has been attained.
 
+tic = perf_counter()
 for timestep in range(0, timesteps):
 
     # Write output:
@@ -185,6 +213,9 @@ for timestep in range(0, timesteps):
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
                  f"{energy_conservation} {gd.T_avg()} {T_dev_avg} ")
+    toc = perf_counter()
+    log(f"Time: {toc-tic0}, {toc-tic}")
+    tic = toc
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
@@ -202,3 +233,6 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
+
+toc = perf_counter()
+log(f"Time final: {toc-tic0}")

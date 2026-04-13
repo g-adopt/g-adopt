@@ -104,8 +104,10 @@ gmg_stokes_solver_parameters = {
     "pc_mg_type": "multiplicative",
     "mg_levels_ksp_type": "chebyshev",
     "mg_levels_esteig_ksp_type": "cg",
-    "mg_levels_pc_type": "jacobi",
-    "mg_ksp_max_it": 2,
+    "mg_levels_pc_type": "python",
+    "mg_levels_pc_python_type": "firedrake.ASMExtrudedStarPC",
+    "mg_levels_pc_star_backend": "tinyasm",
+    "mg_levels_ksp_max_it": 1,
 }
 
 direct_stokes_solver_parameters = {
