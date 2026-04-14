@@ -196,7 +196,7 @@ def hydrostatic_prestress_advection_and_buoyancy_term(
 
 
 def stress_glut_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
 
     if eq.stress_glut is not None:
