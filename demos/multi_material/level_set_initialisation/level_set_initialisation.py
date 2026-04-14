@@ -29,6 +29,7 @@
 from gadopt import *
 
 import shapely as sl
+import numpy as np
 
 # + tags=["active-ipynb"]
 # import matplotlib.pyplot as plt

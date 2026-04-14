@@ -9,7 +9,7 @@ documented parameters and call the `solve` method to request a solver update.
 import abc
 from collections.abc import Mapping
 from numbers import Number
-from typing import Any, Callable
+from typing import Any
 
 from firedrake import *
 
@@ -17,7 +17,7 @@ from . import scalar_equation as scalar_eq
 from .approximations import BaseApproximation
 from .equations import Equation
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
-from .time_stepper import BackwardEuler, RungeKuttaTimeIntegrator
+from .time_stepper import BackwardEuler, IrksomeIntegrator
 from .utility import DEBUG, INFO, absv, ensure_constant, is_continuous, log, log_level
 
 __all__ = [
@@ -90,6 +90,9 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         provided to PETSc
       solver_parameters_extra:
         Dictionary of PETSc solver options used to update the default G-ADOPT options
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterised schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -99,6 +102,7 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
     terms_mapping = {
         "advection": scalar_eq.advection_term,
         "diffusion": scalar_eq.diffusion_term,
+        "mass": scalar_eq.mass_term,
         "sink": scalar_eq.sink_term,
         "source": scalar_eq.source_term,
     }
@@ -108,18 +112,20 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
         solution: Function,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         *,
         solution_old: Function | None = None,
         eq_attrs: dict[str, float] = {},
         bcs: dict[int, dict[str, Number]] = {},
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
+        timestepper_kwargs: dict[str, Any] | None = None,
         su_advection: bool = False,
     ) -> None:
         self.solution = solution
         self.delta_t = delta_t
         self.timestepper = timestepper
+        self.timestepper_kwargs = timestepper_kwargs or {}
         self.solution_old = solution_old or Function(solution)
         self.eq_attrs = eq_attrs
         self.bcs = bcs
@@ -242,17 +248,12 @@ class GenericTransportBase(SolverConfigurationMixin, abc.ABC):
             solution_old=self.solution_old,
             solver_parameters=self.solver_parameters,
             strong_bcs=self.strong_bcs,
+            **self.timestepper_kwargs,
         )
 
-    def solver_callback(self) -> None:
-        """Optional instructions to execute right after a solve."""
-        pass
-
-    def solve(self, update_forcings: Callable | None = None, t: float | None = None) -> None:
+    def solve(self, t: float | None = None) -> None:
         """Advances solver in time."""
-        self.ts.advance(update_forcings, t)
-
-        self.solver_callback()
+        return self.ts.advance(t=t)
 
 
 class GenericTransportSolver(GenericTransportBase):
@@ -269,6 +270,7 @@ class GenericTransportSolver(GenericTransportBase):
         | --------- | --------------------- | ----------------------------------------- |
         | advection | u                     | advective_velocity_scaling, su_nubar      |
         | diffusion | diffusivity           | reference_for_diffusion, interior_penalty |
+        | mass      | diffusivity           | mass_scaling                              |
         | source    | source                |                                           |
         | sink      | sink_coeff            |                                           |
 
@@ -290,6 +292,9 @@ class GenericTransportSolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -304,7 +309,7 @@ class GenericTransportSolver(GenericTransportBase):
         solution: Function,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         **kwargs,
     ) -> None:
         self.terms = [terms] if isinstance(terms, str) else terms
@@ -316,7 +321,6 @@ class GenericTransportSolver(GenericTransportBase):
             self.test,
             self.solution_space,
             residual_terms=[self.terms_mapping[term] for term in self.terms],
-            mass_term=scalar_eq.mass_term,
             eq_attrs=self.eq_attrs,
             bcs=self.weak_bcs,
         )
@@ -345,6 +349,9 @@ class EnergySolver(GenericTransportBase):
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
+      timestepper_kwargs:
+        Dictionary of additional keyword arguments passed to the timestepper constructor.
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA)
       su_advection:
         Boolean activating the streamline-upwind stabilisation scheme when using
         continuous finite elements
@@ -360,7 +367,7 @@ class EnergySolver(GenericTransportBase):
         approximation: BaseApproximation,
         /,
         delta_t: Constant,
-        timestepper: RungeKuttaTimeIntegrator,
+        timestepper: IrksomeIntegrator,
         **kwargs,
     ) -> None:
         self.u = u
@@ -376,6 +383,7 @@ class EnergySolver(GenericTransportBase):
         self.eq_attrs |= {
             "advective_velocity_scaling": rho_cp,
             "diffusivity": self.approximation.kappa(),
+            "mass_scaling": rho_cp,
             "reference_for_diffusion": self.approximation.Tbar,
             "sink_coeff": self.approximation.linearized_energy_sink(self.u),
             "source": self.approximation.energy_source(self.u),
@@ -386,7 +394,6 @@ class EnergySolver(GenericTransportBase):
             self.test,
             self.solution_space,
             residual_terms=self.terms_mapping.values(),
-            mass_term=lambda eq, trial: scalar_eq.mass_term(eq, rho_cp * trial),
             eq_attrs=self.eq_attrs,
             approximation=self.approximation,
             bcs=self.weak_bcs,
@@ -427,14 +434,14 @@ class DiffusiveSmoothingSolver(GenericTransportSolver):
 
         # Initialise the parent GenericTransportSolver
         super().__init__(
-            "diffusion",
+            ["diffusion", "mass"],
             solution,
             dt,
             BackwardEuler,
             eq_attrs={"diffusivity": ensure_constant(K)},
             bcs=bcs,
             solver_parameters=solver_parameters,
-            **kwargs
+            **kwargs,
         )
 
     def _calculate_diffusive_time_step(

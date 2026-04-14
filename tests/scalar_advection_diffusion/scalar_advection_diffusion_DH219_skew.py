@@ -5,8 +5,9 @@
 # so it is a good test of the tensor implementation of SU, compared
 # with the quasi 1D demo based on Figure 2.7.
 
+import numpy as np
+
 from gadopt import *
-from gadopt.time_stepper import DIRK33
 
 nx, ny = 10, 10
 mesh = UnitSquareMesh(nx, ny, quadrilateral=True)
@@ -47,7 +48,7 @@ dt = 0.01
 # Use G-ADOPT's GenericTransportSolver to advect the tracer. We use the diagonally
 # implicit DIRK33 Runge-Kutta method for timestepping. 'g' means that the boundary
 # conditions will be applied strongly by the solver.
-terms = ["advection", "diffusion"]
+terms = ["advection", "diffusion", "mass"]
 eq_attrs = {"diffusivity": kappa, "u": u}
 # strongly applied Dirichlet bcs on top and bottom
 g_left = conditional(y < 0.2, 0.0, 1.0)

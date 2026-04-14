@@ -11,7 +11,8 @@ from numbers import Number
 from typing import Optional
 from warnings import warn
 
-from firedrake import Function, Identity, div, grad, inner, sym, ufl, tr
+from firedrake import Function, Identity, div, grad, inner, sqrt, sym, tr
+import ufl
 
 from .utility import ensure_constant, vertical_component
 
@@ -490,15 +491,6 @@ class BaseGIAApproximation:
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         return 0
 
-    def compressible_adv_hyd_pre(
-        self, u_r: Function | ufl.core.expr.Expr
-    ) -> ufl.core.expr.Expr:
-        # Hydrostatic prestress advection term which is applied
-        # as a `normal_stress` boundary condition when the `free_surface` tag is
-        # specified in the `bcs` dictionary of the `InternalVariableSolver`
-        # through the `set_free_surface_boundary` method.
-        return 0
-
 
 class IncompressibleMaxwellApproximation(BaseGIAApproximation):
     """Incompressible Maxwell rheology via the incremental displacement formulation.
@@ -569,8 +561,8 @@ class IncompressibleMaxwellApproximation(BaseGIAApproximation):
         return delta_rho_fs * self.g * eta
 
 
-class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
-    '''Quasi compressible viscoelasticty via internal variables
+class InternalVariableApproximation(BaseGIAApproximation):
+    '''Base class for viscoelastic stress relaxation via internal variables.
 
     This class implements compressible viscoelasticity following the formulation
     adopted by Al-Attar and Tromp (2014) and Crawford et al. (2017, 2018), in
@@ -584,17 +576,8 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     and using a series of internal variables permits approximation of a continuous
     range of relaxation timescales for more complicated rheologies.
 
-    This class implements the substitution method where the time-dependent internal
-    variable equation is substituted into the momentum equation assuming a Backward
-    Euler time discretisation. Therefore, the displacement field is the only unknown.
     For more information regarding the specific implementation in G-ADOPT please see
     Scott et al. 2025.
-
-    N.b. this class neglects two key terms: compressible buoyancy and the volume
-    integral after integrating the advection of hydrostatic prestress term by parts.
-    This allows us to reproduce simplified analytical cases such as the
-    # Cathles 2024 benchmark in /tests/glacial_isostatic_adjustment/iv_ve_fs.py
-    where we need to remove these effect.
 
     Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
     based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
@@ -610,6 +593,35 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
     Automated forward and adjoint modelling of viscoelastic deformation of the solid
     Earth.  Scott, W.; Hoggard, M.; Duvernay, T.; Ghelichkhan, S.; Gibson, A.;
     Roberts, D.; Kramer, S. C.; and Davies, D. R. EGUsphere, 2025: 1–43. 2025.
+
+    Arguments:
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      exponent:          Power-law stress exponent n. Defaults to 1, which recovers
+                         Newtonian (linear) viscosity with no special casing. Set n > 1
+                         for composite (diffusion + dislocation) creep. The power-law
+                         factor is always evaluated; for n=1 it is identically 1.
+      transition_stress: Stress level (in sqrt(J2) units, consistent with
+                         second_stress_invariant) at which diffusion and dislocation
+                         creep contribute equally. Defaults to 1; the value is
+                         irrelevant when exponent=1.
+      background_stress: Background stress magnitude (sqrt(J2)) representing a
+                         pre-existing stress state, e.g. from mantle convection.
+                         Defaults to 0. The total stress entering the power-law factor
+                         is sigma_GIA + background_stress, a scalar combination that
+                         assumes the two fields are approximately aligned.
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
+
     '''
     compressible = True
 
@@ -621,6 +633,9 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
         viscosity: Function | Number | list,
         *,
         bulk_shear_ratio: Function | Number = 1,
+        exponent: Function | Number = 1,
+        transition_stress: Function | Number = 1,
+        background_stress: Function | Number = 0,
         **kwargs,
     ):
         self.bulk_modulus = ensure_constant(bulk_modulus)
@@ -645,6 +660,11 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
             for visc, mu in zip(self.viscosity, self.shear_modulus)
         ]
         self.mu0 = ensure_constant(sum(self.shear_modulus))
+
+        # Power law arguments
+        self.exponent = exponent
+        self.transition_stress = transition_stress
+        self.background_stress = background_stress
 
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         dim = len(u)
@@ -672,52 +692,162 @@ class QuasiCompressibleInternalVariableApproximation(BaseGIAApproximation):
             )
 
         div_u = div(u) * Identity(len(u))
-        d = self.deviatoric_strain(u)
-
         stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
-        stress += 2 * self.mu0 * d
-        for mu, m in zip(self.shear_modulus, internal_variables):
-            stress -= 2 * mu * m
+        stress += self.deviatoric_stress(u, internal_variables)
         return stress
+
+    def deviatoric_stress(self, u, internal_variables):
+        d = self.deviatoric_strain(u)
+        dev_stress = 2 * self.mu0 * d
+        for mu, m in zip(self.shear_modulus, internal_variables):
+            dev_stress -= 2 * mu * m
+        return dev_stress
+
+    def second_stress_invariant(self, dev_stress):
+        """Return the second deviatoric stress invariant sqrt(J2).
+
+        Computes sqrt(J2) = sqrt(0.5 * s_ij * s_ij), the standard second
+        invariant used in mantle rheology power-law formulations. The
+        `transition_stress` parameter throughout this class must be supplied
+        in the same units, i.e. as a sqrt(J2) value.
+        """
+        return sqrt(0.5 * inner(dev_stress, dev_stress) + 1e-16)
+
+    def power_law_factor(self, dev_stress):
+        """Return the composite creep viscosity correction factor.
+
+        For composite (diffusion + dislocation) creep the effective viscosity is
+
+            eta_eff(sigma) = eta_diff / (1 + (sigma / sigma*)^(n-1))
+
+        where sigma* is the transition stress (in sqrt(J2) units, consistent with
+        second_stress_invariant) at which both mechanisms contribute equally.
+        The input viscosity field is assumed to represent eta_eff evaluated at
+        `background_stress` (e.g. from a mantle convection simulation). The factor
+        returned here corrects that value to the total stress sigma_GIA + sigma_bg:
+
+            f = (1 + a^(n-1)) / (1 + b^(n-1))
+
+        where a = sigma_bg / sigma* and b = (sigma_GIA + sigma_bg) / sigma*.
+
+        Note: sigma_GIA and sigma_bg are combined as scalar magnitudes. This
+        assumes the two stress fields are approximately aligned; it is an accepted
+        simplification in GIA power-law literature but should be borne in mind
+        when interpreting results.
+
+        Note on UFL evaluation: UFL evaluates 0^0 = 0 rather than the
+        mathematically correct value of 1. A conditional is used to guard the
+        exponentiation when the base is zero so that n=1 (Newtonian) layers
+        correctly return f=1 regardless of background_stress.
+        """
+        sigma = self.second_stress_invariant(dev_stress)
+        n = self.exponent
+        a = self.background_stress / self.transition_stress
+        b = (sigma + self.background_stress) / self.transition_stress
+        # Guard against 0^0: UFL evaluates 0^0 as 0 rather than 1. This
+        # only arises when n=1 (exponent n-1 = 0); for n>1, a zero base
+        # raised to a positive power correctly evaluates to 0. Conditioning
+        # on the exponent rather than the base avoids incorrectly setting
+        # a^(n-1) = 1 for n>1 when background_stress = 0.
+        a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), a ** (n - 1))
+        b_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), b ** (n - 1))
+        return (1 + a_pow) / (1 + b_pow)
+
+
+class QuasiCompressibleInternalVariableApproximation(InternalVariableApproximation):
+    '''Quasi compressible viscoelasticty via internal variables
+
+    N.b. this class neglects two key terms: compressible buoyancy and the volume
+    integral after integrating the advection of hydrostatic prestress term by parts.
+    This allows us to reproduce simplified analytical cases such as the
+    Cathles 2024 benchmark in `g-adopt/test/viscoelastic_internal_variable/`
+    where these terms are not accounted for in the analytical solution.
+
+    For more information on the formulation see the documentation of the parent class
+    `InternalVariableApproximation`
+
+    Arguments:
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      exponent:          Power-law stress exponent n (default 1 = Newtonian)
+      transition_stress: Transition stress in sqrt(J2) units (default 1, irrelevant for n=1)
+      background_stress: Background stress magnitude in sqrt(J2) units (default 0)
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
+    '''
+    compressible = True
+
+    def __init__(
+        self,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number | list[Function | Number],
+        viscosity: Function | Number | list[Function | Number],
+        *,
+        bulk_shear_ratio: Function | Number = 1,
+        **kwargs,
+    ):
+
+        warn(
+            '''The QuasiCompressibleInternalVariableApproximation has specifically
+            been designed to reproduce the simplified analytical benchmarks of
+            Cathles 2024, e.g. see `g-adopt/tests/viscoelastic_internal_variable`.
+            We recommend using `MaxwellApproximation` together with the
+            `InternalVariableSolver` for viscoelastic applications in G-ADOPT.
+        ''')
+
+        super().__init__(
+            bulk_modulus,
+            density,
+            shear_modulus,
+            viscosity,
+            bulk_shear_ratio=bulk_shear_ratio,
+            **kwargs,
+        )
 
     def hydrostatic_prestress_advection(
         self, u_r: Function | ufl.core.expr.Expr
     ) -> ufl.core.expr.Expr:
-        # Hydrostatic prestress advection term which is applied
-        # as a `normal_stress` boundary condition when the `free_surface` tag is
-        # specified in the `bcs` dictionary of the `InternalVariableSolver`
-        # through the `set_free_surface_boundary` method.
+        # 'Free-surface' feedback associated with integrating the hydrostatic prestress
+        # advection term by parts. This is applied as a `normal_stress` boundary
+        # condition when the `free_surface` tag is specified in the `bcs` dictionary
+        # of the `InternalVariableSolver` through the `set_free_surface_boundary`
+        # method in `stokes_integrators.py`.
         return self.B_mu * self.density * self.g * u_r
 
 
-class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariableApproximation):
+class CompressibleInternalVariableApproximation(InternalVariableApproximation):
     """Compressible viscoelastic rheology via the internal variable formulation.
 
-
-    N.b. this class includes the two additional terms neglected in the
-    `QuasiCompressibleInternalVariableApproximation`: compressible buoyancy and the
-    volume integral after integrating the advection of hydrostatic prestress term by
-    parts.
-
-    For more information on the methodology and references please see the
-    documentation of the parent class.
+    For more information on the formulation see the documentation of the parent class
+    `InternalVariableApproximation`.
 
     Arguments:
-      bulk_modulus:             bulk modulus
-      density:                  background density
-      shear_modulus:            shear modulus
-      viscosity:                viscosity
-      bulk_shear_ratio:         Ratio of bulk to shear modulus
-      g:                        gravitational acceleration
-      B_mu:                     Nondimensional number describing ratio of buoyancy to
-                                elastic shear strength used for nondimensionalisation.
-                                $ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
-                                where $\bar{\rho}$ is a characteristic density scale
-                                (kg / m^3), $\bar{g}$ is a characteristic gravity
-                                scale (m / s^2), $L$ is a characteristic length scale,
-                                often Mantle depth (m), $\\mu$ is a characteristic
-                                shear modulus (Pa).
-
+      bulk_modulus:      bulk modulus
+      density:           density of the reference state - assumed to be hydrostatic
+      shear_modulus:     shear modulus
+      viscosity:         viscosity
+      bulk_shear_ratio:  Ratio of bulk to shear modulus
+      exponent:          Power-law stress exponent n (default 1 = Newtonian)
+      transition_stress: Transition stress in sqrt(J2) units (default 1, irrelevant for n=1)
+      background_stress: Background stress magnitude in sqrt(J2) units (default 0)
+      g:                 gravitational acceleration
+      B_mu:              Nondimensional number describing ratio of buoyancy to elastic
+                         shear strength used for nondimensionalisation.
+                         $$ B_{\\mu} = \frac{\bar{\rho} \bar{g} L}{\bar{\\mu}}$,
+                         where $\bar{\rho}$ is a characteristic density scale (kg / m^3),
+                         $\bar{g}$ is a characteristic gravity scale (m / s^2),
+                         $L$ is a characteristic length scale, often Mantle depth (m),
+                         $\\mu$ is a characteristic shear modulus (Pa).
     """
 
     compressible = True
@@ -732,6 +862,7 @@ class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariabl
         bulk_shear_ratio: Function | Number = 1,
         **kwargs,
     ):
+
         super().__init__(
             bulk_modulus,
             density,
@@ -742,25 +873,20 @@ class CompressibleInternalVariableApproximation(QuasiCompressibleInternalVariabl
         )
 
     def buoyancy(self, displacement: Function) -> ufl.core.expr.Expr:
-        # Compressible part of buoyancy term due to the density perturbation
-        # written on rhs of equations
-        buoyancy = super().buoyancy(displacement)
-        # Usually this term is included but in some cases e.g. to reproduce
-        # simplified analytical cases such as the Cathles 2024 benchmark in
-        # /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
-        # this effect.
-        buoyancy += self.B_mu * self.g * self.density * div(displacement)
-        return buoyancy
+        # The buoyancy term is combined with the advection of hydrostatic prestress
+        # to form an explicitly symmetric term, following Eqs. B22-B29 in
+        # Appendix B of Al-Attar et al. 2014. The associated G-ADOPT code for these
+        # terms is in `gadopt/momentum_equation.py`.
+        return 0
 
-    def compressible_adv_hyd_pre(
+    def hydrostatic_prestress_advection(
         self, u_r: Function | ufl.core.expr.Expr
     ) -> ufl.core.expr.Expr:
-        # Compressible part of hydrostatic prestress advection after integration
-        # by parts. Usually this term is included but in some cases e.g. to
-        # reproduce simplified analytical cases such as the Cathles 2024 benchmark
-        # in /tests/glacial_isostatic_adjustment/iv_ve_fs.py we need to remove
-        # this effect.
-        return self.hydrostatic_prestress_advection(u_r)
+        # The advection of hydrostatic prestress term is combined with the buoyancy
+        # to form an explicitly symmetric term, following Eqs. B22-B29 in
+        # Appendix B of Al-Attar et al. 2014. The associated G-ADOPT code for these
+        # terms is in `gadopt/momentum_equation.py`.
+        return 0
 
 
 class MaxwellApproximation(CompressibleInternalVariableApproximation):

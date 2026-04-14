@@ -28,7 +28,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run:
           echo skip=true >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ steps.early_exit.outputs.skip != 'true' }}
         with:
           ref: ${{ github.event.push.after || github.event.pull_request.head.sha || github.event.workflow_dispatch.ref }}
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Prefer specific branch, then PR base, then actual branch
-      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
+      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'release', github.base_ref)) || github.ref_name }}
 
     needs: check_commit
     if: ${{ needs.check_commit.outputs.skip != 'true' }}
@@ -56,18 +56,24 @@ jobs:
       - name: Install dependencies
         run: |
           apt update
-          apt install -y python3-venv git-lfs
-          python3 -m venv venv
+          apt install -y git-lfs
+          git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          # disable cache on hosted runner, otherwise we need a lock file
+          enable-cache: false
+
       - name: Run smoke test
         run: |
-          python3 -m venv --system-site-packages env
-          . env/bin/activate
-          python3 -m pip install .
+          uv venv --system-site-packages
+          uv pip install .
+          . .venv/bin/activate
           make -C demos/mantle_convection/base_case check
 
   build:
@@ -93,12 +99,12 @@ jobs:
         run: |
           apt update
           apt install -y time unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
-          git config --global safe.directory '*'
+          git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
 
@@ -107,17 +113,16 @@ jobs:
           git lfs checkout
 
       - name: Fetch task spooler
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: dsroberts/tsp_for_hpc
           path: ./tsp
           ref: ${{ vars.TSP_VERSION }}
 
       - name: Build task spooler
-        uses: threeal/cmake-action@v2
-        with:
-          source-dir: ./tsp
-          build-dir: ./tsp_build
+        run: |
+          cmake ./tsp -B ./tsp_build
+          cmake --build ./tsp_build
 
       - name: Put task spooler on PATH
         run: |
@@ -134,7 +139,7 @@ jobs:
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
       - name: Check out repository linked to Trim et al. (2023)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: seantrim/exact-thermochem-solution
           path: ./flib
@@ -157,10 +162,9 @@ jobs:
           tsp --timeout -T 7200
           tsp --memprof
           . .venv/bin/activate
-          make -j test
+          uv run doit run --process $(nproc --all) --continue --always-execute run_case || true
         env:
           GADOPT_LOGLEVEL: INFO
-          BATCH_MODE: 1
 
       - name: Pytest
         id: run_pytest
@@ -169,7 +173,7 @@ jobs:
           python -m pytest -m 'not longtest' --junit-xml=test_results.xml
 
       - name: Pytest report
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v6
         if: ${{ !cancelled() && steps.run_pytest.conclusion != 'skipped' }}
         with:
           check_name: Test suite report
@@ -185,7 +189,7 @@ jobs:
 
       - name: Upload run log
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: run-log
           path: /tmp/tsp_db.sqlite3

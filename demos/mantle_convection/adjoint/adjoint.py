@@ -151,7 +151,6 @@ stokes_solver = StokesSolver(
     approximation,
     T,
     bcs=stokes_bcs,
-    constant_jacobian=True,
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
 )

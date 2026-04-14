@@ -27,7 +27,7 @@ jobs:
         run: |
           apt update
           apt install -y git-lfs
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
 
@@ -46,13 +46,7 @@ jobs:
           git lfs checkout
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Fetch animate
-        uses: actions/checkout@v4
-        with:
-          repository: mesh-adaptation/animate
-          path: animate
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: |
@@ -60,7 +54,7 @@ jobs:
 
           uv venv --system-site-packages
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
-          uv pip install -e ./animate
+          uv pip install --no-build-isolation git+https://github.com/mesh-adaptation/animate
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
@@ -89,9 +83,9 @@ jobs:
           export GADOPT_RENDER=true
           Xvfb $DISPLAY -screen 0 1024x768x24 > /dev/null 2>&1 &
           sleep 3
-          make -j convert_demos
+          uv run doit run --process $(nproc --all) --always-execute convert
           rm -rf rendered && mkdir rendered
-          tar -xf demos/artifact.tar -C rendered
+          tar -xf artifact.tar -C rendered
         env:
           GADOPT_LOGLEVEL: WARN
       - uses: actions/upload-artifact@v4

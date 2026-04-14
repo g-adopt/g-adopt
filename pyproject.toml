@@ -16,9 +16,11 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
+  "doit",
   "pandas",
   "shapely",
   "vtk",
+  "irksome @ git+https://github.com/firedrakeproject/Irksome",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +28,8 @@ demos = ["assess", "gadopt-demo-utils @ git+https://github.com/g-adopt/gadopt-de
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]
-packages = ["gadopt", "gadopt.gplates"]
+packages = ["gadopt", "gadopt.gplates", "gadopt.demos"]
+package-dir = { "gadopt.demos" = "demos" }
 
 [tool.setuptools_scm]
+scm.git.describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--abbrev=40", "--match", "*[0-9]*", "--exclude", "Zenodo*"]

@@ -1,40 +1,28 @@
 r"""Derived terms and associated equations for the Stokes system.
 
-All terms are considered as if they were on the right-hand side of the equation, leading
-to the following UFL expression returned by the `residual` method:
+All terms are considered as if they were on the left-hand side of the equation, leading
+to the following UFL expression returned by `Equation`'s `residual` method:
 
 $$
-  (dq)/dt = sum "term.residual()"
+  dq / dt + F(q) = 0.
 $$
-
-This sign convention ensures compatibility with Thetis's time integrators. In general,
-however, we like to think about the terms as they are on the left-hand side. Therefore,
-in the residual methods below, we first sum the terms in the variable `F` as if they
-were on the left-hand side, i.e.
-
-$$
-  (dq)/dt + F(q) = 0,
-$$
-
-and then return `-F`.
 
 """
 
 from firedrake import *
-from firedrake.mesh import ExtrudedMeshTopology
+from ufl.indexed import Indexed
 
+from .approximations import QuasiCompressibleInternalVariableApproximation
 from .equations import Equation, interior_penalty_factor
 from .utility import (
     is_continuous,
     normal_is_continuous,
     tensor_jump,
-    vertical_component,
+    upward_normal,
 )
 
 
-def viscosity_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Viscosity term $-nabla * (mu nabla u)$ in the momentum equation.
 
     Using the symmetric interior penalty method (Epshteyn & Rivière, 2007), the weak
@@ -124,7 +112,6 @@ def viscosity_term(
 
             if hasattr(eq.approximation, 'bulk_modulus'):
                 trial_tensor_jump = identity * (dot(eq.n, trial) - bc["un"])
-                trial_tensor_jump += transpose(trial_tensor_jump)
                 bulk = eq.approximation.bulk_modulus * eq.approximation.bulk_shear_ratio
                 # Terms below are similar to the above terms for the DG dS integrals.
                 F += (
@@ -143,12 +130,10 @@ def viscosity_term(
         if "normal_stress" in bc:
             F += dot(eq.test, bc["normal_stress"] * eq.n) * eq.ds(bc_id)
 
-    return -F
+    return F
 
 
-def pressure_gradient_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def pressure_gradient_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     assert normal_is_continuous(eq.test)
 
     F = -dot(div(eq.test), eq.p) * eq.dx
@@ -160,12 +145,10 @@ def pressure_gradient_term(
         if "u" in bc or "un" in bc:
             F += dot(eq.test, eq.n) * eq.p * eq.ds(bc_id)
 
-    return -F
+    return F
 
 
-def divergence_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
+def divergence_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     assert normal_is_continuous(eq.u)
 
     rho = eq.rho_continuity
@@ -178,51 +161,38 @@ def divergence_term(
         elif "un" in bc:
             F -= eq.test * rho * (bc["un"] - dot(eq.n, eq.u)) * eq.ds(bc_id)
 
-    return -F
+    return F
 
 
-def momentum_source_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
+def momentum_source_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
+    return -dot(eq.test, eq.source) * eq.dx
+
+
+def hydrostatic_prestress_advection_and_buoyancy_term(
+    eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
-    F = -dot(eq.test, eq.source) * eq.dx
+    # The advection of hydrostatic prestress and buoyancy terms are combined
+    # to form an explicitly symmetric term, following Eqs. B22-B29 in
+    # Appendix B of Al-Attar et al. 2014 and Scott et al. 2026, the full references
+    # are provided in `approximations.py`.
 
-    return -F
+    # For the Cathles 2024 benchmark in `tests/viscoelastic_internal_variable`
+    # we neglect these terms to be consistent with the analytical solution
+    if isinstance(eq.approximation, QuasiCompressibleInternalVariableApproximation):
+        return 0
 
-
-def advection_hydrostatic_prestress_term(
-    eq: Equation, trial: Argument | ufl.indexed.Indexed | Function
-) -> Form:
-    # Advection of background hydrostatic pressure used in linearised
-    # GIA simulations. This method implements the volume integral and
-    # jump terms (if density space is discontinuous) after integration
-    # by parts. The boundary integral on the Earth's surface is
-    # applied through the `normal_stress` boundary condition tag of
-    # the `viscosity_term`. This is turned on by specifiying a
-    # `free_surface` in the boundary conditions of the solver.
     B_mu = eq.approximation.B_mu
     rho0 = eq.approximation.density
     g = eq.approximation.g
-    u_r = vertical_component(trial)
+    grad_phi = g * upward_normal(eq.mesh)
 
-    # Only include jump term for discontinuous density spaces
-    if is_continuous(rho0.function_space()):
-        F = 0
-    else:
-        # change surface measure for extruded mesh.
-        # assumes mesh is aligned in the vertical so that jump
-        # only occurs across horizontal layers
-        if isinstance(eq.mesh, ExtrudedMeshTopology):
-            dS = dS_h
-        else:
-            dS = eq.dS
-        F = B_mu("+") * jump(rho0) * u_r("+") * g("+") * dot(eq.test("+"), eq.n("+")) * dS
-    # Include volume integral after i.b.p of hydrostatic prestress advection term
-    # Analytical solution from Cathles 2024 Eq 2b doesn't include prestress
-    # so we neglect this term but keep the free surface term that accounts for
-    # viscous feedback at isostatic equibrium
-    F -= div(eq.test) * eq.approximation.compressible_adv_hyd_pre(u_r) * eq.dx
+    F = 0.5 * B_mu * rho0 * dot(grad(dot(trial, grad_phi)), eq.test) * eq.dx
+    F += 0.5 * B_mu * rho0 * dot(trial, grad(dot(eq.test, grad_phi))) * eq.dx
 
-    return -F
+    F -= 0.5 * B_mu * rho0 * dot(div(trial)*grad_phi, eq.test) * eq.dx
+    F -= 0.5 * B_mu * rho0 * dot(grad_phi, trial) * div(eq.test) * eq.dx
+
+    return F
 
 
 def stress_glut_term(
@@ -247,8 +217,8 @@ divergence_term.required_attrs = {"u", "rho_continuity"}
 divergence_term.optional_attrs = set()
 momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
-advection_hydrostatic_prestress_term.required_attrs = set()
-advection_hydrostatic_prestress_term.optional_attrs = set()
+hydrostatic_prestress_advection_and_buoyancy_term.required_attrs = set()
+hydrostatic_prestress_advection_and_buoyancy_term.optional_attrs = set()
 stress_glut_term.required_attrs = set()
 stress_glut_term.optional_attrs = set()
 
@@ -257,7 +227,7 @@ mass_terms = divergence_term
 stokes_terms = [momentum_terms, mass_terms]
 
 compressible_viscoelastic_terms = [
-    advection_hydrostatic_prestress_term,
+    hydrostatic_prestress_advection_and_buoyancy_term,
     momentum_source_term,
     stress_glut_term,
     viscosity_term,

@@ -3,7 +3,6 @@
 # Streamline Upwind (SU) stabilisation.
 
 from gadopt import *
-from gadopt.time_stepper import DIRK33
 import numpy as np
 
 # We use a 40-by-40 mesh of squares.
@@ -77,7 +76,7 @@ bc_in = {"q": q_in}
 bcs = {1: bc_in, 2: bc_in, 3: bc_in, 4: bc_in}
 eq_attrs = {"u": u}
 adv_solver = GenericTransportSolver(
-    "advection", q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_advection=True
+    ["advection", "mass"], q, dt, DIRK33, eq_attrs=eq_attrs, bcs=bcs, su_advection=True
 )
 
 # Get nubar (additional SU diffusion) for plotting

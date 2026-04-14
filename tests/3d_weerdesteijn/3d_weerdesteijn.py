@@ -6,6 +6,10 @@
 # al. 2011 testcases. There is also a case with a low
 # viscosity region situated under the ice sheet.
 # results within G-ADOPT see Scott et al. 2025.
+# N.b. this test uses the substitute formulation where
+# we substitte the internal variable update
+# (a Backward Euler solve) into the momentum equation so
+# that displacement is the only one unknown we solve for.
 
 # Weerdesteijn, M. F., Naliboff, J. B., Conrad,
 # C. P., Reusen, J. M., Steffen, R., Heister, T., &
@@ -30,7 +34,6 @@ from gadopt import *
 from gadopt.utility import CombinedSurfaceMeasure
 from gadopt.utility import extruded_layer_heights
 from gadopt.utility import initialise_background_field
-from gadopt.utility import vertical_component as vc
 import argparse
 import numpy as np
 from mpi4py import MPI
@@ -226,7 +229,9 @@ else:
 
 if args.burgers:
     viscosity_1 = Function(DG0, name="viscosity 1")
-    initialise_background_field(viscosity_2, viscosity_values_2_tilde)
+    initialise_background_field(
+        viscosity_1, viscosity_values_1_tilde, X, radius_values_tilde,
+        shift=radius_values_tilde[-1])
     viscosity_2 = Function(DG0, name="viscosity 2")
     initialise_background_field(
         viscosity_2, viscosity_values_2_tilde, X, radius_values_tilde,
@@ -345,13 +350,13 @@ iterative_parameters = {"mat_type": "matfree",
                         "snes_monitor": None,
                         "snes_converged_reason": None,
                         "snes_type": "ksponly",
-                        "ksp_type": "gmres",
+                        "ksp_type": "cg",
                         "ksp_rtol": 1e-5,
                         "ksp_converged_reason": None,
                         "ksp_monitor": None,
                         "pc_type": "python",
                         "pc_fieldsplit_type": "firedrake.AssembledPC",
-                        "pc_python_type": "firedrake.AssembledPC",
+                        "pc_python_type": "gadopt.SPDAssembledPC",
                         "assembled_pc_type": "gamg",
                         "assembled_mg_levels_pc_type": "sor",
                         "assembled_pc_gamg_threshold": args.gamg_threshold,
@@ -392,7 +397,7 @@ plog = ParameterLog("params.log", mesh)
 plog.log_str(
     "timestep time dt u_rms u_rms_surf ux_max uv_min"
 )
-gd = GeodynamicalDiagnostics(u, density, boundary.bottom, boundary.top)
+gd = GIADiagnostics(u, boundary.bottom, boundary.top)
 
 checkpoint_filename = f"{args.output_path}{name}-refinedsurface{args.refined_surface}-dx{args.dx}km-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
 
@@ -421,25 +426,19 @@ for timestep in range(1, max_timesteps+1):
                  f"{gd.uv_min(boundary.top)}")
     # Compute diagnostics:
     # output dimensional vertical displacement
-    vertical_displacement.interpolate(vc(u)*D)
-    bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, boundary.top)
-    displacement_z_min = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].min(initial=0)
     # Minimum displacement at surface (should be top left corner with
     # greatest (-ve) deflection due to ice loading
-    displacement_min = vertical_displacement.comm.allreduce(displacement_z_min, MPI.MIN)
+    displacement_min = gd.uv_min(boundary.top) * D
     log("Greatest (-ve) displacement", displacement_min)
-    displacement_z_max = vertical_displacement.dat.data_ro_with_halos[bc_displacement.nodes].max(initial=0)
-    displacement_max = vertical_displacement.comm.allreduce(displacement_z_max, MPI.MAX)
+    displacement_max = gd.uv_max(boundary.top) * D
     log("Greatest (+ve) displacement", displacement_max)
     displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds), displacement_min])
-
-    disp_norm_L2surf = assemble((u[vertical_component])**2 * ds(boundary.top))
+    disp_norm_L2surf = gd.l2_norm_top()
     log("L2 surface norm displacement", disp_norm_L2surf)
-
-    disp_norm_L1surf = assemble(abs(u[vertical_component]) * ds(boundary.top))
+    disp_norm_L1surf = gd.l1_norm_top()
     log("L1 surface norm displacement", disp_norm_L1surf)
 
-    integrated_disp = assemble(u[vertical_component] * ds(boundary.top))
+    integrated_disp = gd.integrated_displacement()
     log("Integrated displacement", integrated_disp)
 
     if timestep % output_frequency == 0:
