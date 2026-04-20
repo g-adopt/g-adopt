@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 demos = ["assess", "gmsh", "imageio", "jupytext", "openpyxl", "pyvista"]
-optimisation = ["pyroltrilinos"]
+optimisation = ["pyroltrilinos", "pyadjoint-ad==2025.10.1"]
 
 [tool.setuptools]
 packages = ["gadopt", "gadopt.gplates"]
