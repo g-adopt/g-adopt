@@ -16,15 +16,30 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
+  "firedrake~=2026.4.0",
   "doit",
   "pandas",
   "shapely",
   "vtk",
-  "irksome @ git+https://github.com/firedrakeproject/Irksome",
+  "IRKsome-gadopt~=2026.4.0",
+  #"irksome @ git+https://github.com/firedrakeproject/Irksome@fdae281",
+]
+
+[external]
+dependencies = [
+  "dep:github/firedrakeproject/Irksome",
 ]
 
 [project.optional-dependencies]
-demos = ["assess", "gadopt-demo-utils @ git+https://github.com/g-adopt/gadopt-demo-utils.git", "gmsh", "imageio", "jupytext", "openpyxl", "pyvista"]
+demos = [
+  "assess",
+  "gadopt-demo-utils",
+  "gmsh",
+  "imageio",
+  "jupytext",
+  "openpyxl",
+  "pyvista",
+]
 optimisation = ["pyroltrilinos"]
 
 [tool.setuptools]
