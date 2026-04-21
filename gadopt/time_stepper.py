@@ -324,13 +324,15 @@ class RKGeneric(IrksomeIntegrator):
                 f"{self.__class__.__name__} must define a butcher_tableau attribute"
             )
 
+        stage_type = kwargs.pop('stage_type', self.stage_type)
+        bc_type = kwargs.pop('bc_type', self.bc_type)
         super().__init__(
             equation,
             solution,
             dt,
             self.butcher_tableau,
-            stage_type=self.stage_type,
-            bc_type=self.bc_type,
+            stage_type=stage_type,
+            bc_type=bc_type,
             **kwargs,
         )
 
@@ -373,7 +375,9 @@ def create_custom_tableau(
         raise ValueError("Inconsistent Butcher tableau: Row sum of 'a' is not 'c'")
 
     return ButcherTableau(
-        A=a, b=b, btilde=None, c=c, order=len(b), embedded_order=None, gamma0=None
+        A=np.asarray(a, dtype=float), b=np.asarray(b, dtype=float),
+        btilde=None, c=np.asarray(c, dtype=float),
+        order=len(b), embedded_order=None, gamma0=None
     )
 
 
