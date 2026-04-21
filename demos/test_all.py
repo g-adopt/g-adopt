@@ -5,6 +5,7 @@ import pandas as pd
 mc_path = "mantle_convection"
 mm_path = "multi_material"
 gia_path = "glacial_isostatic_adjustment"
+gw_path = "groundwater"
 tests_path = "../tests"
 
 cases = {
@@ -39,6 +40,13 @@ cases = {
     f"{tests_path}/3d_weerdesteijn_coupled": {"extra_checks": ["uv_min"]},
     f"{tests_path}/3d_spada": {"extra_checks": ["disp_min", "disp_max"]},
     f"{tests_path}/3d_sphere_burgers": {"extra_checks": ["uv_min"]},
+    f"{gw_path}/2d_vauclin": {
+        "primary_checks": ["min_h", "max_h"],
+        "extra_checks": ["mass_balance"],
+    },
+    f"{gw_path}/3d_cockett": {
+        "primary_checks": ["min_h", "max_h"],
+    },
 }
 
 
@@ -63,9 +71,12 @@ def check_series(
     compare_params,
     convergence_tolerance,
     extra_checks,
+    primary_checks=None,
 ):
+    if primary_checks is None:
+        primary_checks = ["u_rms"]
     pd.testing.assert_series_equal(
-        actual[["u_rms"] + extra_checks],
+        actual[primary_checks + extra_checks],
         expected,
         check_names=False,
         check_index_type=False,
@@ -100,6 +111,7 @@ def test_benchmark(benchmark):
     compare_params = cases[benchmark]
     convergence_tolerance = compare_params.pop("iterations", 2)
     extra_checks = compare_params.pop("extra_checks", [])
+    primary_checks = compare_params.pop("primary_checks", None)
 
     if isinstance(expected, list):
         assertion = None
@@ -112,6 +124,7 @@ def test_benchmark(benchmark):
                     compare_params=compare_params,
                     convergence_tolerance=convergence_tolerance,
                     extra_checks=extra_checks,
+                    primary_checks=primary_checks,
                 )
             except AssertionError as e:
                 assertion = e
@@ -132,4 +145,5 @@ def test_benchmark(benchmark):
             compare_params=compare_params,
             convergence_tolerance=convergence_tolerance,
             extra_checks=extra_checks,
+            primary_checks=primary_checks,
         )

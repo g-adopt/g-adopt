@@ -17,12 +17,15 @@ if __name__ == "__main__":
 
     for case in requested_cases:
         try:
-            extra_checks = cases[case].get("extra_checks", [])
+            case_config = cases[case]
         except KeyError:
             print(f"Skipping unknown case: {case}")
             continue
 
+        extra_checks = case_config.get("extra_checks", [])
+        primary_checks = case_config.get("primary_checks", ["u_rms"])
+
         b = Path(__file__).parent.resolve() / case
-        df = get_convergence(b)[["u_rms"] + extra_checks]
+        df = get_convergence(b)[primary_checks + extra_checks]
 
         df.to_pickle(b / "expected.pkl")
