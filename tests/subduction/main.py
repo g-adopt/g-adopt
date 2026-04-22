@@ -22,7 +22,7 @@ time_now = fd.Constant(0.0)  # Initial time
 time_step = fd.Constant(prms.time_step)  # Initial time step
 step = 0  # A counter to keep track of the simulation time-loop iterations
 
-for _ in range(prms.initial_adapt_calls):
+for _ in range(prms.initial_adapt_loops):
     # Initialise solutions for mesh adaptivity
     stokes, T, psi, _ = initialise(mesh, time_step)
 

@@ -111,7 +111,7 @@ def_mech_tags = {
 }
 
 # Adaptivity
-initial_adapt_calls = 3
+initial_adapt_loops = 3
 adapt_calls = 3
 metric_parameters = {  # For further information: `set_parameters` in animate/metric.py
     "dm_plex_metric": {
@@ -123,6 +123,14 @@ metric_parameters = {  # For further information: `set_parameters` in animate/me
         "gradation_factor": 1.3,  # Maximum variation in length between adjacent edges
     }
 }
+mesh_fields = {
+    "Stokes": {"add_to_metric": [True, False], "scaling": [1e-3, None]},
+    "Temperature": {"add_to_metric": True, "scaling": 1e0},
+    "Level set": {"add_to_metric": True, "scaling": 1e0},
+}
+if free_surface:
+    mesh_fields["Stokes"]["add_to_metric"].append(False)
+    mesh_fields["Stokes"]["scaling"].append(None)
 
 # Time loop
 subcycles = 1
