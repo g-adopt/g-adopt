@@ -10,12 +10,9 @@ on:
     inputs:
       target_container:
         description: The target container with which to run the suite
-        type: choice
-        options:
-          - main
-          - release
+        type: string
         required: true
-        default: main
+        default: dev-main
 
 jobs:
   check_commit:
@@ -47,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Prefer specific branch, then PR base, then actual branch
-      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'release', github.base_ref)) || github.ref_name }}
+      image: firedrakeproject/firedrake-vanilla-default:${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'dev-main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'dev-release', format('dev-{0}', github.base_ref))) || format('dev-{0}', github.ref_name) }}
 
     needs: check_commit
     if: ${{ needs.check_commit.outputs.skip != 'true' }}
@@ -81,7 +78,7 @@ jobs:
     runs-on: self-hosted
     container:
       # Prefer specific branch, then PR base, then actual branch
-      image: firedrakeproject/firedrake-vanilla-default:dev-${{ inputs.target_container || github.base_ref || github.ref_name }}
+      image: firedrakeproject/firedrake-vanilla-default:${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'dev-main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'dev-release', format('dev-{0}', github.base_ref))) || format('dev-{0}', github.ref_name) }}
       options: --cap-add SYS_NICE
 
     concurrency:

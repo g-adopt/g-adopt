@@ -10,12 +10,18 @@ on:
         type: boolean
         default: false
         description: 'Trigger a website rebuild if this run is successful'
+      target_container:
+        description: The target container with which to run the suite
+        type: string
+        required: true
+        default: dev-main
 
 jobs:
   render:
     runs-on: self-hosted
     container:
       image: firedrakeproject/firedrake-vanilla-default:dev-main
+      image: firedrakeproject/firedrake-vanilla-default:${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'dev-main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'dev-release', format('dev-{0}', github.base_ref))) || format('dev-{0}', github.ref_name) }}
       options: --cap-add=SYS_ADMIN
 
     env:
