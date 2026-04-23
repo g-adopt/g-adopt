@@ -214,7 +214,8 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
 # -
 
 # The same can be done for the viscosity field, although that must
-# first be interpolated onto a function space, as the viscosity $\\mu$ is currently only specified in UFL.
+# first be interpolated onto a function space, as the viscosity `mu`
+# is currently only specified as a symbolic UFL expression.
 
 # + tags=["active-ipynb"]
 # mu_field = Function(W, name="Viscosity")
