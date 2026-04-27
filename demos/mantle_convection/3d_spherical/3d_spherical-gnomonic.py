@@ -31,25 +31,48 @@ import numpy as np
 # +
 tic0 = perf_counter()
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
+coarse_ref_level = 1
+coarse_layers = 1
 
-mesh2d = CubedSphereMesh(rmin, refinement_level=1, degree=2)
-base_mh = MeshHierarchy(mesh2d, ref_level-1)
+# start with coarse base mesh
+mesh2d = CubedSphereMesh(rmin, refinement_level=coarse_ref_level, degree=1)
+# convert back to cube-mesh before refinement
+# needs to happen on dm coordinates, as that's what's used to refine in MeshHierarchy
+coords = mesh2d.topology_dm.getCoordinatesLocal().array.reshape((-1,mesh2d.geometric_dimension))
+coords /= np.max(np.abs(coords), axis=1).reshape((-1,1))
+# if coarsest refinement >1 this unit cube mesh is not equispaced
+# make it so by going back to angles:
+coords[:] = np.arctan(coords)
+# now we have a [-atan(1), atan(1)]^3 cube with equi-spaced mesh
+
+# remove _radius attribute to stop MeshHierarchy popping things out too early
+del mesh2d._radius
+
+base_mh = MeshHierarchy(mesh2d, ref_level-coarse_ref_level)
 base_meshes_p2 = []
-for i, m in enumerate(base_mh):
-    if m.coordinates.ufl_element().degree() == 2:
-        base_meshes_p2.append(m)
-    else:
-        P2 = VectorFunctionSpace(m, "Q", 2)
-        coords = Function(P2).interpolate(m.coordinates)
-        scale = rmin / np.linalg.norm(coords.dat.data, axis=1).reshape(-1, 1)
-        coords.dat.data[:] *= scale
-        base_mesh_p2 = Mesh(coords)
-        base_meshes_p2.append(base_mesh_p2)
+
+for m in base_mh:
+    # we start with [-atan(1), atan(1)]^3 cube with equi-spaced mesh (with some further divisions)
+    # after taking the tan, we get a non-equispaced mesh on a unit-cube
+    m.coordinates.dat.data[:] = np.tan(m.coordinates.dat.data)
+    # then scale up to rmin everywhere
+    scale = rmin / np.linalg.norm(m.coordinates.dat.data, axis=1).reshape(-1, 1)
+    m.coordinates.dat.data[:] *= scale
+
+    # Now we have a P1 mesh that should be the same as coming from CubedSphereMesh(..., degree=1)
+    # Finally create P2 mesh from that in the same way as in CubedSphereMesh(..., degree=2)
+    P2 = VectorFunctionSpace(m, "Q", 2)
+    coords = Function(P2).interpolate(m.coordinates)
+    scale = rmin / np.linalg.norm(coords.dat.data, axis=1).reshape(-1, 1)
+    coords.dat.data[:] *= scale
+    base_mesh_p2 = Mesh(coords)
+    base_meshes_p2.append(base_mesh_p2)
 
 base_mh_p2 = HierarchyBase(base_meshes_p2, base_mh.coarse_to_fine_cells,
                            base_mh.fine_to_coarse_cells, nested=True)
 
-mh = ExtrudedMeshHierarchy(base_mh_p2, rmax-rmin, layers=[1, 2, 4, 8], extrusion_type='radial')
+layers = coarse_layers * 2**np.arange(0, ref_level-coarse_ref_level+1)
+mh = ExtrudedMeshHierarchy(base_mh_p2, rmax-rmin, layers=layers, extrusion_type='radial')
 mesh = mh[-1]
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
