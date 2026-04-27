@@ -216,7 +216,7 @@ for timestep in range(0, timesteps):
     toc = perf_counter()
     log(f"Time: {toc-tic0}, {toc-tic}")
     tic = toc
-    
+
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
         log("Steady-state achieved -- exiting time-step loop")

@@ -38,8 +38,8 @@ coarse_layers = 1
 mesh2d = CubedSphereMesh(rmin, refinement_level=coarse_ref_level, degree=1)
 # convert back to cube-mesh before refinement
 # needs to happen on dm coordinates, as that's what's used to refine in MeshHierarchy
-coords = mesh2d.topology_dm.getCoordinatesLocal().array.reshape((-1,mesh2d.geometric_dimension))
-coords /= np.max(np.abs(coords), axis=1).reshape((-1,1))
+coords = mesh2d.topology_dm.getCoordinatesLocal().array.reshape((-1, mesh2d.geometric_dimension))
+coords /= np.max(np.abs(coords), axis=1).reshape((-1, 1))
 # if coarsest refinement >1 this unit cube mesh is not equispaced
 # make it so by going back to angles:
 coords[:] = np.arctan(coords)
