@@ -28,7 +28,7 @@ jobs:
         if [[ "${SYSTEM}" == "all" ]]; then
           export SYSTEMS='[ "gadi", "setonix" ]'
         else
-          export SYSTEMS='[ "${{ inputs.system }}" ]'
+          export SYSTEMS='[ "'"${SYSTEM}"'" ]'
         fi
         echo system_matrix=$( jq -cn --argjson sys "$SYSTEMS" '{system: $sys}' ) >> $GITHUB_OUTPUT
 
