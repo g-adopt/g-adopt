@@ -1,77 +1,77 @@
-import gc
+# import gc
 
 import firedrake as fd
 import gmsh
-from animate.adapt import adapt
-from animate.metric import RiemannianMetric
+# from animate.adapt import adapt
+# from animate.metric import RiemannianMetric
 from ufl.core.operator import Operator
 from ufl.indexed import Indexed
 
-import parameters as prms
+# import parameters as prms
 
 
-def adapt_mesh(
-    mesh: fd.MeshGeometry,
-    mesh_fields: dict[str, dict[str, fd.Function | bool]],
-    initial: bool = False,
-) -> tuple[fd.MeshGeometry, dict[str, dict[str, fd.Function | bool]]]:
-    for _ in range(prms.adapt_calls):
-        M = fd.TensorFunctionSpace(mesh, "CG", 1)
+# def adapt_mesh(
+#     mesh: fd.MeshGeometry,
+#     mesh_fields: dict[str, dict[str, fd.Function | bool]],
+#     initial: bool = False,
+# ) -> tuple[fd.MeshGeometry, dict[str, dict[str, fd.Function | bool]]]:
+#     for _ in range(prms.adapt_calls):
+#         M = fd.TensorFunctionSpace(mesh, "CG", 1)
 
-        metric_fields = {}
-        for field, field_specs in mesh_fields.items():
-            if isinstance(field_specs["add_to_metric"], list):
-                for dim, (add_to_metric, scaling) in enumerate(
-                    zip(field_specs["add_to_metric"], field_specs["scaling"])
-                ):
-                    if add_to_metric:
-                        metric_fields[field.subfunctions[dim]] = scaling
-            elif field_specs["add_to_metric"]:
-                metric_fields[field] = field_specs["scaling"]
+#         metric_fields = {}
+#         for field, field_specs in mesh_fields.items():
+#             if isinstance(field_specs["add_to_metric"], list):
+#                 for dim, (add_to_metric, scaling) in enumerate(
+#                     zip(field_specs["add_to_metric"], field_specs["scaling"])
+#                 ):
+#                     if add_to_metric:
+#                         metric_fields[field.subfunctions[dim]] = scaling
+#             elif field_specs["add_to_metric"]:
+#                 metric_fields[field] = field_specs["scaling"]
 
-        fields = list(metric_fields)
-        for field in fields:
-            if isinstance(field.ufl_element(), fd.VectorElement):
-                scaling = metric_fields.pop(field)
-                for dim in range(field.ufl_shape[0]):
-                    metric_fields[field[dim]] = scaling
+#         fields = list(metric_fields)
+#         for field in fields:
+#             if isinstance(field.ufl_element(), fd.VectorElement):
+#                 scaling = metric_fields.pop(field)
+#                 for dim in range(field.ufl_shape[0]):
+#                     metric_fields[field[dim]] = scaling
 
-        metrics = []
-        for field, scaling in metric_fields.items():
-            # Firedrake function for a metric over a mesh where a field lives
-            metric = RiemannianMetric(M, name=f"Metric ({function_name(field)})")
-            metric.set_parameters(prms.metric_parameters)  # Set metric parameters
-            metric.compute_hessian(field)  # Field Hessian
-            metric.enforce_spd()  # Ensure boundedness (symmetric positive-definite)
-            metric.assign(metric * scaling)
-            metrics.append(metric)
+#         metrics = []
+#         for field, scaling in metric_fields.items():
+#             # Firedrake function for a metric over a mesh where a field lives
+#             metric = RiemannianMetric(M, name=f"Metric ({function_name(field)})")
+#             metric.set_parameters(prms.metric_parameters)  # Set metric parameters
+#             metric.compute_hessian(field)  # Field Hessian
+#             metric.enforce_spd()  # Ensure boundedness (symmetric positive-definite)
+#             metric.assign(metric * scaling)
+#             metrics.append(metric)
 
-        overall_metric = metrics[0].copy(deepcopy=True)  # Overall metric
-        overall_metric.rename("Metric (overall)")
-        # Minimum in all directions across all metrics
-        overall_metric.intersect(*metrics[1:])
-        overall_metric.enforce_spd()  # Ensure boundedness (symmetric positive-definite)
-        overall_metric.normalise()  # Rescale metric to achieve the desired target complexity
+#         overall_metric = metrics[0].copy(deepcopy=True)  # Overall metric
+#         overall_metric.rename("Metric (overall)")
+#         # Minimum in all directions across all metrics
+#         overall_metric.intersect(*metrics[1:])
+#         overall_metric.enforce_spd()  # Ensure boundedness (symmetric positive-definite)
+#         overall_metric.normalise()  # Rescale metric to achieve the desired target complexity
 
-        mesh = adapt(mesh, overall_metric)  # Generate new mesh based on overall metric
-        # Ensure boundary coordinates are not exceeded
-        mesh.coordinates.dat.data[:, 0].clip(
-            0.0, prms.domain_dims[0], out=mesh.coordinates.dat.data[:, 0]
-        )
-        mesh.coordinates.dat.data[:, 1].clip(
-            0.0, prms.domain_dims[1], out=mesh.coordinates.dat.data[:, 1]
-        )
-        mesh.cartesian = True  # Geometry tag informing other G-ADOPT objects
+#         mesh = adapt(mesh, overall_metric)  # Generate new mesh based on overall metric
+#         # Ensure boundary coordinates are not exceeded
+#         mesh.coordinates.dat.data[:, 0].clip(
+#             0.0, prms.domain_dims[0], out=mesh.coordinates.dat.data[:, 0]
+#         )
+#         mesh.coordinates.dat.data[:, 1].clip(
+#             0.0, prms.domain_dims[1], out=mesh.coordinates.dat.data[:, 1]
+#         )
+#         mesh.cartesian = True  # Geometry tag informing other G-ADOPT objects
 
-        mesh_fields = interpolate_fields(mesh, mesh_fields)
+#         mesh_fields = interpolate_fields(mesh, mesh_fields)
 
-        if initial:
-            break
+#         if initial:
+#             break
 
-    # Collect and clean objects associated with the old mesh
-    garbage_collect(mesh)
+#     # Collect and clean objects associated with the old mesh
+#     garbage_collect(mesh)
 
-    return mesh, mesh_fields
+#     return mesh, mesh_fields
 
 
 def clip_expression(
@@ -129,9 +129,9 @@ def function_name(field: fd.Function | Indexed) -> str:
         return field.name()
 
 
-def garbage_collect(mesh: fd.MeshGeometry) -> None:
-    fd.PETSc.garbage_cleanup(mesh.comm)
-    gc.collect()
+# def garbage_collect(mesh: fd.MeshGeometry) -> None:
+#     fd.PETSc.garbage_cleanup(mesh.comm)
+#     gc.collect()
 
 
 def half_space_cooling_model(
@@ -142,44 +142,44 @@ def half_space_cooling_model(
     return fd.conditional(fd.eq(age, 0.0), T_hot, hscm)
 
 
-def interpolate_fields(
-    mesh: fd.MeshGeometry,
-    mesh_fields: dict[str, dict[str, fd.Function | bool]],
-    new_fields: list[fd.Function] = [],
-) -> dict[str, dict[str, fd.Function | bool]]:
-    if not new_fields:
-        for field in mesh_fields:
-            field_element = field.ufl_element()
+# def interpolate_fields(
+#     mesh: fd.MeshGeometry,
+#     mesh_fields: dict[str, dict[str, fd.Function | bool]],
+#     new_fields: list[fd.Function] = [],
+# ) -> dict[str, dict[str, fd.Function | bool]]:
+#     if not new_fields:
+#         for field in mesh_fields:
+#             field_element = field.ufl_element()
 
-            if isinstance(field_element, fd.MixedElement):
-                spaces = [
-                    fd.FunctionSpace(mesh, element)
-                    for element in field_element.sub_elements
-                ]
-                mixed_space = fd.MixedFunctionSpace(spaces)
+#             if isinstance(field_element, fd.MixedElement):
+#                 spaces = [
+#                     fd.FunctionSpace(mesh, element)
+#                     for element in field_element.sub_elements
+#                 ]
+#                 mixed_space = fd.MixedFunctionSpace(spaces)
 
-                new_fields.append(fd.Function(mixed_space, name=field.name()))
-            else:
-                space = fd.FunctionSpace(mesh, field_element)
-                new_fields.append(fd.Function(space, name=field.name()))
+#                 new_fields.append(fd.Function(mixed_space, name=field.name()))
+#             else:
+#                 space = fd.FunctionSpace(mesh, field_element)
+#                 new_fields.append(fd.Function(space, name=field.name()))
 
-    for field, new_field in zip(mesh_fields, new_fields):
-        field_specs = mesh_fields.pop(field)
+#     for field, new_field in zip(mesh_fields, new_fields):
+#         field_specs = mesh_fields.pop(field)
 
-        if isinstance(field.ufl_element(), fd.MixedElement):
-            for sub_field, new_sub_field in zip(
-                field.subfunctions, new_field.subfunctions
-            ):
-                new_sub_field.interpolate(sub_field)
-        else:
-            new_field.interpolate(field)
+#         if isinstance(field.ufl_element(), fd.MixedElement):
+#             for sub_field, new_sub_field in zip(
+#                 field.subfunctions, new_field.subfunctions
+#             ):
+#                 new_sub_field.interpolate(sub_field)
+#         else:
+#             new_field.interpolate(field)
 
-        mesh_fields[new_field] = field_specs
+#         mesh_fields[new_field] = field_specs
 
-    # Collect and clean objects associated with the old mesh
-    garbage_collect(mesh)
+#     # Collect and clean objects associated with the old mesh
+#     garbage_collect(mesh)
 
-    return mesh_fields
+#     return mesh_fields
 
 
 def tensor_second_invariant(tensor: Operator, regularisation: float = 0.0) -> Operator:

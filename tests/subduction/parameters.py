@@ -85,9 +85,9 @@ viscous_creep_params = {
         "diffusion": {"prefactor": 1.5e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
         "dislocation": {
             "prefactor": 4.4e-17,
-            "n": 3.5,
+            "n": 3.3,
             "act_nrg": 5.4e5,
-            "act_vol": 1.2e-5,
+            "act_vol": 1.5e-5,
         },
         "Peierls": {
             "prefactor": 9.5e-157,
@@ -124,9 +124,9 @@ metric_parameters = {  # For further information: `set_parameters` in animate/me
     }
 }
 mesh_fields = {
-    "Stokes": {"add_to_metric": [True, False], "scaling": [1e-3, None]},
+    "Stokes": {"add_to_metric": [True, False], "scaling": [1e-1, None]},
     "Temperature": {"add_to_metric": True, "scaling": 1e0},
-    "Level set": {"add_to_metric": True, "scaling": 1e0},
+    "Level set": {"add_to_metric": True, "scaling": 1e2},
 }
 if free_surface:
     mesh_fields["Stokes"]["add_to_metric"].append(False)

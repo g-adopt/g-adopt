@@ -29,7 +29,7 @@ class AdaptiveSimulation:
 
         self.mesh_fields = prms.mesh_fields  # Fields involved in mesh adaptivity
 
-        self.initialise()  # Initialise solutions on the adapted mesh
+        self.initialise()  # Initialise solutions on the initial mesh
 
         for iteration in range(prms.initial_adapt_loops):
             # Adapt original mesh based on initial fields
@@ -50,10 +50,21 @@ class AdaptiveSimulation:
         )
 
     def adapt_mesh(self, initial: bool = False) -> None:
-        for _ in range(prms.adapt_calls):
+        def add_metric_field(field: Function, scaling: float) -> None:
+            nonlocal metric_fields
+
+            if isinstance(field.ufl_element(), VectorElement):
+                for dim in range(field.ufl_shape[0]):
+                    metric_fields.append([field[dim], scaling])
+            else:
+                metric_fields.append([field, scaling])
+
+        for call_count in range(prms.adapt_calls):
+            PETSc.Sys.Print(f"Adapt call #{call_count}")
+
             M = TensorFunctionSpace(self.mesh, "CG", 1)
 
-            metric_fields = {}
+            metric_fields = []
             for field_specs in self.mesh_fields.values():
                 field = field_specs["field"]
 
@@ -62,19 +73,12 @@ class AdaptiveSimulation:
                         zip(field_specs["add_to_metric"], field_specs["scaling"])
                     ):
                         if add_to_metric:
-                            metric_fields[field.subfunctions[dim]] = scaling
+                            add_metric_field(field.subfunctions[dim], scaling)
                 elif field_specs["add_to_metric"]:
-                    metric_fields[field] = field_specs["scaling"]
-
-            fields = list(metric_fields)
-            for field in fields:
-                if isinstance(field.ufl_element(), VectorElement):
-                    scaling = metric_fields.pop(field)
-                    for dim in range(field.ufl_shape[0]):
-                        metric_fields[field[dim]] = scaling
+                    add_metric_field(field, field_specs["scaling"])
 
             metrics = []
-            for field, scaling in metric_fields.items():
+            for field, scaling in metric_fields:
                 # Firedrake function for a metric over a mesh where a field lives
                 metric = RiemannianMetric(M, name=f"Metric ({function_name(field)})")
                 metric.set_parameters(prms.metric_parameters)  # Set metric parameters
@@ -104,7 +108,7 @@ class AdaptiveSimulation:
             self.interpolate_fields()
 
     def initialise(self) -> None:
-        # Setup solvers
+        # Set up solvers
         self.set_up(initial=True)
         # Initialise transported fields (temperature and level set)
         initial_temperature(self.T)
@@ -152,19 +156,14 @@ class AdaptiveSimulation:
             self.mesh_fields[field_name] = field_specs
 
     def run(self) -> None:
-        # Increase relative contribution of velocity metric
-        self.mesh_fields[self.stokes.name()]["scaling"][0] = 1e-1
-
         while True:  # Mesh adaptivity loop
-            PETSc.Sys.Print("Time loop")
             self.time_loop()  # Run the time loop
 
             # Exit loop after reaching target time
-            if float(self.time_now) >= prms.time_end or self.step >= 20:
+            if float(self.time_now) >= prms.time_end:
                 break
 
-            PETSc.Sys.Print("Adapt call")
-            self.adapt_mesh()  # Adapt mesh based on new fields
+            self.adapt_mesh()  # Adapt mesh based on current fields
             self.set_up()  # Set simulation objects on the new mesh
 
     def set_up(self, initial: bool = False) -> None:
@@ -336,9 +335,11 @@ class AdaptiveSimulation:
 
     def time_loop(self) -> None:
         for _ in range(prms.iterations):  # Time loop
-            self.tstep_adapt.update_timestep()
+            PETSc.Sys.Print(f"Time loop iteration #{self.step}")
 
-            for solver in self.solvers:
+            self.tstep_adapt.update_timestep()  # Update time step
+
+            for solver in self.solvers:  # Perform solves
                 solver.solve()
 
             # Increment iteration count and time
