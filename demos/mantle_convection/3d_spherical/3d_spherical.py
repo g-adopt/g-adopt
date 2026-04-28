@@ -82,7 +82,7 @@ approximation = BoussinesqApproximation(Ra)
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 10  # Maximum number of timesteps
+timesteps = 20  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 steady_state_tolerance = 1e-6  # Used to determine if solution has reached a steady state.
 
