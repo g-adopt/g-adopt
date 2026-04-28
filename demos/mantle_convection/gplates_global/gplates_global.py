@@ -39,10 +39,30 @@ from gadopt import *
 from gadopt.gplates import *
 import scipy.special
 import math
+import numpy as np
+from time import perf_counter
+tic0 = perf_counter()
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
 
-mesh2d = CubedSphereMesh(rmin, refinement_level=ref_level, degree=2)
-mesh = ExtrudedMesh(mesh2d, layers=nlayers, extrusion_type="radial")
+mesh2d = CubedSphereMesh(rmin, refinement_level=1, degree=2)
+base_mh = MeshHierarchy(mesh2d, ref_level-1)
+base_meshes_p2 = []
+for i, m in enumerate(base_mh):
+    if m.coordinates.ufl_element().degree() == 2:
+        base_meshes_p2.append(m)
+    else:
+        P2 = VectorFunctionSpace(m, "Q", 2)
+        coords = Function(P2).interpolate(m.coordinates)
+        scale = rmin / np.linalg.norm(coords.dat.data, axis=1).reshape(-1, 1)
+        coords.dat.data[:] *= scale
+        base_mesh_p2 = Mesh(coords)
+        base_meshes_p2.append(base_mesh_p2)
+
+base_mh_p2 = HierarchyBase(base_meshes_p2, base_mh.coarse_to_fine_cells,
+                           base_mh.fine_to_coarse_cells, nested=True)
+
+mh = ExtrudedMeshHierarchy(base_mh_p2, rmax-rmin, layers=[1, 2, 4, 8], extrusion_type='radial')
+mesh = mh[-1]
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
 
@@ -275,6 +295,10 @@ gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top, quad_degree=6)
 
 energy_solver = EnergySolver(T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs)
 
+solver_settings = {
+    "fieldsplit_0": {"ksp_converged_reason": None},
+}
+
 stokes_solver = StokesSolver(
     z,
     approximation,
@@ -283,6 +307,7 @@ stokes_solver = StokesSolver(
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
+    solver_parameters_extra=solver_settings,
 )
 # -
 
@@ -295,6 +320,7 @@ stokes_solver = StokesSolver(
 # +
 presentday_ndtime = plate_reconstruction_model.age2ndtime(0.0)
 
+tic = perf_counter()
 for timestep in range(0, timesteps):
 
     # Write output:
@@ -334,6 +360,9 @@ for timestep in range(0, timesteps):
                  f"{maxchange} {gd.u_rms()} {gd.u_rms_top()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
                  f"{energy_conservation} {gd.T_avg()} ")
+    toc = perf_counter()
+    log(f"Time: {toc-tic0}, {toc-tic}")
+    tic = toc
 
     # Do not go over present-day
     if time > presentday_ndtime:
@@ -352,3 +381,6 @@ with CheckpointFile("Final_State.h5", "w") as final_checkpoint:
     final_checkpoint.save_mesh(mesh)
     final_checkpoint.save_function(T, name="Temperature")
     final_checkpoint.save_function(z, name="Stokes")
+
+toc = perf_counter()
+log(f"Time final: {toc-tic0}")

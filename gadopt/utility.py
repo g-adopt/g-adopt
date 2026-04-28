@@ -546,7 +546,8 @@ def get_boundary_ids(mesh) -> BoundaryIDNamespace:
     # PETSc creates these labels when loading meshes from files, Firedrake imitates it
     # in its own mesh creation functions.
 
-    if mesh.topology_dm.hasLabel("Face Sets"):
+    if mesh.cartesian:
+        assert mesh.topology_dm.hasLabel("Face Sets")
         axis_extremes_order = [["left", "right"], ["bottom", "top"]]
         dim = mesh.geometric_dimension
         plex_dim = mesh.topology_dm.getCoordinateDim()  # In an extruded mesh, this is different to the

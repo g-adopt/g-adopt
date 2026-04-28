@@ -18,6 +18,7 @@ from warnings import warn
 
 import firedrake as fd
 from ufl.core.expr import Expr
+from firedrake.mg.utils import has_level
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
@@ -49,12 +50,14 @@ iterative_stokes_solver_parameters = {
         "ksp_max_it": 1000,
         "pc_type": "python",
         "pc_python_type": "gadopt.SPDAssembledPC",
-        "assembled_pc_type": "gamg",
-        "assembled_mg_levels_pc_type": "sor",
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
-        "assembled_pc_gamg_coarse_eq_limit": 1000,
-        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+        "assembled": {
+            "pc_type": "gamg",
+            "mg_levels_pc_type": "sor",
+            "pc_gamg_threshold": 0.01,
+            "pc_gamg_square_graph": 100,
+            "pc_gamg_coarse_eq_limit": 1000,
+            "pc_gamg_mis_k_minimum_degree_ordering": True,
+        }
     },
     "fieldsplit_1": {
         "ksp_type": "fgmres",
@@ -95,6 +98,17 @@ Note:
   and values to extend the default ones.
   .
 """
+
+gmg_stokes_solver_parameters = {
+    "pc_type": "mg",
+    "pc_mg_type": "multiplicative",
+    "mg_levels_ksp_type": "chebyshev",
+    "mg_levels_esteig_ksp_type": "cg",
+    "mg_levels_pc_type": "python",
+    "mg_levels_pc_python_type": "firedrake.ASMExtrudedStarPC",
+    "mg_levels_pc_star_backend": "tinyasm",
+    "mg_levels_ksp_max_it": 1,
+}
 
 direct_stokes_solver_parameters = {
     "mat_type": "aij",
@@ -402,12 +416,16 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                     self.add_to_solver_config(direct_stokes_solver_parameters)
                 case "iterative":
                     self.add_to_solver_config(iterative_stokes_solver_parameters)
+                    if has_level(self.mesh):
+                        self.add_to_solver_config({'fieldsplit_0': {'assembled': gmg_stokes_solver_parameters}})
                 case _:
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
         elif self.mesh.topological_dimension == 2:
             self.add_to_solver_config(direct_stokes_solver_parameters)
         else:
             self.add_to_solver_config(iterative_stokes_solver_parameters)
+            if has_level(self.mesh):
+                self.add_to_solver_config({'fieldsplit_0': {'assembled': gmg_stokes_solver_parameters}})
 
         # Extra monitoring options for iterative solvers
         if self.solver_parameters.get("pc_type") == "fieldsplit":
