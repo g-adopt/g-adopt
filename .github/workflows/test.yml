@@ -28,7 +28,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run:
           echo skip=true >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: ${{ steps.early_exit.outputs.skip != 'true' }}
         with:
           ref: ${{ github.event.push.after || github.event.pull_request.head.sha || github.event.workflow_dispatch.ref }}
@@ -59,7 +59,7 @@ jobs:
           apt install -y git-lfs
           git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
 
@@ -104,7 +104,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
 
@@ -113,17 +113,16 @@ jobs:
           git lfs checkout
 
       - name: Fetch task spooler
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: dsroberts/tsp_for_hpc
           path: ./tsp
           ref: ${{ vars.TSP_VERSION }}
 
       - name: Build task spooler
-        uses: threeal/cmake-action@v2
-        with:
-          source-dir: ./tsp
-          build-dir: ./tsp_build
+        run: |
+          cmake ./tsp -B ./tsp_build
+          cmake --build ./tsp_build
 
       - name: Put task spooler on PATH
         run: |
@@ -146,7 +145,7 @@ jobs:
           make thickness_data craton_data
 
       - name: Check out repository linked to Trim et al. (2023)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: seantrim/exact-thermochem-solution
           path: ./flib
@@ -180,7 +179,7 @@ jobs:
           python -m pytest -m 'not longtest' --junit-xml=test_results.xml
 
       - name: Pytest report
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v6
         if: ${{ !cancelled() && steps.run_pytest.conclusion != 'skipped' }}
         with:
           check_name: Test suite report
@@ -196,7 +195,7 @@ jobs:
 
       - name: Upload run log
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: run-log
           path: /tmp/tsp_db.sqlite3
