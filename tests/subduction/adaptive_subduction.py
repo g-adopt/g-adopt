@@ -140,8 +140,9 @@ class AdaptiveSimulation:
                 space = FunctionSpace(self.mesh, field_element)
                 new_fields.append(Function(space, name=field.name()))
 
-        for field_name, new_field in zip(self.mesh_fields, new_fields):
-            field_specs = self.mesh_fields.pop(field_name)
+        for (field_name, field_specs), new_field in zip(
+            self.mesh_fields.items(), new_fields
+        ):
             field = field_specs.pop("field")
 
             if isinstance(field.ufl_element(), MixedElement):
