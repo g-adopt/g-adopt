@@ -290,18 +290,19 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
 
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, *, H: Optional[Number] = None, **kwargs):
+    def __init__(self, Ra: Number, Di: Number, *, H: Optional[Number] = None, heating_weight: Function | Number = 1, **kwargs):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.H = H
+        self.heating_weight = ensure_constant(heating_weight)
 
     def viscous_dissipation(self, u):
         phi = inner(self.stress(u), grad(u))
-        return phi * self.Di / self.Ra
+        return self.heating_weight * phi * self.Di / self.Ra
 
     def linearized_energy_sink(self, u):
         w = vertical_component(u)
-        return self.Di * self.alpha * self.rho * self.g * w
+        return self.heating_weight * self.Di * self.alpha * self.rho * self.g * w
 
     def work_against_gravity(self, u, T):
         return self.linearized_energy_sink(u) * T
