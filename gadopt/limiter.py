@@ -44,7 +44,7 @@ def assert_function_space(
     if isinstance(ufl_elem, VectorElement):
         ufl_elem = ufl_elem.sub_elements[0]
 
-    if ufl_elem.family() == 'TensorProductElement':  # extruded mesh
+    if isinstance(ufl_elem, TensorProductElement):  # extruded mesh
         A, B = ufl_elem.factor_elements
         assert A.family() in fam_list, 'horizontal space must be one of {0:s}'.format(fam_list)
         assert B.family() in fam_list, 'vertical space must be {0:s}'.format(fam_list)

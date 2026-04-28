@@ -13,7 +13,7 @@ on:
           - setonix
 
   schedule:
-    - cron: "5 19 * * 0"
+    - cron: "5 21 * * 0"
 
 jobs:
   setup:
@@ -21,7 +21,7 @@ jobs:
     outputs:
       system_matrix: ${{ steps.build_matrix.outputs.system_matrix }}
     env:
-      SYSTEM: ${{ inputs.system || 'all' }}
+      SYSTEM: ${{ inputs.system || 'gadi' }}
     steps:
     - id: build_matrix
       run: |
@@ -43,7 +43,14 @@ jobs:
       REPO_PATH: ${{ secrets[format('{0}_REPO_PATH',matrix.system)] }}
       GADOPT_SETUP: ${{ secrets[format('{0}_GADOPT_SETUP',matrix.system)] }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - name: Fetch LFS artifacts
+        run: |
+          git lfs checkout
+
       - name: Get system FQDN
         id: get_fqdn
         shell: bash
@@ -71,17 +78,16 @@ jobs:
           EOF
 
       - name: Sync repository to ${{matrix.system}}
-        shell: bash
         run: |
-          rsync -avz --delete --exclude=/.git/ --exclude=/.github/ ./ ${{matrix.system}}:"$REPO_PATH"
+          rsync -avz --delete --exclude=/.github/ ./ ${{matrix.system}}:"$REPO_PATH"
 
       - name: Run test cases
         id: run_tests
         run: |
-          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && make -j longtest"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && doit run --process 48 --continue --always-execute run_case_hpc"
 
       - name: Test results
-        if: ${{ success() }}
+        if: ${{ !cancelled() }}
         run: |
           ssh ${{ matrix.system }} "cd $REPO_PATH && source $GADOPT_SETUP && python3 -m pytest -m longtest --junit-xml=test_results.xml --ignore=tests/unit tests"
 
@@ -91,7 +97,7 @@ jobs:
           scp ${{ matrix.system }}:"$REPO_PATH/test_results.xml" .
 
       - name: Pytest report
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v6
         if: ${{ !cancelled() }}
         with:
           check_name: Test suite report
@@ -99,7 +105,14 @@ jobs:
           include_passed: true
           annotate_only: true
 
-      - name: Get error output
-        if: ${{ failure() }}
+      - name: Get job logs
+        if: ${{ !cancelled() }}
         run: |
-          ssh ${{ matrix.system }} "cd $REPO_PATH && make longtest_output"
+          ssh ${{ matrix.system }} "cd $REPO_PATH && git ls-files -z -o -x \*pyc -x \*h5 | xargs -0 tar -cv" > longtest_output.tar
+
+      - name: Upload job logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: longtest_logs
+          path: longtest_output.tar
