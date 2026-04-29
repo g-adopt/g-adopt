@@ -13,7 +13,7 @@ from mpi4py import MPI
 from functools import cache, cached_property, partial, _make_key
 
 from firedrake.ufl_expr import extract_unique_domain
-from .utility import CombinedSurfaceMeasure, vertical_component
+from .utility import CombinedSurfaceMeasure, vertical_component, horizontal_components
 from collections.abc import Sequence
 from typing import Literal
 from collections import defaultdict
@@ -570,6 +570,24 @@ class BaseDiagnostics:
         self._check_present(f)
         self._check_dim_valid(f)  # Can't take upward component of a scalar function
         return vertical_component(f)
+
+    @cache
+    def get_horizontal_components(self, f: fd.Function) -> Operator:
+        """Get the horizontal components of a function.
+
+        Returns a UFL expression for the horizontal components of a function. Uses the
+        G-ADOPT `horizontal_components` function and caches the result such that the
+        UFL expression only needs to be constructed once per run.
+
+        Args:
+            f: Function
+
+        Returns:
+            UFL expression for the vertical component of `f`
+        """
+        self._check_present(f)
+        self._check_dim_valid(f)  # Can't take horizontal components of a scalar function
+        return horizontal_components(f)
 
     #
     # Section 2. Implementations
