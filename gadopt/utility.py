@@ -8,6 +8,7 @@ from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, Ja
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional
+from firedrake import Mesh, CubedSphereMesh, MeshHierarchy, HierarchyBase
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import time
@@ -666,3 +667,66 @@ def initialise_background_field(
             conditional(vertical_component(X) + shift > radii[i+1],
                         conditional(vertical_component(X) + shift <= radii[i],
                                     background_values[i], f), f))
+
+
+def CubedSphereMeshHierarchy(
+        radius: float,
+        refinement_level: int,
+        degree: int = 2,
+        coarse_refinement_level: int = 1):
+    """
+    Generate hierarchy of refined cubed sphere meshes.
+
+    Each of the meshes will be consistent (i.e. have nodes in the same locations)
+    with the output of CubedSphereMesh at the same refinement level.
+
+    Args:
+       radius:  radius of the sphere
+       refinement_level: refinement level of the finest mesh
+       degree:  polynomial degree of coordinates
+       coarse_refinement_level: refinement level of the coarsest mesh
+    """
+
+    # start with *linear* coarse mesh
+    mesh_coarse = CubedSphereMesh(radius, refinement_level=coarse_refinement_level, degree=1)
+    # convert back to cube-mesh before refinement
+    # needs to happen on dm coordinates, as that's what's used to refine in MeshHierarchy
+    coords = mesh_coarse.topology_dm.getCoordinatesLocal().array.reshape((-1, mesh_coarse.geometric_dimension))
+    coords /= np.max(np.abs(coords), axis=1).reshape((-1, 1))
+
+    # The unit-cube mesh is not equispaced, but it will be if we
+    # convert back to "angle"-coordinates. It in these coordinates
+    # that we need to refine, to be consistent with the refinement
+    # that happens in CubedSphereMesh: if we refine in "angle"
+    # coordinates and then convert back to on-the-sphere coordinates
+    # we obtain the same mesh as if we'd directly asked CubedSphereMesh
+    # for the same level of refinement
+    coords[:] = np.arctan(coords)
+    # now we have a [-atan(1), atan(1)]^3 cube with equi-spaced mesh
+
+    # remove _radius attribute to stop MeshHierarchy popping things out too early
+    del mesh_coarse._radius
+
+    mh = MeshHierarchy(mesh_coarse, refinement_level - coarse_refinement_level)
+    meshes_p2 = []
+    for m in mh:
+        # convert [-atan(1), atan(1)]^3 cube in "angle"-coordinates
+        # back to non-equispaced unit cube mesh
+        m.coordinates.dat.data[:] = np.tan(m.coordinates.dat.data)
+        # then scale up to radius everywhere
+        scale = radius / np.linalg.norm(m.coordinates.dat.data, axis=1).reshape(-1, 1)
+        m.coordinates.dat.data[:] *= scale
+
+        # Finally create P2 mesh. To be consistent with
+        # CubedSphereMesh(..., degree=2) we do this after refinement
+        P2 = VectorFunctionSpace(m, "Q", 2)
+        coords = Function(P2).interpolate(m.coordinates)
+        scale = radius / np.linalg.norm(coords.dat.data, axis=1).reshape(-1, 1)
+        coords.dat.data[:] *= scale
+        mesh_p2 = Mesh(coords)
+        # not sure is needed, but for consistenty with CubedSphereMesh:
+        mesh_p2._radius = radius
+        meshes_p2.append(mesh_p2)
+
+    return HierarchyBase(meshes_p2, mh.coarse_to_fine_cells,
+                         mh.fine_to_coarse_cells, nested=True)

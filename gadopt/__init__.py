@@ -43,6 +43,7 @@ from .utility import (
     node_coordinates,
     timer_decorator,
     get_boundary_ids,
+    CubedSphereMeshHierarchy,
 )
 
 PETSc.Sys.popErrorHandler()

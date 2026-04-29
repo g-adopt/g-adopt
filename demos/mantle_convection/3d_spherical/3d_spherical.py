@@ -31,25 +31,14 @@ import numpy as np
 # +
 tic0 = perf_counter()
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
+coarse_ref_level = 1
+coarse_layers = 1
 
-mesh2d = CubedSphereMesh(rmin, refinement_level=1, degree=2)
-base_mh = MeshHierarchy(mesh2d, ref_level-1)
-base_meshes_p2 = []
-for i, m in enumerate(base_mh):
-    if m.coordinates.ufl_element().degree() == 2:
-        base_meshes_p2.append(m)
-    else:
-        P2 = VectorFunctionSpace(m, "Q", 2)
-        coords = Function(P2).interpolate(m.coordinates)
-        scale = rmin / np.linalg.norm(coords.dat.data, axis=1).reshape(-1, 1)
-        coords.dat.data[:] *= scale
-        base_mesh_p2 = Mesh(coords)
-        base_meshes_p2.append(base_mesh_p2)
+base_mh = CubedSphereMeshHierarchy(
+    rmin, ref_level, coarse_refinement_level=coarse_ref_level)
 
-base_mh_p2 = HierarchyBase(base_meshes_p2, base_mh.coarse_to_fine_cells,
-                           base_mh.fine_to_coarse_cells, nested=True)
-
-mh = ExtrudedMeshHierarchy(base_mh_p2, rmax-rmin, layers=[1, 2, 4, 8], extrusion_type='radial')
+layers = coarse_layers * 2**np.arange(0, ref_level-coarse_ref_level+1)
+mh = ExtrudedMeshHierarchy(base_mh_p2, rmax-rmin, layers=layers, extrusion_type='radial')
 mesh = mh[-1]
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
@@ -82,7 +71,7 @@ approximation = BoussinesqApproximation(Ra)
 
 time = 0.0  # Initial time
 delta_t = Constant(1e-6)  # Initial time-step
-timesteps = 20  # Maximum number of timesteps
+timesteps = 10  # Maximum number of timesteps
 t_adapt = TimestepAdaptor(delta_t, u, V, maximum_timestep=0.1, increase_tolerance=1.5)
 steady_state_tolerance = 1e-6  # Used to determine if solution has reached a steady state.
 
