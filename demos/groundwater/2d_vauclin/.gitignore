@@ -1,0 +1,4 @@
+params.log
+*.pvd
+*.vtu
+*.pvtu

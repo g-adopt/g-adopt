@@ -1,5 +1,6 @@
 import importlib
 import sys
+import uuid
 
 from doit import get_var
 from doit.action import CmdAction
@@ -51,25 +52,36 @@ def discover_cases() -> Iterator[tuple[Path, CaseMeta]]:
 def load_meta(meta_path: Path) -> CaseMeta:
     """Load a meta.py file by path.
 
-    We temporarily add the module to the system collection
-    when running the loader so that it is executed as its
-    own package. This way, the meta file can import files
-    in its directory.
+    Each meta file is loaded under its own uuid-derived package name so
+    that relative imports (``from .scaling import ...``) resolve to the
+    meta's own directory without cross-contaminating sys.modules with a
+    sibling test's equivalently named submodule. An empty
+    ``submodule_search_locations`` is the CPython-documented signal
+    that the module is a package; the loader fills in the parent
+    directory from the spec's ``origin``.
 
     Returns:
       The module resulting from loading the meta file.
 
     """
 
+    mod_name = f"meta-{uuid.uuid4()}"
+
     spec = importlib.util.spec_from_file_location(
-        "meta",
+        mod_name,
         meta_path,
         submodule_search_locations=[],
     )
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["meta"] = mod
-    spec.loader.exec_module(mod)
-    del sys.modules["meta"]
+    sys.modules[mod_name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        # Evict the package and every submodule it pulled in; a broken
+        # meta.py otherwise leaves stale entries behind, and a
+        # successful load has no reason to keep them around either.
+        for key in [k for k in sys.modules if k.startswith(mod_name)]:
+            del sys.modules[key]
     return mod
 
 
