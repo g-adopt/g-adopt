@@ -38,7 +38,7 @@ base_mh = CubedSphereMeshHierarchy(
     rmin, ref_level, coarse_refinement_level=coarse_ref_level)
 
 layers = coarse_layers * 2**np.arange(0, ref_level-coarse_ref_level+1)
-mh = ExtrudedMeshHierarchy(base_mh_p2, rmax-rmin, layers=layers, extrusion_type='radial')
+mh = ExtrudedMeshHierarchy(base_mh, rmax-rmin, layers=layers, extrusion_type='radial')
 mesh = mh[-1]
 mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
