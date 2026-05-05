@@ -130,7 +130,7 @@ plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev
              "u_hor_max div_u_hor_min_base div_u_hor_max_base")
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top, quad_degree=6)
-u_horizontal = gd.get_horizontal_components(u)
+u_horizontal = gd.u_horizontal()
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
