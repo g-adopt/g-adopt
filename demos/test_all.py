@@ -17,7 +17,8 @@ cases = {
     f"{mc_path}/2d_compressible_ALA": {"extra_checks": ["nu_top"]},
     f"{mc_path}/viscoplastic_case": {"extra_checks": ["nu_top"]},
     f"{mc_path}/2d_cylindrical": {"extra_checks": ["nu_top", "T_min", "T_max"]},
-    f"{mc_path}/3d_spherical": {"extra_checks": ["nu_top", "t_dev_avg"]},
+    f"{mc_path}/3d_spherical": {"extra_checks": [
+        "nu_top", "t_dev_avg", "u_hor_max", "div_u_hor_min_base", "div_u_hor_max_base"]},
     f"{mc_path}/3d_cartesian": {"extra_checks": ["nu_top"], "rtol": 1e-4},
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
     f"{mc_path}/Drucker_Prager": {"extra_checks": ["ux_max"]},
