@@ -175,6 +175,12 @@ def ts_cache(
                     object_state[key][f] = f.dat.dat_version
             return cache[key]
 
+        def cache_clear():
+            cache.clear()
+            funcs.clear()
+            object_state.clear()
+
+        wrapper.cache_clear = cache_clear
         return wrapper
 
     # See if we're being called as @ts_cache or @ts_cache().
@@ -320,7 +326,13 @@ class BaseDiagnostics:
     is created for each function. These attributes are accessed by the
     `diag._function_contexts` dict.
 
-    This class is intended to be subclassed by domain-specific diagnostic classes
+    This class is intended to be subclassed by domain-specific diagnostic classes. This
+    class is a singleton class, it will only allow a single instance of itself to be
+    instantiated. Attempting to construct a second instance will result in returning
+    the first.
+
+    `ini_hash` and self._initialised is used to determine if the BaseDiagnostics object
+    needs a full re-initialisation or not.
 
     Args:
         quad_degree: Quadrature degree to use when approximating integrands managed by
@@ -328,19 +340,40 @@ class BaseDiagnostics:
         **funcs: Firedrake functions to associate with this instance
     """
 
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        """Enforce singleton behaviour"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self, quad_degree: int, **funcs: fd.Function | None):
         """Initialise a BaseDiagnostics object.
 
         Sets the `quad_degree` for measures used by this object and passes the
         remaining keyword arguments through to `register_functions`.
         """
-        self._function_contexts: dict[fd.Function | Operator, FunctionContext] = {}
-        self._quad_degree = quad_degree
+        ini_hash = hash((quad_degree, *funcs.values()))
+        if hasattr(self, "_initialised"):
+            if self._initialised == ini_hash:
+                return
+        else:
+            self._function_contexts: dict[fd.Function | Operator, FunctionContext] = {}
+
+        self._initialised = ini_hash
         self._mixed_functions: list[str] = []
-        self.register_functions(**funcs)
+        self._invalidate_caches()
+        self._function_contexts.clear()
+        self._quad_degree = quad_degree
+        self.register_functions(cache_invalidated=True, **funcs)
 
     def register_functions(
-        self, *, quad_degree: int | None = None, **funcs: fd.Function | None
+        self,
+        *,
+        quad_degree: int | None = None,
+        cache_invalidated: bool = False,
+        **funcs: fd.Function | None,
     ):
         """Register a function with this BaseDiagnostics object.
 
@@ -376,27 +409,67 @@ class BaseDiagnostics:
         """
         if quad_degree is None:
             quad_degree = self._quad_degree
+
         for name, func in funcs.items():
             # Handle optional functions in diagnostics
             if func is None:
                 setattr(self, name, 0.0)
                 continue
             if len(func.subfunctions) == 1:
-                if not hasattr(self, name):
-                    setattr(self, name, func)
-                    self._init_single_func(quad_degree, func)
+                if hasattr(self, name):
+                    old_func = getattr(self, name)
+                    if old_func in self._function_contexts:
+                        del self._function_contexts[old_func]
+                    delattr(self, name)
+                    if not cache_invalidated:
+                        self._invalidate_caches()
+                        cache_invalidated = True
+                setattr(self, name, func)
+                self._init_single_func(quad_degree, func)
             else:
                 self._mixed_functions.append(name)
                 for i, subfunc in enumerate(func.subfunctions):
-                    if not hasattr(self, f"{name}_{i}"):
-                        setattr(self, f"{name}_{i}", subfunc)
-                        self._init_single_func(quad_degree, subfunc)
+                    subfunc_name = f"{name}_{i}"
+                    if hasattr(self, subfunc_name):
+                        old_func = getattr(self, subfunc_name)
+                        if old_func in self._function_contexts:
+                            del self._function_contexts[old_func]
+                        delattr(self, subfunc_name)
+                        if not cache_invalidated:
+                            self._invalidate_caches()
+                            cache_invalidated = True
+                    setattr(self, subfunc_name, subfunc)
+                    self._init_single_func(quad_degree, subfunc)
 
     def _init_single_func(self, quad_degree: int, func: fd.Function):
         """Create a FunctionContext for a single function"""
         self._function_contexts[func] = FunctionContext(quad_degree, func)
 
+    def _invalidate_caches(self):
+        """Clear all cached values in this object
+
+        The `@cache` and `@ts_cache` decorators add the `clear_cache` function to any
+        decorated function. Search all attributes of this object and any encapsulated
+        FunctionContext objects to see if they contains this `clear_cache` function
+        and call it where found. Also clear caches of module-level functions.
+        """
+        for attr in [getattr(self, a) for a in dir(self)]:
+            if hasattr(attr, "cache_clear"):
+                getattr(attr, "cache_clear")()
+        for fctx in self._function_contexts.values():
+            for attr in [getattr(fctx, a) for a in dir(fctx)]:
+                if hasattr(attr, "cache_clear"):
+                    getattr(attr, "cache_clear")()
+        get_ds.cache_clear()
+        get_dx.cache_clear()
+        get_normal.cache_clear()
+        get_volume.cache_clear()
+
     def __getattr__(self, name: str):
+        # Special shortcut to allow access to the _initialised attr before
+        # _mixed_functions has been constructed
+        if name == "_initialised":
+            return super().__getattribute__(name)
         if name in self._mixed_functions:
             subfn_string = ", ".join([i for i in dir(self) if i.startswith(name + "_")])
             raise AttributeError(
@@ -553,7 +626,6 @@ class BaseDiagnostics:
             )
         return self._function_contexts[op].function
 
-    @cache
     def get_upward_component(self, f: fd.Function) -> Operator:
         """Get the upward (against gravity) component of a function.
 

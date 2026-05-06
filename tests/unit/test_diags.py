@@ -293,7 +293,7 @@ def test_no_functions_never_cached():
         assert mock_method.call_count == 2
 
 
-def test_cache_invalidated():
+def test_ts_cache_invalidated():
     mesh = get_mesh("square")
     F = fd.FunctionSpace(mesh, "CG", 1)
     f = fd.Function(F)
@@ -307,6 +307,95 @@ def test_cache_invalidated():
     f.assign(-f)
     decorator(diags, f, None)
     assert mock.call_count == 2
+
+
+def test_singleton():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    X, Y = fd.SpatialCoordinate(mesh)
+    f.interpolate(X + Y)
+    diags1 = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    diags2 = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    assert diags1 is diags2
+    assert diags1._function_contexts[f] is diags2._function_contexts[f]
+
+
+def test_reinitialisation():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    X, Y = fd.SpatialCoordinate(mesh)
+    f.interpolate(X + Y)
+    diags1 = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    old_fcontext = diags1._function_contexts[diags1.f]
+    mesh2 = get_mesh("square", nx=20, ny=20)
+    F2 = fd.FunctionSpace(mesh2, "CG", 1)
+    f2 = fd.Function(F2)
+    f2.interpolate(f)
+    diags1._function_contexts[f].surface_area(1)
+    assert gadopt.diagnostics.FunctionContext.surface_area.cache_info().misses == 1
+    diags2 = gadopt.BaseDiagnostics(quad_degree=4, f=f2)
+    assert len(diags2._function_contexts) == 1
+    assert diags1 is diags2
+    assert old_fcontext is not diags2._function_contexts[diags2.f]
+    assert gadopt.diagnostics.FunctionContext.surface_area.cache_info().misses == 0
+
+
+def test_reinitialisation_quad_degree():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    X, Y = fd.SpatialCoordinate(mesh)
+    f.interpolate(X + Y)
+    diags1 = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    old_fcontext = diags1._function_contexts[diags1.f]
+    diags2 = gadopt.BaseDiagnostics(quad_degree=6, f=f)
+    assert len(diags2._function_contexts) == 1
+    assert diags1 is diags2
+    assert old_fcontext is not diags2._function_contexts[diags2.f]
+
+
+def test_register_new_func():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    old_fcontext = diags._function_contexts[diags.f]
+    G = fd.VectorFunctionSpace(mesh, "CG", 1)
+    g = fd.Function(G)
+    diags.register_functions(g=g)
+    assert len(diags._function_contexts) == 2
+    assert old_fcontext is diags._function_contexts[diags.f]
+
+
+def test_register_existing_func():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    old_fcontext = diags._function_contexts[diags.f]
+    F2 = fd.FunctionSpace(mesh, "DG", 1)
+    f2 = fd.Function(F2)
+    diags.register_functions(f=f2)
+    assert len(diags._function_contexts) == 1
+    assert old_fcontext is not diags._function_contexts[diags.f]
+
+
+def test_manual_cache_invalidation():
+    mesh = get_mesh("square")
+    F = fd.FunctionSpace(mesh, "CG", 1)
+    f = fd.Function(F)
+    X, Y = fd.SpatialCoordinate(mesh)
+    f.interpolate(X + Y)
+    diags = gadopt.BaseDiagnostics(quad_degree=4, f=f)
+    diags._function_contexts[f].surface_area(1)
+    diags._function_contexts[f].surface_area(1)
+    assert gadopt.diagnostics.FunctionContext.surface_area.cache_info().hits == 1
+    assert gadopt.diagnostics.FunctionContext.surface_area.cache_info().misses == 1
+    diags._invalidate_caches()
+    assert gadopt.diagnostics.FunctionContext.surface_area.cache_info().hits == 0
+    assert gadopt.diagnostics.FunctionContext.surface_area.cache_info().misses == 0
 
 
 @pytest.mark.parametrize(
