@@ -7,7 +7,7 @@
 # nonlinear systems that can be challenging to solve, we use this case to
 # illustrate some of the strategies involved in doing so within G-ADOPT.
 #
-# Similar to the [visco-plastic tutorial](viscoplastic_case.md) which uses a
+# Similar to the [visco-plastic tutorial](../viscoplastic_case) which uses a
 # temperature- and depth-dependent von Mises rheology, the overall effective
 # viscosity takes the following form
 #
