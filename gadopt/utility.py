@@ -8,7 +8,7 @@ from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, Ja
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional
-from firedrake import Mesh, CubedSphereMesh, MeshHierarchy, HierarchyBase
+from firedrake import Mesh, CubedSphereMesh, MeshHierarchy, HierarchyBase, DistributedMeshOverlapType
 from firedrake.ufl_expr import extract_unique_domain
 import ufl
 import time
@@ -688,7 +688,12 @@ def CubedSphereMeshHierarchy(
     """
 
     # start with *linear* coarse mesh
-    mesh_coarse = CubedSphereMesh(radius, refinement_level=coarse_refinement_level, degree=1)
+    mesh_coarse = CubedSphereMesh(
+        radius,
+        refinement_level=coarse_refinement_level,
+        degree=1,
+        distribution_parameters={"overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
+    )
     # convert back to cube-mesh before refinement
     # needs to happen on dm coordinates, as that's what's used to refine in MeshHierarchy
     coords = mesh_coarse.topology_dm.getCoordinatesLocal().array.reshape((-1, mesh_coarse.geometric_dimension))
