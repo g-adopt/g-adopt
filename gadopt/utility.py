@@ -703,14 +703,19 @@ def CubedSphereMeshHierarchy(
     # convert back to "angle"-coordinates. It in these coordinates
     # that we need to refine, to be consistent with the refinement
     # that happens in CubedSphereMesh: if we refine in "angle"
-    # coordinates and then convert back to on-the-sphere coordinates
+    # coordinates and then convert back to on-the-sphere coordinates,
     # we obtain the same mesh as if we'd directly asked CubedSphereMesh
     # for the same level of refinement
     coords[:] = np.arctan(coords)
     # now we have a [-atan(1), atan(1)]^3 cube with equi-spaced mesh
 
-    # remove _radius attribute to stop MeshHierarchy popping things out too early
-    del mesh_coarse._radius
+    # Rebuild mesh from dm to ensure these coordinates end up in Firedrake's mesh.coordinates
+    # (this also removes the ._radius attribute to prevent MeshHierarchy popping out too early)
+    mesh_coarse = Mesh(
+        mesh_coarse.topology_dm,
+        distribution_parameters=mesh_coarse._distribution_parameters,
+        comm=mesh_coarse.comm
+    )
 
     mh = MeshHierarchy(mesh_coarse, refinement_level - coarse_refinement_level)
     meshes_p2 = []
