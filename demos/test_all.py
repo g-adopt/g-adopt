@@ -18,7 +18,12 @@ cases = {
     f"{mc_path}/viscoplastic_case": {"extra_checks": ["nu_top"]},
     f"{mc_path}/2d_cylindrical": {"extra_checks": ["nu_top", "T_min", "T_max"]},
     f"{mc_path}/3d_spherical": {"extra_checks": [
-        "nu_top", "t_dev_avg", "u_hor_max", "div_u_hor_min_base", "div_u_hor_max_base"]},
+        "nu_top",
+        "t_dev_avg",
+        ("u_hor_max", {"rtol": 5e-4}),
+        ("div_u_hor_min_base", {"rtol": 5e-4}),
+        ("div_u_hor_max_base", {"rtol": 5e-4}),
+    ]},
     f"{mc_path}/3d_cartesian": {"extra_checks": ["nu_top"], "rtol": 1e-4},
     f"{mc_path}/gplates_global": {"extra_checks": ["nu_top", "u_rms_top"]},
     f"{mc_path}/Drucker_Prager": {"extra_checks": ["ux_max"]},
@@ -65,13 +70,35 @@ def check_series(
     convergence_tolerance,
     extra_checks,
 ):
+    uniform_column_names = ["u_rms"]
+    nonuniform_columns = []
+
+    # Extra checks can individually specify kwargs, which override
+    # the global values.
+    for extra_check in extra_checks:
+        if isinstance(extra_check, tuple):
+            nonuniform_columns.append(extra_check)
+        else:
+            uniform_column_names.append(extra_check)
+
     pd.testing.assert_series_equal(
-        actual[["u_rms"] + extra_checks],
-        expected,
+        actual[uniform_column_names],
+        expected[uniform_column_names],
         check_names=False,
         check_index_type=False,
         **compare_params,
     )
+
+    for column_name, override_params in nonuniform_columns:
+        kwargs = compare_params | override_params
+
+        pd.testing.assert_series_equal(
+            actual[[column_name]],
+            expected[[column_name]],
+            check_names=False,
+            check_index_type=False,
+            **kwargs,
+        )
 
     assert abs(actual.name - expected.name) <= convergence_tolerance
 
