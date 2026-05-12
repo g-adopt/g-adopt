@@ -4,7 +4,7 @@ Soil curve models for Richards equation.
 This module implements various soil-water retention and hydraulic conductivity
 relationships commonly used in unsaturated flow modelling. These models describe
 the relationship between hydraulic pressure head (h) and soil properties such
-as moisture content and relative permeability.
+as moisture content and hydraulic conductivity.
 
 References:
     - Haverkamp, R., et al. (1977). A comparison of numerical simulation models
@@ -31,7 +31,7 @@ class SoilCurve(ABC):
 
     All soil curve models must implement methods for:
     - moisture_content: $\theta(h)$ - volumetric water content
-    - relative_permeability: $K(h)$ - hydraulic conductivity
+    - hydraulic_conductivity: $K(h)$ - hydraulic conductivity
     - water_retention: $C(h)$ - specific moisture capacity ($d\theta/dh$)
 
     All models require a specific storage coefficient Ss parameter.
@@ -109,7 +109,7 @@ class SoilCurve(ABC):
         pass
 
     @abstractmethod
-    def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def hydraulic_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
         Calculate relative hydraulic conductivity $K(h)$.
 
@@ -189,9 +189,9 @@ class HaverkampCurve(SoilCurve):
         theta = self.theta_r + self.alpha * (self.theta_s - self.theta_r) / (self.alpha + abs(h)**self.beta)
         return fd.conditional(h <= 0, theta, self.theta_s)
 
-    def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def hydraulic_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
-        Haverkamp relative permeability relationship.
+        Haverkamp hydraulic conductivity relationship.
 
         $K(h) = K_s \\cdot A / (A + |h|^{\\gamma})$
         """
@@ -260,9 +260,9 @@ class VanGenuchtenCurve(SoilCurve):
         theta = self.theta_r + (self.theta_s - self.theta_r) / ((1 + abs(self.alpha * h)**self.n)**m)
         return fd.conditional(h <= 0, theta, self.theta_s)
 
-    def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def hydraulic_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
-        van Genuchten relative permeability relationship.
+        van Genuchten hydraulic conductivity relationship.
 
         $K(h) = K_s \\cdot (1 - |\\alpha h|^{(n-1)} \\cdot (1 + |\\alpha h|^n)^{(-m)})^2 / (1 + |\\alpha h|^n)^{(m/2)}$
         where $m = 1 - 1/n$
@@ -326,9 +326,9 @@ class ExponentialCurve(SoilCurve):
         theta = self.theta_r + (self.theta_s - self.theta_r) * fd.exp(h * self.alpha)
         return fd.conditional(h <= 0, theta, self.theta_s)
 
-    def relative_permeability(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def hydraulic_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
-        Exponential relative permeability relationship.
+        Exponential hydraulic conductivity relationship.
 
         $K(h) = K_s \\cdot \\exp(\\alpha h)$
         """

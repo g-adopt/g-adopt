@@ -40,6 +40,7 @@ from .utility import is_continuous
 __all__ = [
     "richards_mass_term",
     "richards_diffusion_term",
+    "richards_source_term",
     "richards_gravity_term",
 ]
 
@@ -121,7 +122,7 @@ def richards_diffusion_term(
     soil_curve = eq.soil_curve
 
     # Evaluate hydraulic conductivity at trial function
-    K = soil_curve.relative_permeability(trial)
+    K = soil_curve.hydraulic_conductivity(trial)
 
     # Volume integral
     F = inner(grad(eq.test), K * grad(trial)) * eq.dx
@@ -170,6 +171,35 @@ def richards_diffusion_term(
     return F
 
 
+def richards_source_term(
+    eq: Equation, trial: Argument | Indexed | Function
+) -> Form:
+    r"""Richards volumetric source/sink term.
+
+    Adds a prescribed volumetric source (water added per unit volume per unit
+    time, units of $\theta$ per second) to the right-hand side of the PDE:
+
+    $$
+    \frac{\partial \theta}{\partial t} = \nabla \cdot (K \nabla h)
+                                       + \nabla \cdot (K \nabla z) + S.
+    $$
+
+    The other terms in this module are written on the left-hand side of the
+    residual $F = 0$, so the source enters with a negative sign:
+    $-\int_\Omega S \, v \, dx$. A positive ``source_term`` therefore adds
+    water to the system.
+
+    Args:
+        eq: G-ADOPT Equation instance (expects ``eq.source_term``).
+        trial: Firedrake trial function for pressure head (unused; signature
+            kept consistent with the other term functions).
+
+    Returns:
+        UFL form for the source term.
+    """
+    return -inner(eq.source_term, eq.test) * eq.dx
+
+
 def richards_gravity_term(
     eq: Equation, trial: Argument | Indexed | Function
 ) -> Form:
@@ -204,7 +234,7 @@ def richards_gravity_term(
     soil_curve = eq.soil_curve
 
     # Evaluate hydraulic conductivity at trial function
-    K = soil_curve.relative_permeability(trial)
+    K = soil_curve.hydraulic_conductivity(trial)
 
     # Get mesh dimension and spatial coordinates
     dim = eq.mesh.geometric_dimension
@@ -239,6 +269,9 @@ richards_mass_term.optional_attrs = set()
 
 richards_diffusion_term.required_attrs = {'soil_curve'}
 richards_diffusion_term.optional_attrs = {'interior_penalty'}
+
+richards_source_term.required_attrs = {'source_term'}
+richards_source_term.optional_attrs = set()
 
 richards_gravity_term.required_attrs = {'soil_curve'}
 richards_gravity_term.optional_attrs = set()

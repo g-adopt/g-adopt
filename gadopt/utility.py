@@ -168,7 +168,7 @@ class RichardsTimestepAdaptor:
         n_down = grad(x[dim - 1])
 
         # Tier 1: advective CFL — |J^{-1} (K(h) * n_down)|
-        K_expr = soil_curve.relative_permeability(h)
+        K_expr = soil_curve.hydraulic_conductivity(h)
         q = K_expr * n_down
         J_inv_q = dot(JacobianInverse(self.mesh), q)
         ref_speed = sqrt(dot(J_inv_q, J_inv_q))

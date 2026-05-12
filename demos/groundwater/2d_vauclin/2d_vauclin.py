@@ -58,7 +58,7 @@ soil_curve = HaverkampCurve(
 )
 
 moisture_content = soil_curve.moisture_content
-relative_permeability = soil_curve.relative_permeability
+hydraulic_conductivity = soil_curve.hydraulic_conductivity
 
 # Initial condition: water table at z = 0.65 m from bottom
 water_table_height = vauclin_solution.WATER_TABLE_HEIGHT
@@ -128,7 +128,7 @@ while time < t_final:
     timestep_count += 1
 
     # Compute flux diagnostics for mass balance
-    K = relative_permeability((h + h_old) / 2)
+    K = hydraulic_conductivity((h + h_old) / 2)
     q.interpolate(-K * grad((h + h_old) / 2 + X[1]))
     external_flux += assemble(float(dt) * dot(q, -FacetNormal(mesh)) * ds_mesh)
 

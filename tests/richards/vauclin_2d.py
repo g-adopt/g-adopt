@@ -67,7 +67,7 @@ def model(level=0, do_write=False, t_final=None):
     )
 
     moisture_content = soil_curve.moisture_content
-    relative_permeability = soil_curve.relative_permeability
+    hydraulic_conductivity = soil_curve.hydraulic_conductivity
 
     # Initial condition: water table at z = 0.65 m
     water_table_height = vauclin_solution.WATER_TABLE_HEIGHT
@@ -80,7 +80,7 @@ def model(level=0, do_write=False, t_final=None):
     # Diagnostic fields
     theta = Function(V, name="MoistureContent").interpolate(moisture_content(h))
     q = Function(W, name="VolumetricFlux")
-    K = Function(V, name="RelativeConductivity").interpolate(relative_permeability(h))
+    K = Function(V, name="RelativeConductivity").interpolate(hydraulic_conductivity(h))
 
     # Time-dependent top boundary flux
     time_var = Constant(0.0)
@@ -144,7 +144,7 @@ def model(level=0, do_write=False, t_final=None):
 
         # Update diagnostic fields
         theta.interpolate(moisture_content(h))
-        K.interpolate(relative_permeability((h + h_old) / 2))
+        K.interpolate(hydraulic_conductivity((h + h_old) / 2))
         q.interpolate(-K * grad((h + h_old) / 2 + X[1]))
 
         # Track external flux through all boundaries

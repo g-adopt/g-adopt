@@ -58,6 +58,7 @@ _newton_common: dict[str, Any] = {
 direct_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
     "snes_type": "newtonls",
+    "snes_linesearch_type": "bt",
     "ksp_type": "preonly",
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
@@ -72,6 +73,7 @@ G-ADOPT uses this preset by default in 2-D.
 iterative_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
     "ksp_type": "gmres",
+    "snes_linesearch_type": "bt",
     "ksp_rtol": 1e-5,
     "ksp_max_it": 200,
     "ksp_gmres_restart": 30,
@@ -104,6 +106,7 @@ vlumping_richards_solver_parameters: dict[str, Any] = {
     # variable preconditioner (the Galerkin coarse solve is itself
     # iterative in practice).
     "ksp_type": "fgmres",
+    "snes_linesearch_type": "bt",
     # Inexact Newton: the 1e-4 linear tolerance consistently wins against
     # the 1e-5 baseline across the scaling studies (Cockett and
     # Murrumbidgee). Tighter linear solves don't reduce Newton counts.
@@ -148,6 +151,7 @@ MeshHierarchy.
 vlumping_hmg_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
     "ksp_type": "fgmres",
+    "snes_linesearch_type": "bt",
     "ksp_rtol": 1e-4,
     "ksp_max_it": 200,
     "ksp_gmres_restart": 30,
@@ -223,6 +227,10 @@ class RichardsSolver(SolverConfigurationMixin):
         Runge-Kutta time integrator for an implicit or explicit numerical scheme
       bcs:
         Dictionary specifying boundary conditions (identifier, type, and value)
+      source_term:
+        Volumetric source/sink (positive = water added) in units of $\theta$
+        per second. Either a UFL expression, a Firedrake ``Function``, or a
+        constant. Defaults to ``0``.
       solver_parameters:
         Dictionary of solver parameters or a string specifying a default configuration
         provided to PETSc
@@ -276,6 +284,7 @@ class RichardsSolver(SolverConfigurationMixin):
         timestepper: type[IrksomeIntegrator],
         *,
         bcs: dict[int | str, dict[str, Number]] = {},
+        source_term: Any = 0,
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
         quad_degree: int | None = None,
@@ -290,6 +299,7 @@ class RichardsSolver(SolverConfigurationMixin):
         self.delta_t = delta_t
         self.timestepper = timestepper
         self.bcs = bcs
+        self.source_term = source_term
         self.quad_degree = quad_degree
         self.interior_penalty = interior_penalty
         self.nullspace = nullspace
@@ -372,6 +382,7 @@ class RichardsSolver(SolverConfigurationMixin):
         """Sets up the Richards equation with all terms."""
         eq_attrs = {
             'soil_curve': self.soil_curve,
+            'source_term': self.source_term,
         }
 
         if self.interior_penalty is not None:
@@ -383,6 +394,7 @@ class RichardsSolver(SolverConfigurationMixin):
             residual_terms=[
                 richards_eq.richards_mass_term,
                 richards_eq.richards_diffusion_term,
+                richards_eq.richards_source_term,
                 richards_eq.richards_gravity_term,
             ],
             eq_attrs=eq_attrs,

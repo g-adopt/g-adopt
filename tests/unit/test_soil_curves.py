@@ -33,8 +33,8 @@ def evaluate_soil_curve(model, h, property_name):
     """Evaluate a soil curve property and return interpolated values."""
     if property_name == "moisture_content":
         expr = model.moisture_content(h)
-    elif property_name == "relative_permeability":
-        expr = model.relative_permeability(h)
+    elif property_name == "hydraulic_conductivity":
+        expr = model.hydraulic_conductivity(h)
     elif property_name == "water_retention":
         expr = model.water_retention(h)
     else:
@@ -98,7 +98,7 @@ class TestHaverkampCurve:
 
         # Evaluate soil curve properties
         theta = evaluate_soil_curve(haverkamp_model, h_sat, "moisture_content")
-        K = evaluate_soil_curve(haverkamp_model, h_sat, "relative_permeability")
+        K = evaluate_soil_curve(haverkamp_model, h_sat, "hydraulic_conductivity")
         C = evaluate_soil_curve(haverkamp_model, h_sat, "water_retention")
 
         # Under saturated conditions, should return saturated values
@@ -113,7 +113,7 @@ class TestHaverkampCurve:
 
         # Evaluate soil curve properties
         theta = evaluate_soil_curve(haverkamp_model, h_unsat, "moisture_content")
-        K = evaluate_soil_curve(haverkamp_model, h_unsat, "relative_permeability")
+        K = evaluate_soil_curve(haverkamp_model, h_unsat, "hydraulic_conductivity")
         C = evaluate_soil_curve(haverkamp_model, h_unsat, "water_retention")
 
         # Under unsaturated conditions, should be less than saturated values
@@ -127,7 +127,7 @@ class TestHaverkampCurve:
         h = create_pressure_head_function(mesh, -1.0)
 
         theta = evaluate_soil_curve(haverkamp_model, h, "moisture_content")
-        K = evaluate_soil_curve(haverkamp_model, h, "relative_permeability")
+        K = evaluate_soil_curve(haverkamp_model, h, "hydraulic_conductivity")
 
         # Test that residual water content is respected
         assert theta.dat.data[0] >= 0.15  # theta >= theta_r
@@ -172,7 +172,7 @@ class TestVanGenuchtenCurve:
 
         # Evaluate soil curve properties
         theta = evaluate_soil_curve(vg_model, h_sat, "moisture_content")
-        K = evaluate_soil_curve(vg_model, h_sat, "relative_permeability")
+        K = evaluate_soil_curve(vg_model, h_sat, "hydraulic_conductivity")
         C = evaluate_soil_curve(vg_model, h_sat, "water_retention")
 
         # Under saturated conditions, should return saturated values
@@ -187,7 +187,7 @@ class TestVanGenuchtenCurve:
 
         # Evaluate soil curve properties
         theta = evaluate_soil_curve(vg_model, h_unsat, "moisture_content")
-        K = evaluate_soil_curve(vg_model, h_unsat, "relative_permeability")
+        K = evaluate_soil_curve(vg_model, h_unsat, "hydraulic_conductivity")
         C = evaluate_soil_curve(vg_model, h_unsat, "water_retention")
 
         # Under unsaturated conditions, should be less than saturated values
@@ -201,7 +201,7 @@ class TestVanGenuchtenCurve:
         h = create_pressure_head_function(mesh, -1.0)
 
         theta = evaluate_soil_curve(vg_model, h, "moisture_content")
-        K = evaluate_soil_curve(vg_model, h, "relative_permeability")
+        K = evaluate_soil_curve(vg_model, h, "hydraulic_conductivity")
 
         # Test that residual water content is respected
         assert theta.dat.data[0] >= 0.15  # theta >= theta_r
@@ -245,7 +245,7 @@ class TestExponentialCurve:
 
         # Evaluate soil curve properties
         theta = evaluate_soil_curve(exp_model, h_sat, "moisture_content")
-        K = evaluate_soil_curve(exp_model, h_sat, "relative_permeability")
+        K = evaluate_soil_curve(exp_model, h_sat, "hydraulic_conductivity")
         C = evaluate_soil_curve(exp_model, h_sat, "water_retention")
 
         # Under saturated conditions, should return saturated values
@@ -262,7 +262,7 @@ class TestExponentialCurve:
 
         # Evaluate soil curve properties
         theta = evaluate_soil_curve(exp_model, h_unsat, "moisture_content")
-        K = evaluate_soil_curve(exp_model, h_unsat, "relative_permeability")
+        K = evaluate_soil_curve(exp_model, h_unsat, "hydraulic_conductivity")
         C = evaluate_soil_curve(exp_model, h_unsat, "water_retention")
 
         # Under unsaturated conditions, should be less than saturated values
@@ -276,7 +276,7 @@ class TestExponentialCurve:
         h = create_pressure_head_function(mesh, -1.0)
 
         theta = evaluate_soil_curve(exp_model, h, "moisture_content")
-        K = evaluate_soil_curve(exp_model, h, "relative_permeability")
+        K = evaluate_soil_curve(exp_model, h, "hydraulic_conductivity")
 
         # Test that residual water content is respected
         assert theta.dat.data[0] >= 0.15  # theta >= theta_r
@@ -329,7 +329,7 @@ class TestSoilCurveComparison:
         # Test Haverkamp and van Genuchten models (should have C=0 at saturation)
         for model in [haverkamp, vg]:
             theta = evaluate_soil_curve(model, h_sat, "moisture_content")
-            K = evaluate_soil_curve(model, h_sat, "relative_permeability")
+            K = evaluate_soil_curve(model, h_sat, "hydraulic_conductivity")
             C = evaluate_soil_curve(model, h_sat, "water_retention")
 
             np.testing.assert_allclose(theta.dat.data, theta_s, rtol=1e-10)
@@ -338,7 +338,7 @@ class TestSoilCurveComparison:
 
         # Test exponential model (has different water retention at saturation)
         theta = evaluate_soil_curve(exp, h_sat, "moisture_content")
-        K = evaluate_soil_curve(exp, h_sat, "relative_permeability")
+        K = evaluate_soil_curve(exp, h_sat, "hydraulic_conductivity")
         C = evaluate_soil_curve(exp, h_sat, "water_retention")
 
         np.testing.assert_allclose(theta.dat.data, theta_s, rtol=1e-10)
@@ -375,9 +375,9 @@ class TestSoilCurveComparison:
         theta_vg = evaluate_soil_curve(vg, h_unsat, "moisture_content").dat.data[0]
         theta_exp = evaluate_soil_curve(exp, h_unsat, "moisture_content").dat.data[0]
 
-        K_h = evaluate_soil_curve(haverkamp, h_unsat, "relative_permeability").dat.data[0]
-        K_vg = evaluate_soil_curve(vg, h_unsat, "relative_permeability").dat.data[0]
-        K_exp = evaluate_soil_curve(exp, h_unsat, "relative_permeability").dat.data[0]
+        K_h = evaluate_soil_curve(haverkamp, h_unsat, "hydraulic_conductivity").dat.data[0]
+        K_vg = evaluate_soil_curve(vg, h_unsat, "hydraulic_conductivity").dat.data[0]
+        K_exp = evaluate_soil_curve(exp, h_unsat, "hydraulic_conductivity").dat.data[0]
 
         # Models should give different results (not testing specific values,
         # just that they're different from each other)
