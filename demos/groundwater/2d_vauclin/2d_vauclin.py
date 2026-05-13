@@ -525,10 +525,18 @@ h_final_plot = Function(V, name="FinalPressureHead").interpolate(h)
 theta.interpolate(moisture_content(h))
 theta_final_plot = Function(V, name="FinalMoistureContent").interpolate(theta)
 
-h_plot_min = min(h_initial_plot.dat.data_ro.min(), h_final_plot.dat.data_ro.min())
-h_plot_max = max(h_initial_plot.dat.data_ro.max(), h_final_plot.dat.data_ro.max())
-theta_plot_min = min(theta_initial_plot.dat.data_ro.min(), theta_final_plot.dat.data_ro.min())
-theta_plot_max = max(theta_initial_plot.dat.data_ro.max(), theta_final_plot.dat.data_ro.max())
+h_plot_min = mesh.comm.allreduce(
+    min(h_initial_plot.dat.data_ro.min(), h_final_plot.dat.data_ro.min()), MPI.MIN
+)
+h_plot_max = mesh.comm.allreduce(
+    max(h_initial_plot.dat.data_ro.max(), h_final_plot.dat.data_ro.max()), MPI.MAX
+)
+theta_plot_min = mesh.comm.allreduce(
+    min(theta_initial_plot.dat.data_ro.min(), theta_final_plot.dat.data_ro.min()), MPI.MIN
+)
+theta_plot_max = mesh.comm.allreduce(
+    max(theta_initial_plot.dat.data_ro.max(), theta_final_plot.dat.data_ro.max()), MPI.MAX
+)
 # -
 
 # We visualise the initial and final states with two-panel Firedrake-native
