@@ -27,6 +27,7 @@
 # discretisation in RichardsSolver.
 
 from gadopt import *
+from mpi4py import MPI
 
 # Set up the extruded mesh: a 20x20 quadrilateral base mesh extruded
 # vertically into 26 layers.
@@ -133,8 +134,8 @@ while time < t_final:
     time += float(dt)
     timestep_count += 1
 
-    min_h = h.dat.data.min()
-    max_h = h.dat.data.max()
+    min_h = mesh.comm.allreduce(h.dat.data_ro.min(), MPI.MIN)
+    max_h = mesh.comm.allreduce(h.dat.data_ro.max(), MPI.MAX)
 
     plog.log_str(f"{timestep_count} {time} {float(dt)} {min_h} {max_h}")
 

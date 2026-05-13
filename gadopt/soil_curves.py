@@ -26,8 +26,8 @@ class SoilCurve(ABC):
     Soil curves describe the relationship between hydraulic pressure head (h)
     and soil hydraulic properties. The hydraulic pressure head h is defined
     as the pressure head relative to atmospheric pressure, where:
-    - h < 0: unsaturated conditions (tension)
-    - h <= 0: saturated conditions
+    - h <= 0: unsaturated conditions (tension)
+    - h > 0: saturated conditions (clamped to theta_s, K_s)
 
     All soil curve models must implement methods for:
     - moisture_content: $\theta(h)$ - volumetric water content
@@ -123,14 +123,14 @@ class SoilCurve(ABC):
 
     @abstractmethod
     def water_retention(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
-        f"""
-        Calculate specific moisture capacity $ C(h) = d\theta/dh $.
+        r"""
+        Calculate specific moisture capacity $C(h) = d\theta/dh$.
 
         Args:
-            h: Hydraulic pressure head $[ L ]$
+            h: Hydraulic pressure head $[L]$
 
         Returns:
-            Specific moisture capacity C $ [ L^{-1} ] $
+            Specific moisture capacity C $[L^{-1}]$
         """
         pass
 

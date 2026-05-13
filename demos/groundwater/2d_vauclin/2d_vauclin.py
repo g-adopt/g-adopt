@@ -294,6 +294,7 @@
 
 from gadopt import *
 from firedrake.exceptions import ConvergenceError
+from mpi4py import MPI
 import gwassess
 
 # The reference problem setup is obtained from the ``gwassess`` companion
@@ -506,8 +507,8 @@ while time < t_final:
     current_mass = assemble(moisture_content(h) * dx_mesh)
     mass_balance = (current_mass - initial_mass) / external_flux if external_flux != 0 else 0
 
-    min_h = h.dat.data.min()
-    max_h = h.dat.data.max()
+    min_h = mesh.comm.allreduce(h.dat.data_ro.min(), MPI.MIN)
+    max_h = mesh.comm.allreduce(h.dat.data_ro.max(), MPI.MAX)
 
     plog.log_str(
         f"{timestep_count} {time} {float(dt)} {min_h} {max_h} {mass_balance}"

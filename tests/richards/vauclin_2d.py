@@ -13,6 +13,8 @@ conditions: bottom and left are no-flux, right has fixed water table height
 The simulation runs for 8 hours.
 """
 from gadopt import *
+from irksome import MeshConstant
+from mpi4py import MPI
 import gwassess
 
 
@@ -82,8 +84,11 @@ def model(level=0, do_write=False, t_final=None):
     q = Function(W, name="VolumetricFlux")
     K = Function(V, name="RelativeConductivity").interpolate(hydraulic_conductivity(h))
 
-    # Time-dependent top boundary flux
-    time_var = Constant(0.0)
+    # Time-dependent top boundary flux. Share Irksome's t Constant with the
+    # BC expression so stage substitution t -> t + c_i*dt is honest for the
+    # multi-stage DIRK22 integrator.
+    mc = MeshConstant(mesh)
+    time_var = mc.Constant(0.0)
     infiltration_rate = vauclin_solution.INFILTRATION_RATE
     infiltration_width = vauclin_solution.INFILTRATION_WIDTH
 
@@ -108,7 +113,8 @@ def model(level=0, do_write=False, t_final=None):
     # Time stepping
     dt = Constant(10)
 
-    # Create Richards solver
+    # Create Richards solver. Hand it the shared t Constant so that stage
+    # times c_i*dt are substituted into top_flux during stage assembly.
     richards_solver = RichardsSolver(
         h,
         soil_curve,
@@ -117,6 +123,7 @@ def model(level=0, do_write=False, t_final=None):
         bcs=richards_bcs,
         solver_parameters="direct",
         quad_degree=5,
+        timestepper_kwargs={'t': time_var},
     )
 
     # Output setup
@@ -158,8 +165,8 @@ def model(level=0, do_write=False, t_final=None):
     final_mass = assemble(theta * dx_mesh)
     mass_balance = (final_mass - initial_mass) / external_flux if external_flux != 0 else 0
 
-    min_h = h.dat.data.min()
-    max_h = h.dat.data.max()
+    min_h = mesh.comm.allreduce(h.dat.data_ro.min(), MPI.MIN)
+    max_h = mesh.comm.allreduce(h.dat.data_ro.max(), MPI.MAX)
 
     return min_h, max_h, external_flux, mass_balance
 

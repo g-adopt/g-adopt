@@ -203,7 +203,7 @@ class RichardsSolver(SolverConfigurationMixin):
     The Richards equation describes water movement in variably saturated porous media:
 
     $$
-    (S_s S + C) \\frac{\\partial h}{\\partial t} + \\nabla \\cdot (K \\nabla h) + \\nabla \\cdot (K \\nabla z) = 0
+    (S_s S + C) \\frac{\\partial h}{\\partial t} - \\nabla \\cdot (K \\nabla h) - \\nabla \\cdot (K \\nabla z) = 0
     $$
 
     where:

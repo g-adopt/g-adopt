@@ -134,12 +134,13 @@ def test_temporal_convergence(scheme, scheme_kwargs, expected_order, label):
         f"{label}: observed rates {rates}, expected order {expected_order}"
     )
 
-    # The finest pair sometimes brushes the solver-tolerance floor for
-    # order-4 GaussLegendre(2), so take the best of the last two as the
-    # representative rate. Tolerance is ~85% of formal order.
-    representative_rate = max(rates[-2:])
+    # Assert the coarsest pair's rate against ~85% of the formal order.
+    # The coarsest pair is furthest from the solver-tolerance floor and
+    # would expose any silent collapse to order 1. Finer-pair rates are
+    # printed above for diagnostic purposes only — taking max/min over
+    # them lets a single bad rate hide behind a good one.
     floor = 0.85 * expected_order
-    assert representative_rate >= floor, (
-        f"{label}: observed rate {representative_rate:.2f} below expected "
+    assert rates[0] >= floor, (
+        f"{label}: coarsest-pair rate {rates[0]:.2f} below expected "
         f"{expected_order} (floor {floor:.2f}); full rate list {rates}"
     )

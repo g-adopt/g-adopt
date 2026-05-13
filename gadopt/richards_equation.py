@@ -17,7 +17,7 @@ The Richards equation in mixed form:
 
 $$
   \frac{\partial \theta}{\partial t} + S_s S \frac{\partial h}{\partial t}
-  + \nabla \cdot (K \nabla h) + \nabla \cdot (K \nabla z) = 0
+  - \nabla \cdot (K \nabla h) - \nabla \cdot (K \nabla z) = 0
 $$
 
 where:
