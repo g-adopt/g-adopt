@@ -1,15 +1,35 @@
 """Mass conservation verification for the Richards equation solver.
 
-Tests that the discrete mass balance holds across different function spaces
-(CG1, CG2, DQ0, DQ1, DQ2) with BackwardEuler time integration. The solver
-uses stage_type="value" by default, which discretises Dt(theta(h)) as an
-exact finite difference rather than using the chain-rule capacity form.
-This should give mass conservation to solver tolerance for DQ spaces.
+Two questions this file answers.
+
+(1) Function-space sensitivity at fixed (stiffly-accurate) tableau.
+    Run BackwardEuler on the same problem across CG1, CG2, DQ0, DQ1, DQ2
+    and check the discrete mass balance. DQ spaces carry the local
+    conservation structure of the moisture term and should sit at the
+    nonlinear solver tolerance; CG spaces do not and pick up an O(1e-4)
+    consistency error from the lack of element-wise conservation.
+
+(2) Tableau sensitivity at fixed function space.
+    Run BackwardEuler (stiffly accurate, control case), ImplicitMidpoint
+    (single-stage non-SA, order 2) and GaussLegendre(2) (two-stage non-SA,
+    order 4) on DQ1 and check the same discrete mass balance. The
+    stage-value path discretises Dt(theta(h)) as the exact finite
+    difference theta(h_new) - theta(h_old) at every stage. For SA
+    tableaux the update u_new = U_s reads that finite difference directly;
+    for non-SA tableaux Irksome must route through the conservative
+    variational update, otherwise the linear-combination update
+    u_new = (1 - sum(bAinv)) * u0 + sum bAinv * U_i destroys conservation
+    because theta of a linear combination is not the linear combination of
+    theta values. With the conservative variational update in place all
+    three tableaux should sit at solver tolerance. Running this test
+    against an Irksome that lacks the conservative-update path will fail
+    on the two non-SA cases with a mass error of order 1.
 
 The test domain is a unit square with no-flux boundaries on left, right,
 and bottom, and a prescribed inflow flux of 1e-6 m/s on top. The soil
 follows a Haverkamp model with parameters chosen to give moderate
-nonlinearity.
+nonlinearity. Specific storage is zero so theta(h) is the only conserved
+quantity.
 """
 
 import pytest
@@ -18,7 +38,8 @@ from gadopt import *
 
 def compute_mass_balance(grid_points, time_step, t_final,
                          polynomial_degree, time_integrator,
-                         function_space):
+                         function_space, timestepper_kwargs=None,
+                         scheme_label=None):
     mesh = UnitSquareMesh(grid_points, grid_points, quadrilateral=True)
     V = FunctionSpace(mesh, function_space, polynomial_degree)
 
@@ -54,6 +75,7 @@ def compute_mass_balance(grid_points, time_step, t_final,
         timestepper=time_integrator,
         solver_parameters_extra={'snes_atol': 1e-15},
         bcs=richards_bcs,
+        timestepper_kwargs=timestepper_kwargs,
     )
 
     initial_mass = assemble(theta * dx)
@@ -77,7 +99,7 @@ def compute_mass_balance(grid_points, time_step, t_final,
         f"dx = {1/(grid_points-1):.4f} | "
         f"dt = {float(dt):.0f} | "
         f"Function space = {function_space}{polynomial_degree} | "
-        f"Time integration = {time_integrator.__name__}"
+        f"Time integration = {scheme_label or time_integrator.__name__}"
     )
 
     return mass_error
@@ -108,3 +130,39 @@ def test_mass_balance(function_space, polynomial_degree):
         # CG spaces lack local conservation; expect O(1e-4) mass error
         assert mass_error < 1e-3, \
             f"Mass imbalance too large for {function_space}{polynomial_degree}: {mass_error:.2e}"
+
+
+# Tableau sensitivity at fixed function space (DQ1).
+#
+# BackwardEuler is the stiffly-accurate control: the linear-combination
+# update is identically the last stage, so the conservation property of
+# the per-stage equations carries straight to u_new. ImplicitMidpoint
+# (single-stage Gauss-Legendre, order 2) and GaussLegendre(2) (two-stage,
+# order 4) are non-stiffly-accurate. On an Irksome that ships the
+# conservative variational update for non-SA stage_value, all three sit
+# at solver tolerance. On an Irksome that does not, the two non-SA cases
+# pick up an O(1) mass defect from the linear-combination update.
+@pytest.mark.parametrize("scheme,scheme_kwargs,scheme_label", [
+    (BackwardEuler, None, "BackwardEuler"),
+    (ImplicitMidpoint, None, "ImplicitMidpoint"),
+    (GaussLegendre, {"tableau_parameter": 2}, "GaussLegendre(2)"),
+])
+def test_mass_balance_tableaux(scheme, scheme_kwargs, scheme_label):
+    grid_points = 26
+    dt = 100.0
+    # A hundred steps is enough to distinguish working (solver tolerance,
+    # ~1e-12) from broken (non-SA linear-combination defect at O(dt^2),
+    # ~1e-4); we do not need to integrate to physical steady state to
+    # make the point.
+    t_final = 100 * dt
+
+    mass_error = compute_mass_balance(
+        grid_points, dt, t_final,
+        polynomial_degree=1, time_integrator=scheme,
+        function_space="DQ",
+        timestepper_kwargs=scheme_kwargs,
+        scheme_label=scheme_label,
+    )
+
+    assert mass_error < 1e-10, \
+        f"Mass imbalance too large for {scheme_label}: {mass_error:.2e}"

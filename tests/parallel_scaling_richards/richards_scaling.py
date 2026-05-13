@@ -112,7 +112,7 @@ assert set(CASE_SOLVERS) == set(CASES), \
 def all_triples() -> Iterator[tuple[str, int, str]]:
     """Yield ``(case, level, solver)`` tuples honouring CASE_SOLVERS.
 
-    Ordering matches meta.py's step enumeration (case → level → solver);
+    Ordering matches meta.py's step enumeration (case, then level, then solver);
     keep the loops in that order so pytest parametrisation IDs stay stable.
     """
     for case, levels in CASES.items():

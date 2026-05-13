@@ -4,7 +4,7 @@
 # This demo reproduces the 3D benchmark from Cockett, Heagy, and Haber
 # (Computers & Geosciences, 2018, doi:10.1016/j.cageo.2018.04.006).
 # The problem simulates infiltration of water into a block of soil
-# composed of two materials — sand and loamy sand — arranged in a
+# composed of two materials (sand and loamy sand) arranged in a
 # spatially complex heterogeneous pattern.
 #
 # The domain is a rectangular prism of 2 x 2 x 2.6 m, built as an

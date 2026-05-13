@@ -99,7 +99,7 @@ def _skip_if_nan(value: float, metric: str) -> None:
 @pytest.mark.longtest
 @pytest.mark.parametrize("case,level,solver", list(all_triples()))
 def test_linear_iterations(case, level, solver):
-    """Mean linear-iteration count stays within ±1 of the recorded value."""
+    """Mean linear-iteration count stays within +/- 1 of the recorded value."""
     expected_df = _load_expected("expected.csv")
     expected = float(_expected_row(expected_df, "expected.csv",
                                    case, level, solver)["linear_iterations"])
@@ -112,7 +112,7 @@ def test_linear_iterations(case, level, solver):
     )
     assert abs(measured - expected) < _ITER_TOL, (
         f"{case}/{solver}/l={level}: mean iterations {measured:.2f} "
-        f"vs expected {expected:.2f} (tol ±{_ITER_TOL})"
+        f"vs expected {expected:.2f} (tol +/- {_ITER_TOL})"
     )
 
 
