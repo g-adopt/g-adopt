@@ -61,6 +61,12 @@ class IrksomeIntegrator:
                 denser mass matrix with block-diagonal stiffness.
         solver_parameters:
             Dictionary of solver parameters provided to PETSc
+        t:
+            Optional pre-existing time Constant. If provided, it is used as the
+            stepper's internal time variable instead of creating a new one,
+            allowing the caller to reference it in time-dependent BC or source
+            expressions and have Irksome substitute stage times correctly. If
+            omitted, a `MeshConstant` initialised to `initial_time` is created.
         adaptive_parameters:
             Optional dict for adaptive time-stepping (`stage_type="deriv"` only).
             - `tol`
@@ -123,6 +129,7 @@ class IrksomeIntegrator:
         bc_type: str = "DAE",
         solver_parameters: dict[str, Any] | None = None,
         initial_time: float = 0.0,
+        t: fd.Constant | None = None,
         adaptive_parameters: dict[str, Any] | None = None,
         **irksome_kwargs,
     ):
@@ -140,7 +147,12 @@ class IrksomeIntegrator:
         # Create MeshConstant objects for time variables (what Irksome expects)
         # These are shared with Irksome's TimeStepper (ensures synchronisation)
         mc = MeshConstant(equation.mesh)
-        self.t = mc.Constant(initial_time)  # Shared time variable with Irksome
+        # Callers that need stage-accurate time substitution in their UFL
+        # (e.g. time-dependent BC expressions, MMS source terms) must build
+        # those expressions referencing the *same* `t` Constant Irksome advances
+        # internally. Passing `t` here lets the caller construct the form first
+        # and hand the Constant in; otherwise we create one.
+        self.t = t if t is not None else mc.Constant(initial_time)
         self.dt_irksome = mc.Constant(dt)  # Irksome's dt, synced from dt_reference
         # Store Dirichlet conditions for application before advancing the integrator
         self.strong_bcs = strong_bcs or []

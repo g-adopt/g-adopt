@@ -312,10 +312,13 @@ class RichardsSolver(SolverConfigurationMixin):
         # The stage value stepper discretises Dt(theta(h)) as the exact finite
         # difference (theta(h_new) - theta(h_old))/dt rather than applying the
         # chain rule C(h)*dh/dt, which introduces systematic mass balance error.
-        # Requires a stiffly accurate Butcher tableau (BackwardEuler, RadauIIA,
-        # DIRK22, etc.). Adaptive time stepping is not yet supported with
-        # stage_type="value" in Irksome, so we only set the default when
-        # adaptive_parameters is not requested.
+        # Conservation now holds for both stiffly-accurate tableaux (where the
+        # update u_new = U_s copies the per-stage finite difference directly)
+        # and non-stiffly-accurate ones (where Irksome routes through a
+        # conservative variational update; requires Irksome PR #226 or later).
+        # Adaptive time stepping is not yet supported with stage_type="value"
+        # in Irksome, so we only set the default when adaptive_parameters is
+        # not requested.
         if ('stage_type' not in self.timestepper_kwargs
                 and 'adaptive_parameters' not in self.timestepper_kwargs):
             self.timestepper_kwargs['stage_type'] = 'value'
@@ -332,8 +335,9 @@ class RichardsSolver(SolverConfigurationMixin):
                 "be conserved exactly. The nonlinear mass term Dt(theta(h)) will "
                 "be discretised via the chain rule C(h)*dh/dt, which introduces "
                 "systematic mass balance error that accumulates over time. To "
-                "enable mass conservation, use stage_type='value' with a stiffly "
-                "accurate Butcher tableau (e.g. BackwardEuler, RadauIIA, DIRK22).",
+                "enable mass conservation, use stage_type='value' with any "
+                "Butcher tableau (Irksome's conservative-update path handles "
+                "both stiffly-accurate and non-stiffly-accurate methods).",
                 stacklevel=2,
             )
 
