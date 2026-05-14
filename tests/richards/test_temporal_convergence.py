@@ -73,10 +73,10 @@ def _run_one(scheme, scheme_kwargs, dt_value, t_final, mesh_n=4):
 
     boundary_ids = get_boundary_ids(mesh)
     bcs = {
-        boundary_ids.left:   {'h': h0},
-        boundary_ids.right:  {'h': h0},
+        boundary_ids.left: {'h': h0},
+        boundary_ids.right: {'h': h0},
         boundary_ids.bottom: {'h': h0},
-        boundary_ids.top:    {'h': h0},
+        boundary_ids.top: {'h': h0},
     }
 
     h = Function(V).interpolate(Constant(baseline))
@@ -109,9 +109,9 @@ def _run_one(scheme, scheme_kwargs, dt_value, t_final, mesh_n=4):
 
 
 @pytest.mark.parametrize("scheme,scheme_kwargs,expected_order,label", [
-    (BackwardEuler,    None,                     1, "BackwardEuler"),
-    (ImplicitMidpoint, None,                     2, "ImplicitMidpoint"),
-    (GaussLegendre,    {"tableau_parameter": 2}, 4, "GaussLegendre(2)"),
+    (BackwardEuler, None, 1, "BackwardEuler"),
+    (ImplicitMidpoint, None, 2, "ImplicitMidpoint"),
+    (GaussLegendre, {"tableau_parameter": 2}, 4, "GaussLegendre(2)"),
 ])
 def test_temporal_convergence(scheme, scheme_kwargs, expected_order, label):
     t_final = 0.1
