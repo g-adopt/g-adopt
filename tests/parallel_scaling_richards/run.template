@@ -1,0 +1,25 @@
+{header}
+
+{prescript}
+
+# Per-job PyOP2 / TSFC / XDG caches on node-local SSD ($PBS_JOBFS).
+# Multiple scaling runs launched concurrently would otherwise race on
+# shared Lustre cache directories when they JIT the same Firedrake
+# kernels. The overhead of a fresh compile per job is ~1-2 min and is
+# cheaper than a corrupted .so.
+if [ -z "$PBS_JOBFS" ]; then
+  echo "PBS_JOBFS is unset; request jobfs storage on the qsub line" >&2
+  exit 1
+fi
+mkdir -p "$PBS_JOBFS/pyop2" "$PBS_JOBFS/tsfc" "$PBS_JOBFS/xdg"
+export PYOP2_CACHE_DIR="$PBS_JOBFS/pyop2"
+export FIREDRAKE_TSFC_KERNEL_CACHE_DIR="$PBS_JOBFS/tsfc"
+export XDG_CACHE_HOME="$PBS_JOBFS/xdg"
+
+# TAG is injected by gadopt_hpc_helper via -v TAG=... and has the shape
+# <case>_<solver>_<level> (see meta.py). The PETSc -log_view profile
+# written below is the file the test parser pulls pc_setup and
+# solve_time from; stdout from the driver carries the per-step linear
+# iteration counts.
+export PETSC_OPTIONS="-log_view :profile_${TAG}.txt"
+{executor} {command}
