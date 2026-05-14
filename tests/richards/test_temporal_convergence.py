@@ -38,7 +38,6 @@ from firedrake import (
     UnitSquareMesh, FunctionSpace, Function, Constant,
     sin, cos, exp, pi, errornorm,
 )
-from irksome import MeshConstant
 
 
 def _run_one(scheme, scheme_kwargs, dt_value, t_final, mesh_n=4):

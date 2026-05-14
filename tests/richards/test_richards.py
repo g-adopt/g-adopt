@@ -23,8 +23,9 @@ expected_rates = {
 
 # Cases to test and whether they are longtests
 enabled_cases = {
+    "tracy_2d_specified_head_dg0": {},
     "tracy_2d_specified_head_dg1": {},
-    "tracy_2d_specified_head_dg2": {"marks": pytest.mark.longtest},
+    "tracy_2d_specified_head_dg2": {},
     "tracy_2d_no_flux_dg1": {},
 }
 

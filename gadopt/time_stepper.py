@@ -62,11 +62,18 @@ class IrksomeIntegrator:
         solver_parameters:
             Dictionary of solver parameters provided to PETSc
         t:
-            Optional pre-existing time Constant. If provided, it is used as the
-            stepper's internal time variable instead of creating a new one,
-            allowing the caller to reference it in time-dependent BC or source
-            expressions and have Irksome substitute stage times correctly. If
-            omitted, a `MeshConstant` initialised to `initial_time` is created.
+            Optional pre-existing `MeshConstant` to use as the stepper's
+            internal time variable. The default (None) creates one internally
+            and the caller updates time as a Python float through `solve(t=t)`,
+            which is the standard g-adopt pattern. The kwarg is for the niche
+            case of time-dependent BC or source expressions that must see
+            stage times: build the BC referencing a shared `MeshConstant`
+            (importable from `gadopt`), pass that Constant in here, and Irksome
+            will substitute `t -> t + c_i*dt` at every stage. Without the
+            shared Constant, multi-stage methods see frozen-at-t_n forcing and
+            their formal order collapses to one. See
+            `tests/richards/test_temporal_convergence.py` and
+            `demos/groundwater/2d_vauclin/2d_vauclin.py` for examples.
         adaptive_parameters:
             Optional dict for adaptive time-stepping (`stage_type="deriv"` only).
             - `tol`
@@ -1047,7 +1054,7 @@ rk_schemes_irksome = [
 ]
 
 __all__ = (
-    ["IrksomeIntegrator"]
+    ["IrksomeIntegrator", "MeshConstant"]
     + [scheme.__name__ for scheme in rk_schemes_gadopt]
     + [scheme.__name__ for scheme in rk_schemes_irksome]
 )

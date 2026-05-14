@@ -238,10 +238,18 @@ class RichardsSolver(SolverConfigurationMixin):
         Dictionary of PETSc solver options used to update the default G-ADOPT options
       quad_degree:
         Integer specifying the quadrature degree. If omitted, it is set to `2p + 1`,
-        where p is the polynomial degree of the trial space
+        where p is the polynomial degree of the trial space. For Richards the soil
+        curves are non-polynomial (`K(h) = K_s exp(alpha h)` for the exponential
+        model, rational/power forms for Haverkamp and van Genuchten), and Newton
+        line search can fail at higher polynomial degrees if the bilinear form is
+        under-integrated. The Tracy benchmark (`tests/richards/tracy_2d.py`) uses
+        `2 * degree + 4` as a safe rule of thumb for the exponential curve;
+        Haverkamp/van Genuchten typically need less. If Newton diverges with
+        DIVERGED_LINE_SEARCH at the start of a run, raise this value.
       interior_penalty:
-        Penalty parameter for SIPG method in DG discretizations. Default is 2.0.
-        Smaller values give weaker boundary enforcement.
+        Safety-factor multiplier for the SIPG penalty in DG discretisations.
+        Default is 2.0; the theoretical coercivity floor is 1.0. Setting it
+        below 1.0 will give a non-coercive bilinear form and Newton may fail.
       nullspace:
         ``VectorSpaceBasis`` spanning the nullspace of the Jacobian. Relevant
         for pure-Neumann problems (all fluxes specified, no Dirichlet on h),

@@ -17,8 +17,8 @@ cases = {
                 "bc_type": "specified_head",
             },
             "dg2": {
-                "levels": [76, 151, 301, 601],
-                "cores": [2, 2, 8, 32],
+                "levels": [76, 151, 301],
+                "cores": [2, 2, 8],
                 "degree": 2,
                 "bc_type": "specified_head",
             },

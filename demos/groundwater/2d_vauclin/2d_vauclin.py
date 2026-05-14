@@ -378,7 +378,8 @@ theta_initial_plot = Function(V, name="InitialMoistureContent").interpolate(thet
 # is held at the hydrostatic Dirichlet head, and the bottom and left are
 # closed with a zero normal flux.
 
-time_var = Constant(0.0)
+mc = MeshConstant(mesh)
+time_var = mc.Constant(0.0)
 infiltration_rate = vauclin_solution.INFILTRATION_RATE
 infiltration_width = vauclin_solution.INFILTRATION_WIDTH
 
@@ -413,6 +414,7 @@ richards_solver = RichardsSolver(
     bcs=richards_bcs,
     solver_parameters="direct",
     quad_degree=5,
+    timestepper_kwargs={'t': time_var},
 )
 
 # The adaptive time-step controller is configured with a lower bound of

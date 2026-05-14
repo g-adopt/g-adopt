@@ -13,7 +13,6 @@ conditions: bottom and left are no-flux, right has fixed water table height
 The simulation runs for 8 hours.
 """
 from gadopt import *
-from irksome import MeshConstant
 from mpi4py import MPI
 import gwassess
 

@@ -78,13 +78,19 @@ def model(nodes, degree=1, bc_type='specified_head'):
     t_final = 2.5e6
     dt = Constant(5e4)
 
+    # Quadrature degree scales with polynomial degree so the non-polynomial
+    # K(h) = K_s exp(alpha h) factor in the bilinear form is integrated
+    # accurately enough to keep the Newton iteration stable. Under-quadrature
+    # at DG2 caused DIVERGED_LINE_SEARCH on the first step.
+    quad_degree = max(3, 2 * degree + 4)
+
     richards_solver = RichardsSolver(
         h, soil_curve, delta_t=dt,
         timestepper=BackwardEuler,
         bcs=richards_bcs,
         solver_parameters="direct",
-        quad_degree=3,
-        interior_penalty=0.5,
+        quad_degree=quad_degree,
+        interior_penalty=2.0,
     )
 
     time = 0.0
@@ -94,7 +100,7 @@ def model(nodes, degree=1, bc_type='specified_head'):
         dt.assign(min(float(dt) * 1.05, t_final / 10))
 
     # Compute L2 errors against analytical solution at t_offset + time
-    dx_quad = dx(metadata={"quadrature_degree": 3})
+    dx_quad = dx(metadata={"quadrature_degree": quad_degree})
 
     h_anal = Function(V, name="AnalyticalPressureHead")
     h_anal.dat.data[:] = [
