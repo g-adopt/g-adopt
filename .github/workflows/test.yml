@@ -129,7 +129,11 @@ jobs:
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
-          uv pip install .[demos,optimisation] pygplates
+          # --reinstall-package irksome forces uv to fetch the pyproject pin
+          # into the venv instead of treating the container's system-site
+          # Irksome as satisfying the requirement. Temporary, tied to the
+          # Irksome pin in pyproject.toml on this branch; remove together.
+          uv pip install --reinstall-package irksome .[demos,optimisation] pygplates
 
       - name: Get Muller et al 2022 plate reconstructions
         run: |
