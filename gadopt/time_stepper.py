@@ -61,6 +61,19 @@ class IrksomeIntegrator:
                 denser mass matrix with block-diagonal stiffness.
         solver_parameters:
             Dictionary of solver parameters provided to PETSc
+        t:
+            Optional pre-existing `MeshConstant` to use as the stepper's
+            internal time variable. The default (None) creates one internally
+            and the caller updates time as a Python float through `solve(t=t)`,
+            which is the standard g-adopt pattern. The kwarg is for the niche
+            case of time-dependent BC or source expressions that must see
+            stage times: build the BC referencing a shared `MeshConstant`
+            (importable from `gadopt`), pass that Constant in here, and Irksome
+            will substitute `t -> t + c_i*dt` at every stage. Without the
+            shared Constant, multi-stage methods see frozen-at-t_n forcing and
+            their formal order collapses to one. See
+            `tests/richards/test_temporal_convergence.py` and
+            `demos/groundwater/2d_vauclin/2d_vauclin.py` for examples.
         adaptive_parameters:
             Optional dict for adaptive time-stepping (`stage_type="deriv"` only).
             - `tol`
@@ -123,6 +136,7 @@ class IrksomeIntegrator:
         bc_type: str = "DAE",
         solver_parameters: dict[str, Any] | None = None,
         initial_time: float = 0.0,
+        t: fd.Constant | None = None,
         adaptive_parameters: dict[str, Any] | None = None,
         **irksome_kwargs,
     ):
@@ -140,7 +154,12 @@ class IrksomeIntegrator:
         # Create MeshConstant objects for time variables (what Irksome expects)
         # These are shared with Irksome's TimeStepper (ensures synchronisation)
         mc = MeshConstant(equation.mesh)
-        self.t = mc.Constant(initial_time)  # Shared time variable with Irksome
+        # Callers that need stage-accurate time substitution in their UFL
+        # (e.g. time-dependent BC expressions, MMS source terms) must build
+        # those expressions referencing the *same* `t` Constant Irksome advances
+        # internally. Passing `t` here lets the caller construct the form first
+        # and hand the Constant in; otherwise we create one.
+        self.t = t if t is not None else mc.Constant(initial_time)
         self.dt_irksome = mc.Constant(dt)  # Irksome's dt, synced from dt_reference
         # Store Dirichlet conditions for application before advancing the integrator
         self.strong_bcs = strong_bcs or []
@@ -324,13 +343,15 @@ class RKGeneric(IrksomeIntegrator):
                 f"{self.__class__.__name__} must define a butcher_tableau attribute"
             )
 
+        stage_type = kwargs.pop('stage_type', self.stage_type)
+        bc_type = kwargs.pop('bc_type', self.bc_type)
         super().__init__(
             equation,
             solution,
             dt,
             self.butcher_tableau,
-            stage_type=self.stage_type,
-            bc_type=self.bc_type,
+            stage_type=stage_type,
+            bc_type=bc_type,
             **kwargs,
         )
 
@@ -373,7 +394,9 @@ def create_custom_tableau(
         raise ValueError("Inconsistent Butcher tableau: Row sum of 'a' is not 'c'")
 
     return ButcherTableau(
-        A=a, b=b, btilde=None, c=c, order=len(b), embedded_order=None, gamma0=None
+        A=np.asarray(a, dtype=float), b=np.asarray(b, dtype=float),
+        btilde=None, c=np.asarray(c, dtype=float),
+        order=len(b), embedded_order=None, gamma0=None
     )
 
 
@@ -1031,7 +1054,7 @@ rk_schemes_irksome = [
 ]
 
 __all__ = (
-    ["IrksomeIntegrator"]
+    ["IrksomeIntegrator", "MeshConstant"]
     + [scheme.__name__ for scheme in rk_schemes_gadopt]
     + [scheme.__name__ for scheme in rk_schemes_irksome]
 )
