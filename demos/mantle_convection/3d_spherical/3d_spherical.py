@@ -180,6 +180,7 @@ for timestep in range(0, timesteps):
         output_file.write(
             *z.subfunctions,
             T,
+            T_dev,
             u_radial_out,
             u_horizontal_out,
         )
