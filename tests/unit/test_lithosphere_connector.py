@@ -812,7 +812,7 @@ class TestPolygonConfig:
         assert config.n_points == 20000
         assert config.interpolation.k_neighbors == 50
         assert config.interpolation.distance_threshold == 0.1
-        assert config.interpolation.default_value == 200.0
+        assert config.interpolation.default_value == 0.0
         assert config.r_outer == 2.208
         assert config.depth_scale == 2890.0
         assert config.transition_width == 10.0

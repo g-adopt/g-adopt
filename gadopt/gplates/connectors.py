@@ -361,6 +361,15 @@ class IndicatorConnector(ABC):
             - ``"idw"``: inverse-distance weighting (w = 1/d).
             - ``"gaussian"``: Gaussian RBF (w = exp(-d^2 / 2*sigma^2)).
 
+        Note on ``distance_threshold`` for PolygonConnector:
+            When the source cloud already encodes the region boundary via
+            zero-thickness halo seeds (the mask-and-relabel pattern), the
+            lateral roll-off length is set by ``gaussian_sigma``, not by
+            ``distance_threshold``. The threshold then degenerates into a
+            pathological-query guard for target nodes that have no source
+            seed within range at all; raise it generously
+            (e.g. 0.15-0.2 rad) and tune ``gaussian_sigma`` instead.
+
         Args:
             source_xyz: (N, 3) source coordinates (gtrack metres or mesh units).
             target_coords: (M, 3) target mesh coordinates.

@@ -2,6 +2,7 @@ import os
 import re
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import firedrake as fd
@@ -1132,7 +1133,7 @@ class PolygonConfig(IndicatorConfigBase):
     Args:
         n_points: Number of sample points for polygon coverage. Default: 20000.
         interpolation: Interpolation parameters. See :class:`InterpolationConfig`.
-            Default: ``InterpolationConfig(default_value=200.0)``.
+            Default: ``InterpolationConfig(default_value=0.0)``.
         r_outer: Outer mesh radius in non-dimensional units. Default: 2.208.
         depth_scale: Physical depth (km) per non-dimensional unit. Default: 2890.0.
         transition_width: Tanh transition width in km. Default: 10.0.
@@ -1151,7 +1152,10 @@ class PolygonConfig(IndicatorConfigBase):
 
     def __post_init__(self):
         if self.interpolation is None:
-            self.interpolation = InterpolationConfig(default_value=200.0)
+            # default_value=0.0 because mask-and-relabel places zero-thickness
+            # halo seeds outside polygons; a `too_far` mesh node should read 0,
+            # not the 200 km fill that would tanh-up to indicator ~1.
+            self.interpolation = InterpolationConfig(default_value=0.0)
         super().__post_init__()
         if self.gc_collect_frequency is not None and self.gc_collect_frequency < 1:
             raise ValueError(
@@ -1167,8 +1171,13 @@ class PolygonConnector(IndicatorConnector):
     boundaries. The indicator is ~1 inside the region, ~0 outside, with a
     smooth tanh transition at the region base.
 
-    Differs from the base-class tanh behaviour: points far from any source
-    data receive indicator = 0 (outside the polygon region).
+    The polygon edge is smoothed by the Gaussian kNN interpolator: seeds
+    inside the polygon carry the requested thickness and seeds outside
+    carry zero thickness, so the lateral roll-off length is set by
+    ``interpolation.gaussian_sigma`` rather than by the polygon outline.
+    ``interpolation.distance_threshold`` no longer controls the polygon
+    footprint here -- it is just a guard against pathological queries when
+    a target node has no nearby seed at all.
 
     Args:
         gplates_connector (pyGplatesConnector): Connector with plate model files.
@@ -1229,7 +1238,7 @@ class PolygonConnector(IndicatorConnector):
                 rotation_files=gplates_connector.rotation_filenames,
                 static_polygons=gplates_connector.static_polygons,
             )
-            self._region_present = self._load_data(thickness_data)
+            self._region_present = self._load_data_masked(thickness_data)
         else:
             self._polygon_filter = None
             self._rotator = None
@@ -1252,11 +1261,58 @@ class PolygonConnector(IndicatorConnector):
             "thickness": region_cloud.get_property(self.config.property_name).copy(),
         }
 
-    def _apply_indicator(self, r_target, thickness_km, too_far):
-        """Zero out indicator for points far from any polygon data."""
-        indicator = super()._apply_indicator(r_target, thickness_km, too_far)
-        indicator[too_far] = 0.0
-        return indicator
+    def _load_data_masked(self, data):
+        """Build the seed cloud and mask the property to 0 outside polygons.
+
+        Reproduces the seed-construction dispatch from
+        ``IndicatorConnector._load_data`` but, instead of dropping exterior
+        points via ``PolygonFilter.filter_inside``, keeps every seed and
+        sets the property to 0 outside. This way the kNN interpolator can
+        average across the boundary and the lateral roll-off length is
+        controlled by ``interpolation.gaussian_sigma`` rather than by the
+        polygon outline -- avoiding the 1->0 cliff that a filter-then-snap
+        approach produces.
+        """
+        PointCloud = self._PointCloud
+
+        if hasattr(data, "xyz") and hasattr(data, "properties"):
+            cloud = data
+        elif isinstance(data, (str, Path)):
+            cloud = self._load_from_hdf5(data)
+        elif isinstance(data, tuple) and len(data) == 2:
+            latlon, values = data
+            cloud = PointCloud.from_latlon(np.asarray(latlon))
+            cloud.add_property(self.config.property_name, np.asarray(values))
+        elif isinstance(data, (int, float)):
+            from gtrack.mesh import create_sphere_mesh_latlon
+            lats, lons = create_sphere_mesh_latlon(self.config.n_points)
+            latlon = np.column_stack([lats, lons])
+            cloud = PointCloud.from_latlon(latlon)
+            cloud.add_property(
+                self.config.property_name, np.full(len(latlon), float(data))
+            )
+        else:
+            raise TypeError(
+                f"Unsupported data type: {type(data)}. "
+                "Expected PointCloud, file path, (latlon, values) tuple, or scalar."
+            )
+
+        mask = self._polygon_filter.get_containment_mask(cloud, at_age=0.0)
+        prop = cloud.get_property(self.config.property_name).copy()
+        prop[~mask] = 0.0
+        cloud.add_property(self.config.property_name, prop)
+
+        log(f"{type(self).__name__}: Mask-and-relabel kept {cloud.n_points} "
+            f"seeds; {int(mask.sum())} inside polygons, "
+            f"{int((~mask).sum())} zeroed outside.", level=DEBUG)
+
+        cloud = self._rotator.assign_plate_ids(
+            cloud, at_age=0.0, remove_undefined=True,
+        )
+        log(f"{type(self).__name__}: After plate ID assignment: "
+            f"{cloud.n_points} points.", level=DEBUG)
+
+        return cloud
 
 
 # ---------------------------------------------------------------------------
