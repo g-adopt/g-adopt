@@ -5,16 +5,11 @@ graph TD
   cylindrical_2d[2D Cylindrical] --> cylindrical_lvv_2d[2d Cylindrical LVV]
   end
 
-  subgraph rheology[Rheology]
-  burgers[Burgers]
-  end
-
   subgraph adjoint[Adjoint]
-  adjoint_viscosity[Viscosity Inversion] --> adjoint_ice[Ice Inversion] --> adjoint_coupled[adjoint_coupled]
+  adjoint_viscosity[Viscosity Inversion] --> adjoint_ice[Ice Inversion]
   end
 
   base --> geometry
-  base --> rheology
   geometry --> adjoint
 
   click base "base_case"

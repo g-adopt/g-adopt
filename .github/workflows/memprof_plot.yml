@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
       - name: Install plotter 
         run: |
           pip3 install git+https://github.com/g-adopt/memprof_plotter.git
@@ -22,7 +26,7 @@ jobs:
           memprof_plotter -n "${NRUNS}"
       - name: Upload plots
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: memprof_plots
           path: memprof_plots

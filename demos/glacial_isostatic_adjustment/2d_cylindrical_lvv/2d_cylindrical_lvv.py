@@ -1,4 +1,4 @@
-# Idealised 2-D viscoelastic loading problem in an annulus
+# Idealised viscoelastic loading problem with lateral viscosity variations
 # =======================================================
 #
 # In this tutorial, we examine an idealised 2-D loading problem in an annulus domain.

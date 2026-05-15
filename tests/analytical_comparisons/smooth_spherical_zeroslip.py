@@ -58,7 +58,15 @@ def model(level, l, mm, k, do_write=False):
     mu = Constant(1.0)  # Constant viscosity
 
     # RHS provided by assess solution: rho'=r**k Y_lm
-    solution = assess.SphericalStokesSolutionSmoothZeroSlip(float(l), float(m), float(k), nu=float(mu), Rp=rmax, Rm=rmin, g=1.0)
+    solution = assess.SphericalStokesSolutionSmoothZeroSlip(
+        int(float(l)),
+        int(float(m)),
+        int(float(k)),
+        nu=float(mu),
+        Rp=rmax,
+        Rm=rmin,
+        g=1.0,
+    )
     u_xyz = Function(V).interpolate(X)
     rhop = Function(Vscl)
     rhop.dat.data[:] = [solution.delta_rho_cartesian(xyzi) for xyzi in u_xyz.dat.data]
@@ -73,7 +81,7 @@ def model(level, l, mm, k, do_write=False):
 
     # Nullspaces and near-nullspaces:
     Z_nullspace = create_stokes_nullspace(Z, closed=True, rotational=False)
-    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1])
+    Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, translations=[0, 1, 2])
 
     # use tighter tolerances than default to ensure convergence:
     solver_params_extra = {"fieldsplit_0": {"ksp_rtol": 1e-10}, "fieldsplit_1": {"ksp_rtol": 1e-9}}
