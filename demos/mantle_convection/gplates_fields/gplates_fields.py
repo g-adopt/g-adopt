@@ -293,7 +293,7 @@ connector_config = {
         "default_mesh_points": 5000,  # initial Fibonacci sphere mesh points
         "initial_ocean_mean_spreading_rate": 75.0,  # the spreading rate we use at initial age (mm/yr)
         "ridge_sampling_degrees": 2.0,  # ridge tessellation resolution (degrees)
-        "spreading_offset_degrees": 0.01, # offset from ridge for new seeds (degrees)
+        "spreading_offset_degrees": 0.01,  # offset from ridge for new seeds (degrees)
         "reinit_k_neighbors": 5,  # KNN neighbours during reinitialisation
         "reinit_max_distance": 500e3,  # max interpolation distance (m)
     },

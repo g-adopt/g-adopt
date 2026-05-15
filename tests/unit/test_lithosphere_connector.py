@@ -1631,7 +1631,7 @@ class TestCheckpointRoundtrip:
 
     @pytest.fixture
     def mesh_and_Q(self):
-        rmin, rmax = 1.208, 2.208
+        rmin = 1.208
         mesh2d = CubedSphereMesh(rmin, refinement_level=3, degree=2)
         mesh = ExtrudedMesh(mesh2d, layers=4, extrusion_type="radial")
         mesh.cartesian = False
