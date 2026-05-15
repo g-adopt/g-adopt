@@ -155,6 +155,14 @@ stokes_solver = StokesSolver(
 )
 # -
 
+# Output the radial and horizontal velocity components to demonstrate the
+# spherical velocity decomposition provided by the diagnostic helpers. The
+# radial field is the component parallel to the upward normal, while the
+# horizontal field is the remaining tangential velocity, making both fields
+# available for visualisation in ParaView.
+u_radial_out = Function(Q, name="Radial_Velocity")
+u_horizontal_out = Function(V, name="Horizontal_Velocity")
+
 # We now initiate the time loop, which runs until a steady-state solution has been attained.
 
 for timestep in range(0, timesteps):
@@ -165,7 +173,16 @@ for timestep in range(0, timesteps):
         averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
         # Compute deviation from layer average
         T_dev.assign(T-T_avg)
-        output_file.write(*z.subfunctions, T, T_dev)
+        # Interpolate radial and horizontal velocity components for visualisation.
+        u_radial_out.interpolate(u_radial)
+        u_horizontal_out.interpolate(u_horizontal)
+        # Write output
+        output_file.write(
+            *z.subfunctions,
+            T,
+            u_radial_out,
+            u_horizontal_out,
+        )
 
     if timestep != 0:
         dt = t_adapt.update_timestep()
