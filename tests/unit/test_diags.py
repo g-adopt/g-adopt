@@ -234,6 +234,68 @@ def test_function_extraction():
     assert gadopt.diagnostics.extract_functions(vc) == {f}
 
 
+def test_u_radial_matches_upward_component():
+    """
+    Test that GeodynamicalDiagnostics.u_radial returns the upward/radial
+    component of the velocity field.
+    """
+    mesh = get_mesh("annulus")
+    V = fd.VectorFunctionSpace(mesh, "CG", 1)
+    Q = fd.FunctionSpace(mesh, "CG", 1)
+    Z = fd.MixedFunctionSpace([V, Q])
+
+    z = fd.Function(Z)
+    u, _ = z.subfunctions
+
+    X, Y = fd.SpatialCoordinate(mesh)
+    u.interpolate(fd.as_vector([X + Y, 2.0 * Y - X]))
+
+    T = fd.Function(Q)
+    diags = gadopt.GeodynamicalDiagnostics(z, T, "bottom", "top")
+
+    radial = diags.u_radial()
+    expected = diags.get_upward_component(u)
+
+    error = fd.assemble((radial - expected) ** 2 * fd.dx)
+
+    assert error < 1.0e-12
+
+
+def test_u_radial_and_u_horizontal_decompose_velocity():
+    """
+    Test that the radial and horizontal velocity components decompose the full
+    velocity magnitude consistently.
+    """
+    mesh = get_mesh("annulus")
+    V = fd.VectorFunctionSpace(mesh, "CG", 1)
+    Q = fd.FunctionSpace(mesh, "CG", 1)
+    Z = fd.MixedFunctionSpace([V, Q])
+
+    z = fd.Function(Z)
+    u, _ = z.subfunctions
+
+    X, Y = fd.SpatialCoordinate(mesh)
+    u.interpolate(fd.as_vector([X + Y, 2.0 * Y - X]))
+
+    T = fd.Function(Q)
+    diags = gadopt.GeodynamicalDiagnostics(z, T, "bottom", "top")
+
+    u_radial = diags.u_radial()
+    u_horizontal = diags.u_horizontal()
+
+    error = fd.assemble(
+        (
+            fd.inner(u, u)
+            - u_radial**2
+            - fd.inner(u_horizontal, u_horizontal)
+        )
+        ** 2
+        * fd.dx
+    )
+
+    assert error < 1.0e-12
+
+
 def test_cache_outside_base_diagnostics():
     @gadopt.diagnostics.ts_cache
     def func():

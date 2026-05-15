@@ -126,10 +126,15 @@ output_file = VTKFile("output.pvd")
 output_frequency = 1
 
 plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg "
-             "u_hor_max div_u_hor_min_base div_u_hor_max_base")
+plog.log_str(
+    "timestep time dt maxchange u_rms "
+    "Nu_top Nu_bottom energy_conservation T_avg T_dev_avg "
+    "u_radial_min u_radial_max "
+    "u_hor_max div_u_hor_min_base div_u_hor_max_base"
+)
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top, quad_degree=6)
+u_radial = gd.u_radial()
 u_horizontal = gd.u_horizontal()
 # -
 
@@ -183,7 +188,9 @@ for timestep in range(0, timesteps):
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
-    # Horizontal velocity diagnostics
+    # Radial and Horizontal velocity diagnostics
+    u_radial_min = gd.min(u_radial)
+    u_radial_max = gd.max(u_radial)
     u_hor_max = gd.max(u_horizontal)
     div_u_hor_min_base = gd.min(div(u_horizontal), boundary_id=boundary.bottom)
     div_u_hor_max_base = gd.max(div(u_horizontal), boundary_id=boundary.bottom)
@@ -192,6 +199,7 @@ for timestep in range(0, timesteps):
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
                  f"{energy_conservation} {gd.T_avg()} {T_dev_avg} "
+                 f"{u_radial_min} {u_radial_max} "
                  f"{u_hor_max} {div_u_hor_min_base} {div_u_hor_max_base}")
 
     # Leave if steady-state has been achieved:
