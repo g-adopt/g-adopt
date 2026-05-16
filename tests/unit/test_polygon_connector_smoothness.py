@@ -56,13 +56,13 @@ from gadopt.gplates import (
 # ---------------------------------------------------------------------------
 ARC_LAT = 0.0             # equator
 ARC_LON_INSIDE = -65.0    # well inside South America (Amazon)
-ARC_LON_OUTSIDE = -130.0  # abyssal Pacific, past distance_threshold from any
-                          # continental seed (also well past the Galapagos so
-                          # the bound is robust to polygon-set updates)
-N_ARC = 200               # samples along the arc; ~36 km step over the
-                          # ~7200 km arc, fine enough to land >=5 samples in
-                          # the (0.05, 0.95) mid-band for sigma=0.03 (~190 km
-                          # transition width)
+# abyssal Pacific, past distance_threshold from any continental seed
+# (also well past the Galapagos so the bound is robust to polygon-set updates)
+ARC_LON_OUTSIDE = -130.0
+# samples along the arc; ~36 km step over the ~7200 km arc, fine enough to land
+# >=5 samples in the (0.05, 0.95) mid-band for sigma=0.03 (~190 km transition
+# width)
+N_ARC = 200
 
 # Sampling radius. We do NOT sample at `r_outer` exactly: with the
 # mask-and-relabel fix in place, far-from-polygon mesh nodes interpolate to
