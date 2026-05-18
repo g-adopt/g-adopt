@@ -277,8 +277,7 @@ def test_u_radial_and_u_horizontal_decompose_velocity():
     X, Y = fd.SpatialCoordinate(mesh)
     u.interpolate(fd.as_vector([X + Y, 2.0 * Y - X]))
 
-    T = fd.Function(Q)
-    diags = gadopt.GeodynamicalDiagnostics(z, T, "bottom", "top")
+    diags = gadopt.GeodynamicalDiagnostics(z, None, bottom_bdy, top_bdy)
 
     u_radial = diags.u_radial()
     u_horizontal = diags.u_horizontal()
