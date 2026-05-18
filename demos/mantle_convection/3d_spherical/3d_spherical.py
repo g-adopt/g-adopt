@@ -134,7 +134,7 @@ plog.log_str(
 )
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top, quad_degree=6)
-u_radial = gd.u_radial()
+u_radial = gd.u_vertical()
 u_horizontal = gd.u_horizontal()
 # -
 

@@ -20,6 +20,8 @@ cases = {
     f"{mc_path}/3d_spherical": {"extra_checks": [
         "Nu_top",
         "T_dev_avg",
+        ("u_radial_min", {"rtol": 5e-4}),
+        ("u_radial_max", {"rtol": 5e-4}),
         ("u_hor_max", {"rtol": 5e-4}),
         ("div_u_hor_min_base", {"rtol": 5e-4}),
         ("div_u_hor_max_base", {"rtol": 5e-4}),

@@ -235,55 +235,60 @@ def test_function_extraction():
 
 
 @pytest.mark.parametrize(
-    "mesh_type,top_bdy,bottom_bdy", [("square", 2, 1), ("annulus", "top", "bottom")]
+    "mesh_type,bottom_id,top_id",
+    [
+        ("square", 3, 4),
+        ("annulus", "bottom", "top"),
+    ],
 )
-def test_u_radial_matches_upward_component(
-    mesh_type: Literal["square", "annulus"],
-    top_bdy: int | str,
-    bottom_bdy: int | str,
-):
+def test_u_vertical_matches_upward_component(mesh_type, bottom_id, top_id):
     """
-    Test that GeodynamicalDiagnostics.u_radial returns the upward/radial
-    component of the velocity field.
+    Test that GeodynamicalDiagnostics.u_vertical returns the velocity
+    component parallel to the upward normal.
+
+    On a Cartesian mesh this is the vertical component. On an annulus mesh
+    this is the radial component.
     """
-    mesh = get_mesh(mesh_type)
-    V = fd.VectorFunctionSpace(mesh, "CG", 1)
-    Q = fd.FunctionSpace(mesh, "CG", 1)
-    Z = fd.MixedFunctionSpace([V, Q])
+    mesh = get_mesh(mesh_type, L=2)
+    V = fd.VectorFunctionSpace(mesh, "CG", 2)
+    W = fd.FunctionSpace(mesh, "CG", 1)
+    Z = V * W
 
     z = fd.Function(Z)
     u, _ = z.subfunctions
 
     X, Y = fd.SpatialCoordinate(mesh)
     u.interpolate(fd.as_vector([X + Y, 2.0 * Y - X]))
-    u_test, _ = fd.split(z)
 
-    diags = gadopt.GeodynamicalDiagnostics(z, None, bottom_bdy, top_bdy)
+    diags = gadopt.GeodynamicalDiagnostics(z, None, bottom_id, top_id)
 
-    radial = diags.u_radial()
-    expected = gadopt.utility.vertical_component(u_test)
+    u_vertical = diags.u_vertical()
+    expected = gadopt.utility.vertical_component(u)
 
-    error = fd.assemble((radial - expected) ** 2 * fd.dx)
+    error = fd.assemble((u_vertical - expected) ** 2 * fd.dx)
 
     assert error < 1.0e-12
 
 
 @pytest.mark.parametrize(
-    "mesh_type,top_bdy,bottom_bdy", [("square", 2, 1), ("annulus", "top", "bottom")]
+    "mesh_type,bottom_id,top_id",
+    [
+        ("square", 3, 4),
+        ("annulus", "bottom", "top"),
+    ],
 )
-def test_u_radial_and_u_horizontal_decompose_velocity(
-    mesh_type: Literal["square", "annulus"],
-    top_bdy: int | str,
-    bottom_bdy: int | str,
-):
+def test_u_vertical_and_u_horizontal_decompose_velocity(mesh_type, bottom_id, top_id):
     """
-    Test that the radial and horizontal velocity components decompose the full
-    velocity magnitude consistently.
+    Test that the vertical and horizontal velocity components decompose
+    the full velocity magnitude.
+
+    On a Cartesian mesh the vertical component is the y/upward component.
+    On an annulus mesh it is the radial component.
     """
-    mesh = get_mesh(mesh_type)
-    V = fd.VectorFunctionSpace(mesh, "CG", 1)
-    Q = fd.FunctionSpace(mesh, "CG", 1)
-    Z = fd.MixedFunctionSpace([V, Q])
+    mesh = get_mesh(mesh_type, L=2)
+    V = fd.VectorFunctionSpace(mesh, "CG", 2)
+    W = fd.FunctionSpace(mesh, "CG", 1)
+    Z = V * W
 
     z = fd.Function(Z)
     u, _ = z.subfunctions
@@ -291,15 +296,15 @@ def test_u_radial_and_u_horizontal_decompose_velocity(
     X, Y = fd.SpatialCoordinate(mesh)
     u.interpolate(fd.as_vector([X + Y, 2.0 * Y - X]))
 
-    diags = gadopt.GeodynamicalDiagnostics(z, None, bottom_bdy, top_bdy)
+    diags = gadopt.GeodynamicalDiagnostics(z, None, bottom_id, top_id)
 
-    u_radial = diags.u_radial()
+    u_vertical = diags.u_vertical()
     u_horizontal = diags.u_horizontal()
 
     error = fd.assemble(
         (
             fd.inner(u, u)
-            - u_radial**2
+            - u_vertical**2
             - fd.inner(u_horizontal, u_horizontal)
         )
         ** 2
