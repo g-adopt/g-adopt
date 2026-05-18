@@ -234,12 +234,19 @@ def test_function_extraction():
     assert gadopt.diagnostics.extract_functions(vc) == {f}
 
 
-def test_u_radial_matches_upward_component():
+@pytest.mark.parametrize(
+    "mesh_type,top_bdy,bottom_bdy", [("square", 2, 1), ("annulus", "top", "bottom")]
+)
+def test_u_radial_matches_upward_component(
+    mesh_type: Literal["square", "annulus"],
+    top_bdy: int | str,
+    bottom_bdy: int | str,
+):
     """
     Test that GeodynamicalDiagnostics.u_radial returns the upward/radial
     component of the velocity field.
     """
-    mesh = get_mesh("annulus")
+    mesh = get_mesh(mesh_type)
     V = fd.VectorFunctionSpace(mesh, "CG", 1)
     Q = fd.FunctionSpace(mesh, "CG", 1)
     Z = fd.MixedFunctionSpace([V, Q])
