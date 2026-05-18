@@ -343,15 +343,15 @@ class RKGeneric(IrksomeIntegrator):
                 f"{self.__class__.__name__} must define a butcher_tableau attribute"
             )
 
-        stage_type = kwargs.pop('stage_type', self.stage_type)
-        bc_type = kwargs.pop('bc_type', self.bc_type)
+        kwargs = {
+            "stage_type": self.stage_type,
+            "bc_type": self.bc_type,
+        } | kwargs
         super().__init__(
             equation,
             solution,
             dt,
             self.butcher_tableau,
-            stage_type=stage_type,
-            bc_type=bc_type,
             **kwargs,
         )
 
