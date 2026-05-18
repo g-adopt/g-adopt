@@ -249,12 +249,12 @@ def test_u_radial_matches_upward_component():
 
     X, Y = fd.SpatialCoordinate(mesh)
     u.interpolate(fd.as_vector([X + Y, 2.0 * Y - X]))
+    u_test, _ = fd.split(z)
 
-    T = fd.Function(Q)
-    diags = gadopt.GeodynamicalDiagnostics(z, T, "bottom", "top")
+    diags = gadopt.GeodynamicalDiagnostics(z, None, bottom_bdy, top_bdy)
 
     radial = diags.u_radial()
-    expected = diags.get_upward_component(u)
+    expected = gadopt.utility.vertical_component(u_test)
 
     error = fd.assemble((radial - expected) ** 2 * fd.dx)
 
