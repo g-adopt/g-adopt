@@ -261,12 +261,19 @@ def test_u_radial_matches_upward_component():
     assert error < 1.0e-12
 
 
-def test_u_radial_and_u_horizontal_decompose_velocity():
+@pytest.mark.parametrize(
+    "mesh_type,top_bdy,bottom_bdy", [("square", 2, 1), ("annulus", "top", "bottom")]
+)
+def test_u_radial_and_u_horizontal_decompose_velocity(
+    mesh_type: Literal["square", "annulus"],
+    top_bdy: int | str,
+    bottom_bdy: int | str,
+):
     """
     Test that the radial and horizontal velocity components decompose the full
     velocity magnitude consistently.
     """
-    mesh = get_mesh("annulus")
+    mesh = get_mesh(mesh_type)
     V = fd.VectorFunctionSpace(mesh, "CG", 1)
     Q = fd.FunctionSpace(mesh, "CG", 1)
     Z = fd.MixedFunctionSpace([V, Q])
