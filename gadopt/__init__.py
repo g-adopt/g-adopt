@@ -44,6 +44,9 @@ from .utility import (
     timer_decorator,
     get_boundary_ids,
     CubedSphereMeshHierarchy,
+    decomposition_stats,
+    print_decomposition_stats,
+    print_hierarchy_decomposition_stats
 )
 
 PETSc.Sys.popErrorHandler()

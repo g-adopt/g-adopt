@@ -10,6 +10,8 @@ from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_val
 from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional
 from firedrake import Mesh, CubedSphereMesh, MeshHierarchy, HierarchyBase, DistributedMeshOverlapType
 from firedrake.ufl_expr import extract_unique_domain
+from firedrake.functionspaceimpl import WithGeometry
+from firedrake.mg.utils import get_level
 import ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
@@ -22,6 +24,7 @@ from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
+import pandas as pd
 
 try:
     from firedrake import MeshSequenceGeometry
@@ -669,6 +672,22 @@ def initialise_background_field(
                                     background_values[i], f), f))
 
 
+def _cubed_sphere_to_angle_coords(coords):
+    """Maps (in-place) on sphere coordinates back to [-atan(1), atan(1)]^3 cube."""
+    # Map back to unit cube by dividing through by largest coordinate
+    coords /= np.max(np.abs(coords), axis=1).reshape((-1, 1))
+    # Map to angle coordinates, giving [-atan(1), atan(1)]^3 cube
+    # It is in these coordinates that a cubed-sphere mesh is uniform (i.e. all equal squares)
+    coords[:] = np.arctan(coords)
+
+
+def _cube_sphere_from_angle_coords(coords, radius):
+    """Maps (in-place) angle coords of a [-atan(1), atan(1)] cube to the sphere."""
+    coords[:] = np.tan(coords)
+    scale = radius / np.linalg.norm(coords, axis=1).reshape(-1, 1)
+    coords[:] *= scale
+
+
 def CubedSphereMeshHierarchy(
         radius: float,
         refinement_level: int,
@@ -694,38 +713,22 @@ def CubedSphereMeshHierarchy(
         degree=1,
         distribution_parameters={"overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
     )
-    # convert back to cube-mesh before refinement
-    # needs to happen on dm coordinates, as that's what's used to refine in MeshHierarchy
+
+    # Convert back to cube-mesh in angle coordinates, this is a [-atan(1), atan(1)]^3 cube
+    # in which the mesh is uniform, all cells are equal sized squares.
+    # Needs to happen on both dm coordinates, as that's what's used to refine in MeshHierarchy
     coords = mesh_coarse.topology_dm.getCoordinatesLocal().array.reshape((-1, mesh_coarse.geometric_dimension))
-    coords /= np.max(np.abs(coords), axis=1).reshape((-1, 1))
+    _cubed_sphere_to_angle_coords(coords)
+    # and on Firedrake's mesh.coordinates as this mesh will become the coarse mesh in the hierarchy
+    _cubed_sphere_to_angle_coords(mesh_coarse.coordinates.dat.data[:])
 
-    # The unit-cube mesh is not equispaced, but it will be if we
-    # convert back to "angle"-coordinates. It in these coordinates
-    # that we need to refine, to be consistent with the refinement
-    # that happens in CubedSphereMesh: if we refine in "angle"
-    # coordinates and then convert back to on-the-sphere coordinates,
-    # we obtain the same mesh as if we'd directly asked CubedSphereMesh
-    # for the same level of refinement
-    coords[:] = np.arctan(coords)
-    # now we have a [-atan(1), atan(1)]^3 cube with equi-spaced mesh
-
-    # Rebuild mesh from dm to ensure these coordinates end up in Firedrake's mesh.coordinates
-    # (this also removes the ._radius attribute to prevent MeshHierarchy popping out too early)
-    mesh_coarse = Mesh(
-        mesh_coarse.topology_dm,
-        distribution_parameters=mesh_coarse._distribution_parameters,
-        comm=mesh_coarse.comm
-    )
+    # remove _radius attribute to stop MeshHierarchy popping things back out too early
+    del mesh_coarse._radius
 
     mh = MeshHierarchy(mesh_coarse, refinement_level - coarse_refinement_level)
     meshes_p2 = []
     for m in mh:
-        # convert [-atan(1), atan(1)]^3 cube in "angle"-coordinates
-        # back to non-equispaced unit cube mesh
-        m.coordinates.dat.data[:] = np.tan(m.coordinates.dat.data)
-        # then scale up to radius everywhere
-        scale = radius / np.linalg.norm(m.coordinates.dat.data, axis=1).reshape(-1, 1)
-        m.coordinates.dat.data[:] *= scale
+        _cube_sphere_from_angle_coords(m.coordinates.dat.data, radius)
 
         # Finally create P2 mesh. To be consistent with
         # CubedSphereMesh(..., degree=2) we do this after refinement
@@ -733,10 +736,102 @@ def CubedSphereMeshHierarchy(
         coords = Function(P2).interpolate(m.coordinates)
         scale = radius / np.linalg.norm(coords.dat.data, axis=1).reshape(-1, 1)
         coords.dat.data[:] *= scale
-        mesh_p2 = Mesh(coords)
+        mesh_p2 = Mesh(coords, reorder=False)
         # not sure is needed, but for consistenty with CubedSphereMesh:
         mesh_p2._radius = radius
         meshes_p2.append(mesh_p2)
 
-    return HierarchyBase(meshes_p2, mh.coarse_to_fine_cells,
-                         mh.fine_to_coarse_cells, nested=True)
+    mh2 = HierarchyBase(meshes_p2, mh.coarse_to_fine_cells,
+                        mh.fine_to_coarse_cells, nested=True)
+    from firedrake import VTKFile
+    mh_pvd = VTKFile('mh.pvd', adaptive=True)
+    for m in mh2:
+        mh_pvd.write(Function(FunctionSpace(m, "CG", 1), name='foo'))
+
+    return mh2
+
+
+def _min_max_sum_reduce(a, b, dtype):
+    """
+    invec: incoming data
+    inoutvec: accumulated result
+    Both are flat arrays → reshape them
+    """
+
+    # elementwise reduction
+    b[:, 0] = np.minimum(b[:, 0], a[:, 0])
+    b[:, 1] = np.maximum(b[:, 1], a[:, 1])
+    b[:, 2] = b[:, 2] + a[:, 2]
+    return b
+
+
+def decomposition_stats(function_space, include_element_count=True):
+    node_counts = []
+    index = []
+
+    if isinstance(function_space, WithGeometry):
+        subspaces = function_space.subspaces
+        comm = function_space.comm
+    else:
+        subspaces = [subfs for fs in function_space for subfs in fs.subspaces]
+        comm = function_space[0].comm
+
+    if include_element_count:
+        meshes = set([fs.mesh() for fs in subspaces])
+        for mesh in meshes:
+            node_counts.append(mesh.topology.cell_set.sizes[1])
+        if len(meshes) > 1:
+            index = [mesh.name + ' elements' for mesh in meshes]
+        else:
+            index = ['Elements']
+
+    for fs in subspaces:
+        node_counts.append(fs.node_set.sizes[1] * fs.dof_dset.cdim)
+        index.append(fs.name)
+
+    buffer = np.repeat(node_counts, 3).reshape((-1, 3))
+
+    op = MPI.Op.Create(_min_max_sum_reduce, commute=True)
+    buffer = comm.reduce(buffer, op=op)
+    op.free()
+
+    if comm.rank == 0:
+        avg = buffer[:, 2] / comm.size
+        df = pd.DataFrame({
+            'Min': buffer[:, 0],
+            'Max': buffer[:, 1],
+            'Sum': buffer[:, 2],
+            'Average': avg,
+            'Imbalance': (buffer[:, 1] - avg)/avg
+        }, index=index)
+        return df
+    else:
+        return None
+
+
+def print_decomposition_stats(function_space, include_element_count=True):
+    df = decomposition_stats(function_space, include_element_count=include_element_count)
+    if df is not None:
+        print(df)
+
+
+def print_hierarchy_decomposition_stats(function_space, include_element_count=True):
+    if isinstance(function_space, WithGeometry):
+        subspaces = function_space.subspaces
+    else:
+        subspaces = [subfs for fs in function_space for subfs in fs.subspaces]
+
+    meshes = set(fs.mesh() for fs in subspaces)
+    if len(meshes) > 1:
+        raise ValueError("Function spaces need to be defined on the same mesh hierarchy")
+    mh, level = get_level(subspaces[0].mesh())
+
+    dfs = []
+    for mesh in mh:
+        mh_subspaces = [FunctionSpace(mesh, fs.ufl_element(), name=fs.name) for fs in subspaces]
+        dfs.append(decomposition_stats(mh_subspaces, include_element_count=include_element_count))
+
+    if dfs[0] is not None:
+        for i, df in enumerate(dfs):
+            df.insert(0, 'Level', np.ones(len(df), dtype=int)*i)
+        print(pd.concat(dfs))

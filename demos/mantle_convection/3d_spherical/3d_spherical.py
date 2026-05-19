@@ -31,8 +31,8 @@ import numpy as np
 # +
 tic0 = perf_counter()
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 4, 8
-coarse_ref_level = 1
-coarse_layers = 1
+coarse_ref_level = 2
+coarse_layers = 2
 
 base_mh = CubedSphereMeshHierarchy(
     rmin, ref_level, coarse_refinement_level=coarse_ref_level)
@@ -44,10 +44,12 @@ mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
 domain_volume = assemble(1*dx(domain=mesh))  # Required for a diagnostic calculation.
 
-V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
-Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
+V = VectorFunctionSpace(mesh, "CG", 2, name='Velocity')  # Velocity function space (vector)
+W = FunctionSpace(mesh, "CG", 1, name='Pressure')  # Pressure function space (scalar)
+Q = FunctionSpace(mesh, "CG", 2, name='Temperature')  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
+
+print_hierarchy_decomposition_stats([Z, Q])
 
 log(f"Dimensions: {V.dim()}, {W.dim()}, {Q.dim()}")
 
