@@ -269,6 +269,8 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
       Di: Dissipation number
       mu: dynamic viscosity
       H:  volumetric heat production
+      heating_weight: scaling factor (Function or Number) applied to viscous
+                      dissipation and adiabatic heating terms; defaults to 1
 
     Other Arguments:
       rho (Number):           reference density
