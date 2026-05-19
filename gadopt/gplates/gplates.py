@@ -14,7 +14,7 @@ from firedrake.ufl_expr import extract_unique_domain
 from scipy.special import erf
 from gtrack import (
     SeafloorAgeTracker, PointRotator, PolygonFilter,
-    PointCloud, TracerConfig,
+    PointCloud, TracerConfig, create_sphere_mesh_latlon
 )
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
@@ -1169,15 +1169,14 @@ class PolygonConnector(IndicatorConnector):
 
     Computes a smooth 3D indicator field for regions defined by polygon
     boundaries. The indicator is ~1 inside the region, ~0 outside, with a
-    smooth tanh transition at the region base.
+    smooth tanh transition at the region base (in "upward" direction).
 
     The polygon edge is smoothed by the Gaussian kNN interpolator: seeds
     inside the polygon carry the requested thickness and seeds outside
     carry zero thickness, so the lateral roll-off length is set by
-    ``interpolation.gaussian_sigma`` rather than by the polygon outline.
-    ``interpolation.distance_threshold`` no longer controls the polygon
-    footprint here -- it is just a guard against pathological queries when
-    a target node has no nearby seed at all.
+    ``interpolation.gaussian_sigma``.
+    Note that ``interpolation.distance_threshold`` is just a guard against
+    pathological queries when a target node has no nearby seed at all.
 
     Args:
         gplates_connector (pyGplatesConnector): Connector with plate model files.
@@ -1275,16 +1274,21 @@ class PolygonConnector(IndicatorConnector):
         """
         PointCloud = self._PointCloud
 
+        # The case from data is coming from a PointCloud object (a gtrack object)
         if hasattr(data, "xyz") and hasattr(data, "properties"):
             cloud = data
+        # The case from data is coming from an HDF5 file path
         elif isinstance(data, (str, Path)):
             cloud = self._load_from_hdf5(data)
+        # The case from data is coming from a (latlon, values) tuple, a common way to represent gridded data.
         elif isinstance(data, tuple) and len(data) == 2:
             latlon, values = data
             cloud = PointCloud.from_latlon(np.asarray(latlon))
             cloud.add_property(self.config.property_name, np.asarray(values))
+
+        # For the case where we are assigning a constant thickness to all points,
         elif isinstance(data, (int, float)):
-            from gtrack.mesh import create_sphere_mesh_latlon
+            # Create a sphere mesh of lat/lon points using Fibonacci hashing technique
             lats, lons = create_sphere_mesh_latlon(self.config.n_points)
             latlon = np.column_stack([lats, lons])
             cloud = PointCloud.from_latlon(latlon)
@@ -1307,10 +1311,46 @@ class PolygonConnector(IndicatorConnector):
             f"{int((~mask).sum())} zeroed outside.", level=DEBUG)
 
         cloud = self._rotator.assign_plate_ids(
-            cloud, at_age=0.0, remove_undefined=True,
+            cloud, at_age=0.0, remove_undefined=False,
         )
+
+        # Polygon-set mismatch sliver: the thickness mask above used the
+        # continental polygons (PolygonFilter.get_containment_mask) while
+        # assign_plate_ids uses the static plate polygons. These two sets
+        # disagree by 10-50 km along passive margins, so seeds in that
+        # sliver carry thickness>0 (continental) but get plate_id=0 from
+        # the assignment. With remove_undefined=True those seeds were
+        # dropped, biasing the Gaussian kNN at exactly the locations where
+        # smoothness matters. Instead, each undefined *continental* seed
+        # inherits the plate_id of its nearest defined *continental*
+        # neighbour on the unit sphere; restricting donors to the
+        # continental subset guarantees the sliver halo rides the adjacent
+        # continent through geological time rather than an oceanic plate
+        # that might happen to sit closer geometrically.
+        prop_arr = cloud.get_property(self.config.property_name)
+        undefined = cloud.plate_ids == 0
+        continental = prop_arr > 0.0
+        target = undefined & continental
+        donor = (~undefined) & continental
+        n_target = int(target.sum())
+        n_donor = int(donor.sum())
+        if n_target > 0 and n_donor > 0:
+            donor_xyz = cloud.xyz[donor]
+            donor_unit = donor_xyz / np.linalg.norm(donor_xyz, axis=1, keepdims=True)
+            target_xyz = cloud.xyz[target]
+            target_unit = target_xyz / np.linalg.norm(target_xyz, axis=1, keepdims=True)
+            tree = cKDTree(donor_unit)
+            _, idx = tree.query(target_unit, k=1)
+            new_ids = cloud.plate_ids.copy()
+            new_ids[target] = cloud.plate_ids[donor][idx]
+            cloud.plate_ids = new_ids
+            log(f"{type(self).__name__}: Patched {n_target} undefined "
+                f"continental seeds via 1-NN inheritance from {n_donor} "
+                f"defined continental seeds.", level=DEBUG)
+
         log(f"{type(self).__name__}: After plate ID assignment: "
-            f"{cloud.n_points} points.", level=DEBUG)
+            f"{cloud.n_points} points ({int((cloud.plate_ids != 0).sum())} "
+            f"with defined plate IDs).", level=DEBUG)
 
         return cloud
 

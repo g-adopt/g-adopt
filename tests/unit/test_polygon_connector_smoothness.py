@@ -348,3 +348,89 @@ def test_polygon_indicator_is_smooth_across_continental_edge(
         "SMOOTH_POLYGON_INDICATOR.md step 2 mandates deleting that "
         f"override. Tail values: {tail.tolist()}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Margin-aligned seed loss regression (SMOOTH-CONTINENTS-IMPLMEMENTATION-05-19.md)
+#
+# Before the 1-NN plate-ID inheritance fix, seeds in the polygon-set mismatch
+# sliver (thickness>0 from the continental mask but plate_id=0 from the static
+# plate polygons) were dropped by `assign_plate_ids(..., remove_undefined=True)`.
+# The fix switches to `remove_undefined=False` and inherits each undefined
+# continental seed's plate ID from its nearest defined continental neighbour
+# on the unit sphere -- restricting donors to the continental subset so the
+# halo cannot accidentally ride an oceanic plate at older ages.
+# ---------------------------------------------------------------------------
+def test_no_continental_seeds_dropped_at_polygon_set_mismatch(
+    smooth_polygon_connector,
+):
+    """All continental seeds survive the plate-ID step with a defined plate.
+
+    The mask step marks ~N continental seeds (thickness=50). Pre-fix, any of
+    those seeds sitting in the static-vs-continental polygon sliver were
+    dropped. Post-fix, they remain in the cloud and carry a non-zero plate ID
+    inherited from a nearby continental seed.
+    """
+    cloud = smooth_polygon_connector._region_present
+    assert cloud is not None, "Connector root state missing region cloud."
+
+    thickness = cloud.get_property("thickness")
+    continental = thickness > 0.0
+    n_continental = int(continental.sum())
+    assert n_continental > 0, "Fixture has no continental seeds; mask broken."
+
+    undefined_continental = int(((cloud.plate_ids == 0) & continental).sum())
+    assert undefined_continental == 0, (
+        f"{undefined_continental} continental seeds (out of {n_continental}) "
+        "still carry plate_id=0 after the 1-NN patch. The margin sliver fix "
+        "must leave every continental seed with a defined plate ID."
+    )
+
+
+def test_undefined_continental_seeds_inherit_continental_plate_id(
+    smooth_polygon_connector,
+):
+    """Re-derive the raw plate IDs and check the 1-NN inheritance contract.
+
+    For each seed that was originally undefined AND continental (thickness>0),
+    its post-fix plate_id must equal the plate_id of its nearest defined
+    continental neighbour on the unit sphere. Restricting donors to the
+    continental subset is the load-bearing safety property: it prevents the
+    halo from riding an oceanic plate over geological time.
+    """
+    from scipy.spatial import cKDTree
+    from gtrack.point_rotation import _get_plate_ids
+
+    connector = smooth_polygon_connector
+    cloud = connector._region_present
+    rotator = connector._rotator
+
+    raw_ids = _get_plate_ids(
+        cloud.xyz,
+        rotator.static_polygons,
+        rotator.rotation_model,
+        0.0,
+    )
+    thickness = cloud.get_property("thickness")
+    continental = thickness > 0.0
+    originally_undefined = raw_ids == 0
+    target = originally_undefined & continental
+    donor = (~originally_undefined) & continental
+
+    if int(target.sum()) == 0:
+        pytest.skip(
+            "No undefined continental seeds in this fixture; the polygon "
+            "sets agree everywhere a continental seed landed. Nothing to "
+            "verify."
+        )
+
+    donor_xyz = cloud.xyz[donor]
+    donor_unit = donor_xyz / np.linalg.norm(donor_xyz, axis=1, keepdims=True)
+    target_xyz = cloud.xyz[target]
+    target_unit = target_xyz / np.linalg.norm(target_xyz, axis=1, keepdims=True)
+    tree = cKDTree(donor_unit)
+    _, idx = tree.query(target_unit, k=1)
+
+    expected = raw_ids[donor][idx]
+    actual = cloud.plate_ids[target]
+    np.testing.assert_array_equal(actual, expected)
