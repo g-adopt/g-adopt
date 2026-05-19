@@ -6,6 +6,7 @@ on:
       - main
       - release
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       target_container:
