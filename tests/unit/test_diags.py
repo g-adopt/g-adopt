@@ -234,6 +234,86 @@ def test_function_extraction():
     assert gadopt.diagnostics.extract_functions(vc) == {f}
 
 
+@pytest.mark.parametrize(
+    "mesh_type,bottom_id,top_id",
+    [
+        ("square", 3, 4),
+        ("annulus", "bottom", "top"),
+    ],
+)
+def test_u_vertical_matches_upward_component(mesh_type, bottom_id, top_id):
+    """
+    Test that GeodynamicalDiagnostics.u_vertical returns the velocity
+    component parallel to the upward normal.
+
+    On a Cartesian mesh this is the vertical component. On an annulus mesh
+    this is the radial component.
+    """
+    mesh = get_mesh(mesh_type, L=2)
+    V = fd.VectorFunctionSpace(mesh, "CG", 2)
+    W = fd.FunctionSpace(mesh, "CG", 1)
+    Z = V * W
+
+    z = fd.Function(Z)
+    u, _ = z.subfunctions
+
+    X, Y = fd.SpatialCoordinate(mesh)
+    u.interpolate(fd.as_vector([X + Y, 2.0 * Y - X]))
+
+    diags = gadopt.GeodynamicalDiagnostics(z, None, bottom_id, top_id)
+
+    u_vertical = diags.u_vertical()
+    expected = gadopt.utility.vertical_component(u)
+
+    error = fd.assemble((u_vertical - expected) ** 2 * fd.dx)
+
+    assert error < 1.0e-12
+
+
+@pytest.mark.parametrize(
+    "mesh_type,bottom_id,top_id",
+    [
+        ("square", 3, 4),
+        ("annulus", "bottom", "top"),
+    ],
+)
+def test_u_vertical_and_u_horizontal_decompose_velocity(mesh_type, bottom_id, top_id):
+    """
+    Test that the vertical and horizontal velocity components decompose
+    the full velocity magnitude.
+
+    On a Cartesian mesh the vertical component is the y/upward component.
+    On an annulus mesh it is the radial component.
+    """
+    mesh = get_mesh(mesh_type, L=2)
+    V = fd.VectorFunctionSpace(mesh, "CG", 2)
+    W = fd.FunctionSpace(mesh, "CG", 1)
+    Z = V * W
+
+    z = fd.Function(Z)
+    u, _ = z.subfunctions
+
+    X, Y = fd.SpatialCoordinate(mesh)
+    u.interpolate(fd.as_vector([X + Y, 2.0 * Y - X]))
+
+    diags = gadopt.GeodynamicalDiagnostics(z, None, bottom_id, top_id)
+
+    u_vertical = diags.u_vertical()
+    u_horizontal = diags.u_horizontal()
+
+    error = fd.assemble(
+        (
+            fd.inner(u, u)
+            - u_vertical**2
+            - fd.inner(u_horizontal, u_horizontal)
+        )
+        ** 2
+        * fd.dx
+    )
+
+    assert error < 1.0e-12
+
+
 def test_cache_outside_base_diagnostics():
     @gadopt.diagnostics.ts_cache
     def func():

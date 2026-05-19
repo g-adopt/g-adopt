@@ -799,8 +799,12 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
     def u_rms_top(self) -> float:
         return self.l2norm(self.u, self.top_id)
 
+    def u_vertical(self):
+        """Return UFL expression for the velocity component parallel to the upward normal."""
+        return self.get_upward_component(self.u)
+
     def u_horizontal(self):
-        """Return UFL expression for velocity components orthogonal to gravity."""
+        """Return UFL expression for velocity components orthogonal to the upward normal."""
         return self.get_horizontal_components(self.u)
 
     @ts_cache(input_funcs=["T"])
