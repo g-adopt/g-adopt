@@ -3,13 +3,19 @@ import numpy as np
 import shapely as sl
 from mpi4py import MPI
 
-from gadopt import assign_level_set_values, interface_thickness
+from gadopt import (
+    DiffusiveSmoothingSolver,
+    assign_level_set_values,
+    interface_thickness,
+)
 
 import parameters as prms
 from utility import half_space_cooling_model
 
 
-def initial_temperature(T: fd.Function) -> None:
+def initial_temperature(
+    T: fd.Function, smoothing_params: dict[str, float | dict] | None = None
+) -> None:
     x, y = fd.SpatialCoordinate(T.ufl_domain())
     depth = prms.domain_dims[1] - y
 
@@ -50,16 +56,12 @@ def initial_temperature(T: fd.Function) -> None:
         - ((x - prms.ann_centre[0]) / fd.tan(prms.slab_tip_angle) + prms.ann_centre[1])
         >= 0.0,
     )
-    T_not_plate = fd.conditional(
-        is_slab,
-        prms.temperature_scaling(T_slab),
-        prms.temperature_scaling(T_overriding),
-    )
-    T.interpolate(
-        fd.conditional(
-            x <= prms.trench_coords[0], prms.temperature_scaling(T_plate), T_not_plate
-        )
-    )
+    T_not_plate = fd.conditional(is_slab, T_slab, T_overriding)
+    T_global = fd.conditional(x <= prms.trench_coords[0], T_plate, T_not_plate)
+    T.interpolate(prms.temperature_scaling(T_global))
+
+    if smoothing_params is not None:
+        DiffusiveSmoothingSolver(T, **smoothing_params).action(T)
 
 
 def initial_level_set(psi: fd.Function) -> None:

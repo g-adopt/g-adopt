@@ -1,5 +1,4 @@
 import firedrake as fd
-import numpy as np
 from scipy.constants import R, g
 from ufl.core.operator import Operator
 
@@ -90,10 +89,9 @@ def viscosity_strain_rate_balance(
             )
             variation = fd.assemble(abs(viscosity_eff - viscosity_eff_old) * measure)
             relative_variation = variation / fd.assemble(viscosity_eff_old * measure)
-            if relative_variation > 1e-4:
-                viscosity_eff_old = viscosity_eff
-            else:
+            if relative_variation <= 1e-4:
                 break
+            viscosity_eff_old = viscosity_eff
 
         viscosity[mantle]["effective"] = viscosity_eff
 
@@ -121,7 +119,7 @@ def plastic_deformation(
 def dominant_creep(
     creep_laws: dict[str, Operator],
     deformation_tags: dict[str, int],
-    visc_min: Operator | float = np.inf,
+    visc_min: Operator | float,
     def_mech: Operator | int = -1,
 ) -> Operator:
     creep, viscosity = creep_laws.popitem()
@@ -143,8 +141,13 @@ def active_deformation(
     viscosity: Operator,
     visc_bounds: dict[str, float],
 ) -> Operator:
-    def_mech = dominant_creep(creep_laws.copy(), deformation_tags)
-    def_mech = fd.conditional(yield_criterion, deformation_tags["plastic"], def_mech)
+    def_mech = dominant_creep(
+        creep_laws.copy(), deformation_tags, visc_bounds["maximum"]
+    )
+    if prms.plastic_deformation:
+        def_mech = fd.conditional(
+            yield_criterion, deformation_tags["plastic"], def_mech
+        )
     def_mech = fd.conditional(
         viscosity <= visc_bounds["minimum"], deformation_tags["minimum"], def_mech
     )
@@ -167,11 +170,11 @@ def material_viscosity(
         + depth * prms.distance_scale * prms.adiab_grad
     )
 
-    mu_bounds_material = {}
-    for bound in prms.mu_bounds["mantle"]:
-        mu_bounds_material[bound] = material_field(
+    eta_bounds_material = {}
+    for bound in prms.eta_bounds["mantle"]:
+        eta_bounds_material[bound] = material_field(
             psi,
-            [prms.mu_bounds["mantle"][bound], prms.mu_bounds["weak layer"][bound]],
+            [prms.eta_bounds["mantle"][bound], prms.eta_bounds["weak layer"][bound]],
             "geometric",
         )
 
@@ -179,73 +182,72 @@ def material_viscosity(
     epsilon_dot_ii = tensor_second_invariant(epsilon_dot, 1e-25 * prms.time_scale)
 
     yield_strength = {}
-    mu_plastic = {}
+    eta_plastic = {}
     for material, params in prms.plastic_deformation_params.items():
         yield_strength[material] = yield_point(lith_pres, **params)
-        mu_plastic[material] = plastic_deformation(
+        eta_plastic[material] = plastic_deformation(
             yield_strength[material],
             epsilon_dot_ii / prms.time_scale,
-            prms.mu_bounds[material],
+            prms.eta_bounds[material],
         )
     yield_strength_material = material_field(
         psi, [yield_strength["mantle"], yield_strength["weak layer"]], "geometric"
     )
-    mu_plastic_material = material_field(
-        psi, [mu_plastic["mantle"], mu_plastic["weak layer"]], "geometric"
+    eta_plastic_material = material_field(
+        psi, [eta_plastic["mantle"], eta_plastic["weak layer"]], "geometric"
     )
 
-    mu_viscous = viscosity_strain_rate_balance(
+    eta_viscous = viscosity_strain_rate_balance(
         mesh,
         epsilon_dot,
         lith_pres,
         T_full,
         prms.viscous_creep_params,
-        prms.mu_bounds["mantle"],
-        mu_bounds_material,
+        prms.eta_bounds["mantle"],
+        eta_bounds_material,
     )
 
-    tau_upp_mant = 2.0 * mu_viscous["upper"]["effective"] / prms.mu_scale * epsilon_dot
+    tau_upp_mant = (
+        2.0 * eta_viscous["upper"]["effective"] / prms.viscosity_scale * epsilon_dot
+    )
     tau_ii_upp_mant = tensor_second_invariant(tau_upp_mant)
 
     yield_criterion = (
-        tau_ii_upp_mant * prms.mu_scale / prms.time_scale >= yield_strength_material
+        tau_ii_upp_mant * prms.viscosity_scale / prms.time_scale
+        >= yield_strength_material
     )
-    mu_upp_mant = fd.conditional(
-        yield_criterion, mu_plastic_material, mu_viscous["upper"].pop("effective")
-    )
-    mu_material = fd.conditional(
+    if prms.plastic_deformation:
+        eta_upp_mant = fd.conditional(
+            yield_criterion, eta_plastic_material, eta_viscous["upper"].pop("effective")
+        )
+    else:
+        eta_upp_mant = eta_viscous["upper"].pop("effective")
+    eta_material = fd.conditional(
         depth <= prms.depth_lower_mantle,
-        mu_upp_mant,
-        mu_viscous["lower"].pop("effective"),
+        eta_upp_mant,
+        eta_viscous["lower"].pop("effective"),
     )
-    # mu_material = fd.conditional(
-    #     depth <= prms.depth_lower_mantle,
-    #     mu_viscous["upper"].pop("effective"),
-    #     mu_viscous["lower"].pop("effective"),
-    # )
 
     def_mech = {}
-    for mantle, creep_laws in mu_viscous.items():
+    for mantle, creep_laws in eta_viscous.items():
         def_mech[mantle] = active_deformation(
             prms.def_mech_tags,
             creep_laws=creep_laws,
             yield_criterion=yield_criterion,
-            viscosity=mu_material,
-            visc_bounds=mu_bounds_material,
+            viscosity=eta_material,
+            visc_bounds=eta_bounds_material,
         )
     def_mech_material = fd.conditional(
         depth <= prms.depth_lower_mantle, def_mech["upper"], def_mech["lower"]
     )
 
-    mu_material /= prms.mu_scale
+    eta_material /= prms.viscosity_scale
 
     rheol_expr = {
         "Deformation mechanism": def_mech_material,
-        "Deviatoric stress (second invariant)": tau_ii_upp_mant
-        * prms.mu_scale
-        / prms.time_scale,
-        "Strain-rate (second invariant)": epsilon_dot_ii / prms.time_scale,
-        "Viscosity": mu_material * prms.mu_scale,
+        "Deviatoric stress (second invariant)": tau_ii_upp_mant,
+        "Strain-rate (second invariant)": epsilon_dot_ii,
+        "Viscosity": eta_material,
     }
 
-    return mu_material, rheol_expr
+    return eta_material, rheol_expr

@@ -1,6 +1,8 @@
+from functools import partial
+
 import firedrake as fd
 import numpy as np
-from scipy.constants import g, zero_Celsius
+from scipy.constants import g, mega, year, zero_Celsius
 from ufl.core.operator import Operator
 
 
@@ -9,13 +11,14 @@ def buoyancy_number(density_contrast: float) -> float:
 
 
 def temperature_scaling(
-    temperature: float | fd.Function | Operator, dimensional: bool = True
+    temperature: float | fd.Function | Operator,
+    dimensional: bool = True,
+    adapt: bool = False,
 ) -> float | fd.Function | Operator:
-    if not dimensionless:
-        return temperature
-
-    if dimensional:
+    if (adapt and not dimensionless) or (dimensional and dimensionless):
         return (temperature - T_surf) / (T_pot - T_surf)
+    elif not dimensionless:
+        return temperature
     else:
         return temperature * (T_pot - T_surf) + T_surf
 
@@ -26,8 +29,8 @@ free_surface = True
 mesh_generation = "gmsh"
 
 # Spatial parameters
-domain_height = 1e6
-domain_aspect_ratio = 3.0
+domain_height = 1.5e6
+domain_aspect_ratio = 4.0
 distance_scale = domain_height if dimensionless else 1.0
 domain_dims = (
     domain_aspect_ratio * domain_height / distance_scale,
@@ -36,12 +39,12 @@ domain_dims = (
 depth_lower_mantle = 6.6e5 / distance_scale
 
 # Mesh parameters (Firedrake)
-mesh_elements = (225, 75)
+mesh_elements = (400, 100)
 # Mesh parameters (Gmsh)
 mesh_layers = {
-    "thickness": [x / distance_scale for x in [3.4e5, 5.8e5, 8e4]],
-    "vertical_resolution": [x / distance_scale for x in [6.8e4, 2.9e4, 1e4]],
-    "horizontal_resolution": 2e4 / distance_scale,
+    "thickness": [x / distance_scale for x in [8.4e5, 5.8e5, 8e4]],
+    "vertical_resolution": [x / distance_scale for x in [8.4e4, 2e4, 8e3]],
+    "horizontal_resolution": 1.5e4 / distance_scale,
 }
 
 # Physical parameters
@@ -56,23 +59,43 @@ T_surf = zero_Celsius
 T_pot = T_surf + 1.35e3
 adiab_grad = alpha * g * T_pot / cp
 
+# Non-dimensional scales
+reference_viscosity = 1e22
+reference_time = domain_height**2 / kappa
+scales = {
+    "Deformation mechanism": 1.0,
+    "Density": rho_mantle,
+    "Deviatoric stress (second invariant)": reference_viscosity / reference_time,
+    "Free surface": domain_height,
+    "Level set": 1.0,
+    "Pressure": reference_viscosity / reference_time,
+    "Rayleigh number (compositional)": 1.0,
+    "Strain-rate (second invariant)": 1.0 / reference_time,
+    "Temperature": partial(temperature_scaling, dimensional=False),
+    "Velocity": domain_height / reference_time,
+    "Viscosity": reference_viscosity,
+}
+
 # Non-dimensional numbers
-mu_scale = 1e21 if dimensionless else 1.0
+viscosity_scale = reference_viscosity if dimensionless else 1.0
 if dimensionless:
-    Ra = rho_mantle * alpha * (T_pot - T_surf) * g * domain_height**3 / mu_scale / kappa
+    Ra = (rho_mantle * alpha * (T_pot - T_surf) * g * domain_height**3) / (
+        reference_viscosity * kappa
+    )
     B = buoyancy_number(rho_weak_layer - rho_mantle)
 
     if free_surface:
         BFS = [buoyancy_number(rho - rho_water) for rho in [rho_mantle, rho_weak_layer]]
 
 # Temporal parameters
-time_scale = domain_height**2 / kappa if dimensionless else 1.0
-myr_to_seconds = 1e6 * 365.25 * 8.64e4
-time_end = 50.0 * myr_to_seconds / time_scale
+time_scale = reference_time if dimensionless else 1.0
+myr_to_seconds = mega * year
+time_end = 100.0 * myr_to_seconds / time_scale
 time_step = 1e11 / time_scale
 
 # Rheology
-mu_bounds = {
+plastic_deformation = True
+eta_bounds = {
     "mantle": {"minimum": 1e18, "maximum": 1e25},
     "weak layer": {"minimum": 1e18, "maximum": 1e25},
 }
@@ -84,17 +107,12 @@ viscous_creep_params = {
     "upper": {
         "diffusion": {"prefactor": 1.5e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
         "dislocation": {
-            "prefactor": 4.4e-17,
-            "n": 3.3,
+            "prefactor": 1e-17,
+            "n": 3.5,
             "act_nrg": 5.4e5,
-            "act_vol": 1.5e-5,
+            "act_vol": 1.2e-5,
         },
-        "Peierls": {
-            "prefactor": 9.5e-157,
-            "n": 20.0,
-            "act_nrg": 5.4e5,
-            "act_vol": 1e-5,
-        },
+        "Peierls": {"prefactor": 1e-150, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
     },
     "lower": {
         "diffusion": {"prefactor": 1e-18, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}
@@ -115,22 +133,26 @@ initial_adapt_loops = 3
 adapt_calls = 3
 metric_parameters = {  # For further information: `set_parameters` in animate/metric.py
     "dm_plex_metric": {
-        "target_complexity": 20_000,  # Metric complexity, analogous to cell count
-        "h_min": 3e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
+        "target_complexity": 125_000,  # Metric complexity, analogous to cell count
+        "h_min": 2e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
         "h_max": 5e5 / distance_scale,  # Maximum metric magnitude (i.e. cell size)
-        "a_max": 10.0,  # Maximum metric anisotropy (cell aspect ratio)
+        "a_max": 2.0,  # Maximum metric anisotropy (cell aspect ratio)
         "p": np.inf,  # Metric normalisation order
         "gradation_factor": 1.3,  # Maximum variation in length between adjacent edges
     }
 }
-mesh_fields = {
-    "Stokes": {"add_to_metric": [True, False], "scaling": [1e-1, None]},
-    "Temperature": {"add_to_metric": True, "scaling": 1e0},
-    "Level set": {"add_to_metric": True, "scaling": 1e2},
+initial_metric_scales = {
+    "Velocity": [1.0, 1.0],
+    "Temperature": 10.0,
+    "Level set": 1000.0,
+    "Viscosity": 0.05,
 }
-if free_surface:
-    mesh_fields["Stokes"]["add_to_metric"].append(False)
-    mesh_fields["Stokes"]["scaling"].append(None)
+metric_scales = {
+    "Velocity": [1.0, 1.0],
+    "Temperature": 5.0,
+    "Level set": 10.0,
+    "Viscosity": 0.05,
+}
 
 # Time loop
 subcycles = 1
@@ -146,3 +168,4 @@ weak_layer_thickness = 5e3 / distance_scale
 ann_outer_radius = 2.5e5 / distance_scale
 ann_centre = (trench_coords[0], trench_coords[1] - ann_outer_radius)
 slab_tip_angle = np.deg2rad(77.0)
+smoothing_wavelength = 3e3 / distance_scale
