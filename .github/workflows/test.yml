@@ -10,10 +10,10 @@ on:
   workflow_dispatch:
     inputs:
       target_container:
-        description: The target container with which to run the suite
+        description: The target container with which to run the suite (full tag, e.g. dev-main)
         type: string
         required: true
-        default: main
+        default: dev-main
 
 jobs:
   check_commit:
