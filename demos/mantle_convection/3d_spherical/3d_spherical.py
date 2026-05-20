@@ -44,12 +44,12 @@ mesh.cartesian = False
 boundary = get_boundary_ids(mesh)
 domain_volume = assemble(1*dx(domain=mesh))  # Required for a diagnostic calculation.
 
-V = VectorFunctionSpace(mesh, "CG", 2, name='Velocity')  # Velocity function space (vector)
-W = FunctionSpace(mesh, "CG", 1, name='Pressure')  # Pressure function space (scalar)
-Q = FunctionSpace(mesh, "CG", 2, name='Temperature')  # Temperature function space (scalar)
+V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
+W = FunctionSpace(mesh, "CG", 1)  # Pressure function space (scalar)
+Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
 Z = MixedFunctionSpace([V, W])  # Mixed function space.
 
-print_hierarchy_decomposition_stats([Z, Q])
+print_hierarchy_decomposition_stats([Z, Q], names=['Velocity', 'Pressure', 'Temperature'])
 
 log(f"Dimensions: {V.dim()}, {W.dim()}, {Q.dim()}")
 

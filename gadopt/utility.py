@@ -765,16 +765,16 @@ def _min_max_sum_reduce(a, b, dtype):
     return b
 
 
-def decomposition_stats(function_space, include_element_count=True):
+def decomposition_stats(function_spaces, names=None, include_element_count=True):
     node_counts = []
     index = []
 
-    if isinstance(function_space, WithGeometry):
-        subspaces = function_space.subspaces
-        comm = function_space.comm
+    if isinstance(function_spaces, WithGeometry):
+        subspaces = function_spaces.subspaces
+        comm = function_spaces.comm
     else:
-        subspaces = [subfs for fs in function_space for subfs in fs.subspaces]
-        comm = function_space[0].comm
+        subspaces = [subfs for fs in function_spaces for subfs in fs.subspaces]
+        comm = function_spaces[0].comm
 
     if include_element_count:
         meshes = set([fs.mesh() for fs in subspaces])
@@ -785,10 +785,16 @@ def decomposition_stats(function_space, include_element_count=True):
         else:
             index = ['Elements']
 
+    if names is None:
+        index.extend([fs.name for fs in subspaces])
+    else:
+        if len(names) != len(subspaces):
+            raise ValueError(f"Different number of (sub)functon spaces ({len(subspaces)})"
+                             " and names ({len(names)}).")
+        index.extend(names)
+
     for fs in subspaces:
         node_counts.append(fs.node_set.sizes[1] * fs.dof_dset.cdim)
-        index.append(fs.name)
-
     buffer = np.repeat(node_counts, 3).reshape((-1, 3))
 
     op = MPI.Op.Create(_min_max_sum_reduce, commute=True)
@@ -809,17 +815,17 @@ def decomposition_stats(function_space, include_element_count=True):
         return None
 
 
-def print_decomposition_stats(function_space, include_element_count=True):
-    df = decomposition_stats(function_space, include_element_count=include_element_count)
+def print_decomposition_stats(function_spaces, names=None, include_element_count=True):
+    df = decomposition_stats(function_spaces, names=names, include_element_count=include_element_count)
     if df is not None:
         print(df)
 
 
-def print_hierarchy_decomposition_stats(function_space, include_element_count=True):
-    if isinstance(function_space, WithGeometry):
-        subspaces = function_space.subspaces
+def print_hierarchy_decomposition_stats(function_spaces, names=None, include_element_count=True):
+    if isinstance(function_spaces, WithGeometry):
+        subspaces = function_spaces.subspaces
     else:
-        subspaces = [subfs for fs in function_space for subfs in fs.subspaces]
+        subspaces = [subfs for fs in function_spaces for subfs in fs.subspaces]
 
     meshes = set(fs.mesh() for fs in subspaces)
     if len(meshes) > 1:
@@ -829,7 +835,7 @@ def print_hierarchy_decomposition_stats(function_space, include_element_count=Tr
     dfs = []
     for mesh in mh:
         mh_subspaces = [FunctionSpace(mesh, fs.ufl_element(), name=fs.name) for fs in subspaces]
-        dfs.append(decomposition_stats(mh_subspaces, include_element_count=include_element_count))
+        dfs.append(decomposition_stats(mh_subspaces, names=names, include_element_count=include_element_count))
 
     if dfs[0] is not None:
         for i, df in enumerate(dfs):
