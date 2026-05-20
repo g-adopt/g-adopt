@@ -22,8 +22,12 @@ if __name__ == "__main__":
             print(f"Skipping unknown case: {case}")
             continue
 
-        extra_checks = case_config.get("extra_checks", [])
         primary_checks = case_config.get("primary_checks", ["u_rms"])
+        # strip check params
+        extra_checks = [
+            check[0] if isinstance(check, tuple) else check
+            for check in case_config.get("extra_checks", [])
+        ]
 
         b = Path(__file__).parent.resolve() / case
         df = get_convergence(b)[primary_checks + extra_checks]
