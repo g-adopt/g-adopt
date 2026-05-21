@@ -31,6 +31,7 @@ from warnings import warn
 from firedrake import *
 
 from . import richards_equation as richards_eq
+from . import scalar_equation as scalar_eq
 from .equations import Equation
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .soil_curves import SoilCurve
@@ -248,8 +249,12 @@ class RichardsSolver(SolverConfigurationMixin):
         DIVERGED_LINE_SEARCH at the start of a run, raise this value.
       interior_penalty:
         Safety-factor multiplier for the SIPG penalty in DG discretisations.
-        Default is 2.0; the theoretical coercivity floor is 1.0. Setting it
-        below 1.0 will give a non-coercive bilinear form and Newton may fail.
+        Default is 4.0 for Richards (the scalar diffusion term uses
+        ``shift=-1`` in the Hillewaert bound, so we double the usual G-ADOPT
+        safety factor of 2.0 to preserve the penalty margin the bespoke
+        Richards term had with ``shift=0``). The theoretical coercivity floor
+        is 1.0; setting it below 1.0 gives a non-coercive bilinear form and
+        Newton may fail.
       nullspace:
         ``VectorSpaceBasis`` spanning the nullspace of the Jacobian. Relevant
         for pure-Neumann problems (all fluxes specified, no Dirichlet on h),
@@ -376,8 +381,10 @@ class RichardsSolver(SolverConfigurationMixin):
                         strong_bc = DirichletBC(self.solution_space, value, bc_id)
                         self.strong_bcs.append(strong_bc)
                     else:
-                        # Weak Dirichlet for DG (handled in equation)
-                        weak_bc['h'] = value
+                        # Weak Dirichlet for DG. scalar_equation.diffusion_term
+                        # expects the Dirichlet value under key 'q'; the public
+                        # Richards BC vocabulary stays 'h' (pressure head).
+                        weak_bc['q'] = value
                 elif bc_type == 'flux':
                     # Flux BC (always weak)
                     weak_bc['flux'] = value
@@ -392,21 +399,30 @@ class RichardsSolver(SolverConfigurationMixin):
 
     def set_equation(self) -> None:
         """Sets up the Richards equation with all terms."""
+        # Diffusion and source reuse scalar_equation. K(h) is solution-dependent,
+        # so we pass the bound method via `diffusivity_fn`; scalar's diffusion
+        # term evaluates it against each Irksome stage's trial.
         eq_attrs = {
             'soil_curve': self.soil_curve,
-            'source_term': self.source_term,
+            'diffusivity_fn': self.soil_curve.hydraulic_conductivity,
+            'source': self.source_term,
         }
 
-        if self.interior_penalty is not None:
-            eq_attrs['interior_penalty'] = self.interior_penalty
+        # scalar_equation.diffusion_term uses interior_penalty_factor(eq, shift=-1),
+        # which gives a smaller penalty than the shift=0 the bespoke Richards term
+        # used. Compensate with a higher default safety factor so Tracy and similar
+        # nonlinear cases keep the coercivity margin they had before.
+        eq_attrs['interior_penalty'] = (
+            self.interior_penalty if self.interior_penalty is not None else 4.0
+        )
 
         self.equation = Equation(
             self.test,
             self.solution_space,
             residual_terms=[
                 richards_eq.richards_mass_term,
-                richards_eq.richards_diffusion_term,
-                richards_eq.richards_source_term,
+                scalar_eq.diffusion_term,
+                scalar_eq.source_term,
                 richards_eq.richards_gravity_term,
             ],
             eq_attrs=eq_attrs,
