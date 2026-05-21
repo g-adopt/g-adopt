@@ -34,13 +34,11 @@ from firedrake import *
 from irksome import Dt
 from ufl.indexed import Indexed
 
-from .equations import Equation, interior_penalty_factor
+from .equations import Equation
 from .utility import is_continuous
 
 __all__ = [
     "richards_mass_term",
-    "richards_diffusion_term",
-    "richards_source_term",
     "richards_gravity_term",
 ]
 
@@ -86,118 +84,6 @@ def richards_mass_term(
         F += inner(eq.test, soil_curve.Ss * S * Dt(trial)) * eq.dx
 
     return F
-
-
-def richards_diffusion_term(
-    eq: Equation, trial: Argument | Indexed | Function
-) -> Form:
-    r"""Richards diffusion term for pressure-driven flow using SIPG.
-
-    The diffusion term represents pressure-driven water flow:
-
-    $$
-    \\nabla \\cdot (K \\nabla h)
-    $$
-
-    Using the symmetric interior penalty method (SIPG), the weak form becomes:
-
-    $$
-    \\begin{aligned}
-    &\\int_\\Omega K (\\nabla \\phi) \\cdot (\\nabla h) dx \\\\
-    &- \\int_{\\mathcal{I}} \\text{jump}(\\phi \\mathbf{n}) \\cdot \\text{avg}(K \\nabla h) dS \\\\
-    &- \\int_{\\mathcal{I}} \\text{jump}(h \\mathbf{n}) \\cdot \\text{avg}(K \\nabla \\phi) dS \\\\
-    &+ \\int_{\\mathcal{I}} \\sigma \\text{avg}(K) \\text{jump}(h \\mathbf{n}) \\cdot \\text{jump}(\\phi \\mathbf{n}) dS
-    \\end{aligned}
-    $$
-
-    where $\\sigma$ is the penalty parameter and $K(h)$ is the hydraulic conductivity.
-
-    Args:
-        eq: G-ADOPT Equation instance
-        trial: Firedrake trial function for pressure head
-
-    Returns:
-        UFL form for the diffusion term
-    """
-    soil_curve = eq.soil_curve
-
-    # Evaluate hydraulic conductivity at trial function
-    K = soil_curve.hydraulic_conductivity(trial)
-
-    # Volume integral
-    F = inner(grad(eq.test), K * grad(trial)) * eq.dx
-
-    # Interior penalty for DG
-    sigma = interior_penalty_factor(eq)
-    if not is_continuous(eq.trial_space):
-        sigma_int = sigma * avg(FacetArea(eq.mesh) / CellVolume(eq.mesh))
-
-        # SIPG terms on interior facets
-        F += (
-            sigma_int
-            * inner(jump(eq.test, eq.n), avg(K) * jump(trial, eq.n))
-            * eq.dS
-        )
-        F -= inner(avg(K * grad(eq.test)), jump(trial, eq.n)) * eq.dS
-        F -= inner(jump(eq.test, eq.n), avg(K * grad(trial))) * eq.dS
-
-    # Boundary conditions
-    for bc_id, bc in eq.bcs.items():
-        if 'h' in bc and 'flux' in bc:
-            raise ValueError("Cannot apply both 'h' and 'flux' on the same boundary.")
-
-        if 'h' in bc:
-            # Dirichlet BC on pressure head
-            jump_h = trial - bc['h']
-            sigma_ext = sigma * FacetArea(eq.mesh) / CellVolume(eq.mesh)
-
-            # SIPG boundary terms (similar to interior)
-            F += (
-                2
-                * sigma_ext
-                * eq.test
-                * K
-                * jump_h
-                * eq.ds(bc_id)
-            )
-            F -= inner(K * grad(eq.test), eq.n) * jump_h * eq.ds(bc_id)
-            F -= eq.test * inner(K * grad(trial), eq.n) * eq.ds(bc_id)
-
-        elif 'flux' in bc:
-            # Neumann BC on flux: flux = -K * dh/dn
-            # On the LHS this enters as -flux * test
-            F -= eq.test * bc['flux'] * eq.ds(bc_id)
-
-    return F
-
-
-def richards_source_term(
-    eq: Equation, trial: Argument | Indexed | Function
-) -> Form:
-    r"""Richards volumetric source/sink term.
-
-    Adds a prescribed volumetric source (water added per unit volume per unit
-    time, units of $\theta$ per second) to the right-hand side of the PDE:
-
-    $$
-    \frac{\partial \theta}{\partial t} = \nabla \cdot (K \nabla h)
-                                       + \nabla \cdot (K \nabla z) + S.
-    $$
-
-    The other terms in this module are written on the left-hand side of the
-    residual $F = 0$, so the source enters with a negative sign:
-    $-\int_\Omega S \, v \, dx$. A positive ``source_term`` therefore adds
-    water to the system.
-
-    Args:
-        eq: G-ADOPT Equation instance (expects ``eq.source_term``).
-        trial: Firedrake trial function for pressure head (unused; signature
-            kept consistent with the other term functions).
-
-    Returns:
-        UFL form for the source term.
-    """
-    return -inner(eq.source_term, eq.test) * eq.dx
 
 
 def richards_gravity_term(
@@ -266,12 +152,6 @@ def richards_gravity_term(
 # Set required and optional attributes for each term
 richards_mass_term.required_attrs = {'soil_curve'}
 richards_mass_term.optional_attrs = set()
-
-richards_diffusion_term.required_attrs = {'soil_curve'}
-richards_diffusion_term.optional_attrs = {'interior_penalty'}
-
-richards_source_term.required_attrs = {'source_term'}
-richards_source_term.optional_attrs = set()
 
 richards_gravity_term.required_attrs = {'soil_curve'}
 richards_gravity_term.optional_attrs = set()
