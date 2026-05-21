@@ -59,11 +59,28 @@ def diffusion_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     :}
     $$
 
-    where σ is a penalty parameter.
+    where σ is the SIPG penalty parameter computed by
+    :func:`gadopt.equations.interior_penalty_factor` (Hillewaert's sharp
+    trace-inverse form; see that function's docstring for the full
+    derivation and references). Here we pass ``shift=-1`` so the trace
+    constant matches the Shahbazi / Epshteyn-Rivière coercivity proof,
+    which applies the trace inequality to :math:`\nabla v \in \mathcal P_{p-1}`.
+    Callers needing the stricter ``shift=0`` form (e.g. the Richards
+    solver, where extra margin helps with nonlinear ``K(h)``) can set
+    ``eq.penalty_shift = 0``.
 
-    Epshteyn, Y., & Rivière, B. (2007).
-    Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
-    Journal of Computational and Applied Mathematics, 206(2), 843-872.
+    References:
+        Shahbazi, K. (2005). An explicit expression for the penalty
+        parameter of the interior penalty method. *Journal of
+        Computational Physics*, 205(2), 401-407.
+
+        Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty
+        parameters for symmetric interior penalty Galerkin methods.
+        *Journal of Computational and Applied Mathematics*, 206(2),
+        843-872.
+
+        Hillewaert, K. (2013). PhD thesis, UCL — Chapter 3 / Appendix C
+        for the sharp trace constants on hybrid meshes.
     """
     has_fn = hasattr(eq, "diffusivity_fn")
     has_const = hasattr(eq, "diffusivity")
@@ -167,6 +184,7 @@ diffusion_term.optional_attrs = {
     "diffusivity_fn",
     "reference_for_diffusion",
     "interior_penalty",
+    "penalty_shift",
 }
 mass_term.required_attrs = set()
 mass_term.optional_attrs = {"dt", "mass_scaling", "trial_old", "use_irksome"}

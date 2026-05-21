@@ -144,23 +144,75 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
 
 
 def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
-    """Interior Penalty method
+    r"""SIPG penalty coefficient using Hillewaert's sharp trace-inverse bound.
 
-    For details on the choice of sigma, see
-    https://www.researchgate.net/publication/260085826
+    Returns the dimensionless coefficient :math:`\sigma_0` such that the
+    per-facet penalty assembled in the DG bilinear form is
+    :math:`\sigma_0 \cdot \mathcal A(f) / \mathcal V(e)` (the geometric ratio
+    is applied in the term body via ``FacetArea/CellVolume``). For coercivity
+    of the SIPG bilinear form one needs (Hillewaert, Eq. 3.22 / Shahbazi 2005)
 
-    We use Equations (3.20) and (3.23). Instead of getting the maximum over two adjacent
-    cells (+ and -), we just sum (i.e. 2 * avg) and have an extra 0.5 for internal
-    facets.
+    .. math::
+        \sigma_f \;>\; \mu \, \max_{e \ni f}
+        \bigl( n_e \, C_{e,f}(q) \, \mathcal A(f) / \mathcal V(e) \bigr),
+
+    where :math:`C_{e,f}(q)` is the sharp trace-inverse constant for
+    polynomials of degree :math:`q` on the element/facet pair (Hillewaert
+    Table 3.1) and :math:`n_e` is the number of facets of element ``e``.
+    The implementation replaces ``max`` over the two adjacent elements by
+    ``avg``, picking up an extra factor 2 in the form, which is exact on
+    quasi-uniform meshes and a conservative estimate on stretched ones.
+
+    The ``shift`` argument selects which polynomial degree is fed to
+    :func:`cell_edge_integral_ratio`:
+
+    * ``shift = -1``: use :math:`C(p-1)`. The Shahbazi /
+      Epshteyn-Rivière coercivity proof bounds the consistency term
+      :math:`\int_f [u]\,\langle\nabla v\rangle\,dS` by applying the trace
+      inequality to :math:`\nabla v \in \mathcal P_{p-1}`, so the sharp
+      constant is the one for degree :math:`p-1`. This is the
+      theoretically tight choice.
+    * ``shift = 0`` (signature default): use :math:`C(p)`, i.e. the
+      trace constant for the solution space :math:`\mathcal P_p` itself.
+      Stricter than required by a factor of ~:math:`((p+1)/p)^2`; the
+      default here for historical reasons (matches the original gadopt
+      momentum-equation penalty), and what the Richards solver opts
+      into via ``eq.penalty_shift=0`` since its nonlinear ``K(h)``
+      benefits from the extra coercivity margin.
+
+    An overriding value may be set on the equation as ``eq.penalty_shift``.
+
+    Args:
+        eq: Equation instance; reads optional ``interior_penalty`` (safety
+            factor, default 2.0) and ``penalty_shift`` (overrides
+            ``shift``) attributes.
+        shift: Default shift used when ``eq.penalty_shift`` is not set.
+
+    References:
+        Hillewaert, K. (2013). *Development of the Discontinuous Galerkin
+        Method for high-resolution, large-scale CFD and acoustics in
+        industrial geometries*. PhD thesis, Université catholique de
+        Louvain. Chapter 3 and Appendix C.
+
+        Shahbazi, K. (2005). An explicit expression for the penalty
+        parameter of the interior penalty method. *Journal of
+        Computational Physics*, 205(2), 401-407.
+
+        Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty
+        parameters for symmetric interior penalty Galerkin methods.
+        *Journal of Computational and Applied Mathematics*, 206(2),
+        843-872.
     """
     degree = eq.trial_space.ufl_element().degree()
     if not isinstance(degree, int):
         degree = max(degree)
 
+    shift = getattr(eq, "penalty_shift", shift)
+
     if degree == 0:  # probably only works for orthogonal quads and hexes
         sigma = 1.0
     else:
-        # safety factor: 1.0 is theoretical minimum
+        # safety factor: 1.0 is the theoretical coercivity floor
         alpha = getattr(eq, "interior_penalty", 2.0)
         num_facets = eq.mesh.ufl_cell().num_facets
         sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
