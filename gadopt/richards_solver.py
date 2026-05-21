@@ -32,7 +32,7 @@ from firedrake import *
 
 from . import richards_equation as richards_eq
 from . import scalar_equation as scalar_eq
-from .equations import Equation
+from .equations import Equation, cell_edge_integral_ratio
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .soil_curves import SoilCurve
 from .time_stepper import IrksomeIntegrator
@@ -251,12 +251,12 @@ class RichardsSolver(SolverConfigurationMixin):
         Safety-factor multiplier for the SIPG penalty in DG discretisations.
         Default is 2.0; the theoretical coercivity floor is 1.0. Setting it
         below 1.0 will give a non-coercive bilinear form and Newton may fail.
-        Richards additionally pins ``penalty_shift=0`` on the equation
-        (rather than scalar_equation's default ``shift=-1``), so the trace
-        constant used is :math:`C(p)` instead of :math:`C(p-1)` — a stricter
-        Hillewaert-form bound chosen because nonlinear ``K(h)`` benefits
-        from the extra coercivity margin and to keep the penalty identical
-        to the pre-refactor bespoke Richards diffusion term.
+        scalar_equation's diffusion term passes ``shift=-1`` to
+        ``interior_penalty_factor`` (Shahbazi / Epshteyn-Rivière sharp bound
+        using ``C(p-1)``), whereas the pre-refactor bespoke Richards term
+        used ``shift=0``. To preserve the original penalty bit-for-bit we
+        multiply the user-facing ``interior_penalty`` by ``C(p)/C(p-1)``
+        internally, so the value passed here remains the bare safety factor.
       nullspace:
         ``VectorSpaceBasis`` spanning the nullspace of the Jacobian. Relevant
         for pure-Neumann problems (all fluxes specified, no Dirichlet on h),
@@ -401,24 +401,35 @@ class RichardsSolver(SolverConfigurationMixin):
 
     def set_equation(self) -> None:
         """Sets up the Richards equation with all terms."""
-        # Diffusion and source reuse scalar_equation. K(h) is solution-dependent,
-        # so we pass the bound method via `diffusivity_fn`; scalar's diffusion
-        # term evaluates it against each Irksome stage's trial.
-        #
-        # `penalty_shift=0` overrides scalar_equation's `shift=-1` default so
-        # that the SIPG penalty uses Hillewaert's trace constant C(p) instead
-        # of C(p-1). This reproduces the bespoke richards_diffusion_term
-        # penalty bit-for-bit (downstream Richards tests are tuned against it)
-        # and gives extra coercivity margin against nonlinear K(h).
+        # Diffusion and source reuse scalar_equation. K(h) is solution-dependent;
+        # we build it as a UFL expression in `self.solution` and declare it in
+        # `nonlinear_coefficients`, so scalar_equation.diffusion_term resolves
+        # K against each Irksome stage's trial via ufl.replace.
         eq_attrs = {
             'soil_curve': self.soil_curve,
-            'diffusivity_fn': self.soil_curve.hydraulic_conductivity,
+            'solution': self.solution,
+            'diffusivity': self.soil_curve.hydraulic_conductivity(self.solution),
+            'nonlinear_coefficients': ('diffusivity',),
             'source': self.source_term,
-            'penalty_shift': 0,
         }
 
-        if self.interior_penalty is not None:
-            eq_attrs['interior_penalty'] = self.interior_penalty
+        # scalar_equation.diffusion_term calls interior_penalty_factor(eq, shift=-1),
+        # giving sigma proportional to C(p-1). The bespoke Richards term used the
+        # default shift=0 (sigma proportional to C(p)). Absorb the C(p)/C(p-1)
+        # trace-constant ratio into the safety factor so the assembled penalty
+        # is bit-for-bit identical to the pre-refactor Richards term.
+        alpha = self.interior_penalty if self.interior_penalty is not None else 2.0
+        degree = self.solution_space.ufl_element().degree()
+        if not isinstance(degree, int):
+            degree = max(degree)
+        if degree >= 1:
+            ratio = (cell_edge_integral_ratio(self.mesh, degree)
+                     / cell_edge_integral_ratio(self.mesh, degree - 1))
+            eq_attrs['interior_penalty'] = alpha * ratio
+        else:
+            # degree == 0: interior_penalty_factor short-circuits to sigma=1.0
+            # and ignores alpha entirely; pass alpha through unchanged.
+            eq_attrs['interior_penalty'] = alpha
 
         self.equation = Equation(
             self.test,

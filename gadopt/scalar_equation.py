@@ -59,38 +59,17 @@ def diffusion_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     :}
     $$
 
-    where σ is the SIPG penalty parameter computed by
-    :func:`gadopt.equations.interior_penalty_factor` (Hillewaert's sharp
-    trace-inverse form; see that function's docstring for the full
-    derivation and references). Here we pass ``shift=-1`` so the trace
-    constant matches the Shahbazi / Epshteyn-Rivière coercivity proof,
-    which applies the trace inequality to :math:`\nabla v \in \mathcal P_{p-1}`.
-    Callers needing the stricter ``shift=0`` form (e.g. the Richards
-    solver, where extra margin helps with nonlinear ``K(h)``) can set
-    ``eq.penalty_shift = 0``.
+    where σ is a penalty parameter.
 
-    References:
-        Shahbazi, K. (2005). An explicit expression for the penalty
-        parameter of the interior penalty method. *Journal of
-        Computational Physics*, 205(2), 401-407.
-
-        Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty
-        parameters for symmetric interior penalty Galerkin methods.
-        *Journal of Computational and Applied Mathematics*, 206(2),
-        843-872.
-
-        Hillewaert, K. (2013). PhD thesis, UCL — Chapter 3 / Appendix C
-        for the sharp trace constants on hybrid meshes.
+    Epshteyn, Y., & Rivière, B. (2007).
+    Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
+    Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    has_fn = hasattr(eq, "diffusivity_fn")
-    has_const = hasattr(eq, "diffusivity")
-    if has_fn == has_const:
-        raise ValueError(
-            "diffusion_term requires exactly one of `diffusivity` (fixed UFL "
-            "expression / Constant / Function) or `diffusivity_fn` (callable "
-            "of the trial, for solution-dependent K)."
-        )
-    kappa = eq.diffusivity_fn(trial) if has_fn else eq.diffusivity
+    # Resolve diffusivity against the current trial via ufl.replace; this is a
+    # no-op when `diffusivity` is solution-independent. Solution-dependent
+    # coefficients (e.g. Richards' K(h)) must be UFL expressions in
+    # `eq.solution` and listed in `eq.nonlinear_coefficients`.
+    kappa = eq.resolve_coefficient("diffusivity", trial)
     dim = eq.mesh.geometric_dimension
     diff_tensor = kappa if len(kappa.ufl_shape) == 2 else kappa * Identity(dim)
 
@@ -178,13 +157,10 @@ def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
 advection_term.required_attrs = {"u"}
 advection_term.optional_attrs = {"advective_velocity_scaling", "su_nubar"}
-diffusion_term.required_attrs = set()
+diffusion_term.required_attrs = {"diffusivity"}
 diffusion_term.optional_attrs = {
-    "diffusivity",
-    "diffusivity_fn",
     "reference_for_diffusion",
     "interior_penalty",
-    "penalty_shift",
 }
 mass_term.required_attrs = set()
 mass_term.optional_attrs = {"dt", "mass_scaling", "trial_old", "use_irksome"}

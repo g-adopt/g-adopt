@@ -13,10 +13,15 @@ from typing import Any, Callable
 from warnings import warn
 
 import firedrake as fd
+import ufl
+from ufl.algorithms.analysis import extract_coefficients
 from ufl.indexed import Indexed
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .utility import CombinedSurfaceMeasure
+
+# Equation-level eq_attrs consumed by Equation itself, not by any term.
+_EQUATION_RESERVED_ATTRS = frozenset({"solution", "nonlinear_coefficients"})
 
 __all__ = ["Equation"]
 
@@ -37,6 +42,13 @@ class Equation:
           Equation term or a list thereof contributing to the residual.
         eq_attrs:
           Dictionary of fields and parameters used in the equation's weak form.
+          Two keys are reserved for the equation itself: ``solution`` (the
+          ``Function`` the residual will eventually be assembled against) and
+          ``nonlinear_coefficients`` (an iterable of attribute names whose
+          values are UFL expressions in ``solution``). Term implementations
+          call :meth:`resolve_coefficient` on such attributes to substitute
+          the current trial via :func:`ufl.replace`. When ``solution`` is
+          omitted, all coefficients are treated as solution-independent.
         approximation:
           G-ADOPT approximation for the system of equations considered.
         bcs:
@@ -77,7 +89,8 @@ class Equation:
             )
 
         optional_attrs = set.union(*(term.optional_attrs for term in residual_terms))
-        if unused_attrs := eq_attrs.keys() - required_attrs.union(optional_attrs):
+        allowed = required_attrs | optional_attrs | _EQUATION_RESERVED_ATTRS
+        if unused_attrs := eq_attrs.keys() - allowed:
             warn(
                 "Some unused equation attributes were provided.\nUnused attributes: "
                 f"{unused_attrs}"
@@ -85,6 +98,32 @@ class Equation:
 
         for key, value in eq_attrs.items():
             setattr(self, key, value)
+
+        # Validate solution-dependent coefficients: each name listed in
+        # `nonlinear_coefficients` must be a UFL expression that actually
+        # contains `solution`. This catches the common foot-gun where the
+        # coefficient is built against a different Function object (e.g. a
+        # copy of solution), in which case `resolve_coefficient` would
+        # silently freeze the coefficient instead of substituting.
+        for name in getattr(self, "nonlinear_coefficients", ()):
+            val = getattr(self, name, None)
+            if val is None:
+                raise ValueError(
+                    f"`nonlinear_coefficients` lists '{name}' but the "
+                    f"attribute is not set on the equation."
+                )
+            if not isinstance(val, ufl.core.expr.Expr):
+                raise ValueError(
+                    f"Attribute '{name}' is declared in `nonlinear_coefficients` "
+                    f"but is not a UFL expression."
+                )
+            if getattr(self, "solution", None) not in extract_coefficients(val):
+                raise ValueError(
+                    f"Attribute '{name}' is declared in `nonlinear_coefficients` "
+                    f"but does not contain the equation's `solution` Function. "
+                    f"Build the expression against the same Function passed as "
+                    f"`solution` in eq_attrs."
+                )
 
         if quad_degree is None:
             p = self.trial_space.ufl_element().degree()
@@ -116,6 +155,24 @@ class Equation:
             term(self, trial) for term in self.residual_terms
         )
 
+    def resolve_coefficient(
+        self, name: str, trial: fd.Argument | Indexed | fd.Function
+    ) -> Any:
+        """Return ``getattr(self, name)`` with ``solution`` substituted by ``trial``.
+
+        Non-UFL values (plain numbers, ``Constant``s wrapping scalars, etc.) and
+        cases where the equation has no ``solution`` attribute are returned as
+        is. For solution-dependent UFL expressions this calls
+        :func:`ufl.replace`; the call is a no-op when ``solution`` does not
+        appear in the expression, so the same convention serves linear and
+        nonlinear coefficients uniformly.
+        """
+        val = getattr(self, name)
+        solution = getattr(self, "solution", None)
+        if solution is None or not isinstance(val, ufl.core.expr.Expr):
+            return val
+        return ufl.replace(val, {solution: trial})
+
 
 def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
     r"""
@@ -144,75 +201,23 @@ def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:
 
 
 def interior_penalty_factor(eq: Equation, *, shift: int = 0) -> float:
-    r"""SIPG penalty coefficient using Hillewaert's sharp trace-inverse bound.
+    """Interior Penalty method
 
-    Returns the dimensionless coefficient :math:`\sigma_0` such that the
-    per-facet penalty assembled in the DG bilinear form is
-    :math:`\sigma_0 \cdot \mathcal A(f) / \mathcal V(e)` (the geometric ratio
-    is applied in the term body via ``FacetArea/CellVolume``). For coercivity
-    of the SIPG bilinear form one needs (Hillewaert, Eq. 3.22 / Shahbazi 2005)
+    For details on the choice of sigma, see
+    https://www.researchgate.net/publication/260085826
 
-    .. math::
-        \sigma_f \;>\; \mu \, \max_{e \ni f}
-        \bigl( n_e \, C_{e,f}(q) \, \mathcal A(f) / \mathcal V(e) \bigr),
-
-    where :math:`C_{e,f}(q)` is the sharp trace-inverse constant for
-    polynomials of degree :math:`q` on the element/facet pair (Hillewaert
-    Table 3.1) and :math:`n_e` is the number of facets of element ``e``.
-    The implementation replaces ``max`` over the two adjacent elements by
-    ``avg``, picking up an extra factor 2 in the form, which is exact on
-    quasi-uniform meshes and a conservative estimate on stretched ones.
-
-    The ``shift`` argument selects which polynomial degree is fed to
-    :func:`cell_edge_integral_ratio`:
-
-    * ``shift = -1``: use :math:`C(p-1)`. The Shahbazi /
-      Epshteyn-Rivière coercivity proof bounds the consistency term
-      :math:`\int_f [u]\,\langle\nabla v\rangle\,dS` by applying the trace
-      inequality to :math:`\nabla v \in \mathcal P_{p-1}`, so the sharp
-      constant is the one for degree :math:`p-1`. This is the
-      theoretically tight choice.
-    * ``shift = 0`` (signature default): use :math:`C(p)`, i.e. the
-      trace constant for the solution space :math:`\mathcal P_p` itself.
-      Stricter than required by a factor of ~:math:`((p+1)/p)^2`; the
-      default here for historical reasons (matches the original gadopt
-      momentum-equation penalty), and what the Richards solver opts
-      into via ``eq.penalty_shift=0`` since its nonlinear ``K(h)``
-      benefits from the extra coercivity margin.
-
-    An overriding value may be set on the equation as ``eq.penalty_shift``.
-
-    Args:
-        eq: Equation instance; reads optional ``interior_penalty`` (safety
-            factor, default 2.0) and ``penalty_shift`` (overrides
-            ``shift``) attributes.
-        shift: Default shift used when ``eq.penalty_shift`` is not set.
-
-    References:
-        Hillewaert, K. (2013). *Development of the Discontinuous Galerkin
-        Method for high-resolution, large-scale CFD and acoustics in
-        industrial geometries*. PhD thesis, Université catholique de
-        Louvain. Chapter 3 and Appendix C.
-
-        Shahbazi, K. (2005). An explicit expression for the penalty
-        parameter of the interior penalty method. *Journal of
-        Computational Physics*, 205(2), 401-407.
-
-        Epshteyn, Y., & Rivière, B. (2007). Estimation of penalty
-        parameters for symmetric interior penalty Galerkin methods.
-        *Journal of Computational and Applied Mathematics*, 206(2),
-        843-872.
+    We use Equations (3.20) and (3.23). Instead of getting the maximum over two adjacent
+    cells (+ and -), we just sum (i.e. 2 * avg) and have an extra 0.5 for internal
+    facets.
     """
     degree = eq.trial_space.ufl_element().degree()
     if not isinstance(degree, int):
         degree = max(degree)
 
-    shift = getattr(eq, "penalty_shift", shift)
-
     if degree == 0:  # probably only works for orthogonal quads and hexes
         sigma = 1.0
     else:
-        # safety factor: 1.0 is the theoretical coercivity floor
+        # safety factor: 1.0 is theoretical minimum
         alpha = getattr(eq, "interior_penalty", 2.0)
         num_facets = eq.mesh.ufl_cell().num_facets
         sigma = alpha * cell_edge_integral_ratio(eq.mesh, degree + shift) * num_facets
