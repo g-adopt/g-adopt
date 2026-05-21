@@ -249,12 +249,14 @@ class RichardsSolver(SolverConfigurationMixin):
         DIVERGED_LINE_SEARCH at the start of a run, raise this value.
       interior_penalty:
         Safety-factor multiplier for the SIPG penalty in DG discretisations.
-        Default is 4.0 for Richards (the scalar diffusion term uses
-        ``shift=-1`` in the Hillewaert bound, so we double the usual G-ADOPT
-        safety factor of 2.0 to preserve the penalty margin the bespoke
-        Richards term had with ``shift=0``). The theoretical coercivity floor
-        is 1.0; setting it below 1.0 gives a non-coercive bilinear form and
-        Newton may fail.
+        Default is 2.0; the theoretical coercivity floor is 1.0. Setting it
+        below 1.0 will give a non-coercive bilinear form and Newton may fail.
+        Richards additionally pins ``penalty_shift=0`` on the equation
+        (rather than scalar_equation's default ``shift=-1``), so the trace
+        constant used is :math:`C(p)` instead of :math:`C(p-1)` — a stricter
+        Hillewaert-form bound chosen because nonlinear ``K(h)`` benefits
+        from the extra coercivity margin and to keep the penalty identical
+        to the pre-refactor bespoke Richards diffusion term.
       nullspace:
         ``VectorSpaceBasis`` spanning the nullspace of the Jacobian. Relevant
         for pure-Neumann problems (all fluxes specified, no Dirichlet on h),
@@ -402,19 +404,21 @@ class RichardsSolver(SolverConfigurationMixin):
         # Diffusion and source reuse scalar_equation. K(h) is solution-dependent,
         # so we pass the bound method via `diffusivity_fn`; scalar's diffusion
         # term evaluates it against each Irksome stage's trial.
+        #
+        # `penalty_shift=0` overrides scalar_equation's `shift=-1` default so
+        # that the SIPG penalty uses Hillewaert's trace constant C(p) instead
+        # of C(p-1). This reproduces the bespoke richards_diffusion_term
+        # penalty bit-for-bit (downstream Richards tests are tuned against it)
+        # and gives extra coercivity margin against nonlinear K(h).
         eq_attrs = {
             'soil_curve': self.soil_curve,
             'diffusivity_fn': self.soil_curve.hydraulic_conductivity,
             'source': self.source_term,
+            'penalty_shift': 0,
         }
 
-        # scalar_equation.diffusion_term uses interior_penalty_factor(eq, shift=-1),
-        # which gives a smaller penalty than the shift=0 the bespoke Richards term
-        # used. Compensate with a higher default safety factor so Tracy and similar
-        # nonlinear cases keep the coercivity margin they had before.
-        eq_attrs['interior_penalty'] = (
-            self.interior_penalty if self.interior_penalty is not None else 4.0
-        )
+        if self.interior_penalty is not None:
+            eq_attrs['interior_penalty'] = self.interior_penalty
 
         self.equation = Equation(
             self.test,
