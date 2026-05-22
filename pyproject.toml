@@ -20,14 +20,7 @@ dependencies = [
   "pandas",
   "shapely",
   "vtk",
-  # Track Irksome PR #226 ("Mass-conservative update for non-stiffly-accurate
-  # stage_value") on the author's fork branch. PR #204 fixed the per-stage
-  # two-evaluation form; PR #226 is the follow-up that fixes the stage->u_new
-  # update step, which is what gadopt.RichardsSolver relies on for
-  # ImplicitMidpoint / GaussLegendre(2) to conserve mass. Once PR #226 is
-  # merged upstream and firedrake-vanilla-default (plus the fp50 Gadi module)
-  # ship an Irksome including it, drop the pin.
-  "irksome @ git+https://github.com/sghelichkhani/Irksome.git@sghelichkhani/conservative-update-non-sa",
+  "irksome @ git+https://github.com/firedrakeproject/Irksome",
 ]
 
 [project.optional-dependencies]
