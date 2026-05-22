@@ -275,7 +275,8 @@ class RichardsSolver(SolverConfigurationMixin):
         supply one explicitly.
       timestepper_kwargs:
         Dictionary of additional keyword arguments passed to the timestepper constructor.
-        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA).
+        Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA) or
+        adaptive time-stepping (e.g., {'adaptive_parameters': {'tol': 1e-3}})
 
     ### Valid keys for boundary conditions
     |  Condition  |  Type  |              Description               |
@@ -339,8 +340,19 @@ class RichardsSolver(SolverConfigurationMixin):
         # update u_new = U_s copies the per-stage finite difference directly)
         # and non-stiffly-accurate ones (where Irksome routes through a
         # conservative variational update; requires Irksome PR #226 or later).
-        if 'stage_type' not in self.timestepper_kwargs:
+        # Adaptive time stepping is not yet supported with stage_type="value"
+        # in Irksome, so we only set the default when adaptive_parameters is
+        # not requested.
+        if ('stage_type' not in self.timestepper_kwargs
+                and 'adaptive_parameters' not in self.timestepper_kwargs):
             self.timestepper_kwargs['stage_type'] = 'value'
+        elif (self.timestepper_kwargs.get('stage_type') == 'value'
+                and 'adaptive_parameters' in self.timestepper_kwargs):
+            raise ValueError(
+                "stage_type='value' is incompatible with adaptive_parameters. "
+                "Irksome does not yet support adaptive time stepping with the "
+                "stage value stepper."
+            )
         elif self.timestepper_kwargs.get('stage_type', None) != 'value':
             warn(
                 "RichardsSolver is not using stage_type='value'. Mass will not "
