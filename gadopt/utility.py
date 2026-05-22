@@ -4,7 +4,7 @@ depending on what they would like to achieve.
 
 """
 
-from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
+from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, grad, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
 from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional
@@ -101,6 +101,273 @@ class TimestepAdaptor:
     def update_timestep(self):
         self.dt_const.assign(self.compute_timestep())
         return float(self.dt_const)
+
+
+class RichardsTimestepAdaptor:
+    """Adaptive timestep controller for the Richards equation.
+
+    Two CFL tiers set a physics ceiling on dt, and the SNES iteration count
+    modulates the step-to-step growth rate:
+
+    1. **Advective CFL** from gravity-driven Darcy flux q = K(h) * n_down,
+       using the same |J^{-1} q| pattern as TimestepAdaptor.
+    2. **Diffusive CFL** from hydraulic diffusivity D(h) = K(h) / C(h) with
+       dt ~ dx^2 / D scaling. For implicit schemes this is an accuracy
+       heuristic rather than a stability requirement; ``minimum_diffusive_dt``
+       caps its contribution so a diverging D in dry soil cannot dominate.
+    3. **SNES growth modulation**: when Newton converges within
+       ``snes_target_its`` the allowed growth factor is ``snes_scale_up``;
+       when it takes longer the factor becomes ``snes_scale_down`` (< 1),
+       which forces dt to shrink even if CFL would allow a larger step.
+       Before the first solve, ``increase_tolerance`` is used as the growth
+       ceiling.
+
+    The final dt is also bounded by ``maximum_timestep`` and
+    ``minimum_timestep`` when provided.
+
+    The adaptor only proposes timesteps. The caller owns the solve loop,
+    including any retry on SNES failure. Typical usage::
+
+        adaptor = RichardsTimestepAdaptor(dt, richards_solver, ...)
+        while time < t_final:
+            h_old.assign(h)
+            adaptor.update_timestep()
+            try:
+                richards_solver.solve()
+            except ConvergenceError:
+                h.assign(h_old)
+                dt.assign(float(dt) * 0.5)
+                richards_solver.solve()
+            time += float(dt)
+
+    Arguments:
+      dt_const: Constant whose value will be updated by the adaptor
+      richards_solver: RichardsSolver instance (read-only access for solution,
+        soil curve, mesh, and SNES iteration count)
+      target_cfl: Target CFL number for advective criterion
+      target_diffusive_cfl: Target CFL number for diffusive criterion
+      snes_target_its: Target SNES iteration count; dt scales up below this
+      snes_scale_up: Factor to multiply dt when snes_its <= snes_target_its
+      snes_scale_down: Factor to multiply dt when snes_its > snes_target_its
+      increase_tolerance: Maximum factor dt can increase between steps
+      maximum_timestep: Upper bound on dt (None for no limit)
+      minimum_timestep: Lower bound on dt (None for no limit)
+      c_floor: Floor for |C(h)| to prevent division by zero in diffusivity.
+        Only affects DOFs where h < 0 (unsaturated); DOFs with h >= 0 are
+        excluded from the diffusive bound entirely.
+      post_retry_cooldown: Number of steps after a caller-reported retry
+        during which growth is capped at 1.0 (dt held, not grown). The
+        SNES iteration count from a halved-recovery step is misleadingly
+        low; this prevents the adaptor from immediately growing back into
+        the regime that just failed. Call :meth:`record_retry` when the
+        caller halves dt and retries. Default 0 (disabled).
+      minimum_diffusive_dt: Floor on the diffusive tier's proposal (None = no
+        floor). The formula ``dt = CFL / (2 * dim * D / dx^2)`` is the
+        classical *explicit*-scheme stability bound. In very dry soil,
+        ``C = d(theta)/dh`` becomes tiny and ``D = K / C`` diverges, driving
+        the proposal toward zero. For implicit schemes (BackwardEuler,
+        DIRK22, and so on) this is not a stability concern, only an accuracy
+        heuristic, so capping the diffusive tier's contribution from below
+        with a physically motivated floor prevents it from dominating
+        pathologically in dry cells. The other tiers still govern.
+
+    """
+
+    def __init__(
+        self,
+        dt_const,
+        richards_solver,
+        target_cfl=0.5,
+        target_diffusive_cfl=0.5,
+        snes_target_its=3,
+        snes_scale_up=1.5,
+        snes_scale_down=0.5,
+        increase_tolerance=1.5,
+        maximum_timestep=None,
+        minimum_timestep=None,
+        c_floor=1e-10,
+        minimum_diffusive_dt=None,
+        post_retry_cooldown=0,
+    ):
+        self.dt_const = dt_const
+        self.solver = richards_solver
+        self.target_cfl = target_cfl
+        self.target_diffusive_cfl = target_diffusive_cfl
+        self.snes_target_its = snes_target_its
+        self.snes_scale_up = snes_scale_up
+        self.snes_scale_down = snes_scale_down
+        self.increase_tolerance = increase_tolerance
+        self.maximum_timestep = maximum_timestep
+        self.minimum_timestep = minimum_timestep
+        self.minimum_diffusive_dt = minimum_diffusive_dt
+        self.post_retry_cooldown = post_retry_cooldown
+        self._cooldown_remaining = 0
+
+        h = richards_solver.solution
+        soil_curve = richards_solver.soil_curve
+        V = richards_solver.solution_space
+        self.mesh = richards_solver.mesh
+        dim = self.mesh.geometric_dimension
+        self._dim = dim
+
+        # Gravity direction (same convention as richards_gravity_term)
+        x = SpatialCoordinate(self.mesh)
+        n_down = grad(x[dim - 1])
+
+        # Tier 1: advective CFL from |J^{-1} (K(h) * n_down)|
+        K_expr = soil_curve.hydraulic_conductivity(h)
+        q = K_expr * n_down
+        J_inv_q = dot(JacobianInverse(self.mesh), q)
+        ref_speed = sqrt(dot(J_inv_q, J_inv_q))
+        self._adv_interpolate = interpolate(ref_speed, V, access=op2.MAX)
+
+        # Tier 2: diffusive CFL from D(h) / dx^2 where D = K / C.
+        # Only meaningful in the unsaturated regime (h < 0) where C > 0.
+        # DG solutions can overshoot to h >= 0 where C = 0 by definition,
+        # making D singular; those DOFs are excluded (D set to 0) so they
+        # do not pollute the max.  The advective CFL and SNES heuristic
+        # still protect against timestep issues in saturated regions.
+        C_expr = soil_curve.water_retention(h)
+        D_unsat = K_expr / max_value(abs(C_expr), c_floor)
+        D_expr = conditional(h < 0, D_unsat, 0)
+        ref_diff_expr = D_expr / CellDiameter(self.mesh) ** 2
+        self._diff_interpolate = interpolate(ref_diff_expr, V, access=op2.MAX)
+
+    def _get_snes_iterations(self):
+        """Read SNES iteration count from the solver's most recent solve.
+
+        Returns None if no solve has been performed yet.
+        """
+        try:
+            return self.solver.ts.stepper.solver.snes.getIterationNumber()
+        except AttributeError:
+            return None
+
+    def _compute_advective_dt(self):
+        """Tier 1: dt from advective CFL on gravity-driven Darcy flux."""
+        ref_vel = assemble(self._adv_interpolate)
+        local_max = ref_vel.dat.data.max()
+        max_refvel = self.mesh.comm.allreduce(local_max, MPI.MAX)
+        if max_refvel < 1e-30:
+            return float('inf')
+        return self.target_cfl / max_refvel
+
+    def _compute_diffusive_dt(self):
+        """Tier 2: dt from diffusive CFL on hydraulic diffusivity D(h).
+
+        Applies ``minimum_diffusive_dt`` as a floor on the proposal so that
+        dry-zone blow-up of D = K/C (where C goes to zero) cannot drive dt to zero.
+        For implicit time integration this bound is an accuracy heuristic,
+        not a stability requirement; the floor is physically motivated.
+        """
+        ref_diff = assemble(self._diff_interpolate)
+        local_max = ref_diff.dat.data.max()
+        max_ref_diff = self.mesh.comm.allreduce(local_max, MPI.MAX)
+        if max_ref_diff < 1e-30:
+            return float('inf')
+        dt_diff = self.target_diffusive_cfl / (2.0 * self._dim * max_ref_diff)
+        if self.minimum_diffusive_dt is not None:
+            dt_diff = max(dt_diff, self.minimum_diffusive_dt)
+        return dt_diff
+
+    def compute_timestep(self):
+        """Compute the adaptive timestep.
+
+        The CFL tiers (advective, diffusive) set a physics ceiling on dt.
+        SNES modulates the *growth rate* between steps, replacing the static
+        ``increase_tolerance`` clamp when iteration data is available:
+
+        - Newton healthy (``snes_its <= snes_target_its``): allow dt to grow
+          by up to ``snes_scale_up * current_dt``.
+        - Newton stressed (``snes_its > snes_target_its``): force dt to
+          shrink to ``snes_scale_down * current_dt``, even if CFL says a
+          larger step is fine. This is the main way Newton struggle feeds
+          back into dt.
+
+        Before the first solve (no SNES data yet), falls back to
+        ``increase_tolerance`` as the growth ceiling.
+
+        Returns:
+          The adapted timestep value (float).
+        """
+        dt_adv = self._compute_advective_dt()
+        dt_diff = self._compute_diffusive_dt()
+        snes_its = self._get_snes_iterations()
+        current_dt = float(self.dt_const)
+
+        # Physics ceiling from CFL tiers
+        dt_proposed = min(dt_adv, dt_diff)
+        controlling = "advective CFL" if dt_adv <= dt_diff else "diffusive CFL"
+
+        # SNES-modulated growth/shrink factor. A post-retry cooldown caps
+        # growth at 1.0 for a few steps after the caller records a retry,
+        # because the SNES iteration count from a halved-recovery step is
+        # a misleading "healthy" signal that reflects the reduced dt, not
+        # the underlying physics difficulty. Stress still shrinks dt.
+        if snes_its is not None:
+            if snes_its > self.snes_target_its:
+                growth = self.snes_scale_down
+                growth_label = f"SNES stressed ({snes_its} its)"
+            elif self._cooldown_remaining > 0:
+                growth = 1.0
+                growth_label = (f"post-retry cooldown "
+                                f"({self._cooldown_remaining} left)")
+            else:
+                growth = self.snes_scale_up
+                growth_label = f"SNES healthy ({snes_its} its)"
+        else:
+            growth = self.increase_tolerance
+            growth_label = "increase tolerance"
+
+        if self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+
+        max_ts = current_dt * growth
+        if self.maximum_timestep is not None:
+            max_ts = min(max_ts, self.maximum_timestep)
+
+        # Apply the growth/shrink clamp. When growth >= 1 this only caps dt
+        # from above (CFL may still win); when growth < 1 (Newton stressed)
+        # it forces dt below current_dt regardless of what CFL proposes.
+        if dt_proposed > max_ts or growth < 1.0:
+            if max_ts < dt_proposed:
+                controlling = growth_label
+                dt_proposed = max_ts
+
+        if self.minimum_timestep is not None and dt_proposed < self.minimum_timestep:
+            log(f"RichardsTimestepAdaptor: dt {dt_proposed:.3e} below "
+                f"minimum {self.minimum_timestep:.3e}, clamping.")
+            controlling = "minimum timestep"
+            dt_proposed = self.minimum_timestep
+
+        snes_info = (f", snes_its={snes_its}"
+                     if snes_its is not None else "")
+        log(f"RichardsTimestepAdaptor: dt={dt_proposed:.3e} "
+            f"(adv={dt_adv:.3e}, diff={dt_diff:.3e}"
+            f"{snes_info}) controlled by {controlling}")
+
+        return dt_proposed
+
+    def update_timestep(self):
+        """Compute and assign the adapted timestep.
+
+        Returns:
+          The new timestep value (float).
+        """
+        self.dt_const.assign(self.compute_timestep())
+        return float(self.dt_const)
+
+    def record_retry(self):
+        """Notify the adaptor that the caller just halved dt and retried.
+
+        Sets a cooldown that caps growth at 1.0 for the next
+        ``post_retry_cooldown`` calls to :meth:`update_timestep`. The next
+        step's SNES iteration count is likely to look "healthy" simply
+        because dt was reduced, so growing again based on that signal
+        would overshoot back into the regime that failed. Stress still
+        shrinks dt during cooldown.
+        """
+        self._cooldown_remaining = self.post_retry_cooldown
 
 
 def is_cartesian(mesh):
