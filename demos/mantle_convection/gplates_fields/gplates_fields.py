@@ -74,7 +74,22 @@ import h5py
 import numpy as np
 
 from gadopt import *
-from gadopt.gplates import *
+from gadopt.gplates import (
+    GplatesScalarFunction,
+    IndicatorConnector,
+    InterpolationConfig,
+    LithosphereSource,
+    LithosphereSourceConfig,
+    MeshConfig,
+    PolygonSource,
+    PolygonSourceConfig,
+    TanhOutput,
+    GeothermERFOutput,
+    GeothermLinearOutput,
+    ensure_reconstruction,
+    polygon_indicator,
+    pyGplatesConnector,
+)
 
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 5, 32
 # -
@@ -214,254 +229,207 @@ continental_data = (latlon, thickness_values)
 
 # ## Shared configuration
 #
-# All indicator and geotherm connectors share the same interpolation
-# parameters.  We define them once here.
+# A plate-reconstruction field is built from three composable pieces:
 #
-# `r_outer` is the outer radius of the mesh in non-dimensional units
-# (same as `rmax`).  `n_points` controls how many source points
-# gtrack samples on the sphere -- more points give finer spatial
-# resolution at linearly increasing cost; 20 000 is a reasonable
-# choice for a refinement-level-5 cubed-sphere mesh.  `k_neighbors`
-# is the number of nearest neighbours used in the inverse-distance
-# weighted (IDW) interpolation from source points to mesh degrees of
-# freedom; cost per target point scales linearly with this value, and
-# 50 gives smooth results without excessive blurring.
+# * a **Source** owns the stateful gtrack machinery (the
+#   `SeafloorAgeTracker`, the `PointRotator`, the `PolygonFilter`)
+#   and exposes a single `prepare(age)` call returning a dict of
+#   source-point arrays;
+# * an **OutputStrategy** turns interpolated source values at target
+#   mesh nodes into a scalar field (a tanh indicator, an erf geotherm,
+#   a linear geotherm);
+# * an **IndicatorConnector** wires the two together, handles the
+#   kNN interpolation between source points and mesh DoFs, and caches
+#   results by `(age, coords_hash)`.
 #
-# `distance_threshold` is the maximum angular distance, in radians
-# on the unit sphere, at which a target point is still considered
-# "close enough" to the source data.  Points farther away receive an
-# a-priori thickness (for `LithosphereConnector`, coming from
-# whatever distance from the ridge) or zero (for
-# `PolygonConnector`).  As a rough guide, 0.15 rad is approximately
-# 960 km on Earth's surface; smaller values produce sharper
-# boundaries but may leave gaps if the source mesh is sparse.
+# The key benefit of this split: two connectors that share the *same*
+# `LithosphereSource` instance see a single coherent advance of the
+# underlying forward-only ocean tracker per geological age.  The
+# Source's per-age cache enforces this regardless of which connector
+# is asked first, so the order of `update_plate_reconstruction` calls
+# between a paired indicator and geotherm doesn't matter.  This
+# pattern also makes the resource budget transparent at the call
+# site: you can see at a glance that `lith_source` is constructed
+# once and that both `I_lith` and `T_erf` hold a reference to it,
+# rather than each carrying an invisible duplicate tracker.
 #
-# `transition_width` sets the width of the tanh smoothing at the
-# base of the lithosphere, in kilometres.  This value is converted
-# internally to non-dimensional units by dividing by the depth scale
-# (2891 km).  A width of 10 km gives a sharp but numerically stable
-# transition between the lithosphere indicator (~1) and the mantle
-# (~0).
+# We collect the shared parameters into four small dataclasses:
 #
-# `gtrack_config` is a pass-through dictionary that forwards
-# parameters directly to gtrack's `TracerConfig`.  This gives access
-# to the full set of ocean-tracker knobs without duplicating them in
-# G-ADOPT: `ridge_sampling_degrees` controls how densely mid-ocean
-# ridges are tessellated (default 0.5 degrees, ~50 km; larger values
-# seed fewer points per timestep), `velocity_delta_threshold` and
-# `distance_threshold_per_myr` tune collision detection at subduction
-# zones, `continental_cache_size` sets how many timesteps of polygon
-# queries are cached, and the `reinit_*` parameters control the
-# periodic reinitialization that redistributes tracers evenly on the
-# sphere.  Any parameter accepted by `TracerConfig` can be set here;
-# see the [gtrack documentation](https://pypi.org/project/gtrack/)
-# for the full list.
+# * `MeshConfig` -- the mesh's outer radius (`r_outer = rmax`) and
+#   physical depth scale (2891 km).
+# * `InterpolationConfig` -- the kNN kernel, neighbour count, and
+#   angular distance cut-off for interpolating source points onto
+#   mesh DoFs.  0.02 rad ~ 130 km is a fairly tight threshold;
+#   loosen it if you see "holes" in the field.
+# * `LithosphereSourceConfig` -- ocean-tracker knobs: how many
+#   tracers to seed, how often to reinitialise the tracer mesh, and
+#   the pass-through `gtrack_config` dictionary which is forwarded
+#   directly to gtrack's `TracerConfig` (ridge sampling, collision
+#   thresholds, etc).
+# * `PolygonSourceConfig` -- much simpler since polygon sources have
+#   no time-stepping state.
 #
-# **Ocean tracker checkpointing.**  When the `LithosphereConnector`
-# first computes an indicator field, rank 0 must initialise the
-# `SeafloorAgeTracker` at `oldest_age` and step it forward to the
-# requested reconstruction age -- a sequential process during which
-# every other MPI rank sits idle at the broadcast.  Setting
-# `checkpoint_interval_myr` tells the connector to periodically save
-# the tracker state (tracer positions and material ages) to `.npz`
-# files.  On a subsequent run the connector scans the checkpoint
-# directory, loads the file closest to the first requested age, and
-# only steps forward from there.  The result is identical to a
-# continuous run, but the wall-clock saving can be substantial on
-# large MPI jobs.  Checkpoint files are config-agnostic -- they store
-# tracer positions and ages, not the `LithosphereConfig` parameters
-# -- so changing `n_points`, `k_neighbors`, or other settings between
-# runs is fine.  A failed checkpoint write (e.g. permission error) is
-# logged but never crashes the simulation.
+# **Ocean tracker checkpointing.**  When `LithosphereSource` first
+# steps the `SeafloorAgeTracker`, rank 0 must initialise it at
+# `oldest_age` and step forward to the requested reconstruction age
+# -- a sequential process during which every other MPI rank sits
+# idle at the broadcast.  Setting `checkpoint_interval_myr` tells
+# the source to periodically save the tracker state (tracer positions
+# and material ages) to `.npz` files.  On a subsequent run, the source
+# scans the checkpoint directory, loads the file closest to the first
+# requested age, and only steps forward from there.  The result is
+# identical to a continuous run, but the wall-clock saving can be
+# substantial on large MPI jobs.
 
 # +
-connector_config = {
-    "r_outer": rmax,
-    "n_points": 5000,
-    "k_neighbors": 20,
-    "distance_threshold": 0.02,
-    "kernel": "idw",
-    "transition_width": 10.0,
-    "reinit_interval_myr": 10.0,
-    "checkpoint_interval_myr": 10.0,
-    "checkpoint_dir": "./ocean_checkpoints",
-    "gtrack_config": {
-        "time_step": 2.0,  # internal gtrack timestep (Myr)
-        "earth_radius": 6.3781e6,  # Earth radius (m)
-        "velocity_delta_threshold": 7.0,  # collision velocity threshold (km/Myr)
-        "distance_threshold_per_myr": 10.0,  # collision distance threshold (km/Myr)
-        "default_mesh_points": 5000,  # initial Fibonacci sphere mesh points
-        "initial_ocean_mean_spreading_rate": 75.0,  # the spreading rate we use at initial age (mm/yr)
-        "ridge_sampling_degrees": 2.0,  # ridge tessellation resolution (degrees)
-        "spreading_offset_degrees": 0.01,  # offset from ridge for new seeds (degrees)
-        "reinit_k_neighbors": 5,  # KNN neighbours during reinitialisation
-        "reinit_max_distance": 500e3,  # max interpolation distance (m)
+mesh_cfg = MeshConfig(r_outer=rmax)
+interp_cfg = InterpolationConfig(
+    kernel="idw",
+    k_neighbors=20,
+    distance_threshold=0.02,
+)
+
+lith_source_cfg = LithosphereSourceConfig(
+    n_points=5000,
+    reinit_interval_myr=10.0,
+    checkpoint_interval_myr=10.0,
+    checkpoint_dir="./ocean_checkpoints",
+    gtrack_config={
+        "time_step": 2.0,                            # internal gtrack timestep (Myr)
+        "earth_radius": 6.3781e6,                    # Earth radius (m)
+        "velocity_delta_threshold": 7.0,             # collision velocity threshold (km/Myr)
+        "distance_threshold_per_myr": 10.0,          # collision distance threshold (km/Myr)
+        "default_mesh_points": 5000,                 # initial Fibonacci sphere mesh points
+        "initial_ocean_mean_spreading_rate": 75.0,   # spreading rate at initial age (mm/yr)
+        "ridge_sampling_degrees": 2.0,               # ridge tessellation resolution (degrees)
+        "spreading_offset_degrees": 0.01,            # offset from ridge for new seeds (degrees)
+        "reinit_k_neighbors": 5,                     # kNN during reinitialisation
+        "reinit_max_distance": 500e3,                # max interpolation distance (m)
     },
-}
+)
+
+poly_source_cfg = PolygonSourceConfig(n_points=5000)
 # -
 
-# ## Part 1: Indicator fields
+# ## Part 1: Lithosphere indicator + geotherm
 #
-# We create three indicator fields that define *where* different
-# regions are in the mantle domain.  Each field is ~1 inside the
-# target region and ~0 outside, connected by a smooth tanh
-# transition.
-#
-# The workflow uses two objects per field.  A *connector*
-# (`LithosphereConnector`, `PolygonConnector`, etc.) talks to gtrack
-# and the plate reconstruction to produce thickness or geotherm data
-# on a set of source points at each reconstruction age.  A
-# `GplatesScalarFunction` wraps that connector in a standard
-# Firedrake `Function` -- just as `GplatesVelocityFunction` does for
-# surface velocities in the [GPlates global demo](../gplates_global).
-# For all practical purposes these are ordinary Firedrake functions
-# that can be used directly in UFL expressions; they simply know how
-# to refresh their values from plate-reconstruction data via
-# `update_plate_reconstruction(ndtime)`.
-
-# ### Lithosphere indicator
-#
-# The `LithosphereConnector` wraps gtrack components that handle
-# oceanic age tracking (`SeafloorAgeTracker`), continental data
-# rotation (`PointRotator`), and ocean/continent separation
-# (`PolygonFilter`).  It produces a smooth 3-D indicator field with
-# values ~1 inside the lithosphere and ~0 in the underlying mantle.
+# We build a single `LithosphereSource` and then hand it to two
+# separate `IndicatorConnector` instances -- one with a `TanhOutput`
+# (the smooth indicator field, ~1 inside lithosphere, ~0 in mantle)
+# and one with a `GeothermERFOutput` (the half-space cooling
+# temperature profile).  Because both connectors hold a reference to
+# `lith_source`, the underlying `SeafloorAgeTracker` advances exactly
+# once per call to `update_plate_reconstruction(ndtime)`, no matter
+# which of the two `GplatesScalarFunction` wrappers is asked first.
 
 # +
-I_lith_connector = LithosphereConnector(
+lith_source = LithosphereSource(
     gplates_connector=plate_model,
     continental_data=continental_data,
     age_to_property=half_space_cooling,
-    config_extra=connector_config,
+    config=lith_source_cfg,
     comm=mesh.comm,
 )
 
-I_lith = GplatesScalarFunction(Q, indicator_connector=I_lith_connector, name="I_lith")
+I_lith = GplatesScalarFunction(Q, indicator_connector=IndicatorConnector(
+    lith_source,
+    TanhOutput(transition_width_km=10.0, default_thickness_km=100.0),
+    mesh=mesh_cfg, interpolation=interp_cfg,
+), name="I_lith")
+
+T_erf = GplatesScalarFunction(Q, indicator_connector=IndicatorConnector(
+    lith_source,
+    GeothermERFOutput(kappa=1e-6, too_far_age_myr=500.0),
+    mesh=mesh_cfg, interpolation=interp_cfg,
+), name="T_erf")
 # -
 
-# ### Continental indicator
+# ## Part 2: Continental indicator + geotherm
 #
-# The `PolygonConnector` accepts either a `(coords, values)` tuple
-# for spatially varying thickness or a single scalar for uniform
-# thickness.  For example, passing `thickness_data=50.0` would give
-# a uniform 50 km crustal layer everywhere inside the polygons --
-# useful for representing the density deficit of continental crust.
-# Here we use the full `continental_data` so that the indicator depth
-# varies with the observed lithospheric thickness, which is the
-# version used later for geotherm blending.
+# Same idiom for the continental polygon-bounded fields: one
+# `PolygonSource` shared between an indicator and a linear geotherm.
+# Note `default_thickness_km=0.0` for the continental indicator --
+# the polygon source places zero-thickness halo seeds outside the
+# continental polygons, so `too_far` target nodes should read as
+# "outside the region" rather than getting filled with a default
+# 100 km of continental material.
 
 # +
-I_cont_connector = PolygonConnector(
+cont_source = PolygonSource(
     gplates_connector=plate_model,
     polygons=muller_2022_files.get("continental_polygons"),
     thickness_data=continental_data,
-    config_extra=connector_config,
+    config=poly_source_cfg,
     comm=mesh.comm,
 )
 
-I_cont = GplatesScalarFunction(Q, indicator_connector=I_cont_connector, name="I_cont")
+I_cont = GplatesScalarFunction(Q, indicator_connector=IndicatorConnector(
+    cont_source,
+    TanhOutput(transition_width_km=10.0, default_thickness_km=0.0),
+    mesh=mesh_cfg, interpolation=interp_cfg,
+), name="I_cont")
+
+T_lin = GplatesScalarFunction(Q, indicator_connector=IndicatorConnector(
+    cont_source,
+    GeothermLinearOutput(),
+    mesh=mesh_cfg, interpolation=interp_cfg,
+), name="T_lin")
 # -
 
-# ### Continental crust indicator
+# ## Part 3: Solo polygon indicators
+#
+# The continental crust and craton fields are indicator-only -- they
+# don't have a paired geotherm.  When you only need one field per
+# source, the `polygon_indicator` factory keeps the call site short
+# without losing any of the underlying machinery.
+
+# ### Continental crust
 #
 # The continental crust (top ~50 km of continental regions) is less
-# dense than the mantle (~2700 vs ~3200 kg/m^3).  We model this as a
+# dense than the mantle (~2700 vs ~3200 kg/m^3).  We model it as a
 # uniform-thickness layer identified by the plate model's continental
-# polygons.  In a full simulation this indicator drives an upward
-# buoyancy force that represents the density deficit of continental
-# crust relative to the mantle.  Unlike the continental indicator
-# above, which uses the full spatially varying thickness for geotherm
-# blending, this one uses a constant 50 km for the crustal layer.
+# polygons, driving an upward buoyancy force that represents the
+# density deficit of continental crust relative to the mantle.
 
 # +
-I_crust_connector = PolygonConnector(
+I_crust = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
     gplates_connector=plate_model,
     polygons=muller_2022_files.get("continental_polygons"),
     thickness_data=50.0,
-    config_extra=connector_config,
+    source_config=poly_source_cfg,
+    transition_width_km=10.0,
+    default_thickness_km=0.0,
+    mesh=mesh_cfg, interpolation=interp_cfg,
     comm=mesh.comm,
-)
-
-I_crust = GplatesScalarFunction(Q, indicator_connector=I_crust_connector, name="I_crust")
+), name="I_crust")
 # -
 
-# ### Craton indicator
+# ### Cratons
 #
 # Cratons are the ancient, stable cores of continents.  Their thick
 # (~200-300 km), cold lithospheric roots are thought to protect them
-# from tectonic reworking over billions of years.  The craton
-# boundary polygons used here come from
+# from tectonic reworking over billions of years.  The craton boundary
+# polygons used here come from
 # [Shirmard et al. (2025)](https://doi.org/10.1016/j.gsf.2025.102176),
 # who delineated craton boundaries by applying unsupervised machine
 # learning (PCA and k-means clustering) to horizontal shear-wave
-# velocities from the REVEAL full-waveform tomography model,
-# combined with lithospheric thickness and tectonic age constraints.
-# The shapefiles are available from the
+# velocities from the REVEAL full-waveform tomography model, combined
+# with lithospheric thickness and tectonic age constraints.  The
+# shapefiles are available from the
 # [EarthByte Craton_Boundaries repository](https://github.com/EarthByte/Craton_Boundaries)
 # on GitHub (or via `make data`).
-#
-# The `PolygonConnector` identifies cratonic regions by filtering
-# thickness data through these polygon boundaries.  The resulting
-# indicator is ~1 inside the craton root and ~0 elsewhere.
 
 # +
-I_craton_connector = PolygonConnector(
+I_craton = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
     gplates_connector=plate_model,
     polygons="Craton_Boundaries_Inferred.shp",
     thickness_data=continental_data,
-    config_extra=connector_config,
+    source_config=poly_source_cfg,
+    transition_width_km=10.0,
+    default_thickness_km=0.0,
+    mesh=mesh_cfg, interpolation=interp_cfg,
     comm=mesh.comm,
-)
-
-I_craton = GplatesScalarFunction(Q, indicator_connector=I_craton_connector, name="I_craton")
-# -
-
-# ## Part 2: Geotherm fields
-#
-# We now create two geotherm fields that produce normalized
-# temperature profiles with values in [0, 1], where 0 corresponds to
-# the surface temperature $T_s$ and 1 to the LAB temperature
-# $T_{\text{lab}}$.  The composition in Part 3 converts these to
-# physical temperature via $T = T_s + (T_{\text{lab}} - T_s) \times
-# T_{\text{normalized}}$.  The oceanic erf profile depends on seafloor
-# age -- younger ocean has a thinner thermal boundary layer -- while
-# the continental linear profile simply increases linearly from
-# surface to the base of the lithosphere.  Outside the lithosphere
-# (where $I_{\text{lith}} \approx 0$), the normalized background is
-# set to 1 ($= T_{\text{lab}}$).  In a production simulation you
-# would typically replace this uniform background with an adiabatic
-# mantle geotherm or a 3-D temperature field from a previous run.
-#
-# Each geotherm wraps an existing indicator connector rather than
-# creating its own tracking and rotation infrastructure.
-# `LithosphereGeotherm` reuses `I_lith_connector`'s ocean age tracker,
-# and `PolygonGeotherm` reuses `I_cont_connector`'s polygon rotator.
-# This avoids duplicating the expensive `SeafloorAgeTracker` and
-# ensures that both the indicator and the geotherm see exactly the
-# same reconstructed data.
-#
-# Because the ocean age tracker can only evolve forward in time
-# (decreasing geological age toward the present), the indicator
-# connector must be updated before the geotherm at each time step.
-# If your workflow requires independent ordering or different
-# interpolation parameters for the geotherm, create a separate
-# `LithosphereConnector` instead.
-
-# +
-T_erf_connector = LithosphereGeotherm(
-    I_lith_connector,
-    geotherm=ocean_erf_normalized,
-    kappa=1e-6,
-)
-
-T_erf = GplatesScalarFunction(Q, indicator_connector=T_erf_connector, name="T_erf")
-
-T_lin_connector = PolygonGeotherm(
-    I_cont_connector,
-    geotherm=continental_linear,
-)
-
-T_lin = GplatesScalarFunction(Q, indicator_connector=T_lin_connector, name="T_lin")
+), name="I_craton")
 # -
 
 # ## Part 3: Temperature composition
@@ -732,7 +700,7 @@ plog.close()
 # directory now contains tracker snapshots at every 10 Myr from
 # 500 Ma to the present.  If you restart this demo, or start a new
 # simulation that begins at a different age, a fresh
-# `LithosphereConnector` pointed at the same `checkpoint_dir` will
+# `LithosphereSource` pointed at the same `checkpoint_dir` will
 # automatically load the nearest checkpoint instead of stepping all
 # the way from `oldest_age`, skipping the long serial spin-up.
 #

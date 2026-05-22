@@ -83,30 +83,30 @@ class MockGplatesConnector:
 class MockIndicatorConnector(IndicatorConnector):
     """Indicator connector returning a controllable constant field.
 
+    Bypasses the real source+output composition; the MockGplatesConnector
+    instance is wired in as ``self.source`` so the connector's
+    ndtime2age/delta_t delegates resolve correctly.
+
     Tracks call count so tests can verify caching behaviour.
     """
 
     def __init__(self, gplates_connector, value=1.0, comm=MPI.COMM_WORLD):
+        # The real IndicatorConnector.__init__ wants a Source + an Output;
+        # we skip it deliberately and set just the attributes that
+        # GplatesScalarFunction reads through us.
+        self.source = gplates_connector  # exposes ndtime2age, age2ndtime, delta_t
         self.gplates_connector = gplates_connector
-        self.comm = comm
-        self._is_root = (comm.rank == 0)
-        self.config = None
-        self._transition_width_nondim = 0.0
-        self._initialized = False
         self.reconstruction_age = None
         self._cached_result = None
         self._cached_coords_hash = None
         self._value = value
         self.get_indicator_call_count = 0
 
-    def _prepare_sources(self, age):
-        return {"value": np.array([self._value])}
-
     def set_value(self, value):
         self._value = value
 
     def get_indicator(self, target_coords, ndtime):
-        age = self.ndtime2age(ndtime)
+        age = self.source.ndtime2age(ndtime)
         self.get_indicator_call_count += 1
         self.reconstruction_age = age
         return np.full(len(target_coords), self._value)

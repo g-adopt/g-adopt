@@ -8,8 +8,8 @@ from gadopt.gplates import (
     GplatesVelocityFunction,
     pyGplatesConnector,
     ensure_reconstruction,
-    LithosphereConnector,
-    PolygonConnector,
+    lithosphere_indicator,
+    polygon_indicator,
 )
 
 
@@ -130,7 +130,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_valid_age_works(self, plate_model_with_polygons, synthetic_data, test_coords):
         """Test that valid ages within bounds work correctly."""
-        connector = LithosphereConnector(
+        connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -145,7 +145,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_age_older_than_oldest_raises_error(self, plate_model_with_polygons, synthetic_data, test_coords):
         """Test that requesting age > oldest_age raises ValueError."""
-        connector = LithosphereConnector(
+        connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -159,7 +159,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_negative_age_raises_error(self, plate_model_with_polygons, synthetic_data, test_coords):
         """Test that requesting negative age (future) raises ValueError."""
-        connector = LithosphereConnector(
+        connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -173,7 +173,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_backward_step_raises_error(self, plate_model_with_polygons, synthetic_data, test_coords):
         """Test that going backward in ocean tracker raises ValueError."""
-        connector = LithosphereConnector(
+        connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -191,7 +191,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_forward_steps_work(self, plate_model_with_polygons, synthetic_data, test_coords):
         """Test that sequential forward steps (decreasing age) work."""
-        connector = LithosphereConnector(
+        connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -219,7 +219,7 @@ class TestPolygonConnectorAgeValidation:
         if not craton_shapefile.exists():
             pytest.skip("Craton shapefile not available")
 
-        return PolygonConnector(
+        return polygon_indicator(
             gplates_connector=plate_model_with_polygons,
             polygons=str(craton_shapefile),
             thickness_data=synthetic_data,
