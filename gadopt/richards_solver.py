@@ -251,12 +251,6 @@ class RichardsSolver(SolverConfigurationMixin):
         Safety-factor multiplier for the SIPG penalty in DG discretisations.
         Default is 2.0; the theoretical coercivity floor is 1.0. Setting it
         below 1.0 will give a non-coercive bilinear form and Newton may fail.
-        scalar_equation's diffusion term passes ``shift=-1`` to
-        ``interior_penalty_factor`` (Shahbazi / Epshteyn-Rivière sharp bound
-        using ``C(p-1)``), whereas the pre-refactor bespoke Richards term
-        used ``shift=0``. To preserve the original penalty bit-for-bit we
-        multiply the user-facing ``interior_penalty`` by ``C(p)/C(p-1)``
-        internally, so the value passed here remains the bare safety factor.
       nullspace:
         ``VectorSpaceBasis`` spanning the nullspace of the Jacobian. Relevant
         for pure-Neumann problems (all fluxes specified, no Dirichlet on h),
@@ -413,11 +407,22 @@ class RichardsSolver(SolverConfigurationMixin):
             'source': self.source_term,
         }
 
-        # scalar_equation.diffusion_term calls interior_penalty_factor(eq, shift=-1),
-        # giving sigma proportional to C(p-1). The bespoke Richards term used the
-        # default shift=0 (sigma proportional to C(p)). Absorb the C(p)/C(p-1)
-        # trace-constant ratio into the safety factor so the assembled penalty
-        # is bit-for-bit identical to the pre-refactor Richards term.
+        # scalar_equation.diffusion_term uses interior_penalty_factor(eq, shift=-1),
+        # i.e. the Shahbazi / Epshteyn-Rivière sharp bound with C(p-1). Richards
+        # is assembled against the looser Hillewaert form (C(p)) to match the
+        # momentum equation and the pre-refactor bespoke Richards term; the
+        # extra margin over the Shahbazi floor is useful in practice because
+        # K(h) can vary by orders of magnitude across the wetting front, even
+        # though Hillewaert's coercivity proof itself assumes bounded
+        # diffusivity. Absorb the C(p)/C(p-1) ratio into the safety factor so
+        # the assembled penalty matches the Hillewaert convention; the
+        # user-facing `interior_penalty` stays a bare safety factor.
+        #
+        # Flipping scalar_equation to shift=0 would let us delete this block,
+        # but would force regenerating stored reference data on every DG scalar
+        # diffusion test (viscoplastic_case_DG, multi_material,
+        # 2d_cylindrical_TALA_DG, adjoint_2d_cylindrical, and the adjoint
+        # mantle-convection demos).
         alpha = self.interior_penalty if self.interior_penalty is not None else 2.0
         degree = self.solution_space.ufl_element().degree()
         if not isinstance(degree, int):
