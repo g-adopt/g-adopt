@@ -119,8 +119,12 @@ class _DummyGplates:
     helpers and oldest_age are touched by the validation path."""
     oldest_age = 100.0
     delta_t = 1.0
-    def ndtime2age(self, ndtime): return float(ndtime) * 100.0
-    def age2ndtime(self, age): return age / 100.0
+
+    def ndtime2age(self, ndtime):
+        return float(ndtime) * 100.0
+
+    def age2ndtime(self, age):
+        return age / 100.0
 
 
 # ---------------------------------------------------------------------------

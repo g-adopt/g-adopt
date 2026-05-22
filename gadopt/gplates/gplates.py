@@ -1,4 +1,3 @@
-import re
 import warnings
 from typing import Callable
 
@@ -9,6 +8,7 @@ from firedrake import TensorElement, VectorElement
 from firedrake.ufl_expr import extract_unique_domain
 from mpi4py import MPI
 from pyadjoint.tape import annotate_tape, stop_annotating
+from scipy.spatial import cKDTree
 
 from ..solver_options_manager import SolverConfigurationMixin
 from ..utility import DEBUG, INFO, InteriorBC, is_continuous, log, log_level

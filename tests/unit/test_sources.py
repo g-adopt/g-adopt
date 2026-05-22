@@ -24,7 +24,6 @@ from gadopt.gplates import (
     IndicatorConnector,
     LithosphereSource,
     LithosphereSourceConfig,
-    MeshConfig,
     PolygonSource,
     PolygonSourceConfig,
     TanhOutput,

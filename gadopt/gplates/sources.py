@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, ClassVar
 
