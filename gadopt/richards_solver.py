@@ -42,6 +42,8 @@ __all__ = [
     "RichardsSolver",
     "direct_richards_solver_parameters",
     "iterative_richards_solver_parameters",
+    "vlumping_richards_solver_parameters",
+    "vlumping_hmg_richards_solver_parameters",
 ]
 
 
@@ -95,8 +97,106 @@ iterative_richards_solver_parameters: dict[str, Any] = {
 }
 """Iterative solver preset: Newton + GMRES + BoomerAMG (Hypre).
 
-G-ADOPT uses this preset by default in 3-D. Requires PETSc to be built with
-Hypre support; otherwise an informative error is raised at solve time.
+G-ADOPT uses this preset by default in 3-D for non-extruded meshes. Requires
+PETSc to be built with Hypre support; otherwise an informative error is
+raised at solve time.
+"""
+
+
+vlumping_richards_solver_parameters: dict[str, Any] = {
+    "mat_type": "aij",
+    # Flexible GMRES because the vertically-lumped 2-level MG is a
+    # variable preconditioner (the Galerkin coarse solve is itself
+    # iterative in practice).
+    "ksp_type": "fgmres",
+    "snes_linesearch_type": "bt",
+    # Inexact Newton: the 1e-4 linear tolerance consistently wins against
+    # the 1e-5 baseline across the scaling studies (Cockett and
+    # Murrumbidgee). Tighter linear solves don't reduce Newton counts.
+    "ksp_rtol": 1e-4,
+    "ksp_max_it": 200,
+    "ksp_gmres_restart": 30,
+
+    "pc_type": "python",
+    "pc_python_type": "gadopt.VerticallyLumpedPC",
+
+    # Fine-level smoother: Chebyshev wrapping block-Jacobi ILU handles
+    # the stiff vertical modes at modest cost. Iteration counts are
+    # insensitive to vertical resolution.
+    "lumped_mg_levels_ksp_type": "chebyshev",
+    "lumped_mg_levels_ksp_max_it": 2,
+    "lumped_mg_levels_ksp_convergence_test": "skip",
+    "lumped_mg_levels_pc_type": "bjacobi",
+    "lumped_mg_levels_sub_pc_type": "ilu",
+    "lumped_mg_levels_sub_pc_factor_levels": 0,
+
+    # Coarse solve: the vertically lumped coarse operator is 2D-like
+    # (~n_horiz DOFs) so MUMPS LU is cheap and robust.
+    "lumped_mg_coarse_ksp_type": "preonly",
+    "lumped_mg_coarse_pc_type": "lu",
+    "lumped_mg_coarse_pc_factor_mat_solver_type": "mumps",
+
+    **_newton_common,
+}
+"""Iterative solver preset: vertically lumped 2-level MG.
+
+Two-level multigrid tailored for high-aspect-ratio extruded meshes
+(Kramer et al. 2010). Collapses the vertical dimension onto a 2D-like
+coarse problem via Galerkin projection; the coarse solve is MUMPS LU.
+Inexact Newton (ksp_rtol=1e-4) is baked into the preset.
+
+G-ADOPT selects this preset by default in 3-D on extruded Cartesian
+meshes. It requires an extruded fine mesh but does not require a
+MeshHierarchy.
+"""
+
+
+vlumping_hmg_richards_solver_parameters: dict[str, Any] = {
+    "mat_type": "aij",
+    "ksp_type": "fgmres",
+    "snes_linesearch_type": "bt",
+    "ksp_rtol": 1e-4,
+    "ksp_max_it": 200,
+    "ksp_gmres_restart": 30,
+
+    "pc_type": "python",
+    "pc_python_type": "gadopt.VerticallyLumpedHMGPC",
+
+    # Fine-level smoother: ASM line smoother (one patch per vertical
+    # column, factorised by LU). Exact column solves damp vertical modes
+    # in one sweep.
+    "lumped_mg_levels_ksp_type": "chebyshev",
+    "lumped_mg_levels_ksp_max_it": 1,
+    "lumped_mg_levels_ksp_convergence_test": "skip",
+    "lumped_mg_levels_pc_type": "python",
+    "lumped_mg_levels_pc_python_type": "firedrake.ASMLinesmoothPC",
+    "lumped_mg_levels_pc_linesmooth_codims": "0",
+    # The outer ASM PC's prefix ends in "_sub_", so the patch-local
+    # sub-PC lives under "_sub_sub_". A single sub_ downgrades ASM
+    # itself to LU on the rank-local matrix -- an instant OOM.
+    "lumped_mg_levels_pc_linesmooth_sub_sub_pc_type": "lu",
+
+    # Coarse solve: geometric MG descending the 2D base MeshHierarchy.
+    "lumped_mg_coarse_pc_type": "mg",
+    "lumped_mg_coarse_mg_levels_ksp_type": "chebyshev",
+    "lumped_mg_coarse_mg_levels_ksp_max_it": 2,
+    "lumped_mg_coarse_mg_levels_pc_type": "bjacobi",
+    "lumped_mg_coarse_mg_levels_sub_pc_type": "ilu",
+    "lumped_mg_coarse_mg_coarse_pc_type": "lu",
+    "lumped_mg_coarse_mg_coarse_pc_factor_mat_solver_type": "mumps",
+
+    **_newton_common,
+}
+"""Iterative solver preset: vlumping + geometric MG on the 2D base.
+
+Same two-level structure as ``vlumping_richards_solver_parameters``, but
+the coarse solve descends a geometric multigrid on a 2D base
+``MeshHierarchy`` instead of MUMPS. Fine-level smoother is
+``ASMLinesmoothPC`` (exact per-column solves).
+
+Requires the extruded fine mesh's base mesh to live in a
+``MeshHierarchy`` with at least one refinement level. If that hierarchy
+is absent, the solver raises ``RuntimeError`` at setup time.
 """
 
 
@@ -343,6 +443,8 @@ class RichardsSolver(SolverConfigurationMixin):
     _PRESETS: dict[str, dict[str, Any]] = {
         "direct": direct_richards_solver_parameters,
         "iterative": iterative_richards_solver_parameters,
+        "vlumping": vlumping_richards_solver_parameters,
+        "vlumping_hmg": vlumping_hmg_richards_solver_parameters,
     }
 
     def set_solver_options(
@@ -382,10 +484,16 @@ class RichardsSolver(SolverConfigurationMixin):
         """Pick a default preset based on mesh type.
 
         * 2-D: ``"direct"`` (MUMPS LU).
-        * 3-D: ``"iterative"`` (BoomerAMG).
+        * 3-D extruded Cartesian: ``"vlumping"``, which exploits the
+          vertical anisotropy typical of water-table problems.
+        * 3-D otherwise: ``"iterative"`` (BoomerAMG).
         """
         if self.mesh.topological_dimension == 2:
             return "direct"
+        extruded = getattr(self.mesh, "extruded", False)
+        cartesian = getattr(self.mesh, "cartesian", False)
+        if extruded and cartesian:
+            return "vlumping"
         return "iterative"
 
     def _validate_preset(self, name: str) -> None:
@@ -398,7 +506,32 @@ class RichardsSolver(SolverConfigurationMixin):
                     "solver_parameters='iterative' requires PETSc to be "
                     "built with Hypre (BoomerAMG). This PETSc build does "
                     "not include Hypre. Rebuild PETSc with --download-hypre "
-                    "or choose a different preset (e.g. 'direct')."
+                    "or choose a different preset (e.g. 'vlumping' on "
+                    "extruded Cartesian meshes, or 'direct')."
+                )
+
+        if name in ("vlumping", "vlumping_hmg"):
+            if not getattr(self.mesh, "extruded", False):
+                raise RuntimeError(
+                    f"solver_parameters='{name}' requires an extruded mesh. "
+                    f"Use 'iterative' (BoomerAMG) or 'direct' for "
+                    f"non-extruded meshes."
+                )
+
+        if name == "vlumping_hmg":
+            from firedrake.mg.utils import get_level
+            base = getattr(self.mesh, "_base_mesh", None)
+            hierarchy, level = (None, None) if base is None else get_level(base)
+            if hierarchy is None or level is None:
+                raise RuntimeError(
+                    "solver_parameters='vlumping_hmg' requires the extruded "
+                    "mesh's base mesh to live in a MeshHierarchy so the "
+                    "coarse PCMG can descend a geometric hierarchy. Build "
+                    "the mesh with\n"
+                    "    base_h = MeshHierarchy(base, L)\n"
+                    "    mesh = ExtrudedMeshHierarchy(base_h, layers, "
+                    "layer_height=h)[-1]\n"
+                    "with L >= 1, or fall back to 'vlumping'."
                 )
 
     def setup_solver(self) -> None:
