@@ -232,6 +232,128 @@ class TestResultCacheKey:
 
 
 # ---------------------------------------------------------------------------
+# Shared interpolation geometry (P10)
+# ---------------------------------------------------------------------------
+
+class _DataSource(Source):
+    """Dummy source returning a fixed small (xyz, thickness) cloud — enough to
+    exercise the real kNN interpolation path without any reconstruction I/O."""
+
+    provides = frozenset({"xyz", "thickness"})
+
+    def __init__(self, comm=MPI.COMM_WORLD):
+        self.comm = comm
+        self._is_root = (comm.rank == 0)
+        self.gplates_connector = _DummyGplates()
+        rng = np.random.default_rng(0)
+        xyz = rng.normal(size=(20, 3))
+        xyz = 6.371e6 * xyz / np.linalg.norm(xyz, axis=1, keepdims=True)
+        self._fixed = {
+            "xyz": xyz,
+            "thickness": rng.uniform(50.0, 200.0, size=20),
+        }
+
+    def _compute_sources(self, age):
+        # Same cloud at every age (good enough for the geometry-sharing tests).
+        return {k: v.copy() for k, v in self._fixed.items()}
+
+
+class _CountingCKDTree:
+    """Wraps cKDTree, counting constructions so a test can assert how many
+    interpolation geometries were built."""
+
+    count = 0
+
+    def __init__(self, *args, **kwargs):
+        type(self).count += 1
+        from scipy.spatial import cKDTree as _real
+        self._tree = _real(*args, **kwargs)
+
+    def query(self, *args, **kwargs):
+        return self._tree.query(*args, **kwargs)
+
+
+def _target_coords():
+    rng = np.random.default_rng(1)
+    xyz = rng.normal(size=(15, 3))
+    return 2.0 * xyz / np.linalg.norm(xyz, axis=1, keepdims=True)
+
+
+class TestGeometrySharing:
+    """The interpolation geometry (cKDTree indices + weights) depends only on
+    (source cloud, target coords, cfg), so connectors sharing those should
+    build it once and reuse the cached bundle."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_tree(self, monkeypatch):
+        _CountingCKDTree.count = 0
+        monkeypatch.setattr(
+            "gadopt.gplates.connectors.cKDTree", _CountingCKDTree
+        )
+
+    def test_siblings_share_one_build_and_agree(self):
+        src = _DataSource()
+        cfg = InterpolationConfig()
+        target = _target_coords()
+        # Two indicator connectors sharing the same source, target and cfg.
+        conn_a = ScalarFieldConnector(src, TanhOutput(), interpolation=cfg)
+        conn_b = ScalarFieldConnector(src, TanhOutput(), interpolation=cfg)
+
+        ndtime = src.age2ndtime(50.0)
+        out_a = conn_a.get_indicator(target, ndtime)
+        out_b = conn_b.get_indicator(target, ndtime)
+
+        # Geometry built exactly once, shared by both.
+        assert _CountingCKDTree.count == 1
+        # Both TanhOutputs on the same source/geometry must agree byte-for-byte.
+        np.testing.assert_array_equal(out_a, out_b)
+
+    def test_distinct_configs_build_separately(self):
+        src = _DataSource()
+        target = _target_coords()
+        conn_a = ScalarFieldConnector(src, TanhOutput(), interpolation=InterpolationConfig())
+        conn_b = ScalarFieldConnector(src, TanhOutput(), interpolation=InterpolationConfig())
+
+        ndtime = src.age2ndtime(50.0)
+        conn_a.get_indicator(target, ndtime)
+        conn_b.get_indicator(target, ndtime)
+
+        # Different cfg identities -> different cache keys -> two builds.
+        assert _CountingCKDTree.count == 2
+
+    def test_age_advance_rebuilds_geometry(self):
+        src = _DataSource()
+        cfg = InterpolationConfig()
+        target = _target_coords()
+        conn = ScalarFieldConnector(src, TanhOutput(), interpolation=cfg)
+
+        conn.get_indicator(target, src.age2ndtime(50.0))
+        assert _CountingCKDTree.count == 1
+        # Advancing a full delta_t misses the source cache, which clears the
+        # geometry cache -> rebuild.
+        conn.get_indicator(target, src.age2ndtime(20.0))
+        assert _CountingCKDTree.count == 2
+
+    def test_gather_matches_hand_computed(self):
+        # The gathered property must equal the explicit weighted sum.
+        src = _DataSource()
+        cfg = InterpolationConfig()
+        target = _target_coords()
+        conn = ScalarFieldConnector(src, TanhOutput(), interpolation=cfg)
+
+        source_dict = src.prepare(50.0)
+        bundle = conn._interp_geometry(source_dict["xyz"], target)
+        prop = source_dict["thickness"]
+        gathered = conn._interp_gather(bundle, prop)
+
+        idx = bundle["idx"]
+        weights = bundle["weights"]
+        expected = np.sum(weights * prop[idx], axis=1)
+        expected[bundle["exact_match"]] = prop[idx[bundle["exact_match"], 0]]
+        np.testing.assert_array_equal(gathered, expected)
+
+
+# ---------------------------------------------------------------------------
 # GplatesScalarFunction rejects non-scalar spaces
 # ---------------------------------------------------------------------------
 

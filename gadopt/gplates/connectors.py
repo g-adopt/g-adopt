@@ -235,25 +235,39 @@ class ScalarFieldConnector:
             return np.zeros(len(target_coords))
 
         r_target = np.linalg.norm(target_coords, axis=1)
-        prop_keys = sorted(self.output.requires)
-        prop_arrays = [sources_dict[k] for k in prop_keys]
-        interp_values, too_far = self._interpolate(
-            source_xyz, target_coords, *prop_arrays
-        )
-        interpolated = dict(zip(prop_keys, interp_values))
-        return self.output.compute(interpolated, r_target, too_far, self.mesh)
 
-    def _interpolate(
+        # Interpolation geometry (cKDTree indices + weights) depends only on
+        # (source cloud, target coords, cfg) — not on the gathered property —
+        # so it is identical across every output sharing this source at a given
+        # age. Build it once and cache it on the source; siblings reuse it.
+        key = (hash(target_coords.tobytes()), id(self.interpolation))
+        bundle = self.source.get_or_build_geometry(
+            key, lambda: self._interp_geometry(source_xyz, target_coords)
+        )
+
+        prop_keys = sorted(self.output.requires)
+        interpolated = {
+            k: self._interp_gather(bundle, sources_dict[k]) for k in prop_keys
+        }
+        return self.output.compute(
+            interpolated, r_target, bundle["too_far"], self.mesh
+        )
+
+    def _interp_geometry(
         self,
         source_xyz: np.ndarray,
         target_coords: np.ndarray,
-        *source_properties: np.ndarray,
-    ) -> tuple[list[np.ndarray], np.ndarray]:
-        """Spherical kNN interpolation.
+    ) -> dict:
+        """Build the spherical kNN interpolation geometry over a source cloud.
 
-        Normalises both clouds to the unit sphere, builds a cKDTree over
-        source points, and computes a weighted average per target using
-        the configured kernel.
+        Normalises both clouds to the unit sphere, builds a cKDTree over the
+        source points and queries the ``k`` nearest neighbours per target node,
+        then precomputes the (normalised) blend weights. The returned bundle is
+        the part of the interpolation that is independent of the gathered
+        property, so it can be shared across every output sharing this source.
+
+        The bundle must be treated read-only by ``_interp_gather`` — its arrays
+        are shared across sibling outputs.
         """
         cfg = self.interpolation
         epsilon = 1e-10
@@ -269,9 +283,8 @@ class ScalarFieldConnector:
         dists, idx = tree.query(unit_target, k=k)
 
         if k == 1:
-            results = [prop[idx].copy() for prop in source_properties]
             too_far = dists > cfg.distance_threshold
-            return results, too_far
+            return {"k1": True, "idx": idx, "too_far": too_far}
 
         exact_match = dists[:, 0] < epsilon
         too_far = dists[:, 0] > cfg.distance_threshold
@@ -284,10 +297,27 @@ class ScalarFieldConnector:
         weight_sums = weights.sum(axis=1, keepdims=True)
         weights /= np.maximum(weight_sums, epsilon)
 
-        results = []
-        for prop in source_properties:
-            interpolated = np.sum(weights * prop[idx], axis=1)
-            interpolated[exact_match] = prop[idx[exact_match, 0]]
-            results.append(interpolated)
+        return {
+            "k1": False,
+            "idx": idx,
+            "too_far": too_far,
+            "exact_match": exact_match,
+            "weights": weights,
+        }
 
-        return results, too_far
+    @staticmethod
+    def _interp_gather(bundle: dict, prop: np.ndarray) -> np.ndarray:
+        """Gather one property through a prebuilt geometry bundle.
+
+        Reads the bundle strictly read-only (its arrays are shared across
+        sibling outputs); only the freshly-allocated result array is written.
+        """
+        idx = bundle["idx"]
+        if bundle["k1"]:
+            return prop[idx].copy()
+
+        weights = bundle["weights"]
+        exact_match = bundle["exact_match"]
+        interpolated = np.sum(weights * prop[idx], axis=1)
+        interpolated[exact_match] = prop[idx[exact_match, 0]]
+        return interpolated

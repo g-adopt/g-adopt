@@ -257,6 +257,15 @@ class Source(ABC):
     _cached_age: float | None = None
     _cached_dict: dict[str, np.ndarray] | None = None
 
+    # kNN interpolation-geometry cache. Keyed on
+    # (target_coords content hash, id(interpolation_config)); the value is the
+    # geometry bundle produced by the connector for that (source cloud, mesh,
+    # cfg) triple. Siblings sharing this source at the same age reuse one
+    # cKDTree build + query. Lazily created (a class-level dict default would
+    # be shared across instances). Cleared whenever the source dict advances
+    # to a new age, so geometry never disagrees with _cached_dict on age.
+    _interp_geometry_cache: dict | None = None
+
     # Lazy-load flag: gtrack/pyGplates handles and the present-day cloud are
     # built on the first prepare(), not in __init__, so a Source is cheap to
     # construct and mockable without touching reconstruction data.
@@ -300,7 +309,30 @@ class Source(ABC):
 
         self._cached_age = age
         self._cached_dict = sources
+        # The source cloud just changed, so any cached interpolation geometry
+        # (cKDTree indices/weights over the previous cloud) is stale. Clear it
+        # in lockstep with _cached_dict so the two caches never disagree on age.
+        if self._interp_geometry_cache is not None:
+            self._interp_geometry_cache.clear()
         return sources
+
+    def get_or_build_geometry(self, key, build_fn):
+        """Return the cached interpolation-geometry bundle for ``key``, building
+        it via ``build_fn()`` on a miss.
+
+        The cache is rank-local and keyed on
+        ``(target_coords content hash, id(interpolation_config))``; the
+        connector owns the geometry math (``build_fn``) while the source owns
+        the cache so siblings sharing this source reuse one build. Cleared by
+        ``prepare`` whenever the source cloud advances to a new age.
+        """
+        if self._interp_geometry_cache is None:
+            self._interp_geometry_cache = {}
+        bundle = self._interp_geometry_cache.get(key)
+        if bundle is None:
+            bundle = build_fn()
+            self._interp_geometry_cache[key] = bundle
+        return bundle
 
     # Time delegates
 
