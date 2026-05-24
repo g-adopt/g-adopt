@@ -747,7 +747,7 @@ def lithosphere_indicator(
     interpolation: InterpolationConfig | None = None,
     default_continental_age_myr: float = 500.0,
     walk_start_age: float | None = None,
-    gc_collect_frequency: int | None = 1,
+    gc_collect_frequency: int | None = 10,
     comm: MPI.Comm = MPI.COMM_WORLD,
 ) -> ScalarFieldConnector:
     """Build an ``ScalarFieldConnector`` returning the lithosphere indicator field.
@@ -806,7 +806,7 @@ def lithosphere_geotherm(
     interpolation: InterpolationConfig | None = None,
     default_continental_age_myr: float = 500.0,
     walk_start_age: float | None = None,
-    gc_collect_frequency: int | None = 1,
+    gc_collect_frequency: int | None = 10,
     comm: MPI.Comm = MPI.COMM_WORLD,
 ) -> ScalarFieldConnector:
     """Build an ``ScalarFieldConnector`` returning the normalised oceanic geotherm.
@@ -862,7 +862,7 @@ def polygon_indicator(
     source_config: PolygonSourceConfig | None = None,
     mesh: MeshConfig | None = None,
     interpolation: InterpolationConfig | None = None,
-    gc_collect_frequency: int | None = 1,
+    gc_collect_frequency: int | None = 10,
     comm: MPI.Comm = MPI.COMM_WORLD,
 ) -> ScalarFieldConnector:
     """Build an ``ScalarFieldConnector`` returning a polygon-bounded indicator
@@ -910,7 +910,7 @@ def polygon_geotherm(
     source_config: PolygonSourceConfig | None = None,
     mesh: MeshConfig | None = None,
     interpolation: InterpolationConfig | None = None,
-    gc_collect_frequency: int | None = 1,
+    gc_collect_frequency: int | None = 10,
     comm: MPI.Comm = MPI.COMM_WORLD,
 ) -> ScalarFieldConnector:
     """Build an ``ScalarFieldConnector`` returning the linear continental geotherm

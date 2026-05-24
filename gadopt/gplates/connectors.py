@@ -112,6 +112,18 @@ class ScalarFieldConnector:
     underlying state per geological age — the source's per-age cache
     enforces that, so the order of ``get_indicator`` calls between
     consumers is immaterial.
+
+    ``gc_collect_frequency`` controls how often a full ``gc.collect()`` runs
+    in the update loop (every Nth ``get_indicator``). The default of ``10``
+    matches gtrack's own internal GC cadence and periodically breaks the
+    pygplates C++ reference cycles without paying a collection on every call.
+    Set it to ``None`` to disable the connector-level collect entirely (relying
+    on gtrack's internal collect plus Python's automatic generational GC) when
+    you have profiled GC as hot and confirmed memory stays bounded; set it to
+    ``1`` for a lithosphere spin-up or very-long adjoint run where the
+    connector is driven for thousands of ages and the tightest bound on C++
+    cycle accumulation is wanted (the per-call cost is negligible there against
+    the per-age ``step_to``).
     """
 
     def __init__(
@@ -121,7 +133,7 @@ class ScalarFieldConnector:
         *,
         mesh: MeshConfig | None = None,
         interpolation: InterpolationConfig | None = None,
-        gc_collect_frequency: int | None = 1,
+        gc_collect_frequency: int | None = 10,
     ):
         if not output.requires <= source.provides:
             missing = output.requires - source.provides

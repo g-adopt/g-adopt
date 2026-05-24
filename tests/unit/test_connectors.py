@@ -178,6 +178,54 @@ class TestConnectorConstruction:
         assert isinstance(conn.interpolation, InterpolationConfig)
 
 
+class TestGcCollectDefault:
+    """The gc_collect_frequency default is 10 (matching gtrack's own internal
+    GC cadence), not 1 — a full gc.collect() every call was an undefended
+    default that wasted ~130s over a 5000-step loop while gtrack already
+    breaks the pygplates C++ cycles internally. The default must be 10 on
+    every construction path, including the factories (which forward their own
+    default to the connector, so a stale factory default would silently
+    override the connector's)."""
+
+    def test_default_is_ten_direct(self):
+        conn = ScalarFieldConnector(_DummySource({"xyz", "thickness"}), TanhOutput())
+        assert conn.gc_collect_frequency == 10
+
+    def test_default_is_ten_lithosphere_factory(self):
+        # source= route skips the source-is-None branch -> no reconstruction I/O.
+        conn = lithosphere_indicator(source=_DataSource())
+        assert conn.gc_collect_frequency == 10
+
+    def test_default_is_ten_polygon_factory(self):
+        conn = polygon_indicator(source=_DataSource())
+        assert conn.gc_collect_frequency == 10
+
+    def _drive(self, monkeypatch, frequency, n_calls):
+        calls = {"n": 0}
+        monkeypatch.setattr(
+            "gadopt.gplates.connectors.gc.collect",
+            lambda *a, **k: calls.__setitem__("n", calls["n"] + 1),
+        )
+        conn = ScalarFieldConnector(
+            _DataSource(), TanhOutput(), gc_collect_frequency=frequency
+        )
+        target = _target_coords()
+        # Distinct ages (spaced > delta_t=1.0, all <= oldest_age=100) so every
+        # call is a cache miss and runs _compute (where the gc counter lives).
+        for age in range(90, 90 - 10 * n_calls, -10):
+            conn.get_indicator(target, conn.source.age2ndtime(float(age)))
+        return calls["n"]
+
+    def test_interval_collects_every_nth(self, monkeypatch):
+        assert self._drive(monkeypatch, frequency=3, n_calls=9) == 3
+
+    def test_none_never_collects(self, monkeypatch):
+        assert self._drive(monkeypatch, frequency=None, n_calls=5) == 0
+
+    def test_one_collects_every_call(self, monkeypatch):
+        assert self._drive(monkeypatch, frequency=1, n_calls=4) == 4
+
+
 class TestResultCacheKey:
     """The result cache is keyed on the *identity* of the target_coords
     buffer (via a weakref), not on its contents. GplatesScalarFunction holds
