@@ -69,21 +69,32 @@ T_erf.update_plate_reconstruction(ndtime)
 
 > Updating these fields is order-independent: a shared source caches its reconstruction per geological age (`sources.py:261-270`, asserted by `test_connectors.py:413-419`), so whichever field updates first does the work and the other reuses the result. Either may be updated first.
 
-### Config + Extra Pattern
+### Config pattern: direct kwargs vs. wrapped-dict extra
 
-Following G-ADOPT's `solver_parameters` pattern:
+Most configs are leaf dataclasses over our own parameters and take direct
+kwargs with no extra hook: `InterpolationConfig` (`connectors.py`),
+`MeshConfig` (`outputs.py`), `PolygonSourceConfig` (`sources.py`).
+
+The wrapped-dict "extra" pattern is reserved for a config that fronts a
+third-party config object whose surface we don't want to re-declare. The
+sole case is `LithosphereSourceConfig.gtrack_config` (`sources.py:61`),
+spliced into gtrack's `TracerConfig` at construction
+(`sources.py:373-375`). Keys in `gtrack_config` pass straight through to
+`gtrack.config.TracerConfig`.
+
+Rule: add an extra hook only when a config fronts a third-party config
+object you don't want to re-declare; configs over our own parameters stay
+flat.
 
 ```python
-# Use defaults
-connector = LithosphereConnector(gplates, data, func)
+# Leaf config — direct kwargs
+interp = InterpolationConfig(k_neighbors=80, kernel="gaussian")
 
-# Override specific values
-connector = LithosphereConnector(gplates, data, func,
-    config_extra={"n_points": 40000, "transition_width": 5.0})
-
-# Full custom config
-config = LithosphereConfig(n_points=40000, r_outer=2.5)
-connector = LithosphereConnector(gplates, data, func, config=config)
+# Wrapped-dict extra — forward arbitrary TracerConfig fields to gtrack
+lith_cfg = LithosphereSourceConfig(
+    n_points=40000,
+    gtrack_config={"ridge_sampling_degrees": 0.5},  # passed to gtrack TracerConfig
+)
 ```
 
 ### MPI Parallelization
