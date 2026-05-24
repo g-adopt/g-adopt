@@ -19,6 +19,7 @@ Three groups:
     without producing duplicate state.
 """
 
+import gc
 from pathlib import Path
 import pickle
 
@@ -175,6 +176,59 @@ class TestConnectorConstruction:
         conn = IndicatorConnector(src, TanhOutput())
         assert isinstance(conn.mesh, MeshConfig)
         assert isinstance(conn.interpolation, InterpolationConfig)
+
+
+class TestResultCacheKey:
+    """The result cache is keyed on the *identity* of the target_coords
+    buffer (via a weakref), not on its contents. GplatesScalarFunction holds
+    one mesh_coords array for its lifetime, so identity is a sound O(1) key
+    and avoids hashing the whole coordinate buffer on every call.
+    """
+
+    @staticmethod
+    def _conn():
+        return IndicatorConnector(_DummySource({"xyz", "thickness"}), TanhOutput())
+
+    def test_same_array_same_age_hits(self):
+        conn = self._conn()
+        arr = np.arange(12, dtype=float).reshape(4, 3)
+        result = np.zeros(4)
+        conn._update_cache(10.0, arr, result)
+        assert conn._check_cache(10.0, arr) is True
+
+    def test_byte_equal_distinct_array_misses(self):
+        # arr2 is byte-for-byte identical but a different object — a content
+        # hash would (wrongly) hit; identity correctly misses.
+        conn = self._conn()
+        arr = np.arange(12, dtype=float).reshape(4, 3)
+        result = np.zeros(4)
+        conn._update_cache(10.0, arr, result)
+        arr2 = arr.copy()
+        assert np.array_equal(arr, arr2)
+        assert conn._check_cache(10.0, arr2) is False
+
+    def test_dead_referent_misses_without_raising(self):
+        conn = self._conn()
+        arr = np.arange(12, dtype=float).reshape(4, 3)
+        conn._update_cache(10.0, arr, np.zeros(4))
+        # Drop every binding to the cached array, then collect.
+        del arr
+        gc.collect()
+        assert conn._cached_coords_ref() is None
+        new_array = np.arange(12, dtype=float).reshape(4, 3)
+        assert conn._check_cache(10.0, new_array) is False
+
+    def test_age_guard_independent_of_identity(self):
+        conn = self._conn()
+        arr = np.arange(12, dtype=float).reshape(4, 3)
+        result = np.zeros(4)
+        # delta_t is 1.0 (from _DummyGplates).
+        conn._update_cache(10.0, arr, result)
+        # Same buffer, but the age has moved a full delta_t away -> miss.
+        assert conn._check_cache(11.0, arr) is False
+        # Re-cache at the new age; a sub-delta_t age with the same buffer hits.
+        conn._update_cache(11.0, arr, result)
+        assert conn._check_cache(11.5, arr) is True
 
 
 # ---------------------------------------------------------------------------

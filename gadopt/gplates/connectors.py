@@ -4,18 +4,18 @@ The connector orchestrates one timestep:
 
   age = source.ndtime2age(ndtime)
   source.validate_age(age)
-  if cached (age, coords_hash) match: return cached result
+  if cached (age, identity of the target_coords buffer) match: return cached
   sources_dict = source.prepare(age)             # collective; per-age cached
   interp = self._interpolate(sources_dict, target_coords, output.requires)
   result = output.compute(interp, r_target, too_far, mesh)
   cache + return
 
 The two cache layers (source.prepare's per-age cache and the connector's
-(age, coords_hash) cache) are independent. The source cache decision is
-deterministic on ``age`` alone, so it is identical on every rank — no
-collective is needed there. The connector cache decision differs per rank
-(coords_hash varies with partitioning) and is allreduced before any
-collective work runs.
+(age, identity of the target_coords buffer) cache) are independent. The
+source cache decision is deterministic on ``age`` alone, so it is identical
+on every rank — no collective is needed there. The connector cache decision
+differs per rank (the target buffer differs with partitioning) and is
+allreduced before any collective work runs.
 
 Source/Output pairing is validated at construction: ``output.requires`` must
 be a subset of ``source.provides``. Mismatches (e.g. PolygonSource paired
@@ -26,6 +26,7 @@ error rather than silently dropping the missing key.
 from __future__ import annotations
 
 import gc
+import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -141,11 +142,14 @@ class IndicatorConnector:
         self.interpolation = interpolation or _DEFAULT_INTERPOLATION_PARAMETERS
         self.gc_collect_frequency = gc_collect_frequency
 
-        # Result cache: keyed on (age, coords_hash). Distinct from the
-        # source's per-age cache, which only sees the age axis.
+        # Result cache: keyed on (age, identity of the target_coords buffer).
+        # Distinct from the source's per-age cache, which only sees the age
+        # axis. GplatesScalarFunction.mesh_coords is allocated once and held
+        # for the SF lifetime, so a weakref to that buffer is a sound O(1)
+        # key — no need to hash ~24 MB of coordinates on every call.
         self.reconstruction_age: float | None = None
         self._cached_result: np.ndarray | None = None
-        self._cached_coords_hash: tuple | None = None
+        self._cached_coords_ref: weakref.ref | None = None
         self._gc_call_counter = 0
 
     # Time delegates (most callers reach through the connector)
@@ -201,8 +205,11 @@ class IndicatorConnector:
             return False
         if abs(age - self.reconstruction_age) >= self.delta_t:
             return False
-        coords_hash = hash(target_coords.tobytes())
-        if self._cached_result is None or coords_hash != self._cached_coords_hash:
+        if self._cached_result is None or self._cached_coords_ref is None:
+            return False
+        # A dead referent dereferences to None and is never ``is`` the live
+        # target buffer, so a freed coords array correctly misses.
+        if self._cached_coords_ref() is not target_coords:
             return False
         log(f"{type(self).__name__}: age {age:.2f} Ma unchanged "
             f"(within delta_t={self.delta_t}); reusing cached result.",
@@ -214,7 +221,7 @@ class IndicatorConnector:
     ) -> None:
         self.reconstruction_age = age
         self._cached_result = result
-        self._cached_coords_hash = hash(target_coords.tobytes())
+        self._cached_coords_ref = weakref.ref(target_coords)
 
     # Computation
 

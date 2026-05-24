@@ -98,7 +98,6 @@ class MockIndicatorConnector(IndicatorConnector):
         self.gplates_connector = gplates_connector
         self.reconstruction_age = None
         self._cached_result = None
-        self._cached_coords_hash = None
         self._value = value
         self.get_indicator_call_count = 0
 
