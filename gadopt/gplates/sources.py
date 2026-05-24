@@ -578,6 +578,14 @@ class LithosphereSource(Source):
         )
 
         combined = PointCloud.concatenate([ocean_cloud, cont_cloud], warn=False)
+        # PointCloud.xyz / get_property return gtrack's internal arrays by
+        # reference (the accessors do not copy). The two-cloud concatenate
+        # vstacks into fresh arrays today, but we copy here regardless: the
+        # returned dict becomes the source's per-age _cached_dict, which is
+        # shared across sibling connectors and must survive the next step_to /
+        # rotate. The copy is a deliberate ownership boundary — it is cheap
+        # (~n_points elements) and does not rely on concatenate's freshness,
+        # which is an uncontracted gtrack implementation detail.
         return {
             "xyz": combined.xyz.copy(),
             "thickness": combined.get_property(self.config.property_name).copy(),
@@ -742,6 +750,13 @@ class PolygonSource(Source):
         )
         log(f"PolygonSource: {region_cloud.n_points} region points at "
             f"{age:.2f} Ma.", level=DEBUG)
+        # Unlike LithosphereSource, this is a single rotated cloud with no
+        # concatenate, so region_cloud.xyz / get_property return region_cloud's
+        # OWN internal arrays by reference. The copy here is REQUIRED, not
+        # defensive: without it the per-age _cached_dict — shared across sibling
+        # connectors and held across the next rotate — would alias gtrack's live
+        # internal storage. Do not drop it by analogy with any "redundant" copy
+        # elsewhere; the single-cloud accessors genuinely alias.
         return {
             "xyz": region_cloud.xyz.copy(),
             "thickness": region_cloud.get_property(self.config.property_name).copy(),
