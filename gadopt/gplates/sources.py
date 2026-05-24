@@ -552,31 +552,39 @@ class LithosphereSource(Source):
             "age": combined.get_property("age").copy(),
         }
 
+    def _initialize_walk(self, age: float) -> None:
+        """First-call walk init: load the nearest checkpoint if one exists, else
+        initialize the tracker at the model's oldest age. Idempotent via the
+        _initialized latch. Distinct from Source._load (which builds the gtrack
+        objects); this initialises the forward age-walk state."""
+        if self._initialized:
+            return
+        loaded = False
+        best = _find_best_checkpoint(self._checkpoint_dir, age)
+        if best is not None:
+            try:
+                self._ocean_tracker.load_checkpoint(best)
+                loaded_age = self._ocean_tracker.current_age
+                log(f"LithosphereSource: loaded ocean checkpoint at "
+                    f"{loaded_age} Ma from {best}.", level=DEBUG)
+                self._last_reinit_age = loaded_age
+                self._last_checkpoint_age = loaded_age
+                loaded = True
+            except Exception as exc:
+                log(f"LithosphereSource: failed to load checkpoint "
+                    f"{best}: {exc}. Falling back to full init.", level=INFO)
+        if not loaded:
+            # pyGplates uses integer ages (Ma).
+            starting_age = int(self.gplates_connector.oldest_age)
+            log(f"LithosphereSource: initialising ocean tracker at "
+                f"{starting_age} Ma.", level=DEBUG)
+            self._ocean_tracker.initialize(starting_age=starting_age)
+            self._last_reinit_age = starting_age
+        self._initialized = True
+
     def _step_ocean_to(self, age: float) -> PointCloud:
         """Initialise (from checkpoint if available) and step the tracker to ``age``."""
-        if not self._initialized:
-            loaded = False
-            best = _find_best_checkpoint(self._checkpoint_dir, age)
-            if best is not None:
-                try:
-                    self._ocean_tracker.load_checkpoint(best)
-                    loaded_age = self._ocean_tracker.current_age
-                    log(f"LithosphereSource: loaded ocean checkpoint at "
-                        f"{loaded_age} Ma from {best}.", level=DEBUG)
-                    self._last_reinit_age = loaded_age
-                    self._last_checkpoint_age = loaded_age
-                    loaded = True
-                except Exception as exc:
-                    log(f"LithosphereSource: failed to load checkpoint "
-                        f"{best}: {exc}. Falling back to full init.", level=INFO)
-            if not loaded:
-                # pyGplates uses integer ages (Ma).
-                starting_age = int(self.gplates_connector.oldest_age)
-                log(f"LithosphereSource: initialising ocean tracker at "
-                    f"{starting_age} Ma.", level=DEBUG)
-                self._ocean_tracker.initialize(starting_age=starting_age)
-                self._last_reinit_age = starting_age
-            self._initialized = True
+        self._initialize_walk(age)
 
         if self._last_reinit_age is not None:
             if abs(self._last_reinit_age - age) >= self.config.reinit_interval_myr:

@@ -369,6 +369,68 @@ class TestWalkStartAge:
         assert "last computed age" in str(floor.value)
 
 
+class _FakeTracker:
+    """Minimal stand-in for SeafloorAgeTracker — counts initialize() calls
+    and no-ops the rest, so the walk-init path can be exercised without
+    touching gtrack."""
+
+    def __init__(self):
+        self.initialize_calls = 0
+        self.current_age = 0.0
+
+    def initialize(self, starting_age):
+        self.initialize_calls += 1
+
+    def reinitialize(self, n_points):
+        pass
+
+    def load_checkpoint(self, path):
+        pass
+
+    def step_to(self, age):
+        return object()
+
+
+class TestInitializeWalk:
+    """The first-call walk init was pulled out of _step_ocean_to into
+    _initialize_walk with an inverted early-return guard. This pins the
+    idempotency at the mockable layer — a botched guard inversion (e.g.
+    dropping the latch) would re-initialise on every call and trip here,
+    without needing the slow data-backed regression."""
+
+    @staticmethod
+    def _lith():
+        src = LithosphereSource(
+            gplates_connector=_StubConnector(),
+            continental_data=100.0,
+            age_to_property=half_space_cooling,
+            plate_files=PlateModelFiles(
+                continental_polygons="continental.gpml",
+                static_polygons="static.gpml",
+            ),
+        )
+        src._ocean_tracker = _FakeTracker()
+        # No checkpoint dir -> _find_best_checkpoint returns None -> the
+        # initialize() path is taken, not load_checkpoint.
+        src._checkpoint_dir = None
+        return src
+
+    def test_initialize_runs_exactly_once_across_steps(self):
+        src = self._lith()
+        src._step_ocean_to(100)
+        assert src._initialized is True
+        assert src._ocean_tracker.initialize_calls == 1
+        # A second (younger) step must not re-initialise the walk.
+        src._step_ocean_to(90)
+        assert src._ocean_tracker.initialize_calls == 1
+
+    def test_initialize_walk_is_idempotent(self):
+        src = self._lith()
+        src._initialize_walk(100)
+        src._initialize_walk(100)
+        assert src._ocean_tracker.initialize_calls == 1
+
+
 # ---------------------------------------------------------------------------
 # prepare(age) regression
 # ---------------------------------------------------------------------------
