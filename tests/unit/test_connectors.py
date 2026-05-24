@@ -101,15 +101,14 @@ class _DummySource(Source):
     can be exercised without paying for a real reconstruction load."""
 
     def __init__(self, provides, comm=MPI.COMM_WORLD):
-        # Bypass the ABC by setting the class attribute via assignment.
-        self.__class__ = type(
-            f"_DummySource_{'_'.join(sorted(provides))}",
-            (Source,),
-            {"provides": frozenset(provides)},
-        )
+        self._provides = frozenset(provides)
         self.comm = comm
         self._is_root = (comm.rank == 0)
         self.gplates_connector = _DummyGplates()
+
+    @property
+    def provides(self) -> frozenset[str]:
+        return self._provides
 
     def _compute_sources(self, age):
         raise RuntimeError("dummy source should never reach _compute_sources")

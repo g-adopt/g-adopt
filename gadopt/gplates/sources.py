@@ -19,7 +19,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, ClassVar
+from typing import TYPE_CHECKING, Callable
 
 import h5py
 import numpy as np
@@ -228,18 +228,26 @@ def _find_best_checkpoint(checkpoint_dir: str | None, target_age: float):
 class Source(ABC):
     """Time-dependent source of (xyz, properties) on a sphere.
 
-    Subclasses declare a class-level ``provides`` set listing the property
-    keys (excluding "xyz") that ``prepare(age)`` returns. The ABC implements
-    a per-age cache so that consumers sharing this Source can call
-    ``prepare`` in any order and the underlying gtrack state advances at
-    most once per age.
+    Subclasses expose a ``provides`` set listing the property keys (excluding
+    "xyz") that ``prepare(age)`` returns. ``provides`` is declared here as an
+    abstract property, which a subclass may satisfy either with a plain class
+    constant (the concrete sources do this, keeping class-level access like
+    ``LithosphereSource.provides``) or with an instance property (handy for
+    test doubles and dynamically-configured sources). The ABC implements a
+    per-age cache so that consumers sharing this Source can call ``prepare``
+    in any order and the underlying gtrack state advances at most once per
+    age.
 
     ``prepare`` is collective across ``self.comm``. Subclasses implement
     ``_compute_sources(age)``, which runs on rank 0 only; the ABC handles
     broadcast and caching.
     """
 
-    provides: ClassVar[frozenset[str]]
+    @property
+    @abstractmethod
+    def provides(self) -> frozenset[str]:
+        """The set of property keys (excluding 'xyz') that prepare(age) returns."""
+        ...
 
     gplates_connector: "pyGplatesConnector"
     comm: MPI.Comm
