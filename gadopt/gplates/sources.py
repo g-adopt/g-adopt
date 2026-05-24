@@ -357,6 +357,17 @@ class LithosphereSource(Source):
     geological time (decreasing age) and cannot rewind. Per-age caching
     on the base class guarantees one ``step_to`` per age regardless of how
     many connectors share this source.
+
+    Forward-only contract: the first ``prepare`` across every connector that
+    shares this source sets the oldest reachable age, and every subsequent
+    request must be at that age or younger. When several connectors share one
+    source and update at different cadences, whichever one fires first would
+    otherwise silently fix the walk's ceiling. Declare ``walk_start_age`` to
+    pin the oldest age you intend to request up front, so an out-of-range
+    request fails immediately at wiring time rather than locking the walk at
+    the first touch. Declaring ``walk_start_age`` does NOT let you revisit
+    ages already stepped past — it only declares the oldest age you intend to
+    request.
     """
 
     provides = frozenset({"xyz", "thickness", "age"})
@@ -370,8 +381,18 @@ class LithosphereSource(Source):
         config: LithosphereSourceConfig | None = None,
         *,
         default_continental_age_myr: float = 500.0,
+        walk_start_age: float | None = None,
         comm: MPI.Comm = MPI.COMM_WORLD,
     ):
+        """Build a combined oceanic + continental lithosphere source.
+
+        Args:
+            walk_start_age: the oldest age you will ever request; requests
+                older than this fail immediately rather than silently locking
+                the forward-only walk at the first touch. Does not enable
+                revisiting older ages once stepped past. Default None keeps the
+                pre-declaration behaviour (the first prepare fixes the ceiling).
+        """
         if plate_files.continental_polygons is None:
             raise ValueError(
                 "plate_files.continental_polygons must be set. "
@@ -389,6 +410,15 @@ class LithosphereSource(Source):
         self._default_continental_age_myr = default_continental_age_myr
         self.comm = comm
         self._is_root = (comm.rank == 0)
+
+        if walk_start_age is not None and not (
+            0 <= walk_start_age <= self.oldest_age
+        ):
+            raise ValueError(
+                f"walk_start_age ({walk_start_age}) must be between 0 and the "
+                f"plate model's oldest age ({self.oldest_age:.2f} Ma)."
+            )
+        self._walk_start_age = walk_start_age
 
         # Stashed for the lazy _load; not touched between here and prepare.
         self._continental_data = continental_data
@@ -464,8 +494,31 @@ class LithosphereSource(Source):
     # Age validation extension
 
     def validate_age(self, age: float) -> None:
+        """Validate a requested age against the forward-only contract.
+
+        Two independent checks run after the base range / non-negative check
+        (which fires first). An age must pass both:
+
+        (a) Promise check: if ``walk_start_age`` was declared, the age must be
+            no older than it. This fires even before the first ``prepare``, so
+            an out-of-range request is caught at wiring time.
+        (b) Physical-floor check: once the tracker has actually stepped to some
+            age, an older age is unreachable (the walk is forward-only and
+            cannot rewind), regardless of any declaration.
+
+        Declaring ``walk_start_age`` does NOT let you revisit ages already
+        stepped past — it only declares the oldest age you intend to request.
+        """
         super().validate_age(age)
-        # Forward-only tracker: once we've stepped to some age, we cannot
+        # (a) Promise check — fires even before the first prepare.
+        if self._walk_start_age is not None and age > self._walk_start_age:
+            raise ValueError(
+                f"Requested age {age:.2f} Ma is older than the declared "
+                f"walk_start_age ({self._walk_start_age:.2f} Ma). Raise "
+                f"walk_start_age to the oldest age you will request, or request a "
+                f"younger age. The ocean tracker evolves forward only (decreasing age)."
+            )
+        # (b) Physical-floor check: once we've stepped to some age, we cannot
         # go back to an older age. Check on all ranks (not just root) using
         # the per-age cache, which is coherent.
         if self._initialized and self._cached_age is not None:

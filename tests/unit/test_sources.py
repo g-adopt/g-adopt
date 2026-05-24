@@ -291,6 +291,85 @@ class TestLazyLoad:
 
 
 # ---------------------------------------------------------------------------
+# walk_start_age: declared forward-only ceiling
+# ---------------------------------------------------------------------------
+
+class TestWalkStartAge:
+    """The forward-only ocean tracker would otherwise let whichever connector
+    updates first silently fix the walk's oldest reachable age. Declaring
+    walk_start_age pins that ceiling up front so an out-of-range request fails
+    immediately. These tests drive validate_age directly — no real prepare,
+    no gtrack — using the cheap stub connector (oldest_age=100.0)."""
+
+    @staticmethod
+    def _lith(walk_start_age):
+        return LithosphereSource(
+            gplates_connector=_StubConnector(),
+            continental_data=100.0,
+            age_to_property=half_space_cooling,
+            plate_files=PlateModelFiles(
+                continental_polygons="continental.gpml",
+                static_polygons="static.gpml",
+            ),
+            walk_start_age=walk_start_age,
+        )
+
+    def test_declared_promise_check(self):
+        src = self._lith(walk_start_age=80.0)
+        # Pre-prepare: anything older than the declared start fails the promise.
+        with pytest.raises(ValueError, match="walk_start_age"):
+            src.validate_age(95.0)
+        # The declared start itself and younger ages pass.
+        src.validate_age(80.0)
+        src.validate_age(50.0)
+
+    def test_physical_floor_overrides_declaration(self):
+        # Declaring an old start does NOT let you revisit ages stepped past.
+        src = self._lith(walk_start_age=80.0)
+        src._initialized = True
+        src._cached_age = 50.0
+        # 70 <= declared 80 (passes promise) but > last computed 50 -> floor.
+        with pytest.raises(ValueError, match="last .*computed age"):
+            src.validate_age(70.0)
+        # Younger than the floor is fine.
+        src.validate_age(40.0)
+
+    def test_default_none_preprepare_allows_old_age(self):
+        src = self._lith(walk_start_age=None)
+        # No declaration and not yet stepped: any in-range age passes.
+        src.validate_age(95.0)
+        # After stepping, the physical floor still applies.
+        src._initialized = True
+        src._cached_age = 50.0
+        with pytest.raises(ValueError, match="last .*computed age"):
+            src.validate_age(95.0)
+
+    def test_init_time_range_validation(self):
+        # walk_start_age above the model's oldest age (stub: 100.0) is rejected
+        # at construction, before any I/O.
+        with pytest.raises(ValueError, match="walk_start_age"):
+            self._lith(walk_start_age=150.0)
+        # Negative is rejected too.
+        with pytest.raises(ValueError, match="walk_start_age"):
+            self._lith(walk_start_age=-5.0)
+
+    def test_message_variants_distinct(self):
+        # Promise-check message names walk_start_age; physical-floor names the
+        # last computed age. They must be distinguishable.
+        src = self._lith(walk_start_age=80.0)
+        with pytest.raises(ValueError) as promise:
+            src.validate_age(95.0)
+        assert "walk_start_age" in str(promise.value)
+        assert "last computed age" not in str(promise.value)
+
+        src._initialized = True
+        src._cached_age = 50.0
+        with pytest.raises(ValueError) as floor:
+            src.validate_age(70.0)
+        assert "last computed age" in str(floor.value)
+
+
+# ---------------------------------------------------------------------------
 # prepare(age) regression
 # ---------------------------------------------------------------------------
 

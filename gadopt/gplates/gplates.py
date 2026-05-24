@@ -746,6 +746,7 @@ def lithosphere_indicator(
     mesh: MeshConfig | None = None,
     interpolation: InterpolationConfig | None = None,
     default_continental_age_myr: float = 500.0,
+    walk_start_age: float | None = None,
     gc_collect_frequency: int | None = 1,
     comm: MPI.Comm = MPI.COMM_WORLD,
 ) -> ScalarFieldConnector:
@@ -755,6 +756,11 @@ def lithosphere_indicator(
     geotherm connector) or the trio ``gplates_connector``,
     ``continental_data``, ``age_to_property`` plus ``plate_files`` (to build a
     fresh source).
+
+    ``walk_start_age`` is the oldest age you will ever request; requests older
+    than this fail immediately rather than silently locking the forward-only
+    walk at the first touch. It does not enable revisiting older ages once
+    stepped past. Ignored when ``source=`` is given.
     """
     if source is None:
         if (gplates_connector is None or continental_data is None
@@ -771,6 +777,7 @@ def lithosphere_indicator(
             plate_files,
             config=source_config,
             default_continental_age_myr=default_continental_age_myr,
+            walk_start_age=walk_start_age,
             comm=comm,
         )
     output = TanhOutput(
@@ -798,6 +805,7 @@ def lithosphere_geotherm(
     mesh: MeshConfig | None = None,
     interpolation: InterpolationConfig | None = None,
     default_continental_age_myr: float = 500.0,
+    walk_start_age: float | None = None,
     gc_collect_frequency: int | None = 1,
     comm: MPI.Comm = MPI.COMM_WORLD,
 ) -> ScalarFieldConnector:
@@ -806,6 +814,11 @@ def lithosphere_geotherm(
     To share a tracker with a sibling indicator connector, build a single
     ``LithosphereSource`` explicitly and pass it via ``source=`` to both
     ``lithosphere_indicator`` and ``lithosphere_geotherm``.
+
+    ``walk_start_age`` is the oldest age you will ever request; requests older
+    than this fail immediately rather than silently locking the forward-only
+    walk at the first touch. It does not enable revisiting older ages once
+    stepped past. Ignored when ``source=`` is given.
     """
     if source is None:
         if (gplates_connector is None or continental_data is None
@@ -822,6 +835,7 @@ def lithosphere_geotherm(
             plate_files,
             config=source_config,
             default_continental_age_myr=default_continental_age_myr,
+            walk_start_age=walk_start_age,
             comm=comm,
         )
     output = GeothermERFOutput(
