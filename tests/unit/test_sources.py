@@ -210,6 +210,82 @@ class TestSourceContracts:
 
 
 # ---------------------------------------------------------------------------
+# Lazy load: construction is I/O-free, _load fires once
+# ---------------------------------------------------------------------------
+
+class _StubConnector:
+    """Cheap stand-in for pyGplatesConnector.
+
+    Carries the polygon-path attributes so the Source's cheap None-validation
+    passes, plus the filename lists _load would reach for. Building one of
+    these touches no reconstruction data, so it isolates the construction path
+    from the gtrack I/O in _load.
+    """
+
+    rotation_filenames = ["rot.rot"]
+    topology_filenames = ["topo.gpml"]
+    continental_polygons = "continental.gpml"
+    static_polygons = "static.gpml"
+    delta_t = 1.0
+    oldest_age = 100.0
+
+
+class TestLazyLoad:
+    """Source construction must not perform gtrack/pyGplates I/O — that is
+    deferred to the first prepare() via _load. These tests run without any
+    reconstruction data."""
+
+    def test_lithosphere_construction_is_io_free(self):
+        src = LithosphereSource(
+            gplates_connector=_StubConnector(),
+            continental_data=100.0,
+            age_to_property=half_space_cooling,
+        )
+        # Nothing loaded, no gtrack handles built yet.
+        assert src._loaded is False
+        assert src._ocean_tracker is None
+        assert src._rotator is None
+        assert src._continental_filter is None
+        assert src._continental_present is None
+
+    def test_polygon_construction_is_io_free(self):
+        src = PolygonSource(
+            gplates_connector=_StubConnector(),
+            polygons="craton.shp",
+            thickness_data=200.0,
+        )
+        assert src._loaded is False
+        assert src._polygon_filter is None
+        assert src._rotator is None
+        assert src._region_present is None
+
+    def test_load_fires_exactly_once_across_prepares(self):
+        # Drive prepare() twice and assert _load ran once. We stub _load (so no
+        # gtrack) and _compute_sources (so prepare returns without real work),
+        # which isolates the _ensure_loaded latch.
+        src = PolygonSource(
+            gplates_connector=_StubConnector(),
+            polygons="craton.shp",
+            thickness_data=200.0,
+        )
+        load_calls = {"n": 0}
+
+        def fake_load():
+            load_calls["n"] += 1
+
+        src._load = fake_load
+        src._compute_sources = lambda age: {
+            "xyz": np.zeros((1, 3)), "thickness": np.zeros(1)
+        }
+
+        # Two prepares at distinct ages (second is far enough to miss the cache).
+        src.prepare(10.0)
+        src.prepare(50.0)
+        assert load_calls["n"] == 1
+        assert src._loaded is True
+
+
+# ---------------------------------------------------------------------------
 # prepare(age) regression
 # ---------------------------------------------------------------------------
 

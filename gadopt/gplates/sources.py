@@ -257,10 +257,34 @@ class Source(ABC):
     _cached_age: float | None = None
     _cached_dict: dict[str, np.ndarray] | None = None
 
+    # Lazy-load flag: gtrack/pyGplates handles and the present-day cloud are
+    # built on the first prepare(), not in __init__, so a Source is cheap to
+    # construct and mockable without touching reconstruction data.
+    _loaded: bool = False
+
     @abstractmethod
     def _compute_sources(self, age: float) -> dict[str, np.ndarray]:
         """Build the source-arrays dict on rank 0. Must include 'xyz' plus
         every key in ``self.provides``."""
+
+    def _load(self) -> None:
+        """Rank-0 I/O: build the gtrack machinery and the present-day cloud.
+
+        Default is a no-op; subclasses that own gtrack handles override this.
+        Runs at most once, on root, driven by ``_ensure_loaded``.
+        """
+        pass
+
+    def _ensure_loaded(self) -> None:
+        """Trigger the one-off rank-0 load before the first compute.
+
+        Called on every rank so the ``_loaded`` flag stays coherent, but the
+        actual I/O in ``_load`` only runs on root.
+        """
+        if not self._loaded:
+            if self._is_root:
+                self._load()
+            self._loaded = True
 
     def prepare(self, age: float) -> dict[str, np.ndarray]:
         """Return source arrays at ``age`` (collective across self.comm)."""
@@ -270,6 +294,7 @@ class Source(ABC):
                 and abs(self._cached_age - age) < self.delta_t):
             return self._cached_dict
 
+        self._ensure_loaded()
         sources = self._compute_sources(age) if self._is_root else None
         sources = self.comm.bcast(sources, root=0)
 
@@ -364,6 +389,9 @@ class LithosphereSource(Source):
         self.comm = comm
         self._is_root = (comm.rank == 0)
 
+        # Stashed for the lazy _load; not touched between here and prepare.
+        self._continental_data = continental_data
+
         self._initialized = False
         self._last_reinit_age: float | None = None
         self._last_checkpoint_age: float | None = None
@@ -373,35 +401,13 @@ class LithosphereSource(Source):
             else None
         )
 
-        if self._is_root:
-            tracer_kwargs = {
-                "time_step": self.config.time_step,
-                "default_mesh_points": self.config.n_points,
-            }
-            if self.config.gtrack_config is not None:
-                tracer_kwargs.update(self.config.gtrack_config)
-            tracer_config = TracerConfig(**tracer_kwargs)
-
-            self._ocean_tracker = SeafloorAgeTracker(
-                rotation_files=gplates_connector.rotation_filenames,
-                topology_files=gplates_connector.topology_filenames,
-                continental_polygons=gplates_connector.continental_polygons,
-                config=tracer_config,
-            )
-            self._rotator = PointRotator(
-                rotation_files=gplates_connector.rotation_filenames,
-                static_polygons=gplates_connector.static_polygons,
-            )
-            self._continental_filter = PolygonFilter(
-                polygon_files=gplates_connector.continental_polygons,
-                rotation_files=gplates_connector.rotation_filenames,
-            )
-            self._continental_present = self._load_continental(continental_data)
-        else:
-            self._ocean_tracker = None
-            self._rotator = None
-            self._continental_filter = None
-            self._continental_present = None
+        # gtrack handles + present-day cloud are built lazily in _load (rank 0
+        # only). On non-root these stay None for the source's lifetime and are
+        # never read — all gtrack work happens on root.
+        self._ocean_tracker = None
+        self._rotator = None
+        self._continental_filter = None
+        self._continental_present = None
 
     # Public properties (some tests / consumers want them)
 
@@ -410,6 +416,34 @@ class LithosphereSource(Source):
         return self._is_root
 
     # Loading
+
+    def _load(self) -> None:
+        """Build the ocean tracker, rotators and present-day continental
+        cloud. Runs once on rank 0, driven by Source._ensure_loaded."""
+        gplates_connector = self.gplates_connector
+        tracer_kwargs = {
+            "time_step": self.config.time_step,
+            "default_mesh_points": self.config.n_points,
+        }
+        if self.config.gtrack_config is not None:
+            tracer_kwargs.update(self.config.gtrack_config)
+        tracer_config = TracerConfig(**tracer_kwargs)
+
+        self._ocean_tracker = SeafloorAgeTracker(
+            rotation_files=gplates_connector.rotation_filenames,
+            topology_files=gplates_connector.topology_filenames,
+            continental_polygons=gplates_connector.continental_polygons,
+            config=tracer_config,
+        )
+        self._rotator = PointRotator(
+            rotation_files=gplates_connector.rotation_filenames,
+            static_polygons=gplates_connector.static_polygons,
+        )
+        self._continental_filter = PolygonFilter(
+            polygon_files=gplates_connector.continental_polygons,
+            rotation_files=gplates_connector.rotation_filenames,
+        )
+        self._continental_present = self._load_continental(self._continental_data)
 
     def _load_continental(self, data) -> PointCloud:
         cloud = _build_cloud(data, self.config.property_name, self.config.n_points)
@@ -560,24 +594,33 @@ class PolygonSource(Source):
         self.comm = comm
         self._is_root = (comm.rank == 0)
 
-        if self._is_root:
-            self._polygon_filter = PolygonFilter(
-                polygon_files=polygons,
-                rotation_files=gplates_connector.rotation_filenames,
-            )
-            self._rotator = PointRotator(
-                rotation_files=gplates_connector.rotation_filenames,
-                static_polygons=gplates_connector.static_polygons,
-            )
-            self._region_present = self._load_region(thickness_data)
-        else:
-            self._polygon_filter = None
-            self._rotator = None
-            self._region_present = None
+        # Stashed for the lazy _load; not touched between here and prepare.
+        self._polygons = polygons
+        self._thickness_data = thickness_data
+
+        # gtrack handles + present-day cloud are built lazily in _load (rank 0
+        # only). On non-root these stay None for the source's lifetime and are
+        # never read.
+        self._polygon_filter = None
+        self._rotator = None
+        self._region_present = None
 
     @property
     def is_root(self) -> bool:
         return self._is_root
+
+    def _load(self) -> None:
+        """Build the polygon filter, rotator and present-day region cloud.
+        Runs once on rank 0, driven by Source._ensure_loaded."""
+        self._polygon_filter = PolygonFilter(
+            polygon_files=self._polygons,
+            rotation_files=self.gplates_connector.rotation_filenames,
+        )
+        self._rotator = PointRotator(
+            rotation_files=self.gplates_connector.rotation_filenames,
+            static_polygons=self.gplates_connector.static_polygons,
+        )
+        self._region_present = self._load_region(self._thickness_data)
 
     def _load_region(self, data) -> PointCloud:
         cloud = _build_cloud(data, self.config.property_name, self.config.n_points)
