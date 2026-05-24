@@ -21,7 +21,7 @@ import pytest
 
 from gadopt.gplates import (
     InterpolationConfig,
-    IndicatorConnector,
+    ScalarFieldConnector,
     LithosphereSource,
     LithosphereSourceConfig,
     PolygonSource,
@@ -339,10 +339,10 @@ class TestSingleStepGuarantee:
             config=LithosphereSourceConfig(n_points=LITH_N_POINTS),
         )
 
-        ind_connector = IndicatorConnector(
+        ind_connector = ScalarFieldConnector(
             source, TanhOutput(transition_width_km=10.0),
         )
-        geo_connector = IndicatorConnector(
+        geo_connector = ScalarFieldConnector(
             source, GeothermERFOutput(kappa=1e-6),
         )
 

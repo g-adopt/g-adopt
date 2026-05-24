@@ -51,7 +51,7 @@ class MeshConfig:
             raise ValueError(f"depth_scale must be positive, got {self.depth_scale}")
 
 
-# Importable default used by the IndicatorConnector when the caller doesn't
+# Importable default used by the ScalarFieldConnector when the caller doesn't
 # pass a MeshConfig of their own. The leading underscore matches Sia's
 # convention for module-level config sentinels.
 _DEFAULT_MESH_PARAMETERS = MeshConfig()

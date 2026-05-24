@@ -289,7 +289,7 @@ class Source(ABC):
         """Raise if ``age`` is outside the plate model's range.
 
         Subclasses with extra state (e.g. forward-only ocean trackers) may
-        override to add further checks. Called by IndicatorConnector before
+        override to add further checks. Called by ScalarFieldConnector before
         prepare().
         """
         if age > self.oldest_age:

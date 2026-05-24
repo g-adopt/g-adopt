@@ -76,7 +76,7 @@ import numpy as np
 from gadopt import *
 from gadopt.gplates import (
     GplatesScalarFunction,
-    IndicatorConnector,
+    ScalarFieldConnector,
     InterpolationConfig,
     LithosphereSource,
     LithosphereSourceConfig,
@@ -238,7 +238,7 @@ continental_data = (latlon, thickness_values)
 # * an **OutputStrategy** turns interpolated source values at target
 #   mesh nodes into a scalar field (a tanh indicator, an erf geotherm,
 #   a linear geotherm);
-# * an **IndicatorConnector** wires the two together, handles the
+# * an **ScalarFieldConnector** wires the two together, handles the
 #   kNN interpolation between source points and mesh DoFs, and caches
 #   results by `(age, coords_hash)`.
 #
@@ -314,7 +314,7 @@ poly_source_cfg = PolygonSourceConfig(n_points=5000)
 # ## Part 1: Lithosphere indicator + geotherm
 #
 # We build a single `LithosphereSource` and then hand it to two
-# separate `IndicatorConnector` instances -- one with a `TanhOutput`
+# separate `ScalarFieldConnector` instances -- one with a `TanhOutput`
 # (the smooth indicator field, ~1 inside lithosphere, ~0 in mantle)
 # and one with a `GeothermERFOutput` (the half-space cooling
 # temperature profile).  Because both connectors hold a reference to
@@ -331,13 +331,13 @@ lith_source = LithosphereSource(
     comm=mesh.comm,
 )
 
-I_lith = GplatesScalarFunction(Q, indicator_connector=IndicatorConnector(
+I_lith = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     lith_source,
     TanhOutput(transition_width_km=10.0, default_thickness_km=100.0),
     mesh=mesh_cfg, interpolation=interp_cfg,
 ), name="I_lith")
 
-T_erf = GplatesScalarFunction(Q, indicator_connector=IndicatorConnector(
+T_erf = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     lith_source,
     GeothermERFOutput(kappa=1e-6, too_far_age_myr=500.0),
     mesh=mesh_cfg, interpolation=interp_cfg,
@@ -363,13 +363,13 @@ cont_source = PolygonSource(
     comm=mesh.comm,
 )
 
-I_cont = GplatesScalarFunction(Q, indicator_connector=IndicatorConnector(
+I_cont = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     cont_source,
     TanhOutput(transition_width_km=10.0, default_thickness_km=0.0),
     mesh=mesh_cfg, interpolation=interp_cfg,
 ), name="I_cont")
 
-T_lin = GplatesScalarFunction(Q, indicator_connector=IndicatorConnector(
+T_lin = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     cont_source,
     GeothermLinearOutput(),
     mesh=mesh_cfg, interpolation=interp_cfg,

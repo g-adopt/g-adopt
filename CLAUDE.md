@@ -24,10 +24,10 @@ PYTHONPATH=/path/to/this/worktree:$PYTHONPATH mpiexec -n 4 python gplates_lithos
 
 ## Architecture
 
-### IndicatorConnector Hierarchy
+### ScalarFieldConnector Hierarchy
 
 ```
-IndicatorConnector (ABC in connectors.py)
+ScalarFieldConnector (ABC in connectors.py)
 ├── LithosphereConnector  - Oceanic (age-tracked) + continental thickness
 ├── PolygonConnector      - Polygon boundaries + thickness data
 ├── LithosphereGeotherm   - Wraps LithosphereConnector (composition, shared tracker)
@@ -40,12 +40,12 @@ Indicator connectors produce smooth 3D indicator fields (~1 in region, ~0 outsid
 
 | Class | Purpose |
 |-------|---------|
-| `IndicatorConnector` | Abstract base class defining `get_indicator(target_coords, ndtime)` interface |
+| `ScalarFieldConnector` | Abstract base class defining `get_indicator(target_coords, ndtime)` interface |
 | `LithosphereConnector` | Combines gtrack's `SeafloorAgeTracker` (ocean) + `PointRotator` (continental) |
 | `PolygonConnector` | Uses gtrack's `PolygonFilter` to filter thickness data to polygon-defined regions |
 | `LithosphereGeotherm` | Wraps `LithosphereConnector`, shares its tracker, produces erf geotherm |
 | `PolygonGeotherm` | Wraps `PolygonConnector`, shares its rotator, produces linear geotherm |
-| `GplatesScalarFunction` | Firedrake `Function` that updates from any `IndicatorConnector` |
+| `GplatesScalarFunction` | Firedrake `Function` that updates from any `ScalarFieldConnector` |
 | `LithosphereConfig` / `PolygonConfig` | Dataclasses with tunable parameters |
 
 ### GplatesScalarFunction Usage
@@ -105,7 +105,7 @@ Pass `comm=mesh.comm` to connectors. Rank 0 handles I/O and gtrack computations,
 
 | File | Changes |
 |------|---------|
-| `gadopt/gplates/connectors.py` | NEW: `IndicatorConnector` abstract base class |
+| `gadopt/gplates/connectors.py` | NEW: `ScalarFieldConnector` abstract base class |
 | `gadopt/gplates/gplates.py` | `LithosphereConnector`, `PolygonConnector`, `GplatesScalarFunction`, configs |
 | `gadopt/gplates/__init__.py` | Exports for new classes |
 | `gadopt/gplates/gplatesfiles.py` | Fixed string/list handling |

@@ -1,4 +1,4 @@
-"""Tests for IndicatorConnector and its factory functions.
+"""Tests for ScalarFieldConnector and its factory functions.
 
 Three groups:
 
@@ -33,7 +33,7 @@ from gadopt.gplates import (
     GeothermERFOutput,
     GeothermLinearOutput,
     GplatesScalarFunction,
-    IndicatorConnector,
+    ScalarFieldConnector,
     InterpolationConfig,
     LithosphereSource,
     LithosphereSourceConfig,
@@ -141,39 +141,39 @@ class TestRequiresProvidesContract:
         # LithosphereSource provides {"xyz","thickness","age"}; TanhOutput
         # requires {"thickness"}.
         src = _DummySource({"xyz", "thickness", "age"})
-        IndicatorConnector(src, TanhOutput())  # must not raise
+        ScalarFieldConnector(src, TanhOutput())  # must not raise
 
     def test_lith_with_linear_geotherm_allowed(self):
         # GeothermLinearOutput requires only {"thickness"} — a polygon-style
         # output paired against a lithosphere-style source is allowed.
         src = _DummySource({"xyz", "thickness", "age"})
-        IndicatorConnector(src, GeothermLinearOutput())
+        ScalarFieldConnector(src, GeothermLinearOutput())
 
     def test_polygon_with_erf_geotherm_raises(self):
         # PolygonSource provides {"xyz","thickness"} — missing "age" that
         # GeothermERFOutput needs.
         src = _DummySource({"xyz", "thickness"})
         with pytest.raises(ValueError, match="age"):
-            IndicatorConnector(src, GeothermERFOutput())
+            ScalarFieldConnector(src, GeothermERFOutput())
 
     def test_polygon_with_tanh_allowed(self):
         src = _DummySource({"xyz", "thickness"})
-        IndicatorConnector(src, TanhOutput(default_thickness_km=0.0))
+        ScalarFieldConnector(src, TanhOutput(default_thickness_km=0.0))
 
     def test_polygon_with_linear_geotherm_allowed(self):
         src = _DummySource({"xyz", "thickness"})
-        IndicatorConnector(src, GeothermLinearOutput())
+        ScalarFieldConnector(src, GeothermLinearOutput())
 
 
 class TestConnectorConstruction:
     def test_gc_collect_frequency_validated(self):
         src = _DummySource({"xyz", "thickness"})
         with pytest.raises(ValueError, match="gc_collect_frequency"):
-            IndicatorConnector(src, TanhOutput(), gc_collect_frequency=0)
+            ScalarFieldConnector(src, TanhOutput(), gc_collect_frequency=0)
 
     def test_defaults_use_module_level_configs(self):
         src = _DummySource({"xyz", "thickness"})
-        conn = IndicatorConnector(src, TanhOutput())
+        conn = ScalarFieldConnector(src, TanhOutput())
         assert isinstance(conn.mesh, MeshConfig)
         assert isinstance(conn.interpolation, InterpolationConfig)
 
@@ -187,7 +187,7 @@ class TestResultCacheKey:
 
     @staticmethod
     def _conn():
-        return IndicatorConnector(_DummySource({"xyz", "thickness"}), TanhOutput())
+        return ScalarFieldConnector(_DummySource({"xyz", "thickness"}), TanhOutput())
 
     def test_same_array_same_age_hits(self):
         conn = self._conn()
@@ -248,14 +248,14 @@ class TestGplatesScalarFunctionSpaceCheck:
     def test_vector_space_rejected(self, tiny_mesh):
         V = fd.VectorFunctionSpace(tiny_mesh, "CG", 1)
         src = _DummySource({"xyz", "thickness"})
-        conn = IndicatorConnector(src, TanhOutput())
+        conn = ScalarFieldConnector(src, TanhOutput())
         with pytest.raises(TypeError, match="scalar function space"):
             GplatesScalarFunction(V, indicator_connector=conn)
 
     def test_scalar_space_accepted(self, tiny_mesh):
         Q = fd.FunctionSpace(tiny_mesh, "CG", 1)
         src = _DummySource({"xyz", "thickness"})
-        conn = IndicatorConnector(src, TanhOutput())
+        conn = ScalarFieldConnector(src, TanhOutput())
         # Should construct without raising; the mock source is never asked
         # for data because we never call update_plate_reconstruction.
         GplatesScalarFunction(Q, indicator_connector=conn)

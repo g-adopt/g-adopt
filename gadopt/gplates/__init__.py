@@ -1,4 +1,4 @@
-from .connectors import IndicatorConnector, InterpolationConfig
+from .connectors import ScalarFieldConnector, InterpolationConfig
 from .gplates import (
     GplatesScalarFunction,
     GplatesVelocityFunction,
@@ -34,7 +34,7 @@ __all__ = [
     "pyGplatesConnector",
     "ensure_reconstruction",
     # Connector + config
-    "IndicatorConnector",
+    "ScalarFieldConnector",
     "InterpolationConfig",
     "MeshConfig",
     # Sources

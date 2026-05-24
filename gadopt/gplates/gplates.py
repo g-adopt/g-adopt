@@ -12,7 +12,7 @@ from scipy.spatial import cKDTree
 
 from ..solver_options_manager import SolverConfigurationMixin
 from ..utility import DEBUG, INFO, InteriorBC, is_continuous, log, log_level
-from .connectors import IndicatorConnector, InterpolationConfig
+from .connectors import ScalarFieldConnector, InterpolationConfig
 from .gplatesfiles import ensure_reconstruction
 from .outputs import (
     GeothermERFOutput,
@@ -32,7 +32,7 @@ __all__ = [
     "ensure_reconstruction",
     "GplatesVelocityFunction",
     "GplatesScalarFunction",
-    "IndicatorConnector",
+    "ScalarFieldConnector",
     "InterpolationConfig",
     "MeshConfig",
     "LithosphereSource",
@@ -719,7 +719,7 @@ class pyGplatesConnector(object):
 # ---------------------------------------------------------------------------
 # Factory functions
 # ---------------------------------------------------------------------------
-# Most users don't need to wire a Source + Output + IndicatorConnector by
+# Most users don't need to wire a Source + Output + ScalarFieldConnector by
 # hand; these factories absorb the boilerplate for the two common pairings
 # (indicator and geotherm) for both lithosphere and polygon sources.
 #
@@ -745,8 +745,8 @@ def lithosphere_indicator(
     default_continental_age_myr: float = 500.0,
     gc_collect_frequency: int | None = 1,
     comm: MPI.Comm = MPI.COMM_WORLD,
-) -> IndicatorConnector:
-    """Build an ``IndicatorConnector`` returning the lithosphere indicator field.
+) -> ScalarFieldConnector:
+    """Build an ``ScalarFieldConnector`` returning the lithosphere indicator field.
 
     Pass either ``source=`` (to reuse a LithosphereSource shared with a
     geotherm connector) or the trio ``gplates_connector``,
@@ -770,7 +770,7 @@ def lithosphere_indicator(
         transition_width_km=transition_width_km,
         default_thickness_km=default_thickness_km,
     )
-    return IndicatorConnector(
+    return ScalarFieldConnector(
         source, output,
         mesh=mesh, interpolation=interpolation,
         gc_collect_frequency=gc_collect_frequency,
@@ -792,8 +792,8 @@ def lithosphere_geotherm(
     default_continental_age_myr: float = 500.0,
     gc_collect_frequency: int | None = 1,
     comm: MPI.Comm = MPI.COMM_WORLD,
-) -> IndicatorConnector:
-    """Build an ``IndicatorConnector`` returning the normalised oceanic geotherm.
+) -> ScalarFieldConnector:
+    """Build an ``ScalarFieldConnector`` returning the normalised oceanic geotherm.
 
     To share a tracker with a sibling indicator connector, build a single
     ``LithosphereSource`` explicitly and pass it via ``source=`` to both
@@ -818,7 +818,7 @@ def lithosphere_geotherm(
         default_thickness_km=default_thickness_km,
         too_far_age_myr=too_far_age_myr,
     )
-    return IndicatorConnector(
+    return ScalarFieldConnector(
         source, output,
         mesh=mesh, interpolation=interpolation,
         gc_collect_frequency=gc_collect_frequency,
@@ -838,8 +838,8 @@ def polygon_indicator(
     interpolation: InterpolationConfig | None = None,
     gc_collect_frequency: int | None = 1,
     comm: MPI.Comm = MPI.COMM_WORLD,
-) -> IndicatorConnector:
-    """Build an ``IndicatorConnector`` returning a polygon-bounded indicator
+) -> ScalarFieldConnector:
+    """Build an ``ScalarFieldConnector`` returning a polygon-bounded indicator
     field.
 
     The ``default_thickness_km`` default is 0 (not 100 as for lithosphere)
@@ -864,7 +864,7 @@ def polygon_indicator(
         transition_width_km=transition_width_km,
         default_thickness_km=default_thickness_km,
     )
-    return IndicatorConnector(
+    return ScalarFieldConnector(
         source, output,
         mesh=mesh, interpolation=interpolation,
         gc_collect_frequency=gc_collect_frequency,
@@ -882,8 +882,8 @@ def polygon_geotherm(
     interpolation: InterpolationConfig | None = None,
     gc_collect_frequency: int | None = 1,
     comm: MPI.Comm = MPI.COMM_WORLD,
-) -> IndicatorConnector:
-    """Build an ``IndicatorConnector`` returning the linear continental geotherm
+) -> ScalarFieldConnector:
+    """Build an ``ScalarFieldConnector`` returning the linear continental geotherm
     bounded by polygons.
 
     Outside the polygon region the output is 1.0 — i.e. mantle temperature.
@@ -902,7 +902,7 @@ def polygon_geotherm(
             comm=comm,
         )
     output = GeothermLinearOutput()
-    return IndicatorConnector(
+    return ScalarFieldConnector(
         source, output,
         mesh=mesh, interpolation=interpolation,
         gc_collect_frequency=gc_collect_frequency,
@@ -913,7 +913,7 @@ class GplatesScalarFunction(fd.Function):
     """Firedrake Function for scalar indicator/geotherm fields from plate
     reconstructions.
 
-    Wraps any ``IndicatorConnector`` (built either directly via composition
+    Wraps any ``ScalarFieldConnector`` (built either directly via composition
     of a ``Source`` and an ``OutputStrategy``, or via one of the convenience
     factories ``lithosphere_indicator``, ``lithosphere_geotherm``,
     ``polygon_indicator``, ``polygon_geotherm``). Calling
@@ -928,7 +928,7 @@ class GplatesScalarFunction(fd.Function):
         self,
         function_space,
         *args,
-        indicator_connector: IndicatorConnector | None = None,
+        indicator_connector: ScalarFieldConnector | None = None,
         name: str | None = None,
         **kwargs
     ):
@@ -937,9 +937,9 @@ class GplatesScalarFunction(fd.Function):
         if indicator_connector is None:
             return
 
-        if not isinstance(indicator_connector, IndicatorConnector):
+        if not isinstance(indicator_connector, ScalarFieldConnector):
             raise TypeError(
-                f"indicator_connector must be an IndicatorConnector, "
+                f"indicator_connector must be a ScalarFieldConnector, "
                 f"got {type(indicator_connector).__name__}"
             )
 

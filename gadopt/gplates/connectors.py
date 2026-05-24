@@ -1,4 +1,4 @@
-"""IndicatorConnector — composes a Source with an OutputStrategy.
+"""ScalarFieldConnector — composes a Source with an OutputStrategy.
 
 The connector orchestrates one timestep:
 
@@ -95,10 +95,10 @@ _DEFAULT_INTERPOLATION_PARAMETERS = InterpolationConfig()
 
 
 # ---------------------------------------------------------------------------
-# IndicatorConnector
+# ScalarFieldConnector
 # ---------------------------------------------------------------------------
 
-class IndicatorConnector:
+class ScalarFieldConnector:
     """Composition of a Source and an OutputStrategy into a single time-
     varying scalar field on a mesh.
 

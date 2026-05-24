@@ -23,7 +23,7 @@ from pyadjoint.tape import (
 from gadopt.gplates import (
     GplatesVelocityFunction,
     GplatesScalarFunction,
-    IndicatorConnector,
+    ScalarFieldConnector,
 )
 
 
@@ -80,7 +80,7 @@ class MockGplatesConnector:
         return np.cross(target_coords, z_axis) * 0.01
 
 
-class MockIndicatorConnector(IndicatorConnector):
+class MockScalarFieldConnector(ScalarFieldConnector):
     """Indicator connector returning a controllable constant field.
 
     Bypasses the real source+output composition; the MockGplatesConnector
@@ -91,7 +91,7 @@ class MockIndicatorConnector(IndicatorConnector):
     """
 
     def __init__(self, gplates_connector, value=1.0, comm=MPI.COMM_WORLD):
-        # The real IndicatorConnector.__init__ wants a Source + an Output;
+        # The real ScalarFieldConnector.__init__ wants a Source + an Output;
         # we skip it deliberately and set just the attributes that
         # GplatesScalarFunction reads through us.
         self.source = gplates_connector  # exposes ndtime2age, age2ndtime, delta_t
@@ -121,7 +121,7 @@ class TestGplatesScalarFunctionTapeReplay:
     def test_replay_at_same_values(self, spherical_shell_mesh):
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=5.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=5.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -141,7 +141,7 @@ class TestGplatesScalarFunctionTapeReplay:
     def test_replay_at_different_values(self, spherical_shell_mesh):
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=5.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=5.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -167,7 +167,7 @@ class TestGplatesScalarFunctionDerivative:
     def test_taylor_linear(self, spherical_shell_mesh):
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=3.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=3.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -185,7 +185,7 @@ class TestGplatesScalarFunctionDerivative:
     def test_taylor_nonlinear(self, spherical_shell_mesh):
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=2.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=2.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -204,7 +204,7 @@ class TestGplatesScalarFunctionDerivative:
         """Full R0, R1, R2 convergence analysis."""
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=2.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=2.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -233,7 +233,7 @@ class TestGplatesScalarFunctionDeltaTCaching:
     def test_no_update_within_delta_t(self, spherical_shell_mesh):
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=5.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=5.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -253,7 +253,7 @@ class TestGplatesScalarFunctionDeltaTCaching:
     def test_update_outside_delta_t(self, spherical_shell_mesh):
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=5.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=5.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -275,7 +275,7 @@ class TestGplatesScalarFunctionDeltaTCaching:
         """Repeated calls within delta_t must not add blocks to the tape."""
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=1.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=1.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -296,7 +296,7 @@ class TestGplatesScalarFunctionDeltaTCaching:
         adjoint contributions from each accumulate correctly."""
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=2.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=2.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
@@ -323,7 +323,7 @@ class TestGplatesScalarFunctionDeltaTCaching:
         """Taylor convergence for the accumulation scenario."""
         V = fd.FunctionSpace(spherical_shell_mesh, "CG", 1)
         gpc = MockGplatesConnector(oldest_age=200.0, delta_t=2.0)
-        mock_conn = MockIndicatorConnector(gpc, value=2.0)
+        mock_conn = MockScalarFieldConnector(gpc, value=2.0)
 
         sf = GplatesScalarFunction(
             V, indicator_connector=mock_conn, name="indicator"
