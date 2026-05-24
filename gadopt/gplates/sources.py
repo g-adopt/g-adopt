@@ -33,7 +33,7 @@ from gtrack.mesh import create_sphere_mesh_latlon
 from ..utility import log, DEBUG, INFO
 
 if TYPE_CHECKING:
-    from .gplates import pyGplatesConnector
+    from .gplates import pyGplatesConnector, PlateModelFiles
 
 
 # Minimum points to make any sphere-coverage source meaningful. Anything
@@ -366,20 +366,21 @@ class LithosphereSource(Source):
         gplates_connector: "pyGplatesConnector",
         continental_data,
         age_to_property: Callable[[np.ndarray], np.ndarray],
+        plate_files: "PlateModelFiles",
         config: LithosphereSourceConfig | None = None,
         *,
         default_continental_age_myr: float = 500.0,
         comm: MPI.Comm = MPI.COMM_WORLD,
     ):
-        if gplates_connector.continental_polygons is None:
+        if plate_files.continental_polygons is None:
             raise ValueError(
-                "gplates_connector must have continental_polygons set. "
-                "Pass continental_polygons to pyGplatesConnector constructor."
+                "plate_files.continental_polygons must be set. "
+                "Pass continental_polygons to PlateModelFiles."
             )
-        if gplates_connector.static_polygons is None:
+        if plate_files.static_polygons is None:
             raise ValueError(
-                "gplates_connector must have static_polygons set. "
-                "Pass static_polygons to pyGplatesConnector constructor."
+                "plate_files.static_polygons must be set. "
+                "Pass static_polygons to PlateModelFiles."
             )
 
         self.gplates_connector = gplates_connector
@@ -391,6 +392,7 @@ class LithosphereSource(Source):
 
         # Stashed for the lazy _load; not touched between here and prepare.
         self._continental_data = continental_data
+        self._plate_files = plate_files
 
         self._initialized = False
         self._last_reinit_age: float | None = None
@@ -421,6 +423,7 @@ class LithosphereSource(Source):
         """Build the ocean tracker, rotators and present-day continental
         cloud. Runs once on rank 0, driven by Source._ensure_loaded."""
         gplates_connector = self.gplates_connector
+        plate_files = self._plate_files
         tracer_kwargs = {
             "time_step": self.config.time_step,
             "default_mesh_points": self.config.n_points,
@@ -432,15 +435,15 @@ class LithosphereSource(Source):
         self._ocean_tracker = SeafloorAgeTracker(
             rotation_files=gplates_connector.rotation_filenames,
             topology_files=gplates_connector.topology_filenames,
-            continental_polygons=gplates_connector.continental_polygons,
+            continental_polygons=plate_files.continental_polygons,
             config=tracer_config,
         )
         self._rotator = PointRotator(
             rotation_files=gplates_connector.rotation_filenames,
-            static_polygons=gplates_connector.static_polygons,
+            static_polygons=plate_files.static_polygons,
         )
         self._continental_filter = PolygonFilter(
-            polygon_files=gplates_connector.continental_polygons,
+            polygon_files=plate_files.continental_polygons,
             rotation_files=gplates_connector.rotation_filenames,
         )
         self._continental_present = self._load_continental(self._continental_data)
@@ -579,14 +582,15 @@ class PolygonSource(Source):
         gplates_connector: "pyGplatesConnector",
         polygons,
         thickness_data,
+        plate_files: "PlateModelFiles",
         config: PolygonSourceConfig | None = None,
         *,
         comm: MPI.Comm = MPI.COMM_WORLD,
     ):
-        if gplates_connector.static_polygons is None:
+        if plate_files.static_polygons is None:
             raise ValueError(
-                "gplates_connector must have static_polygons set. "
-                "Pass static_polygons to pyGplatesConnector constructor."
+                "plate_files.static_polygons must be set. "
+                "Pass static_polygons to PlateModelFiles."
             )
 
         self.gplates_connector = gplates_connector
@@ -597,6 +601,7 @@ class PolygonSource(Source):
         # Stashed for the lazy _load; not touched between here and prepare.
         self._polygons = polygons
         self._thickness_data = thickness_data
+        self._plate_files = plate_files
 
         # gtrack handles + present-day cloud are built lazily in _load (rank 0
         # only). On non-root these stay None for the source's lifetime and are
@@ -618,7 +623,7 @@ class PolygonSource(Source):
         )
         self._rotator = PointRotator(
             rotation_files=self.gplates_connector.rotation_filenames,
-            static_polygons=self.gplates_connector.static_polygons,
+            static_polygons=self._plate_files.static_polygons,
         )
         self._region_present = self._load_region(self._thickness_data)
 

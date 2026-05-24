@@ -21,6 +21,7 @@ from gadopt.gplates import (
     GplatesScalarFunction,
     LithosphereSource,
     LithosphereSourceConfig,
+    PlateModelFiles,
     PolygonSource,
     PolygonSourceConfig,
     ensure_reconstruction,
@@ -114,6 +115,8 @@ def main():
         rotation_filenames=files["rotation_filenames"],
         topology_filenames=files["topology_filenames"],
         oldest_age=OLDEST_AGE,
+    )
+    plate_files = PlateModelFiles(
         continental_polygons=files.get("continental_polygons"),
         static_polygons=files.get("static_polygons"),
     )
@@ -128,6 +131,7 @@ def main():
         gplates_connector=plate_model,
         continental_data=load_continental_data(),
         age_to_property=half_space_cooling,
+        plate_files=plate_files,
         config=LithosphereSourceConfig(n_points=LITH_N_POINTS),
     )
 
@@ -142,6 +146,7 @@ def main():
         gplates_connector=plate_model,
         polygons=str(CRATON_SHAPEFILE),
         thickness_data=200.0,
+        plate_files=plate_files,
         config=PolygonSourceConfig(n_points=POLYGON_N_POINTS),
     )
     poly_result = walk_connectors({

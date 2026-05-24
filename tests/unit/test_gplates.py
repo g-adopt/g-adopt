@@ -6,11 +6,32 @@ import pytest
 from gadopt import *
 from gadopt.gplates import (
     GplatesVelocityFunction,
+    PlateModelFiles,
     pyGplatesConnector,
     ensure_reconstruction,
     lithosphere_indicator,
     polygon_indicator,
 )
+
+
+def test_connector_no_longer_carries_polygon_kwargs():
+    """pyGplatesConnector is velocity-only now: the polygon paths moved to
+    PlateModelFiles. The constructor must not accept the old kwargs, and the
+    new dataclass must carry them. No reconstruction data needed."""
+    import inspect
+
+    params = inspect.signature(pyGplatesConnector.__init__).parameters
+    assert "continental_polygons" not in params
+    assert "static_polygons" not in params
+
+    pf = PlateModelFiles(
+        continental_polygons="cont.gpml", static_polygons="static.gpml"
+    )
+    assert pf.continental_polygons == "cont.gpml"
+    assert pf.static_polygons == "static.gpml"
+    # Defaults are None so the source None-validation can fire.
+    assert PlateModelFiles().continental_polygons is None
+    assert PlateModelFiles().static_polygons is None
 
 
 def test_obtain_muller_2022_se():
@@ -98,7 +119,7 @@ def half_space_cooling(age_myr):
 
 @pytest.fixture
 def plate_model_with_polygons():
-    """Create pyGplatesConnector with polygon files for testing."""
+    """Create pyGplatesConnector for testing the indicator/geotherm path."""
     gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
     muller_files = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
 
@@ -106,6 +127,15 @@ def plate_model_with_polygons():
         rotation_filenames=muller_files["rotation_filenames"],
         topology_filenames=muller_files["topology_filenames"],
         oldest_age=200,
+    )
+
+
+@pytest.fixture
+def plate_files():
+    """Polygon file paths for the indicator/geotherm sources."""
+    gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
+    muller_files = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
+    return PlateModelFiles(
         continental_polygons=muller_files.get("continental_polygons"),
         static_polygons=muller_files.get("static_polygons"),
     )
@@ -128,12 +158,13 @@ def test_coords():
 class TestLithosphereConnectorAgeValidation:
     """Test age validation in LithosphereConnector."""
 
-    def test_valid_age_works(self, plate_model_with_polygons, synthetic_data, test_coords):
+    def test_valid_age_works(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that valid ages within bounds work correctly."""
         connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
+            plate_files=plate_files,
         )
 
         # Valid age within bounds
@@ -143,12 +174,13 @@ class TestLithosphereConnectorAgeValidation:
         assert result.shape == (len(test_coords),)
         assert np.all(np.isfinite(result))
 
-    def test_age_older_than_oldest_raises_error(self, plate_model_with_polygons, synthetic_data, test_coords):
+    def test_age_older_than_oldest_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that requesting age > oldest_age raises ValueError."""
         connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
+            plate_files=plate_files,
         )
 
         # Age older than oldest_age (200 Ma)
@@ -157,12 +189,13 @@ class TestLithosphereConnectorAgeValidation:
         with pytest.raises(ValueError, match="older than the plate model's oldest age"):
             connector.get_indicator(test_coords, ndtime)
 
-    def test_negative_age_raises_error(self, plate_model_with_polygons, synthetic_data, test_coords):
+    def test_negative_age_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that requesting negative age (future) raises ValueError."""
         connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
+            plate_files=plate_files,
         )
 
         # Negative age (in the future)
@@ -171,12 +204,13 @@ class TestLithosphereConnectorAgeValidation:
         with pytest.raises(ValueError, match="negative.*future"):
             connector.get_indicator(test_coords, ndtime)
 
-    def test_backward_step_raises_error(self, plate_model_with_polygons, synthetic_data, test_coords):
+    def test_backward_step_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that going backward in ocean tracker raises ValueError."""
         connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
+            plate_files=plate_files,
         )
 
         # First step forward to 50 Ma
@@ -189,12 +223,13 @@ class TestLithosphereConnectorAgeValidation:
         with pytest.raises(ValueError, match="can only evolve forward"):
             connector.get_indicator(test_coords, ndtime_150)
 
-    def test_forward_steps_work(self, plate_model_with_polygons, synthetic_data, test_coords):
+    def test_forward_steps_work(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that sequential forward steps (decreasing age) work."""
         connector = lithosphere_indicator(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
+            plate_files=plate_files,
         )
 
         # Sequential forward steps (decreasing age)
@@ -208,7 +243,7 @@ class TestPolygonConnectorAgeValidation:
     """Test age validation in PolygonConnector."""
 
     @pytest.fixture
-    def polygon_connector(self, plate_model_with_polygons, synthetic_data):
+    def polygon_connector(self, plate_model_with_polygons, plate_files, synthetic_data):
         """Create PolygonConnector for testing."""
         craton_shapefile = (
             Path(__file__).resolve().parents[2]
@@ -223,6 +258,7 @@ class TestPolygonConnectorAgeValidation:
             gplates_connector=plate_model_with_polygons,
             polygons=str(craton_shapefile),
             thickness_data=synthetic_data,
+            plate_files=plate_files,
         )
 
     def test_valid_age_works(self, polygon_connector, test_coords, plate_model_with_polygons):

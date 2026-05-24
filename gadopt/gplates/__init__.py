@@ -8,6 +8,7 @@ from .gplates import (
     polygon_geotherm,
     polygon_indicator,
     pyGplatesConnector,
+    PlateModelFiles,
 )
 from .outputs import (
     GeothermERFOutput,
@@ -32,6 +33,7 @@ __all__ = [
     "GplatesScalarFunction",
     # Plate-reconstruction backbone
     "pyGplatesConnector",
+    "PlateModelFiles",
     "ensure_reconstruction",
     # Connector + config
     "ScalarFieldConnector",

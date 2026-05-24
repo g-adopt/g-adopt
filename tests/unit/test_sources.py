@@ -24,6 +24,7 @@ from gadopt.gplates import (
     ScalarFieldConnector,
     LithosphereSource,
     LithosphereSourceConfig,
+    PlateModelFiles,
     PolygonSource,
     PolygonSourceConfig,
     TanhOutput,
@@ -88,28 +89,38 @@ def plate_model():
         rotation_filenames=files["rotation_filenames"],
         topology_filenames=files["topology_filenames"],
         oldest_age=OLDEST_AGE,
+    )
+
+
+@pytest.fixture(scope="module")
+def plate_files():
+    _require_data()
+    files = ensure_reconstruction("Muller 2022 SE v1.2", GPLATES_GLOBAL)
+    return PlateModelFiles(
         continental_polygons=files.get("continental_polygons"),
         static_polygons=files.get("static_polygons"),
     )
 
 
 @pytest.fixture(scope="module")
-def lith_source(plate_model):
+def lith_source(plate_model, plate_files):
     return LithosphereSource(
         gplates_connector=plate_model,
         continental_data=_load_continental_data(),
         age_to_property=half_space_cooling,
+        plate_files=plate_files,
         config=LithosphereSourceConfig(n_points=LITH_N_POINTS),
     )
 
 
 @pytest.fixture(scope="module")
-def polygon_source(plate_model):
+def polygon_source(plate_model, plate_files):
     _require_craton()
     return PolygonSource(
         gplates_connector=plate_model,
         polygons=str(CRATON_SHAPEFILE),
         thickness_data=200.0,
+        plate_files=plate_files,
         config=PolygonSourceConfig(n_points=POLYGON_N_POINTS),
     )
 
@@ -184,29 +195,18 @@ class TestSourceContracts:
         assert PolygonSource.provides == frozenset({"xyz", "thickness"})
 
     def test_lithosphere_requires_continental_polygons(self):
-        _require_data()
-        files = ensure_reconstruction("Muller 2022 SE v1.2", GPLATES_GLOBAL)
-        bare = pyGplatesConnector(
-            rotation_filenames=files["rotation_filenames"],
-            topology_filenames=files["topology_filenames"],
-            oldest_age=50,
-            static_polygons=files.get("static_polygons"),
-        )
+        # The check is against PlateModelFiles, not the connector, and fires
+        # AT the constructor — no reconstruction data needed.
+        plate_files = PlateModelFiles(static_polygons="static.gpml")
         with pytest.raises(ValueError, match="continental_polygons"):
-            LithosphereSource(bare, 100.0, half_space_cooling)
+            LithosphereSource(
+                _StubConnector(), 100.0, half_space_cooling, plate_files
+            )
 
     def test_polygon_requires_static_polygons(self):
-        _require_data()
-        _require_craton()
-        files = ensure_reconstruction("Muller 2022 SE v1.2", GPLATES_GLOBAL)
-        bare = pyGplatesConnector(
-            rotation_filenames=files["rotation_filenames"],
-            topology_filenames=files["topology_filenames"],
-            oldest_age=50,
-            continental_polygons=files.get("continental_polygons"),
-        )
+        plate_files = PlateModelFiles(continental_polygons="continental.gpml")
         with pytest.raises(ValueError, match="static_polygons"):
-            PolygonSource(bare, str(CRATON_SHAPEFILE), 200.0)
+            PolygonSource(_StubConnector(), "craton.shp", 200.0, plate_files)
 
 
 # ---------------------------------------------------------------------------
@@ -216,16 +216,15 @@ class TestSourceContracts:
 class _StubConnector:
     """Cheap stand-in for pyGplatesConnector.
 
-    Carries the polygon-path attributes so the Source's cheap None-validation
-    passes, plus the filename lists _load would reach for. Building one of
-    these touches no reconstruction data, so it isolates the construction path
-    from the gtrack I/O in _load.
+    Carries only the velocity-relevant attributes: the rotation/topology
+    filename lists that _load reaches for, plus delta_t / oldest_age. The
+    polygon paths now live on PlateModelFiles, not here. Building one of these
+    touches no reconstruction data, so it isolates the construction path from
+    the gtrack I/O in _load.
     """
 
     rotation_filenames = ["rot.rot"]
     topology_filenames = ["topo.gpml"]
-    continental_polygons = "continental.gpml"
-    static_polygons = "static.gpml"
     delta_t = 1.0
     oldest_age = 100.0
 
@@ -240,6 +239,10 @@ class TestLazyLoad:
             gplates_connector=_StubConnector(),
             continental_data=100.0,
             age_to_property=half_space_cooling,
+            plate_files=PlateModelFiles(
+                continental_polygons="continental.gpml",
+                static_polygons="static.gpml",
+            ),
         )
         # Nothing loaded, no gtrack handles built yet.
         assert src._loaded is False
@@ -253,6 +256,7 @@ class TestLazyLoad:
             gplates_connector=_StubConnector(),
             polygons="craton.shp",
             thickness_data=200.0,
+            plate_files=PlateModelFiles(static_polygons="static.gpml"),
         )
         assert src._loaded is False
         assert src._polygon_filter is None
@@ -267,6 +271,7 @@ class TestLazyLoad:
             gplates_connector=_StubConnector(),
             polygons="craton.shp",
             thickness_data=200.0,
+            plate_files=PlateModelFiles(static_polygons="static.gpml"),
         )
         load_calls = {"n": 0}
 
@@ -406,12 +411,13 @@ class TestSingleStepGuarantee:
     age, regardless of how many connectors share the source. This is the
     central correctness property of the Source/Output split."""
 
-    def test_shared_source_steps_once_per_age(self, plate_model):
+    def test_shared_source_steps_once_per_age(self, plate_model, plate_files):
         # Build a fresh source so the call counter starts clean.
         source = LithosphereSource(
             gplates_connector=plate_model,
             continental_data=_load_continental_data(),
             age_to_property=half_space_cooling,
+            plate_files=plate_files,
             config=LithosphereSourceConfig(n_points=LITH_N_POINTS),
         )
 

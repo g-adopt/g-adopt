@@ -19,6 +19,7 @@ import numpy as np
 from gadopt.gplates import (
     LithosphereSource,
     LithosphereSourceConfig,
+    PlateModelFiles,
     PolygonSource,
     PolygonSourceConfig,
     ensure_reconstruction,
@@ -61,13 +62,16 @@ def load_continental_data():
 
 def make_plate_model():
     files = ensure_reconstruction("Muller 2022 SE v1.2", GPLATES_GLOBAL)
-    return pyGplatesConnector(
+    plate_model = pyGplatesConnector(
         rotation_filenames=files["rotation_filenames"],
         topology_filenames=files["topology_filenames"],
         oldest_age=OLDEST_AGE,
+    )
+    plate_files = PlateModelFiles(
         continental_polygons=files.get("continental_polygons"),
         static_polygons=files.get("static_polygons"),
     )
+    return plate_model, plate_files
 
 
 def reduce_lithosphere(d):
@@ -93,13 +97,14 @@ def reduce_polygon(d):
 
 
 def main():
-    plate_model = make_plate_model()
+    plate_model, plate_files = make_plate_model()
 
     print("Building LithosphereSource...")
     lith = LithosphereSource(
         gplates_connector=plate_model,
         continental_data=load_continental_data(),
         age_to_property=half_space_cooling,
+        plate_files=plate_files,
         config=LithosphereSourceConfig(n_points=LITH_N_POINTS),
     )
     lith_ref = {}
@@ -117,6 +122,7 @@ def main():
         gplates_connector=plate_model,
         polygons=str(CRATON_SHAPEFILE),
         thickness_data=200.0,
+        plate_files=plate_files,
         config=PolygonSourceConfig(n_points=POLYGON_N_POINTS),
     )
     poly_ref = {}

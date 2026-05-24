@@ -81,6 +81,7 @@ from gadopt.gplates import (
     LithosphereSource,
     LithosphereSourceConfig,
     MeshConfig,
+    PlateModelFiles,
     PolygonSource,
     PolygonSourceConfig,
     TanhOutput,
@@ -174,8 +175,10 @@ def half_space_cooling(age_myr, kappa=1e-6):
 # into this directory (or run `make data`, which does this
 # automatically).  The `ensure_reconstruction` helper then locates
 # the required rotation and topology files, as well as
-# `continental_polygons` and `static_polygons` that the connectors
-# need to distinguish oceanic from continental crust.
+# `continental_polygons` and `static_polygons`. The polygon files
+# are not needed by the velocity reconstruction itself; they belong
+# to the lithosphere/craton Sources, so we collect them into a
+# `PlateModelFiles` and hand that to the sources below.
 
 # +
 muller_2022_files = ensure_reconstruction("Muller 2022 SE v1.2", ".")
@@ -188,6 +191,9 @@ plate_model = pyGplatesConnector(
     nneighbours=4,
     delta_t=10.0,
     scaling_factor=1000.,
+)
+
+plate_files = PlateModelFiles(
     continental_polygons=muller_2022_files.get("continental_polygons"),
     static_polygons=muller_2022_files.get("static_polygons"),
 )
@@ -327,6 +333,7 @@ lith_source = LithosphereSource(
     gplates_connector=plate_model,
     continental_data=continental_data,
     age_to_property=half_space_cooling,
+    plate_files=plate_files,
     config=lith_source_cfg,
     comm=mesh.comm,
 )
@@ -359,6 +366,7 @@ cont_source = PolygonSource(
     gplates_connector=plate_model,
     polygons=muller_2022_files.get("continental_polygons"),
     thickness_data=continental_data,
+    plate_files=plate_files,
     config=poly_source_cfg,
     comm=mesh.comm,
 )
@@ -396,6 +404,7 @@ I_crust = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
     gplates_connector=plate_model,
     polygons=muller_2022_files.get("continental_polygons"),
     thickness_data=50.0,
+    plate_files=plate_files,
     source_config=poly_source_cfg,
     transition_width_km=10.0,
     default_thickness_km=0.0,
@@ -424,6 +433,7 @@ I_craton = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
     gplates_connector=plate_model,
     polygons="Craton_Boundaries_Inferred.shp",
     thickness_data=continental_data,
+    plate_files=plate_files,
     source_config=poly_source_cfg,
     transition_width_km=10.0,
     default_thickness_km=0.0,

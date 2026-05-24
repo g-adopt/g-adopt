@@ -38,6 +38,7 @@ from gadopt.gplates import (
     LithosphereSource,
     LithosphereSourceConfig,
     MeshConfig,
+    PlateModelFiles,
     PolygonSource,
     PolygonSourceConfig,
     Source,
@@ -272,28 +273,38 @@ def plate_model():
         rotation_filenames=files["rotation_filenames"],
         topology_filenames=files["topology_filenames"],
         oldest_age=OLDEST_AGE,
+    )
+
+
+@pytest.fixture(scope="module")
+def plate_files():
+    _require_data()
+    files = ensure_reconstruction("Muller 2022 SE v1.2", GPLATES_GLOBAL)
+    return PlateModelFiles(
         continental_polygons=files.get("continental_polygons"),
         static_polygons=files.get("static_polygons"),
     )
 
 
 @pytest.fixture(scope="module")
-def lith_source(plate_model):
+def lith_source(plate_model, plate_files):
     return LithosphereSource(
         gplates_connector=plate_model,
         continental_data=_load_continental_data(),
         age_to_property=half_space_cooling,
+        plate_files=plate_files,
         config=LithosphereSourceConfig(n_points=LITH_N_POINTS),
     )
 
 
 @pytest.fixture(scope="module")
-def poly_source(plate_model):
+def poly_source(plate_model, plate_files):
     _require_craton()
     return PolygonSource(
         gplates_connector=plate_model,
         polygons=str(CRATON_SHAPEFILE),
         thickness_data=200.0,
+        plate_files=plate_files,
         config=PolygonSourceConfig(n_points=POLYGON_N_POINTS),
     )
 
@@ -415,11 +426,12 @@ class TestSharedSourceConsistency:
     """
 
     @pytest.fixture(scope="class")
-    def fresh_lith_source(self, plate_model):
+    def fresh_lith_source(self, plate_model, plate_files):
         return LithosphereSource(
             gplates_connector=plate_model,
             continental_data=_load_continental_data(),
             age_to_property=half_space_cooling,
+            plate_files=plate_files,
             config=LithosphereSourceConfig(n_points=LITH_N_POINTS),
         )
 

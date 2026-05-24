@@ -1,4 +1,5 @@
 import warnings
+from dataclasses import dataclass
 from typing import Callable
 
 import firedrake as fd
@@ -33,6 +34,7 @@ __all__ = [
     "GplatesVelocityFunction",
     "GplatesScalarFunction",
     "ScalarFieldConnector",
+    "PlateModelFiles",
     "InterpolationConfig",
     "MeshConfig",
     "LithosphereSource",
@@ -292,6 +294,20 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
         return r
 
 
+@dataclass
+class PlateModelFiles:
+    """Plate-model polygon file paths for the indicator/geotherm Sources.
+
+    Owned by the user and passed to LithosphereSource / PolygonSource. These
+    files drive the continental filtering and plate-id assignment that the
+    Sources need; they are not used by the velocity reconstruction, so they
+    live here rather than on pyGplatesConnector.
+    """
+
+    continental_polygons: str | list[str] | None = None
+    static_polygons: str | list[str] | None = None
+
+
 class pyGplatesConnector(object):
     # Non-dimensionalisation constants
     # characteristic length scale: d
@@ -317,9 +333,7 @@ class pyGplatesConnector(object):
                  scaling_factor=1.0,
                  nseeds=1e5,
                  nneighbours=4,
-                 kappa=1e-6,
-                 continental_polygons=None,
-                 static_polygons=None):
+                 kappa=1e-6):
         """An interface to PyGPlates, used for updating top Dirichlet boundary conditions
         using plate tectonic reconstructions.
 
@@ -341,28 +355,16 @@ class pyGplatesConnector(object):
                     the finer velocity variations will then result in more challenging Stokes solves.
             nneighbours (Optional[int]): Number of neighbouring points when interpolating velocity for each grid point. Default is 4.
             kappa: (Optional[float]): Diffusion constant used for don-dimensionalising time. Default is 1e-6.
-            continental_polygons (Optional[Union[str, List[str]]]): Path(s) to continental polygon files.
-                    Required for LithosphereConnector to filter continental regions.
-            static_polygons (Optional[Union[str, List[str]]]): Path(s) to static polygon files for plate ID assignment.
-                    Required for LithosphereConnector to assign plate IDs for rotation.
 
         Examples:
             >>> connector = pyGplatesConnector(rotation_filenames, topology_filenames, oldest_age)
             >>> connector.get_plate_velocities(ndtime=100)
-
-            >>> # With polygon files for lithosphere tracking
-            >>> connector = pyGplatesConnector(
-            ...     rotation_filenames, topology_filenames, oldest_age,
-            ...     continental_polygons='continental_polygons.gpml',
-            ...     static_polygons='static_polygons.gpml'
-            ... )
         """
 
-        # Store original filenames for downstream use (e.g., LithosphereConnector)
+        # Store original filenames for downstream use (e.g., the Sources, which
+        # share the rotation/topology files with the velocity reconstruction).
         self.rotation_filenames = rotation_filenames
         self.topology_filenames = topology_filenames
-        self.continental_polygons = continental_polygons
-        self.static_polygons = static_polygons
 
         # Rotation model(s)
         self.rotation_model = pygplates.RotationModel(rotation_filenames)
@@ -737,6 +739,7 @@ def lithosphere_indicator(
     age_to_property: Callable[[np.ndarray], np.ndarray] | None = None,
     *,
     source: LithosphereSource | None = None,
+    plate_files: "PlateModelFiles | None" = None,
     transition_width_km: float = 10.0,
     default_thickness_km: float = 100.0,
     source_config: LithosphereSourceConfig | None = None,
@@ -750,18 +753,22 @@ def lithosphere_indicator(
 
     Pass either ``source=`` (to reuse a LithosphereSource shared with a
     geotherm connector) or the trio ``gplates_connector``,
-    ``continental_data``, ``age_to_property`` (to build a fresh source).
+    ``continental_data``, ``age_to_property`` plus ``plate_files`` (to build a
+    fresh source).
     """
     if source is None:
-        if gplates_connector is None or continental_data is None or age_to_property is None:
+        if (gplates_connector is None or continental_data is None
+                or age_to_property is None or plate_files is None):
             raise ValueError(
-                "lithosphere_indicator: pass either `source=` or all three of "
-                "`gplates_connector`, `continental_data`, `age_to_property`."
+                "lithosphere_indicator: pass either `source=` or all of "
+                "`gplates_connector`, `continental_data`, `age_to_property`, "
+                "`plate_files`."
             )
         source = LithosphereSource(
             gplates_connector,
             continental_data,
             age_to_property,
+            plate_files,
             config=source_config,
             default_continental_age_myr=default_continental_age_myr,
             comm=comm,
@@ -783,6 +790,7 @@ def lithosphere_geotherm(
     age_to_property: Callable[[np.ndarray], np.ndarray] | None = None,
     *,
     source: LithosphereSource | None = None,
+    plate_files: "PlateModelFiles | None" = None,
     kappa: float = 1e-6,
     default_thickness_km: float = 100.0,
     too_far_age_myr: float = 500.0,
@@ -800,15 +808,18 @@ def lithosphere_geotherm(
     ``lithosphere_indicator`` and ``lithosphere_geotherm``.
     """
     if source is None:
-        if gplates_connector is None or continental_data is None or age_to_property is None:
+        if (gplates_connector is None or continental_data is None
+                or age_to_property is None or plate_files is None):
             raise ValueError(
-                "lithosphere_geotherm: pass either `source=` or all three of "
-                "`gplates_connector`, `continental_data`, `age_to_property`."
+                "lithosphere_geotherm: pass either `source=` or all of "
+                "`gplates_connector`, `continental_data`, `age_to_property`, "
+                "`plate_files`."
             )
         source = LithosphereSource(
             gplates_connector,
             continental_data,
             age_to_property,
+            plate_files,
             config=source_config,
             default_continental_age_myr=default_continental_age_myr,
             comm=comm,
@@ -831,6 +842,7 @@ def polygon_indicator(
     thickness_data=None,
     *,
     source: PolygonSource | None = None,
+    plate_files: "PlateModelFiles | None" = None,
     transition_width_km: float = 10.0,
     default_thickness_km: float = 0.0,
     source_config: PolygonSourceConfig | None = None,
@@ -848,15 +860,18 @@ def polygon_indicator(
     as "outside the region" rather than filling in 100 km of fake material.
     """
     if source is None:
-        if gplates_connector is None or polygons is None or thickness_data is None:
+        if (gplates_connector is None or polygons is None
+                or thickness_data is None or plate_files is None):
             raise ValueError(
-                "polygon_indicator: pass either `source=` or all three of "
-                "`gplates_connector`, `polygons`, `thickness_data`."
+                "polygon_indicator: pass either `source=` or all of "
+                "`gplates_connector`, `polygons`, `thickness_data`, "
+                "`plate_files`."
             )
         source = PolygonSource(
             gplates_connector,
             polygons,
             thickness_data,
+            plate_files,
             config=source_config,
             comm=comm,
         )
@@ -877,6 +892,7 @@ def polygon_geotherm(
     thickness_data=None,
     *,
     source: PolygonSource | None = None,
+    plate_files: "PlateModelFiles | None" = None,
     source_config: PolygonSourceConfig | None = None,
     mesh: MeshConfig | None = None,
     interpolation: InterpolationConfig | None = None,
@@ -889,15 +905,18 @@ def polygon_geotherm(
     Outside the polygon region the output is 1.0 — i.e. mantle temperature.
     """
     if source is None:
-        if gplates_connector is None or polygons is None or thickness_data is None:
+        if (gplates_connector is None or polygons is None
+                or thickness_data is None or plate_files is None):
             raise ValueError(
-                "polygon_geotherm: pass either `source=` or all three of "
-                "`gplates_connector`, `polygons`, `thickness_data`."
+                "polygon_geotherm: pass either `source=` or all of "
+                "`gplates_connector`, `polygons`, `thickness_data`, "
+                "`plate_files`."
             )
         source = PolygonSource(
             gplates_connector,
             polygons,
             thickness_data,
+            plate_files,
             config=source_config,
             comm=comm,
         )
