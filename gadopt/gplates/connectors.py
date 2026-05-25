@@ -57,7 +57,7 @@ class InterpolationConfig:
     ``too_far`` and handled by the OutputStrategy (which decides whether
     to fill with a default thickness, switch to mantle temperature, etc).
 
-    Defaults: 0.1 rad \approx 640 km — generous; tighten to e.g. 0.02 rad
+    Defaults: 0.1 rad ≈ 640 km — generous; tighten to e.g. 0.02 rad
     (~127 km) for sharper boundaries. For polygon sources where the
     boundary is encoded by zero-thickness halo seeds, the threshold
     degenerates into a pathological-query guard and the actual roll-off
