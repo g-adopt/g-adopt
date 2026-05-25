@@ -5,19 +5,25 @@ from .gplates import (
     ensure_reconstruction,
     lithosphere_geotherm,
     lithosphere_indicator,
+    polygon_geotherm,
+    polygon_indicator,
     pyGplatesConnector,
     PlateModelFiles,
 )
 from .outputs import (
     GeothermERFOutput,
+    GeothermLinearOutput,
     MeshConfig,
     OutputStrategy,
     TanhOutput,
+    continental_linear,
     ocean_erf_normalized,
 )
 from .sources import (
     LithosphereSource,
     LithosphereSourceConfig,
+    PolygonSource,
+    PolygonSourceConfig,
     Source,
 )
 
@@ -37,12 +43,18 @@ __all__ = [
     "Source",
     "LithosphereSource",
     "LithosphereSourceConfig",
+    "PolygonSource",
+    "PolygonSourceConfig",
     # Outputs
     "OutputStrategy",
     "TanhOutput",
     "GeothermERFOutput",
+    "GeothermLinearOutput",
     "ocean_erf_normalized",
+    "continental_linear",
     # Factories
     "lithosphere_indicator",
     "lithosphere_geotherm",
+    "polygon_indicator",
+    "polygon_geotherm",
 ]

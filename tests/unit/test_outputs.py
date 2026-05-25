@@ -10,8 +10,10 @@ import pytest
 
 from gadopt.gplates import (
     GeothermERFOutput,
+    GeothermLinearOutput,
     MeshConfig,
     TanhOutput,
+    continental_linear,
     ocean_erf_normalized,
 )
 
@@ -95,6 +97,33 @@ class TestOceanErfNormalized:
         result = ocean_erf_normalized(depth, z_lab, age_myr=age, kappa=1e-6)
         assert np.all(np.isfinite(result))
         assert np.all((result >= 0.0) & (result <= 1.0))
+
+
+class TestContinentalLinear:
+    def test_surface_is_zero(self):
+        z_lab = np.array([200e3, 150e3])
+        depth = np.zeros_like(z_lab)
+        result = continental_linear(depth, z_lab)
+        np.testing.assert_allclose(result, 0.0, atol=1e-12)
+
+    def test_lab_is_one(self):
+        z_lab = np.array([200e3, 150e3])
+        depth = z_lab.copy()
+        result = continental_linear(depth, z_lab)
+        np.testing.assert_allclose(result, 1.0, atol=1e-12)
+
+    def test_midpoint(self):
+        result = continental_linear(np.array([100e3]), np.array([200e3]))
+        np.testing.assert_allclose(result, 0.5, atol=1e-12)
+
+    def test_clipped_to_unit_interval(self):
+        result = continental_linear(np.array([200e3]), np.array([100e3]))
+        assert np.all((result >= 0.0) & (result <= 1.0))
+
+    def test_zero_lab_returns_zero(self):
+        # z_lab=0 means no lithosphere; profile collapses to surface value.
+        result = continental_linear(np.array([50e3]), np.array([0.0]))
+        np.testing.assert_allclose(result, 0.0, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -253,3 +282,29 @@ class TestGeothermERFOutput:
             kappa=1e-6,
         )
         np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+
+class TestGeothermLinearOutput:
+    def test_requires_only_thickness(self):
+        assert GeothermLinearOutput().requires == frozenset({"thickness"})
+
+    def test_too_far_is_mantle(self):
+        # Outside the polygon region (too_far=True), the output is 1.0
+        # (mantle temperature).
+        mesh = MeshConfig()
+        out = GeothermLinearOutput()
+        r_target = np.array([mesh.r_outer - 50.0 / mesh.depth_scale])
+        interp = {"thickness": np.array([100.0])}
+        result = out.compute(interp, r_target, np.array([True]), mesh)
+        np.testing.assert_allclose(result, 1.0, atol=1e-12)
+
+    def test_inside_region_linear(self):
+        # Inside the polygon, output follows the linear geotherm.
+        mesh = MeshConfig(r_outer=2.208, depth_scale=2890.0)
+        out = GeothermLinearOutput()
+        thickness_km = 100.0
+        # Mid-depth in the lithosphere ⇒ T_norm ~ 0.5.
+        r_target = np.array([mesh.r_outer - 50.0 / mesh.depth_scale])
+        interp = {"thickness": np.array([thickness_km])}
+        result = out.compute(interp, r_target, np.array([False]), mesh)
+        np.testing.assert_allclose(result, 0.5, atol=1e-10)

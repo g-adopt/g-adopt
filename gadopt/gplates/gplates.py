@@ -17,12 +17,15 @@ from .connectors import ScalarFieldConnector, InterpolationConfig
 from .gplatesfiles import ensure_reconstruction
 from .outputs import (
     GeothermERFOutput,
+    GeothermLinearOutput,
     MeshConfig,
     TanhOutput,
 )
 from .sources import (
     LithosphereSource,
     LithosphereSourceConfig,
+    PolygonSource,
+    PolygonSourceConfig,
 )
 
 
@@ -36,10 +39,15 @@ __all__ = [
     "MeshConfig",
     "LithosphereSource",
     "LithosphereSourceConfig",
+    "PolygonSource",
+    "PolygonSourceConfig",
     "TanhOutput",
     "GeothermERFOutput",
+    "GeothermLinearOutput",
     "lithosphere_indicator",
     "lithosphere_geotherm",
+    "polygon_indicator",
+    "polygon_geotherm",
     "pyGplatesConnector",
 ]
 
@@ -835,6 +843,98 @@ def lithosphere_geotherm(
         default_thickness_km=default_thickness_km,
         too_far_age_myr=too_far_age_myr,
     )
+    return ScalarFieldConnector(
+        source, output,
+        mesh=mesh, interpolation=interpolation,
+        gc_collect_frequency=gc_collect_frequency,
+    )
+
+
+def polygon_indicator(
+    gplates_connector: "pyGplatesConnector | None" = None,
+    polygons=None,
+    thickness_data=None,
+    *,
+    source: PolygonSource | None = None,
+    plate_files: "PlateModelFiles | None" = None,
+    transition_width_km: float = 10.0,
+    default_thickness_km: float = 0.0,
+    source_config: PolygonSourceConfig | None = None,
+    mesh: MeshConfig | None = None,
+    interpolation: InterpolationConfig | None = None,
+    gc_collect_frequency: int | None = 10,
+    comm: MPI.Comm = MPI.COMM_WORLD,
+) -> ScalarFieldConnector:
+    """Build an ``ScalarFieldConnector`` returning a polygon-bounded indicator
+    field.
+
+    The ``default_thickness_km`` default is 0 (not 100 as for lithosphere)
+    because PolygonSource's mask-and-relabel pattern places zero-thickness
+    halo seeds outside the polygons; a ``too_far`` target node should read
+    as "outside the region" rather than filling in 100 km of fake material.
+    """
+    if source is None:
+        if (gplates_connector is None or polygons is None
+                or thickness_data is None or plate_files is None):
+            raise ValueError(
+                "polygon_indicator: pass either `source=` or all of "
+                "`gplates_connector`, `polygons`, `thickness_data`, "
+                "`plate_files`."
+            )
+        source = PolygonSource(
+            gplates_connector,
+            polygons,
+            thickness_data,
+            plate_files,
+            config=source_config,
+            comm=comm,
+        )
+    output = TanhOutput(
+        transition_width_km=transition_width_km,
+        default_thickness_km=default_thickness_km,
+    )
+    return ScalarFieldConnector(
+        source, output,
+        mesh=mesh, interpolation=interpolation,
+        gc_collect_frequency=gc_collect_frequency,
+    )
+
+
+def polygon_geotherm(
+    gplates_connector: "pyGplatesConnector | None" = None,
+    polygons=None,
+    thickness_data=None,
+    *,
+    source: PolygonSource | None = None,
+    plate_files: "PlateModelFiles | None" = None,
+    source_config: PolygonSourceConfig | None = None,
+    mesh: MeshConfig | None = None,
+    interpolation: InterpolationConfig | None = None,
+    gc_collect_frequency: int | None = 10,
+    comm: MPI.Comm = MPI.COMM_WORLD,
+) -> ScalarFieldConnector:
+    """Build an ``ScalarFieldConnector`` returning the linear continental geotherm
+    bounded by polygons.
+
+    Outside the polygon region the output is 1.0 — i.e. mantle temperature.
+    """
+    if source is None:
+        if (gplates_connector is None or polygons is None
+                or thickness_data is None or plate_files is None):
+            raise ValueError(
+                "polygon_geotherm: pass either `source=` or all of "
+                "`gplates_connector`, `polygons`, `thickness_data`, "
+                "`plate_files`."
+            )
+        source = PolygonSource(
+            gplates_connector,
+            polygons,
+            thickness_data,
+            plate_files,
+            config=source_config,
+            comm=comm,
+        )
+    output = GeothermLinearOutput()
     return ScalarFieldConnector(
         source, output,
         mesh=mesh, interpolation=interpolation,

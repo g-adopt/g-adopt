@@ -87,6 +87,16 @@ def ocean_erf_normalized(depth_m, z_lab_m, age_myr, kappa):
     return np.clip(result, 0.0, 1.0)
 
 
+def continental_linear(depth_m, z_lab_m):
+    """Linear geotherm for continental lithosphere. T_norm = z / z_lab."""
+    depth_m = np.asarray(depth_m, dtype=float)
+    z_lab_m = np.asarray(z_lab_m, dtype=float)
+    result = np.zeros_like(depth_m)
+    valid = z_lab_m > 0
+    result[valid] = depth_m[valid] / z_lab_m[valid]
+    return np.clip(result, 0.0, 1.0)
+
+
 # ---------------------------------------------------------------------------
 # OutputStrategy ABC
 # ---------------------------------------------------------------------------
@@ -211,3 +221,30 @@ class GeothermERFOutput(OutputStrategy):
         z_lab_m = thickness_km * 1e3
         T_norm = self._geotherm(depth_m, z_lab_m, age_myr, self.kappa)
         return np.clip(T_norm, 0.0, 1.0)
+
+
+class GeothermLinearOutput(OutputStrategy):
+    """Linear normalised geotherm for continental / polygon-bounded regions.
+
+    Outside the region (``too_far``) the output is 1 — mantle temperature.
+    Inside, T_norm = z / z_LAB. Matches the current PolygonGeotherm semantics
+    where the geotherm is only defined where a polygon claims it; everywhere
+    else the surrounding mantle is presumed adiabatic at T_norm=1.
+    """
+
+    requires = frozenset({"thickness"})
+
+    def __init__(
+        self,
+        geotherm: Callable | None = None,
+    ):
+        self._geotherm = geotherm or continental_linear
+
+    def compute(self, interpolated, r_target, too_far, mesh):
+        thickness_km = interpolated["thickness"]
+        depth_m = (mesh.r_outer - r_target) * mesh.depth_scale * 1e3
+        z_lab_m = thickness_km * 1e3
+        T_norm = self._geotherm(depth_m, z_lab_m)
+        T_norm = np.clip(T_norm, 0.0, 1.0)
+        T_norm[too_far] = 1.0
+        return T_norm

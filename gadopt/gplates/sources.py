@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Callable
 import h5py
 import numpy as np
 from mpi4py import MPI
+from scipy.spatial import cKDTree
 
 from gtrack import PointCloud, PointRotator, PolygonFilter, SeafloorAgeTracker
 from gtrack.config import TracerConfig
@@ -78,6 +79,20 @@ class LithosphereSourceConfig:
             raise ValueError(
                 f"checkpoint_interval_myr must be positive or None, "
                 f"got {self.checkpoint_interval_myr}"
+            )
+
+
+@dataclass
+class PolygonSourceConfig:
+    """Knobs for PolygonSource — sphere-mesh resolution and data loading."""
+
+    n_points: int = 20000
+    property_name: str = "thickness"
+
+    def __post_init__(self):
+        if self.n_points < SOURCE_MIN_POINTS:
+            raise ValueError(
+                f"n_points must be at least {SOURCE_MIN_POINTS}, got {self.n_points}"
             )
 
 
@@ -140,6 +155,40 @@ def _build_cloud(data, property_name: str, n_points_fallback: int) -> PointCloud
         f"Unsupported data type: {type(data)}. "
         "Expected PointCloud, file path, (latlon, values) tuple, or scalar."
     )
+
+
+def _inherit_sliver_plate_ids(cloud: PointCloud, property_name: str) -> None:
+    """Patch undefined continental seeds with the nearest defined-continental ID.
+
+    The continental polygons and the static plate polygons disagree by 10-50 km
+    along passive margins. Seeds in that sliver carry thickness>0 (continental)
+    but plate_id=0 from the static-polygon assignment. Without this patch the
+    sliver seeds either get dropped (biasing the kNN at exactly the locations
+    where smoothness matters) or get attached to oceanic plates and drift the
+    wrong way through geological time. Restricting donors to *defined
+    continental* neighbours makes each sliver seed ride the adjacent continent.
+    """
+    prop = cloud.get_property(property_name)
+    undefined = cloud.plate_ids == 0
+    continental = prop > 0.0
+    target = undefined & continental
+    donor = (~undefined) & continental
+    n_target = int(target.sum())
+    n_donor = int(donor.sum())
+    if n_target == 0 or n_donor == 0:
+        return
+
+    donor_xyz = cloud.xyz[donor]
+    donor_unit = donor_xyz / np.linalg.norm(donor_xyz, axis=1, keepdims=True)
+    target_xyz = cloud.xyz[target]
+    target_unit = target_xyz / np.linalg.norm(target_xyz, axis=1, keepdims=True)
+    tree = cKDTree(donor_unit)
+    _, idx = tree.query(target_unit, k=1)
+    new_ids = cloud.plate_ids.copy()
+    new_ids[target] = cloud.plate_ids[donor][idx]
+    cloud.plate_ids = new_ids
+    log(f"Patched {n_target} undefined continental seeds via 1-NN inheritance "
+        f"from {n_donor} defined-continental seeds.", level=DEBUG)
 
 
 # ---------------------------------------------------------------------------
@@ -608,3 +657,107 @@ class LithosphereSource(Source):
         except Exception as exc:
             log(f"LithosphereSource: failed to save checkpoint at "
                 f"{rounded_age} Ma: {exc}", level=INFO)
+
+
+# ---------------------------------------------------------------------------
+# PolygonSource
+# ---------------------------------------------------------------------------
+
+class PolygonSource(Source):
+    """Polygon-bounded thickness source.
+
+    Builds a single seed cloud at present day. Seeds inside the polygons
+    carry the data-derived thickness; seeds outside are kept but zeroed
+    (mask-and-relabel), so the kNN interpolator can smear across the
+    boundary and the lateral roll-off length is controlled by
+    ``InterpolationConfig.gaussian_sigma`` rather than by the polygon
+    outline. ``prepare(age)`` just back-rotates this cloud to the target
+    age — no stateful machinery, so the cache is purely a small speedup
+    rather than a correctness requirement.
+    """
+
+    provides = frozenset({"xyz", "thickness"})
+
+    def __init__(
+        self,
+        gplates_connector: "pyGplatesConnector",
+        polygons,
+        thickness_data,
+        plate_files: "PlateModelFiles",
+        config: PolygonSourceConfig | None = None,
+        *,
+        comm: MPI.Comm = MPI.COMM_WORLD,
+    ):
+        if plate_files.static_polygons is None:
+            raise ValueError(
+                "plate_files.static_polygons must be set. "
+                "Pass static_polygons to PlateModelFiles."
+            )
+
+        self.gplates_connector = gplates_connector
+        self.config = config or PolygonSourceConfig()
+        self.comm = comm
+        self._is_root = (comm.rank == 0)
+
+        # Stashed for the lazy _load; not touched between here and prepare.
+        self._polygons = polygons
+        self._thickness_data = thickness_data
+        self._plate_files = plate_files
+
+        # gtrack handles + present-day cloud are built lazily in _load (rank 0
+        # only). On non-root these stay None for the source's lifetime and are
+        # never read.
+        self._polygon_filter = None
+        self._rotator = None
+        self._region_present = None
+
+    @property
+    def is_root(self) -> bool:
+        return self._is_root
+
+    def _load(self) -> None:
+        """Build the polygon filter, rotator and present-day region cloud.
+        Runs once on rank 0, driven by Source._ensure_loaded."""
+        self._polygon_filter = PolygonFilter(
+            polygon_files=self._polygons,
+            rotation_files=self.gplates_connector.rotation_filenames,
+        )
+        self._rotator = PointRotator(
+            rotation_files=self.gplates_connector.rotation_filenames,
+            static_polygons=self._plate_files.static_polygons,
+        )
+        self._region_present = self._load_region(self._thickness_data)
+
+    def _load_region(self, data) -> PointCloud:
+        cloud = _build_cloud(data, self.config.property_name, self.config.n_points)
+        mask = self._polygon_filter.get_containment_mask(cloud, at_age=0.0)
+        prop = cloud.get_property(self.config.property_name).copy()
+        prop[~mask] = 0.0
+        cloud.add_property(self.config.property_name, prop)
+        log(f"PolygonSource: mask-and-relabel kept {cloud.n_points} seeds; "
+            f"{int(mask.sum())} inside, {int((~mask).sum())} zeroed outside.",
+            level=DEBUG)
+
+        cloud = self._rotator.assign_plate_ids(
+            cloud, at_age=0.0, remove_undefined=False
+        )
+        _inherit_sliver_plate_ids(cloud, self.config.property_name)
+        return cloud
+
+    def _compute_sources(self, age: float) -> dict[str, np.ndarray]:
+        region_cloud = self._rotator.rotate(
+            self._region_present, from_age=0.0, to_age=age
+        )
+        log(f"PolygonSource: {region_cloud.n_points} region points at "
+            f"{age:.2f} Ma.", level=DEBUG)
+        # Unlike LithosphereSource, this is a single rotated cloud with no
+        # concatenate, so region_cloud.xyz / get_property return region_cloud's
+        # OWN internal arrays by reference. The copy here is REQUIRED, not
+        # defensive: without it the per-age _cached_dict — shared across sibling
+        # connectors and held across the next rotate — would alias gtrack's live
+        # internal storage. Do not drop it by analogy with any "redundant" copy
+        # elsewhere; the single-cloud accessors genuinely alias.
+        return {
+            "xyz": region_cloud.xyz.copy(),
+            "thickness": region_cloud.get_property(self.config.property_name).copy(),
+        }
