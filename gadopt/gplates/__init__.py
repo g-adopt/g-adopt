@@ -2,12 +2,24 @@ from .connectors import ScalarFieldConnector, InterpolationConfig
 from .gplates import (
     GplatesScalarFunction,
     GplatesVelocityFunction,
-    PlateModelFiles,
     ensure_reconstruction,
+    lithosphere_geotherm,
+    lithosphere_indicator,
     pyGplatesConnector,
+    PlateModelFiles,
 )
-from .outputs import MeshConfig, OutputStrategy
-from .sources import Source
+from .outputs import (
+    GeothermERFOutput,
+    MeshConfig,
+    OutputStrategy,
+    TanhOutput,
+    ocean_erf_normalized,
+)
+from .sources import (
+    LithosphereSource,
+    LithosphereSourceConfig,
+    Source,
+)
 
 __all__ = [
     # Firedrake function wrappers
@@ -21,7 +33,16 @@ __all__ = [
     "ScalarFieldConnector",
     "InterpolationConfig",
     "MeshConfig",
-    # Abstract source / output contracts
+    # Sources
     "Source",
+    "LithosphereSource",
+    "LithosphereSourceConfig",
+    # Outputs
     "OutputStrategy",
+    "TanhOutput",
+    "GeothermERFOutput",
+    "ocean_erf_normalized",
+    # Factories
+    "lithosphere_indicator",
+    "lithosphere_geotherm",
 ]
