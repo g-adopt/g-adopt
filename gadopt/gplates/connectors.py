@@ -115,7 +115,7 @@ class ScalarFieldConnector:
     pygplates C++ reference cycles without paying a collection on every call.
     Set it to ``None`` to disable the connector-level collect entirely (relying
     on gtrack's internal collect plus Python's automatic generational GC) when
-    you have profiled GC as hot and confirmed memory stays bounded; set it to
+    GC is documented as hot and confirmed memory stays bounded; set it to
     ``1`` for a lithosphere spin-up or very-long adjoint run where the
     connector is driven for thousands of ages and the tightest bound on C++
     cycle accumulation is wanted (the per-call cost is negligible there against
@@ -131,6 +131,7 @@ class ScalarFieldConnector:
         interpolation: InterpolationConfig | None = None,
         gc_collect_frequency: int | None = 10,
     ):
+        # Validate the pairing of source and output
         if not output.requires <= source.provides:
             missing = output.requires - source.provides
             raise ValueError(
@@ -138,6 +139,7 @@ class ScalarFieldConnector:
                 f"{type(source).__name__} does not provide "
                 f"(provides={sorted(source.provides)})."
             )
+        # Validate the GC collect frequency
         if gc_collect_frequency is not None and gc_collect_frequency < 1:
             raise ValueError(
                 f"gc_collect_frequency must be >= 1 or None, "
