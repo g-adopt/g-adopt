@@ -28,7 +28,6 @@ from __future__ import annotations
 import gc
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import numpy as np
 from mpi4py import MPI
@@ -37,9 +36,6 @@ from scipy.spatial import cKDTree
 from ..utility import log, DEBUG
 from .outputs import MeshConfig, OutputStrategy, _DEFAULT_MESH_PARAMETERS
 from .sources import Source
-
-if TYPE_CHECKING:
-    pass
 
 
 # ---------------------------------------------------------------------------
