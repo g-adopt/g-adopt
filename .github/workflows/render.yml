@@ -10,12 +10,17 @@ on:
         type: boolean
         default: false
         description: 'Trigger a website rebuild if this run is successful'
+      target_container:
+        description: 'The target container tag (full tag, e.g. dev-main)'
+        type: string
+        required: true
+        default: dev-main
 
 jobs:
   render:
     runs-on: self-hosted
     container:
-      image: firedrakeproject/firedrake-vanilla-default:dev-main
+      image: firedrakeproject/firedrake-vanilla-default:${{ inputs.target_container || 'dev-main' }}
       options: --cap-add=SYS_ADMIN
 
     env:
