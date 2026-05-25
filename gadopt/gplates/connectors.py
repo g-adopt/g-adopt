@@ -179,7 +179,6 @@ class ScalarFieldConnector:
         return self.source.comm
 
     # Main entry point
-
     def get_indicator(
         self,
         target_coords: np.ndarray,
@@ -197,6 +196,7 @@ class ScalarFieldConnector:
         if use_cache:
             return self._cached_result
 
+        # If the cache is not suitable, prepare the source and compute the result
         sources_dict = self.source.prepare(age)
         result = self._compute(sources_dict, target_coords)
         self._update_cache(age, target_coords, result)
@@ -209,12 +209,15 @@ class ScalarFieldConnector:
         return result
 
     # Cache
-
     def _check_cache(self, age: float, target_coords: np.ndarray) -> bool:
+        # Case when everything is fresh
         if self.reconstruction_age is None:
             return False
+        # Case where we have gone over the delta_t
         if abs(age - self.reconstruction_age) >= self.delta_t:
             return False
+        # Case where we do not even have a cached result (Not sure how this happens)
+        # But just for safety!
         if self._cached_result is None or self._cached_coords_ref is None:
             return False
         # A dead referent dereferences to None and is never ``is`` the live
@@ -226,15 +229,16 @@ class ScalarFieldConnector:
             level=DEBUG)
         return True
 
+    # Update the cache
     def _update_cache(
         self, age: float, target_coords: np.ndarray, result: np.ndarray
     ) -> None:
+        # Here we are just weak referencing the target_coords array
         self.reconstruction_age = age
         self._cached_result = result
         self._cached_coords_ref = weakref.ref(target_coords)
 
     # Computation
-
     def _compute(
         self,
         sources_dict: dict[str, np.ndarray],
