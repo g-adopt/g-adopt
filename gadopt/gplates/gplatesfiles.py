@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 
 _default_muller2022_plate_files = {
@@ -57,7 +58,12 @@ reconstructions = {
 def check_and_get_absolute_paths(base_path: Path, filenames: dict):
     # Normalize all values to lists
     def to_list(value):
-        return value if isinstance(value, list) else [value]
+        if isinstance(value, str):
+            return [value]
+        elif isinstance(value, Sequence):
+            return list(value)
+        else:
+            return [value]
 
     # Check if all files are present
     all_files_present = all(
@@ -69,15 +75,11 @@ def check_and_get_absolute_paths(base_path: Path, filenames: dict):
     if not all_files_present:
         raise FileNotFoundError("Some files are missing. Cannot proceed without downloading the required files.")
 
-    # Return absolute paths of the files
-    # Keep single values as single strings, not lists
-    result = {}
-    for key, files in filenames.items():
-        if isinstance(files, list):
-            result[key] = [str(base_path / filename) for filename in files]
-        else:
-            result[key] = str(base_path / files)
-    return result
+    # Return absolute paths of the files, normalized to lists
+    return {
+        key: [str(base_path / filename) for filename in to_list(files)]
+        for key, files in filenames.items()
+    }
 
 
 def ensure_reconstruction(reconstruction: str, base_path: str | Path):
