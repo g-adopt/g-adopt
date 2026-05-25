@@ -291,8 +291,8 @@ continental_data = (latlon, thickness_values)
 mesh_cfg = MeshConfig(r_outer=rmax)
 interp_cfg = InterpolationConfig(
     kernel="idw",
-    k_neighbors=20,
-    distance_threshold=0.02,
+    k_neighbors=20,           # source seeds averaged per target node; higher is smoother but costlier
+    distance_threshold=0.02,  # max angular reach on the unit sphere, in RADIANS (0.02 rad ~ 127 km); a target with no seed inside this reads as "outside"
 )
 
 lith_source_cfg = LithosphereSourceConfig(

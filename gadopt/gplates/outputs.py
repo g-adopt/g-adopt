@@ -1,18 +1,18 @@
 """Output strategies for plate-reconstruction scalar fields.
 
 An OutputStrategy turns interpolated source arrays at target mesh nodes into a
-scalar field. The two flavours are:
+scalar field. The current two flavours are:
 
-  * indicator fields  — ~1 inside the region of interest, ~0 outside, with a
+  - indicator fields  — ~1 inside the region of interest, ~0 outside, with a
     smooth tanh transition at the region base (TanhOutput).
 
-  * normalised geotherms — (T - T_surface) / (T_LAB - T_surface) in [0, 1],
+  - normalised geotherms — (T - T_surface) / (T_LAB - T_surface) in [0, 1],
     using an erf profile (oceanic, age-dependent) or a linear profile
     (continental). The "outside" value is 1 — i.e. mantle temperature.
 
 Outputs declare what they need from the source via the class-level ``requires``
 set; the connector validates this against the source's ``provides`` set at
-construction time so a polygon source paired with an erf geotherm fails loudly
+construction time so, e.g. a polygon source paired with an erf geotherm fails loudly
 rather than silently dropping the missing key.
 """
 
@@ -26,10 +26,7 @@ import numpy as np
 from scipy.special import erf
 
 
-# ---------------------------------------------------------------------------
 # Mesh geometry
-# ---------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class MeshConfig:
     """Non-dimensional mesh geometry shared by every output that converts
@@ -52,15 +49,11 @@ class MeshConfig:
 
 
 # Importable default used by the ScalarFieldConnector when the caller doesn't
-# pass a MeshConfig of their own. The leading underscore matches Sia's
-# convention for module-level config sentinels.
+# pass a MeshConfig of their own.
 _DEFAULT_MESH_PARAMETERS = MeshConfig()
 
 
-# ---------------------------------------------------------------------------
 # Geotherm functions (used by GeothermERFOutput / GeothermLinearOutput)
-# ---------------------------------------------------------------------------
-
 def ocean_erf_normalized(depth_m, z_lab_m, age_myr, kappa):
     """Normalised erf geotherm for oceanic lithosphere.
 
@@ -97,10 +90,7 @@ def continental_linear(depth_m, z_lab_m):
     return np.clip(result, 0.0, 1.0)
 
 
-# ---------------------------------------------------------------------------
 # OutputStrategy ABC
-# ---------------------------------------------------------------------------
-
 class OutputStrategy(ABC):
     """Map interpolated source arrays at target coords to a scalar field.
 

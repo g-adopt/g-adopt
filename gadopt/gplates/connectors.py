@@ -28,7 +28,6 @@ from __future__ import annotations
 import gc
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import numpy as np
 from mpi4py import MPI
@@ -37,9 +36,6 @@ from scipy.spatial import cKDTree
 from ..utility import log, DEBUG
 from .outputs import MeshConfig, OutputStrategy, _DEFAULT_MESH_PARAMETERS
 from .sources import Source
-
-if TYPE_CHECKING:
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +115,7 @@ class ScalarFieldConnector:
     pygplates C++ reference cycles without paying a collection on every call.
     Set it to ``None`` to disable the connector-level collect entirely (relying
     on gtrack's internal collect plus Python's automatic generational GC) when
-    you have profiled GC as hot and confirmed memory stays bounded; set it to
+    GC is documented as hot and confirmed memory stays bounded; set it to
     ``1`` for a lithosphere spin-up or very-long adjoint run where the
     connector is driven for thousands of ages and the tightest bound on C++
     cycle accumulation is wanted (the per-call cost is negligible there against
@@ -135,6 +131,7 @@ class ScalarFieldConnector:
         interpolation: InterpolationConfig | None = None,
         gc_collect_frequency: int | None = 10,
     ):
+        # Validate the pairing of source and output
         if not output.requires <= source.provides:
             missing = output.requires - source.provides
             raise ValueError(
@@ -142,6 +139,7 @@ class ScalarFieldConnector:
                 f"{type(source).__name__} does not provide "
                 f"(provides={sorted(source.provides)})."
             )
+        # Validate the GC collect frequency
         if gc_collect_frequency is not None and gc_collect_frequency < 1:
             raise ValueError(
                 f"gc_collect_frequency must be >= 1 or None, "
@@ -181,7 +179,6 @@ class ScalarFieldConnector:
         return self.source.comm
 
     # Main entry point
-
     def get_indicator(
         self,
         target_coords: np.ndarray,
@@ -199,6 +196,7 @@ class ScalarFieldConnector:
         if use_cache:
             return self._cached_result
 
+        # If the cache is not suitable, prepare the source and compute the result
         sources_dict = self.source.prepare(age)
         result = self._compute(sources_dict, target_coords)
         self._update_cache(age, target_coords, result)
@@ -211,12 +209,15 @@ class ScalarFieldConnector:
         return result
 
     # Cache
-
     def _check_cache(self, age: float, target_coords: np.ndarray) -> bool:
+        # Case when everything is fresh
         if self.reconstruction_age is None:
             return False
+        # Case where we have gone over the delta_t
         if abs(age - self.reconstruction_age) >= self.delta_t:
             return False
+        # Case where we do not even have a cached result (Not sure how this happens)
+        # But just for safety!
         if self._cached_result is None or self._cached_coords_ref is None:
             return False
         # A dead referent dereferences to None and is never ``is`` the live
@@ -228,15 +229,16 @@ class ScalarFieldConnector:
             level=DEBUG)
         return True
 
+    # Update the cache
     def _update_cache(
         self, age: float, target_coords: np.ndarray, result: np.ndarray
     ) -> None:
+        # Here we are just weak referencing the target_coords array
         self.reconstruction_age = age
         self._cached_result = result
         self._cached_coords_ref = weakref.ref(target_coords)
 
     # Computation
-
     def _compute(
         self,
         sources_dict: dict[str, np.ndarray],
