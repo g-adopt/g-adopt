@@ -11,8 +11,10 @@ from .gplates import (
     PlateModelFiles,
 )
 from .outputs import (
+    FadedRadialStepOutput,
     GeothermERFOutput,
     GeothermLinearOutput,
+    LateralFractionOutput,
     MeshConfig,
     OutputStrategy,
     TanhOutput,
@@ -51,6 +53,8 @@ __all__ = [
     "TanhOutput",
     "GeothermERFOutput",
     "GeothermLinearOutput",
+    "LateralFractionOutput",
+    "FadedRadialStepOutput",
     "ocean_erf_normalized",
     "continental_linear",
     "radial_tanh_step",
