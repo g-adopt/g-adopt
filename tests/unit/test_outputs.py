@@ -13,6 +13,7 @@ from gadopt.gplates import (
     MeshConfig,
     TanhOutput,
     ocean_erf_normalized,
+    radial_tanh_step,
 )
 
 
@@ -253,3 +254,70 @@ class TestGeothermERFOutput:
             kappa=1e-6,
         )
         np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# radial_tanh_step — shared radial primitive
+# ---------------------------------------------------------------------------
+
+class TestRadialTanhStep:
+    """The 0.5*(1+tanh((r-base_r)/width)) kernel shared by every tanh output.
+
+    The core design point is that base_r may be a scalar (fixed base depth) or
+    a per-node array (variable base depth) and both broadcast correctly.
+    """
+
+    def test_boundary_direction_and_saturation(self):
+        # =0.5 exactly at r==base_r; >0.5 above toward 1; <0.5 below toward 0.
+        base_r = 2.0
+        width = 0.01
+        # At the boundary the argument is zero -> exactly one half.
+        assert radial_tanh_step(base_r, base_r, width) == 0.5
+        # Five sigma above and below saturates to the golden tanh values.
+        np.testing.assert_allclose(
+            radial_tanh_step(base_r + 0.05, base_r, width),
+            0.9999546021312975, rtol=1e-12,
+        )
+        np.testing.assert_allclose(
+            radial_tanh_step(base_r - 0.05, base_r, width),
+            1.0 - 0.9999546021312975, rtol=1e-9,
+        )
+        # Monotone increasing across the step.
+        rs = np.linspace(base_r - 0.05, base_r + 0.05, 50)
+        f = radial_tanh_step(rs, base_r, width)
+        assert np.all(np.diff(f) > 0)
+        assert f[0] < 0.5 < f[-1]
+
+    def test_odd_symmetry_about_base(self):
+        # f(base+d) + f(base-d) == 1 for any offset (tanh is odd).
+        base_r = 2.0
+        width = 0.02
+        d = np.array([0.005, 0.01, 0.03, 0.1])
+        np.testing.assert_allclose(
+            radial_tanh_step(base_r + d, base_r, width)
+            + radial_tanh_step(base_r - d, base_r, width),
+            1.0, rtol=1e-12,
+        )
+
+    def test_scalar_and_array_base_broadcast(self):
+        # Scalar base_r and a per-node array base_r both broadcast against an
+        # array r_target. A constant array base must reproduce the scalar case.
+        r = np.array([2.0, 2.05, 2.1])
+        width = 0.02
+        scalar = radial_tanh_step(r, 2.05, width)
+        array = radial_tanh_step(r, np.full_like(r, 2.05), width)
+        np.testing.assert_allclose(scalar, array, rtol=1e-12)
+        # A genuinely per-node base shifts each crossing independently: each
+        # node sitting exactly on its own base reads 0.5.
+        per_node_base = r.copy()
+        np.testing.assert_allclose(
+            radial_tanh_step(r, per_node_base, width), 0.5, rtol=1e-12
+        )
+
+    def test_narrower_width_is_steeper(self):
+        # Narrower transition width => larger gradient magnitude at the step.
+        base_r = 2.0
+        rs = np.linspace(base_r - 0.05, base_r + 0.05, 200)
+        narrow = radial_tanh_step(rs, base_r, 0.005)
+        wide = radial_tanh_step(rs, base_r, 0.05)
+        assert np.abs(np.gradient(narrow)).max() > np.abs(np.gradient(wide)).max()

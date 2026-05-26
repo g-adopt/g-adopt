@@ -80,6 +80,18 @@ def ocean_erf_normalized(depth_m, z_lab_m, age_myr, kappa):
     return np.clip(result, 0.0, 1.0)
 
 
+# Shared radial primitive (used by every tanh-step indicator output)
+def radial_tanh_step(r_target, base_r, width_nondim):
+    """Smooth radial 1->0 step ``0.5 * (1 + tanh((r - base_r) / width))``.
+
+    The single radial kernel shared by every indicator output. All radii are in
+    non-dimensional mesh units. ``base_r`` may be a scalar (a fixed base depth)
+    or a per-node array (a variable base depth read from the thickness channel,
+    as in TanhOutput).
+    """
+    return 0.5 * (1.0 + np.tanh((r_target - base_r) / width_nondim))
+
+
 # OutputStrategy ABC
 class OutputStrategy(ABC):
     """Map interpolated source arrays at target coords to a scalar field.
@@ -148,10 +160,11 @@ class TanhOutput(OutputStrategy):
     def compute(self, interpolated, r_target, too_far, mesh):
         thickness_km = interpolated["thickness"].copy()
         thickness_km[too_far] = self.default_thickness_km
-        thickness_nondim = thickness_km / mesh.depth_scale
-        transition_nondim = self.transition_width_km / mesh.depth_scale
-        base_r = mesh.r_outer - thickness_nondim
-        return 0.5 * (1.0 + np.tanh((r_target - base_r) / transition_nondim))
+        # Variable base depth: the radial step inflection follows h(x).
+        base_r = mesh.r_outer - thickness_km / mesh.depth_scale
+        return radial_tanh_step(
+            r_target, base_r, self.transition_width_km / mesh.depth_scale
+        )
 
 
 class GeothermERFOutput(OutputStrategy):

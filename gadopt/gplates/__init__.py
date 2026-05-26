@@ -14,6 +14,7 @@ from .outputs import (
     OutputStrategy,
     TanhOutput,
     ocean_erf_normalized,
+    radial_tanh_step,
 )
 from .sources import (
     LithosphereSource,
@@ -42,6 +43,7 @@ __all__ = [
     "TanhOutput",
     "GeothermERFOutput",
     "ocean_erf_normalized",
+    "radial_tanh_step",
     # Factories
     "lithosphere_indicator",
     "lithosphere_geotherm",
