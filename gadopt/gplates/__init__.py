@@ -18,6 +18,7 @@ from .outputs import (
     TanhOutput,
     continental_linear,
     ocean_erf_normalized,
+    radial_tanh_step,
 )
 from .sources import (
     LithosphereSource,
@@ -52,6 +53,7 @@ __all__ = [
     "GeothermLinearOutput",
     "ocean_erf_normalized",
     "continental_linear",
+    "radial_tanh_step",
     # Factories
     "lithosphere_indicator",
     "lithosphere_geotherm",
