@@ -9,12 +9,15 @@ import numpy as np
 import pytest
 
 from gadopt.gplates import (
+    FadedRadialStepOutput,
     GeothermERFOutput,
     GeothermLinearOutput,
+    LateralFractionOutput,
     MeshConfig,
     TanhOutput,
     continental_linear,
     ocean_erf_normalized,
+    radial_tanh_step,
 )
 
 
@@ -308,3 +311,213 @@ class TestGeothermLinearOutput:
         interp = {"thickness": np.array([thickness_km])}
         result = out.compute(interp, r_target, np.array([False]), mesh)
         np.testing.assert_allclose(result, 0.5, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# radial_tanh_step — shared radial primitive
+# ---------------------------------------------------------------------------
+
+class TestRadialTanhStep:
+    """The 0.5*(1+tanh((r-base_r)/width)) kernel shared by every tanh output.
+
+    The core design point is that base_r may be a scalar (fixed base depth) or
+    a per-node array (variable base depth) and both broadcast correctly.
+    """
+
+    def test_boundary_direction_and_saturation(self):
+        # =0.5 exactly at r==base_r; >0.5 above toward 1; <0.5 below toward 0.
+        base_r = 2.0
+        width = 0.01
+        # At the boundary the argument is zero -> exactly one half.
+        assert radial_tanh_step(base_r, base_r, width) == 0.5
+        # Five sigma above and below saturates to the golden tanh values.
+        np.testing.assert_allclose(
+            radial_tanh_step(base_r + 0.05, base_r, width),
+            0.9999546021312975, rtol=1e-12,
+        )
+        np.testing.assert_allclose(
+            radial_tanh_step(base_r - 0.05, base_r, width),
+            1.0 - 0.9999546021312975, rtol=1e-9,
+        )
+        # Monotone increasing across the step.
+        rs = np.linspace(base_r - 0.05, base_r + 0.05, 50)
+        f = radial_tanh_step(rs, base_r, width)
+        assert np.all(np.diff(f) > 0)
+        assert f[0] < 0.5 < f[-1]
+
+    def test_odd_symmetry_about_base(self):
+        # f(base+d) + f(base-d) == 1 for any offset (tanh is odd).
+        base_r = 2.0
+        width = 0.02
+        d = np.array([0.005, 0.01, 0.03, 0.1])
+        np.testing.assert_allclose(
+            radial_tanh_step(base_r + d, base_r, width)
+            + radial_tanh_step(base_r - d, base_r, width),
+            1.0, rtol=1e-12,
+        )
+
+    def test_scalar_and_array_base_broadcast(self):
+        # Scalar base_r and a per-node array base_r both broadcast against an
+        # array r_target. A constant array base must reproduce the scalar case.
+        r = np.array([2.0, 2.05, 2.1])
+        width = 0.02
+        scalar = radial_tanh_step(r, 2.05, width)
+        array = radial_tanh_step(r, np.full_like(r, 2.05), width)
+        np.testing.assert_allclose(scalar, array, rtol=1e-12)
+        # A genuinely per-node base shifts each crossing independently: each
+        # node sitting exactly on its own base reads 0.5.
+        per_node_base = r.copy()
+        np.testing.assert_allclose(
+            radial_tanh_step(r, per_node_base, width), 0.5, rtol=1e-12
+        )
+
+    def test_narrower_width_is_steeper(self):
+        # Narrower transition width => larger gradient magnitude at the step.
+        base_r = 2.0
+        rs = np.linspace(base_r - 0.05, base_r + 0.05, 200)
+        narrow = radial_tanh_step(rs, base_r, 0.005)
+        wide = radial_tanh_step(rs, base_r, 0.05)
+        assert np.abs(np.gradient(narrow)).max() > np.abs(np.gradient(wide)).max()
+
+
+# ---------------------------------------------------------------------------
+# LateralFractionOutput — pure lateral membership, no radial dependence
+# ---------------------------------------------------------------------------
+
+class TestLateralFractionOutput:
+    """Returns the interpolated membership clipped to [0, 1] with too_far->0.
+
+    Its defining property is the absence of any radial dependence: the result
+    is identical for any r_target.
+    """
+
+    def test_requires_only_thickness(self):
+        assert LateralFractionOutput().requires == frozenset({"thickness"})
+
+    def test_no_radial_dependence(self):
+        # Same interpolated membership, wildly different r_target -> identical.
+        mesh = MeshConfig()
+        out = LateralFractionOutput()
+        interp = {"thickness": np.array([0.2, 0.8, 1.0])}
+        too_far = np.zeros(3, dtype=bool)
+        shallow = out.compute(interp, np.full(3, mesh.r_outer), too_far, mesh)
+        deep = out.compute(interp, np.full(3, mesh.r_outer - 0.5), too_far, mesh)
+        np.testing.assert_array_equal(shallow, deep)
+
+    def test_clipping_passthrough_and_too_far(self):
+        # Below 0 clips to 0, above 1 clips to 1, mid-values pass through
+        # unchanged, and too_far nodes are forced to 0 regardless of value.
+        mesh = MeshConfig()
+        out = LateralFractionOutput()
+        interp = {"thickness": np.array([-0.3, 0.0, 0.37, 1.0, 5.0, 0.9])}
+        too_far = np.array([False, False, False, False, False, True])
+        result = out.compute(interp, np.full(6, mesh.r_outer), too_far, mesh)
+        np.testing.assert_allclose(
+            result, [0.0, 0.0, 0.37, 1.0, 1.0, 0.0], rtol=1e-12
+        )
+
+    def test_does_not_mutate_input(self):
+        mesh = MeshConfig()
+        out = LateralFractionOutput()
+        thickness = np.array([-0.3, 0.37, 5.0])
+        interp = {"thickness": thickness.copy()}
+        out.compute(interp, np.full(3, mesh.r_outer), np.array([False, False, True]), mesh)
+        np.testing.assert_array_equal(interp["thickness"], thickness)
+
+
+# ---------------------------------------------------------------------------
+# FadedRadialStepOutput — separable lateral-fade × fixed-depth radial step
+# ---------------------------------------------------------------------------
+
+class TestFadedRadialStepOutput:
+    """I(r, x) = f_lat(x) * S(r) with f_lat = clip(thickness/crust, 0, 1) and
+    a radial step whose base depth is FIXED (independent of thickness).
+    """
+
+    def test_validation_rejects_nonpositive_args(self):
+        with pytest.raises(ValueError, match="crust_thickness_km must be positive"):
+            FadedRadialStepOutput(crust_thickness_km=0.0)
+        with pytest.raises(ValueError, match="radial_width_km must be positive"):
+            FadedRadialStepOutput(radial_width_km=-1.0)
+
+    def test_requires_only_thickness(self):
+        assert FadedRadialStepOutput().requires == frozenset({"thickness"})
+
+    def test_separable_product(self):
+        # The whole field equals f_lat(x) * S(r) computed independently.
+        mesh = MeshConfig()
+        crust, w_r = 50.0, 10.0
+        out = FadedRadialStepOutput(crust_thickness_km=crust, radial_width_km=w_r)
+        thickness = np.array([10.0, 25.0, 50.0, 80.0])
+        r_target = mesh.r_outer - np.array([20.0, 40.0, 60.0, 100.0]) / mesh.depth_scale
+        too_far = np.zeros(4, dtype=bool)
+        result = out.compute({"thickness": thickness.copy()}, r_target, too_far, mesh)
+
+        f_lat = np.clip(thickness / crust, 0.0, 1.0)
+        base_r = mesh.r_outer - crust / mesh.depth_scale
+        S = radial_tanh_step(r_target, base_r, w_r / mesh.depth_scale)
+        np.testing.assert_allclose(result, f_lat * S, rtol=1e-12)
+
+    def test_fixed_base_depth_independent_of_thickness(self):
+        # Unlike TanhOutput, the radial 0.5-crossing of S does NOT move with
+        # thickness: at the fixed base_r, S=0.5 for every thickness, so the
+        # column value there is simply f_lat * 0.5.
+        mesh = MeshConfig()
+        crust = 50.0
+        out = FadedRadialStepOutput(crust_thickness_km=crust, radial_width_km=10.0)
+        base_r = mesh.r_outer - crust / mesh.depth_scale
+        # Saturated f_lat (thickness >= crust) at base_r -> exactly 0.5.
+        for thickness in (50.0, 100.0, 300.0):
+            r_target = np.array([base_r])
+            result = out.compute(
+                {"thickness": np.array([thickness])}, r_target, np.array([False]), mesh
+            )
+            np.testing.assert_allclose(result, 0.5, rtol=1e-12)
+
+    def test_ocean_column_zeroed_vs_tanh_floor(self):
+        # too_far (or zero thickness) zeroes the entire column, surface
+        # included -- the artefact this output fixes. Contrast: TanhOutput on
+        # the same surface point floors at 0.5.
+        mesh = MeshConfig()
+        out = FadedRadialStepOutput(crust_thickness_km=50.0, radial_width_km=10.0)
+        r_surface = np.array([mesh.r_outer])
+        # Zero thickness -> f_lat = 0 -> whole column 0 even at the surface.
+        zero = out.compute({"thickness": np.array([0.0])}, r_surface, np.array([False]), mesh)
+        np.testing.assert_allclose(zero, 0.0, atol=1e-15)
+        # too_far sets thickness to 0 with the same effect.
+        too_far = out.compute(
+            {"thickness": np.array([999.0])}, r_surface, np.array([True]), mesh
+        )
+        np.testing.assert_allclose(too_far, 0.0, atol=1e-15)
+        # TanhOutput at the same ocean surface point still reads ~0.5.
+        tanh_surface = TanhOutput(transition_width_km=10.0, default_thickness_km=0.0).compute(
+            {"thickness": np.array([0.0])}, r_surface, np.array([False]), mesh
+        )
+        np.testing.assert_allclose(tanh_surface, 0.5, rtol=1e-10)
+
+    def test_amplitude_scaling_and_saturation(self):
+        # f_lat scales the amplitude of the radial profile linearly: a half
+        # membership halves the surface value of a saturated column; thickness
+        # above crust saturates f_lat at 1.
+        mesh = MeshConfig()
+        crust = 50.0
+        out = FadedRadialStepOutput(crust_thickness_km=crust, radial_width_km=10.0)
+        r_surface = np.array([mesh.r_outer])
+        S_surf = 0.9999546021312975  # golden S(r_outer) for fixed base/width
+        # thickness = crust -> f_lat = 1 -> full surface amplitude.
+        full = out.compute({"thickness": np.array([crust])}, r_surface, np.array([False]), mesh)
+        np.testing.assert_allclose(full, S_surf, rtol=1e-9)
+        # thickness = crust/2 -> f_lat = 0.5 -> half amplitude.
+        half = out.compute({"thickness": np.array([crust / 2])}, r_surface, np.array([False]), mesh)
+        np.testing.assert_allclose(half, 0.5 * S_surf, rtol=1e-9)
+        # thickness = 4*crust -> f_lat saturates at 1, same as full.
+        sat = out.compute({"thickness": np.array([4 * crust])}, r_surface, np.array([False]), mesh)
+        np.testing.assert_allclose(sat, full, rtol=1e-12)
+
+    def test_does_not_mutate_input(self):
+        mesh = MeshConfig()
+        out = FadedRadialStepOutput()
+        thickness = np.array([999.0, 10.0])
+        interp = {"thickness": thickness.copy()}
+        out.compute(interp, np.full(2, mesh.r_outer), np.array([True, False]), mesh)
+        np.testing.assert_array_equal(interp["thickness"], thickness)
