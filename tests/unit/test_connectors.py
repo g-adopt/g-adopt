@@ -551,9 +551,11 @@ def _load_reference():
 
 
 def _check_reduced(observed, expected, label):
+    # atol floors the round-off on quantities that are analytically zero
+    # (e.g. a geotherm's surface integral) so they aren't held to rtol.
     for key, expected_value in expected.items():
         np.testing.assert_allclose(
-            observed[key], expected_value, rtol=1e-3,
+            observed[key], expected_value, rtol=1e-3, atol=1e-9,
             err_msg=f"{label}: {key}",
         )
 
