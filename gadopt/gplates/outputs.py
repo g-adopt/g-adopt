@@ -95,9 +95,10 @@ def radial_tanh_step(r_target, base_r, width_nondim):
     """Smooth radial 1->0 step ``0.5 * (1 + tanh((r - base_r) / width))``.
 
     The single radial kernel shared by every indicator output. All radii are in
-    non-dimensional mesh units. ``base_r`` may be a scalar (a fixed base depth)
-    or a per-node array (a variable base depth read from the thickness channel,
-    as in TanhOutput).
+    non-dimensional mesh units. ``base_r`` may be a scalar (a fixed base depth,
+    as in FadedRadialStepOutput) or a per-node array (a variable base depth read
+    from the thickness channel, as in TanhOutput) -- the only thing that
+    distinguishes those two outputs at the radial level.
     """
     return 0.5 * (1.0 + np.tanh((r_target - base_r) / width_nondim))
 
@@ -170,7 +171,9 @@ class TanhOutput(OutputStrategy):
     def compute(self, interpolated, r_target, too_far, mesh):
         thickness_km = interpolated["thickness"].copy()
         thickness_km[too_far] = self.default_thickness_km
-        # Variable base depth: the radial step inflection follows h(x).
+        # Variable base depth: the radial step inflection follows h(x), which is
+        # what makes this output non-separable (it cannot be written as a lateral
+        # fraction times a fixed-depth step -- see FadedRadialStepOutput).
         base_r = mesh.r_outer - thickness_km / mesh.depth_scale
         return radial_tanh_step(
             r_target, base_r, self.transition_width_km / mesh.depth_scale
@@ -251,3 +254,83 @@ class GeothermLinearOutput(OutputStrategy):
         T_norm = np.clip(T_norm, 0.0, 1.0)
         T_norm[too_far] = 1.0
         return T_norm
+
+
+class LateralFractionOutput(OutputStrategy):
+    """Pure lateral membership fraction -- no radial dependence.
+
+    Returns the kNN-interpolated property clamped to [0, 1]. Paired with a
+    PolygonSource carrying a uniform value of 1.0 inside the polygon (0 outside),
+    the interpolated value *is* the smoothed inside-fraction: 1 well inside the
+    region, 0 well outside, with a smooth halo whose width is set by
+    InterpolationConfig.gaussian_sigma. Used as the standalone membership channel
+    f_lat(x) that the decoupled craton field multiplies against.
+
+    NB ``requires`` names the ``"thickness"`` key only because that is the key a
+    PolygonSource publishes; here it carries a membership value (1.0 inside), not
+    a thickness. The name is kept to satisfy the connector's
+    ``requires <= source.provides`` check.
+    """
+
+    requires = frozenset({"thickness"})
+
+    def compute(self, interpolated, r_target, too_far, mesh):
+        frac = np.clip(interpolated["thickness"].copy(), 0.0, 1.0)
+        frac[too_far] = 0.0
+        return frac
+
+
+class FadedRadialStepOutput(OutputStrategy):
+    """Decoupled lateral fade * radial lithosphere step.
+
+    I(r, x) = f_lat(x) * S(r), where
+
+      f_lat(x) = clip(thickness / crust_thickness_km, 0, 1)
+
+    is the smoothed inside-fraction from the kNN interpolation -- a purely
+    lateral, smooth 1 (continent) -> 0 (ocean) band whose width is set by
+    InterpolationConfig.gaussian_sigma -- and
+
+      S(r) = radial_tanh_step(r, r_outer - crust/depth, w_r)
+
+    is the radial lithosphere step at a FIXED base depth, with sharpness w_r.
+
+    This keeps the radial 1->0 transition at the lithosphere base intact while
+    fixing the two artefacts of TanhOutput-on-uniform-thickness: the ocean no
+    longer floors at 0.5 (f_lat = 0 zeroes the whole column, surface included),
+    and the lateral transition is the full smooth fraction rather than a
+    tanh-saturated fringe. The lateral fade scales the *amplitude* of the
+    continental signal rather than moving the base depth around.
+
+    Because the base depth here is fixed, this output is separable into a lateral
+    factor times a single radial profile. TanhOutput is the non-separable
+    generalisation: it reuses the same radial_tanh_step primitive but with a
+    per-node base depth read from the thickness channel, so its transition depth
+    moves with x and it carries no lateral factor. The two cannot be reduced to
+    one another (a separable product cannot slide the transition depth around);
+    they only share the radial_tanh_step kernel.
+    """
+
+    requires = frozenset({"thickness"})
+
+    def __init__(self, crust_thickness_km: float = 50.0, radial_width_km: float = 10.0):
+        if crust_thickness_km <= 0:
+            raise ValueError(
+                f"crust_thickness_km must be positive, got {crust_thickness_km}"
+            )
+        if radial_width_km <= 0:
+            raise ValueError(
+                f"radial_width_km must be positive, got {radial_width_km}"
+            )
+        self.crust_thickness_km = crust_thickness_km
+        self.radial_width_km = radial_width_km
+
+    def compute(self, interpolated, r_target, too_far, mesh):
+        thickness_km = interpolated["thickness"].copy()
+        thickness_km[too_far] = 0.0
+        f_lat = np.clip(thickness_km / self.crust_thickness_km, 0.0, 1.0)
+
+        base_r = mesh.r_outer - self.crust_thickness_km / mesh.depth_scale
+        return f_lat * radial_tanh_step(
+            r_target, base_r, self.radial_width_km / mesh.depth_scale
+        )
