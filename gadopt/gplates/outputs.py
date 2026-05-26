@@ -14,6 +14,19 @@ Outputs declare what they need from the source via the class-level ``requires``
 set; the connector validates this against the source's ``provides`` set at
 construction time so, e.g. a polygon source paired with an erf geotherm fails loudly
 rather than silently dropping the missing key.
+
+The four indicator outputs all share the ``radial_tanh_step`` primitive and
+differ only in whether the radial base depth is fixed or per-node, and whether
+a lateral amplitude fade is applied:
+
+  ====================== ==================== ===================
+  Output                 Base depth           Lateral fade
+  ====================== ==================== ===================
+  TanhOutput             variable (per-node)  none (0.5 floor)
+  FadedRadialStepOutput  fixed                yes (separable)
+  FadedTanhOutput        variable             yes (coupled to depth)
+  LateralFractionOutput  none (pure lateral)  the fraction itself
+  ====================== ==================== ===================
 """
 
 from __future__ import annotations
@@ -331,6 +344,64 @@ class FadedRadialStepOutput(OutputStrategy):
         f_lat = np.clip(thickness_km / self.crust_thickness_km, 0.0, 1.0)
 
         base_r = mesh.r_outer - self.crust_thickness_km / mesh.depth_scale
+        return f_lat * radial_tanh_step(
+            r_target, base_r, self.radial_width_km / mesh.depth_scale
+        )
+
+
+class FadedTanhOutput(OutputStrategy):
+    """Amplitude-faded, VARIABLE-depth radial step from a single thickness channel.
+
+    I(r, x) = f_lat(x) * S(r; h(x)), where both factors derive from the SAME
+    interpolated thickness channel h(x):
+
+        f_lat = clip(thickness / thickness_ref_km, 0, 1)
+        S     = radial_tanh_step(r, r_outer - thickness/depth_scale, w_r)
+
+    The faded twin of TanhOutput: same per-node variable base depth (so deep
+    cratonic roots and shallow margins are both captured — the radial 0.5
+    crossing moves with thickness), plus an intrinsic lateral amplitude fade.
+    Because f_lat -> 0 exactly where thickness -> 0, the 0.5 surface-skin floor
+    that TanhOutput leaves at r = r_outer (where base_r = r_outer gives
+    0.5*(1 + tanh(0)) = 0.5) is multiplied away. The fade removes the surface
+    floor; it does NOT confine the region laterally — that roll-off length is set
+    by InterpolationConfig.gaussian_sigma, and any further confinement (e.g. to
+    land) is the caller's responsibility, not this output's.
+
+    Designed for PolygonSource, where exterior seeds carry zero thickness and
+    no-seed (``too_far``) nodes read as "outside the region" — hence faded to 0;
+    the too-far thickness is hard-wired to 0 (there is no sensible nonzero
+    default for a faded field).
+
+    Relation to the other indicator outputs (all share ``radial_tanh_step``):
+      - TanhOutput: variable depth, NO fade — leaves the 0.5 surface floor.
+      - FadedRadialStepOutput: amplitude fade, but a FIXED base depth.
+      - FadedTanhOutput: amplitude fade AND variable depth, from one channel.
+    The price of the single channel is that amplitude and depth are coupled (a
+    shallow keel is both fainter and shallower); when that coupling is unwanted,
+    use FadedRadialStepOutput or a decoupled LateralFractionOutput assembly.
+    """
+
+    requires = frozenset({"thickness"})
+
+    def __init__(self, thickness_ref_km: float = 150.0, radial_width_km: float = 10.0):
+        if thickness_ref_km <= 0:
+            raise ValueError(
+                f"thickness_ref_km must be positive, got {thickness_ref_km}"
+            )
+        if radial_width_km <= 0:
+            raise ValueError(
+                f"radial_width_km must be positive, got {radial_width_km}"
+            )
+        self.thickness_ref_km = thickness_ref_km
+        self.radial_width_km = radial_width_km
+
+    def compute(self, interpolated, r_target, too_far, mesh):
+        thickness_km = interpolated["thickness"].copy()
+        thickness_km[too_far] = 0.0
+        f_lat = np.clip(thickness_km / self.thickness_ref_km, 0.0, 1.0)
+
+        base_r = mesh.r_outer - thickness_km / mesh.depth_scale
         return f_lat * radial_tanh_step(
             r_target, base_r, self.radial_width_km / mesh.depth_scale
         )
