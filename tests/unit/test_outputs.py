@@ -10,6 +10,7 @@ import pytest
 
 from gadopt.gplates import (
     FadedRadialStepOutput,
+    FadedTanhOutput,
     GeothermERFOutput,
     GeothermLinearOutput,
     LateralFractionOutput,
@@ -381,7 +382,7 @@ class TestRadialTanhStep:
 
 
 # ---------------------------------------------------------------------------
-# LateralFractionOutput -- pure lateral membership, no radial dependence
+# LateralFractionOutput — pure lateral membership, no radial dependence
 # ---------------------------------------------------------------------------
 
 class TestLateralFractionOutput:
@@ -426,7 +427,7 @@ class TestLateralFractionOutput:
 
 
 # ---------------------------------------------------------------------------
-# FadedRadialStepOutput -- separable lateral-fade * fixed-depth radial step
+# FadedRadialStepOutput — separable lateral-fade × fixed-depth radial step
 # ---------------------------------------------------------------------------
 
 class TestFadedRadialStepOutput:
@@ -521,3 +522,63 @@ class TestFadedRadialStepOutput:
         interp = {"thickness": thickness.copy()}
         out.compute(interp, np.full(2, mesh.r_outer), np.array([True, False]), mesh)
         np.testing.assert_array_equal(interp["thickness"], thickness)
+
+
+# ---------------------------------------------------------------------------
+# FadedTanhOutput — amplitude fade AND variable base depth from one channel
+# ---------------------------------------------------------------------------
+
+class TestFadedTanhOutput:
+    """I(r, x) = f_lat(x) * S(r; h(x)), with both the fade and the per-node
+    base depth derived from the SAME thickness channel.
+
+    The distinguishing property — not held by either sibling — is the
+    combination of a thickness-driven variable base depth (like TanhOutput,
+    unlike FadedRadialStepOutput's fixed base) with an amplitude fade that
+    multiplies away the 0.5 surface-skin floor TanhOutput leaves where
+    thickness -> 0 (unlike TanhOutput, which has no fade).
+    """
+
+    def test_variable_depth_with_faded_surface_floor(self):
+        # Three columns sampled at the surface r = r_outer, where TanhOutput
+        # floors at exactly 0.5 regardless of thickness. Here the amplitude
+        # fade ties the surface value to thickness/thickness_ref instead:
+        #   thin keel  -> faded toward 0 (the removed floor),
+        #   reference   -> half the (just-above-0.5) surface step,
+        #   thick craton-> saturated f_lat = 1.
+        # And the radial 0.5-crossing still moves with thickness (variable
+        # depth), which a fixed-base faded step could not reproduce.
+        mesh = MeshConfig()
+        thickness_ref, w_r = 150.0, 10.0
+        out = FadedTanhOutput(thickness_ref_km=thickness_ref, radial_width_km=w_r)
+
+        thickness = np.array([0.0, thickness_ref / 2.0, 300.0])
+        r_surface = np.full(3, mesh.r_outer)
+        too_far = np.zeros(3, dtype=bool)
+        surf = out.compute({"thickness": thickness.copy()}, r_surface, too_far, mesh)
+
+        # The faded surface floor: zero thickness gives exactly 0 (TanhOutput
+        # would give 0.5), and each surface value matches f_lat * S analytically.
+        f_lat = np.clip(thickness / thickness_ref, 0.0, 1.0)
+        base_r = mesh.r_outer - thickness / mesh.depth_scale
+        S_surf = radial_tanh_step(r_surface, base_r, w_r / mesh.depth_scale)
+        np.testing.assert_allclose(surf, f_lat * S_surf, rtol=1e-12)
+        np.testing.assert_allclose(surf[0], 0.0, atol=1e-15)
+
+        # Contrast at the same zero-thickness surface point: TanhOutput floors
+        # at 0.5, FadedTanhOutput fades it to 0.
+        tanh_surface = TanhOutput(
+            transition_width_km=w_r, default_thickness_km=0.0
+        ).compute({"thickness": np.array([0.0])}, np.array([mesh.r_outer]),
+                  np.array([False]), mesh)
+        np.testing.assert_allclose(tanh_surface, 0.5, rtol=1e-10)
+
+        # Variable base depth: each saturated-or-near column crosses 0.5 at its
+        # OWN thickness-defined base_r, so sampling there gives f_lat * 0.5 with
+        # the crossing radius differing per node (a fixed base could not).
+        r_at_base = mesh.r_outer - thickness / mesh.depth_scale
+        at_base = out.compute(
+            {"thickness": thickness.copy()}, r_at_base, too_far, mesh
+        )
+        np.testing.assert_allclose(at_base, f_lat * 0.5, rtol=1e-12)
+        assert r_at_base[1] != r_at_base[2]  # crossing moves with thickness

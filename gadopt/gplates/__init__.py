@@ -12,6 +12,7 @@ from .gplates import (
 )
 from .outputs import (
     FadedRadialStepOutput,
+    FadedTanhOutput,
     GeothermERFOutput,
     GeothermLinearOutput,
     LateralFractionOutput,
@@ -55,6 +56,7 @@ __all__ = [
     "GeothermLinearOutput",
     "LateralFractionOutput",
     "FadedRadialStepOutput",
+    "FadedTanhOutput",
     "ocean_erf_normalized",
     "continental_linear",
     "radial_tanh_step",
