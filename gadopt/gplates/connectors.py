@@ -87,9 +87,6 @@ class InterpolationConfig:
             )
 
 
-_DEFAULT_INTERPOLATION_PARAMETERS = InterpolationConfig()
-
-
 # ---------------------------------------------------------------------------
 # ScalarFieldConnector
 # ---------------------------------------------------------------------------
