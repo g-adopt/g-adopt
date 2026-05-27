@@ -49,7 +49,6 @@ class MeshConfig:
 
 # Importable default used by the ScalarFieldConnector when the caller doesn't
 # pass a MeshConfig of their own.
-_DEFAULT_MESH_PARAMETERS = MeshConfig()
 
 
 # OutputStrategy ABC
