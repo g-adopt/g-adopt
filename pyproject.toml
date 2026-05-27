@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 demos = ["assess", "gadopt-demo-utils @ git+https://github.com/g-adopt/gadopt-demo-utils.git", "gmsh", "imageio", "jupytext", "openpyxl", "pyvista"]
 optimisation = ["pyroltrilinos"]
+gplates = ["gtrack", "pygplates"]
 
 [tool.setuptools]
 packages = ["gadopt", "gadopt.gplates", "gadopt.demos"]
