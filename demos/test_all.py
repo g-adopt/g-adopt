@@ -19,8 +19,10 @@ cases = {
     f"{mc_path}/viscoplastic_case": {"extra_checks": ["nu_top"]},
     f"{mc_path}/2d_cylindrical": {"extra_checks": ["nu_top", "T_min", "T_max"]},
     f"{mc_path}/3d_spherical": {"extra_checks": [
-        "nu_top",
-        "t_dev_avg",
+        "Nu_top",
+        "T_dev_avg",
+        ("u_radial_min", {"rtol": 5e-4}),
+        ("u_radial_max", {"rtol": 5e-4}),
         ("u_hor_max", {"rtol": 5e-4}),
         ("div_u_hor_min_base", {"rtol": 5e-4}),
         ("div_u_hor_max_base", {"rtol": 5e-4}),
