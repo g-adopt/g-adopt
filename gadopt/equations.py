@@ -13,15 +13,10 @@ from typing import Any, Callable
 from warnings import warn
 
 import firedrake as fd
-import ufl
-from ufl.algorithms.analysis import extract_coefficients
 from ufl.indexed import Indexed
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .utility import CombinedSurfaceMeasure
-
-# Equation-level eq_attrs consumed by Equation itself, not by any term.
-_EQUATION_RESERVED_ATTRS = frozenset({"solution", "nonlinear_coefficients"})
 
 __all__ = ["Equation"]
 
@@ -42,13 +37,6 @@ class Equation:
           Equation term or a list thereof contributing to the residual.
         eq_attrs:
           Dictionary of fields and parameters used in the equation's weak form.
-          Two keys are reserved for the equation itself: ``solution`` (the
-          ``Function`` the residual will eventually be assembled against) and
-          ``nonlinear_coefficients`` (an iterable of attribute names whose
-          values are UFL expressions in ``solution``). Term implementations
-          call :meth:`resolve_coefficient` on such attributes to substitute
-          the current trial via :func:`ufl.replace`. When ``solution`` is
-          omitted, all coefficients are treated as solution-independent.
         approximation:
           G-ADOPT approximation for the system of equations considered.
         bcs:
@@ -89,8 +77,7 @@ class Equation:
             )
 
         optional_attrs = set.union(*(term.optional_attrs for term in residual_terms))
-        allowed = required_attrs | optional_attrs | _EQUATION_RESERVED_ATTRS
-        if unused_attrs := eq_attrs.keys() - allowed:
+        if unused_attrs := eq_attrs.keys() - required_attrs.union(optional_attrs):
             warn(
                 "Some unused equation attributes were provided.\nUnused attributes: "
                 f"{unused_attrs}"
@@ -98,32 +85,6 @@ class Equation:
 
         for key, value in eq_attrs.items():
             setattr(self, key, value)
-
-        # Validate solution-dependent coefficients: each name listed in
-        # `nonlinear_coefficients` must be a UFL expression that actually
-        # contains `solution`. This catches the common foot-gun where the
-        # coefficient is built against a different Function object (e.g. a
-        # copy of solution), in which case `resolve_coefficient` would
-        # silently freeze the coefficient instead of substituting.
-        for name in getattr(self, "nonlinear_coefficients", ()):
-            val = getattr(self, name, None)
-            if val is None:
-                raise ValueError(
-                    f"`nonlinear_coefficients` lists '{name}' but the "
-                    f"attribute is not set on the equation."
-                )
-            if not isinstance(val, ufl.core.expr.Expr):
-                raise ValueError(
-                    f"Attribute '{name}' is declared in `nonlinear_coefficients` "
-                    f"but is not a UFL expression."
-                )
-            if getattr(self, "solution", None) not in extract_coefficients(val):
-                raise ValueError(
-                    f"Attribute '{name}' is declared in `nonlinear_coefficients` "
-                    f"but does not contain the equation's `solution` Function. "
-                    f"Build the expression against the same Function passed as "
-                    f"`solution` in eq_attrs."
-                )
 
         if quad_degree is None:
             p = self.trial_space.ufl_element().degree()
@@ -154,24 +115,6 @@ class Equation:
         return self.scaling_factor * sum(
             term(self, trial) for term in self.residual_terms
         )
-
-    def resolve_coefficient(
-        self, name: str, trial: fd.Argument | Indexed | fd.Function
-    ) -> Any:
-        """Return ``getattr(self, name)`` with ``solution`` substituted by ``trial``.
-
-        Non-UFL values (plain numbers, ``Constant``s wrapping scalars, etc.) and
-        cases where the equation has no ``solution`` attribute are returned as
-        is. For solution-dependent UFL expressions this calls
-        :func:`ufl.replace`; the call is a no-op when ``solution`` does not
-        appear in the expression, so the same convention serves linear and
-        nonlinear coefficients uniformly.
-        """
-        val = getattr(self, name)
-        solution = getattr(self, "solution", None)
-        if solution is None or not isinstance(val, ufl.core.expr.Expr):
-            return val
-        return ufl.replace(val, {solution: trial})
 
 
 def cell_edge_integral_ratio(mesh: fd.MeshGeometry, p: int) -> int:

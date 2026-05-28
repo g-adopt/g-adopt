@@ -395,15 +395,12 @@ class RichardsSolver(SolverConfigurationMixin):
 
     def set_equation(self) -> None:
         """Sets up the Richards equation with all terms."""
-        # Diffusion and source reuse scalar_equation. K(h) is solution-dependent;
-        # we build it as a UFL expression in `self.solution` and declare it in
-        # `nonlinear_coefficients`, so scalar_equation.diffusion_term resolves
-        # K against each Irksome stage's trial via ufl.replace.
+        # K(h) is built against `self.solution`; Irksome's `TimeStepper`
+        # substitutes `solution` for the stage unknowns across the whole
+        # residual, so we don't need a per-coefficient replace mechanism.
         eq_attrs = {
             'soil_curve': self.soil_curve,
-            'solution': self.solution,
             'diffusivity': self.soil_curve.hydraulic_conductivity(self.solution),
-            'nonlinear_coefficients': ('diffusivity',),
             'source': self.source_term,
         }
 

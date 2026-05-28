@@ -65,11 +65,7 @@ def diffusion_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    # Resolve diffusivity against the current trial via ufl.replace; this is a
-    # no-op when `diffusivity` is solution-independent. Solution-dependent
-    # coefficients (e.g. Richards' K(h)) must be UFL expressions in
-    # `eq.solution` and listed in `eq.nonlinear_coefficients`.
-    kappa = eq.resolve_coefficient("diffusivity", trial)
+    kappa = eq.diffusivity
     dim = eq.mesh.geometric_dimension
     diff_tensor = kappa if len(kappa.ufl_shape) == 2 else kappa * Identity(dim)
 
@@ -158,10 +154,7 @@ def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 advection_term.required_attrs = {"u"}
 advection_term.optional_attrs = {"advective_velocity_scaling", "su_nubar"}
 diffusion_term.required_attrs = {"diffusivity"}
-diffusion_term.optional_attrs = {
-    "reference_for_diffusion",
-    "interior_penalty",
-}
+diffusion_term.optional_attrs = {"reference_for_diffusion", "interior_penalty"}
 mass_term.required_attrs = set()
 mass_term.optional_attrs = {"dt", "mass_scaling", "trial_old", "use_irksome"}
 source_term.required_attrs = {"source"}
