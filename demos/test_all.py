@@ -54,6 +54,9 @@ cases = {
         "primary_checks": ["min_h", "max_h"],
         "extra_checks": ["mass_balance"],
     },
+    f"{gw_path}/3d_cockett": {
+        "primary_checks": ["min_h", "max_h"],
+    },
 }
 
 
