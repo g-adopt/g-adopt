@@ -31,7 +31,8 @@ from warnings import warn
 from firedrake import *
 
 from . import richards_equation as richards_eq
-from .equations import Equation
+from . import scalar_equation as scalar_eq
+from .equations import Equation, cell_edge_integral_ratio
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .soil_curves import SoilCurve
 from .time_stepper import IrksomeIntegrator
@@ -376,8 +377,10 @@ class RichardsSolver(SolverConfigurationMixin):
                         strong_bc = DirichletBC(self.solution_space, value, bc_id)
                         self.strong_bcs.append(strong_bc)
                     else:
-                        # Weak Dirichlet for DG (handled in equation)
-                        weak_bc['h'] = value
+                        # Weak Dirichlet for DG. scalar_equation.diffusion_term
+                        # expects the Dirichlet value under key 'q'; the public
+                        # Richards BC vocabulary stays 'h' (pressure head).
+                        weak_bc['q'] = value
                 elif bc_type == 'flux':
                     # Flux BC (always weak)
                     weak_bc['flux'] = value
@@ -392,21 +395,51 @@ class RichardsSolver(SolverConfigurationMixin):
 
     def set_equation(self) -> None:
         """Sets up the Richards equation with all terms."""
+        # K(h) is built against `self.solution`; Irksome's `TimeStepper`
+        # substitutes `solution` for the stage unknowns across the whole
+        # residual, so we don't need a per-coefficient replace mechanism.
         eq_attrs = {
             'soil_curve': self.soil_curve,
-            'source_term': self.source_term,
+            'diffusivity': self.soil_curve.hydraulic_conductivity(self.solution),
+            'source': self.source_term,
         }
 
-        if self.interior_penalty is not None:
-            eq_attrs['interior_penalty'] = self.interior_penalty
+        # scalar_equation.diffusion_term uses interior_penalty_factor(eq, shift=-1),
+        # i.e. the Shahbazi / Epshteyn-Rivière sharp bound with C(p-1). Richards
+        # is assembled against the looser Hillewaert form (C(p)) to match the
+        # momentum equation and the pre-refactor bespoke Richards term; the
+        # extra margin over the Shahbazi floor is useful in practice because
+        # K(h) can vary by orders of magnitude across the wetting front, even
+        # though Hillewaert's coercivity proof itself assumes bounded
+        # diffusivity. Absorb the C(p)/C(p-1) ratio into the safety factor so
+        # the assembled penalty matches the Hillewaert convention; the
+        # user-facing `interior_penalty` stays a bare safety factor.
+        #
+        # Flipping scalar_equation to shift=0 would let us delete this block,
+        # but would force regenerating stored reference data on every DG scalar
+        # diffusion test (viscoplastic_case_DG, multi_material,
+        # 2d_cylindrical_TALA_DG, adjoint_2d_cylindrical, and the adjoint
+        # mantle-convection demos).
+        alpha = self.interior_penalty if self.interior_penalty is not None else 2.0
+        degree = self.solution_space.ufl_element().degree()
+        if not isinstance(degree, int):
+            degree = max(degree)
+        if degree >= 1:
+            ratio = (cell_edge_integral_ratio(self.mesh, degree)
+                     / cell_edge_integral_ratio(self.mesh, degree - 1))
+            eq_attrs['interior_penalty'] = alpha * ratio
+        else:
+            # degree == 0: interior_penalty_factor short-circuits to sigma=1.0
+            # and ignores alpha entirely; pass alpha through unchanged.
+            eq_attrs['interior_penalty'] = alpha
 
         self.equation = Equation(
             self.test,
             self.solution_space,
             residual_terms=[
                 richards_eq.richards_mass_term,
-                richards_eq.richards_diffusion_term,
-                richards_eq.richards_source_term,
+                scalar_eq.diffusion_term,
+                scalar_eq.source_term,
                 richards_eq.richards_gravity_term,
             ],
             eq_attrs=eq_attrs,
@@ -539,6 +572,12 @@ class RichardsSolver(SolverConfigurationMixin):
             self.timestepper_kwargs.setdefault('transpose_nullspace', self.transpose_nullspace)
         if self.near_nullspace is not None:
             self.timestepper_kwargs.setdefault('near_nullspace', self.near_nullspace)
+
+        # Reuse stage solver parameters for the conservative update solve.
+        if self.timestepper_kwargs.get('stage_type') == 'value':
+            self.timestepper_kwargs.setdefault(
+                'update_solver_parameters', self.solver_parameters,
+            )
 
         self.ts = self.timestepper(
             self.equation,
