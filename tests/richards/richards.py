@@ -36,19 +36,19 @@ cases = {
 
 
 def get_case(cases, name):
-    """Look up a case by its flat name, e.g. 'tracy_2d_specified_head_dg1'.
+    """Look up (module_name, config) by flat name, e.g. 'tracy_2d_specified_head_dg1'.
 
-    The cases dict is nested as cases[tracy_2d][specified_head][dg1].
+    The cases dict is nested as cases[tracy_2d][specified_head][dg1]. Rather than
+    parsing the flat name (which is fragile because '_' is both the separator and
+    appears inside the module/BC/degree keys), match it against the names the
+    nesting actually produces.
     """
-    # Split into module prefix and the rest
-    parts = name.split("_")
-    # First two parts form the module key (e.g. tracy_2d)
-    module_key = "_".join(parts[:2])
-    # Middle parts are the BC type (e.g. specified_head or no_flux)
-    # Last part is the degree key (e.g. dg0, dg1, dg2)
-    degree_key = parts[-1]
-    bc_key = "_".join(parts[2:-1])
-    return cases[module_key][bc_key][degree_key]
+    for module_name, bc_dict in cases.items():
+        for bc_type, degree_dict in bc_dict.items():
+            for degree_key, config in degree_dict.items():
+                if f"{module_name}_{bc_type}_{degree_key}" == name:
+                    return module_name, config
+    raise KeyError(f"unknown case {name}")
 
 
 if __name__ == "__main__":
@@ -65,8 +65,8 @@ if __name__ == "__main__":
 
     from mpi4py import MPI
 
-    # Map case name to module: tracy_2d_specified_head_dg1 -> tracy_2d
-    module_name = "_".join(args.case.split("_")[:2])
+    # Resolve the module the case lives in (e.g. tracy_2d) without parsing.
+    module_name, _ = get_case(cases, args.case)
     try:
         model = importlib.import_module(module_name).model
     except ModuleNotFoundError:

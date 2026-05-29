@@ -42,7 +42,7 @@ for name, opts in enabled_cases.items():
 def test_convergence_rate(case_name):
     """Verify spatial convergence rate across mesh refinements."""
     b = Path(__file__).parent.resolve()
-    config = get_case(cases, case_name)
+    _, config = get_case(cases, case_name)
     levels = config["levels"]
     degree = config["degree"]
 
@@ -52,7 +52,9 @@ def test_convergence_rate(case_name):
     for nodes in levels:
         datfile = b / f"errors-{case_name}-nodes{nodes}-dq{degree}.dat"
         if not datfile.exists():
-            pytest.skip(f"Missing {datfile.name}. Run: python richards.py {case_name} {nodes} {degree} {config['bc_type']}")
+            raise FileNotFoundError(
+                f"Missing {datfile.name}. Run: python richards.py {case_name} {nodes} {degree} {config['bc_type']}"
+            )
         dats.append(pd.read_csv(datfile, sep=" ", header=None))
 
     dat = pd.concat(dats)
@@ -65,18 +67,6 @@ def test_convergence_rate(case_name):
 
     # Compute convergence rates between successive levels
     rates = np.log2(rel_errors.values[:-1] / rel_errors.values[1:])
-
-    # Print summary
-    print(f"\n{'=' * 60}")
-    print(f"Tracy 2D Convergence: {case_name}")
-    print(f"{'=' * 60}")
-    print(f"{'Nodes':>8} | {'L2 error':>12} | {'Relative':>12} | {'Rate':>8}")
-    print("-" * 50)
-    for i, nodes in enumerate(levels):
-        rate_str = f"{rates[i-1]:8.2f}" if i > 0 else "       -"
-        print(f"{nodes:>8} | {dat.loc[nodes, 'l2error_h']:>12.4e} | "
-              f"{rel_errors.loc[nodes]:>12.4e} | {rate_str}")
-    print(f"{'=' * 60}\n")
 
     # Check that the finest-mesh rate meets the theoretical expectation
     expected = expected_rates[degree]

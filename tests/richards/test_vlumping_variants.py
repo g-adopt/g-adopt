@@ -6,7 +6,7 @@ Exercises the two iterative presets that are specific to extruded meshes:
                       MUMPS LU at the bottom. Inexact Newton baked in.
     "vlumping_hmg" -- as above but the coarse solve descends a geometric
                       MG on the 2D base MeshHierarchy; fine-level smoother
-                      is ``ASMLinesmoothPC`` (exact per-column solves).
+                      is `ASMLinesmoothPC` (exact per-column solves).
 
 All cases are intentionally tiny (8x8 base, 4 layers, 2 steps) so the
 file is serial-laptop friendly.
@@ -75,7 +75,7 @@ def _make_flat_extruded_mesh():
 
 def _make_hierarchy_extruded_mesh(base_levels=1):
     """Finest level of an ExtrudedMeshHierarchy built over a 2D
-    MeshHierarchy -- the shape ``vlumping_hmg`` requires."""
+    MeshHierarchy -- the shape `vlumping_hmg` requires."""
     nx_coarse = NX // (2 ** base_levels)
     base_coarse = RectangleMesh(nx_coarse, nx_coarse, LX, LX, quadrilateral=True)
     mh2d = MeshHierarchy(base_coarse, base_levels)
@@ -120,6 +120,20 @@ def _run_short(mesh, preset):
     return h, solver
 
 
+# Meshes are immutable and safe to share read-only; building the
+# ExtrudedMeshHierarchy is the one non-trivial cost in this file, so hoist
+# both meshes to module scope. Function spaces and solvers are still built
+# per test, so no mutable solver state leaks between tests.
+@pytest.fixture(scope="module")
+def flat_mesh():
+    return _make_flat_extruded_mesh()
+
+
+@pytest.fixture(scope="module")
+def hierarchy_mesh():
+    return _make_hierarchy_extruded_mesh(base_levels=1)
+
+
 # ---------------------------------------------------------------------------
 # "vlumping" and "vlumping_hmg": a short solve converges and the solutions
 # agree with one another up to a few multiples of the linear tolerance.
@@ -127,23 +141,19 @@ def _run_short(mesh, preset):
 
 
 @pytest.mark.parametrize("preset", ["vlumping", "vlumping_hmg"])
-def test_preset_loads_and_runs(preset):
+def test_preset_loads_and_runs(preset, flat_mesh, hierarchy_mesh):
     """Preset resolves, solver converges, output is finite and nonzero."""
-    mesh = (
-        _make_hierarchy_extruded_mesh(base_levels=1)
-        if preset == "vlumping_hmg"
-        else _make_flat_extruded_mesh()
-    )
+    mesh = hierarchy_mesh if preset == "vlumping_hmg" else flat_mesh
     h, _ = _run_short(mesh, preset)
     arr = h.dat.data_ro
     assert np.all(np.isfinite(arr))
     assert np.linalg.norm(arr) > 0.0
 
 
-def test_vlumping_hmg_matches_vlumping():
+def test_vlumping_hmg_matches_vlumping(hierarchy_mesh):
     """Both presets solve the same linear system to a 1e-4 relative
     tolerance. The solutions should agree up to a small multiple of that."""
-    mesh = _make_hierarchy_extruded_mesh(base_levels=1)
+    mesh = hierarchy_mesh
     h_ref, _ = _run_short(mesh, "vlumping")
     h_new, _ = _run_short(mesh, "vlumping_hmg")
 
@@ -160,7 +170,7 @@ def test_vlumping_hmg_matches_vlumping():
 # ---------------------------------------------------------------------------
 
 
-def test_prol_preserves_constants():
+def test_prol_preserves_constants(hierarchy_mesh):
     """Prolongation maps coarse-space ones to fine-space ones.
 
     A columnwise injection is the whole point of the construction; this
@@ -169,7 +179,7 @@ def test_prol_preserves_constants():
     from firedrake.assemble import assemble as fd_assemble
     from petsc4py import PETSc
 
-    mesh = _make_hierarchy_extruded_mesh(base_levels=1)
+    mesh = hierarchy_mesh
     V = FunctionSpace(mesh, "DQ", DEGREE)
     u, v = TrialFunction(V), TestFunction(V)
     A = fd_assemble(inner(u, v) * dx + inner(grad(u), grad(v)) * dx).petscmat
@@ -194,58 +204,42 @@ def test_prol_preserves_constants():
     )
 
 
-def test_missing_hierarchy_raises_clearly():
-    """Constructing VerticallyLumpedHMGPC on a flat extruded mesh must
-    fail at setup with a message that mentions the missing hierarchy --
-    not a cryptic "error code 101"."""
+def test_missing_hierarchy_raises_clearly(flat_mesh):
+    """The vlumping_hmg PC must reject a flat (no-hierarchy) extruded mesh
+    with a message that names the missing MeshHierarchy, rather than failing
+    cryptically.
+
+    We invoke the context's ``initialize`` directly instead of going through
+    ``pc.setUp()``. ``initialize`` is exactly the code ``setUp`` runs, and the
+    guard raises a plain Python ``RuntimeError`` -- so we assert on its message
+    without routing it through ``PCSetUp_Python``. That C path prints PETSc's
+    "Unhandled Python Exception" banner to the raw stderr fd as the exception
+    unwinds, which segfaults under pytest's fd-capture on a debug PETSc build,
+    and also buries the real message behind petsc4py's bare "error code 101".
+    """
     from firedrake.assemble import assemble as fd_assemble
     from petsc4py import PETSc
 
-    mesh = _make_flat_extruded_mesh()
-    V = FunctionSpace(mesh, "DQ", DEGREE)
+    V = FunctionSpace(flat_mesh, "DQ", DEGREE)
     u, v = TrialFunction(V), TestFunction(V)
     A = fd_assemble(inner(u, v) * dx + inner(grad(u), grad(v)) * dx).petscmat
 
-    pc = PETSc.PC().create(comm=mesh.comm)
+    pc = PETSc.PC().create(comm=flat_mesh.comm)
     pc.setOperators(A, A)
     pc.setType("python")
     pc.setPythonContext(VerticallyLumpedHMGPC())
     pc.setDM(V.dm)
 
-    with pytest.raises(Exception) as excinfo:
-        pc.setUp()
-
-    # petsc4py wraps RuntimeErrors from PCSetUp_Python as PETSc.Error
-    # with __str__ == "error code 101". The useful message survives on
-    # __cause__ / __context__, so walk the chain.
-    exc = excinfo.value
-    messages = []
-    seen = set()
-    while exc is not None and id(exc) not in seen:
-        seen.add(id(exc))
-        messages.append(str(exc).lower())
-        exc = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
-
-    combined = " | ".join(messages)
-    # Expected: the wrapped RuntimeError from preconditioners.py:232 surfaces
-    # in the exception chain. petsc4py preserves the chain in newer builds
-    # and reports the message verbatim. Older builds drop the chain and
-    # report only "error code 101", which still proves PCSetUp failed (the
-    # primary thing the test is here to verify); the message-quality
-    # assertion is best-effort.
-    has_clear_message = "hierarchy" in combined or "meshhierarchy" in combined
-    has_petsc_code = "error code 101" in combined or "code 101" in combined
-    assert has_clear_message or has_petsc_code, (
-        f"Expected error mentioning the missing MeshHierarchy or a PETSc "
-        f"error code, got: {messages!r}"
-    )
+    ctx = pc.getPythonContext()
+    with pytest.raises(RuntimeError, match="(?i)hierarchy"):
+        ctx.initialize(pc)
 
 
-def test_mg_descent_on_coarse_side():
+def test_mg_descent_on_coarse_side(hierarchy_mesh):
     """After setup, the coarse KSP's PC is a PCMG with > 1 level.
     Guards against a silent-failure mode where the hierarchy doesn't
     propagate through setDM."""
-    mesh = _make_hierarchy_extruded_mesh(base_levels=1)
+    mesh = hierarchy_mesh
     _, solver = _run_short(mesh, "vlumping_hmg")
 
     outer_pc = solver.solver.snes.getKSP().getPC()
@@ -263,16 +257,16 @@ def test_mg_descent_on_coarse_side():
     )
 
 
-def test_fine_smoother_is_asm_not_lu():
-    """Regression guard for the ``sub_sub_`` prefix bug.
+def test_fine_smoother_is_asm_not_lu(hierarchy_mesh):
+    """Regression guard for the `sub_sub_` prefix bug.
 
-    The vlumping_hmg preset uses ``ASMLinesmoothPC`` at the fine level.
-    Its inner ASM sub-PC lives at prefix ``..._sub_sub_``; a single
-    ``_sub_`` would hit ASM's own ``pc_type`` field and silently
+    The vlumping_hmg preset uses `ASMLinesmoothPC` at the fine level.
+    Its inner ASM sub-PC lives at prefix `..._sub_sub_`; a single
+    `_sub_` would hit ASM's own `pc_type` field and silently
     downgrade the line smoother to a full-rank LU (instant OOM on
     large meshes).
     """
-    mesh = _make_hierarchy_extruded_mesh(base_levels=1)
+    mesh = hierarchy_mesh
     _, solver = _run_short(mesh, "vlumping_hmg")
 
     outer_pc = solver.solver.snes.getKSP().getPC()
@@ -291,10 +285,10 @@ def test_fine_smoother_is_asm_not_lu():
     )
 
 
-def test_update_is_not_noop_for_hmg():
+def test_update_is_not_noop_for_hmg(hierarchy_mesh):
     """Across two successive solves the inner operator state advances.
-    Confirms ``update()`` reassembles the Galerkin coarse operator."""
-    mesh = _make_hierarchy_extruded_mesh(base_levels=1)
+    Confirms `update()` reassembles the Galerkin coarse operator."""
+    mesh = hierarchy_mesh
     soil_curve = _make_soil_curve()
 
     V = FunctionSpace(mesh, "DQ", DEGREE)

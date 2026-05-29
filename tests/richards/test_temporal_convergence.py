@@ -1,33 +1,21 @@
-"""Temporal convergence verification via manufactured solution.
+"""Temporal convergence verification via a manufactured solution.
 
-For Richards with a nonlinear `Dt(theta(h))` mass term, the stage_value
-formulation is mass-conservative in two regimes: stiffly-accurate
-tableaux (where u_new = U_s copies the per-stage finite difference
-directly) and non-stiffly-accurate tableaux (where Irksome PR #226
-routes through a conservative variational update). Mass conservation
-is checked elsewhere (`test_mass_balance.py`). This file pins the
-*temporal order* the three integrators are supposed to deliver, since
-the conservative-update path has to preserve the formal order p of the
-underlying Runge-Kutta method.
+Checks that each time-stepping scheme delivers its formal order: BackwardEuler
+(1), ImplicitMidpoint (2) and GaussLegendre(2) (4).
 
-Manufactured solution.
-
-We pick a spatially uniform solution h(x, y, t) = h0(t) on the unit
-square, with ExponentialCurve soil and Dirichlet h = h0(t) on all four
-sides. Spatial uniformity makes diffusion and gravity contribute zero,
-so the PDE reduces pointwise to dtheta/dt = S, which is satisfied by
-construction with
+We pick a spatially uniform solution h(x, y, t) = h0(t) on the unit square,
+with ExponentialCurve soil and Dirichlet h = h0(t) on all four sides. Spatial
+uniformity makes diffusion and gravity contribute zero, so the PDE reduces
+pointwise to dtheta/dt = S, satisfied by construction with
 
   S(t) = (theta_s - theta_r) * alpha * exp(alpha * h0(t)) * h0'(t).
 
-The BC and source are time-dependent UFL expressions referencing the
-*same* Constant Irksome advances through stages, so stage substitution
-t -> t + c_i*dt is honest for multi-stage tableaux. Without that, the
-observed order collapses to 1 regardless of the scheme. CG is used so
-the strong Dirichlet BC handles gravity boundary fluxes cleanly.
-
-The error at t = t_final reduces to |h_num - h0(t_final)| (since h_num
-is spatially uniform), isolating the temporal truncation cleanly.
+The BC and source are time-dependent UFL expressions referencing the same
+Constant that Irksome advances through stages, so the stage substitution
+t -> t + c_i*dt is honest for multi-stage tableaux (without it the observed
+order collapses to 1). CG is used so the strong Dirichlet BC handles gravity
+boundary fluxes cleanly. The error at t_final reduces to |h_num - h0(t_final)|
+since h_num is spatially uniform, isolating the temporal truncation.
 """
 
 import numpy as np
@@ -136,7 +124,7 @@ def test_temporal_convergence(scheme, scheme_kwargs, expected_order, label):
     # Assert the coarsest pair's rate against ~85% of the formal order.
     # The coarsest pair is furthest from the solver-tolerance floor and
     # would expose any silent collapse to order 1. Finer-pair rates are
-    # printed above for diagnostic purposes only — taking max/min over
+    # printed above for diagnostic purposes only -- taking max/min over
     # them lets a single bad rate hide behind a good one.
     floor = 0.85 * expected_order
     assert rates[0] >= floor, (
