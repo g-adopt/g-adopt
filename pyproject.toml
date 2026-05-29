@@ -20,12 +20,7 @@ dependencies = [
   "pandas",
   "shapely",
   "vtk",
-  # Pin to upstream commit 4820795 ("Conservative StageValueStepper (#204)")
-  # which lands the conservative-update fix for non-stiffly-accurate
-  # stage_value that gadopt.RichardsSolver depends on. Once
-  # firedrake-vanilla-default and the fp50 Gadi module both ship an
-  # Irksome at or after this commit, drop the pin.
-  "irksome @ git+https://github.com/firedrakeproject/Irksome.git@4820795",
+  "irksome @ git+https://github.com/firedrakeproject/Irksome",
 ]
 
 [project.optional-dependencies]
