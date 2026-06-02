@@ -3,8 +3,6 @@ from .gplates import (
     GplatesScalarFunction,
     GplatesVelocityFunction,
     ensure_reconstruction,
-    lithosphere_geotherm,
-    lithosphere_indicator,
     pyGplatesConnector,
     PlateModelFiles,
 )
@@ -20,6 +18,10 @@ from .sources import (
     LithosphereSource,
     LithosphereSourceConfig,
     Source,
+)
+from .factories import (
+    ConnectorFactory,
+    LithosphereIndicator,
 )
 
 __all__ = [
@@ -45,6 +47,6 @@ __all__ = [
     "ocean_erf_normalized",
     "radial_tanh_step",
     # Factories
-    "lithosphere_indicator",
-    "lithosphere_geotherm",
+    "ConnectorFactory",
+    "LithosphereIndicator",
 ]

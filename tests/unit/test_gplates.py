@@ -9,7 +9,10 @@ from gadopt.gplates import (
     PlateModelFiles,
     pyGplatesConnector,
     ensure_reconstruction,
-    lithosphere_indicator,
+    ConnectorFactory,
+    LithosphereIndicator,
+    LithosphereSource,
+    TanhOutput,
 )
 
 
@@ -154,12 +157,119 @@ def test_coords():
     return np.array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]])
 
 
+class TestConnectorFactory:
+    def test_cannot_construct_source_without_class(self):
+        factory = ConnectorFactory()
+        with pytest.raises(
+            TypeError, match="Do not know what kind of Source to construct!"
+        ):
+            factory.construct_source()
+
+    def test_cannot_construct_indicator_without_source_class(self):
+        factory = ConnectorFactory()
+        with pytest.raises(
+            TypeError, match="Do not know what kind of Source to construct!"
+        ):
+            with pytest.warns(UserWarning):
+                _ = factory.indicator
+
+    def test_warn_on_default_source(self):
+        factory = ConnectorFactory(source_class=LithosphereSource)
+        # LithosphereSource cannot be initialised with default args
+        with pytest.raises(
+            TypeError,
+            match=r"LithosphereSource.__init__.*missing.*required positional arguments:.*",
+        ):
+            with pytest.warns(UserWarning):
+                _ = factory.indicator
+
+    def test_constructed_source(
+        self, plate_model_with_polygons, plate_files, synthetic_data
+    ):
+        factory = ConnectorFactory(source_class=LithosphereSource)
+        factory.construct_source(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_data,
+            age_to_property=half_space_cooling,
+            plate_files=plate_files,
+        )
+
+        assert isinstance(factory.source, LithosphereSource)
+
+    def test_inherited_source(
+        self, plate_model_with_polygons, plate_files, synthetic_data
+    ):
+        factory1 = ConnectorFactory(source_class=LithosphereSource)
+        factory2 = ConnectorFactory()
+        factory1.construct_source(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_data,
+            age_to_property=half_space_cooling,
+            plate_files=plate_files,
+        )
+        factory2.source = factory1.source
+        assert factory1.source is factory2.source
+
+    def test_strictly_single_source(
+        self, plate_model_with_polygons, plate_files, synthetic_data
+    ):
+        factory = ConnectorFactory(source_class=LithosphereSource)
+        factory.construct_source(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_data,
+            age_to_property=half_space_cooling,
+            plate_files=plate_files,
+        )
+        source = LithosphereSource(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_data,
+            age_to_property=half_space_cooling,
+            plate_files=plate_files,
+        )
+        with pytest.raises(RuntimeError, match="This indicator already has a Source!"):
+            factory.source = source
+
+    def test_constructed_output(self):
+        factory = ConnectorFactory(output_class=TanhOutput)
+        factory.construct_output()
+
+        assert isinstance(factory.output, TanhOutput)
+
+    def test_inherited_output(self):
+        factory1 = ConnectorFactory(output_class=TanhOutput)
+        factory2 = ConnectorFactory()
+        factory1.construct_output()
+        factory2.output = factory1.output
+        assert factory1.output is factory2.output
+
+    def test_strictly_single_output(self):
+        factory = ConnectorFactory(output_class=TanhOutput)
+        factory.construct_output()
+        output = TanhOutput()
+        with pytest.raises(RuntimeError, match="This indicator already has an Output!"):
+            factory.output = output
+
+    def test_default_output_raises_warning(
+        self, plate_model_with_polygons, plate_files, synthetic_data
+    ):
+        factory = ConnectorFactory(source_class=LithosphereSource)
+        factory.construct_source(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_data,
+            age_to_property=half_space_cooling,
+            plate_files=plate_files,
+        )
+        with pytest.warns(UserWarning):
+            _ = factory.indicator
+
+
 class TestLithosphereConnectorAgeValidation:
     """Test age validation in LithosphereConnector."""
 
     def test_valid_age_works(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that valid ages within bounds work correctly."""
-        connector = lithosphere_indicator(
+        factory = LithosphereIndicator()
+        factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -168,14 +278,15 @@ class TestLithosphereConnectorAgeValidation:
 
         # Valid age within bounds
         ndtime = plate_model_with_polygons.age2ndtime(100)
-        result = connector.get_indicator(test_coords, ndtime)
+        result = factory.indicator.get_indicator(test_coords, ndtime)
 
         assert result.shape == (len(test_coords),)
         assert np.all(np.isfinite(result))
 
     def test_age_older_than_oldest_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that requesting age > oldest_age raises ValueError."""
-        connector = lithosphere_indicator(
+        factory = LithosphereIndicator()
+        factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -186,11 +297,12 @@ class TestLithosphereConnectorAgeValidation:
         ndtime = plate_model_with_polygons.age2ndtime(250)
 
         with pytest.raises(ValueError, match="older than the plate model's oldest age"):
-            connector.get_indicator(test_coords, ndtime)
+            factory.indicator.get_indicator(test_coords, ndtime)
 
     def test_negative_age_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that requesting negative age (future) raises ValueError."""
-        connector = lithosphere_indicator(
+        factory = LithosphereIndicator()
+        factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -201,11 +313,12 @@ class TestLithosphereConnectorAgeValidation:
         ndtime = plate_model_with_polygons.age2ndtime(-10)
 
         with pytest.raises(ValueError, match="negative.*future"):
-            connector.get_indicator(test_coords, ndtime)
+            factory.indicator.get_indicator(test_coords, ndtime)
 
     def test_backward_step_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that going backward in ocean tracker raises ValueError."""
-        connector = lithosphere_indicator(
+        factory = LithosphereIndicator()
+        factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -214,17 +327,18 @@ class TestLithosphereConnectorAgeValidation:
 
         # First step forward to 50 Ma
         ndtime_50 = plate_model_with_polygons.age2ndtime(50)
-        connector.get_indicator(test_coords, ndtime_50)
+        factory.indicator.get_indicator(test_coords, ndtime_50)
 
         # Now try to go backward to 150 Ma (should fail)
         ndtime_150 = plate_model_with_polygons.age2ndtime(150)
 
         with pytest.raises(ValueError, match="can only evolve forward"):
-            connector.get_indicator(test_coords, ndtime_150)
+            factory.indicator.get_indicator(test_coords, ndtime_150)
 
     def test_forward_steps_work(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that sequential forward steps (decreasing age) work."""
-        connector = lithosphere_indicator(
+        factory = LithosphereIndicator()
+        factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
             age_to_property=half_space_cooling,
@@ -234,5 +348,5 @@ class TestLithosphereConnectorAgeValidation:
         # Sequential forward steps (decreasing age)
         for age in [150, 100, 50, 0]:
             ndtime = plate_model_with_polygons.age2ndtime(age)
-            result = connector.get_indicator(test_coords, ndtime)
+            result = factory.indicator.get_indicator(test_coords, ndtime)
             assert result.shape == (len(test_coords),)
