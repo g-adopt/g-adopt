@@ -10,14 +10,17 @@ subclassing ConnectorFactory with a call to super().__init__() with the
 source_class, output_class and geotherm_output_class specified.
 """
 
-import warnings
-
-from typing import Type, Any
+import numpy as np
+from mpi4py import MPI
+from typing import Type, Any, Callable, TYPE_CHECKING
 from functools import cached_property
 
 from .connectors import ScalarFieldConnector
 from .outputs import OutputStrategy, TanhOutput, GeothermERFOutput
-from .sources import Source, LithosphereSource
+from .sources import Source, LithosphereSource, LithosphereSourceConfig
+
+if TYPE_CHECKING:
+    from .gplates import pyGplatesConnector, PlateModelFiles
 
 __all__ = [
     "ConnectorFactory",
@@ -225,26 +228,25 @@ class ConnectorFactory:
         """Construct and retrieve the indicator `ScalarFieldConnector`.
 
         This function creates the `ScalarFieldConnector` for the indicator. If
-        Source and/or OutputStrategy objects have not been created, this function will
-        attempt to create them using default classes and parameters, and warn the
-        user that it is doing so. `cached_property` is used to ensure sanity checks
+        Source and/or OutputStrategy objects have not been created, this function
+        will raise a RuntimeError. `cached_property` is used to ensure sanity checks
         and object creation only run once.
 
         Returns:
             `ScalarFieldConnector` for indicator
+
+        Raises:
+            RuntimeError: Attempted to construct the isotherm without a source or
+                          output is present.
         """
         if self._source is None:
-            warnings.warn(
-                "No source specified for this indicator, attempting to construct with default parameters"
+            raise RuntimeError(
+                "A source must be either constructed or connected in order to construct the indicator"
             )
-            self.construct_source()
         if self._output is None:
-            if self._output_class is None:
-                warnings.warn(
-                    "No Output specified for this indicator, using default TanhOutput"
-                )
-                self._output_class = TanhOutput
-            self.construct_output()
+            raise RuntimeError(
+                "An output must be either constructed or connected in order to construct the indicator"
+            )
         return ScalarFieldConnector(self._source, self._output, **self._conn_params)
 
     @cached_property
@@ -259,19 +261,19 @@ class ConnectorFactory:
 
         Returns:
             `ScalarFieldConnector` for indicator
+
+        Raises:
+            RuntimeError: Attempted to construct the isotherm without a source or
+                          geotherm_output is present.
         """
         if self._source is None:
-            warnings.warn(
-                "No source specified for this geotherm, attempting to construct with default parameters"
+            raise RuntimeError(
+                "A source must be either constructed or connected in order to construct the geotherm"
             )
-            self.construct_source()
         if self._geotherm_output is None:
-            if self._geotherm_output_class is None:
-                warnings.warn(
-                    "No Geotherm output specified for this geotherm, using default GeothermERFOutput"
-                )
-                self._geotherm_output_class = GeothermERFOutput
-            self.construct_geotherm()
+            raise RuntimeError(
+                "A geotherm_output must be either constructed or connected in order to construct the geotherm"
+            )
         return ScalarFieldConnector(
             self._source, self._geotherm_output, **self._conn_params
         )
@@ -287,3 +289,70 @@ class LithosphereIndicator(ConnectorFactory):
 
     def __init__(self):
         super().__init__(LithosphereSource, TanhOutput, GeothermERFOutput)
+
+    def construct_source(
+        self,
+        gplates_connector: "pyGplatesConnector",
+        continental_data,
+        age_to_property: Callable[[np.ndarray], np.ndarray],
+        plate_files: "PlateModelFiles",
+        config: LithosphereSourceConfig | None = None,
+        *,
+        default_continental_age_myr: float = 500.0,
+        walk_start_age: float | None = None,
+        comm: MPI.Comm = MPI.COMM_WORLD,
+    ):
+        """Overloaded construct_source
+
+        Match argument list to `LithosphereSource` to allow static argument checking
+        and IDE introspection
+        """
+
+        return super().construct_source(
+            gplates_connector,
+            continental_data,
+            age_to_property,
+            plate_files,
+            config,
+            default_continental_age_myr=default_continental_age_myr,
+            walk_start_age=walk_start_age,
+            comm=comm,
+        )
+
+    def construct_output(
+        self,
+        transition_width_km: float = 10.0,
+        default_thickness_km: float = 100.0,
+        **output_kwargs,
+    ):
+        """Overloaded construct_output
+
+        Match argument list to `TanhOutput` to allow static argument checking
+        and IDE introspection
+        """
+        return super().construct_output(
+            transition_width_km=transition_width_km,
+            default_thickness_km=default_thickness_km,
+            **output_kwargs,
+        )
+
+    def construct_geotherm(
+        self,
+        kappa: float = 1e-6,
+        default_thickness_km: float = 100.0,
+        too_far_age_myr: float = 500.0,
+        geotherm: Callable | None = None,
+        **output_kwargs,
+    ):
+        """Overloaded construct_geotherm
+
+        Match argument list to `GeothermERFOutput` to allow static argument checking
+        and IDE introspection
+        """
+        return super().construct_geotherm(
+            kappa=kappa,
+            default_thickness_km=default_thickness_km,
+            too_far_age_myr=too_far_age_myr,
+            geotherm=geotherm,
+            **output_kwargs,
+        )

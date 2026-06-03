@@ -168,20 +168,18 @@ class TestConnectorFactory:
     def test_cannot_construct_indicator_without_source_class(self):
         factory = ConnectorFactory()
         with pytest.raises(
-            TypeError, match="Do not know what kind of Source to construct!"
+            RuntimeError,
+            match="A source must be either constructed or connected in order to construct the indicator",
         ):
-            with pytest.warns(UserWarning):
-                _ = factory.indicator
+            _ = factory.indicator
 
-    def test_warn_on_default_source(self):
+    def test_exception_on_default_source(self):
         factory = ConnectorFactory(source_class=LithosphereSource)
-        # LithosphereSource cannot be initialised with default args
         with pytest.raises(
-            TypeError,
-            match=r"LithosphereSource.__init__.*missing.*required positional arguments:.*",
+            RuntimeError,
+            match="A source must be either constructed or connected in order to construct the indicator",
         ):
-            with pytest.warns(UserWarning):
-                _ = factory.indicator
+            _ = factory.indicator
 
     def test_constructed_source(
         self, plate_model_with_polygons, plate_files, synthetic_data
@@ -249,7 +247,7 @@ class TestConnectorFactory:
         with pytest.raises(RuntimeError, match="This indicator already has an Output!"):
             factory.output = output
 
-    def test_default_output_raises_warning(
+    def test_default_output_raises_exception(
         self, plate_model_with_polygons, plate_files, synthetic_data
     ):
         factory = ConnectorFactory(source_class=LithosphereSource)
@@ -259,7 +257,10 @@ class TestConnectorFactory:
             age_to_property=half_space_cooling,
             plate_files=plate_files,
         )
-        with pytest.warns(UserWarning):
+        with pytest.raises(
+            RuntimeError,
+            match="An output must be either constructed or connected in order to construct the indicator",
+        ):
             _ = factory.indicator
 
 
@@ -275,6 +276,7 @@ class TestLithosphereConnectorAgeValidation:
             age_to_property=half_space_cooling,
             plate_files=plate_files,
         )
+        factory.construct_output()
 
         # Valid age within bounds
         ndtime = plate_model_with_polygons.age2ndtime(100)
@@ -292,6 +294,7 @@ class TestLithosphereConnectorAgeValidation:
             age_to_property=half_space_cooling,
             plate_files=plate_files,
         )
+        factory.construct_output()
 
         # Age older than oldest_age (200 Ma)
         ndtime = plate_model_with_polygons.age2ndtime(250)
@@ -308,6 +311,7 @@ class TestLithosphereConnectorAgeValidation:
             age_to_property=half_space_cooling,
             plate_files=plate_files,
         )
+        factory.construct_output()
 
         # Negative age (in the future)
         ndtime = plate_model_with_polygons.age2ndtime(-10)
@@ -324,6 +328,7 @@ class TestLithosphereConnectorAgeValidation:
             age_to_property=half_space_cooling,
             plate_files=plate_files,
         )
+        factory.construct_output()
 
         # First step forward to 50 Ma
         ndtime_50 = plate_model_with_polygons.age2ndtime(50)
@@ -344,6 +349,7 @@ class TestLithosphereConnectorAgeValidation:
             age_to_property=half_space_cooling,
             plate_files=plate_files,
         )
+        factory.construct_output()
 
         # Sequential forward steps (decreasing age)
         for age in [150, 100, 50, 0]:
