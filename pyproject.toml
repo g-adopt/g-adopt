@@ -21,13 +21,7 @@ dependencies = [
   "pandas",
   "shapely",
   "vtk",
-  "IRKsome-gadopt~=2026.4.0",
-  #"irksome @ git+https://github.com/firedrakeproject/Irksome@fdae281",
-]
-
-[external]
-dependencies = [
-  "dep:github/firedrakeproject/Irksome",
+  "IRKsome~=2026.0.0",
 ]
 
 [project.optional-dependencies]
