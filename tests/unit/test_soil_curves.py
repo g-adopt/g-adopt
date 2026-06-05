@@ -8,12 +8,59 @@ Haverkamp, van Genuchten, and exponential models for unsaturated flow.
 import firedrake as fd
 import numpy as np
 import pytest
+import ufl
 from gadopt.soil_curves import (
     SoilCurve,
     HaverkampCurve,
     VanGenuchtenCurve,
     ExponentialCurve,
 )
+
+PROPERTY_NAMES = (
+    "moisture_content",
+    "hydraulic_conductivity",
+    "water_retention",
+)
+
+
+def _make_curve(cls, reg_eps, n=1.5):
+    """Build a curve of the given class with a NON-INTEGER exponent.
+
+    A non-integer n/beta/gamma is what exposes the singular |.|^(p) derivative
+    at h = 0 in the unsaturated branch. The exponential model has no such
+    exponent, so it is excluded from the regularisation tests.
+    """
+    if cls is VanGenuchtenCurve:
+        return VanGenuchtenCurve(
+            theta_r=0.15, theta_s=0.45, Ks=1e-5, Ss=0.0,
+            alpha=0.5, n=n, reg_eps=reg_eps,
+        )
+    if cls is HaverkampCurve:
+        return HaverkampCurve(
+            theta_r=0.15, theta_s=0.45, Ks=1e-5, Ss=0.0,
+            alpha=1.0, beta=n, A=1.0, gamma=n, reg_eps=reg_eps,
+        )
+    raise ValueError(cls)
+
+
+def _jacobian_diag(model, property_name, hval):
+    """Assemble d(property)/dh at a uniform head hval and return the entries.
+
+    This mirrors exactly the branch-wise UFL differentiation that goes into the
+    Newton Jacobian and the pyadjoint adjoint, so finiteness here is finiteness
+    of both.
+    """
+    mesh = create_test_mesh()
+    V = fd.FunctionSpace(mesh, "CG", 1)
+    h = fd.Function(V)
+    h.interpolate(fd.Constant(hval))
+
+    expr = getattr(model, property_name)(h)
+    u = fd.TrialFunction(V)
+    v = fd.TestFunction(V)
+    J = fd.derivative(expr * v * fd.dx, h, u)
+    A = fd.assemble(J)
+    return np.array(A.M.values).ravel()
 
 
 def create_test_mesh():
@@ -175,10 +222,13 @@ class TestVanGenuchtenCurve:
         K = evaluate_soil_curve(vg_model, h_sat, "hydraulic_conductivity")
         C = evaluate_soil_curve(vg_model, h_sat, "water_retention")
 
-        # Under saturated conditions, should return saturated values
-        np.testing.assert_allclose(theta.dat.data, 0.45, rtol=1e-10)  # theta_s
-        np.testing.assert_allclose(K.dat.data, 1e-5, rtol=1e-10)      # Ks
-        np.testing.assert_allclose(C.dat.data, 0.0, rtol=1e-10)       # C = 0
+        # Under saturated conditions, should return saturated values. h = 0 is
+        # exactly the point where the reg_eps smoothing acts, so K carries an
+        # O(reg_eps) offset there (negligible, and the only place it shows up);
+        # theta and C are unaffected to O(reg_eps^2).
+        np.testing.assert_allclose(theta.dat.data, 0.45, rtol=1e-8)   # theta_s
+        np.testing.assert_allclose(K.dat.data, 1e-5, rtol=1e-4)       # Ks
+        np.testing.assert_allclose(C.dat.data, 0.0, atol=1e-12)       # C = 0
 
     def test_unsaturated_conditions(self, vg_model):
         """Test soil curve behavior under unsaturated conditions (h < 0)."""
@@ -326,15 +376,17 @@ class TestSoilCurveComparison:
             alpha=0.5,
         )
 
-        # Test Haverkamp and van Genuchten models (should have C=0 at saturation)
+        # Test Haverkamp and van Genuchten models (should have C=0 at saturation).
+        # h = 0 is exactly where the reg_eps smoothing acts, so K carries an
+        # O(reg_eps) offset there; theta and C are unaffected to O(reg_eps^2).
         for model in [haverkamp, vg]:
             theta = evaluate_soil_curve(model, h_sat, "moisture_content")
             K = evaluate_soil_curve(model, h_sat, "hydraulic_conductivity")
             C = evaluate_soil_curve(model, h_sat, "water_retention")
 
-            np.testing.assert_allclose(theta.dat.data, theta_s, rtol=1e-10)
-            np.testing.assert_allclose(K.dat.data, Ks, rtol=1e-10)
-            np.testing.assert_allclose(C.dat.data, 0.0, rtol=1e-10)
+            np.testing.assert_allclose(theta.dat.data, theta_s, rtol=1e-8)
+            np.testing.assert_allclose(K.dat.data, Ks, rtol=1e-4)
+            np.testing.assert_allclose(C.dat.data, 0.0, atol=1e-12)
 
         # Test exponential model (has different water retention at saturation)
         theta = evaluate_soil_curve(exp, h_sat, "moisture_content")
@@ -383,3 +435,125 @@ class TestSoilCurveComparison:
         # just that they're different from each other)
         assert not np.allclose([theta_h, theta_vg, theta_exp], theta_h, rtol=1e-6)
         assert not np.allclose([K_h, K_vg, K_exp], K_h, rtol=1e-6)
+
+
+class TestRegularisationAtWaterTable:
+    """Regularisation of the singular |.|^p derivative at exactly h = 0.
+
+    For van Genuchten and Haverkamp with a non-integer exponent, the
+    unsaturated branch contains a magnitude raised to a non-integer/negative
+    power. Differentiated branch-wise by UFL this produces a term that is Inf
+    (and NaN after sign(0)*Inf or 0*Inf) at exactly h = 0, poisoning the Newton
+    Jacobian and the pyadjoint gradient. The reg_eps smoothing must keep all of
+    moisture_content, hydraulic_conductivity and water_retention AND their
+    derivatives finite at h = 0.
+    """
+
+    @pytest.mark.parametrize("cls", [VanGenuchtenCurve, HaverkampCurve])
+    @pytest.mark.parametrize("property_name", PROPERTY_NAMES)
+    def test_values_and_derivatives_finite_at_zero(self, cls, property_name):
+        """With the default reg_eps, value and derivative are finite at h = 0."""
+        model = _make_curve(cls, reg_eps=SoilCurve.DEFAULT_REG_EPS)
+
+        # Value at h = 0.
+        h0 = create_pressure_head_function(create_test_mesh(), 0.0)
+        value = evaluate_soil_curve(model, h0, property_name)
+        assert np.all(np.isfinite(value.dat.data)), (
+            f"{cls.__name__}.{property_name} value not finite at h=0"
+        )
+
+        # Derivative (Jacobian/adjoint entry) at h = 0.
+        deriv = _jacobian_diag(model, property_name, 0.0)
+        assert np.all(np.isfinite(deriv)), (
+            f"d({cls.__name__}.{property_name})/dh not finite at h=0"
+        )
+
+    @pytest.mark.parametrize("cls", [VanGenuchtenCurve, HaverkampCurve])
+    def test_unregularised_form_is_singular_at_zero(self, cls):
+        """Sanity check: with reg_eps=0 the old form really does go NaN/Inf.
+
+        At least one of the three property derivatives must be non-finite at
+        h = 0 when the regularisation is disabled. This is the failure mode the
+        fix removes; if this assertion ever stops holding the test above is no
+        longer guarding anything.
+        """
+        model = _make_curve(cls, reg_eps=0.0)
+        any_singular = False
+        for property_name in PROPERTY_NAMES:
+            deriv = _jacobian_diag(model, property_name, 0.0)
+            if not np.all(np.isfinite(deriv)):
+                any_singular = True
+        assert any_singular, (
+            f"{cls.__name__} unexpectedly finite at h=0 with reg_eps=0; "
+            "the singular-derivative regression is no longer reproduced"
+        )
+
+    @pytest.mark.parametrize("cls", [VanGenuchtenCurve, HaverkampCurve])
+    @pytest.mark.parametrize("property_name", PROPERTY_NAMES)
+    def test_forward_unchanged_away_from_zero(self, cls, property_name):
+        """Forward value matches the exact (reg_eps=0) form away from h = 0.
+
+        The regularisation is O(reg_eps^2) and must not perturb the constitutive
+        relations in the bulk unsaturated region to several digits.
+        """
+        model_reg = _make_curve(cls, reg_eps=SoilCurve.DEFAULT_REG_EPS)
+        model_exact = _make_curve(cls, reg_eps=0.0)
+
+        h = create_pressure_head_function(create_test_mesh(), -1.0)
+        v_reg = evaluate_soil_curve(model_reg, h, property_name).dat.data
+        v_exact = evaluate_soil_curve(model_exact, h, property_name).dat.data
+        np.testing.assert_allclose(v_reg, v_exact, rtol=1e-7, atol=1e-30)
+
+
+class TestRegularisationAdjointAccuracy:
+    """Finite-difference vs UFL-derivative agreement on an unsaturated state.
+
+    A lightweight stand-in for a full pyadjoint Taylor test: it confirms the
+    regularised constitutive output is differentiable and that the UFL
+    derivative (the object pyadjoint propagates) matches a central finite
+    difference to second order at a strictly unsaturated point (h < 0, away
+    from the water table).
+    """
+
+    @pytest.mark.parametrize("cls", [VanGenuchtenCurve, HaverkampCurve])
+    @pytest.mark.parametrize("property_name", PROPERTY_NAMES)
+    def test_taylor_second_order_unsaturated(self, cls, property_name):
+        model = _make_curve(cls, reg_eps=SoilCurve.DEFAULT_REG_EPS)
+
+        mesh = create_test_mesh()
+        V = fd.FunctionSpace(mesh, "CG", 1)
+        h0 = -1.3  # strictly unsaturated, well away from h = 0
+
+        def value(hval):
+            h = fd.Function(V)
+            h.interpolate(fd.Constant(hval))
+            out = fd.Function(V)
+            out.interpolate(getattr(model, property_name)(h))
+            return out.dat.data[0]
+
+        # Exact (analytic) directional derivative via UFL at h0.
+        h = fd.Function(V)
+        h.interpolate(fd.Constant(h0))
+        hv = fd.variable(h)
+        dexpr = ufl.diff(getattr(model, property_name)(hv), hv)
+        dval = fd.Function(V)
+        dval.interpolate(ufl.replace(dexpr, {hv: h}))
+        analytic = dval.dat.data[0]
+
+        f0 = value(h0)
+
+        # Residual of the first-order Taylor expansion should converge at
+        # rate ~2 as the step is halved.
+        steps = [1e-2, 5e-3, 2.5e-3]
+        residuals = []
+        for ds in steps:
+            taylor = f0 + analytic * ds
+            residuals.append(abs(value(h0 + ds) - taylor))
+
+        rates = [
+            np.log(residuals[i] / residuals[i + 1]) / np.log(steps[i] / steps[i + 1])
+            for i in range(len(steps) - 1)
+        ]
+        assert min(rates) > 1.8, (
+            f"{cls.__name__}.{property_name} Taylor rate {rates} not ~2"
+        )
