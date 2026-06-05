@@ -28,19 +28,43 @@ where:
 - $K(h)$ is the hydraulic conductivity
 - $z$ is the vertical coordinate (gravity term)
 
+The discretisation deliberately carries the mass term as the conservative
+$\partial \theta / \partial t$ form rather than expanding it via the chain rule
+into $C(h)\,\partial h/\partial t$. With the stage-value stepper this yields the
+exact finite difference $(\theta_{new} - \theta_{old})/\Delta t$, which keeps mass
+balance exact for DG. As a consequence $C(h) = d\theta/dh$ is the physical moisture
+capacity listed above but never appears explicitly in the residual.
+
 """
+
+import numbers
 
 from firedrake import *
 from irksome import Dt
 from ufl.indexed import Indexed
 
 from .equations import Equation
-from .utility import is_continuous
+from .utility import is_continuous, upward_normal
 
 __all__ = [
     "richards_mass_term",
     "richards_gravity_term",
 ]
+
+
+def _is_scalar_zero(value) -> bool:
+    """Return True only when ``value`` is provably the scalar zero.
+
+    A plain Python number or a scalar ``Constant`` can be safely evaluated to a
+    float and compared against zero. Anything else (most importantly a ``Function``
+    or ``Function(R)``, which must never be float()'d) is treated as non-zero so
+    that a spatially varying coefficient or an inversion control is never dropped.
+    """
+    if isinstance(value, numbers.Real):
+        return float(value) == 0.0
+    if isinstance(value, Constant):
+        return float(value) == 0.0
+    return False
 
 
 def richards_mass_term(
@@ -76,9 +100,13 @@ def richards_mass_term(
     F = inner(eq.test, Dt(soil_curve.moisture_content(trial))) * eq.dx
 
     # Specific storage: Ss * S * dh/dt (standard Dt, linear in h for given S).
-    # Only include when Ss is nonzero to avoid polluting the form with a
-    # zero-coefficient TimeDerivative that can confuse the nonlinear solver.
-    if float(soil_curve.Ss) != 0.0:
+    # We skip this term when Ss is identically zero, to avoid polluting the form
+    # with a zero-coefficient TimeDerivative that can confuse the nonlinear solver.
+    # That skip is only safe for values we can provably evaluate to the scalar
+    # zero: a plain Python number or a scalar Constant. A Function or Function(R)
+    # (e.g. a spatially varying storage, or an inversion control) must never be
+    # float()'d, so we always include the term for those and never silently drop it.
+    if not _is_scalar_zero(soil_curve.Ss):
         theta = soil_curve.moisture_content(trial)
         S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
         F += inner(eq.test, soil_curve.Ss * S * Dt(trial)) * eq.dx
@@ -91,24 +119,27 @@ def richards_gravity_term(
 ) -> Form:
     r"""Richards gravity term for gravity-driven flow with upwinding.
 
-    The gravity term represents gravity-driven water flow:
+    The gravity term represents the gravity-driven water flux:
 
     $$
-    \\nabla \\cdot (K \\nabla z) = \\frac{\\partial K}{\\partial z}
+    \nabla \cdot (K \nabla z)
     $$
 
-    where $z$ is the vertical coordinate. For DG discretizations, we use upwinding
+    where $z$ is the elevation (upward coordinate); $\nabla z$ is supplied by
+    ``upward_normal``, so the term is correct both in a Cartesian box and on the
+    sphere. (In a Cartesian box with $z$ the vertical coordinate this reduces to
+    the familiar $\partial K/\partial z$.) For DG discretizations, we use upwinding
     on interior facets to ensure stability.
 
     The weak form is:
 
     $$
-    \\int_\\Omega K \\frac{\\partial \\phi}{\\partial z} dx
-    - \\int_{\\mathcal{I}} \\text{jump}(\\phi) \\cdot (q_n^+ - q_n^-) dS
+    \int_\Omega K \frac{\partial \phi}{\partial z} dx
+    - \int_{\mathcal{I}} \text{jump}(\phi) \cdot (q_n^+ - q_n^-) dS
     $$
 
-    where $q_n = 0.5(q \\cdot n + |q \\cdot n|)$ is the upwinded flux and
-    $q = K \\nabla z$ is the gravity-driven flux.
+    where $q_n = 0.5(q \cdot n + |q \cdot n|)$ is the upwinded flux and
+    $q = K \nabla z$ is the gravity-driven flux.
 
     Args:
         eq: G-ADOPT Equation instance
@@ -122,25 +153,24 @@ def richards_gravity_term(
     # Evaluate hydraulic conductivity at trial function
     K = soil_curve.hydraulic_conductivity(trial)
 
-    # Get mesh dimension and spatial coordinates
-    dim = eq.mesh.geometric_dimension
-    x = SpatialCoordinate(eq.mesh)
-
-    # Gradient in vertical direction (last coordinate)
-    # grad(z) = e_z, where e_z is the unit vector in z-direction
-    n_down = grad(x[dim - 1])
+    # Upward unit vector grad(z) = e_z; upward_normal gives the last Cartesian
+    # basis vector in a box and X/r on the sphere, so this also works on a sphere.
+    k = upward_normal(eq.mesh)
 
     # Volume integral: \int K * \partial v/\partial z dx = \int K * \grad z \cdot \grad v dx
-    F = inner(K * n_down, grad(eq.test)) * eq.dx
+    F = inner(K * k, grad(eq.test)) * eq.dx
 
     # Upwinding on interior facets for DG
     if not is_continuous(eq.trial_space):
         # Gravity-driven flux
-        q = K * n_down
+        q = K * k
 
-        # Upwinded flux: take the value from the upwind side
-        # q\cdot n > 0 means flow from '-' to '+', so use '-' side (upwind)
-        # q\cdot n < 0 means flow from '+' to '-', so use '+' side (upwind)
+        # n has no fixed direction: n('+') and n('-') each point outward from
+        # their own cell. So q.n > 0 on a given side means q exits there, i.e.
+        # that side is the upwind side, and only one of q_n('+'), q_n('-') is
+        # nonzero. The minus sign on jump(eq.test) below is needed because jump
+        # gives test_+ - test_-, whereas we want test_up - test_down; when '-'
+        # is the upwind side that extra minus sign corrects the orientation.
         q_n = 0.5 * (dot(q, eq.n) + abs(dot(q, eq.n)))
 
         # Add upwind flux term
