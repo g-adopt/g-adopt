@@ -14,7 +14,6 @@ source points live and what properties do they carry at age X?", Outputs answer
 
 from __future__ import annotations
 
-import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -23,6 +22,7 @@ from typing import TYPE_CHECKING, Callable
 
 import h5py
 import numpy as np
+import numpy.typing as npt
 from mpi4py import MPI
 
 from gtrack import PointCloud, PointRotator, PolygonFilter, SeafloorAgeTracker
@@ -51,6 +51,10 @@ class LithosphereSourceConfig:
     Mesh geometry (r_outer, depth_scale) lives on MeshConfig.
     Interpolation (k_neighbors, kernel, ...) lives on InterpolationConfig.
     Output knobs (transition_width, kappa, ...) live on the output strategy.
+
+    Checkpointing is enabled by setting ``checkpoint_interval_myr``;
+    ``checkpoint_dir`` then defaults to ``gtrack_checkpoints`` (resolved
+    against the cwd at construction time and created up front on rank 0).
     """
 
     time_step: float = 1.0
@@ -59,7 +63,7 @@ class LithosphereSourceConfig:
     property_name: str = "thickness"
     gtrack_config: dict | None = None
     checkpoint_interval_myr: float | None = None
-    checkpoint_dir: str | None = None
+    checkpoint_dir: str | Path | None = None
 
     def __post_init__(self):
         if self.n_points < SOURCE_MIN_POINTS:
@@ -85,7 +89,7 @@ class LithosphereSourceConfig:
 # Data-loading helpers (module-level — both Sources need them)
 # ---------------------------------------------------------------------------
 
-def _load_from_hdf5(filepath, property_name: str) -> PointCloud:
+def _load_from_hdf5(filepath: str | Path, property_name: str) -> PointCloud:
     """Read lat/lon/values from an HDF5 (or NetCDF) file into a PointCloud."""
     with h5py.File(filepath, "r") as f:
         lon = f["lon"][:]
@@ -115,13 +119,16 @@ def _load_from_hdf5(filepath, property_name: str) -> PointCloud:
     return cloud
 
 
-def _build_cloud(data, property_name: str, n_points_fallback: int) -> PointCloud:
+CloudDataType = PointCloud | tuple[npt.ArrayLike, npt.ArrayLike] | str | Path | int | float
+
+
+def _build_cloud(data: CloudDataType, property_name: str, n_points_fallback: int) -> PointCloud:
     """Dispatch the input ``data`` to the right PointCloud constructor.
 
     Accepts: an existing PointCloud, an HDF5 path, a (latlon, values) tuple,
     or a scalar (broadcast onto a Fibonacci sphere mesh).
     """
-    if hasattr(data, "xyz") and hasattr(data, "properties"):
+    if isinstance(data, PointCloud):
         return data
     if isinstance(data, (str, Path)):
         return _load_from_hdf5(data, property_name)
@@ -146,21 +153,27 @@ def _build_cloud(data, property_name: str, n_points_fallback: int) -> PointCloud
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
 
-_CHECKPOINT_RE = re.compile(r"^ocean_checkpoint_(\d+)Ma\.npz$")
+# Matched against Path.stem, so no ".npz" suffix here; the suffix is
+# checked separately in _find_best_checkpoint.
+_CHECKPOINT_RE = re.compile(r"^ocean_checkpoint_(\d+)Ma$")
 
 
-def _find_best_checkpoint(checkpoint_dir: str | None, target_age: float):
+def _find_best_checkpoint(checkpoint_dir: Path | None, target_age: float) -> Path | None:
     """Return the checkpoint path whose age is the smallest value >= target_age.
 
     Smallest-age-not-younger-than-target minimises forward stepping. Returns
-    None if the directory is missing or contains no matching files.
+    None if the directory contains no matching files. The directory is
+    created at source construction time, so if it has disappeared since,
+    the resulting error propagates rather than being silenced.
     """
-    if checkpoint_dir is None or not os.path.isdir(checkpoint_dir):
+    if checkpoint_dir is None:
         return None
     best_path = None
     best_age = None
-    for fname in os.listdir(checkpoint_dir):
-        m = _CHECKPOINT_RE.match(fname)
+    for fname in checkpoint_dir.iterdir():
+        if fname.suffix != ".npz":
+            continue
+        m = _CHECKPOINT_RE.match(fname.stem)
         if m is None:
             continue
         ckpt_age = int(m.group(1))
@@ -168,7 +181,7 @@ def _find_best_checkpoint(checkpoint_dir: str | None, target_age: float):
             continue
         if best_age is None or ckpt_age < best_age:
             best_age = ckpt_age
-            best_path = os.path.join(checkpoint_dir, fname)
+            best_path = fname
     return best_path
 
 
@@ -179,15 +192,15 @@ def _find_best_checkpoint(checkpoint_dir: str | None, target_age: float):
 class Source(ABC):
     """Time-dependent source of (xyz, properties) on a sphere.
 
-    Subclasses expose a ``provides`` set listing the property keys (excluding
-    "xyz") that ``prepare(age)`` returns. ``provides`` is declared here as an
-    abstract property, which a subclass may satisfy either with a plain class
-    constant (the concrete sources do this, keeping class-level access like
-    ``LithosphereSource.provides``) or with an instance property (handy for
-    test doubles and dynamically-configured sources). The ABC implements a
-    per-age cache so that consumers sharing this Source can call ``prepare``
-    in any order and the underlying gtrack state advances at most once per
-    age.
+    Subclasses expose a ``provides`` set listing the keys (including "xyz")
+    that ``prepare(age)`` returns. ``provides`` is declared here as an
+    abstract property, which a subclass may satisfy either with a read-only
+    property (the concrete sources do this) or with a plain class constant
+    (handy for test doubles and dynamically-configured sources, and keeps
+    class-level access like ``SomeSource.provides`` working). The ABC
+    implements a per-age cache so that consumers sharing this Source can call
+    ``prepare`` in any order and the underlying gtrack state advances at most
+    once per age.
 
     ``prepare`` is collective across ``self.comm``. Subclasses implement
     ``_compute_sources(age)``, which runs on rank 0 only; the ABC handles
@@ -197,7 +210,7 @@ class Source(ABC):
     @property
     @abstractmethod
     def provides(self) -> frozenset[str]:
-        """The set of property keys (excluding 'xyz') that prepare(age) returns."""
+        """The set of keys (including 'xyz') that prepare(age) returns."""
         ...
 
     gplates_connector: "pyGplatesConnector"
@@ -224,8 +237,8 @@ class Source(ABC):
 
     @abstractmethod
     def _compute_sources(self, age: float) -> dict[str, np.ndarray]:
-        """Build the source-arrays dict on rank 0. Must include 'xyz' plus
-        every key in ``self.provides``."""
+        """Build the source-arrays dict on rank 0. Must include every key in
+        ``self.provides`` ('xyz' among them)."""
 
     def _load(self) -> None:
         """Rank-0 I/O: build the gtrack machinery and the present-day cloud.
@@ -351,14 +364,38 @@ class LithosphereSource(Source):
     the first touch. Declaring ``walk_start_age`` does NOT let you revisit
     ages already stepped past — it only declares the oldest age you intend to
     request.
+
+    Args:
+        gplates_connector: the `pyGplatesConnector` providing the rotation /
+            topology files and the age <-> non-dimensional time mapping.
+        continental_data: present-day continental thickness; anything
+            `_build_cloud` accepts (a PointCloud, an HDF5/NetCDF path, a
+            (latlon, values) tuple, or a scalar broadcast onto a sphere mesh).
+        age_to_property: callable mapping seafloor age (Myr) to the tracked
+            property (typically thickness in km via half-space cooling).
+        plate_files: `PlateModelFiles` carrying the continental and static
+            polygon paths (both mandatory for this source).
+        config: `LithosphereSourceConfig` with the ocean tracker, data-loading
+            and checkpointing knobs. Defaults to `LithosphereSourceConfig()`.
+        default_continental_age_myr: the age column assigned to continental
+            seeds (they carry no seafloor age of their own).
+        walk_start_age: the oldest age you will ever request; requests older
+            than this fail immediately rather than silently locking the
+            forward-only walk at the first touch. Does not enable revisiting
+            older ages once stepped past. Default None keeps the
+            pre-declaration behaviour (the first prepare fixes the ceiling).
+        comm: MPI communicator; gtrack work runs on rank 0 and results are
+            broadcast.
     """
 
-    provides = frozenset({"xyz", "thickness", "age"})
+    @property
+    def provides(self) -> frozenset[str]:
+        return frozenset({"xyz", "thickness", "age"})
 
     def __init__(
         self,
         gplates_connector: "pyGplatesConnector",
-        continental_data,
+        continental_data: CloudDataType,
         age_to_property: Callable[[np.ndarray], np.ndarray],
         plate_files: "PlateModelFiles",
         config: LithosphereSourceConfig | None = None,
@@ -367,15 +404,6 @@ class LithosphereSource(Source):
         walk_start_age: float | None = None,
         comm: MPI.Comm = MPI.COMM_WORLD,
     ):
-        """Build a combined oceanic + continental lithosphere source.
-
-        Args:
-            walk_start_age: the oldest age you will ever request; requests
-                older than this fail immediately rather than silently locking
-                the forward-only walk at the first touch. Does not enable
-                revisiting older ages once stepped past. Default None keeps the
-                pre-declaration behaviour (the first prepare fixes the ceiling).
-        """
         if plate_files.continental_polygons is None:
             raise ValueError(
                 "plate_files.continental_polygons must be set. "
@@ -410,11 +438,17 @@ class LithosphereSource(Source):
         self._initialized = False
         self._last_reinit_age: float | None = None
         self._last_checkpoint_age: float | None = None
-        self._checkpoint_dir = (
-            self.config.checkpoint_dir or "./gtrack_checkpoints"
-            if self.config.checkpoint_interval_myr is not None
-            else None
-        )
+        # Resolve and create the checkpoint directory up front (rank 0 only;
+        # all checkpoint I/O happens on root) so a typo'd path fails at wiring
+        # time rather than part-way through a simulation.
+        if self.config.checkpoint_interval_myr is not None:
+            self._checkpoint_dir = Path(
+                self.config.checkpoint_dir or "gtrack_checkpoints"
+            ).absolute()
+            if self._is_root:
+                self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self._checkpoint_dir = None
 
         # gtrack handles + present-day cloud are built lazily in _load (rank 0
         # only). On non-root these stay None for the source's lifetime and are
@@ -461,7 +495,7 @@ class LithosphereSource(Source):
         )
         self._continental_present = self._load_continental(self._continental_data)
 
-    def _load_continental(self, data) -> PointCloud:
+    def _load_continental(self, data: CloudDataType) -> PointCloud:
         cloud = _build_cloud(data, self.config.property_name, self.config.n_points)
         n_before = cloud.n_points
         cloud = self._continental_filter.filter_inside(cloud, at_age=0.0)
@@ -596,11 +630,8 @@ class LithosphereSource(Source):
                 and abs(self._last_checkpoint_age - age) < interval):
             return
         rounded_age = int(round(age))
-        filepath = os.path.join(
-            self._checkpoint_dir, f"ocean_checkpoint_{rounded_age}Ma.npz"
-        )
+        filepath = self._checkpoint_dir / f"ocean_checkpoint_{rounded_age}Ma.npz"
         try:
-            os.makedirs(self._checkpoint_dir, exist_ok=True)
             self._ocean_tracker.save_checkpoint(filepath)
             self._last_checkpoint_age = rounded_age
             log(f"LithosphereSource: saved ocean checkpoint at "
