@@ -188,11 +188,28 @@ class TestInterpolationConfig:
 # ---------------------------------------------------------------------------
 
 class TestSourceContracts:
+    # provides is a read-only instance property on the concrete sources, so
+    # assert through instances; construction is I/O-free (lazy load).
     def test_lithosphere_provides(self):
-        assert LithosphereSource.provides == frozenset({"xyz", "thickness", "age"})
+        src = LithosphereSource(
+            gplates_connector=_StubConnector(),
+            continental_data=100.0,
+            age_to_property=half_space_cooling,
+            plate_files=PlateModelFiles(
+                continental_polygons="continental.gpml",
+                static_polygons="static.gpml",
+            ),
+        )
+        assert src.provides == frozenset({"xyz", "thickness", "age"})
 
     def test_polygon_provides(self):
-        assert PolygonSource.provides == frozenset({"xyz", "thickness"})
+        src = PolygonSource(
+            gplates_connector=_StubConnector(),
+            polygons="craton.shp",
+            thickness_data=200.0,
+            plate_files=PlateModelFiles(static_polygons="static.gpml"),
+        )
+        assert src.provides == frozenset({"xyz", "thickness"})
 
     def test_lithosphere_requires_continental_polygons(self):
         # The check is against PlateModelFiles, not the connector, and fires
