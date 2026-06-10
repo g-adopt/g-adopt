@@ -3,10 +3,6 @@ from .gplates import (
     GplatesScalarFunction,
     GplatesVelocityFunction,
     ensure_reconstruction,
-    lithosphere_geotherm,
-    lithosphere_indicator,
-    polygon_geotherm,
-    polygon_indicator,
     pyGplatesConnector,
     PlateModelFiles,
 )
@@ -22,11 +18,17 @@ from .outputs import (
     radial_quintic_step,
 )
 from .sources import (
+    CloudDataType,
     LithosphereSource,
     LithosphereSourceConfig,
     PolygonSource,
     PolygonSourceConfig,
     Source,
+)
+from .factories import (
+    ConnectorFactory,
+    LithosphereConnectorFactory,
+    PolygonConnectorFactory,
 )
 
 __all__ = [
@@ -47,6 +49,7 @@ __all__ = [
     "LithosphereSourceConfig",
     "PolygonSource",
     "PolygonSourceConfig",
+    "CloudDataType",
     # Outputs
     "OutputStrategy",
     "QuinticOutput",
@@ -57,8 +60,7 @@ __all__ = [
     "continental_linear",
     "radial_quintic_step",
     # Factories
-    "lithosphere_indicator",
-    "lithosphere_geotherm",
-    "polygon_indicator",
-    "polygon_geotherm",
+    "ConnectorFactory",
+    "LithosphereConnectorFactory",
+    "PolygonConnectorFactory",
 ]

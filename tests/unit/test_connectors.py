@@ -44,10 +44,9 @@ from gadopt.gplates import (
     Source,
     QuinticOutput,
     ensure_reconstruction,
-    lithosphere_geotherm,
-    lithosphere_indicator,
-    polygon_geotherm,
-    polygon_indicator,
+    ConnectorFactory,
+    LithosphereConnectorFactory,
+    PolygonConnectorFactory,
     pyGplatesConnector,
 )
 
@@ -156,7 +155,7 @@ class TestRequiresProvidesContract:
         with pytest.raises(ValueError, match="age"):
             ScalarFieldConnector(src, GeothermERFOutput())
 
-    def test_polygon_with_quintic_allowed(self):
+    def test_polygon_with_tanh_allowed(self):
         src = _DummySource({"xyz", "thickness"})
         ScalarFieldConnector(src, QuinticOutput(default_thickness_km=0.0))
 
@@ -192,13 +191,18 @@ class TestGcCollectDefault:
         assert conn.gc_collect_frequency == 10
 
     def test_default_is_ten_lithosphere_factory(self):
-        # source= route skips the source-is-None branch -> no reconstruction I/O.
-        conn = lithosphere_indicator(source=_DataSource())
-        assert conn.gc_collect_frequency == 10
+        # Assigning a pre-built source skips construct_source -> no
+        # reconstruction I/O.
+        factory = LithosphereConnectorFactory()
+        factory.source = _DataSource()
+        factory.construct_output()
+        assert factory.indicator.gc_collect_frequency == 10
 
     def test_default_is_ten_polygon_factory(self):
-        conn = polygon_indicator(source=_DataSource(), fade_ref_km=50.0)
-        assert conn.gc_collect_frequency == 10
+        factory = PolygonConnectorFactory()
+        factory.source = _DataSource()
+        factory.construct_output(fade_ref_km=100.0)
+        assert factory.indicator.gc_collect_frequency == 10
 
     def _drive(self, monkeypatch, frequency, n_calls):
         calls = {"n": 0}
@@ -325,6 +329,39 @@ def _target_coords():
     rng = np.random.default_rng(1)
     xyz = rng.normal(size=(15, 3))
     return 2.0 * xyz / np.linalg.norm(xyz, axis=1, keepdims=True)
+
+
+class TestZeroOutsideFadeCrossCheck:
+    """A zero-outside source (polygon-style mask-and-relabel) paired with an
+    unfaded one-sided quintic step would paint the whole exterior surface as
+    inside the region: zero thickness puts the region base at the surface,
+    where the step reads exactly 1. The PolygonConnectorFactory overload
+    forces fade_ref_km at the call site; this cross-check in
+    ConnectorFactory.indicator covers the generic `output` setter route."""
+
+    class _ZeroOutsideSource(_DataSource):
+        zero_outside = True
+
+    def test_unfaded_quintic_on_zero_outside_source_raises(self):
+        factory = ConnectorFactory()
+        factory.source = self._ZeroOutsideSource()
+        factory.output = QuinticOutput()
+        with pytest.raises(ValueError, match="fade_ref_km"):
+            _ = factory.indicator
+
+    def test_faded_quintic_on_zero_outside_source_passes(self):
+        factory = ConnectorFactory()
+        factory.source = self._ZeroOutsideSource()
+        factory.output = QuinticOutput(fade_ref_km=100.0)
+        assert factory.indicator is not None
+
+    def test_unfaded_quintic_on_regular_source_passes(self):
+        # Lithosphere-style sources never have vanishing thickness, so the
+        # unfaded step stays a legitimate configuration there.
+        factory = ConnectorFactory()
+        factory.source = _DataSource()
+        factory.output = QuinticOutput()
+        assert factory.indicator is not None
 
 
 class TestGeometrySharing:
@@ -567,9 +604,16 @@ class TestConnectorRegression:
 
     def test_lithosphere_pair(self, lith_source, regression_mesh, Q):
         ref = _load_reference()
+        factory = LithosphereConnectorFactory()
+        factory.source = lith_source
+        # Must match generate_expected_connectors.py. The fade also keeps
+        # the regression age-sensitive on the coarse 4-layer mesh, where an
+        # unfaded one-sided step would be identical at every age.
+        factory.construct_output(fade_ref_km=100.0)
+        factory.construct_geotherm()
         observed = _evaluate_connectors_lockstep({
-            "lith_indicator": lithosphere_indicator(source=lith_source, fade_ref_km=100.0),
-            "lith_geotherm": lithosphere_geotherm(source=lith_source),
+            "lith_indicator": factory.indicator,
+            "lith_geotherm": factory.geotherm,
         }, regression_mesh, Q, TEST_AGES)
         for name in ("lith_indicator", "lith_geotherm"):
             for age in TEST_AGES:
@@ -578,9 +622,13 @@ class TestConnectorRegression:
 
     def test_polygon_pair(self, poly_source, regression_mesh, Q):
         ref = _load_reference()
+        factory = PolygonConnectorFactory()
+        factory.source = poly_source
+        factory.construct_output(fade_ref_km=200.0)
+        factory.construct_geotherm()
         observed = _evaluate_connectors_lockstep({
-            "polygon_indicator": polygon_indicator(source=poly_source, fade_ref_km=200.0),
-            "polygon_geotherm": polygon_geotherm(source=poly_source),
+            "polygon_indicator": factory.indicator,
+            "polygon_geotherm": factory.geotherm,
         }, regression_mesh, Q, TEST_AGES)
         for name in ("polygon_indicator", "polygon_geotherm"):
             for age in TEST_AGES:
@@ -612,9 +660,16 @@ class TestSharedSourceConsistency:
     ):
         # Build two independent indicator connectors that share the same
         # source. Same source ⇒ same prepared dict ⇒ same kNN interpolation
-        # ⇒ identical DoF values at the same ndtime.
-        ind_a = lithosphere_indicator(source=fresh_lith_source)
-        ind_b = lithosphere_indicator(source=fresh_lith_source)
+        # ⇒ identical DoF values at the same ndtime. A factory only hands
+        # out one indicator, so two factories share the assigned source.
+        factory_a = LithosphereConnectorFactory()
+        factory_a.source = fresh_lith_source
+        factory_a.construct_output()
+        factory_b = LithosphereConnectorFactory()
+        factory_b.source = fresh_lith_source
+        factory_b.construct_output()
+        ind_a = factory_a.indicator
+        ind_b = factory_b.indicator
 
         sf_a = GplatesScalarFunction(Q, indicator_connector=ind_a, name="ind_a")
         sf_b = GplatesScalarFunction(Q, indicator_connector=ind_b, name="ind_b")
@@ -634,11 +689,15 @@ class TestSharedSourceConsistency:
         self, fresh_lith_source, regression_mesh, Q
     ):
         # Pair an indicator with a geotherm on the same source. Both produce
-        # different scalar fields (tanh vs. erf geotherm), but they must
+        # different scalar fields (quintic step vs. erf geotherm), but they must
         # agree on what the underlying source dict is — verifiable by
         # checking that the source's per-age cache hits on the second call.
-        ind = lithosphere_indicator(source=fresh_lith_source)
-        geo = lithosphere_geotherm(source=fresh_lith_source)
+        factory = LithosphereConnectorFactory()
+        factory.source = fresh_lith_source
+        factory.construct_output()
+        factory.construct_geotherm()
+        ind = factory.indicator
+        geo = factory.geotherm
 
         sf_ind = GplatesScalarFunction(Q, indicator_connector=ind, name="ind")
         sf_geo = GplatesScalarFunction(Q, indicator_connector=geo, name="geo")

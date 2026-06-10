@@ -88,7 +88,7 @@ from gadopt.gplates import (
     GeothermERFOutput,
     GeothermLinearOutput,
     ensure_reconstruction,
-    polygon_indicator,
+    PolygonConnectorFactory,
     pyGplatesConnector,
 )
 
@@ -242,7 +242,7 @@ continental_data = (latlon, thickness_values)
 #   and exposes a single `prepare(age)` call returning a dict of
 #   source-point arrays;
 # * an **OutputStrategy** turns interpolated source values at target
-#   mesh nodes into a scalar field (a quintic-step indicator, an erf geotherm,
+#   mesh nodes into a scalar field (a tanh indicator, an erf geotherm,
 #   a linear geotherm);
 # * an **ScalarFieldConnector** wires the two together, handles the
 #   kNN interpolation between source points and mesh DoFs, and caches
@@ -320,11 +320,14 @@ poly_source_cfg = PolygonSourceConfig(n_points=5000)
 # ## Part 1: Lithosphere indicator + geotherm
 #
 # We build a single `LithosphereSource` and then hand it to two
-# separate `ScalarFieldConnector` instances -- one with a `QuinticOutput`
-# (the smooth indicator field: exactly 1 from the surface down to the
-# lithosphere base, decaying to exactly 0 over `width_km` below it)
-# and one with a `GeothermERFOutput` (the half-space cooling
-# temperature profile).  Because both connectors hold a reference to
+# separate `ScalarFieldConnector` instances -- one with a
+# `QuinticOutput` (the smooth indicator field: exactly 1 from the
+# surface down to the lithospheric base, decaying to exactly 0 over a
+# one-sided quintic transition below it) and one with a
+# `GeothermERFOutput` (the half-space cooling temperature profile).
+# No lateral fade is needed here: the thickness channel never
+# vanishes (uncovered nodes are filled with `default_thickness_km`),
+# so the surface legitimately reads 1 everywhere.  Because both connectors hold a reference to
 # `lith_source`, the underlying `SeafloorAgeTracker` advances exactly
 # once per call to `update_plate_reconstruction(ndtime)`, no matter
 # which of the two `GplatesScalarFunction` wrappers is asked first.
@@ -360,13 +363,17 @@ T_erf = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 # the polygon source places zero-thickness halo seeds outside the
 # continental polygons, so `too_far` target nodes should read as
 # "outside the region" rather than getting filled with a default
-# 100 km of continental material.  The lateral fade (`fade_ref_km`)
-# is what actually zeroes the exterior: the one-sided quintic step
-# reads 1 at the surface even where thickness is zero, so without
-# the `clip(thickness / fade_ref_km, 0, 1)` amplitude factor the
-# whole ocean surface would read 1.  A reference of 100 km keeps the
-# continental interiors (thickness >~ 100 km) saturated at 1 while
-# the zero-thickness exterior fades smoothly to 0.
+# 100 km of continental material.
+#
+# Crucially, a polygon-bounded indicator must also set `fade_ref_km`.
+# The one-sided quintic step reads exactly 1 at the surface wherever
+# the region has *any* thickness -- and where the thickness is zero
+# the base sits at the surface, so the surface node itself would read
+# 1 too.  Without a lateral fade the indicator would paint the entire
+# surface, oceans included, as continent.  The fade multiplies the
+# radial step by `clip(thickness / fade_ref_km, 0, 1)`, taking the
+# field to exactly 0 where the thickness vanishes; 100 km is the
+# typical thickness scale of the continental lithosphere data.
 
 # +
 cont_source = PolygonSource(
@@ -395,8 +402,9 @@ T_lin = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 #
 # The continental crust and craton fields are indicator-only -- they
 # don't have a paired geotherm.  When you only need one field per
-# source, the `polygon_indicator` factory keeps the call site short
-# without losing any of the underlying machinery.
+# source, a `PolygonConnectorFactory` keeps the call site short without
+# losing any of the underlying machinery: construct the source and the
+# output on the factory and pull the connector off `.indicator`.
 
 # ### Continental crust
 #
@@ -407,20 +415,22 @@ T_lin = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 # density deficit of continental crust relative to the mantle.
 
 # +
-I_crust = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
+crust_factory = PolygonConnectorFactory(mesh=mesh_cfg, interpolation=interp_cfg)
+crust_factory.construct_source(
     gplates_connector=plate_model,
     polygons=muller_2022_files.get("continental_polygons"),
     thickness_data=50.0,
     plate_files=plate_files,
-    source_config=poly_source_cfg,
-    transition_width_km=10.0,
-    default_thickness_km=0.0,
-    # fade_ref_km is inferred from the scalar thickness_data (50 km): the
-    # lateral fade saturates exactly where the crust reaches its nominal
-    # thickness and zeroes the ocean surface.
-    mesh=mesh_cfg, interpolation=interp_cfg,
+    config=poly_source_cfg,
     comm=mesh.comm,
-), name="I_crust")
+)
+# fade_ref_km is a required argument on the polygon factory; with a
+# constant 50 km crust the natural fade reference is that same 50 km.
+crust_factory.construct_output(fade_ref_km=50.0, width_km=10.0)
+
+I_crust = GplatesScalarFunction(
+    Q, indicator_connector=crust_factory.indicator, name="I_crust"
+)
 # -
 
 # ### Cratons
@@ -439,21 +449,23 @@ I_crust = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
 # on GitHub (or via `make data`).
 
 # +
-I_craton = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
+craton_factory = PolygonConnectorFactory(mesh=mesh_cfg, interpolation=interp_cfg)
+craton_factory.construct_source(
     gplates_connector=plate_model,
     polygons="Craton_Boundaries_Inferred.shp",
     thickness_data=continental_data,
     plate_files=plate_files,
-    source_config=poly_source_cfg,
-    transition_width_km=10.0,
-    default_thickness_km=0.0,
-    # Spatially varying thickness data, so the fade reference cannot be
-    # inferred: 150 km keeps the thick cratonic keels saturated at 1 while
-    # thinner margins fade proportionally.
-    fade_ref_km=150.0,
-    mesh=mesh_cfg, interpolation=interp_cfg,
+    config=poly_source_cfg,
     comm=mesh.comm,
-), name="I_craton")
+)
+# Cratonic roots run thick (~150-300 km); fading over 150 km keeps
+# the craton interiors at full amplitude while the margins, where the
+# thickness data thins out, taper smoothly to zero.
+craton_factory.construct_output(fade_ref_km=150.0, width_km=10.0)
+
+I_craton = GplatesScalarFunction(
+    Q, indicator_connector=craton_factory.indicator, name="I_craton"
+)
 # -
 
 # ## Part 3: Temperature composition

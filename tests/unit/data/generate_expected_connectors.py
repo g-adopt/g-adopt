@@ -25,10 +25,8 @@ from gadopt.gplates import (
     PolygonSource,
     PolygonSourceConfig,
     ensure_reconstruction,
-    lithosphere_geotherm,
-    lithosphere_indicator,
-    polygon_geotherm,
-    polygon_indicator,
+    LithosphereConnectorFactory,
+    PolygonConnectorFactory,
     pyGplatesConnector,
 )
 
@@ -135,9 +133,17 @@ def main():
         config=LithosphereSourceConfig(n_points=LITH_N_POINTS),
     )
 
+    lith_factory = LithosphereConnectorFactory()
+    lith_factory.source = lith_src
+    # fade_ref_km=100 keeps the regression age-sensitive: on the coarse
+    # 4-layer mesh an unfaded one-sided step is exactly 1 at the surface
+    # node and exactly 0 at the next node down at every age, so the
+    # reduced integrals would not change with the reconstruction at all.
+    lith_factory.construct_output(fade_ref_km=100.0)
+    lith_factory.construct_geotherm()
     lith_result = walk_connectors({
-        "lith_indicator": lithosphere_indicator(source=lith_src, fade_ref_km=100.0),
-        "lith_geotherm": lithosphere_geotherm(source=lith_src),
+        "lith_indicator": lith_factory.indicator,
+        "lith_geotherm": lith_factory.geotherm,
     }, Q, TEST_AGES)
     reference.update(lith_result)
 
@@ -149,9 +155,13 @@ def main():
         plate_files=plate_files,
         config=PolygonSourceConfig(n_points=POLYGON_N_POINTS),
     )
+    poly_factory = PolygonConnectorFactory()
+    poly_factory.source = poly_src
+    poly_factory.construct_output(fade_ref_km=200.0)
+    poly_factory.construct_geotherm()
     poly_result = walk_connectors({
-        "polygon_indicator": polygon_indicator(source=poly_src, fade_ref_km=200.0),
-        "polygon_geotherm": polygon_geotherm(source=poly_src),
+        "polygon_indicator": poly_factory.indicator,
+        "polygon_geotherm": poly_factory.geotherm,
     }, Q, TEST_AGES)
     reference.update(poly_result)
 
