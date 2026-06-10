@@ -1,53 +1,26 @@
 import warnings
 from dataclasses import dataclass
-from typing import Callable
+
 
 import firedrake as fd
 import numpy as np
 import pygplates
 from firedrake import TensorElement, VectorElement
 from firedrake.ufl_expr import extract_unique_domain
-from mpi4py import MPI
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
 
 from ..solver_options_manager import SolverConfigurationMixin
 from ..utility import DEBUG, INFO, InteriorBC, is_continuous, log, log_level
-from .connectors import ScalarFieldConnector, InterpolationConfig
+from .connectors import ScalarFieldConnector
 from .gplatesfiles import ensure_reconstruction
-from .outputs import (
-    GeothermERFOutput,
-    GeothermLinearOutput,
-    MeshConfig,
-    TanhOutput,
-)
-from .sources import (
-    LithosphereSource,
-    LithosphereSourceConfig,
-    PolygonSource,
-    PolygonSourceConfig,
-)
 
 
 __all__ = [
     "ensure_reconstruction",
     "GplatesVelocityFunction",
     "GplatesScalarFunction",
-    "ScalarFieldConnector",
     "PlateModelFiles",
-    "InterpolationConfig",
-    "MeshConfig",
-    "LithosphereSource",
-    "LithosphereSourceConfig",
-    "PolygonSource",
-    "PolygonSourceConfig",
-    "TanhOutput",
-    "GeothermERFOutput",
-    "GeothermLinearOutput",
-    "lithosphere_indicator",
-    "lithosphere_geotherm",
-    "polygon_indicator",
-    "polygon_geotherm",
     "pyGplatesConnector",
 ]
 
@@ -718,238 +691,13 @@ class pyGplatesConnector(object):
         return np.array([[x[i], y[i], z[i]] for i in range(len(x))])
 
 
-# ---------------------------------------------------------------------------
-# Factory functions
-# ---------------------------------------------------------------------------
-# Most users don't need to wire a Source + Output + ScalarFieldConnector by
-# hand; these factories absorb the boilerplate for the two common pairings
-# (indicator and geotherm) for both lithosphere and polygon sources.
-#
-# When two consumers (an indicator and a geotherm) need to share the same
-# underlying Source (mandatory for LithosphereSource, whose SeafloorAgeTracker
-# is forward-only and expensive to construct), build the Source explicitly
-# and pass it to *both* factory calls via the ``source=`` keyword. The
-# per-age cache on the Source guarantees the tracker advances exactly once
-# per age, regardless of call order between the two connectors.
-
-
-def lithosphere_indicator(
-    gplates_connector: "pyGplatesConnector | None" = None,
-    continental_data=None,
-    age_to_property: Callable[[np.ndarray], np.ndarray] | None = None,
-    *,
-    source: LithosphereSource | None = None,
-    plate_files: "PlateModelFiles | None" = None,
-    transition_width_km: float = 10.0,
-    default_thickness_km: float = 100.0,
-    source_config: LithosphereSourceConfig | None = None,
-    mesh: MeshConfig | None = None,
-    interpolation: InterpolationConfig | None = None,
-    default_continental_age_myr: float = 500.0,
-    walk_start_age: float | None = None,
-    gc_collect_frequency: int | None = 10,
-    comm: MPI.Comm = MPI.COMM_WORLD,
-) -> ScalarFieldConnector:
-    """Build an ``ScalarFieldConnector`` returning the lithosphere indicator field.
-
-    Pass either ``source=`` (to reuse a LithosphereSource shared with a
-    geotherm connector) or the trio ``gplates_connector``,
-    ``continental_data``, ``age_to_property`` plus ``plate_files`` (to build a
-    fresh source).
-
-    ``walk_start_age`` is the oldest age you will ever request; requests older
-    than this fail immediately rather than silently locking the forward-only
-    walk at the first touch. It does not enable revisiting older ages once
-    stepped past. Ignored when ``source=`` is given.
-    """
-    if source is None:
-        if (gplates_connector is None or continental_data is None
-                or age_to_property is None or plate_files is None):
-            raise ValueError(
-                "lithosphere_indicator: pass either `source=` or all of "
-                "`gplates_connector`, `continental_data`, `age_to_property`, "
-                "`plate_files`."
-            )
-        source = LithosphereSource(
-            gplates_connector,
-            continental_data,
-            age_to_property,
-            plate_files,
-            config=source_config,
-            default_continental_age_myr=default_continental_age_myr,
-            walk_start_age=walk_start_age,
-            comm=comm,
-        )
-    output = TanhOutput(
-        transition_width_km=transition_width_km,
-        default_thickness_km=default_thickness_km,
-    )
-    return ScalarFieldConnector(
-        source, output,
-        mesh=mesh, interpolation=interpolation,
-        gc_collect_frequency=gc_collect_frequency,
-    )
-
-
-def lithosphere_geotherm(
-    gplates_connector: "pyGplatesConnector | None" = None,
-    continental_data=None,
-    age_to_property: Callable[[np.ndarray], np.ndarray] | None = None,
-    *,
-    source: LithosphereSource | None = None,
-    plate_files: "PlateModelFiles | None" = None,
-    kappa: float = 1e-6,
-    default_thickness_km: float = 100.0,
-    too_far_age_myr: float = 500.0,
-    source_config: LithosphereSourceConfig | None = None,
-    mesh: MeshConfig | None = None,
-    interpolation: InterpolationConfig | None = None,
-    default_continental_age_myr: float = 500.0,
-    walk_start_age: float | None = None,
-    gc_collect_frequency: int | None = 10,
-    comm: MPI.Comm = MPI.COMM_WORLD,
-) -> ScalarFieldConnector:
-    """Build an ``ScalarFieldConnector`` returning the normalised oceanic geotherm.
-
-    To share a tracker with a sibling indicator connector, build a single
-    ``LithosphereSource`` explicitly and pass it via ``source=`` to both
-    ``lithosphere_indicator`` and ``lithosphere_geotherm``.
-
-    ``walk_start_age`` is the oldest age you will ever request; requests older
-    than this fail immediately rather than silently locking the forward-only
-    walk at the first touch. It does not enable revisiting older ages once
-    stepped past. Ignored when ``source=`` is given.
-    """
-    if source is None:
-        if (gplates_connector is None or continental_data is None
-                or age_to_property is None or plate_files is None):
-            raise ValueError(
-                "lithosphere_geotherm: pass either `source=` or all of "
-                "`gplates_connector`, `continental_data`, `age_to_property`, "
-                "`plate_files`."
-            )
-        source = LithosphereSource(
-            gplates_connector,
-            continental_data,
-            age_to_property,
-            plate_files,
-            config=source_config,
-            default_continental_age_myr=default_continental_age_myr,
-            walk_start_age=walk_start_age,
-            comm=comm,
-        )
-    output = GeothermERFOutput(
-        kappa=kappa,
-        default_thickness_km=default_thickness_km,
-        too_far_age_myr=too_far_age_myr,
-    )
-    return ScalarFieldConnector(
-        source, output,
-        mesh=mesh, interpolation=interpolation,
-        gc_collect_frequency=gc_collect_frequency,
-    )
-
-
-def polygon_indicator(
-    gplates_connector: "pyGplatesConnector | None" = None,
-    polygons=None,
-    thickness_data=None,
-    *,
-    source: PolygonSource | None = None,
-    plate_files: "PlateModelFiles | None" = None,
-    transition_width_km: float = 10.0,
-    default_thickness_km: float = 0.0,
-    source_config: PolygonSourceConfig | None = None,
-    mesh: MeshConfig | None = None,
-    interpolation: InterpolationConfig | None = None,
-    gc_collect_frequency: int | None = 10,
-    comm: MPI.Comm = MPI.COMM_WORLD,
-) -> ScalarFieldConnector:
-    """Build an ``ScalarFieldConnector`` returning a polygon-bounded indicator
-    field.
-
-    The ``default_thickness_km`` default is 0 (not 100 as for lithosphere)
-    because PolygonSource's mask-and-relabel pattern places zero-thickness
-    halo seeds outside the polygons; a ``too_far`` target node should read
-    as "outside the region" rather than filling in 100 km of fake material.
-    """
-    if source is None:
-        if (gplates_connector is None or polygons is None
-                or thickness_data is None or plate_files is None):
-            raise ValueError(
-                "polygon_indicator: pass either `source=` or all of "
-                "`gplates_connector`, `polygons`, `thickness_data`, "
-                "`plate_files`."
-            )
-        source = PolygonSource(
-            gplates_connector,
-            polygons,
-            thickness_data,
-            plate_files,
-            config=source_config,
-            comm=comm,
-        )
-    output = TanhOutput(
-        transition_width_km=transition_width_km,
-        default_thickness_km=default_thickness_km,
-    )
-    return ScalarFieldConnector(
-        source, output,
-        mesh=mesh, interpolation=interpolation,
-        gc_collect_frequency=gc_collect_frequency,
-    )
-
-
-def polygon_geotherm(
-    gplates_connector: "pyGplatesConnector | None" = None,
-    polygons=None,
-    thickness_data=None,
-    *,
-    source: PolygonSource | None = None,
-    plate_files: "PlateModelFiles | None" = None,
-    source_config: PolygonSourceConfig | None = None,
-    mesh: MeshConfig | None = None,
-    interpolation: InterpolationConfig | None = None,
-    gc_collect_frequency: int | None = 10,
-    comm: MPI.Comm = MPI.COMM_WORLD,
-) -> ScalarFieldConnector:
-    """Build an ``ScalarFieldConnector`` returning the linear continental geotherm
-    bounded by polygons.
-
-    Outside the polygon region the output is 1.0 — i.e. mantle temperature.
-    """
-    if source is None:
-        if (gplates_connector is None or polygons is None
-                or thickness_data is None or plate_files is None):
-            raise ValueError(
-                "polygon_geotherm: pass either `source=` or all of "
-                "`gplates_connector`, `polygons`, `thickness_data`, "
-                "`plate_files`."
-            )
-        source = PolygonSource(
-            gplates_connector,
-            polygons,
-            thickness_data,
-            plate_files,
-            config=source_config,
-            comm=comm,
-        )
-    output = GeothermLinearOutput()
-    return ScalarFieldConnector(
-        source, output,
-        mesh=mesh, interpolation=interpolation,
-        gc_collect_frequency=gc_collect_frequency,
-    )
-
-
 class GplatesScalarFunction(fd.Function):
     """Firedrake Function for scalar indicator/geotherm fields from plate
     reconstructions.
 
     Wraps any ``ScalarFieldConnector`` (built either directly via composition
-    of a ``Source`` and an ``OutputStrategy``, or via one of the convenience
-    factories ``lithosphere_indicator``, ``lithosphere_geotherm``,
-    ``polygon_indicator``, ``polygon_geotherm``). Calling
+    of a ``Source`` and an ``OutputStrategy``, or via a ``ConnectorFactory``
+    such as ``LithosphereConnectorFactory``). Calling
     ``update_plate_reconstruction(ndtime)`` recomputes the field and assigns
     it onto the underlying Firedrake DoFs.
 

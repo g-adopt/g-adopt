@@ -44,10 +44,8 @@ from gadopt.gplates import (
     Source,
     TanhOutput,
     ensure_reconstruction,
-    lithosphere_geotherm,
-    lithosphere_indicator,
-    polygon_geotherm,
-    polygon_indicator,
+    LithosphereConnectorFactory,
+    PolygonConnectorFactory,
     pyGplatesConnector,
 )
 
@@ -192,13 +190,18 @@ class TestGcCollectDefault:
         assert conn.gc_collect_frequency == 10
 
     def test_default_is_ten_lithosphere_factory(self):
-        # source= route skips the source-is-None branch -> no reconstruction I/O.
-        conn = lithosphere_indicator(source=_DataSource())
-        assert conn.gc_collect_frequency == 10
+        # Assigning a pre-built source skips construct_source -> no
+        # reconstruction I/O.
+        factory = LithosphereConnectorFactory()
+        factory.source = _DataSource()
+        factory.construct_output()
+        assert factory.indicator.gc_collect_frequency == 10
 
     def test_default_is_ten_polygon_factory(self):
-        conn = polygon_indicator(source=_DataSource())
-        assert conn.gc_collect_frequency == 10
+        factory = PolygonConnectorFactory()
+        factory.source = _DataSource()
+        factory.construct_output()
+        assert factory.indicator.gc_collect_frequency == 10
 
     def _drive(self, monkeypatch, frequency, n_calls):
         calls = {"n": 0}
@@ -567,9 +570,13 @@ class TestConnectorRegression:
 
     def test_lithosphere_pair(self, lith_source, regression_mesh, Q):
         ref = _load_reference()
+        factory = LithosphereConnectorFactory()
+        factory.source = lith_source
+        factory.construct_output()
+        factory.construct_geotherm()
         observed = _evaluate_connectors_lockstep({
-            "lith_indicator": lithosphere_indicator(source=lith_source),
-            "lith_geotherm": lithosphere_geotherm(source=lith_source),
+            "lith_indicator": factory.indicator,
+            "lith_geotherm": factory.geotherm,
         }, regression_mesh, Q, TEST_AGES)
         for name in ("lith_indicator", "lith_geotherm"):
             for age in TEST_AGES:
@@ -578,9 +585,13 @@ class TestConnectorRegression:
 
     def test_polygon_pair(self, poly_source, regression_mesh, Q):
         ref = _load_reference()
+        factory = PolygonConnectorFactory()
+        factory.source = poly_source
+        factory.construct_output()
+        factory.construct_geotherm()
         observed = _evaluate_connectors_lockstep({
-            "polygon_indicator": polygon_indicator(source=poly_source),
-            "polygon_geotherm": polygon_geotherm(source=poly_source),
+            "polygon_indicator": factory.indicator,
+            "polygon_geotherm": factory.geotherm,
         }, regression_mesh, Q, TEST_AGES)
         for name in ("polygon_indicator", "polygon_geotherm"):
             for age in TEST_AGES:
@@ -612,9 +623,16 @@ class TestSharedSourceConsistency:
     ):
         # Build two independent indicator connectors that share the same
         # source. Same source ⇒ same prepared dict ⇒ same kNN interpolation
-        # ⇒ identical DoF values at the same ndtime.
-        ind_a = lithosphere_indicator(source=fresh_lith_source)
-        ind_b = lithosphere_indicator(source=fresh_lith_source)
+        # ⇒ identical DoF values at the same ndtime. A factory only hands
+        # out one indicator, so two factories share the assigned source.
+        factory_a = LithosphereConnectorFactory()
+        factory_a.source = fresh_lith_source
+        factory_a.construct_output()
+        factory_b = LithosphereConnectorFactory()
+        factory_b.source = fresh_lith_source
+        factory_b.construct_output()
+        ind_a = factory_a.indicator
+        ind_b = factory_b.indicator
 
         sf_a = GplatesScalarFunction(Q, indicator_connector=ind_a, name="ind_a")
         sf_b = GplatesScalarFunction(Q, indicator_connector=ind_b, name="ind_b")
@@ -637,8 +655,12 @@ class TestSharedSourceConsistency:
         # different scalar fields (tanh vs. erf geotherm), but they must
         # agree on what the underlying source dict is — verifiable by
         # checking that the source's per-age cache hits on the second call.
-        ind = lithosphere_indicator(source=fresh_lith_source)
-        geo = lithosphere_geotherm(source=fresh_lith_source)
+        factory = LithosphereConnectorFactory()
+        factory.source = fresh_lith_source
+        factory.construct_output()
+        factory.construct_geotherm()
+        ind = factory.indicator
+        geo = factory.geotherm
 
         sf_ind = GplatesScalarFunction(Q, indicator_connector=ind, name="ind")
         sf_geo = GplatesScalarFunction(Q, indicator_connector=geo, name="geo")
