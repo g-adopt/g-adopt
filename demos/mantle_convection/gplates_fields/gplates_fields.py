@@ -88,7 +88,7 @@ from gadopt.gplates import (
     GeothermERFOutput,
     GeothermLinearOutput,
     ensure_reconstruction,
-    polygon_indicator,
+    PolygonConnectorFactory,
     pyGplatesConnector,
 )
 
@@ -388,8 +388,9 @@ T_lin = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 #
 # The continental crust and craton fields are indicator-only -- they
 # don't have a paired geotherm.  When you only need one field per
-# source, the `polygon_indicator` factory keeps the call site short
-# without losing any of the underlying machinery.
+# source, a `PolygonConnectorFactory` keeps the call site short without
+# losing any of the underlying machinery: construct the source and the
+# output on the factory and pull the connector off `.indicator`.
 
 # ### Continental crust
 #
@@ -400,17 +401,20 @@ T_lin = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 # density deficit of continental crust relative to the mantle.
 
 # +
-I_crust = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
+crust_factory = PolygonConnectorFactory(mesh=mesh_cfg, interpolation=interp_cfg)
+crust_factory.construct_source(
     gplates_connector=plate_model,
     polygons=muller_2022_files.get("continental_polygons"),
     thickness_data=50.0,
     plate_files=plate_files,
-    source_config=poly_source_cfg,
-    transition_width_km=10.0,
-    default_thickness_km=0.0,
-    mesh=mesh_cfg, interpolation=interp_cfg,
+    config=poly_source_cfg,
     comm=mesh.comm,
-), name="I_crust")
+)
+crust_factory.construct_output(transition_width_km=10.0, default_thickness_km=0.0)
+
+I_crust = GplatesScalarFunction(
+    Q, indicator_connector=crust_factory.indicator, name="I_crust"
+)
 # -
 
 # ### Cratons
@@ -429,17 +433,20 @@ I_crust = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
 # on GitHub (or via `make data`).
 
 # +
-I_craton = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
+craton_factory = PolygonConnectorFactory(mesh=mesh_cfg, interpolation=interp_cfg)
+craton_factory.construct_source(
     gplates_connector=plate_model,
     polygons="Craton_Boundaries_Inferred.shp",
     thickness_data=continental_data,
     plate_files=plate_files,
-    source_config=poly_source_cfg,
-    transition_width_km=10.0,
-    default_thickness_km=0.0,
-    mesh=mesh_cfg, interpolation=interp_cfg,
+    config=poly_source_cfg,
     comm=mesh.comm,
-), name="I_craton")
+)
+craton_factory.construct_output(transition_width_km=10.0, default_thickness_km=0.0)
+
+I_craton = GplatesScalarFunction(
+    Q, indicator_connector=craton_factory.indicator, name="I_craton"
+)
 # -
 
 # ## Part 3: Temperature composition
