@@ -4,70 +4,71 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Worktree Overview
 
-This worktree (`sghelichkhani/gtrack`) adds **indicator field** capabilities to G-ADOPT by integrating with [gtrack](https://pypi.org/project/gtrack/) for time-dependent 3D scalar fields (lithosphere, cratons).
+This worktree (`sghelichkhani/gtrack`) adds **indicator field** capabilities to G-ADOPT by integrating with [gtrack](https://pypi.org/project/gtrack/) for time-dependent 3D scalar fields (lithosphere, cratons). It is the integration ("mother") branch for the stacked sub-PRs `gtrack-02-indicator-connector-abc` (#516) → `gtrack-03-lithosphere-connector` (#517) → `gtrack-04-polygon-connector` (#518) → `gtrack-05-gplates-fields-demo` (#519); `gtrack-01-infra-fixes` (#515) already merged to main. Content flows by merge-up, and this branch carries the union of the stack.
 
 ## Build & Test Commands
 
 ```bash
 # Run tests (requires plate reconstruction data)
 cd demos/mantle_convection/gplates_global && make data  # Download test data first
-pytest tests/unit/test_lithosphere_connector.py -v
+pytest tests/unit/test_outputs.py -v        # pure math, no data needed
+pytest tests/unit/test_connectors.py -v     # includes pkl regression (needs data)
+pytest tests/unit/test_sources.py tests/unit/test_gplates.py -v
 
 # Run a single test
-pytest tests/unit/test_lithosphere_connector.py::TestLithosphereConfig::test_default_values -v
+pytest "tests/unit/test_outputs.py::TestQuinticOutputVariableBase" -v
 
 # Run demo
-cd demos/mantle_convection/gplates_lithosphere
+cd demos/mantle_convection/gplates_fields
 make data  # Download plate reconstruction files
-PYTHONPATH=/path/to/this/worktree:$PYTHONPATH mpiexec -n 4 python gplates_lithosphere.py
+PYTHONPATH=/path/to/this/worktree:$PYTHONPATH mpiexec -n 4 python gplates_fields.py
 ```
+
+Use the Firedrake env: `~/Workplace/firedrake-2026-03-03/venv-firedrake/bin/python3`.
 
 ## Architecture
 
-### ScalarFieldConnector Hierarchy
+### Source / Output / Connector split
 
 ```
-ScalarFieldConnector (ABC in connectors.py)
-├── LithosphereConnector  - Oceanic (age-tracked) + continental thickness
-├── PolygonConnector      - Polygon boundaries + thickness data
-├── LithosphereGeotherm   - Wraps LithosphereConnector (composition, shared tracker)
-└── PolygonGeotherm       - Wraps PolygonConnector (composition, shared rotator)
+Source (ABC, sources.py)               OutputStrategy (ABC, outputs.py)
+├── LithosphereSource                  ├── QuinticOutput          (indicator)
+│     SeafloorAgeTracker (ocean)       ├── GeothermERFOutput      (oceanic geotherm)
+│     + PointRotator (continental)     ├── GeothermLinearOutput   (continental geotherm)
+└── PolygonSource                      └── LateralFractionOutput  (pure lateral fraction)
+      PolygonFilter + PointRotator
+
+ScalarFieldConnector(source, output)   — kNN Gaussian interpolation onto mesh nodes
+GplatesScalarFunction(Q, indicator_connector=...) — Firedrake Function wrapper
+ConnectorFactory / LithosphereConnectorFactory / PolygonConnectorFactory (factories.py)
 ```
 
-Indicator connectors produce smooth 3D indicator fields (exactly 1 in region, exactly 0 outside) via a one-sided quintic smoothstep at the region base (`QuinticOutput`); the transition sits entirely below the base, so the surface stays at 1 wherever the region has thickness, and zero-outside polygon sources must pair the step with a lateral fade (`fade_ref_km`). Geotherm connectors wrap an existing indicator connector and produce normalized temperature profiles [0, 1] instead.
+Sources answer "where do source points live and what properties do they carry at age X?"; Outputs answer "given interpolated arrays at target nodes, what scalar field do we want?". Two consumers (indicator + geotherm) share one Source; a per-age cache means whichever updates first pays for the reconstruction step.
 
-### Key Classes
+Indicator fields use a **one-sided quintic smoothstep** at the region base (`QuinticOutput`): exactly 1 from the surface down to the base, decaying to exactly 0 over `width_km` below it (C² junctions; 0.5-crossing at base + width/2 depth). Because zero thickness puts the base at the surface, where the surface node would read 1, zero-outside polygon sources MUST pair the step with a lateral fade (`fade_ref_km`); `PolygonConnectorFactory.construct_output` makes it a required argument, and `ConnectorFactory.indicator` cross-checks `Source.zero_outside` against the output for the generic setter route.
 
-| Class | Purpose |
-|-------|---------|
-| `ScalarFieldConnector` | Abstract base class defining `get_indicator(target_coords, ndtime)` interface |
-| `LithosphereConnector` | Combines gtrack's `SeafloorAgeTracker` (ocean) + `PointRotator` (continental) |
-| `PolygonConnector` | Uses gtrack's `PolygonFilter` to filter thickness data to polygon-defined regions |
-| `LithosphereGeotherm` | Wraps `LithosphereConnector`, shares its tracker, produces erf geotherm |
-| `PolygonGeotherm` | Wraps `PolygonConnector`, shares its rotator, produces linear geotherm |
-| `GplatesScalarFunction` | Firedrake `Function` that updates from any `ScalarFieldConnector` |
-| `LithosphereConfig` / `PolygonConfig` | Dataclasses with tunable parameters |
-
-### GplatesScalarFunction Usage
+### Factory usage
 
 ```python
-# Indicator connectors
-lith_connector = LithosphereConnector(gplates, data, half_space, comm=mesh.comm)
-I_lith = GplatesScalarFunction(Q, indicator_connector=lith_connector)
+factory = PolygonConnectorFactory(mesh=mesh_cfg, interpolation=interp_cfg)
+factory.construct_source(
+    gplates_connector=plate_model, polygons="cratons.shp",
+    thickness_data=continental_data, plate_files=plate_files, comm=mesh.comm,
+)
+factory.construct_output(fade_ref_km=150.0, width_km=10.0)  # fade REQUIRED for polygons
+I_craton = GplatesScalarFunction(Q, indicator_connector=factory.indicator, name="I_craton")
 
-# Geotherm wraps the same connector (shared tracker, no duplication)
-T_erf = GplatesScalarFunction(Q, indicator_connector=LithosphereGeotherm(lith_connector))
+# Shared-source pairs can also be wired directly:
+lith_source = LithosphereSource(...)
+I_lith = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
+    lith_source, QuinticOutput(width_km=10.0, default_thickness_km=100.0)))
+T_erf = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
+    lith_source, GeothermERFOutput()))
 
-# Update in time loop. Call order is immaterial: the per-age source cache
-# (sources.py) means whichever field updates first pays for the
-# reconstruction step and the other reuses the cached result.
+# Update in time loop — order-independent thanks to the per-age source cache.
 I_lith.update_plate_reconstruction(ndtime)
 T_erf.update_plate_reconstruction(ndtime)
 ```
-
-*The class names in this snippet predate the Source/Output refactor and are updated in a later change.*
-
-> Updating these fields is order-independent: a shared source caches its reconstruction per geological age (`sources.py:261-270`, asserted by `test_connectors.py:413-419`), so whichever field updates first does the work and the other reuses the result. Either may be updated first.
 
 ### Config pattern: direct kwargs vs. wrapped-dict extra
 
@@ -77,10 +78,9 @@ kwargs with no extra hook: `InterpolationConfig` (`connectors.py`),
 
 The wrapped-dict "extra" pattern is reserved for a config that fronts a
 third-party config object whose surface we don't want to re-declare. The
-sole case is `LithosphereSourceConfig.gtrack_config` (`sources.py:61`),
-spliced into gtrack's `TracerConfig` at construction
-(`sources.py:373-375`). Keys in `gtrack_config` pass straight through to
-`gtrack.config.TracerConfig`.
+sole case is `LithosphereSourceConfig.gtrack_config`, spliced into
+gtrack's `TracerConfig` at construction. Keys in `gtrack_config` pass
+straight through to `gtrack.config.TracerConfig`.
 
 Rule: add an extra hook only when a config fronts a third-party config
 object you don't want to re-declare; configs over our own parameters stay
@@ -99,36 +99,19 @@ lith_cfg = LithosphereSourceConfig(
 
 ### MPI Parallelization
 
-Pass `comm=mesh.comm` to connectors. Rank 0 handles I/O and gtrack computations, broadcasts numpy arrays to other ranks. Each rank interpolates to its local mesh points via KDTree.
-
-## Files Modified in This Worktree
-
-| File | Changes |
-|------|---------|
-| `gadopt/gplates/connectors.py` | NEW: `ScalarFieldConnector` abstract base class |
-| `gadopt/gplates/gplates.py` | `LithosphereConnector`, `PolygonConnector`, `GplatesScalarFunction`, configs |
-| `gadopt/gplates/__init__.py` | Exports for new classes |
-| `gadopt/gplates/gplatesfiles.py` | Fixed string/list handling |
-| `pyproject.toml` | Added `gtrack` dependency |
-| `demos/mantle_convection/gplates_lithosphere/` | Demo with both indicators |
-| `tests/unit/test_lithosphere_connector.py` | Comprehensive test suite |
+Pass `comm=mesh.comm` to sources. Rank 0 handles I/O and gtrack computations, broadcasts numpy arrays to other ranks. Each rank interpolates to its local mesh points via KDTree.
 
 ## Key Config Parameters
 
-**LithosphereConfig** (ocean tracking + interpolation):
-- `n_points`: Ocean tracker mesh resolution (default: 10000)
-- `k_neighbors`: KDTree neighbors for interpolation (default: 50)
-- `distance_threshold`: Max angular distance in radians (default: 0.1)
-- `transition_width`: Tanh transition width in km (default: 10.0)
-- `r_outer`: Mesh outer radius, non-dimensional (default: 2.208)
+**LithosphereSourceConfig** (`sources.py`): `n_points` (ocean tracker resolution, default 10000), `time_step`, `reinit_interval_myr`, `checkpoint_interval_myr`/`checkpoint_dir`, `gtrack_config` pass-through.
 
-**PolygonConfig** (polygon filtering + interpolation):
-- `n_points`: Sample points for polygon coverage (default: 20000)
-- `k_neighbors`: KDTree neighbors (default: 50)
-- `distance_threshold`: Max angular distance in radians - **controls horizontal extent** (default: 0.1)
-- `transition_width`: Tanh transition width in km (default: 10.0)
+**PolygonSourceConfig** (`sources.py`): `n_points` (sphere-mesh sample resolution, default 20000).
 
-**Note**: `distance_threshold` in radians: 0.1 rad ≈ 640 km, 0.02 rad ≈ 127 km. Smaller values give sharper boundaries.
+**InterpolationConfig** (`connectors.py`): `k_neighbors` (default 50), `distance_threshold` (radians; 0.1 ≈ 640 km — controls horizontal reach of the kNN), `kernel`, `gaussian_sigma` (sets the lateral roll-off across polygon boundaries).
+
+**MeshConfig** (`outputs.py`): `r_outer` (default 2.208), `depth_scale` (default 2890 km).
+
+**QuinticOutput** (`outputs.py`): `width_km` (radial transition, default 10), `base_depth_km` (None = per-node from thickness; number = fixed base), `fade_ref_km` (None = no fade; required in practice for polygon sources), `default_thickness_km` (fill at `too_far` nodes: 100 lithosphere-style, 0 polygon-style).
 
 ## Coordinate Systems
 
