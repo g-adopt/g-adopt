@@ -51,7 +51,7 @@ class LithosphereSourceConfig:
 
     Mesh geometry (r_outer, depth_scale) lives on MeshConfig.
     Interpolation (k_neighbors, kernel, ...) lives on InterpolationConfig.
-    Output knobs (transition_width, kappa, ...) live on the output strategy.
+    Output knobs (width_km, fade_ref_km, kappa, ...) live on the output strategy.
 
     Checkpointing is enabled by setting ``checkpoint_interval_myr``;
     ``checkpoint_dir`` then defaults to ``gtrack_checkpoints`` (resolved
@@ -261,6 +261,15 @@ class Source(ABC):
     def provides(self) -> frozenset[str]:
         """The set of keys (including 'xyz') that prepare(age) returns."""
         ...
+
+    # True for sources whose thickness channel is genuinely zero outside a
+    # bounded region (polygon-style mask-and-relabel clouds). A one-sided
+    # radial step output reads 1 at the surface wherever the base sits at
+    # the surface — i.e. wherever thickness is zero — so indicators built
+    # on a zero-outside source must apply a lateral fade. The factory
+    # cross-checks this flag against the output before constructing an
+    # indicator.
+    zero_outside: bool = False
 
     gplates_connector: "pyGplatesConnector"
     comm: MPI.Comm
@@ -726,6 +735,11 @@ class PolygonSource(Source):
     @property
     def provides(self) -> frozenset[str]:
         return frozenset({"xyz", "thickness"})
+
+    # Thickness is zeroed outside the polygons by mask-and-relabel, so an
+    # unfaded one-sided indicator output would read 1 across the entire
+    # exterior surface; see Source.zero_outside.
+    zero_outside = True
 
     def __init__(
         self,

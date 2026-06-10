@@ -135,7 +135,11 @@ def main():
 
     lith_factory = LithosphereConnectorFactory()
     lith_factory.source = lith_src
-    lith_factory.construct_output()
+    # fade_ref_km=100 keeps the regression age-sensitive: on the coarse
+    # 4-layer mesh an unfaded one-sided step is exactly 1 at the surface
+    # node and exactly 0 at the next node down at every age, so the
+    # reduced integrals would not change with the reconstruction at all.
+    lith_factory.construct_output(fade_ref_km=100.0)
     lith_factory.construct_geotherm()
     lith_result = walk_connectors({
         "lith_indicator": lith_factory.indicator,
@@ -153,7 +157,7 @@ def main():
     )
     poly_factory = PolygonConnectorFactory()
     poly_factory.source = poly_src
-    poly_factory.construct_output()
+    poly_factory.construct_output(fade_ref_km=200.0)
     poly_factory.construct_geotherm()
     poly_result = walk_connectors({
         "polygon_indicator": poly_factory.indicator,

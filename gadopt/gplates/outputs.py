@@ -4,7 +4,7 @@ An OutputStrategy turns interpolated source arrays at target mesh nodes into a
 scalar field. The current two flavours are:
 
   - indicator fields  — ~1 inside the region of interest, ~0 outside, with a
-    smooth tanh transition at the region base (TanhOutput).
+    smooth quintic transition at the region base (QuinticOutput).
 
   - normalised geotherms — (T - T_surface) / (T_LAB - T_surface) in [0, 1],
     using an erf profile (oceanic, age-dependent) or a linear profile
@@ -15,18 +15,32 @@ set; the connector validates this against the source's ``provides`` set at
 construction time so, e.g. a polygon source paired with an erf geotherm fails loudly
 rather than silently dropping the missing key.
 
-The four indicator outputs all share the ``radial_tanh_step`` primitive and
-differ only in whether the radial base depth is fixed or per-node, and whether
-a lateral amplitude fade is applied:
+The radial primitive shared by every indicator output is ``radial_quintic_step``,
+a ONE-SIDED quintic smoothstep: exactly 1 from the surface down to the region
+base, decaying to exactly 0 over one transition width BELOW the base. Unlike
+the symmetric tanh kernel it replaced, the transition never straddles the base,
+so the surface value stays faithful — exactly 1 wherever the region has any
+thickness — and the field is exactly 0 below base + width (no asymptotic tail).
+The 0.5-crossing therefore sits at base + width/2 in depth, not at the base.
 
-  ====================== ==================== ===================
-  Output                 Base depth           Lateral fade
-  ====================== ==================== ===================
-  TanhOutput             variable (per-node)  none (0.5 floor)
-  FadedRadialStepOutput  fixed                yes (separable)
-  FadedTanhOutput        variable             yes (coupled to depth)
-  LateralFractionOutput  none (pure lateral)  the fraction itself
-  ====================== ==================== ===================
+One consequence to keep in mind: where thickness is exactly zero the base sits
+at the surface and the SURFACE NODE still reads 1 (the transition hangs just
+below it). Zero-outside sources (polygon mask-and-relabel) therefore MUST pair
+the step with a lateral fade (``fade_ref_km``) so the exterior column is
+multiplied to 0 — an unfaded variable-depth step is only safe for sources whose
+thickness never vanishes laterally without a fade, or whose fallback thickness
+fills the gap (lithosphere-style ``default_thickness_km=100``).
+
+``QuinticOutput`` covers the whole indicator family through two switches:
+
+  ============================ ==================== ===================
+  Configuration                Base depth           Lateral fade
+  ============================ ==================== ===================
+  QuinticOutput()              variable (per-node)  none
+  QuinticOutput(base_depth_km) fixed                optional
+  QuinticOutput(fade_ref_km)   variable             clip(h/ref, 0, 1)
+  LateralFractionOutput        none (pure lateral)  the fraction itself
+  ============================ ==================== ===================
 """
 
 from __future__ import annotations
@@ -103,17 +117,30 @@ def continental_linear(depth_m, z_lab_m):
     return np.clip(result, 0.0, 1.0)
 
 
-# Shared radial primitive (used by every tanh-step indicator output)
-def radial_tanh_step(r_target, base_r, width_nondim):
-    """Smooth radial 1→0 step ``0.5 * (1 + tanh((r - base_r) / width))``.
+# Shared radial primitive (used by every indicator output)
+def radial_quintic_step(r_target, base_r, width_nondim):
+    """One-sided quintic smoothstep: 1 above the base, 0 one width below it.
 
-    The single radial kernel shared by every indicator output. All radii are in
-    non-dimensional mesh units. ``base_r`` may be a scalar (a fixed base depth,
-    as in FadedRadialStepOutput) or a per-node array (a variable base depth read
-    from the thickness channel, as in TanhOutput) — the only thing that
-    distinguishes those two outputs at the radial level.
+    Returns exactly 1 for ``r >= base_r``, exactly 0 for
+    ``r <= base_r - width_nondim``, and the quintic polynomial
+    ``6t^5 - 15t^4 + 10t^3`` (t the normalised position inside the band) in
+    between. The polynomial has zero first AND second derivatives at both
+    ends, so the field is C^2 across the junctions.
+
+    The transition sits entirely BELOW the base: a node at the base itself
+    reads exactly 1 (the tanh kernel this replaced read 0.5 there), and the
+    0.5-crossing is at ``base_r - width_nondim / 2``. All radii are in
+    non-dimensional mesh units. ``base_r`` may be a scalar (fixed base depth)
+    or a per-node array (variable base depth read from the thickness channel).
     """
-    return 0.5 * (1.0 + np.tanh((r_target - base_r) / width_nondim))
+    # (r - base)/w + 1 rather than (r - (base - w))/w: any r >= base_r then
+    # lands at t >= 1 BEFORE rounding, so the clip makes the upper plateau
+    # exactly 1 (no 1-ulp shortfall at the base itself).
+    t = np.clip(
+        (np.asarray(r_target, dtype=float) - base_r) / width_nondim + 1.0,
+        0.0, 1.0,
+    )
+    return t * t * t * (t * (6.0 * t - 15.0) + 10.0)
 
 
 # OutputStrategy ABC
@@ -151,46 +178,84 @@ class OutputStrategy(ABC):
 # Concrete outputs
 # ---------------------------------------------------------------------------
 
-class TanhOutput(OutputStrategy):
-    """Smooth indicator field: 1 below the lithosphere base, 0 above.
+class QuinticOutput(OutputStrategy):
+    """Smooth indicator field built on the one-sided quintic radial step.
 
-    Apply ``0.5 * (1 + tanh((r - (r_outer - thickness)) / transition))``.
-    ``too_far`` target nodes get ``default_thickness_km`` as a fallback —
-    100 km for lithosphere-style sources (no seed nearby ⇒ assume mantle is
-    100 km below the surface), 0 km for polygon-style sources where exterior
-    seeds carry zero thickness already (so missing-seed targets read as
-    "outside the region" rather than as a continent).
+    The field is exactly 1 from the surface down to the region base, decays
+    to exactly 0 over ``width_km`` below it, and is optionally multiplied by
+    a lateral amplitude fade. Two switches select the configuration:
+
+    ``base_depth_km``
+        ``None`` (default): the base depth is per-node, read from the
+        interpolated ``thickness`` channel — deep cratonic roots and shallow
+        margins are both captured, the radial transition moves with h(x).
+        A number: the base is FIXED at that depth; the thickness channel
+        then only feeds the fade (the separable lateral-fade x radial-step
+        decomposition previously provided by FadedRadialStepOutput).
+
+    ``fade_ref_km``
+        ``None`` (default): no fade. The surface reads exactly 1 wherever
+        thickness is nonzero — including where it is barely nonzero, so this
+        configuration is only safe when thickness never vanishes laterally
+        (or ``default_thickness_km`` fills the gaps, lithosphere-style).
+        A number: the step is multiplied by ``clip(h / fade_ref_km, 0, 1)``.
+        REQUIRED (in practice) for zero-outside polygon sources: without it
+        the exterior surface — where the base coincides with the surface —
+        reads 1 instead of 0.
+
+    ``default_thickness_km`` fills the thickness channel at ``too_far``
+    nodes: 100 for lithosphere-style sources (no seed nearby => assume a
+    100 km plate), 0 for polygon-style sources where missing seeds must read
+    as "outside the region".
     """
 
     requires = frozenset({"thickness"})
 
     def __init__(
         self,
-        transition_width_km: float = 10.0,
-        default_thickness_km: float = 100.0,
+        width_km: float = 10.0,
+        *,
+        base_depth_km: float | None = None,
+        fade_ref_km: float | None = None,
+        default_thickness_km: float = 0.0,
     ):
-        if transition_width_km <= 0:
+        if width_km <= 0:
+            raise ValueError(f"width_km must be positive, got {width_km}")
+        if base_depth_km is not None and base_depth_km <= 0:
             raise ValueError(
-                f"transition_width_km must be positive, got {transition_width_km}"
+                f"base_depth_km must be positive, got {base_depth_km}"
+            )
+        if fade_ref_km is not None and fade_ref_km <= 0:
+            raise ValueError(
+                f"fade_ref_km must be positive, got {fade_ref_km}"
             )
         if default_thickness_km < 0:
             raise ValueError(
                 f"default_thickness_km must be non-negative, "
                 f"got {default_thickness_km}"
             )
-        self.transition_width_km = transition_width_km
+        self.width_km = width_km
+        self.base_depth_km = base_depth_km
+        self.fade_ref_km = fade_ref_km
         self.default_thickness_km = default_thickness_km
 
     def compute(self, interpolated, r_target, too_far, mesh):
         thickness_km = interpolated["thickness"].copy()
         thickness_km[too_far] = self.default_thickness_km
-        # Variable base depth: the radial step inflection follows h(x), which is
-        # what makes this output non-separable (it cannot be written as a lateral
-        # fraction times a fixed-depth step — see FadedRadialStepOutput).
-        base_r = mesh.r_outer - thickness_km / mesh.depth_scale
-        return radial_tanh_step(
-            r_target, base_r, self.transition_width_km / mesh.depth_scale
+
+        if self.base_depth_km is None:
+            base_r = mesh.r_outer - thickness_km / mesh.depth_scale
+        else:
+            base_r = mesh.r_outer - self.base_depth_km / mesh.depth_scale
+
+        result = radial_quintic_step(
+            r_target, base_r, self.width_km / mesh.depth_scale
         )
+        if self.fade_ref_km is not None:
+            result = result * np.clip(
+                thickness_km / self.fade_ref_km, 0.0, 1.0
+            )
+        return result
 
 
 class GeothermERFOutput(OutputStrategy):
@@ -291,117 +356,3 @@ class LateralFractionOutput(OutputStrategy):
         frac = np.clip(interpolated["thickness"].copy(), 0.0, 1.0)
         frac[too_far] = 0.0
         return frac
-
-
-class FadedRadialStepOutput(OutputStrategy):
-    """Decoupled lateral fade × radial lithosphere step.
-
-    I(r, x) = f_lat(x) * S(r), where
-
-      f_lat(x) = clip(thickness / crust_thickness_km, 0, 1)
-
-    is the smoothed inside-fraction from the kNN interpolation — a purely
-    lateral, smooth 1 (continent) → 0 (ocean) band whose width is set by
-    InterpolationConfig.gaussian_sigma — and
-
-      S(r) = radial_tanh_step(r, r_outer - crust/depth, w_r)
-
-    is the radial lithosphere step at a FIXED base depth, with sharpness w_r.
-
-    This keeps the radial 1→0 transition at the lithosphere base intact while
-    fixing the two artefacts of TanhOutput-on-uniform-thickness: the ocean no
-    longer floors at 0.5 (f_lat = 0 zeroes the whole column, surface included),
-    and the lateral transition is the full smooth fraction rather than a
-    tanh-saturated fringe. The lateral fade scales the *amplitude* of the
-    continental signal rather than moving the base depth around.
-
-    Because the base depth here is fixed, this output is separable into a lateral
-    factor times a single radial profile. TanhOutput is the non-separable
-    generalisation: it reuses the same radial_tanh_step primitive but with a
-    per-node base depth read from the thickness channel, so its transition depth
-    moves with x and it carries no lateral factor. The two cannot be reduced to
-    one another (a separable product cannot slide the transition depth around);
-    they only share the radial_tanh_step kernel.
-    """
-
-    requires = frozenset({"thickness"})
-
-    def __init__(self, crust_thickness_km: float = 50.0, radial_width_km: float = 10.0):
-        if crust_thickness_km <= 0:
-            raise ValueError(
-                f"crust_thickness_km must be positive, got {crust_thickness_km}"
-            )
-        if radial_width_km <= 0:
-            raise ValueError(
-                f"radial_width_km must be positive, got {radial_width_km}"
-            )
-        self.crust_thickness_km = crust_thickness_km
-        self.radial_width_km = radial_width_km
-
-    def compute(self, interpolated, r_target, too_far, mesh):
-        thickness_km = interpolated["thickness"].copy()
-        thickness_km[too_far] = 0.0
-        f_lat = np.clip(thickness_km / self.crust_thickness_km, 0.0, 1.0)
-
-        base_r = mesh.r_outer - self.crust_thickness_km / mesh.depth_scale
-        return f_lat * radial_tanh_step(
-            r_target, base_r, self.radial_width_km / mesh.depth_scale
-        )
-
-
-class FadedTanhOutput(OutputStrategy):
-    """Amplitude-faded, VARIABLE-depth radial step from a single thickness channel.
-
-    I(r, x) = f_lat(x) * S(r; h(x)), where both factors derive from the SAME
-    interpolated thickness channel h(x):
-
-        f_lat = clip(thickness / thickness_ref_km, 0, 1)
-        S     = radial_tanh_step(r, r_outer - thickness/depth_scale, w_r)
-
-    The faded twin of TanhOutput: same per-node variable base depth (so deep
-    cratonic roots and shallow margins are both captured — the radial 0.5
-    crossing moves with thickness), plus an intrinsic lateral amplitude fade.
-    Because f_lat -> 0 exactly where thickness -> 0, the 0.5 surface-skin floor
-    that TanhOutput leaves at r = r_outer (where base_r = r_outer gives
-    0.5*(1 + tanh(0)) = 0.5) is multiplied away. The fade removes the surface
-    floor; it does NOT confine the region laterally — that roll-off length is set
-    by InterpolationConfig.gaussian_sigma, and any further confinement (e.g. to
-    land) is the caller's responsibility, not this output's.
-
-    Designed for PolygonSource, where exterior seeds carry zero thickness and
-    no-seed (``too_far``) nodes read as "outside the region" — hence faded to 0;
-    the too-far thickness is hard-wired to 0 (there is no sensible nonzero
-    default for a faded field).
-
-    Relation to the other indicator outputs (all share ``radial_tanh_step``):
-      - TanhOutput: variable depth, NO fade — leaves the 0.5 surface floor.
-      - FadedRadialStepOutput: amplitude fade, but a FIXED base depth.
-      - FadedTanhOutput: amplitude fade AND variable depth, from one channel.
-    The price of the single channel is that amplitude and depth are coupled (a
-    shallow keel is both fainter and shallower); when that coupling is unwanted,
-    use FadedRadialStepOutput or a decoupled LateralFractionOutput assembly.
-    """
-
-    requires = frozenset({"thickness"})
-
-    def __init__(self, thickness_ref_km: float = 150.0, radial_width_km: float = 10.0):
-        if thickness_ref_km <= 0:
-            raise ValueError(
-                f"thickness_ref_km must be positive, got {thickness_ref_km}"
-            )
-        if radial_width_km <= 0:
-            raise ValueError(
-                f"radial_width_km must be positive, got {radial_width_km}"
-            )
-        self.thickness_ref_km = thickness_ref_km
-        self.radial_width_km = radial_width_km
-
-    def compute(self, interpolated, r_target, too_far, mesh):
-        thickness_km = interpolated["thickness"].copy()
-        thickness_km[too_far] = 0.0
-        f_lat = np.clip(thickness_km / self.thickness_ref_km, 0.0, 1.0)
-
-        base_r = mesh.r_outer - thickness_km / mesh.depth_scale
-        return f_lat * radial_tanh_step(
-            r_target, base_r, self.radial_width_km / mesh.depth_scale
-        )

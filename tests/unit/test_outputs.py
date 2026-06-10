@@ -9,16 +9,14 @@ import numpy as np
 import pytest
 
 from gadopt.gplates import (
-    FadedRadialStepOutput,
-    FadedTanhOutput,
     GeothermERFOutput,
     GeothermLinearOutput,
     LateralFractionOutput,
     MeshConfig,
-    TanhOutput,
+    QuinticOutput,
     continental_linear,
     ocean_erf_normalized,
-    radial_tanh_step,
+    radial_quintic_step,
 )
 
 
@@ -131,14 +129,105 @@ class TestContinentalLinear:
 
 
 # ---------------------------------------------------------------------------
-# TanhOutput
+# radial_quintic_step — shared radial primitive
 # ---------------------------------------------------------------------------
 
-class TestTanhOutput:
-    """Tests exercise TanhOutput.compute directly with synthetic inputs.
+class TestRadialQuinticStep:
+    """One-sided quintic step: exactly 1 for r >= base_r, exactly 0 for
+    r <= base_r - width, the smoothstep polynomial in between.
 
-    The output produces a smooth indicator: ~1 inside lithosphere (above
-    r = r_outer - thickness), ~0 in the mantle, 0.5 at the boundary.
+    The transition sits entirely BELOW the base: the base itself reads 1
+    (the old tanh kernel read 0.5 there) and the 0.5-crossing is at
+    base_r - width/2. base_r may be a scalar (fixed base depth) or a
+    per-node array (variable base depth) and both broadcast correctly.
+    """
+
+    def test_exact_plateaus_and_midpoint(self):
+        base_r = 2.0
+        width = 0.01
+        # Exactly 1 at the base and everywhere above it.
+        assert radial_quintic_step(base_r, base_r, width) == 1.0
+        assert radial_quintic_step(base_r + 0.05, base_r, width) == 1.0
+        # Zero at base - width (up to round-off in forming base - width) and
+        # exactly 0 everywhere below the band (no tanh tail).
+        np.testing.assert_allclose(
+            radial_quintic_step(base_r - width, base_r, width), 0.0, atol=1e-30
+        )
+        assert radial_quintic_step(base_r - 0.05, base_r, width) == 0.0
+        # The 0.5-crossing sits at the middle of the band, base - width/2.
+        np.testing.assert_allclose(
+            radial_quintic_step(base_r - width / 2, base_r, width),
+            0.5, rtol=1e-12,
+        )
+        # Monotone increasing across the band.
+        rs = np.linspace(base_r - width, base_r, 50)
+        f = radial_quintic_step(rs, base_r, width)
+        assert np.all(np.diff(f) > 0)
+
+    def test_point_symmetry_about_band_midpoint(self):
+        # The smoothstep polynomial satisfies S(t) + S(1-t) == 1, so the step
+        # is point-symmetric about (base - width/2, 0.5).
+        base_r = 2.0
+        width = 0.02
+        mid = base_r - width / 2
+        d = np.array([0.001, 0.005, 0.009])
+        np.testing.assert_allclose(
+            radial_quintic_step(mid + d, base_r, width)
+            + radial_quintic_step(mid - d, base_r, width),
+            1.0, rtol=1e-12,
+        )
+
+    def test_flat_junctions(self):
+        # Zero slope at both ends of the band (C^1; the quintic is in fact
+        # C^2). The numerical slope just inside each junction is tiny
+        # compared to the mid-band slope.
+        base_r = 2.0
+        width = 0.02
+        eps = 1e-6 * width
+
+        def slope_at(r):
+            return (
+                radial_quintic_step(r + eps, base_r, width)
+                - radial_quintic_step(r - eps, base_r, width)
+            ) / (2 * eps)
+        mid_slope = slope_at(base_r - width / 2)
+        assert abs(slope_at(base_r - eps)) < 1e-6 * mid_slope
+        assert abs(slope_at(base_r - width + eps)) < 1e-6 * mid_slope
+
+    def test_scalar_and_array_base_broadcast(self):
+        # Scalar base_r and a per-node array base_r both broadcast against an
+        # array r_target. A constant array base must reproduce the scalar case.
+        r = np.array([2.0, 2.05, 2.1])
+        width = 0.02
+        scalar = radial_quintic_step(r, 2.05, width)
+        array = radial_quintic_step(r, np.full_like(r, 2.05), width)
+        np.testing.assert_allclose(scalar, array, rtol=1e-12)
+        # A genuinely per-node base shifts each band independently: each node
+        # sitting exactly on its own base reads exactly 1.
+        per_node_base = r.copy()
+        np.testing.assert_array_equal(
+            radial_quintic_step(r, per_node_base, width), 1.0
+        )
+
+    def test_narrower_width_is_steeper(self):
+        # Narrower transition width => larger gradient magnitude in the band.
+        base_r = 2.0
+        rs = np.linspace(base_r - 0.05, base_r + 0.05, 200)
+        narrow = radial_quintic_step(rs, base_r, 0.005)
+        wide = radial_quintic_step(rs, base_r, 0.05)
+        assert np.abs(np.gradient(narrow)).max() > np.abs(np.gradient(wide)).max()
+
+
+# ---------------------------------------------------------------------------
+# QuinticOutput — variable base, no fade (the old TanhOutput role)
+# ---------------------------------------------------------------------------
+
+class TestQuinticOutputVariableBase:
+    """Tests exercise QuinticOutput.compute directly with synthetic inputs.
+
+    Default configuration: per-node base depth from the thickness channel,
+    no lateral fade. The indicator is exactly 1 from the surface down to the
+    base, exactly 0 below base + width.
     """
 
     @staticmethod
@@ -146,52 +235,88 @@ class TestTanhOutput:
         # Helper: a single interpolated thickness value broadcast to n_targets.
         return {"thickness": np.full(n_targets, thickness_km, dtype=float)}
 
-    def test_validation_rejects_nonpositive_transition(self):
-        with pytest.raises(ValueError, match="transition_width_km must be positive"):
-            TanhOutput(transition_width_km=0.0)
-        with pytest.raises(ValueError, match="transition_width_km must be positive"):
-            TanhOutput(transition_width_km=-1.0)
-
-    def test_validation_rejects_negative_default_thickness(self):
+    def test_validation_rejects_bad_args(self):
+        with pytest.raises(ValueError, match="width_km must be positive"):
+            QuinticOutput(width_km=0.0)
+        with pytest.raises(ValueError, match="width_km must be positive"):
+            QuinticOutput(width_km=-1.0)
+        with pytest.raises(ValueError, match="base_depth_km must be positive"):
+            QuinticOutput(base_depth_km=0.0)
+        with pytest.raises(ValueError, match="fade_ref_km must be positive"):
+            QuinticOutput(fade_ref_km=-5.0)
         with pytest.raises(ValueError, match="default_thickness_km must be non-negative"):
-            TanhOutput(default_thickness_km=-1.0)
+            QuinticOutput(default_thickness_km=-1.0)
         # Zero is allowed (polygon mask-and-relabel uses default 0).
-        TanhOutput(default_thickness_km=0.0)
+        QuinticOutput(default_thickness_km=0.0)
 
-    def test_value_at_boundary_is_half(self):
-        # When the target sits at r_outer - thickness/depth_scale, the
-        # argument to tanh is zero and the indicator equals 0.5 exactly.
+    def test_value_at_base_is_one(self):
+        # The target sitting exactly at r_outer - thickness/depth_scale reads
+        # exactly 1: the transition hangs entirely below the base (the old
+        # tanh kernel read 0.5 here).
         mesh = MeshConfig(r_outer=2.208, depth_scale=2890.0)
-        out = TanhOutput(transition_width_km=10.0)
+        out = QuinticOutput(width_km=10.0)
         thickness = 100.0
         interp = self._interp(thickness)
         too_far = np.array([False])
         r_target = np.array([mesh.r_outer - thickness / mesh.depth_scale])
         result = out.compute(interp, r_target, too_far, mesh)
+        np.testing.assert_array_equal(result, 1.0)
+
+    def test_half_crossing_half_width_below_base(self):
+        mesh = MeshConfig()
+        width = 10.0
+        thickness = 100.0
+        out = QuinticOutput(width_km=width)
+        r_target = np.array(
+            [mesh.r_outer - (thickness + width / 2) / mesh.depth_scale]
+        )
+        result = out.compute(
+            self._interp(thickness), r_target, np.array([False]), mesh
+        )
         np.testing.assert_allclose(result, 0.5, rtol=1e-10)
 
-    def test_value_inside_lithosphere_is_one(self):
+    def test_value_inside_lithosphere_is_one_exact(self):
         mesh = MeshConfig()
-        out = TanhOutput(transition_width_km=10.0)
+        out = QuinticOutput(width_km=10.0)
         # 50 km depth, with lithosphere 200 km thick: well inside.
         r_target = np.array([mesh.r_outer - 50.0 / mesh.depth_scale])
         interp = self._interp(200.0)
         result = out.compute(interp, r_target, np.array([False]), mesh)
-        assert result[0] > 0.99
+        np.testing.assert_array_equal(result, 1.0)
 
-    def test_value_below_lithosphere_is_zero(self):
+    def test_value_below_transition_is_zero_exact(self):
         mesh = MeshConfig()
-        out = TanhOutput(transition_width_km=10.0)
-        # 400 km depth, with lithosphere 200 km thick: well below.
+        out = QuinticOutput(width_km=10.0)
+        # 400 km depth, with lithosphere 200 km thick: well below base+width.
         r_target = np.array([mesh.r_outer - 400.0 / mesh.depth_scale])
         interp = self._interp(200.0)
         result = out.compute(interp, r_target, np.array([False]), mesh)
-        assert result[0] < 0.01
+        np.testing.assert_array_equal(result, 0.0)
+
+    def test_zero_thickness_surface_skin(self):
+        # Where thickness is exactly zero the base coincides with the surface
+        # and the SURFACE NODE reads 1 (the transition hangs just below it).
+        # This is the documented reason zero-outside polygon sources must pair
+        # the step with a lateral fade; one width below the surface the column
+        # is exactly 0 again.
+        mesh = MeshConfig()
+        width = 10.0
+        out = QuinticOutput(width_km=width)
+        surface = out.compute(
+            self._interp(0.0), np.array([mesh.r_outer]), np.array([False]), mesh
+        )
+        np.testing.assert_array_equal(surface, 1.0)
+        below = out.compute(
+            self._interp(0.0),
+            np.array([mesh.r_outer - width / mesh.depth_scale]),
+            np.array([False]), mesh,
+        )
+        np.testing.assert_allclose(below, 0.0, atol=1e-30)
 
     def test_narrower_transition_steeper_gradient(self):
         mesh = MeshConfig()
         thickness = 100.0
-        # Sweep a range of radii crossing the boundary.
+        # Sweep a range of radii crossing the transition band.
         r_target = np.linspace(
             mesh.r_outer - (thickness + 50.0) / mesh.depth_scale,
             mesh.r_outer - (thickness - 50.0) / mesh.depth_scale,
@@ -199,28 +324,36 @@ class TestTanhOutput:
         )
         interp = {"thickness": np.full_like(r_target, thickness)}
         too_far = np.zeros_like(r_target, dtype=bool)
-        narrow = TanhOutput(transition_width_km=1.0).compute(interp, r_target, too_far, mesh)
-        wide = TanhOutput(transition_width_km=20.0).compute(interp, r_target, too_far, mesh)
+        narrow = QuinticOutput(width_km=1.0).compute(interp, r_target, too_far, mesh)
+        wide = QuinticOutput(width_km=20.0).compute(interp, r_target, too_far, mesh)
         assert np.abs(np.gradient(narrow)).max() > np.abs(np.gradient(wide)).max()
 
     def test_too_far_uses_default_thickness(self):
         # Polygon-style use: default_thickness_km=0 means too-far targets
-        # read as "outside the region" (indicator -> 0 below r_outer).
+        # read as "outside the region" (indicator -> 0 below the surface skin).
         mesh = MeshConfig()
-        out = TanhOutput(transition_width_km=10.0, default_thickness_km=0.0)
+        out = QuinticOutput(width_km=10.0, default_thickness_km=0.0)
         r_target = np.array([mesh.r_outer - 100.0 / mesh.depth_scale])
         interp = self._interp(200.0)  # value ignored when too_far=True
         too_far = np.array([True])
         result = out.compute(interp, r_target, too_far, mesh)
-        assert result[0] < 0.01
+        np.testing.assert_array_equal(result, 0.0)
 
         # Lithosphere-style use: default_thickness_km=100 means too-far
         # targets get a sensible fill rather than zero.
-        out_lith = TanhOutput(transition_width_km=10.0, default_thickness_km=100.0)
+        out_lith = QuinticOutput(width_km=10.0, default_thickness_km=100.0)
         # Target at 50 km depth, default 100 km -> well inside.
         r_target_inside = np.array([mesh.r_outer - 50.0 / mesh.depth_scale])
         result_inside = out_lith.compute(interp, r_target_inside, np.array([True]), mesh)
-        assert result_inside[0] > 0.99
+        np.testing.assert_array_equal(result_inside, 1.0)
+
+    def test_does_not_mutate_input(self):
+        mesh = MeshConfig()
+        out = QuinticOutput(width_km=10.0)
+        thickness = np.array([999.0, 10.0])
+        interp = {"thickness": thickness.copy()}
+        out.compute(interp, np.full(2, mesh.r_outer), np.array([True, False]), mesh)
+        np.testing.assert_array_equal(interp["thickness"], thickness)
 
 
 # ---------------------------------------------------------------------------
@@ -315,73 +448,6 @@ class TestGeothermLinearOutput:
 
 
 # ---------------------------------------------------------------------------
-# radial_tanh_step — shared radial primitive
-# ---------------------------------------------------------------------------
-
-class TestRadialTanhStep:
-    """The 0.5*(1+tanh((r-base_r)/width)) kernel shared by every tanh output.
-
-    The core design point is that base_r may be a scalar (fixed base depth) or
-    a per-node array (variable base depth) and both broadcast correctly.
-    """
-
-    def test_boundary_direction_and_saturation(self):
-        # =0.5 exactly at r==base_r; >0.5 above toward 1; <0.5 below toward 0.
-        base_r = 2.0
-        width = 0.01
-        # At the boundary the argument is zero -> exactly one half.
-        assert radial_tanh_step(base_r, base_r, width) == 0.5
-        # Five sigma above and below saturates to the golden tanh values.
-        np.testing.assert_allclose(
-            radial_tanh_step(base_r + 0.05, base_r, width),
-            0.9999546021312975, rtol=1e-12,
-        )
-        np.testing.assert_allclose(
-            radial_tanh_step(base_r - 0.05, base_r, width),
-            1.0 - 0.9999546021312975, rtol=1e-9,
-        )
-        # Monotone increasing across the step.
-        rs = np.linspace(base_r - 0.05, base_r + 0.05, 50)
-        f = radial_tanh_step(rs, base_r, width)
-        assert np.all(np.diff(f) > 0)
-        assert f[0] < 0.5 < f[-1]
-
-    def test_odd_symmetry_about_base(self):
-        # f(base+d) + f(base-d) == 1 for any offset (tanh is odd).
-        base_r = 2.0
-        width = 0.02
-        d = np.array([0.005, 0.01, 0.03, 0.1])
-        np.testing.assert_allclose(
-            radial_tanh_step(base_r + d, base_r, width)
-            + radial_tanh_step(base_r - d, base_r, width),
-            1.0, rtol=1e-12,
-        )
-
-    def test_scalar_and_array_base_broadcast(self):
-        # Scalar base_r and a per-node array base_r both broadcast against an
-        # array r_target. A constant array base must reproduce the scalar case.
-        r = np.array([2.0, 2.05, 2.1])
-        width = 0.02
-        scalar = radial_tanh_step(r, 2.05, width)
-        array = radial_tanh_step(r, np.full_like(r, 2.05), width)
-        np.testing.assert_allclose(scalar, array, rtol=1e-12)
-        # A genuinely per-node base shifts each crossing independently: each
-        # node sitting exactly on its own base reads 0.5.
-        per_node_base = r.copy()
-        np.testing.assert_allclose(
-            radial_tanh_step(r, per_node_base, width), 0.5, rtol=1e-12
-        )
-
-    def test_narrower_width_is_steeper(self):
-        # Narrower transition width => larger gradient magnitude at the step.
-        base_r = 2.0
-        rs = np.linspace(base_r - 0.05, base_r + 0.05, 200)
-        narrow = radial_tanh_step(rs, base_r, 0.005)
-        wide = radial_tanh_step(rs, base_r, 0.05)
-        assert np.abs(np.gradient(narrow)).max() > np.abs(np.gradient(wide)).max()
-
-
-# ---------------------------------------------------------------------------
 # LateralFractionOutput — pure lateral membership, no radial dependence
 # ---------------------------------------------------------------------------
 
@@ -427,28 +493,19 @@ class TestLateralFractionOutput:
 
 
 # ---------------------------------------------------------------------------
-# FadedRadialStepOutput — separable lateral-fade × fixed-depth radial step
+# QuinticOutput, fixed base — separable lateral-fade × fixed-depth radial step
 # ---------------------------------------------------------------------------
 
-class TestFadedRadialStepOutput:
-    """I(r, x) = f_lat(x) * S(r) with f_lat = clip(thickness/crust, 0, 1) and
-    a radial step whose base depth is FIXED (independent of thickness).
+class TestQuinticOutputFixedBase:
+    """I(r, x) = f_lat(x) * S(r) with f_lat = clip(thickness/fade_ref, 0, 1)
+    and a radial step whose base depth is FIXED (independent of thickness).
     """
-
-    def test_validation_rejects_nonpositive_args(self):
-        with pytest.raises(ValueError, match="crust_thickness_km must be positive"):
-            FadedRadialStepOutput(crust_thickness_km=0.0)
-        with pytest.raises(ValueError, match="radial_width_km must be positive"):
-            FadedRadialStepOutput(radial_width_km=-1.0)
-
-    def test_requires_only_thickness(self):
-        assert FadedRadialStepOutput().requires == frozenset({"thickness"})
 
     def test_separable_product(self):
         # The whole field equals f_lat(x) * S(r) computed independently.
         mesh = MeshConfig()
         crust, w_r = 50.0, 10.0
-        out = FadedRadialStepOutput(crust_thickness_km=crust, radial_width_km=w_r)
+        out = QuinticOutput(width_km=w_r, base_depth_km=crust, fade_ref_km=crust)
         thickness = np.array([10.0, 25.0, 50.0, 80.0])
         r_target = mesh.r_outer - np.array([20.0, 40.0, 60.0, 100.0]) / mesh.depth_scale
         too_far = np.zeros(4, dtype=bool)
@@ -456,31 +513,31 @@ class TestFadedRadialStepOutput:
 
         f_lat = np.clip(thickness / crust, 0.0, 1.0)
         base_r = mesh.r_outer - crust / mesh.depth_scale
-        S = radial_tanh_step(r_target, base_r, w_r / mesh.depth_scale)
+        S = radial_quintic_step(r_target, base_r, w_r / mesh.depth_scale)
         np.testing.assert_allclose(result, f_lat * S, rtol=1e-12)
 
     def test_fixed_base_depth_independent_of_thickness(self):
-        # Unlike TanhOutput, the radial 0.5-crossing of S does NOT move with
-        # thickness: at the fixed base_r, S=0.5 for every thickness, so the
-        # column value there is simply f_lat * 0.5.
+        # The radial step does NOT move with thickness: at the fixed base_r,
+        # S = 1 exactly (one-sided step) for every thickness, so a saturated
+        # column reads exactly 1 there regardless of how thick it is.
         mesh = MeshConfig()
         crust = 50.0
-        out = FadedRadialStepOutput(crust_thickness_km=crust, radial_width_km=10.0)
+        out = QuinticOutput(width_km=10.0, base_depth_km=crust, fade_ref_km=crust)
         base_r = mesh.r_outer - crust / mesh.depth_scale
-        # Saturated f_lat (thickness >= crust) at base_r -> exactly 0.5.
         for thickness in (50.0, 100.0, 300.0):
             r_target = np.array([base_r])
             result = out.compute(
                 {"thickness": np.array([thickness])}, r_target, np.array([False]), mesh
             )
-            np.testing.assert_allclose(result, 0.5, rtol=1e-12)
+            np.testing.assert_array_equal(result, 1.0)
 
-    def test_ocean_column_zeroed_vs_tanh_floor(self):
+    def test_ocean_column_zeroed_vs_unfaded_surface_skin(self):
         # too_far (or zero thickness) zeroes the entire column, surface
-        # included -- the artefact this output fixes. Contrast: TanhOutput on
-        # the same surface point floors at 0.5.
+        # included. Contrast: the UNFADED variable-base step on the same
+        # zero-thickness surface point reads exactly 1 — the surface skin
+        # that makes the fade mandatory for zero-outside sources.
         mesh = MeshConfig()
-        out = FadedRadialStepOutput(crust_thickness_km=50.0, radial_width_km=10.0)
+        out = QuinticOutput(width_km=10.0, base_depth_km=50.0, fade_ref_km=50.0)
         r_surface = np.array([mesh.r_outer])
         # Zero thickness -> f_lat = 0 -> whole column 0 even at the surface.
         zero = out.compute({"thickness": np.array([0.0])}, r_surface, np.array([False]), mesh)
@@ -490,34 +547,33 @@ class TestFadedRadialStepOutput:
             {"thickness": np.array([999.0])}, r_surface, np.array([True]), mesh
         )
         np.testing.assert_allclose(too_far, 0.0, atol=1e-15)
-        # TanhOutput at the same ocean surface point still reads ~0.5.
-        tanh_surface = TanhOutput(transition_width_km=10.0, default_thickness_km=0.0).compute(
+        # Unfaded variable-base step at the same ocean surface point reads 1.
+        unfaded_surface = QuinticOutput(width_km=10.0, default_thickness_km=0.0).compute(
             {"thickness": np.array([0.0])}, r_surface, np.array([False]), mesh
         )
-        np.testing.assert_allclose(tanh_surface, 0.5, rtol=1e-10)
+        np.testing.assert_array_equal(unfaded_surface, 1.0)
 
     def test_amplitude_scaling_and_saturation(self):
-        # f_lat scales the amplitude of the radial profile linearly: a half
-        # membership halves the surface value of a saturated column; thickness
-        # above crust saturates f_lat at 1.
+        # The surface sits on the plateau of the fixed-base step (S = 1
+        # exactly), so the surface value IS f_lat: linear in thickness up to
+        # the fade reference, saturated at 1 beyond it.
         mesh = MeshConfig()
         crust = 50.0
-        out = FadedRadialStepOutput(crust_thickness_km=crust, radial_width_km=10.0)
+        out = QuinticOutput(width_km=10.0, base_depth_km=crust, fade_ref_km=crust)
         r_surface = np.array([mesh.r_outer])
-        S_surf = 0.9999546021312975  # golden S(r_outer) for fixed base/width
-        # thickness = crust -> f_lat = 1 -> full surface amplitude.
+        # thickness = crust -> f_lat = 1 -> full surface amplitude, exactly 1.
         full = out.compute({"thickness": np.array([crust])}, r_surface, np.array([False]), mesh)
-        np.testing.assert_allclose(full, S_surf, rtol=1e-9)
-        # thickness = crust/2 -> f_lat = 0.5 -> half amplitude.
+        np.testing.assert_array_equal(full, 1.0)
+        # thickness = crust/2 -> f_lat = 0.5 -> exactly half amplitude.
         half = out.compute({"thickness": np.array([crust / 2])}, r_surface, np.array([False]), mesh)
-        np.testing.assert_allclose(half, 0.5 * S_surf, rtol=1e-9)
+        np.testing.assert_allclose(half, 0.5, rtol=1e-12)
         # thickness = 4*crust -> f_lat saturates at 1, same as full.
         sat = out.compute({"thickness": np.array([4 * crust])}, r_surface, np.array([False]), mesh)
         np.testing.assert_allclose(sat, full, rtol=1e-12)
 
     def test_does_not_mutate_input(self):
         mesh = MeshConfig()
-        out = FadedRadialStepOutput()
+        out = QuinticOutput(width_km=10.0, base_depth_km=50.0, fade_ref_km=50.0)
         thickness = np.array([999.0, 10.0])
         interp = {"thickness": thickness.copy()}
         out.compute(interp, np.full(2, mesh.r_outer), np.array([True, False]), mesh)
@@ -525,60 +581,57 @@ class TestFadedRadialStepOutput:
 
 
 # ---------------------------------------------------------------------------
-# FadedTanhOutput — amplitude fade AND variable base depth from one channel
+# QuinticOutput, variable base + fade — both from one thickness channel
 # ---------------------------------------------------------------------------
 
-class TestFadedTanhOutput:
+class TestQuinticOutputVariableFaded:
     """I(r, x) = f_lat(x) * S(r; h(x)), with both the fade and the per-node
     base depth derived from the SAME thickness channel.
 
-    The distinguishing property — not held by either sibling — is the
-    combination of a thickness-driven variable base depth (like TanhOutput,
-    unlike FadedRadialStepOutput's fixed base) with an amplitude fade that
-    multiplies away the 0.5 surface-skin floor TanhOutput leaves where
-    thickness -> 0 (unlike TanhOutput, which has no fade).
+    Because the one-sided step reads exactly 1 at the surface for ANY base
+    depth, the surface value of this configuration is exactly f_lat — the
+    fade alone controls the surface, while the variable base depth controls
+    where the column decays at depth.
     """
 
-    def test_variable_depth_with_faded_surface_floor(self):
-        # Three columns sampled at the surface r = r_outer, where TanhOutput
-        # floors at exactly 0.5 regardless of thickness. Here the amplitude
-        # fade ties the surface value to thickness/thickness_ref instead:
-        #   thin keel  -> faded toward 0 (the removed floor),
-        #   reference   -> half the (just-above-0.5) surface step,
-        #   thick craton-> saturated f_lat = 1.
-        # And the radial 0.5-crossing still moves with thickness (variable
-        # depth), which a fixed-base faded step could not reproduce.
+    def test_surface_is_exactly_the_fade(self):
         mesh = MeshConfig()
         thickness_ref, w_r = 150.0, 10.0
-        out = FadedTanhOutput(thickness_ref_km=thickness_ref, radial_width_km=w_r)
+        out = QuinticOutput(width_km=w_r, fade_ref_km=thickness_ref)
 
         thickness = np.array([0.0, thickness_ref / 2.0, 300.0])
         r_surface = np.full(3, mesh.r_outer)
         too_far = np.zeros(3, dtype=bool)
         surf = out.compute({"thickness": thickness.copy()}, r_surface, too_far, mesh)
 
-        # The faded surface floor: zero thickness gives exactly 0 (TanhOutput
-        # would give 0.5), and each surface value matches f_lat * S analytically.
+        # S(surface) = 1 exactly for every thickness, so surface == f_lat:
+        # zero thickness gives exactly 0 (the faded-away surface skin),
+        # half-reference gives exactly 0.5, saturated gives exactly 1.
         f_lat = np.clip(thickness / thickness_ref, 0.0, 1.0)
-        base_r = mesh.r_outer - thickness / mesh.depth_scale
-        S_surf = radial_tanh_step(r_surface, base_r, w_r / mesh.depth_scale)
-        np.testing.assert_allclose(surf, f_lat * S_surf, rtol=1e-12)
-        np.testing.assert_allclose(surf[0], 0.0, atol=1e-15)
+        np.testing.assert_allclose(surf, f_lat, rtol=1e-12)
+        np.testing.assert_array_equal(surf[0], 0.0)
+        np.testing.assert_array_equal(surf[2], 1.0)
 
-        # Contrast at the same zero-thickness surface point: TanhOutput floors
-        # at 0.5, FadedTanhOutput fades it to 0.
-        tanh_surface = TanhOutput(
-            transition_width_km=w_r, default_thickness_km=0.0
-        ).compute({"thickness": np.array([0.0])}, np.array([mesh.r_outer]),
-                  np.array([False]), mesh)
-        np.testing.assert_allclose(tanh_surface, 0.5, rtol=1e-10)
+    def test_variable_base_moves_with_thickness(self):
+        # Each column reads f_lat * 1 at its OWN thickness-defined base and
+        # f_lat * 0.5 half a width below it — the crossing radius differs per
+        # node, which a fixed-base configuration could not reproduce.
+        mesh = MeshConfig()
+        thickness_ref, w_r = 150.0, 10.0
+        out = QuinticOutput(width_km=w_r, fade_ref_km=thickness_ref)
+        thickness = np.array([75.0, 300.0])
+        too_far = np.zeros(2, dtype=bool)
+        f_lat = np.clip(thickness / thickness_ref, 0.0, 1.0)
 
-        # Variable base depth: each saturated-or-near column crosses 0.5 at its
-        # OWN thickness-defined base_r, so sampling there gives f_lat * 0.5 with
-        # the crossing radius differing per node (a fixed base could not).
         r_at_base = mesh.r_outer - thickness / mesh.depth_scale
         at_base = out.compute(
             {"thickness": thickness.copy()}, r_at_base, too_far, mesh
         )
-        np.testing.assert_allclose(at_base, f_lat * 0.5, rtol=1e-12)
-        assert r_at_base[1] != r_at_base[2]  # crossing moves with thickness
+        np.testing.assert_allclose(at_base, f_lat, rtol=1e-12)
+
+        r_mid_band = mesh.r_outer - (thickness + w_r / 2) / mesh.depth_scale
+        mid_band = out.compute(
+            {"thickness": thickness.copy()}, r_mid_band, too_far, mesh
+        )
+        np.testing.assert_allclose(mid_band, 0.5 * f_lat, rtol=1e-10)
+        assert r_at_base[0] != r_at_base[1]  # crossing moves with thickness

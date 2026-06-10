@@ -7,17 +7,15 @@ from .gplates import (
     PlateModelFiles,
 )
 from .outputs import (
-    FadedRadialStepOutput,
-    FadedTanhOutput,
     GeothermERFOutput,
     GeothermLinearOutput,
     LateralFractionOutput,
     MeshConfig,
     OutputStrategy,
-    TanhOutput,
+    QuinticOutput,
     continental_linear,
     ocean_erf_normalized,
-    radial_tanh_step,
+    radial_quintic_step,
 )
 from .sources import (
     CloudDataType,
@@ -54,15 +52,13 @@ __all__ = [
     "CloudDataType",
     # Outputs
     "OutputStrategy",
-    "TanhOutput",
+    "QuinticOutput",
     "GeothermERFOutput",
     "GeothermLinearOutput",
     "LateralFractionOutput",
-    "FadedRadialStepOutput",
-    "FadedTanhOutput",
     "ocean_erf_normalized",
     "continental_linear",
-    "radial_tanh_step",
+    "radial_quintic_step",
     # Factories
     "ConnectorFactory",
     "LithosphereConnectorFactory",
