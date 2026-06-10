@@ -10,9 +10,9 @@ from .outputs import (
     GeothermERFOutput,
     MeshConfig,
     OutputStrategy,
-    TanhOutput,
+    QuinticOutput,
     ocean_erf_normalized,
-    radial_tanh_step,
+    radial_quintic_step,
 )
 from .sources import (
     CloudDataType,
@@ -44,10 +44,10 @@ __all__ = [
     "CloudDataType",
     # Outputs
     "OutputStrategy",
-    "TanhOutput",
+    "QuinticOutput",
     "GeothermERFOutput",
     "ocean_erf_normalized",
-    "radial_tanh_step",
+    "radial_quintic_step",
     # Factories
     "ConnectorFactory",
     "LithosphereConnectorFactory",

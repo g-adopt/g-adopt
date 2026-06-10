@@ -16,7 +16,7 @@ from typing import Callable, TYPE_CHECKING
 from functools import cached_property
 
 from .connectors import ScalarFieldConnector, InterpolationConfig
-from .outputs import MeshConfig, OutputStrategy, TanhOutput, GeothermERFOutput
+from .outputs import MeshConfig, OutputStrategy, QuinticOutput, GeothermERFOutput
 from .sources import CloudDataType, Source, LithosphereSource, LithosphereSourceConfig
 
 if TYPE_CHECKING:
@@ -65,7 +65,7 @@ class ConnectorFactory:
         >>> factory.output = output
         >>> indicator = factory.indicator
 
-        >>> factory = ConnectorFactory(source_class=LithosphereSource, output_class=TanhOutput)
+        >>> factory = ConnectorFactory(source_class=LithosphereSource, output_class=QuinticOutput)
         >>> factory.construct_source(
         ...    gplates_connector=plate_model_with_polygons,
         ...    continental_data=synthetic_data,
@@ -294,7 +294,7 @@ class LithosphereConnectorFactory(ConnectorFactory):
     """A subclass of ConnectorFactory used for constructing Lithosphere objects
 
     `LithosphereConnectorFactory` ties together a `LithosphereSource`,
-    `TanhOutput` and `GeothermERFOutput` to create a convenience class for a
+    `QuinticOutput` and `GeothermERFOutput` to create a convenience class for a
     common combination of Sources and Outputs.
 
     Args:
@@ -315,7 +315,7 @@ class LithosphereConnectorFactory(ConnectorFactory):
     ):
         super().__init__(
             LithosphereSource,
-            TanhOutput,
+            QuinticOutput,
             GeothermERFOutput,
             mesh=mesh,
             interpolation=interpolation,
@@ -353,17 +353,24 @@ class LithosphereConnectorFactory(ConnectorFactory):
 
     def construct_output(
         self,
-        transition_width_km: float = 10.0,
+        width_km: float = 10.0,
+        *,
+        fade_ref_km: float | None = None,
         default_thickness_km: float = 100.0,
     ):
         """Overloaded construct_output
 
-        Match argument list to `TanhOutput` to allow static argument checking
-        and IDE introspection; see `TanhOutput` for the meaning of each
-        argument.
+        Match argument list to `QuinticOutput` to allow static argument
+        checking and IDE introspection; see `QuinticOutput` for the meaning
+        of each argument.
+
+        ``fade_ref_km`` is optional: the lithosphere thickness channel never
+        vanishes laterally (``default_thickness_km`` fills uncovered nodes),
+        so the unfaded one-sided step is a legitimate configuration.
         """
         super().construct_output(
-            transition_width_km=transition_width_km,
+            width_km=width_km,
+            fade_ref_km=fade_ref_km,
             default_thickness_km=default_thickness_km,
         )
 

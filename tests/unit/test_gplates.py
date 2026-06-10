@@ -12,7 +12,7 @@ from gadopt.gplates import (
     ConnectorFactory,
     LithosphereConnectorFactory,
     LithosphereSource,
-    TanhOutput,
+    QuinticOutput,
     GeothermERFOutput,
 )
 
@@ -264,22 +264,22 @@ class TestConnectorFactory:
             factory.source = source
 
     def test_constructed_output(self):
-        factory = ConnectorFactory(output_class=TanhOutput)
+        factory = ConnectorFactory(output_class=QuinticOutput)
         factory.construct_output()
 
-        assert isinstance(factory.output, TanhOutput)
+        assert isinstance(factory.output, QuinticOutput)
 
     def test_inherited_output(self):
-        factory1 = ConnectorFactory(output_class=TanhOutput)
+        factory1 = ConnectorFactory(output_class=QuinticOutput)
         factory2 = ConnectorFactory()
         factory1.construct_output()
         factory2.output = factory1.output
         assert factory1.output is factory2.output
 
     def test_strictly_single_output(self):
-        factory = ConnectorFactory(output_class=TanhOutput)
+        factory = ConnectorFactory(output_class=QuinticOutput)
         factory.construct_output()
-        output = TanhOutput()
+        output = QuinticOutput()
         with pytest.raises(
             RuntimeError, match="This factory already has an indicator Output!"
         ):
@@ -334,7 +334,7 @@ class TestConnectorFactory:
 
         assert factory.indicator.source is factory.geotherm.source
         assert factory.indicator is not factory.geotherm
-        assert isinstance(factory.indicator.output, TanhOutput)
+        assert isinstance(factory.indicator.output, QuinticOutput)
         assert isinstance(factory.geotherm.output, GeothermERFOutput)
 
     def test_connector_params_forwarded(
