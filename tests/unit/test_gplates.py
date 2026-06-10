@@ -10,9 +10,10 @@ from gadopt.gplates import (
     pyGplatesConnector,
     ensure_reconstruction,
     ConnectorFactory,
-    LithosphereIndicator,
+    LithosphereConnectorFactory,
     LithosphereSource,
     TanhOutput,
+    GeothermERFOutput,
 )
 
 
@@ -157,6 +158,41 @@ def test_coords():
     return np.array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]])
 
 
+class TestFindBestCheckpoint:
+    """The checkpoint-discovery helper matches on Path stems, so the filename
+    pattern and the suffix are checked independently — guard both."""
+
+    def test_picks_smallest_age_not_younger_than_target(self, tmp_path):
+        from gadopt.gplates.sources import _find_best_checkpoint
+
+        for age in (50, 100, 200):
+            (tmp_path / f"ocean_checkpoint_{age}Ma.npz").touch()
+        (tmp_path / "ocean_checkpoint_75Ma.txt").touch()  # wrong suffix
+        (tmp_path / "other_120Ma.npz").touch()  # wrong stem
+
+        best = _find_best_checkpoint(tmp_path, 80.0)
+        assert best == tmp_path / "ocean_checkpoint_100Ma.npz"
+
+    def test_none_dir_returns_none(self):
+        from gadopt.gplates.sources import _find_best_checkpoint
+
+        assert _find_best_checkpoint(None, 50.0) is None
+
+    def test_no_checkpoint_old_enough_returns_none(self, tmp_path):
+        from gadopt.gplates.sources import _find_best_checkpoint
+
+        (tmp_path / "ocean_checkpoint_50Ma.npz").touch()
+        assert _find_best_checkpoint(tmp_path, 80.0) is None
+
+    def test_vanished_dir_raises(self, tmp_path):
+        """The directory is created at source construction; if it disappears
+        mid-run the error must propagate, not be silenced."""
+        from gadopt.gplates.sources import _find_best_checkpoint
+
+        with pytest.raises(FileNotFoundError):
+            _find_best_checkpoint(tmp_path / "gone", 50.0)
+
+
 class TestConnectorFactory:
     def test_cannot_construct_source_without_class(self):
         factory = ConnectorFactory()
@@ -224,7 +260,7 @@ class TestConnectorFactory:
             age_to_property=half_space_cooling,
             plate_files=plate_files,
         )
-        with pytest.raises(RuntimeError, match="This indicator already has a Source!"):
+        with pytest.raises(RuntimeError, match="This factory already has a Source!"):
             factory.source = source
 
     def test_constructed_output(self):
@@ -244,8 +280,90 @@ class TestConnectorFactory:
         factory = ConnectorFactory(output_class=TanhOutput)
         factory.construct_output()
         output = TanhOutput()
-        with pytest.raises(RuntimeError, match="This indicator already has an Output!"):
+        with pytest.raises(
+            RuntimeError, match="This factory already has an indicator Output!"
+        ):
             factory.output = output
+
+    def test_strictly_single_geotherm_output(self):
+        factory = ConnectorFactory(geotherm_output_class=GeothermERFOutput)
+        factory.construct_geotherm()
+        with pytest.raises(
+            RuntimeError, match="This factory already has a geotherm Output!"
+        ):
+            factory.geotherm_output = GeothermERFOutput()
+
+    def test_constructed_geotherm_output(self):
+        factory = ConnectorFactory(geotherm_output_class=GeothermERFOutput)
+        factory.construct_geotherm(kappa=2e-6)
+
+        assert isinstance(factory.geotherm_output, GeothermERFOutput)
+        assert factory.geotherm_output.kappa == 2e-6
+
+    def test_geotherm_requires_geotherm_output(
+        self, plate_model_with_polygons, plate_files, synthetic_data
+    ):
+        factory = ConnectorFactory(source_class=LithosphereSource)
+        factory.construct_source(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_data,
+            age_to_property=half_space_cooling,
+            plate_files=plate_files,
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="A geotherm_output must be either constructed or connected in order to construct the geotherm",
+        ):
+            _ = factory.geotherm
+
+    def test_indicator_and_geotherm_share_source(
+        self, plate_model_with_polygons, plate_files, synthetic_data
+    ):
+        """The whole point of the factory: both connectors hold the same
+        Source instance, so the forward-only ocean tracker advances once per
+        age no matter which connector updates first."""
+        factory = LithosphereConnectorFactory()
+        factory.construct_source(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_data,
+            age_to_property=half_space_cooling,
+            plate_files=plate_files,
+        )
+        factory.construct_output()
+        factory.construct_geotherm()
+
+        assert factory.indicator.source is factory.geotherm.source
+        assert factory.indicator is not factory.geotherm
+        assert isinstance(factory.indicator.output, TanhOutput)
+        assert isinstance(factory.geotherm.output, GeothermERFOutput)
+
+    def test_connector_params_forwarded(
+        self, plate_model_with_polygons, plate_files, synthetic_data
+    ):
+        """Typed connector-level parameters reach every connector the
+        factory creates."""
+        from gadopt.gplates import MeshConfig, InterpolationConfig
+
+        mesh_cfg = MeshConfig(r_outer=2.22, depth_scale=2890.0)
+        interp_cfg = InterpolationConfig(k_neighbors=8)
+        factory = LithosphereConnectorFactory(
+            mesh=mesh_cfg, interpolation=interp_cfg, gc_collect_frequency=3
+        )
+        factory.construct_source(
+            gplates_connector=plate_model_with_polygons,
+            continental_data=synthetic_data,
+            age_to_property=half_space_cooling,
+            plate_files=plate_files,
+        )
+        factory.construct_output()
+        factory.construct_geotherm()
+
+        assert factory.indicator.gc_collect_frequency == 3
+        assert factory.geotherm.gc_collect_frequency == 3
+        assert factory.indicator.mesh is mesh_cfg
+        assert factory.geotherm.mesh is mesh_cfg
+        assert factory.indicator.interpolation is interp_cfg
+        assert factory.geotherm.interpolation is interp_cfg
 
     def test_default_output_raises_exception(
         self, plate_model_with_polygons, plate_files, synthetic_data
@@ -269,7 +387,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_valid_age_works(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that valid ages within bounds work correctly."""
-        factory = LithosphereIndicator()
+        factory = LithosphereConnectorFactory()
         factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
@@ -287,7 +405,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_age_older_than_oldest_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that requesting age > oldest_age raises ValueError."""
-        factory = LithosphereIndicator()
+        factory = LithosphereConnectorFactory()
         factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
@@ -304,7 +422,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_negative_age_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that requesting negative age (future) raises ValueError."""
-        factory = LithosphereIndicator()
+        factory = LithosphereConnectorFactory()
         factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
@@ -321,7 +439,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_backward_step_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that going backward in ocean tracker raises ValueError."""
-        factory = LithosphereIndicator()
+        factory = LithosphereConnectorFactory()
         factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,
@@ -342,7 +460,7 @@ class TestLithosphereConnectorAgeValidation:
 
     def test_forward_steps_work(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
         """Test that sequential forward steps (decreasing age) work."""
-        factory = LithosphereIndicator()
+        factory = LithosphereConnectorFactory()
         factory.construct_source(
             gplates_connector=plate_model_with_polygons,
             continental_data=synthetic_data,

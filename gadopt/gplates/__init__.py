@@ -15,13 +15,14 @@ from .outputs import (
     radial_tanh_step,
 )
 from .sources import (
+    CloudDataType,
     LithosphereSource,
     LithosphereSourceConfig,
     Source,
 )
 from .factories import (
     ConnectorFactory,
-    LithosphereIndicator,
+    LithosphereConnectorFactory,
 )
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "Source",
     "LithosphereSource",
     "LithosphereSourceConfig",
+    "CloudDataType",
     # Outputs
     "OutputStrategy",
     "TanhOutput",
@@ -48,5 +50,5 @@ __all__ = [
     "radial_tanh_step",
     # Factories
     "ConnectorFactory",
-    "LithosphereIndicator",
+    "LithosphereConnectorFactory",
 ]
