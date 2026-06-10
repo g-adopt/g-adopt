@@ -19,7 +19,7 @@ from .outputs import (
     GeothermERFOutput,
     GeothermLinearOutput,
     MeshConfig,
-    TanhOutput,
+    QuinticOutput,
 )
 from .sources import (
     LithosphereSource,
@@ -41,7 +41,7 @@ __all__ = [
     "LithosphereSourceConfig",
     "PolygonSource",
     "PolygonSourceConfig",
-    "TanhOutput",
+    "QuinticOutput",
     "GeothermERFOutput",
     "GeothermLinearOutput",
     "lithosphere_indicator",
@@ -742,6 +742,7 @@ def lithosphere_indicator(
     plate_files: "PlateModelFiles | None" = None,
     transition_width_km: float = 10.0,
     default_thickness_km: float = 100.0,
+    fade_ref_km: float | None = None,
     source_config: LithosphereSourceConfig | None = None,
     mesh: MeshConfig | None = None,
     interpolation: InterpolationConfig | None = None,
@@ -761,6 +762,12 @@ def lithosphere_indicator(
     than this fail immediately rather than silently locking the forward-only
     walk at the first touch. It does not enable revisiting older ages once
     stepped past. Ignored when ``source=`` is given.
+
+    ``fade_ref_km`` optionally adds a lateral amplitude fade
+    ``clip(thickness / fade_ref_km, 0, 1)`` on top of the quintic step —
+    useful to suppress the full-strength surface skin the one-sided step
+    otherwise paints over near-zero-thickness regions (e.g. ridge axes,
+    when the age-to-thickness map is allowed to reach zero).
     """
     if source is None:
         if (gplates_connector is None or continental_data is None
@@ -780,8 +787,9 @@ def lithosphere_indicator(
             walk_start_age=walk_start_age,
             comm=comm,
         )
-    output = TanhOutput(
-        transition_width_km=transition_width_km,
+    output = QuinticOutput(
+        width_km=transition_width_km,
+        fade_ref_km=fade_ref_km,
         default_thickness_km=default_thickness_km,
     )
     return ScalarFieldConnector(
@@ -859,6 +867,7 @@ def polygon_indicator(
     plate_files: "PlateModelFiles | None" = None,
     transition_width_km: float = 10.0,
     default_thickness_km: float = 0.0,
+    fade_ref_km: float | None = None,
     source_config: PolygonSourceConfig | None = None,
     mesh: MeshConfig | None = None,
     interpolation: InterpolationConfig | None = None,
@@ -872,7 +881,28 @@ def polygon_indicator(
     because PolygonSource's mask-and-relabel pattern places zero-thickness
     halo seeds outside the polygons; a ``too_far`` target node should read
     as "outside the region" rather than filling in 100 km of fake material.
+
+    A lateral fade is mandatory here: the one-sided quintic step reads
+    exactly 1 at the surface wherever the base depth sits, so the exterior
+    (zero-thickness) surface would read 1 instead of 0 without the
+    ``clip(thickness / fade_ref_km, 0, 1)`` amplitude factor. When
+    ``thickness_data`` is a uniform scalar the fade reference defaults to
+    that value (full strength exactly where the polygon claims its nominal
+    thickness); for spatially varying thickness data pass ``fade_ref_km``
+    explicitly — a reference around the typical interior thickness keeps
+    the interior saturated at 1 while the zero-thickness exterior fades to 0.
     """
+    if fade_ref_km is None:
+        if isinstance(thickness_data, (int, float)):
+            fade_ref_km = float(thickness_data)
+        else:
+            raise ValueError(
+                "polygon_indicator: pass `fade_ref_km=`. The one-sided "
+                "quintic step reads 1 at the surface even where thickness "
+                "is zero, so polygon indicators need a lateral fade; with "
+                "non-scalar `thickness_data` (or `source=`) the fade "
+                "reference cannot be inferred."
+            )
     if source is None:
         if (gplates_connector is None or polygons is None
                 or thickness_data is None or plate_files is None):
@@ -889,8 +919,9 @@ def polygon_indicator(
             config=source_config,
             comm=comm,
         )
-    output = TanhOutput(
-        transition_width_km=transition_width_km,
+    output = QuinticOutput(
+        width_km=transition_width_km,
+        fade_ref_km=fade_ref_km,
         default_thickness_km=default_thickness_km,
     )
     return ScalarFieldConnector(

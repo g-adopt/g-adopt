@@ -27,7 +27,7 @@ from gadopt.gplates import (
     PlateModelFiles,
     PolygonSource,
     PolygonSourceConfig,
-    TanhOutput,
+    QuinticOutput,
     GeothermERFOutput,
     ensure_reconstruction,
     pyGplatesConnector,
@@ -563,7 +563,7 @@ class TestSingleStepGuarantee:
         )
 
         ind_connector = ScalarFieldConnector(
-            source, TanhOutput(transition_width_km=10.0),
+            source, QuinticOutput(width_km=10.0),
         )
         geo_connector = ScalarFieldConnector(
             source, GeothermERFOutput(kappa=1e-6),

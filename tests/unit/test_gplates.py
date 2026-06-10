@@ -259,6 +259,7 @@ class TestPolygonConnectorAgeValidation:
             polygons=str(craton_shapefile),
             thickness_data=synthetic_data,
             plate_files=plate_files,
+            fade_ref_km=150.0,
         )
 
     def test_valid_age_works(self, polygon_connector, test_coords, plate_model_with_polygons):

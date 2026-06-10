@@ -145,7 +145,7 @@ def _fidelity_check():
             return a / 100.0
 
     from gadopt.gplates import Source
-    from gadopt.gplates import TanhOutput
+    from gadopt.gplates import QuinticOutput
     from mpi4py import MPI
 
     class _DS(Source):
@@ -161,7 +161,7 @@ def _fidelity_check():
 
     ds = _DS()
     cfg = InterpolationConfig(kernel="idw", k_neighbors=50)
-    conn = ScalarFieldConnector(ds, TanhOutput(), interpolation=cfg)
+    conn = ScalarFieldConnector(ds, QuinticOutput(), interpolation=cfg)
     src = random_unit_sphere(2000, seed=7, radius=6.371e6)
     tgt = random_unit_sphere(3000, seed=8, radius=2.0)
 

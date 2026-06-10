@@ -84,7 +84,7 @@ from gadopt.gplates import (
     PlateModelFiles,
     PolygonSource,
     PolygonSourceConfig,
-    TanhOutput,
+    QuinticOutput,
     GeothermERFOutput,
     GeothermLinearOutput,
     ensure_reconstruction,
@@ -242,7 +242,7 @@ continental_data = (latlon, thickness_values)
 #   and exposes a single `prepare(age)` call returning a dict of
 #   source-point arrays;
 # * an **OutputStrategy** turns interpolated source values at target
-#   mesh nodes into a scalar field (a tanh indicator, an erf geotherm,
+#   mesh nodes into a scalar field (a quintic-step indicator, an erf geotherm,
 #   a linear geotherm);
 # * an **ScalarFieldConnector** wires the two together, handles the
 #   kNN interpolation between source points and mesh DoFs, and caches
@@ -320,8 +320,9 @@ poly_source_cfg = PolygonSourceConfig(n_points=5000)
 # ## Part 1: Lithosphere indicator + geotherm
 #
 # We build a single `LithosphereSource` and then hand it to two
-# separate `ScalarFieldConnector` instances -- one with a `TanhOutput`
-# (the smooth indicator field, ~1 inside lithosphere, ~0 in mantle)
+# separate `ScalarFieldConnector` instances -- one with a `QuinticOutput`
+# (the smooth indicator field: exactly 1 from the surface down to the
+# lithosphere base, decaying to exactly 0 over `width_km` below it)
 # and one with a `GeothermERFOutput` (the half-space cooling
 # temperature profile).  Because both connectors hold a reference to
 # `lith_source`, the underlying `SeafloorAgeTracker` advances exactly
@@ -340,7 +341,7 @@ lith_source = LithosphereSource(
 
 I_lith = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     lith_source,
-    TanhOutput(transition_width_km=10.0, default_thickness_km=100.0),
+    QuinticOutput(width_km=10.0, default_thickness_km=100.0),
     mesh=mesh_cfg, interpolation=interp_cfg,
 ), name="I_lith")
 
@@ -359,7 +360,13 @@ T_erf = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 # the polygon source places zero-thickness halo seeds outside the
 # continental polygons, so `too_far` target nodes should read as
 # "outside the region" rather than getting filled with a default
-# 100 km of continental material.
+# 100 km of continental material.  The lateral fade (`fade_ref_km`)
+# is what actually zeroes the exterior: the one-sided quintic step
+# reads 1 at the surface even where thickness is zero, so without
+# the `clip(thickness / fade_ref_km, 0, 1)` amplitude factor the
+# whole ocean surface would read 1.  A reference of 100 km keeps the
+# continental interiors (thickness >~ 100 km) saturated at 1 while
+# the zero-thickness exterior fades smoothly to 0.
 
 # +
 cont_source = PolygonSource(
@@ -373,7 +380,7 @@ cont_source = PolygonSource(
 
 I_cont = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     cont_source,
-    TanhOutput(transition_width_km=10.0, default_thickness_km=0.0),
+    QuinticOutput(width_km=10.0, fade_ref_km=100.0, default_thickness_km=0.0),
     mesh=mesh_cfg, interpolation=interp_cfg,
 ), name="I_cont")
 
@@ -408,6 +415,9 @@ I_crust = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
     source_config=poly_source_cfg,
     transition_width_km=10.0,
     default_thickness_km=0.0,
+    # fade_ref_km is inferred from the scalar thickness_data (50 km): the
+    # lateral fade saturates exactly where the crust reaches its nominal
+    # thickness and zeroes the ocean surface.
     mesh=mesh_cfg, interpolation=interp_cfg,
     comm=mesh.comm,
 ), name="I_crust")
@@ -437,6 +447,10 @@ I_craton = GplatesScalarFunction(Q, indicator_connector=polygon_indicator(
     source_config=poly_source_cfg,
     transition_width_km=10.0,
     default_thickness_km=0.0,
+    # Spatially varying thickness data, so the fade reference cannot be
+    # inferred: 150 km keeps the thick cratonic keels saturated at 1 while
+    # thinner margins fade proportionally.
+    fade_ref_km=150.0,
     mesh=mesh_cfg, interpolation=interp_cfg,
     comm=mesh.comm,
 ), name="I_craton")

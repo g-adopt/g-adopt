@@ -34,7 +34,7 @@ ScalarFieldConnector (ABC in connectors.py)
 └── PolygonGeotherm       - Wraps PolygonConnector (composition, shared rotator)
 ```
 
-Indicator connectors produce smooth 3D indicator fields (~1 in region, ~0 outside) via tanh transitions. Geotherm connectors wrap an existing indicator connector and produce normalized temperature profiles [0, 1] instead.
+Indicator connectors produce smooth 3D indicator fields (exactly 1 in region, exactly 0 outside) via a one-sided quintic smoothstep at the region base (`QuinticOutput`); the transition sits entirely below the base, so the surface stays at 1 wherever the region has thickness, and zero-outside polygon sources must pair the step with a lateral fade (`fade_ref_km`). Geotherm connectors wrap an existing indicator connector and produce normalized temperature profiles [0, 1] instead.
 
 ### Key Classes
 

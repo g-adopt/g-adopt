@@ -42,7 +42,7 @@ from gadopt.gplates import (
     PolygonSource,
     PolygonSourceConfig,
     Source,
-    TanhOutput,
+    QuinticOutput,
     ensure_reconstruction,
     lithosphere_geotherm,
     lithosphere_indicator,
@@ -138,10 +138,10 @@ class TestRequiresProvidesContract:
     construction time."""
 
     def test_lith_thickness_only_pairing_allowed(self):
-        # LithosphereSource provides {"xyz","thickness","age"}; TanhOutput
+        # LithosphereSource provides {"xyz","thickness","age"}; QuinticOutput
         # requires {"thickness"}.
         src = _DummySource({"xyz", "thickness", "age"})
-        ScalarFieldConnector(src, TanhOutput())  # must not raise
+        ScalarFieldConnector(src, QuinticOutput())  # must not raise
 
     def test_lith_with_linear_geotherm_allowed(self):
         # GeothermLinearOutput requires only {"thickness"} — a polygon-style
@@ -156,9 +156,9 @@ class TestRequiresProvidesContract:
         with pytest.raises(ValueError, match="age"):
             ScalarFieldConnector(src, GeothermERFOutput())
 
-    def test_polygon_with_tanh_allowed(self):
+    def test_polygon_with_quintic_allowed(self):
         src = _DummySource({"xyz", "thickness"})
-        ScalarFieldConnector(src, TanhOutput(default_thickness_km=0.0))
+        ScalarFieldConnector(src, QuinticOutput(default_thickness_km=0.0))
 
     def test_polygon_with_linear_geotherm_allowed(self):
         src = _DummySource({"xyz", "thickness"})
@@ -169,11 +169,11 @@ class TestConnectorConstruction:
     def test_gc_collect_frequency_validated(self):
         src = _DummySource({"xyz", "thickness"})
         with pytest.raises(ValueError, match="gc_collect_frequency"):
-            ScalarFieldConnector(src, TanhOutput(), gc_collect_frequency=0)
+            ScalarFieldConnector(src, QuinticOutput(), gc_collect_frequency=0)
 
     def test_defaults_use_module_level_configs(self):
         src = _DummySource({"xyz", "thickness"})
-        conn = ScalarFieldConnector(src, TanhOutput())
+        conn = ScalarFieldConnector(src, QuinticOutput())
         assert isinstance(conn.mesh, MeshConfig)
         assert isinstance(conn.interpolation, InterpolationConfig)
 
@@ -188,7 +188,7 @@ class TestGcCollectDefault:
     override the connector's)."""
 
     def test_default_is_ten_direct(self):
-        conn = ScalarFieldConnector(_DummySource({"xyz", "thickness"}), TanhOutput())
+        conn = ScalarFieldConnector(_DummySource({"xyz", "thickness"}), QuinticOutput())
         assert conn.gc_collect_frequency == 10
 
     def test_default_is_ten_lithosphere_factory(self):
@@ -197,7 +197,7 @@ class TestGcCollectDefault:
         assert conn.gc_collect_frequency == 10
 
     def test_default_is_ten_polygon_factory(self):
-        conn = polygon_indicator(source=_DataSource())
+        conn = polygon_indicator(source=_DataSource(), fade_ref_km=50.0)
         assert conn.gc_collect_frequency == 10
 
     def _drive(self, monkeypatch, frequency, n_calls):
@@ -207,7 +207,7 @@ class TestGcCollectDefault:
             lambda *a, **k: calls.__setitem__("n", calls["n"] + 1),
         )
         conn = ScalarFieldConnector(
-            _DataSource(), TanhOutput(), gc_collect_frequency=frequency
+            _DataSource(), QuinticOutput(), gc_collect_frequency=frequency
         )
         target = _target_coords()
         # Distinct ages (spaced > delta_t=1.0, all <= oldest_age=100) so every
@@ -235,7 +235,7 @@ class TestResultCacheKey:
 
     @staticmethod
     def _conn():
-        return ScalarFieldConnector(_DummySource({"xyz", "thickness"}), TanhOutput())
+        return ScalarFieldConnector(_DummySource({"xyz", "thickness"}), QuinticOutput())
 
     def test_same_array_same_age_hits(self):
         conn = self._conn()
@@ -344,8 +344,8 @@ class TestGeometrySharing:
         cfg = InterpolationConfig()
         target = _target_coords()
         # Two indicator connectors sharing the same source, target and cfg.
-        conn_a = ScalarFieldConnector(src, TanhOutput(), interpolation=cfg)
-        conn_b = ScalarFieldConnector(src, TanhOutput(), interpolation=cfg)
+        conn_a = ScalarFieldConnector(src, QuinticOutput(), interpolation=cfg)
+        conn_b = ScalarFieldConnector(src, QuinticOutput(), interpolation=cfg)
 
         ndtime = src.age2ndtime(50.0)
         out_a = conn_a.get_indicator(target, ndtime)
@@ -353,14 +353,14 @@ class TestGeometrySharing:
 
         # Geometry built exactly once, shared by both.
         assert _CountingCKDTree.count == 1
-        # Both TanhOutputs on the same source/geometry must agree byte-for-byte.
+        # Both QuinticOutputs on the same source/geometry must agree byte-for-byte.
         np.testing.assert_array_equal(out_a, out_b)
 
     def test_distinct_configs_build_separately(self):
         src = _DataSource()
         target = _target_coords()
-        conn_a = ScalarFieldConnector(src, TanhOutput(), interpolation=InterpolationConfig())
-        conn_b = ScalarFieldConnector(src, TanhOutput(), interpolation=InterpolationConfig())
+        conn_a = ScalarFieldConnector(src, QuinticOutput(), interpolation=InterpolationConfig())
+        conn_b = ScalarFieldConnector(src, QuinticOutput(), interpolation=InterpolationConfig())
 
         ndtime = src.age2ndtime(50.0)
         conn_a.get_indicator(target, ndtime)
@@ -373,7 +373,7 @@ class TestGeometrySharing:
         src = _DataSource()
         cfg = InterpolationConfig()
         target = _target_coords()
-        conn = ScalarFieldConnector(src, TanhOutput(), interpolation=cfg)
+        conn = ScalarFieldConnector(src, QuinticOutput(), interpolation=cfg)
 
         conn.get_indicator(target, src.age2ndtime(50.0))
         assert _CountingCKDTree.count == 1
@@ -387,7 +387,7 @@ class TestGeometrySharing:
         src = _DataSource()
         cfg = InterpolationConfig()
         target = _target_coords()
-        conn = ScalarFieldConnector(src, TanhOutput(), interpolation=cfg)
+        conn = ScalarFieldConnector(src, QuinticOutput(), interpolation=cfg)
 
         source_dict = src.prepare(50.0)
         bundle = conn._interp_geometry(source_dict["xyz"], target)
@@ -418,14 +418,14 @@ class TestGplatesScalarFunctionSpaceCheck:
     def test_vector_space_rejected(self, tiny_mesh):
         V = fd.VectorFunctionSpace(tiny_mesh, "CG", 1)
         src = _DummySource({"xyz", "thickness"})
-        conn = ScalarFieldConnector(src, TanhOutput())
+        conn = ScalarFieldConnector(src, QuinticOutput())
         with pytest.raises(TypeError, match="scalar function space"):
             GplatesScalarFunction(V, indicator_connector=conn)
 
     def test_scalar_space_accepted(self, tiny_mesh):
         Q = fd.FunctionSpace(tiny_mesh, "CG", 1)
         src = _DummySource({"xyz", "thickness"})
-        conn = ScalarFieldConnector(src, TanhOutput())
+        conn = ScalarFieldConnector(src, QuinticOutput())
         # Should construct without raising; the mock source is never asked
         # for data because we never call update_plate_reconstruction.
         GplatesScalarFunction(Q, indicator_connector=conn)
@@ -568,7 +568,7 @@ class TestConnectorRegression:
     def test_lithosphere_pair(self, lith_source, regression_mesh, Q):
         ref = _load_reference()
         observed = _evaluate_connectors_lockstep({
-            "lith_indicator": lithosphere_indicator(source=lith_source),
+            "lith_indicator": lithosphere_indicator(source=lith_source, fade_ref_km=100.0),
             "lith_geotherm": lithosphere_geotherm(source=lith_source),
         }, regression_mesh, Q, TEST_AGES)
         for name in ("lith_indicator", "lith_geotherm"):
@@ -579,7 +579,7 @@ class TestConnectorRegression:
     def test_polygon_pair(self, poly_source, regression_mesh, Q):
         ref = _load_reference()
         observed = _evaluate_connectors_lockstep({
-            "polygon_indicator": polygon_indicator(source=poly_source),
+            "polygon_indicator": polygon_indicator(source=poly_source, fade_ref_km=200.0),
             "polygon_geotherm": polygon_geotherm(source=poly_source),
         }, regression_mesh, Q, TEST_AGES)
         for name in ("polygon_indicator", "polygon_geotherm"):

@@ -51,7 +51,7 @@ class LithosphereSourceConfig:
 
     Mesh geometry (r_outer, depth_scale) lives on MeshConfig.
     Interpolation (k_neighbors, kernel, ...) lives on InterpolationConfig.
-    Output knobs (transition_width, kappa, ...) live on the output strategy.
+    Output knobs (width_km, fade_ref_km, kappa, ...) live on the output strategy.
     """
 
     time_step: float = 1.0

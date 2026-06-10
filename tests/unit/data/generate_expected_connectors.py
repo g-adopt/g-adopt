@@ -136,7 +136,7 @@ def main():
     )
 
     lith_result = walk_connectors({
-        "lith_indicator": lithosphere_indicator(source=lith_src),
+        "lith_indicator": lithosphere_indicator(source=lith_src, fade_ref_km=100.0),
         "lith_geotherm": lithosphere_geotherm(source=lith_src),
     }, Q, TEST_AGES)
     reference.update(lith_result)
@@ -150,7 +150,7 @@ def main():
         config=PolygonSourceConfig(n_points=POLYGON_N_POINTS),
     )
     poly_result = walk_connectors({
-        "polygon_indicator": polygon_indicator(source=poly_src),
+        "polygon_indicator": polygon_indicator(source=poly_src, fade_ref_km=200.0),
         "polygon_geotherm": polygon_geotherm(source=poly_src),
     }, Q, TEST_AGES)
     reference.update(poly_result)
