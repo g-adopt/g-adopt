@@ -1,6 +1,7 @@
 import warnings
 from dataclasses import dataclass
 
+
 import firedrake as fd
 import numpy as np
 import pygplates
@@ -18,7 +19,6 @@ __all__ = [
     "ensure_reconstruction",
     "GplatesVelocityFunction",
     "GplatesScalarFunction",
-    "ScalarFieldConnector",
     "PlateModelFiles",
     "pyGplatesConnector",
 ]
@@ -695,9 +695,8 @@ class GplatesScalarFunction(fd.Function):
     reconstructions.
 
     Wraps any ``ScalarFieldConnector`` (built either directly via composition
-    of a ``Source`` and an ``OutputStrategy``, or via one of the convenience
-    factories ``lithosphere_indicator``, ``lithosphere_geotherm``,
-    ``polygon_indicator``, ``polygon_geotherm``). Calling
+    of a ``Source`` and an ``OutputStrategy``, or via a ``ConnectorFactory``
+    such as ``LithosphereConnectorFactory``). Calling
     ``update_plate_reconstruction(ndtime)`` recomputes the field and assigns
     it onto the underlying Firedrake DoFs.
 
