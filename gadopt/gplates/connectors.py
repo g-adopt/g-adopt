@@ -34,7 +34,7 @@ from mpi4py import MPI
 from scipy.spatial import cKDTree
 
 from ..utility import log, DEBUG
-from .outputs import MeshConfig, OutputStrategy, _DEFAULT_MESH_PARAMETERS
+from .outputs import MeshConfig, OutputStrategy
 from .sources import Source
 
 
@@ -85,9 +85,6 @@ class InterpolationConfig:
             raise ValueError(
                 f"gaussian_sigma must be positive, got {self.gaussian_sigma}"
             )
-
-
-_DEFAULT_INTERPOLATION_PARAMETERS = InterpolationConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +145,8 @@ class ScalarFieldConnector:
 
         self.source = source
         self.output = output
-        self.mesh = mesh or _DEFAULT_MESH_PARAMETERS
-        self.interpolation = interpolation or _DEFAULT_INTERPOLATION_PARAMETERS
+        self.mesh = mesh or MeshConfig()
+        self.interpolation = interpolation or InterpolationConfig()
         self.gc_collect_frequency = gc_collect_frequency
 
         # Result cache: keyed on (age, identity of the target_coords buffer).
