@@ -7,8 +7,8 @@ scalar field. The current two flavours are:
     smooth quintic transition at the region base (QuinticOutput).
 
   - normalised geotherms — (T - T_surface) / (T_LAB - T_surface) in [0, 1],
-    using an erf profile (oceanic, age-dependent). The "outside" value is 1 —
-    i.e. mantle temperature.
+    using an erf profile (oceanic, age-dependent) or a linear profile
+    (continental). The "outside" value is 1 — i.e. mantle temperature.
 
 Outputs declare what they need from the source via the class-level ``requires``
 set; the connector validates this against the source's ``provides`` set at
@@ -39,6 +39,7 @@ fills the gap (lithosphere-style ``default_thickness_km=100``).
   QuinticOutput()              variable (per-node)  none
   QuinticOutput(base_depth_km) fixed                optional
   QuinticOutput(fade_ref_km)   variable             clip(h/ref, 0, 1)
+  LateralFractionOutput        none (pure lateral)  the fraction itself
   ============================ ==================== ===================
 """
 
@@ -74,7 +75,7 @@ class MeshConfig:
             raise ValueError(f"depth_scale must be positive, got {self.depth_scale}")
 
 
-# Geotherm functions (used by GeothermERFOutput)
+# Geotherm functions (used by GeothermERFOutput / GeothermLinearOutput)
 def ocean_erf_normalized(depth_m, z_lab_m, age_myr, kappa):
     """Normalised erf geotherm for oceanic lithosphere.
 
@@ -101,6 +102,17 @@ def ocean_erf_normalized(depth_m, z_lab_m, age_myr, kappa):
     return np.clip(result, 0.0, 1.0)
 
 
+def continental_linear(depth_m, z_lab_m):
+    """Linear geotherm for continental lithosphere. T_norm = z / z_lab."""
+    depth_m = np.asarray(depth_m, dtype=float)
+    z_lab_m = np.asarray(z_lab_m, dtype=float)
+    result = np.zeros_like(depth_m)
+    valid = z_lab_m > 0
+    result[valid] = depth_m[valid] / z_lab_m[valid]
+    return np.clip(result, 0.0, 1.0)
+
+
+# Shared radial primitive (used by every indicator output)
 def radial_quintic_step(r_target, base_r, width_nondim):
     """One-sided quintic smoothstep: 1 above the base, 0 one width below it.
 
@@ -288,3 +300,54 @@ class GeothermERFOutput(OutputStrategy):
         z_lab_m = thickness_km * 1e3
         T_norm = self._geotherm(depth_m, z_lab_m, age_myr, self.kappa)
         return np.clip(T_norm, 0.0, 1.0)
+
+
+class GeothermLinearOutput(OutputStrategy):
+    """Linear normalised geotherm for continental / polygon-bounded regions.
+
+    Outside the region (``too_far``) the output is 1 — mantle temperature.
+    Inside, T_norm = z / z_LAB. Matches the current PolygonGeotherm semantics
+    where the geotherm is only defined where a polygon claims it; everywhere
+    else the surrounding mantle is presumed adiabatic at T_norm=1.
+    """
+
+    requires = frozenset({"thickness"})
+
+    def __init__(
+        self,
+        geotherm: Callable | None = None,
+    ):
+        self._geotherm = geotherm or continental_linear
+
+    def compute(self, interpolated, r_target, too_far, mesh):
+        thickness_km = interpolated["thickness"]
+        depth_m = (mesh.r_outer - r_target) * mesh.depth_scale * 1e3
+        z_lab_m = thickness_km * 1e3
+        T_norm = self._geotherm(depth_m, z_lab_m)
+        T_norm = np.clip(T_norm, 0.0, 1.0)
+        T_norm[too_far] = 1.0
+        return T_norm
+
+
+class LateralFractionOutput(OutputStrategy):
+    """Pure lateral membership fraction — no radial dependence.
+
+    Returns the kNN-interpolated property clamped to [0, 1]. Paired with a
+    PolygonSource carrying a uniform value of 1.0 inside the polygon (0 outside),
+    the interpolated value *is* the smoothed inside-fraction: 1 well inside the
+    region, 0 well outside, with a smooth halo whose width is set by
+    InterpolationConfig.gaussian_sigma. Used as the standalone membership channel
+    f_lat(x) that the decoupled craton field multiplies against.
+
+    NB ``requires`` names the ``"thickness"`` key only because that is the key a
+    PolygonSource publishes; here it carries a membership value (1.0 inside), not
+    a thickness. The name is kept to satisfy the connector's
+    ``requires <= source.provides`` check.
+    """
+
+    requires = frozenset({"thickness"})
+
+    def compute(self, interpolated, r_target, too_far, mesh):
+        frac = np.clip(interpolated["thickness"].copy(), 0.0, 1.0)
+        frac[too_far] = 0.0
+        return frac

@@ -11,6 +11,7 @@ from gadopt.gplates import (
     ensure_reconstruction,
     ConnectorFactory,
     LithosphereConnectorFactory,
+    PolygonConnectorFactory,
     LithosphereSource,
     QuinticOutput,
     GeothermERFOutput,
@@ -474,3 +475,66 @@ class TestLithosphereConnectorAgeValidation:
             ndtime = plate_model_with_polygons.age2ndtime(age)
             result = factory.indicator.get_indicator(test_coords, ndtime)
             assert result.shape == (len(test_coords),)
+
+
+class TestPolygonConnectorAgeValidation:
+    """Test age validation in PolygonConnector."""
+
+    @pytest.fixture
+    def polygon_connector(self, plate_model_with_polygons, plate_files, synthetic_data):
+        """Create PolygonConnector for testing."""
+        craton_shapefile = (
+            Path(__file__).resolve().parents[2]
+            / "demos/mantle_convection/gplates_lithosphere"
+            / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2/shapes_cratons.shp"
+        )
+
+        if not craton_shapefile.exists():
+            pytest.skip("Craton shapefile not available")
+
+        factory = PolygonConnectorFactory()
+        factory.construct_source(
+            gplates_connector=plate_model_with_polygons,
+            polygons=str(craton_shapefile),
+            thickness_data=synthetic_data,
+            plate_files=plate_files,
+        )
+        factory.construct_output(fade_ref_km=150.0)
+        return factory.indicator
+
+    def test_valid_age_works(self, polygon_connector, test_coords, plate_model_with_polygons):
+        """Test that valid ages within bounds work correctly."""
+        ndtime = plate_model_with_polygons.age2ndtime(100)
+        result = polygon_connector.get_indicator(test_coords, ndtime)
+
+        assert result.shape == (len(test_coords),)
+        assert np.all(np.isfinite(result))
+
+    def test_age_older_than_oldest_raises_error(self, polygon_connector, test_coords, plate_model_with_polygons):
+        """Test that requesting age > oldest_age raises ValueError."""
+        ndtime = plate_model_with_polygons.age2ndtime(250)
+
+        with pytest.raises(ValueError, match="older than the plate model's oldest age"):
+            polygon_connector.get_indicator(test_coords, ndtime)
+
+    def test_negative_age_raises_error(self, polygon_connector, test_coords, plate_model_with_polygons):
+        """Test that requesting negative age (future) raises ValueError."""
+        ndtime = plate_model_with_polygons.age2ndtime(-10)
+
+        with pytest.raises(ValueError, match="negative.*future"):
+            polygon_connector.get_indicator(test_coords, ndtime)
+
+    def test_any_order_works(self, polygon_connector, test_coords, plate_model_with_polygons):
+        """Test that PolygonConnector allows any age order (unlike LithosphereConnector)."""
+        # PolygonConnector uses rotation only, so any order should work
+
+        # First go to 50 Ma
+        ndtime_50 = plate_model_with_polygons.age2ndtime(50)
+        polygon_connector.get_indicator(test_coords, ndtime_50)
+
+        # Then go back to 150 Ma (should work for PolygonConnector)
+        ndtime_150 = plate_model_with_polygons.age2ndtime(150)
+        result = polygon_connector.get_indicator(test_coords, ndtime_150)
+
+        assert result.shape == (len(test_coords),)
+        assert np.all(np.isfinite(result))

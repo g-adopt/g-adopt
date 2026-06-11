@@ -12,8 +12,11 @@ import pytest
 
 from gadopt.gplates import (
     GeothermERFOutput,
+    GeothermLinearOutput,
+    LateralFractionOutput,
     MeshConfig,
     QuinticOutput,
+    continental_linear,
     ocean_erf_normalized,
     radial_quintic_step,
 )
@@ -98,6 +101,33 @@ class TestOceanErfNormalized:
         result = ocean_erf_normalized(depth, z_lab, age_myr=age, kappa=1e-6)
         assert np.all(np.isfinite(result))
         assert np.all((result >= 0.0) & (result <= 1.0))
+
+
+class TestContinentalLinear:
+    def test_surface_is_zero(self):
+        z_lab = np.array([200e3, 150e3])
+        depth = np.zeros_like(z_lab)
+        result = continental_linear(depth, z_lab)
+        np.testing.assert_allclose(result, 0.0, atol=1e-12)
+
+    def test_lab_is_one(self):
+        z_lab = np.array([200e3, 150e3])
+        depth = z_lab.copy()
+        result = continental_linear(depth, z_lab)
+        np.testing.assert_allclose(result, 1.0, atol=1e-12)
+
+    def test_midpoint(self):
+        result = continental_linear(np.array([100e3]), np.array([200e3]))
+        np.testing.assert_allclose(result, 0.5, atol=1e-12)
+
+    def test_clipped_to_unit_interval(self):
+        result = continental_linear(np.array([200e3]), np.array([100e3]))
+        assert np.all((result >= 0.0) & (result <= 1.0))
+
+    def test_zero_lab_returns_zero(self):
+        # z_lab=0 means no lithosphere; profile collapses to surface value.
+        result = continental_linear(np.array([50e3]), np.array([0.0]))
+        np.testing.assert_allclose(result, 0.0, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +359,7 @@ class TestQuinticOutputVariableBase:
 
 
 # ---------------------------------------------------------------------------
-# GeothermERFOutput
+# GeothermERFOutput and GeothermLinearOutput
 # ---------------------------------------------------------------------------
 
 class TestGeothermERFOutput:
@@ -391,6 +421,77 @@ class TestGeothermERFOutput:
             kappa=1e-6,
         )
         np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+
+class TestGeothermLinearOutput:
+    def test_requires_only_thickness(self):
+        assert GeothermLinearOutput().requires == frozenset({"thickness"})
+
+    def test_too_far_is_mantle(self):
+        # Outside the polygon region (too_far=True), the output is 1.0
+        # (mantle temperature).
+        mesh = MeshConfig()
+        out = GeothermLinearOutput()
+        r_target = np.array([mesh.r_outer - 50.0 / mesh.depth_scale])
+        interp = {"thickness": np.array([100.0])}
+        result = out.compute(interp, r_target, np.array([True]), mesh)
+        np.testing.assert_allclose(result, 1.0, atol=1e-12)
+
+    def test_inside_region_linear(self):
+        # Inside the polygon, output follows the linear geotherm.
+        mesh = MeshConfig(r_outer=2.208, depth_scale=2890.0)
+        out = GeothermLinearOutput()
+        thickness_km = 100.0
+        # Mid-depth in the lithosphere ⇒ T_norm ~ 0.5.
+        r_target = np.array([mesh.r_outer - 50.0 / mesh.depth_scale])
+        interp = {"thickness": np.array([thickness_km])}
+        result = out.compute(interp, r_target, np.array([False]), mesh)
+        np.testing.assert_allclose(result, 0.5, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# LateralFractionOutput — pure lateral membership, no radial dependence
+# ---------------------------------------------------------------------------
+
+class TestLateralFractionOutput:
+    """Returns the interpolated membership clipped to [0, 1] with too_far->0.
+
+    Its defining property is the absence of any radial dependence: the result
+    is identical for any r_target.
+    """
+
+    def test_requires_only_thickness(self):
+        assert LateralFractionOutput().requires == frozenset({"thickness"})
+
+    def test_no_radial_dependence(self):
+        # Same interpolated membership, wildly different r_target -> identical.
+        mesh = MeshConfig()
+        out = LateralFractionOutput()
+        interp = {"thickness": np.array([0.2, 0.8, 1.0])}
+        too_far = np.zeros(3, dtype=bool)
+        shallow = out.compute(interp, np.full(3, mesh.r_outer), too_far, mesh)
+        deep = out.compute(interp, np.full(3, mesh.r_outer - 0.5), too_far, mesh)
+        np.testing.assert_array_equal(shallow, deep)
+
+    def test_clipping_passthrough_and_too_far(self):
+        # Below 0 clips to 0, above 1 clips to 1, mid-values pass through
+        # unchanged, and too_far nodes are forced to 0 regardless of value.
+        mesh = MeshConfig()
+        out = LateralFractionOutput()
+        interp = {"thickness": np.array([-0.3, 0.0, 0.37, 1.0, 5.0, 0.9])}
+        too_far = np.array([False, False, False, False, False, True])
+        result = out.compute(interp, np.full(6, mesh.r_outer), too_far, mesh)
+        np.testing.assert_allclose(
+            result, [0.0, 0.0, 0.37, 1.0, 1.0, 0.0], rtol=1e-12
+        )
+
+    def test_does_not_mutate_input(self):
+        mesh = MeshConfig()
+        out = LateralFractionOutput()
+        thickness = np.array([-0.3, 0.37, 5.0])
+        interp = {"thickness": thickness.copy()}
+        out.compute(interp, np.full(3, mesh.r_outer), np.array([False, False, True]), mesh)
+        np.testing.assert_array_equal(interp["thickness"], thickness)
 
 
 # ---------------------------------------------------------------------------

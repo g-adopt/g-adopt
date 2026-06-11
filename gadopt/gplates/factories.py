@@ -11,13 +11,27 @@ source_class, output_class and geotherm_output_class specified.
 """
 
 import numpy as np
+from pathlib import Path
 from mpi4py import MPI
 from typing import Callable, TYPE_CHECKING
 from functools import cached_property
 
 from .connectors import ScalarFieldConnector, InterpolationConfig
-from .outputs import MeshConfig, OutputStrategy, QuinticOutput, GeothermERFOutput
-from .sources import CloudDataType, Source, LithosphereSource, LithosphereSourceConfig
+from .outputs import (
+    GeothermERFOutput,
+    GeothermLinearOutput,
+    MeshConfig,
+    OutputStrategy,
+    QuinticOutput,
+)
+from .sources import (
+    CloudDataType,
+    LithosphereSource,
+    LithosphereSourceConfig,
+    PolygonSource,
+    PolygonSourceConfig,
+    Source,
+)
 
 if TYPE_CHECKING:
     from .gplates import pyGplatesConnector, PlateModelFiles
@@ -25,6 +39,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ConnectorFactory",
     "LithosphereConnectorFactory",
+    "PolygonConnectorFactory",
 ]
 
 
@@ -248,6 +263,26 @@ class ConnectorFactory:
             raise RuntimeError(
                 "An output must be either constructed or connected in order to construct the indicator"
             )
+        # Cross-check the pairing: a zero-outside source (polygon-style)
+        # combined with an unfaded one-sided quintic step would read 1 at
+        # the surface everywhere — the exterior surface included — because
+        # zero thickness puts the region base exactly at the surface. This
+        # catches outputs assigned through the generic `output` setter; the
+        # PolygonConnectorFactory overload already forces `fade_ref_km` at
+        # the call site.
+        if (
+            getattr(self._source, "zero_outside", False)
+            and isinstance(self._output, QuinticOutput)
+            and self._output.fade_ref_km is None
+        ):
+            raise ValueError(
+                "This source is zero outside its bounded region, but the "
+                "indicator output has no lateral fade (fade_ref_km is "
+                "None). The one-sided quintic step reads 1 at the surface "
+                "wherever thickness is zero, so the indicator would cover "
+                "the whole exterior surface. Construct the output with "
+                "fade_ref_km set to the region's thickness scale."
+            )
         return ScalarFieldConnector(
             self._source,
             self._output,
@@ -294,8 +329,8 @@ class LithosphereConnectorFactory(ConnectorFactory):
     """A subclass of ConnectorFactory used for constructing Lithosphere objects
 
     `LithosphereConnectorFactory` ties together a `LithosphereSource`,
-    `QuinticOutput` and `GeothermERFOutput` to create a convenience class for a
-    common combination of Sources and Outputs.
+    `QuinticOutput` and `GeothermERFOutput` to create a convenience class for
+    a common combination of Sources and Outputs.
 
     Args:
         mesh: `MeshConfig` forwarded to every `ScalarFieldConnector` this
@@ -364,7 +399,8 @@ class LithosphereConnectorFactory(ConnectorFactory):
         checking and IDE introspection; see `QuinticOutput` for the meaning
         of each argument.
 
-        ``fade_ref_km`` is optional: the lithosphere thickness channel never
+        ``fade_ref_km`` is optional here, unlike on
+        `PolygonConnectorFactory`: the lithosphere thickness channel never
         vanishes laterally (``default_thickness_km`` fills uncovered nodes),
         so the unfaded one-sided step is a legitimate configuration.
         """
@@ -391,5 +427,112 @@ class LithosphereConnectorFactory(ConnectorFactory):
             kappa=kappa,
             default_thickness_km=default_thickness_km,
             too_far_age_myr=too_far_age_myr,
+            geotherm=geotherm,
+        )
+
+
+class PolygonConnectorFactory(ConnectorFactory):
+    """A subclass of ConnectorFactory used for constructing polygon-bounded objects
+
+    `PolygonConnectorFactory` ties together a `PolygonSource`,
+    `QuinticOutput` and `GeothermLinearOutput` to create a convenience class
+    for a common combination of Sources and Outputs.
+
+    Args:
+        mesh: `MeshConfig` forwarded to every `ScalarFieldConnector` this
+            factory creates.
+        interpolation: `InterpolationConfig` forwarded to every
+            `ScalarFieldConnector` this factory creates.
+        gc_collect_frequency: forwarded to every `ScalarFieldConnector` this
+            factory creates; see `ScalarFieldConnector` for the semantics.
+    """
+
+    def __init__(
+        self,
+        *,
+        mesh: MeshConfig | None = None,
+        interpolation: InterpolationConfig | None = None,
+        gc_collect_frequency: int | None = 10,
+    ):
+        super().__init__(
+            PolygonSource,
+            QuinticOutput,
+            GeothermLinearOutput,
+            mesh=mesh,
+            interpolation=interpolation,
+            gc_collect_frequency=gc_collect_frequency,
+        )
+
+    def construct_source(
+        self,
+        gplates_connector: "pyGplatesConnector",
+        polygons: str | Path | list[str | Path],
+        thickness_data: CloudDataType,
+        plate_files: "PlateModelFiles",
+        config: PolygonSourceConfig | None = None,
+        *,
+        comm: MPI.Comm = MPI.COMM_WORLD,
+    ):
+        """Overloaded construct_source
+
+        Match argument list to `PolygonSource` to allow static argument
+        checking and IDE introspection; see `PolygonSource` for the meaning
+        of each argument.
+        """
+        super().construct_source(
+            gplates_connector,
+            polygons,
+            thickness_data,
+            plate_files,
+            config,
+            comm=comm,
+        )
+
+    def construct_output(
+        self,
+        fade_ref_km: float,
+        width_km: float = 10.0,
+        *,
+        default_thickness_km: float = 0.0,
+    ):
+        """Overloaded construct_output
+
+        Match argument list to `QuinticOutput` to allow static argument
+        checking and IDE introspection; see `QuinticOutput` for the meaning
+        of each argument.
+
+        ``fade_ref_km`` is REQUIRED here, with no default: a polygon source
+        is zero outside its polygons, and the one-sided quintic step reads
+        exactly 1 at the surface wherever the base sits at the surface —
+        i.e. everywhere thickness is zero. Without a lateral fade the
+        indicator would quietly paint the whole exterior surface as inside
+        the region. Pick the thickness scale of the region (e.g. 100 for
+        continents, 50 for a constant 50 km crust, 150 for cratons); nodes
+        with ``thickness >= fade_ref_km`` keep full amplitude and thinner
+        nodes scale by ``thickness / fade_ref_km``.
+
+        Unlike `QuinticOutput`'s own default (100 km),
+        ``default_thickness_km`` defaults to 0 here: PolygonSource's
+        mask-and-relabel pattern places zero-thickness halo seeds outside
+        the polygons, so a ``too_far`` target node should read as "outside
+        the region" rather than filling in 100 km of fake material.
+        """
+        super().construct_output(
+            fade_ref_km=fade_ref_km,
+            width_km=width_km,
+            default_thickness_km=default_thickness_km,
+        )
+
+    def construct_geotherm(
+        self,
+        geotherm: Callable | None = None,
+    ):
+        """Overloaded construct_geotherm
+
+        Match argument list to `GeothermLinearOutput` to allow static
+        argument checking and IDE introspection; see `GeothermLinearOutput`
+        for the meaning of each argument.
+        """
+        super().construct_geotherm(
             geotherm=geotherm,
         )
