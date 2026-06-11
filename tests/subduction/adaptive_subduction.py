@@ -1,9 +1,12 @@
 from collections.abc import Callable
+from pathlib import Path
+from shutil import rmtree
 
 from animate.adapt import adapt
 from animate.metric import RiemannianMetric
-from gadopt import *
 from mpi4py import MPI
+
+from gadopt import *
 
 import parameters as prms
 from field_initialisation import initial_level_set, initial_temperature
@@ -25,9 +28,12 @@ class AdaptiveSimulation:
                 self.mesh = Mesh("mesh.msh")
 
         # Time-stepping objects
-        self.time_now = Constant(0.0)  # Initial time
+        self.time = Constant(0.0)  # Initial time
+        self.time_float = float(self.time)
         self.time_step = Constant(prms.time_step)  # Initial time step
         self.step = 0  # A counter to keep track of the simulation time-loop iterations
+        self.checkpoint_counter = 0  # A counter to keep track of checkpoint files
+        self.output_counter = 0  # A counter to keep track of output files
 
         self.initialise()  # Initialise solutions on the initial mesh
 
@@ -38,9 +44,9 @@ class AdaptiveSimulation:
 
             self.initialise()  # Initialise solutions on the adapted mesh
 
-        # Write initial output
-        self.output_file = VTKFile("output_adaptive.pvd", adaptive=True)
-        self.write_output()
+        # Write initial checkpoint and output
+        self.write_checkpoint(initial=True)
+        self.write_output(initial=True)
 
     def adapt_mesh(self, initial: bool = False) -> None:
         def add_metric(field: Function, scale: float | Callable, metric_scale: float):
@@ -143,7 +149,7 @@ class AdaptiveSimulation:
             self.time_loop()  # Run the time loop
 
             # Exit loop after reaching target time
-            if float(self.time_now) >= prms.time_end:
+            if float(self.time) >= prms.time_end:
                 break
 
             self.adapt_mesh()  # Adapt mesh based on current fields
@@ -356,26 +362,42 @@ class AdaptiveSimulation:
 
             # Increment iteration count and time
             self.step += 1
-            self.time_now.assign(self.time_now + self.time_step)
+            self.time.assign(self.time + self.time_step)
 
-            # Write output
-            if self.step % prms.output_frequency == 0:
+            self.time_float = float(self.time) * prms.time_scale
+            # Write checkpoint and output
+            if self.time_float >= self.checkpoint_counter * prms.checkpoint_frequency:
+                self.write_checkpoint()
+            if self.time_float >= self.output_counter * prms.output_frequency:
                 self.write_output()
 
             # Check if simulation has completed
-            if float(self.time_now) >= prms.time_end:
-                # Checkpoint solution fields to disk
-                with CheckpointFile("final_state.h5", "w") as final_checkpoint:
-                    final_checkpoint.save_mesh(self.mesh)
-                    final_checkpoint.save_function(self.stokes, name="Stokes")
-                    final_checkpoint.save_function(self.T, name="Temperature")
-                    final_checkpoint.save_function(self.psi, name="Level set")
-
-                log("Reached end of simulation -- exiting time-self.step loop")
+            if float(self.time) >= prms.time_end:
+                log("Reached end of simulation")
 
                 break
 
-    def write_output(self) -> None:
+    def write_checkpoint(self, initial: bool = False) -> None:
+        if initial and MPI.COMM_WORLD.rank == 0:
+            check_dir = Path("checkpoints").resolve()
+            if check_dir.is_dir():
+                rmtree(check_dir)
+            check_dir.mkdir()
+
+        with CheckpointFile(
+            f"checkpoints/checkpoint_{self.checkpoint_counter}.h5", "w"
+        ) as checkpoint_file:
+            checkpoint_file.save_mesh(self.mesh)
+            checkpoint_file.save_function(self.stokes, name="Stokes")
+            checkpoint_file.save_function(self.T, name="Temperature")
+            checkpoint_file.save_function(self.psi, name="Level set")
+
+        self.checkpoint_counter += 1
+
+    def write_output(self, initial: bool = False) -> None:
+        if initial:
+            self.output_file = VTKFile("output.pvd", adaptive=True)
+
         output_fields = []
         for field_specs in self.fields.values():
             scale = field_specs["scale"] if prms.dimensionless else 1.0
@@ -389,9 +411,10 @@ class AdaptiveSimulation:
             output_fields.append(field_specs["output"])
 
         self.output_file.write(
-            *output_fields,
-            time=float(self.time_now) * prms.time_scale / prms.myr_to_seconds,
+            *output_fields, time=self.time_float / prms.myr_to_seconds
         )
+
+        self.output_counter += 1
 
 
 simulation = AdaptiveSimulation()

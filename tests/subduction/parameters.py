@@ -29,8 +29,8 @@ free_surface = True
 mesh_generation = "gmsh"
 
 # Spatial parameters
-domain_height = 1.5e6
-domain_aspect_ratio = 4.0
+domain_height = 2.9e6
+domain_aspect_ratio = 8.0 / 2.9
 distance_scale = domain_height if dimensionless else 1.0
 domain_dims = (
     domain_aspect_ratio * domain_height / distance_scale,
@@ -39,17 +39,17 @@ domain_dims = (
 depth_lower_mantle = 6.6e5 / distance_scale
 
 # Mesh parameters (Firedrake)
-mesh_elements = (400, 100)
+mesh_elements = (400, 150)
 # Mesh parameters (Gmsh)
 mesh_layers = {
-    "thickness": [x / distance_scale for x in [8.4e5, 5.8e5, 8e4]],
-    "vertical_resolution": [x / distance_scale for x in [8.4e4, 2e4, 8e3]],
+    "thickness": [x / distance_scale for x in [2.24e6, 5.8e5, 8e4]],
+    "vertical_resolution": [x / distance_scale for x in [8e4, 2e4, 8e3]],
     "horizontal_resolution": 1.5e4 / distance_scale,
 }
 
 # Physical parameters
 rho_mantle = 3.3e3
-rho_weak_layer = 3.2e3
+rho_weak_layer = 3e3
 if free_surface:
     rho_water = 1e3
 alpha = 3e-5
@@ -107,7 +107,7 @@ viscous_creep_params = {
     "upper": {
         "diffusion": {"prefactor": 1.5e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
         "dislocation": {
-            "prefactor": 1e-17,
+            "prefactor": 4.4e-17,
             "n": 3.5,
             "act_nrg": 5.4e5,
             "act_vol": 1.2e-5,
@@ -133,7 +133,7 @@ initial_adapt_loops = 3
 adapt_calls = 3
 metric_parameters = {  # For further information: `set_parameters` in animate/metric.py
     "dm_plex_metric": {
-        "target_complexity": 125_000,  # Metric complexity, analogous to cell count
+        "target_complexity": 200_000,  # Metric complexity, analogous to cell count
         "h_min": 2e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
         "h_max": 5e5 / distance_scale,  # Maximum metric magnitude (i.e. cell size)
         "a_max": 2.0,  # Maximum metric anisotropy (cell aspect ratio)
@@ -142,13 +142,13 @@ metric_parameters = {  # For further information: `set_parameters` in animate/me
     }
 }
 initial_metric_scales = {
-    "Velocity": [1.0, 1.0],
+    "Velocity": [0.1, 0.1],
     "Temperature": 10.0,
-    "Level set": 1000.0,
+    "Level set": 100.0,
     "Viscosity": 0.05,
 }
 metric_scales = {
-    "Velocity": [1.0, 1.0],
+    "Velocity": [0.1, 0.1],
     "Temperature": 5.0,
     "Level set": 10.0,
     "Viscosity": 0.05,
@@ -157,7 +157,8 @@ metric_scales = {
 # Time loop
 subcycles = 1
 iterations = 10
-output_frequency = 1
+checkpoint_frequency = 5.0 * myr_to_seconds
+output_frequency = 0.4 * myr_to_seconds
 
 # Field initialisation
 age_plate = 100.0 * myr_to_seconds / time_scale
