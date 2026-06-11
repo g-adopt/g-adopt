@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import firedrake as fd
 import numpy as np
 import pygplates
-from firedrake import TensorElement, VectorElement
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
@@ -263,7 +262,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
 
     def _ad_add(self, other):
         r = GplatesVelocityFunction(self.function_space())
-        fd.Function.assign(r, self + other)
+        r.assign(self + other)
         return r
 
 
@@ -729,7 +728,7 @@ class GplatesScalarFunction(fd.Function):
         # Tensor/vector spaces silently produce ill-shaped coords arrays and
         # later fail deep inside Function construction with a cryptic
         # NotImplementedError. Catch it up front.
-        if isinstance(scalar_element, (VectorElement, TensorElement)):
+        if isinstance(scalar_element, (fd.VectorElement, fd.TensorElement)):
             raise TypeError(
                 "GplatesScalarFunction requires a scalar function space; "
                 f"got {type(scalar_element).__name__}. Use one component or "
@@ -739,7 +738,7 @@ class GplatesScalarFunction(fd.Function):
         self.indicator_connector = indicator_connector
 
         mesh = extract_unique_domain(self)
-        vector_element = VectorElement(scalar_element)
+        vector_element = fd.VectorElement(scalar_element)
         coords_space = fd.FunctionSpace(mesh, vector_element)
         coords_func = fd.Function(coords_space)
         coords_func.interpolate(fd.SpatialCoordinate(mesh))
@@ -773,5 +772,5 @@ class GplatesScalarFunction(fd.Function):
 
     def _ad_add(self, other):
         result = GplatesScalarFunction(self.function_space())
-        fd.Function.assign(result, self + other)
+        result.assign(self + other)
         return result

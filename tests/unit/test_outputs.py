@@ -1,8 +1,9 @@
-"""Pure-math tests for OutputStrategy subclasses and MeshConfig.
+"""Validation tests for MeshConfig.
 
 No reconstruction data needed; everything in this file constructs its inputs
-directly. These tests cover the mathematical correctness of the indicator and
-geotherm transformations and the validation contracts of the small dataclasses.
+directly. The tests pin the defaults, check that input parameters are
+honoured, and reject invalid values. The downstream branches extend this file
+with the numerical behaviour of the OutputStrategy subclasses.
 """
 
 import pytest
