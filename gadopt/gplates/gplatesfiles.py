@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 
 _default_muller2022_plate_files = {
@@ -9,7 +10,9 @@ _default_muller2022_plate_files = {
         "1000-410-Divergence.gpml",
         "1000-410-Topologies.gpml",
         "1000-410-Transforms.gpml"
-    ]
+    ],
+    "continental_polygons": "shapes_continents.gpml",
+    "static_polygons": "shapes_static_polygons_Merdith_et_al.gpml",
 }
 
 reconstructions = {
@@ -53,15 +56,28 @@ reconstructions = {
 
 
 def check_and_get_absolute_paths(base_path: Path, filenames: dict):
+    # Normalize all values to lists
+    def to_list(value):
+        if isinstance(value, str):
+            return [value]
+        elif isinstance(value, Sequence):
+            return list(value)
+        else:
+            return [value]
+
     # Check if all files are present
-    all_files_present = all((base_path / filename).exists() for files in filenames.values() for filename in files)
+    all_files_present = all(
+        (base_path / filename).exists()
+        for files in filenames.values()
+        for filename in to_list(files)
+    )
 
     if not all_files_present:
         raise FileNotFoundError("Some files are missing. Cannot proceed without downloading the required files.")
 
-    # Return absolute paths of the files
+    # Return absolute paths of the files, normalized to lists
     return {
-        key: [str(base_path / filename) for filename in files]
+        key: [str(base_path / filename) for filename in to_list(files)]
         for key, files in filenames.items()
     }
 
