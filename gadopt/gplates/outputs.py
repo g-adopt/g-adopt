@@ -75,11 +75,6 @@ class MeshConfig:
             raise ValueError(f"depth_scale must be positive, got {self.depth_scale}")
 
 
-# Importable default used by the ScalarFieldConnector when the caller doesn't
-# pass a MeshConfig of their own.
-_DEFAULT_MESH_PARAMETERS = MeshConfig()
-
-
 # Geotherm functions (used by GeothermERFOutput / GeothermLinearOutput)
 def ocean_erf_normalized(depth_m, z_lab_m, age_myr, kappa):
     """Normalised erf geotherm for oceanic lithosphere.
