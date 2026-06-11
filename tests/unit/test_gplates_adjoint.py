@@ -62,6 +62,7 @@ class MockGplatesConnector:
         self.reconstruction_age = None
         # Simple linear time mapping: 100 Ma per ndtime unit
         self._time_factor = 100.0
+        self.get_plate_velocities_call_count = 0
 
     def ndtime2age(self, ndtime):
         return self.oldest_age - float(ndtime) * self._time_factor
@@ -76,6 +77,7 @@ class MockGplatesConnector:
         everywhere, so it survives the radial component removal step.
         """
         self.reconstruction_age = self.ndtime2age(ndtime)
+        self.get_plate_velocities_call_count += 1
         z_axis = np.array([0.0, 0.0, 1.0])
         return np.cross(target_coords, z_axis) * 0.01
 
@@ -441,11 +443,12 @@ class TestGplatesVelocityFunctionDeltaTCaching:
         # ndtime=0 -> age=200 Ma
         vf.update_plate_reconstruction(ndtime=0.0)
         bv_1 = vf.block_variable
+        assert gpc.get_plate_velocities_call_count == 1
 
         # ndtime=0.01 -> age=199 Ma, within delta_t=2.0
         vf.update_plate_reconstruction(ndtime=0.01)
         bv_2 = vf.block_variable
-
+        assert gpc.get_plate_velocities_call_count == 1
         assert bv_1 is bv_2
 
     def test_update_outside_delta_t(self, spherical_shell_mesh):
@@ -459,9 +462,10 @@ class TestGplatesVelocityFunctionDeltaTCaching:
         # ndtime=0 -> age=200 Ma
         vf.update_plate_reconstruction(ndtime=0.0)
         bv_1 = vf.block_variable
+        assert gpc.get_plate_velocities_call_count == 1
 
         # ndtime=0.05 -> age=195 Ma, outside delta_t=2.0
         vf.update_plate_reconstruction(ndtime=0.05)
         bv_2 = vf.block_variable
-
+        assert gpc.get_plate_velocities_call_count == 2
         assert bv_1 is not bv_2

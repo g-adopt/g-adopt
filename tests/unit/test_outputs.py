@@ -1,8 +1,10 @@
-"""Pure-math tests for OutputStrategy subclasses and MeshConfig.
+"""Tests for OutputStrategy subclasses and MeshConfig.
 
 No reconstruction data needed; everything in this file constructs its inputs
-directly. These tests cover the mathematical correctness of the indicator and
-geotherm transformations and the validation contracts of the small dataclasses.
+directly. The tests check the numerical behaviour of the indicator and
+geotherm transformations, and the validation contracts of the small
+dataclasses: defaults are what we expect, input parameters are honoured,
+and invalid values are rejected.
 """
 
 import numpy as np
