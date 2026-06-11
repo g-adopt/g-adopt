@@ -29,6 +29,8 @@
     - [adjoint_ice](glacial_isostatic_adjustment/adjoint_ice.ipynb)
     - [adjoint_viscosity](glacial_isostatic_adjustment/adjoint_viscosity.ipynb)
 - Multi-material
+    - Initialisation
+        - [level_set_initialisation](multi_material/level_set_initialisation.ipynb)
     - Sources of buoyancy
         - [compositional_buoyancy](multi_material/compositional_buoyancy.ipynb)
         - [thermochemical_buoyancy](multi_material/thermochemical_buoyancy.ipynb)

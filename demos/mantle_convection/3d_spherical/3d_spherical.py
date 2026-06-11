@@ -126,9 +126,16 @@ output_file = VTKFile("output.pvd")
 output_frequency = 1
 
 plog = ParameterLog('params.log', mesh)
-plog.log_str("timestep time dt maxchange u_rms nu_top nu_base energy avg_t t_dev_avg")
+plog.log_str(
+    "timestep time dt maxchange u_rms "
+    "Nu_top Nu_bottom energy_conservation T_avg T_dev_avg "
+    "u_radial_min u_radial_max "
+    "u_hor_max div_u_hor_min_base div_u_hor_max_base"
+)
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top, quad_degree=6)
+u_radial = gd.u_vertical()
+u_horizontal = gd.u_horizontal()
 # -
 
 # We can now setup and solve the variational problem, for both the energy and Stokes equations,
@@ -148,6 +155,14 @@ stokes_solver = StokesSolver(
 )
 # -
 
+# Output the radial and horizontal velocity components to demonstrate the
+# spherical velocity decomposition provided by the diagnostic helpers. The
+# radial field is the component parallel to the upward normal, while the
+# horizontal field is the remaining tangential velocity, making both fields
+# available for visualisation in ParaView.
+u_radial_out = Function(Q, name="Radial_Velocity")
+u_horizontal_out = Function(V, name="Horizontal_Velocity")
+
 # We now initiate the time loop, which runs until a steady-state solution has been attained.
 
 for timestep in range(0, timesteps):
@@ -158,7 +173,17 @@ for timestep in range(0, timesteps):
         averager.extrapolate_layer_average(T_avg, averager.get_layer_average(T))
         # Compute deviation from layer average
         T_dev.assign(T-T_avg)
-        output_file.write(*z.subfunctions, T, T_dev)
+        # Interpolate radial and horizontal velocity components for visualisation.
+        u_radial_out.interpolate(u_radial)
+        u_horizontal_out.interpolate(u_horizontal)
+        # Write output
+        output_file.write(
+            *z.subfunctions,
+            T,
+            T_dev,
+            u_radial_out,
+            u_horizontal_out,
+        )
 
     if timestep != 0:
         dt = t_adapt.update_timestep()
@@ -181,10 +206,19 @@ for timestep in range(0, timesteps):
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old)**2 * dx))
 
+    # Radial and Horizontal velocity diagnostics
+    u_radial_min = gd.min(u_radial)
+    u_radial_max = gd.max(u_radial)
+    u_hor_max = gd.max(u_horizontal)
+    div_u_hor_min_base = gd.min(div(u_horizontal), boundary_id=boundary.bottom)
+    div_u_hor_max_base = gd.max(div(u_horizontal), boundary_id=boundary.bottom)
+
     # Log diagnostics:
     plog.log_str(f"{timestep} {time} {float(delta_t)} {maxchange} {gd.u_rms()} "
                  f"{nusselt_number_top} {nusselt_number_base} "
-                 f"{energy_conservation} {gd.T_avg()} {T_dev_avg} ")
+                 f"{energy_conservation} {gd.T_avg()} {T_dev_avg} "
+                 f"{u_radial_min} {u_radial_max} "
+                 f"{u_hor_max} {div_u_hor_min_base} {div_u_hor_max_base}")
 
     # Leave if steady-state has been achieved:
     if maxchange < steady_state_tolerance:
