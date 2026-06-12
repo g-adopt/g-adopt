@@ -29,7 +29,6 @@ class AdaptiveSimulation:
 
         # Time-stepping objects
         self.time = Constant(0.0)  # Initial time
-        self.time_float = float(self.time)
         self.time_step = Constant(prms.time_step)  # Initial time step
         self.step = 0  # A counter to keep track of the simulation time-loop iterations
         self.checkpoint_counter = 0  # A counter to keep track of checkpoint files
@@ -311,7 +310,7 @@ class AdaptiveSimulation:
             u,
             V,
             target_cfl=0.55 * prms.subcycles,
-            maximum_timestep=prms.myr_to_seconds / prms.time_scale,
+            maximum_timestep=prms.output_frequency,
         )
 
         # Solvers
@@ -364,11 +363,10 @@ class AdaptiveSimulation:
             self.step += 1
             self.time.assign(self.time + self.time_step)
 
-            self.time_float = float(self.time) * prms.time_scale
             # Write checkpoint and output
-            if self.time_float >= self.checkpoint_counter * prms.checkpoint_frequency:
+            if float(self.time) >= self.checkpoint_counter * prms.checkpoint_frequency:
                 self.write_checkpoint()
-            if self.time_float >= self.output_counter * prms.output_frequency:
+            if float(self.time) >= self.output_counter * prms.output_frequency:
                 self.write_output()
 
             # Check if simulation has completed
@@ -411,7 +409,7 @@ class AdaptiveSimulation:
             output_fields.append(field_specs["output"])
 
         self.output_file.write(
-            *output_fields, time=self.time_float / prms.myr_to_seconds
+            *output_fields, time=float(self.time) / prms.myr_to_seconds
         )
 
         self.output_counter += 1

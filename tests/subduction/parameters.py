@@ -89,8 +89,8 @@ if dimensionless:
 
 # Temporal parameters
 time_scale = reference_time if dimensionless else 1.0
-myr_to_seconds = mega * year
-time_end = 100.0 * myr_to_seconds / time_scale
+myr_to_seconds = mega * year / time_scale
+time_end = 100.0 * myr_to_seconds
 time_step = 1e11 / time_scale
 
 # Rheology
@@ -161,8 +161,8 @@ checkpoint_frequency = 5.0 * myr_to_seconds
 output_frequency = 0.4 * myr_to_seconds
 
 # Field initialisation
-age_plate = 100.0 * myr_to_seconds / time_scale
-age_overriding = 20.0 * myr_to_seconds / time_scale
+age_plate = 100.0 * myr_to_seconds
+age_overriding = 20.0 * myr_to_seconds
 plate_extremity_coords = (0.0, domain_dims[1])
 trench_coords = (domain_dims[0] / 2.0, domain_dims[1])
 weak_layer_thickness = 5e3 / distance_scale
