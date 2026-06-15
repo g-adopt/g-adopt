@@ -75,7 +75,7 @@ def check_and_get_absolute_paths(base_path: Path, filenames: dict):
     if not all_files_present:
         raise FileNotFoundError("Some files are missing. Cannot proceed without downloading the required files.")
 
-    # Return absolute paths of the files, normalised to lists
+    # Return absolute paths of the files, normalized to lists
     return {
         key: [str(base_path / filename) for filename in to_list(files)]
         for key, files in filenames.items()
