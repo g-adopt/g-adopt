@@ -52,6 +52,12 @@ class SoilCurve(ABC):
     #: Default dimensionless smoothing of the saturation magnitude near h = 0.
     DEFAULT_REG_EPS = 1e-6
 
+    #: Parameters required by every soil model, validated in the base class.
+    BASE_REQUIRED_PARAMS = ('theta_r', 'theta_s', 'Ks', 'Ss')
+
+    #: Model-specific required parameters; each subclass lists its own.
+    REQUIRED_PARAMS = ()
+
     def __init__(self, theta_r, theta_s, Ks, Ss, reg_eps=DEFAULT_REG_EPS, **kwargs):
         """
         Initialise soil curve with model parameters.
@@ -134,9 +140,23 @@ class SoilCurve(ABC):
         eps = self.reg_eps * scale
         return fd.sqrt(x * x + eps * eps)
 
-    @abstractmethod
     def _validate_parameters(self) -> None:
-        """Validate that all required parameters are provided."""
+        """Check all required parameters are present, then run model-specific checks.
+
+        The required set is the union of BASE_REQUIRED_PARAMS (common to every
+        model) and the subclass REQUIRED_PARAMS. Subclasses add range or
+        consistency checks by overriding _validate_model_parameters.
+        """
+        for param in (*self.BASE_REQUIRED_PARAMS, *self.REQUIRED_PARAMS):
+            if param not in self.parameters:
+                raise ValueError(f"Missing required parameter: {param}")
+        self._validate_model_parameters()
+
+    def _validate_model_parameters(self) -> None:
+        """Hook for model-specific validation (e.g. parameter ranges).
+
+        Default is a no-op; subclasses override to add their own checks.
+        """
         pass
 
     @abstractmethod
@@ -197,6 +217,8 @@ class HaverkampCurve(SoilCurve):
         Ss: Specific storage coefficient $[L^{-1}]$
     """
 
+    REQUIRED_PARAMS = ('alpha', 'beta', 'A', 'gamma')
+
     @property
     def alpha(self):
         """Haverkamp alpha fitting parameter."""
@@ -216,13 +238,6 @@ class HaverkampCurve(SoilCurve):
     def gamma(self):
         """Haverkamp gamma fitting parameter."""
         return self.parameters['gamma']
-
-    def _validate_parameters(self) -> None:
-        """Validate Haverkamp model parameters."""
-        required_params = ['theta_r', 'theta_s', 'alpha', 'beta', 'Ks', 'A', 'gamma', 'Ss']
-        for param in required_params:
-            if param not in self.parameters:
-                raise ValueError(f"Missing required parameter: {param}")
 
     def _abs_h_theta(self, h):
         r"""Regularised $|h|$ for the moisture branch (head scale $\alpha^{1/\beta}$)."""
@@ -284,6 +299,8 @@ class VanGenuchtenCurve(SoilCurve):
         Ss: Specific storage coefficient $[L^{-1}]$
     """
 
+    REQUIRED_PARAMS = ('alpha', 'n')
+
     @property
     def alpha(self):
         """van Genuchten alpha parameter (inverse air-entry pressure)."""
@@ -294,14 +311,13 @@ class VanGenuchtenCurve(SoilCurve):
         """van Genuchten n parameter (pore-size distribution)."""
         return self.parameters['n']
 
-    def _validate_parameters(self) -> None:
-        """Validate van Genuchten model parameters."""
-        required_params = ['theta_r', 'theta_s', 'alpha', 'n', 'Ks', 'Ss']
-        for param in required_params:
-            if param not in self.parameters:
-                raise ValueError(f"Missing required parameter: {param}")
+    def _validate_model_parameters(self) -> None:
+        """Require n > 1 when n is a scalar Constant.
 
-        # Validate parameter ranges when n is a scalar Constant
+        A UFL-expression n (e.g. a spatially varying field or an inversion
+        control) is left to the caller, so the range guard only applies when n
+        is a scalar Constant.
+        """
         n = self.parameters['n']
         if isinstance(n, fd.Constant) and n.values()[0] <= 1.0:
             raise ValueError("Parameter n must be > 1.0")
@@ -378,17 +394,12 @@ class ExponentialCurve(SoilCurve):
         Ss: Specific storage coefficient $[L^{-1}]$
     """
 
+    REQUIRED_PARAMS = ('alpha',)
+
     @property
     def alpha(self):
         """Exponential alpha decay parameter."""
         return self.parameters['alpha']
-
-    def _validate_parameters(self) -> None:
-        """Validate exponential model parameters."""
-        required_params = ['theta_r', 'theta_s', 'alpha', 'Ks', 'Ss']
-        for param in required_params:
-            if param not in self.parameters:
-                raise ValueError(f"Missing required parameter: {param}")
 
     def moisture_content(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
