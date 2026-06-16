@@ -468,8 +468,8 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def solve(self) -> None:
         """Solves the system."""
-        self.solver.solve()
         self.solution_old.assign(self.solution)
+        self.solver.solve()
 
 
 class StokesSolver(StokesSolverBase):
