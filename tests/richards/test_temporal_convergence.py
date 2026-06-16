@@ -30,6 +30,7 @@ from firedrake import (
 
 def _run_one(scheme, scheme_kwargs, dt_value, t_final, mesh_n=4):
     mesh = UnitSquareMesh(mesh_n, mesh_n, quadrilateral=True)
+    mesh.cartesian = True
     V = FunctionSpace(mesh, "CG", 1)
 
     soil_curve = ExponentialCurve(

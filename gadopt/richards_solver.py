@@ -2,7 +2,7 @@
 
 This module provides the `RichardsSolver` class for solving the Richards equation,
 which describes movement of fluid phase in a two-phase flow system, if we ignore the
-compressibility of the dry phase. The solver uses time integrators and together with
+compressibility of the dry phase. The solver uses time integrators together with
 soil curve models for hydraulic properties.
 
 Typical usage:
@@ -51,19 +51,18 @@ _newton_common: dict[str, Any] = {
     "snes_type": "newtonls",
     "snes_linesearch_type": "bt",
     "snes_rtol": 1e-8,
-    "snes_atol": 1e-8,
+    "snes_atol": 1e-12,
+    "snes_stol": 1e-8,
     "snes_max_it": 50,
 }
 
 
 direct_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "bt",
     "ksp_type": "preonly",
     "pc_type": "lu",
     "pc_factor_mat_solver_type": "mumps",
-    "snes_atol": 1e-15,
+    **_newton_common,
 }
 """Direct solver preset: LU factorisation via MUMPS.
 
@@ -79,10 +78,13 @@ iterative_richards_solver_parameters: dict[str, Any] = {
     "ksp_max_it": 200,
     "ksp_gmres_restart": 30,
 
-    # BoomerAMG via Hypre -- strong classical AMG for scalar elliptic
-    # operators. Requires PETSc to be built with --download-hypre (or
-    # equivalent). If Hypre is unavailable, RichardsSolver raises an
-    # informative error before the solve starts.
+    # BoomerAMG via Hypre. Richards is degenerate parabolic rather than
+    # elliptic (transient; K(h) can collapse toward zero in dry regions
+    # and the mass coefficient C(h) = dtheta/dh flattens near saturation),
+    # but each Newton step solves a diffusion-dominated linearised Jacobian
+    # that classical AMG preconditions well. Requires PETSc built with
+    # --download-hypre (or equivalent); if Hypre is unavailable,
+    # RichardsSolver raises an informative error before the solve starts.
     "pc_type": "hypre",
     "pc_hypre_type": "boomeramg",
     "pc_hypre_boomeramg_strong_threshold": 0.7,
@@ -199,21 +201,28 @@ is absent, the solver raises ``RuntimeError`` at setup time.
 
 
 class RichardsSolver(SolverConfigurationMixin):
-    """Advances Richards equation in time for variably saturated flow.
+    r"""Advances Richards equation in time for variably saturated flow.
 
     The Richards equation describes water movement in variably saturated porous media:
 
     $$
-    (S_s S + C) \\frac{\\partial h}{\\partial t} - \\nabla \\cdot (K \\nabla h) - \\nabla \\cdot (K \\nabla z) = 0
+    (S_s S + C) \frac{\partial h}{\partial t} - \nabla \cdot (K \nabla h) - \nabla \cdot (K \nabla z) = 0
     $$
 
     where:
     - $h$ is the pressure head
     - $S_s$ is the specific storage coefficient (from soil curve)
     - $S(h)$ is the effective saturation
-    - $C(h) = d\\theta/dh$ is the specific moisture capacity
+    - $C(h) = d\theta/dh$ is the specific moisture capacity
     - $K(h)$ is the hydraulic conductivity
     - $z$ is the vertical coordinate
+
+    The form above writes the moisture storage as $C\,\partial h/\partial t$ for
+    readability, but the discretisation deliberately carries the conservative
+    $\partial \theta/\partial t$ form instead. With the stage-value stepper this
+    gives the exact finite difference $(\theta_{new} - \theta_{old})/\Delta t$ and
+    keeps mass balance exact for DG, so $C(h)$ is the physical moisture capacity
+    listed here but is never assembled directly.
 
     **Note**: The solution field is updated in place.
 
@@ -259,9 +268,11 @@ class RichardsSolver(SolverConfigurationMixin):
         Nullspace of the transposed Jacobian. Usually equal to ``nullspace``
         for Richards because the advective part is small.
       near_nullspace:
-        Near-nullspace basis passed to the AMG preconditioner. For scalar
-        Richards the near-nullspace is the constants, so if left ``None``
-        on an iterative preset ``RichardsSolver`` auto-builds it.
+        Near-nullspace basis forwarded to the preconditioner if supplied.
+        Defaults to ``None`` and is not auto-built: BoomerAMG (the iterative
+        preset) ignores an attached near-nullspace unless ``nodal_coarsen`` and
+        ``vec_interp_variant`` are set, while gamg/elasticity-style uses would
+        supply one explicitly.
       timestepper_kwargs:
         Dictionary of additional keyword arguments passed to the timestepper constructor.
         Useful for parameterized schemes (e.g., {'order': 5} for IrksomeRadauIIA) or
@@ -292,7 +303,7 @@ class RichardsSolver(SolverConfigurationMixin):
         delta_t: Constant,
         timestepper: type[IrksomeIntegrator],
         *,
-        bcs: dict[int | str, dict[str, Number]] = {},
+        bcs: dict[int | str, dict[str, Number]] | None = None,
         source_term: Any = 0,
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
@@ -307,7 +318,7 @@ class RichardsSolver(SolverConfigurationMixin):
         self.soil_curve = soil_curve
         self.delta_t = delta_t
         self.timestepper = timestepper
-        self.bcs = bcs
+        self.bcs = bcs or {}
         self.source_term = source_term
         self.quad_degree = quad_degree
         self.interior_penalty = interior_penalty
@@ -315,7 +326,11 @@ class RichardsSolver(SolverConfigurationMixin):
         self.transpose_nullspace = transpose_nullspace
         self.near_nullspace = near_nullspace
         self.timestepper_kwargs = timestepper_kwargs or {}
-        self._preset_name: str | None = None
+        # Remember whether the user supplied their own update_solver_parameters,
+        # so we never clobber it when auto-tracking the stage solver parameters.
+        self._user_update_solver_parameters = (
+            'update_solver_parameters' in self.timestepper_kwargs
+        )
 
         # Default to stage_type="value" for mass-conservative time discretisation.
         # The stage value stepper discretises Dt(theta(h)) as the exact finite
@@ -404,22 +419,12 @@ class RichardsSolver(SolverConfigurationMixin):
             'source': self.source_term,
         }
 
-        # scalar_equation.diffusion_term uses interior_penalty_factor(eq, shift=-1),
-        # i.e. the Shahbazi / Epshteyn-Rivière sharp bound with C(p-1). Richards
-        # is assembled against the looser Hillewaert form (C(p)) to match the
-        # momentum equation and the pre-refactor bespoke Richards term; the
-        # extra margin over the Shahbazi floor is useful in practice because
-        # K(h) can vary by orders of magnitude across the wetting front, even
-        # though Hillewaert's coercivity proof itself assumes bounded
-        # diffusivity. Absorb the C(p)/C(p-1) ratio into the safety factor so
-        # the assembled penalty matches the Hillewaert convention; the
-        # user-facing `interior_penalty` stays a bare safety factor.
-        #
-        # Flipping scalar_equation to shift=0 would let us delete this block,
-        # but would force regenerating stored reference data on every DG scalar
-        # diffusion test (viscoplastic_case_DG, multi_material,
-        # 2d_cylindrical_TALA_DG, adjoint_2d_cylindrical, and the adjoint
-        # mantle-convection demos).
+        # scalar_equation.diffusion_term builds the SIPG penalty with shift=-1
+        # (the sharper C(p-1) trace constant), but we want C(p), which appears commonly
+        # in the literature (shift=0), as used by the momentum equation. As a stopgap we
+        # scale the safety factor by C(p)/C(p-1) here to cancel the shift back
+        # out. This is a hack; the proper fix is to default scalar diffusion to
+        # shift=0, deferred for now because it forces regenerating DG reference data.
         alpha = self.interior_penalty if self.interior_penalty is not None else 2.0
         degree = self.solution_space.ufl_element().degree()
         if not isinstance(degree, int):
@@ -461,7 +466,6 @@ class RichardsSolver(SolverConfigurationMixin):
     ) -> None:
         """Sets PETSc solver parameters."""
         if isinstance(solver_preset, Mapping):
-            self._preset_name = None
             self.add_to_solver_config(solver_preset)
             self.add_to_solver_config(solver_extras)
             self.register_update_callback(self.setup_solver)
@@ -477,7 +481,6 @@ class RichardsSolver(SolverConfigurationMixin):
                 f"Valid options: '{valid}'."
             )
 
-        self._preset_name = solver_preset
         self._validate_preset(solver_preset)
         self.add_to_solver_config(self._PRESETS[solver_preset])
 
@@ -543,29 +546,8 @@ class RichardsSolver(SolverConfigurationMixin):
                     "with L >= 1, or fall back to 'vlumping'."
                 )
 
-    def setup_near_nullspace(self) -> "VectorSpaceBasis":
-        """Build the constant near-nullspace for AMG.
-
-        For scalar Richards the near-nullspace is the constants -- the
-        single mode the diffusion operator nearly annihilates. Providing
-        it to BoomerAMG / vlumping's coarse AMG ensures the prolongation
-        preserves constants, which is critical for optimal AMG convergence.
-        """
-        ones = Function(self.solution_space).assign(1.0)
-        basis = VectorSpaceBasis([ones])
-        basis.orthonormalize()
-        return basis
-
     def setup_solver(self) -> None:
         """Sets up the timestepper using specified parameters."""
-        # Auto-build the constant near-nullspace on iterative presets if
-        # the user hasn't supplied one. The constant is the only non-
-        # trivial near-nullspace mode for scalar Richards, so there is no
-        # ambiguity in the default.
-        if (self.near_nullspace is None
-                and self._preset_name in ("iterative", "vlumping", "vlumping_hmg")):
-            self.near_nullspace = self.setup_near_nullspace()
-
         if self.nullspace is not None:
             self.timestepper_kwargs.setdefault('nullspace', self.nullspace)
         if self.transpose_nullspace is not None:
@@ -574,10 +556,14 @@ class RichardsSolver(SolverConfigurationMixin):
             self.timestepper_kwargs.setdefault('near_nullspace', self.near_nullspace)
 
         # Reuse stage solver parameters for the conservative update solve.
-        if self.timestepper_kwargs.get('stage_type') == 'value':
-            self.timestepper_kwargs.setdefault(
-                'update_solver_parameters', self.solver_parameters,
-            )
+        # setup_solver is an update callback that re-runs on every config change,
+        # and add_to_solver_config reassigns self.solver_parameters to a fresh
+        # dict each time, so we must assign unconditionally to track the current
+        # parameters rather than setdefault'ing a one-off stale reference. A
+        # user-supplied update_solver_parameters is still respected.
+        if (self.timestepper_kwargs.get('stage_type') == 'value'
+                and not self._user_update_solver_parameters):
+            self.timestepper_kwargs['update_solver_parameters'] = self.solver_parameters
 
         self.ts = self.timestepper(
             self.equation,
@@ -606,9 +592,8 @@ class RichardsSolver(SolverConfigurationMixin):
             Current simulation time (optional)
 
         Returns:
-          When adaptive time-stepping is enabled: tuple (error, dt_used) where:
-              - error: Error estimate from the adaptive stepper
-              - dt_used: Actual time step used (may differ from initial dt)
-          When adaptive time-stepping is not enabled: None
+          Whatever the underlying integrator's ``advance`` returns: ``None`` for
+          a non-adaptive step, or ``(adapt_error, adapt_dt)`` when adaptive
+          timestepping is enabled.
         """
         return self.ts.advance(t)

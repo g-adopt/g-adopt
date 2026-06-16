@@ -26,6 +26,7 @@ def compute_mass_balance(grid_points, time_step, t_final,
                          function_space, timestepper_kwargs=None,
                          scheme_label=None):
     mesh = UnitSquareMesh(grid_points, grid_points, quadrilateral=True)
+    mesh.cartesian = True
     V = FunctionSpace(mesh, function_space, polynomial_degree)
 
     soil_curve = HaverkampCurve(

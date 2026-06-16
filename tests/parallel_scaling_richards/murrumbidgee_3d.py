@@ -132,7 +132,9 @@ def build_mesh(horiz_res, n_layers, hmg_levels, data_dir):
         refinement_levels=hmg_levels,
         refinement_ratio=1,
     )
-    return mh3d[-1]
+    mesh = mh3d[-1]
+    mesh.cartesian = True
+    return mesh
 
 
 def model(horiz_res, n_layers, solver, *, degree=1, hmg_levels=1,

@@ -37,6 +37,7 @@ nx, ny, nz = 20, 20, 26
 
 mesh2d = RectangleMesh(nx, ny, Lx, Ly, quadrilateral=True)
 mesh = ExtrudedMesh(mesh2d, nz, layer_height=Lz / nz)
+mesh.cartesian = True
 X = SpatialCoordinate(mesh)
 
 # We use a discontinuous Galerkin space of polynomial degree 0 (piecewise
