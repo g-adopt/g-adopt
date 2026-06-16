@@ -1,0 +1,7 @@
+*.csv
+*.pvd
+*.err
+*.out
+errors*.dat
+tracy_h_*
+tracy_analytical_*
