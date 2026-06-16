@@ -18,6 +18,8 @@ import firedrake as fd
 import ufl
 from abc import ABC, abstractmethod
 
+from .utility import ensure_constant
+
 
 class SoilCurve(ABC):
     """
@@ -35,9 +37,28 @@ class SoilCurve(ABC):
     - water_retention: $C(h)$ - specific moisture capacity ($d\theta/dh$)
 
     All models require a specific storage coefficient Ss parameter.
+
+    The van Genuchten and Haverkamp branches raise a saturation magnitude
+    (|alpha h| or |h|) to a non-integer power. Differentiated branch-wise by
+    UFL, that magnitude produces a derivative term that blows up at exactly
+    h = 0 (pow(0, negative) = Inf, sign(0)*Inf = NaN), which would make the
+    Newton Jacobian and the pyadjoint gradient NaN whenever a DOF sits exactly
+    at the water table. The `reg_eps` parameter smoothly regularises the
+    magnitude with sqrt(.^2 + eps^2) so the derivative stays bounded; the
+    forward value is unchanged to O(reg_eps^2) away from h = 0. Set reg_eps=0
+    to recover the exact but adjoint-singular form.
     """
 
-    def __init__(self, theta_r, theta_s, Ks, Ss, **kwargs):
+    #: Default dimensionless smoothing of the saturation magnitude near h = 0.
+    DEFAULT_REG_EPS = 1e-6
+
+    #: Parameters required by every soil model, validated in the base class.
+    BASE_REQUIRED_PARAMS = ('theta_r', 'theta_s', 'Ks', 'Ss')
+
+    #: Model-specific required parameters; each subclass lists its own.
+    REQUIRED_PARAMS = ()
+
+    def __init__(self, theta_r, theta_s, Ks, Ss, reg_eps=DEFAULT_REG_EPS, **kwargs):
         """
         Initialise soil curve with model parameters.
 
@@ -46,18 +67,28 @@ class SoilCurve(ABC):
             theta_s: Saturated water content [-]
             Ks: Saturated hydraulic conductivity [L/T]
             Ss: Specific storage coefficient [1/L]
+            reg_eps: Dimensionless smoothing of the saturation-magnitude near
+                h = 0 that keeps the Jacobian and adjoint finite at the water
+                table. Defaults to 1e-6. Set to 0 to disable (recovers the
+                exact but adjoint-singular form). Unused by the exponential
+                model, which is already smooth.
             **kwargs: Additional model-specific parameters
 
         Example:
             soil_curve = ExponentialCurve(theta_r=0.15, theta_s=0.45, Ks=1e-5,
                                          Ss=0.0, alpha=0.328)
         """
-        # Build parameters dictionary from positional and keyword arguments
+        self.reg_eps = ensure_constant(reg_eps)
+
+        # Build parameters dictionary from positional and keyword arguments.
+        # Route Ss through ensure_constant so a bare float/int becomes a Constant
+        # while a Function or Function(R) (e.g. a spatially varying storage or an
+        # inversion control) passes through untouched and is never float()'d.
         params = {
             'theta_r': theta_r,
             'theta_s': theta_s,
             'Ks': Ks,
-            'Ss': Ss
+            'Ss': ensure_constant(Ss)
         }
         params.update(kwargs)
 
@@ -90,9 +121,42 @@ class SoilCurve(ABC):
         """Specific storage coefficient [1/L]."""
         return self.parameters['Ss']
 
-    @abstractmethod
+    def _reg_abs(self, x, scale=1):
+        r"""Smoothly regularised magnitude $\sqrt{x^2 + (\epsilon\,\text{scale})^2}$.
+
+        This replaces ``abs(x)`` where ``x`` is raised to a non-integer power so
+        that the branch-wise UFL derivative stays bounded at ``x = 0`` (no
+        ``pow(0, negative) = Inf`` and no ``sign(0)`` factor). ``scale`` carries
+        the natural magnitude of ``x`` so the dimensionless ``reg_eps`` produces
+        an offset consistent with the units of ``x`` (e.g. a head scale ``1/alpha``
+        when ``x`` is a head). When ``reg_eps`` is exactly zero this collapses back
+        to the exact ``abs(x)``, letting users opt out of the regularisation.
+        """
+        # float() here only ever sees the default/opt-out Constant or number, so
+        # it does not preclude reg_eps being a control: the regularised branch
+        # below keeps reg_eps symbolic in the form.
+        if float(self.reg_eps) == 0.0:
+            return abs(x)
+        eps = self.reg_eps * scale
+        return fd.sqrt(x * x + eps * eps)
+
     def _validate_parameters(self) -> None:
-        """Validate that all required parameters are provided."""
+        """Check all required parameters are present, then run model-specific checks.
+
+        The required set is the union of BASE_REQUIRED_PARAMS (common to every
+        model) and the subclass REQUIRED_PARAMS. Subclasses add range or
+        consistency checks by overriding _validate_model_parameters.
+        """
+        for param in (*self.BASE_REQUIRED_PARAMS, *self.REQUIRED_PARAMS):
+            if param not in self.parameters:
+                raise ValueError(f"Missing required parameter: {param}")
+        self._validate_model_parameters()
+
+    def _validate_model_parameters(self) -> None:
+        """Hook for model-specific validation (e.g. parameter ranges).
+
+        Default is a no-op; subclasses override to add their own checks.
+        """
         pass
 
     @abstractmethod
@@ -153,6 +217,8 @@ class HaverkampCurve(SoilCurve):
         Ss: Specific storage coefficient $[L^{-1}]$
     """
 
+    REQUIRED_PARAMS = ('alpha', 'beta', 'A', 'gamma')
+
     @property
     def alpha(self):
         """Haverkamp alpha fitting parameter."""
@@ -173,12 +239,13 @@ class HaverkampCurve(SoilCurve):
         """Haverkamp gamma fitting parameter."""
         return self.parameters['gamma']
 
-    def _validate_parameters(self) -> None:
-        """Validate Haverkamp model parameters."""
-        required_params = ['theta_r', 'theta_s', 'alpha', 'beta', 'Ks', 'A', 'gamma', 'Ss']
-        for param in required_params:
-            if param not in self.parameters:
-                raise ValueError(f"Missing required parameter: {param}")
+    def _abs_h_theta(self, h):
+        r"""Regularised $|h|$ for the moisture branch (head scale $\alpha^{1/\beta}$)."""
+        return self._reg_abs(h, scale=self.alpha**(1 / self.beta))
+
+    def _abs_h_K(self, h):
+        r"""Regularised $|h|$ for the conductivity branch (head scale $A^{1/\gamma}$)."""
+        return self._reg_abs(h, scale=self.A**(1 / self.gamma))
 
     def moisture_content(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
@@ -186,7 +253,8 @@ class HaverkampCurve(SoilCurve):
 
         $\theta(h) = \theta_r + \alpha(\theta_s - \theta_r) / (\alpha + |h|^{\beta})$
         """
-        theta = self.theta_r + self.alpha * (self.theta_s - self.theta_r) / (self.alpha + abs(h)**self.beta)
+        abs_h = self._abs_h_theta(h)
+        theta = self.theta_r + self.alpha * (self.theta_s - self.theta_r) / (self.alpha + abs_h**self.beta)
         return fd.conditional(h <= 0, theta, self.theta_s)
 
     def hydraulic_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
@@ -195,7 +263,8 @@ class HaverkampCurve(SoilCurve):
 
         $K(h) = K_s \\cdot A / (A + |h|^{\\gamma})$
         """
-        K = self.Ks * (self.A / (self.A + abs(h)**self.gamma))
+        abs_h = self._abs_h_K(h)
+        K = self.Ks * (self.A / (self.A + abs_h**self.gamma))
         return fd.conditional(h <= 0, K, self.Ks)
 
     def water_retention(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
@@ -204,8 +273,12 @@ class HaverkampCurve(SoilCurve):
 
         $C(h) = -\\text{sign}(h) \\cdot \\alpha \\cdot \\beta \\cdot (\\theta_s - \\theta_r) \\cdot |h|^{(\\beta-1)} / (\\alpha + |h|^{\\beta})^2$
         """
-        C = (-fd.sign(h) * self.alpha * self.beta * (self.theta_s - self.theta_r) *
-             abs(h)**(self.beta - 1) / (self.alpha + abs(h)**self.beta)**2)
+        # d theta/dh of the regularised moisture branch: with m(h) = sqrt(h^2+eps^2)
+        # the chain rule gives dm/dh = h/m, so the singular sign(h)*|h|^(beta-1)
+        # is replaced by the bounded (h/abs_h)*abs_h^(beta-1).
+        abs_h = self._abs_h_theta(h)
+        C = (-(h / abs_h) * self.alpha * self.beta * (self.theta_s - self.theta_r) *
+             abs_h**(self.beta - 1) / (self.alpha + abs_h**self.beta)**2)
         return fd.conditional(h <= 0, C, 0)
 
 
@@ -226,6 +299,8 @@ class VanGenuchtenCurve(SoilCurve):
         Ss: Specific storage coefficient $[L^{-1}]$
     """
 
+    REQUIRED_PARAMS = ('alpha', 'n')
+
     @property
     def alpha(self):
         """van Genuchten alpha parameter (inverse air-entry pressure)."""
@@ -236,17 +311,24 @@ class VanGenuchtenCurve(SoilCurve):
         """van Genuchten n parameter (pore-size distribution)."""
         return self.parameters['n']
 
-    def _validate_parameters(self) -> None:
-        """Validate van Genuchten model parameters."""
-        required_params = ['theta_r', 'theta_s', 'alpha', 'n', 'Ks', 'Ss']
-        for param in required_params:
-            if param not in self.parameters:
-                raise ValueError(f"Missing required parameter: {param}")
+    def _validate_model_parameters(self) -> None:
+        """Require n > 1 when n is a scalar Constant.
 
-        # Validate parameter ranges when n is a scalar Constant
+        A UFL-expression n (e.g. a spatially varying field or an inversion
+        control) is left to the caller, so the range guard only applies when n
+        is a scalar Constant.
+        """
         n = self.parameters['n']
         if isinstance(n, fd.Constant) and n.values()[0] <= 1.0:
             raise ValueError("Parameter n must be > 1.0")
+
+    def _abs_alpha_h(self, h):
+        r"""Regularised dimensionless magnitude $|\alpha h|$.
+
+        $\alpha h$ is already nondimensional, so the smoothing offset is the bare
+        dimensionless ``reg_eps`` (``scale=1``).
+        """
+        return self._reg_abs(self.alpha * h)
 
     def moisture_content(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
@@ -256,8 +338,9 @@ class VanGenuchtenCurve(SoilCurve):
         where $m = 1 - 1/n$
         """
         m = 1 - 1/self.n
+        ah = self._abs_alpha_h(h)
 
-        theta = self.theta_r + (self.theta_s - self.theta_r) / ((1 + abs(self.alpha * h)**self.n)**m)
+        theta = self.theta_r + (self.theta_s - self.theta_r) / ((1 + ah**self.n)**m)
         return fd.conditional(h <= 0, theta, self.theta_s)
 
     def hydraulic_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
@@ -268,9 +351,10 @@ class VanGenuchtenCurve(SoilCurve):
         where $m = 1 - 1/n$
         """
         m = 1 - 1/self.n
+        ah = self._abs_alpha_h(h)
 
-        term1 = 1 - abs(self.alpha * h)**(self.n - 1) * (1 + abs(self.alpha * h)**self.n)**(-m)
-        term2 = (1 + abs(self.alpha * h)**self.n)**(m/2)
+        term1 = 1 - ah**(self.n - 1) * (1 + ah**self.n)**(-m)
+        term2 = (1 + ah**self.n)**(m/2)
         K = self.Ks * (term1**2 / term2)
         return fd.conditional(h <= 0, K, self.Ks)
 
@@ -282,9 +366,14 @@ class VanGenuchtenCurve(SoilCurve):
         where $m = 1 - 1/n$
         """
         m = 1 - 1/self.n
+        ah = self._abs_alpha_h(h)
 
-        C = (-(self.theta_s - self.theta_r) * self.n * m * h * (self.alpha**self.n) *
-             abs(h)**(self.n - 2) * ((self.alpha**self.n * abs(h)**self.n + 1)**(-m - 1)))
+        # The singular factor is |h|^(n-2); rewrite it via the regularised
+        # ah = |alpha h| using |h|^(n-2) = ah^(n-2) / alpha^(n-2). Then
+        # h * alpha^n * |h|^(n-2) = (alpha*h) * alpha * ah^(n-2), which stays
+        # bounded at h = 0. The leading (alpha*h) carries the correct sign.
+        C = (-(self.theta_s - self.theta_r) * self.n * m * (self.alpha * h) *
+             self.alpha * ah**(self.n - 2) * ((ah**self.n + 1)**(-m - 1)))
         return fd.conditional(h <= 0, C, 0)
 
 
@@ -305,17 +394,12 @@ class ExponentialCurve(SoilCurve):
         Ss: Specific storage coefficient $[L^{-1}]$
     """
 
+    REQUIRED_PARAMS = ('alpha',)
+
     @property
     def alpha(self):
         """Exponential alpha decay parameter."""
         return self.parameters['alpha']
-
-    def _validate_parameters(self) -> None:
-        """Validate exponential model parameters."""
-        required_params = ['theta_r', 'theta_s', 'alpha', 'Ks', 'Ss']
-        for param in required_params:
-            if param not in self.parameters:
-                raise ValueError(f"Missing required parameter: {param}")
 
     def moisture_content(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
