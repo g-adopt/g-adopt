@@ -1,17 +1,26 @@
 import warnings
+from dataclasses import dataclass
+
 import firedrake as fd
 import numpy as np
+import pygplates
 from firedrake.ufl_expr import extract_unique_domain
 from pyadjoint.tape import annotate_tape, stop_annotating
 from scipy.spatial import cKDTree
-from ..utility import log, DEBUG, INFO, log_level, InteriorBC, is_continuous
-from ..solver_options_manager import SolverConfigurationMixin
 
-import pygplates
+from ..solver_options_manager import SolverConfigurationMixin
+from ..utility import DEBUG, INFO, InteriorBC, is_continuous, log, log_level
+from .connectors import ScalarFieldConnector
+from .gplatesfiles import ensure_reconstruction
+
 
 __all__ = [
+    "ensure_reconstruction",
     "GplatesVelocityFunction",
-    "pyGplatesConnector"
+    "GplatesScalarFunction",
+    "ScalarFieldConnector",
+    "PlateModelFiles",
+    "pyGplatesConnector",
 ]
 
 
@@ -124,6 +133,12 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
     def __init__(self, function_space, *args, gplates_connector=None, top_boundary_marker="top", quad_degree=None, solver_parameters=None, **kwargs):
         # Initialise as a Firedrake Function
         super().__init__(function_space, *args, **kwargs)
+
+        # When gplates_connector is None (e.g. during adjoint perturbations via
+        # _ad_mul/_ad_add, or when Firedrake internally creates subfunctions),
+        # skip all the plate reconstruction setup.
+        if gplates_connector is None:
+            return
 
         # Set the class name required by SolverConfigurationMixin
         self._class_name = self.__class__.__name__
@@ -240,6 +255,30 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
             self.tangential_velocity.dat.data_ro_with_halos[self.dbc.nodes, :]
         )
 
+    def _ad_mul(self, other):
+        r = GplatesVelocityFunction(self.function_space())
+        r.assign(other * self)
+        return r
+
+    def _ad_add(self, other):
+        r = GplatesVelocityFunction(self.function_space())
+        r.assign(self + other)
+        return r
+
+
+@dataclass
+class PlateModelFiles:
+    """Plate-model polygon file paths for the indicator/geotherm Sources.
+
+    Owned by the user and passed to LithosphereSource / PolygonSource. These
+    files drive the continental filtering and plate-id assignment that the
+    Sources need; they are not used by the velocity reconstruction, so they
+    live here rather than on pyGplatesConnector.
+    """
+
+    continental_polygons: str | list[str] | None = None
+    static_polygons: str | list[str] | None = None
+
 
 class pyGplatesConnector(object):
     # Non-dimensionalisation constants
@@ -293,6 +332,11 @@ class pyGplatesConnector(object):
             >>> connector = pyGplatesConnector(rotation_filenames, topology_filenames, oldest_age)
             >>> connector.get_plate_velocities(ndtime=100)
         """
+
+        # Store original filenames for downstream use (e.g., the Sources, which
+        # share the rotation/topology files with the velocity reconstruction).
+        self.rotation_filenames = rotation_filenames
+        self.topology_filenames = topology_filenames
 
         # Rotation model(s)
         self.rotation_model = pygplates.RotationModel(rotation_filenames)
@@ -644,3 +688,89 @@ class pyGplatesConnector(object):
         x = np.cos(theta) * radius
         z = np.sin(theta) * radius
         return np.array([[x[i], y[i], z[i]] for i in range(len(x))])
+
+
+class GplatesScalarFunction(fd.Function):
+    """Firedrake Function for scalar indicator/geotherm fields from plate
+    reconstructions.
+
+    Wraps any ``ScalarFieldConnector`` (built either directly via composition
+    of a ``Source`` and an ``OutputStrategy``, or via one of the convenience
+    factories ``lithosphere_indicator``, ``lithosphere_geotherm``,
+    ``polygon_indicator``, ``polygon_geotherm``). Calling
+    ``update_plate_reconstruction(ndtime)`` recomputes the field and assigns
+    it onto the underlying Firedrake DoFs.
+
+    Only scalar function spaces are supported — vector / tensor elements
+    raise at construction time.
+    """
+
+    def __init__(
+        self,
+        function_space,
+        *args,
+        indicator_connector: ScalarFieldConnector | None = None,
+        name: str | None = None,
+        **kwargs
+    ):
+        super().__init__(function_space, *args, name=name, **kwargs)
+
+        if indicator_connector is None:
+            return
+
+        if not isinstance(indicator_connector, ScalarFieldConnector):
+            raise TypeError(
+                f"indicator_connector must be a ScalarFieldConnector, "
+                f"got {type(indicator_connector).__name__}"
+            )
+
+        scalar_element = function_space.ufl_element()
+        # Tensor/vector spaces silently produce ill-shaped coords arrays and
+        # later fail deep inside Function construction with a cryptic
+        # NotImplementedError. Catch it up front.
+        if isinstance(scalar_element, (fd.VectorElement, fd.TensorElement)):
+            raise TypeError(
+                "GplatesScalarFunction requires a scalar function space; "
+                f"got {type(scalar_element).__name__}. Use one component or "
+                "switch to a scalar element."
+            )
+
+        self.indicator_connector = indicator_connector
+
+        mesh = extract_unique_domain(self)
+        vector_element = fd.VectorElement(scalar_element)
+        coords_space = fd.FunctionSpace(mesh, vector_element)
+        coords_func = fd.Function(coords_space)
+        coords_func.interpolate(fd.SpatialCoordinate(mesh))
+        self.mesh_coords = coords_func.dat.data_ro_with_halos.copy()
+
+    def update_plate_reconstruction(self, ndtime: float):
+        """Recompute and assign the field for the given non-dimensional time.
+
+        Skipped silently when the requested age is within ``delta_t`` of the
+        last computed age (the connector's own cache would short-circuit
+        anyway; this just avoids paying for the collective MPI dance).
+        """
+        connector = self.indicator_connector
+        age = connector.ndtime2age(ndtime)
+
+        if connector.reconstruction_age is not None:
+            if abs(age - connector.reconstruction_age) < connector.delta_t:
+                return
+
+        with stop_annotating():
+            values = connector.get_indicator(self.mesh_coords, ndtime)
+            self.dat.data_with_halos[:] = values
+
+        if annotate_tape():
+            self.create_block_variable()
+
+    def _ad_mul(self, other):
+        result = GplatesScalarFunction(self.function_space())
+        result.assign(other * self)
+        return result
+
+    def _ad_add(self, other):
+        result = GplatesScalarFunction(self.function_space())
+        result.assign(self + other)
+        return result
