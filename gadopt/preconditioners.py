@@ -9,6 +9,7 @@ Includes preconditioners for:
 import firedrake as fd
 from firedrake import (
     FiniteElement,
+    Function,
     FunctionSpace,
     MixedFunctionSpace,
     PCBase,
@@ -193,14 +194,12 @@ class VerticallyLumpedHMGPC(PCBase):
     Fine space : V         = hele x vele     (full 3D tensor-product)
     Coarse     : V_coarse  = hele on base_2d (same horizontal element)
 
-    The prolongation V_coarse -> V is built as a composition
-    ``Prol = Q . I`` where:
-
-    * ``I`` : V_coarse -> V_R is a DOF permutation from the 2D base to a
-      3D tensor space ``V_R = hele x R`` (one value per horizontal DOF
-      replicated over the column).
-    * ``Q`` : V_R -> V is the same-mesh interpolation used by the plain
-      ``VerticallyLumpedPC``.
+    The prolongation V_coarse -> V is the same-mesh interpolation from the
+    vertically-constant 3D space ``V_R = hele x R`` into ``V``. No explicit
+    V_coarse -> V_R relabelling is needed: a ``hele x Real`` space and the
+    horizontal ``hele`` space on the base share an identical PETSc DOF layout,
+    so that interpolation matrix already has the right column space (see the
+    detailed note in ``initialize``).
 
     Requires the fine mesh's base mesh to live in a ``MeshHierarchy``; if
     not, ``initialize`` raises ``RuntimeError``.
@@ -241,16 +240,43 @@ class VerticallyLumpedHMGPC(PCBase):
         V_coarse = FunctionSpace(base_mesh, hele)
         self.V_coarse = V_coarse
 
-        # Compose the prolongation Prol = Q . I (see class docstring).
+        # Prolongation V_coarse (hele on the 2D base) -> V (full 3D).
+        #
+        # We build it as the same-mesh interpolation V_R -> V, where
+        # V_R = hele x Real is the vertically-constant 3D space. That matrix
+        # *is already* the prolongation we want: V_R and V_coarse share an
+        # identical PETSc layout (owned size, ownership range, and lgmap
+        # including ghost order), so no V_coarse -> V_R relabelling is needed.
+        #
+        # This is structural, not coincidental. An ExtrudedMeshTopology reuses
+        # the base mesh's topology_dm, _dm_renumbering and _entity_classes, and
+        # for a hele x Real element the section and node-class computations
+        # collapse the vertical extent away (create_section on_base=True;
+        # node_classes real_tensorproduct=True; zero dof offset), so V_R's
+        # global numbering is the same computation over the same DM as
+        # V_coarse's. Note a base<->extruded relabelling cannot be expressed as
+        # cross-mesh interpolation anyway: that requires matching geometric
+        # dimension (2D base vs 3D extruded).
         vcell = mesh.ufl_cell().sub_cells[1]
         vele_R = FiniteElement("R", vcell, 0)
         V_R = FunctionSpace(mesh, TensorProductElement(hele, vele_R))
-
-        trial_R = TrialFunction(V_R)
-        Q = assemble(interpolate(trial_R, V)).petscmat
-        I = self._build_identity_coarse_to_R(V_coarse, V_R)
-        Prol = Q.matMult(I)
+        Prol = assemble(interpolate(TrialFunction(V_R), V)).petscmat
         self.Prol = Prol
+
+        # Guard the layout assumption. If V_R and V_coarse ever stop sharing a
+        # layout, a pure size mismatch would surface later as a cryptic PETSc
+        # MatMatMult error in the galerkin setup; a same-size reordering would
+        # be worse still (a silently wrong coarse operator). Fail fast here.
+        with Function(V_coarse).dat.vec_ro as cvec:
+            coarse_owned = cvec.getLocalSize()
+        prol_cols_owned = Prol.getLocalSize()[1]
+        if coarse_owned != prol_cols_owned:
+            raise RuntimeError(
+                "VerticallyLumpedHMGPC: prolongation column layout "
+                f"({prol_cols_owned} owned) does not match the coarse space "
+                f"V_coarse ({coarse_owned} owned). The hele x Real "
+                "layout-collapse assumption has been violated."
+            )
 
         # Set up the 2-level MG.
         self.pc = PETSc.PC().create(comm=pc.comm)
@@ -308,68 +334,6 @@ class VerticallyLumpedHMGPC(PCBase):
             P_k = assemble(interpolate(trial, V_f)).petscmat
             mats.append(P_k)
         return mats
-
-    @staticmethod
-    def _build_identity_coarse_to_R(V_coarse, V_R):
-        """Build the V_coarse -> V_R permutation matrix, parallel-safe.
-
-        ``cell_node_map().values_with_halo`` holds local DOF indices for
-        this rank (including ghost entries from halo cells). To insert
-        into a parallel PETSc Mat we translate local indices to global
-        via the ``dof_dset`` LGMap and only write rows this rank owns;
-        off-rank rows are covered by their owning rank.
-        """
-        import numpy as np
-
-        Vc_cnm = V_coarse.cell_node_map().values_with_halo
-        VR_cnm = V_R.cell_node_map().values_with_halo
-        if Vc_cnm.shape != VR_cnm.shape:
-            raise RuntimeError(
-                "VerticallyLumpedHMGPC: V_coarse and V_R cell_node_maps "
-                "have different shapes; cannot assemble identity "
-                f"prolongation (Vc={Vc_cnm.shape}, VR={VR_cnm.shape})."
-            )
-
-        n_c_owned = V_coarse.dof_dset.size
-        n_R_owned = V_R.dof_dset.size
-        if n_c_owned != n_R_owned:
-            raise RuntimeError(
-                f"VerticallyLumpedHMGPC: V_coarse owned dim ({n_c_owned}) "
-                f"does not match V_R owned dim ({n_R_owned})."
-            )
-
-        lg_R = np.asarray(V_R.dof_dset.lgmap.indices)
-        lg_c = np.asarray(V_coarse.dof_dset.lgmap.indices)
-
-        comm = V_coarse.mesh().comm
-        I = PETSc.Mat().create(comm=comm)
-        I.setSizes(((n_R_owned, None), (n_c_owned, None)))
-        I.setType("aij")
-        I.setPreallocationNNZ(1)
-
-        row_start, row_end = I.getOwnershipRange()
-
-        owned_pairs = {}
-        for c in range(Vc_cnm.shape[0]):
-            for k in range(Vc_cnm.shape[1]):
-                glob_R = int(lg_R[int(VR_cnm[c, k])])
-                glob_c = int(lg_c[int(Vc_cnm[c, k])])
-                if not (row_start <= glob_R < row_end):
-                    continue
-                prev = owned_pairs.get(glob_R)
-                if prev is None:
-                    owned_pairs[glob_R] = glob_c
-                elif prev != glob_c:
-                    raise RuntimeError(
-                        "VerticallyLumpedHMGPC: inconsistent "
-                        "coarse<->R DOF permutation at global row "
-                        f"{glob_R} (got {prev} and {glob_c})."
-                    )
-
-        for glob_R, glob_c in owned_pairs.items():
-            I.setValue(glob_R, glob_c, 1.0)
-        I.assemble()
-        return I
 
     def update(self, pc):
         self.pc.setUp()
