@@ -96,8 +96,8 @@ time_step = 1e11 / time_scale
 # Rheology
 plastic_deformation = True
 eta_bounds = {
-    "mantle": {"minimum": 1e18, "maximum": 1e25},
-    "weak layer": {"minimum": 1e18, "maximum": 1e25},
+    "minimum": {"mantle": 1e18, "weak layer": 1e18},
+    "maximum": {"mantle": 1e25, "weak layer": 1e25},
 }
 plastic_deformation_params = {
     "mantle": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.2},
@@ -136,23 +136,12 @@ metric_parameters = {  # For further information: `set_parameters` in animate/me
         "target_complexity": 200_000,  # Metric complexity, analogous to cell count
         "h_min": 2e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
         "h_max": 5e5 / distance_scale,  # Maximum metric magnitude (i.e. cell size)
-        "a_max": 2.0,  # Maximum metric anisotropy (cell aspect ratio)
+        "a_max": 5.0,  # Maximum metric anisotropy (cell aspect ratio)
         "p": np.inf,  # Metric normalisation order
-        "gradation_factor": 1.3,  # Maximum variation in length between adjacent edges
+        "gradation_factor": 1.5,  # Maximum variation in length between adjacent edges
     }
 }
-initial_metric_scales = {
-    "Velocity": [0.1, 0.1],
-    "Temperature": 10.0,
-    "Level set": 100.0,
-    "Viscosity": 0.05,
-}
-metric_scales = {
-    "Velocity": [0.1, 0.1],
-    "Temperature": 5.0,
-    "Level set": 10.0,
-    "Viscosity": 0.05,
-}
+metric_fields = {"Level set", "Temperature", "Velocity", "Viscosity"}
 
 # Time loop
 subcycles = 1
@@ -165,8 +154,8 @@ age_plate = 100.0 * myr_to_seconds
 age_overriding = 20.0 * myr_to_seconds
 plate_extremity_coords = (0.0, domain_dims[1])
 trench_coords = (domain_dims[0] / 2.0, domain_dims[1])
-weak_layer_thickness = 5e3 / distance_scale
+weak_layer_thickness = 6e3 / distance_scale
 ann_outer_radius = 2.5e5 / distance_scale
 ann_centre = (trench_coords[0], trench_coords[1] - ann_outer_radius)
 slab_tip_angle = np.deg2rad(77.0)
-smoothing_wavelength = 3e3 / distance_scale
+smoothing_wavelength = 2.0 * metric_parameters["dm_plex_metric"]["h_min"]

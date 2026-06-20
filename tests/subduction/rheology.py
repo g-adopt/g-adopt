@@ -42,16 +42,14 @@ def viscosity_strain_rate_balance(
     pressure: Operator,
     temperature: Operator,
     viscous_creep_params: dict[str, dict[str, float]],
-    bounds: dict[str, float | Operator],
-    bounds_material: Operator,
+    bounds: Operator,
 ) -> dict[str, dict[str, Operator]]:
     measure = fd.dx(domain=mesh, degree=5)
 
     viscosity = {}
+    viscous_bounds = {"minimum": 1e15, "maximum": 1e30}
     for mantle, mechanism_params in viscous_creep_params.items():
         viscosity[mantle] = {}
-        bounds_mantle = bounds.copy()
-        bounds_mantle["maximum"] *= len(mechanism_params)
 
         strain_rate_sec_inv = tensor_second_invariant(
             strain_rate, 1e-25 * prms.time_scale
@@ -62,10 +60,10 @@ def viscosity_strain_rate_balance(
                 temperature,
                 strain_rate_sec_inv / prms.time_scale,
                 **params,
-                bounds=bounds_mantle,
+                bounds=viscous_bounds,
             )
 
-        viscosity_eff = effective_viscosity(viscosity[mantle].values(), bounds_material)
+        viscosity_eff = effective_viscosity(viscosity[mantle].values(), bounds)
         viscosity_eff_old = viscosity_eff
 
         while True:
@@ -81,12 +79,10 @@ def viscosity_strain_rate_balance(
                     temperature,
                     strain_rate_sec_inv / prms.time_scale,
                     **params,
-                    bounds=bounds_mantle,
+                    bounds=viscous_bounds,
                 )
 
-            viscosity_eff = effective_viscosity(
-                viscosity[mantle].values(), bounds_material
-            )
+            viscosity_eff = effective_viscosity(viscosity[mantle].values(), bounds)
             variation = fd.assemble(abs(viscosity_eff - viscosity_eff_old) * measure)
             relative_variation = variation / fd.assemble(viscosity_eff_old * measure)
             if relative_variation <= 1e-4:
@@ -124,9 +120,7 @@ def dominant_creep(
 ) -> Operator:
     creep, viscosity = creep_laws.popitem()
     visc_min = fd.min_value(viscosity, visc_min)
-    def_mech = fd.conditional(
-        fd.eq(viscosity, visc_min), deformation_tags[creep], def_mech
-    )
+    def_mech = fd.conditional(viscosity <= visc_min, deformation_tags[creep], def_mech)
 
     if len(creep_laws) == 0:
         return def_mech
@@ -135,14 +129,14 @@ def dominant_creep(
 
 
 def active_deformation(
-    deformation_tags: dict[str, int],
     creep_laws: dict[str, Operator],
+    deformation_tags: dict[str, int],
+    visc_bounds: dict[str, float],
     yield_criterion: Operator,
     viscosity: Operator,
-    visc_bounds: dict[str, float],
 ) -> Operator:
     def_mech = dominant_creep(
-        creep_laws.copy(), deformation_tags, visc_bounds["maximum"]
+        creep_laws.copy(), deformation_tags, len(creep_laws) * visc_bounds["maximum"]
     )
     if prms.plastic_deformation:
         def_mech = fd.conditional(
@@ -161,8 +155,10 @@ def active_deformation(
 def material_viscosity(
     mesh: fd.MeshGeometry, u: fd.Function, T: fd.Function, psi: fd.Function
 ) -> tuple[Operator, dict[str, Operator]]:
-    y = fd.SpatialCoordinate(mesh)[1]
-    depth = prms.domain_dims[1] - y
+    epsilon_dot = fd.sym(fd.grad(u))
+    epsilon_dot_ii = tensor_second_invariant(epsilon_dot, 1e-25 * prms.time_scale)
+
+    depth = prms.domain_dims[1] - fd.SpatialCoordinate(mesh)[1]
     # The following expressions are dimensional
     lith_pres = prms.rho_mantle * g * depth * prms.distance_scale
     T_full = (
@@ -171,30 +167,18 @@ def material_viscosity(
     )
 
     eta_bounds_material = {}
-    for bound in prms.eta_bounds["mantle"]:
+    for bound, material_bounds in prms.eta_bounds.items():
         eta_bounds_material[bound] = material_field(
-            psi,
-            [prms.eta_bounds["mantle"][bound], prms.eta_bounds["weak layer"][bound]],
-            "geometric",
+            psi, list(material_bounds.values()), "geometric"
         )
 
-    epsilon_dot = fd.sym(fd.grad(u))
-    epsilon_dot_ii = tensor_second_invariant(epsilon_dot, 1e-25 * prms.time_scale)
-
-    yield_strength = {}
-    eta_plastic = {}
-    for material, params in prms.plastic_deformation_params.items():
-        yield_strength[material] = yield_point(lith_pres, **params)
-        eta_plastic[material] = plastic_deformation(
-            yield_strength[material],
-            epsilon_dot_ii / prms.time_scale,
-            prms.eta_bounds[material],
-        )
-    yield_strength_material = material_field(
-        psi, [yield_strength["mantle"], yield_strength["weak layer"]], "geometric"
-    )
-    eta_plastic_material = material_field(
-        psi, [eta_plastic["mantle"], eta_plastic["weak layer"]], "geometric"
+    yield_strength = [
+        yield_point(lith_pres, **params)
+        for params in prms.plastic_deformation_params.values()
+    ]
+    yield_strength_material = material_field(psi, yield_strength, "geometric")
+    eta_plastic_material = plastic_deformation(
+        yield_strength_material, epsilon_dot_ii / prms.time_scale, eta_bounds_material
     )
 
     eta_viscous = viscosity_strain_rate_balance(
@@ -203,7 +187,6 @@ def material_viscosity(
         lith_pres,
         T_full,
         prms.viscous_creep_params,
-        prms.eta_bounds["mantle"],
         eta_bounds_material,
     )
 
@@ -222,6 +205,7 @@ def material_viscosity(
         )
     else:
         eta_upp_mant = eta_viscous["upper"].pop("effective")
+
     eta_material = fd.conditional(
         depth <= prms.depth_lower_mantle,
         eta_upp_mant,
@@ -231,11 +215,11 @@ def material_viscosity(
     def_mech = {}
     for mantle, creep_laws in eta_viscous.items():
         def_mech[mantle] = active_deformation(
+            creep_laws,
             prms.def_mech_tags,
-            creep_laws=creep_laws,
-            yield_criterion=yield_criterion,
-            viscosity=eta_material,
-            visc_bounds=eta_bounds_material,
+            eta_bounds_material,
+            yield_criterion,
+            eta_material,
         )
     def_mech_material = fd.conditional(
         depth <= prms.depth_lower_mantle, def_mech["upper"], def_mech["lower"]
