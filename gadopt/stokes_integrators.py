@@ -483,6 +483,11 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 appctx=self.appctx,
                 options_prefix=self.name,
             )
+        if has_level(self.mesh):
+            # Note that this is cheap (no real initialiation), so don't worry
+            # about the case where the mesh has a hierarchy but not using gmg
+            atm = fd.AdaptiveTransferManager()
+            self.solver.set_transfer_manager(atm)
 
     def solve(self) -> None:
         """Solves the system."""
