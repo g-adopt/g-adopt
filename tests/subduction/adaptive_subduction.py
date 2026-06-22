@@ -49,8 +49,6 @@ class AdaptiveSimulation:
 
     def adapt_mesh(self, initial: bool = False) -> None:
         def add_metric(field: Function):
-            nonlocal metrics
-
             # Firedrake function for a metric over a mesh where a field lives
             metric = RiemannianMetric(M, name=f"Metric ({function_name(field)})")
             metric.set_parameters(prms.metric_parameters)  # Set metric parameters
@@ -333,9 +331,8 @@ class AdaptiveSimulation:
         )
 
         epsilon = interface_thickness(K, min_cell_edge_length=True)
-        epsilon = MPI.COMM_WORLD.allreduce(epsilon.dat.data_ro.min(), MPI.MIN)
         adv_kwargs = {"u": u, "timestep": self.time_step, "subcycles": prms.subcycles}
-        reini_kwargs = {"epsilon": epsilon, "frequency": 1}
+        reini_kwargs = {"epsilon": epsilon, "frequency": 3}
         self.level_set_solver = LevelSetSolver(
             self.psi, adv_kwargs=adv_kwargs, reini_kwargs=reini_kwargs
         )

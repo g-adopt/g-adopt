@@ -49,7 +49,7 @@ mesh_layers = {
 
 # Physical parameters
 rho_mantle = 3.3e3
-rho_weak_layer = 3e3
+rho_weak_layer = 3.1e3
 if free_surface:
     rho_water = 1e3
 alpha = 3e-5
@@ -136,7 +136,7 @@ metric_parameters = {  # For further information: `set_parameters` in animate/me
         "target_complexity": 200_000,  # Metric complexity, analogous to cell count
         "h_min": 2e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
         "h_max": 5e5 / distance_scale,  # Maximum metric magnitude (i.e. cell size)
-        "a_max": 5.0,  # Maximum metric anisotropy (cell aspect ratio)
+        "a_max": 2.0,  # Maximum metric anisotropy (cell aspect ratio)
         "p": np.inf,  # Metric normalisation order
         "gradation_factor": 1.5,  # Maximum variation in length between adjacent edges
     }

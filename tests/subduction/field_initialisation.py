@@ -102,7 +102,7 @@ def initial_level_set(psi: fd.Function) -> None:
     weak_layer_interface_coords = weak_layer_polygon_coords[: plate_extremity_index + 1]
     weak_layer_interface = sl.LineString(weak_layer_interface_coords)
 
-    boundary_coordinates = weak_layer_polygon_coords[plate_extremity_index + 1 :]
+    boundary_coordinates = weak_layer_polygon_coords[plate_extremity_index + 1 :]  # noqa: E203
 
     epsilon = interface_thickness(psi.function_space(), min_cell_edge_length=True)
     epsilon = MPI.COMM_WORLD.allreduce(epsilon.dat.data_ro.min(), MPI.MIN)
