@@ -7,8 +7,9 @@ depending on what they would like to achieve.
 from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
 from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
 from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional
+from firedrake import VectorElement, DirichletBC, interpolate, conditional
 from firedrake.ufl_expr import extract_unique_domain
+import pyop3 as op3
 import ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
@@ -82,10 +83,10 @@ class TimestepAdaptor:
         self.maximum_timestep = maximum_timestep
         self.mesh = V.mesh()
 
-        # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
+        # J^-1 u is a discontinuous expression, using op3.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolate = interpolate(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
+        self.ref_vel_interpolate = interpolate(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op3.MAX)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance

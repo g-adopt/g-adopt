@@ -90,7 +90,7 @@ def ts_cache(
     as the underlying Firedrake functions remain unmodified. The modification of
     Firedrake functions is tracked by the `dat_version` attribute of the `dat` object
     which is based on the 'state' of the underlying PETSc object (see e.g.
-    https://petsc.org/release/manualpages/Sys/PetscObjectStateGet/). Pyop2 also
+    https://petsc.org/release/manualpages/Sys/PetscObjectStateGet/). pyop3 also
     maintains a similar counter for non-PETSc objects.
 
     The purpose of this decorator is to allow multiple calls to the same diagnostic
