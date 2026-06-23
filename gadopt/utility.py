@@ -741,14 +741,9 @@ def CubedSphereMeshHierarchy(
         mesh_p2._radius = radius
         meshes_p2.append(mesh_p2)
 
-    mh2 = HierarchyBase(meshes_p2, mh.coarse_to_fine_cells,
-                        mh.fine_to_coarse_cells, nested=True)
-    from firedrake import VTKFile
-    mh_pvd = VTKFile('mh.pvd', adaptive=True)
-    for m in mh2:
-        mh_pvd.write(Function(FunctionSpace(m, "CG", 1), name='foo'))
-
-    return mh2
+    mh_p2 = HierarchyBase(meshes_p2, mh.coarse_to_fine_cells,
+                          mh.fine_to_coarse_cells, nested=True)
+    return mh_p2
 
 
 def _min_max_sum_reduce(a, b, dtype):
