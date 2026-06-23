@@ -83,10 +83,10 @@ class TimestepAdaptor:
         self.maximum_timestep = maximum_timestep
         self.mesh = V.mesh()
 
-        # J^-1 u is a discontinuous expression, using op3.MAX it takes the maximum value
+        # J^-1 u is a discontinuous expression, using op3.MAX_RW it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolate = interpolate(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op3.MAX)
+        self.ref_vel_interpolate = interpolate(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op3.MAX_RW)
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
