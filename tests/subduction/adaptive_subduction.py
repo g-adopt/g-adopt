@@ -299,7 +299,7 @@ class AdaptiveSimulation:
             self.time_step,
             u,
             V,
-            target_cfl=0.55 * prms.subcycles,
+            target_cfl=0.6 * prms.subcycles,
             maximum_timestep=prms.output_frequency,
         )
 

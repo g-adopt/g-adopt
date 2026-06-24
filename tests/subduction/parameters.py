@@ -49,7 +49,7 @@ mesh_layers = {
 
 # Physical parameters
 rho_mantle = 3.3e3
-rho_weak_layer = 3.1e3
+rho_weak_layer = 3.3e3
 if free_surface:
     rho_water = 1e3
 alpha = 3e-5
@@ -115,10 +115,10 @@ viscous_creep_params = {
         "Peierls": {"prefactor": 1e-150, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
     },
     "lower": {
-        "diffusion": {"prefactor": 1e-18, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}
+        "diffusion": {"prefactor": 1e-15, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}
     },
 }
-viscous_creep_params["lower"]["diffusion"]["prefactor"] *= 30.0
+viscous_creep_params["lower"]["diffusion"]["prefactor"] /= 30.0
 def_mech_tags = {
     "diffusion": 0,
     "dislocation": 1,
@@ -133,7 +133,7 @@ initial_adapt_loops = 3
 adapt_calls = 3
 metric_parameters = {  # For further information: `set_parameters` in animate/metric.py
     "dm_plex_metric": {
-        "target_complexity": 200_000,  # Metric complexity, analogous to cell count
+        "target_complexity": 150_000,  # Metric complexity, analogous to cell count
         "h_min": 2e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
         "h_max": 5e5 / distance_scale,  # Maximum metric magnitude (i.e. cell size)
         "a_max": 2.0,  # Maximum metric anisotropy (cell aspect ratio)
@@ -145,7 +145,7 @@ metric_fields = {"Level set", "Temperature", "Velocity", "Viscosity"}
 
 # Time loop
 subcycles = 1
-iterations = 10
+iterations = 16
 checkpoint_frequency = 5.0 * myr_to_seconds
 output_frequency = 0.4 * myr_to_seconds
 

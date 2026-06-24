@@ -87,7 +87,7 @@ def viscosity_strain_rate_balance(
                 relative_variation = (
                     abs(viscosity_eff - viscosity_eff_old) / viscosity_eff_old
                 )
-                if fd.assemble(relative_variation * measure) / domain_volume <= 1e-4:
+                if fd.assemble(relative_variation * measure) / domain_volume <= 5e-4:
                     break
 
         viscosity[mantle]["effective"] = effective_viscosity(
