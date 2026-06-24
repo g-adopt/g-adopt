@@ -774,7 +774,10 @@ def decomposition_stats(function_spaces, names=None, include_element_count=True)
     if include_element_count:
         meshes = set([fs.mesh() for fs in subspaces])
         for mesh in meshes:
-            node_counts.append(mesh.topology.cell_set.sizes[1])
+            ncells = mesh.topology.cell_set.sizes[1]
+            if mesh.layers is not None:
+                ncells *= mesh.layers-1
+            node_counts.append(ncells)
         if len(meshes) > 1:
             index = [mesh.name + ' elements' for mesh in meshes]
         else:
