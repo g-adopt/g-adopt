@@ -692,7 +692,8 @@ def CubedSphereMeshHierarchy(
         radius: float,
         refinement_level: int,
         degree: int = 2,
-        coarse_refinement_level: int = 1):
+        coarse_refinement_level: int = 1,
+        distribution_parameters=None):
     """
     Generate hierarchy of refined cubed sphere meshes.
 
@@ -706,12 +707,14 @@ def CubedSphereMeshHierarchy(
        coarse_refinement_level: refinement level of the coarsest mesh
     """
 
+    distribution_parameters = distribution_parameters or {}
+    distribution_parameters.setdefault("overlap_type", (DistributedMeshOverlapType.VERTEX, 1))
     # start with *linear* coarse mesh
     mesh_coarse = CubedSphereMesh(
         radius,
         refinement_level=coarse_refinement_level,
         degree=1,
-        distribution_parameters={"overlap_type": (DistributedMeshOverlapType.VERTEX, 1)}
+        distribution_parameters=distribution_parameters
     )
 
     # Convert back to cube-mesh in angle coordinates, this is a [-atan(1), atan(1)]^3 cube
