@@ -25,7 +25,13 @@ import numpy as np
 import numpy.typing as npt
 from mpi4py import MPI
 
-from gtrack import PointCloud, PointRotator, PolygonFilter, SeafloorAgeTracker
+from gtrack import (
+    PointCloud,
+    PointRotator,
+    PolygonFilter,
+    SeafloorAgeTracker,
+    build_indicator_source,
+)
 from gtrack.config import TracerConfig
 from gtrack.mesh import create_sphere_mesh_latlon
 
@@ -50,7 +56,7 @@ class LithosphereSourceConfig:
 
     Mesh geometry (r_outer, depth_scale) lives on MeshConfig.
     Interpolation (k_neighbors, kernel, ...) lives on InterpolationConfig.
-    Output knobs (transition_width, kappa, ...) live on the output strategy.
+    Output knobs (width_km, fade_ref_km, kappa, ...) live on the output strategy.
 
     Checkpointing is enabled by setting ``checkpoint_interval_myr``;
     ``checkpoint_dir`` then defaults to ``gtrack_checkpoints`` (resolved
@@ -82,6 +88,20 @@ class LithosphereSourceConfig:
             raise ValueError(
                 f"checkpoint_interval_myr must be positive or None, "
                 f"got {self.checkpoint_interval_myr}"
+            )
+
+
+@dataclass
+class PolygonSourceConfig:
+    """Knobs for PolygonSource — sphere-mesh resolution and data loading."""
+
+    n_points: int = 20000
+    property_name: str = "thickness"
+
+    def __post_init__(self):
+        if self.n_points < SOURCE_MIN_POINTS:
+            raise ValueError(
+                f"n_points must be at least {SOURCE_MIN_POINTS}, got {self.n_points}"
             )
 
 
@@ -212,6 +232,15 @@ class Source(ABC):
     def provides(self) -> frozenset[str]:
         """The set of keys (including 'xyz') that prepare(age) returns."""
         ...
+
+    # True for sources whose thickness channel is genuinely zero outside a
+    # bounded region (polygon-style seeds-plus-zero-background clouds). A one-sided
+    # radial step output reads 1 at the surface wherever the base sits at
+    # the surface — i.e. wherever thickness is zero — so indicators built
+    # on a zero-outside source must apply a lateral fade. The factory
+    # cross-checks this flag against the output before constructing an
+    # indicator.
+    zero_outside: bool = False
 
     gplates_connector: "pyGplatesConnector"
     comm: MPI.Comm
@@ -643,3 +672,144 @@ class LithosphereSource(Source):
         except Exception as exc:
             log(f"LithosphereSource: failed to save checkpoint at "
                 f"{rounded_age} Ma: {exc}", level=INFO)
+
+
+# ---------------------------------------------------------------------------
+# PolygonSource
+# ---------------------------------------------------------------------------
+
+class PolygonSource(Source):
+    """Polygon-bounded thickness source.
+
+    Keeps only the in-polygon seeds at present day, each carrying the
+    data-derived thickness. ``prepare(age)`` rotates those seeds topologically
+    to the target age and unions them with a FRESH uniform background grid
+    regenerated at that age (via ``gtrack.build_indicator_source``); the
+    background carries thickness zero, so the kNN interpolator can smear across
+    the boundary and the lateral roll-off length is controlled by
+    ``InterpolationConfig.gaussian_sigma`` rather than by the polygon outline.
+
+    The fresh background is a correctness requirement, not a convenience:
+    back-rotating a fixed present-day grid deforms it (stretching open at
+    ridges, piling up at trenches), opening coverage gaps that grow with age
+    and leave the kNN with no nearby background point, which smears a distant
+    craton across the hole. A grid regenerated at the target age stays dense
+    and hole-free at any age. No stateful machinery, so the cache is purely a
+    small speedup rather than a correctness requirement.
+
+    Args:
+        gplates_connector: the `pyGplatesConnector` providing the rotation
+            files and the age <-> non-dimensional time mapping.
+        polygons: polygon file path(s) (e.g. a shapefile or gpml) defining
+            the bounded region, passed to gtrack's PolygonFilter.
+        thickness_data: thickness carried by seeds inside the polygons;
+            anything `_build_cloud` accepts (a PointCloud, an HDF5/NetCDF
+            path, a (latlon, values) tuple, or a scalar broadcast onto a
+            sphere mesh).
+        plate_files: `PlateModelFiles` carrying the static polygon paths
+            (mandatory for this source).
+        config: `PolygonSourceConfig` with the sphere-mesh resolution and
+            data-loading knobs. Defaults to `PolygonSourceConfig()`.
+        comm: MPI communicator; gtrack work runs on rank 0 and results are
+            broadcast.
+    """
+
+    @property
+    def provides(self) -> frozenset[str]:
+        return frozenset({"xyz", "thickness"})
+
+    # Thickness is zero everywhere off the seeds (the fresh background grid
+    # carries background_value=0.0), so an unfaded one-sided indicator output
+    # would read 1 across the entire exterior surface; see Source.zero_outside.
+    zero_outside = True
+
+    def __init__(
+        self,
+        gplates_connector: "pyGplatesConnector",
+        polygons: str | Path | list[str | Path],
+        thickness_data: CloudDataType,
+        plate_files: "PlateModelFiles",
+        config: PolygonSourceConfig | None = None,
+        *,
+        comm: MPI.Comm = MPI.COMM_WORLD,
+    ):
+        if plate_files.static_polygons is None:
+            raise ValueError(
+                "plate_files.static_polygons must be set. "
+                "Pass static_polygons to PlateModelFiles."
+            )
+
+        self.gplates_connector = gplates_connector
+        self.config = config or PolygonSourceConfig()
+        self.comm = comm
+        self._is_root = (comm.rank == 0)
+
+        # Stashed for the lazy _load; not touched between here and prepare.
+        self._polygons = polygons
+        self._thickness_data = thickness_data
+        self._plate_files = plate_files
+
+        # gtrack handles + present-day cloud are built lazily in _load (rank 0
+        # only). On non-root these stay None for the source's lifetime and are
+        # never read.
+        self._polygon_filter = None
+        self._rotator = None
+        self._region_present = None
+
+    @property
+    def is_root(self) -> bool:
+        return self._is_root
+
+    def _load(self) -> None:
+        """Build the polygon filter, rotator and present-day region cloud.
+        Runs once on rank 0, driven by Source._ensure_loaded."""
+        self._polygon_filter = PolygonFilter(
+            polygon_files=self._polygons,
+            rotation_files=self.gplates_connector.rotation_filenames,
+        )
+        self._rotator = PointRotator(
+            rotation_files=self.gplates_connector.rotation_filenames,
+            topology_files=self.gplates_connector.topology_filenames,
+            static_polygons=self._plate_files.static_polygons,
+        )
+        self._region_present = self._load_region(self._thickness_data)
+
+    def _load_region(self, data: CloudDataType) -> PointCloud:
+        # Keep ONLY the real in-polygon seeds. The fresh uniform background is
+        # rebuilt at each target age by build_indicator_source, so there is no
+        # present-day grid to mask-and-relabel, no plate ids to assign, and no
+        # sliver patch: the topological rotator advects every seed by whatever
+        # plate or network it sits in and depends on no plate ids.
+        cloud = _build_cloud(data, self.config.property_name, self.config.n_points)
+        n_before = cloud.n_points
+        seeds = self._polygon_filter.filter_inside(cloud, at_age=0.0)
+        log(f"PolygonSource: kept {seeds.n_points} in-polygon seeds "
+            f"out of {n_before} present-day points.", level=DEBUG)
+        return seeds
+
+    def _compute_sources(self, age: float) -> dict[str, np.ndarray]:
+        # Rotate the in-polygon seeds to this age and union them with a fresh
+        # uniform background grid regenerated at the same age (thickness 0 on
+        # the background). background_n matches the seed-grid resolution so the
+        # background is dense enough that the downstream kNN always finds a
+        # nearby point outside the seed region and there are no visible seams.
+        source = build_indicator_source(
+            self._region_present,
+            self._rotator,
+            target_age=age,
+            background_n=self.config.n_points,
+            background_value=0.0,
+            exclusion_factor=1.0,
+        )
+        log(f"PolygonSource: {source.n_points} source points "
+            f"(seeds + fresh background) at {age:.2f} Ma.", level=DEBUG)
+        # build_indicator_source returns a single PointCloud whose xyz /
+        # get_property expose gtrack's OWN internal arrays by reference. The
+        # copy here is REQUIRED, not defensive: without it the per-age
+        # _cached_dict — shared across sibling connectors and held across the
+        # next rotate — would alias gtrack's live internal storage. Do not drop
+        # it by analogy with any "redundant" copy elsewhere; the accessors alias.
+        return {
+            "xyz": source.xyz.copy(),
+            "thickness": source.get_property(self.config.property_name).copy(),
+        }
