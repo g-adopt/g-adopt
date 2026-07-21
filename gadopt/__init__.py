@@ -12,6 +12,7 @@ from .approximations import (
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import *
+from .gravity_solver import CylindricalDtN, GravitySolver, SphericalDtN
 from .level_set_tools import (
     LevelSetSolver,
     assign_level_set_values,
