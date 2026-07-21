@@ -93,6 +93,17 @@ class TestSetup:
         with pytest.raises(ValueError, match="does not resolve"):
             solver.check_boundary_quadrature(rtol=1e-6)
 
+    def test_monolithic_override_guard(self):
+        """A full solver_parameters replacement requesting monolithic
+        assembly is rejected: R-space blocks cannot assemble aij."""
+        mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+        with pytest.raises(ValueError, match="Monolithic"):
+            GravitySolver(
+                psi, 0.0, bcs={"top": {"dtn": CylindricalDtN(M=2)}},
+                solver_parameters={"mat_type": "aij", "ksp_type": "preonly",
+                                   "pc_type": "lu"})
+
     def test_net_mass_guard(self):
         mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
         psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))

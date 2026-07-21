@@ -248,7 +248,10 @@ class GravitySolver(SolverConfigurationMixin):
     A boundary with no entry keeps the natural (homogeneous Neumann)
     condition. The orientation of a DtN boundary (exterior map enclosing the
     sources vs interior map enclosing a source-free core) and its radius are
-    measured from the marked boundary, not specified by the user.
+    measured from the marked boundary, not specified by the user. DtN maps
+    are only valid on origin-centred coordinate circles/spheres; a boundary
+    deviating from constant radius triggers a warning, but the solve
+    proceeds with the mean radius and correspondingly degraded accuracy.
     """
 
     name = "Gravity"
@@ -466,6 +469,13 @@ class GravitySolver(SolverConfigurationMixin):
         handled by GMRES. Without multipliers a direct solve is used.
         """
         if isinstance(solver_preset, Mapping):
+            if (self.n_multipliers > 0
+                    and solver_preset.get("mat_type") in ("aij", "baij", "sbaij")):
+                raise ValueError(
+                    "Monolithic matrix assembly is unsupported with DtN "
+                    "R-space multipliers. Provide a fieldsplit configuration "
+                    "(see the G-ADOPT default) or adjust the default via "
+                    "solver_parameters_extra instead.")
             self.add_to_solver_config(solver_preset)
             self.add_to_solver_config(solver_extras)
             self.register_update_callback(self.set_solver)
@@ -543,7 +553,11 @@ class GravitySolver(SolverConfigurationMixin):
             raise NotImplementedError(
                 f"Net mass {mass:.3e} is nonzero: the 2-D exterior DtN "
                 "monopole requires the -2 G M / R flux datum, which is not "
-                "implemented. Use a zero-mean density or a 3-D formulation.")
+                "implemented. Use a zero-mean density or a 3-D formulation. "
+                "If the density should have zero net mass, this can also "
+                "indicate monopole leakage from density boundaries that do "
+                "not conform to cell edges - a genuine accuracy problem in "
+                "itself; align the mesh with the density interfaces.")
 
     def check_boundary_quadrature(
         self, rtol: float = 1e-8, action: str = "raise"
