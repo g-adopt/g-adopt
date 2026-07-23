@@ -138,8 +138,10 @@ def richards_gravity_term(
     - \int_{\mathcal{I}} \text{jump}(\phi) \cdot (q_n^+ - q_n^-) dS
     $$
 
-    where $q_n = 0.5(q \cdot n + |q \cdot n|)$ is the upwinded flux and
-    $q = K \nabla z$ is the gravity-driven flux.
+    where $q_n = 0.5(q \cdot n - |q \cdot n|)$ is the upwinded flux and
+    $q = K \nabla z$ is the gravity-driven flux. The negative part selects the
+    upstream trace of $K$ from the cell *above* the facet: gravity-driven
+    information propagates downward, so the upwind side is the upper cell.
 
     Args:
         eq: G-ADOPT Equation instance
@@ -165,13 +167,18 @@ def richards_gravity_term(
         # Gravity-driven flux
         q = K * k
 
-        # n has no fixed direction: n('+') and n('-') each point outward from
-        # their own cell. So q.n > 0 on a given side means q exits there, i.e.
-        # that side is the upwind side, and only one of q_n('+'), q_n('-') is
-        # nonzero. The minus sign on jump(eq.test) below is needed because jump
-        # gives test_+ - test_-, whereas we want test_up - test_down; when '-'
-        # is the upwind side that extra minus sign corrects the orientation.
-        q_n = 0.5 * (dot(q, eq.n) + abs(dot(q, eq.n)))
+        # Gravity drives drainage downward. Writing the elevation-head part as a
+        # conservation law d(theta)/dt + d_z(Phi) = 0 with flux Phi = -K, the
+        # characteristic speed is dPhi/dtheta = -K'(theta) < 0 (K increases with
+        # theta), so information propagates downward and the upstream (upwind)
+        # side of a facet is the cell ABOVE it. We therefore take the NEGATIVE
+        # part of q.n, which selects the upper trace of K (verified for both
+        # facet orientations): with n('+') and n('-') each pointing outward from
+        # their own cell, only the side whose outward normal points downward
+        # contributes, and that is the upper cell. The minus sign on
+        # jump(eq.test) below accounts for jump giving test('+') - test('-'),
+        # whereas we want test_up - test_down.
+        q_n = 0.5 * (dot(q, eq.n) - abs(dot(q, eq.n)))
 
         # Add upwind flux term
         F -= jump(eq.test) * (q_n('+') - q_n('-')) * eq.dS
