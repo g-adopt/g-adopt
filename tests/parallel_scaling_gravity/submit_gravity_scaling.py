@@ -37,9 +37,13 @@ can have left anything behind. The second invocation is warm, because it is the
 same nodes and the same directories. And nodes cannot race each other to write
 the same file, because each writes its own private filesystem - the failure the
 shared-cache version of this script had to avoid by warming level 4 first.
-``XDG_CACHE_HOME`` is deliberately left on the shared filesystem: the wipe
-covers the PyOP2 and TSFC caches, which are where kernels and compiled forms
-live.
+
+Three cache directories move, not two. PyOP2 holds compiled objects and TSFC
+holds compiled forms, which are the obvious ones; loopy also keeps its code
+generation, scheduling and preprocessing results in sqlite files under
+``XDG_CACHE_HOME``, and PyOP2 goes through loopy code generation on the assembly
+path. Leaving that one shared would have let a "cold" run answer the codegen and
+scheduling steps out of a warm sqlite file while reporting itself as cold.
 """
 
 import argparse
@@ -58,14 +62,29 @@ WORKTREE = "/scratch/xd2/sg8812/g-adopt-worktrees/sghelichkhani/poisson"
 # anything above one node, and we ask for whole nodes everywhere regardless so
 # that no other job shares the hardware being timed.
 NODE_CORES = 104
-NODE_MEM_GB = 400          # under the 500 GB ceiling, far above what we need
+NODE_MEM_GB = 480          # just under the 500 GB normalsr ceiling
 NODE_JOBFS_GB = 50         # kernel caches only; the study writes no big files
 
+# Level 7 spreads its 512 ranks over eight nodes rather than the five that would
+# hold them, for two reasons that stage one measured.
+#
+# Memory. Peak per-rank memory tracks the multiplier count and barely moves with
+# the level, because the bookkeeping for the scalar Real fields is replicated on
+# every rank rather than distributed: 0.66 to 2.11 GB across L = 2 to 10 at
+# level 4, and 0.82 to 2.31 GB at level 5. Extrapolated to L = 20 that is close
+# to 7 GB per rank during the compile-heavy cold phase, so 102 ranks on a node
+# would want around 700 GB against a 500 GB ceiling. At 64 per node it is about
+# 430 GB, inside the 480 GB requested.
+#
+# Comparability. Level 6 puts 64 ranks on one node, so holding level 7 at the
+# same 64 per node keeps memory bandwidth per rank the same between the two
+# levels being compared. Five nodes would have given level 7 *more* bandwidth
+# per rank than level 6 and quietly flattered the weak-scaling result.
 LADDER = {
     4: {"launch": 1, "nodes": 1},
     5: {"launch": 8, "nodes": 1},
     6: {"launch": 64, "nodes": 1},
-    7: {"launch": 512, "nodes": 5},
+    7: {"launch": 512, "nodes": 8},
 }
 
 # The truncations: the set the level-4 record already covers, plus the three
@@ -100,12 +119,18 @@ def walltime(level, lmax):
 def resources(level):
     """PBS ncpus, mem and jobfs for a level, as whole exclusive nodes."""
     nodes = LADDER[level]["nodes"]
+    launch = LADDER[level]["launch"]
+    # Ranks per node, pinned explicitly rather than left to the default mapping:
+    # per-rank memory bandwidth depends on how many ranks share a node, so a
+    # study comparing wall times across levels cannot let it vary silently.
+    per_node = -(-launch // nodes)          # ceiling division
     return {
         "request_ncpus": nodes * NODE_CORES,
-        "launch_ncpus": LADDER[level]["launch"],
+        "launch_ncpus": launch,
         "mem": nodes * NODE_MEM_GB,
         "jobfs": nodes * NODE_JOBFS_GB,
         "nodes": nodes,
+        "per_node": per_node,
     }
 
 
@@ -179,7 +204,8 @@ cd {casedir}
 for PHASE in cold warm; do
     export PETSC_OPTIONS="-log_view :{casedir}/profile_$PHASE.txt -options_left"
     echo "=== phase $PHASE begins $(date) ==="
-    mpiexec -np {launch_ncpus} python3 {worktree}/tests/parallel_scaling_gravity/{script} \\
+    mpiexec -np {launch_ncpus} --map-by ppr:{per_node}:node \\
+        python3 {worktree}/tests/parallel_scaling_gravity/{script} \\
         {level} --lmax {lmax} --cache-phase $PHASE {extra} \\
         --out-dir {casedir} > {casedir}/run_$PHASE.out 2> {casedir}/run_$PHASE.err
     echo "=== phase $PHASE exit $? at $(date) ==="

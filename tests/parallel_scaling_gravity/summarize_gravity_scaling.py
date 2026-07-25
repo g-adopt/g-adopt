@@ -63,9 +63,12 @@ def summarize_coupled(rows):
     out.append(_grid(rows, "level", "lmax",
                      lambda r: f"{r['fieldsplit_0_iterations_per_invocation']:.2f}"))
     out.append("")
+    # One decimal, not zero: these are means over invocations, and the study's
+    # cross-check against the capacitance diagnostic turns on half-iteration
+    # differences, so rounding 14.5 to 14 would erase the comparison.
     out.append("fieldsplit_1 iterations (mean) vs 2(L+1):")
     out.append(_grid(rows, "level", "lmax",
-                     lambda r: f"{r['fieldsplit_1_iterations_mean']:.0f}"))
+                     lambda r: f"{r['fieldsplit_1_iterations_mean']:.1f}"))
     out.append("")
     out.append("outer FGMRES iterations:")
     out.append(_grid(rows, "level", "lmax",
