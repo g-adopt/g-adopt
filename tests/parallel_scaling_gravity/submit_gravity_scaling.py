@@ -150,8 +150,29 @@ export PYOP2_CACHE_INFO=1
 # do not depend on that wrapper behaviour staying as it is. PyOP2 and Firedrake
 # create these directories themselves on whichever node needs them, so there is
 # nothing to pre-create.
+#
+# Per-node rather than shared is also the safer choice, not merely the
+# convenient one. Divergent cache state is only dangerous where it splits a
+# communicator that a collective runs over, and PyOP2's compile communicator is
+# node-local, so divergence aligned with node boundaries cannot split it. A
+# shared cache on a network filesystem instead gives divergence driven by
+# metadata-visibility skew, which cuts across nodes, and that is the shape that
+# hangs. `PYOP2_NODE_LOCAL_COMPILATION` must therefore stay at its default of 1:
+# switching it off makes every rank copy the compiled object out of rank 0's
+# temporary directory, which does not exist on the other nodes.
 export PYOP2_CACHE_DIR=$PBS_JOBFS/pyop2
 export FIREDRAKE_TSFC_KERNEL_CACHE_DIR=$PBS_JOBFS/tsfc
+# The third cache, and the one it would be easy to miss: loopy keeps its
+# code-generation, scheduling and preprocessing results in sqlite files under
+# XDG_CACHE_HOME. Leaving that on shared storage would make the cold phase pay
+# neither loopy codegen nor scheduling, understating it by however much that
+# costs, while still calling itself cold. It also puts a busy-retrying sqlite
+# file on a network filesystem with 512 ranks reaching for it.
+export XDG_CACHE_HOME=$PBS_JOBFS/xdg-cache
+# TMPDIR is deliberately not set here. Python silently ignores a TMPDIR that
+# does not exist and falls back to /tmp, so pointing it at a subdirectory
+# created only on the head node would send compile scratch to /tmp on every
+# other node without any error. PBS already provides $PBS_JOBFS on each node.
 
 cd {casedir}
 
