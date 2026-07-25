@@ -132,39 +132,43 @@ module use {module_use}
 module load {module}
 
 export PYTHONPATH={worktree}:$PYTHONPATH
+export PYTHONDONTWRITEBYTECODE=1
 # One BLAS thread per rank; threaded BLAS underneath MPI would thrash the node
 # and make the wall times meaningless.
 export OMP_NUM_THREADS=1
+export OMPI_MCA_io=ompio
+export MPLCONFIGDIR=$PBS_JOBFS/matplotlib
 # Turn on PyOP2's cache hit/miss counters so each sidecar records what the
 # process actually generated, rather than us inferring it from the filesystem.
 export PYOP2_CACHE_INFO=1
 
 # Node-local kernel caches: private per node, so nodes cannot race, and empty at
-# job start, so the first invocation is genuinely cold. The module would
-# otherwise point these at shared scratch, where a previous job's kernels would
-# make every run warm.
+# job start, so the first invocation below is genuinely cold. Setting these is
+# belt and braces - the fp50 wrapper already redirects the cache directories,
+# XDG_CACHE_HOME included, into $PBS_JOBFS inside a job, which was verified on
+# this module rather than assumed - but naming them explicitly means the phases
+# do not depend on that wrapper behaviour staying as it is. PyOP2 and Firedrake
+# create these directories themselves on whichever node needs them, so there is
+# nothing to pre-create.
 export PYOP2_CACHE_DIR=$PBS_JOBFS/pyop2
 export FIREDRAKE_TSFC_KERNEL_CACHE_DIR=$PBS_JOBFS/tsfc
-# The PBS script itself runs only on the head node, so create the directories on
-# every node. One process per node, hence --map-by ppr:1:node.
-mpiexec -n {nodes} --map-by ppr:1:node \\
-    bash -c 'mkdir -p $PBS_JOBFS/pyop2 $PBS_JOBFS/tsfc'
 
 cd {casedir}
 
 for PHASE in cold warm; do
     export PETSC_OPTIONS="-log_view :{casedir}/profile_$PHASE.txt -options_left"
-    echo "=== phase $PHASE: $(date) ==="
+    echo "=== phase $PHASE begins $(date) ==="
     mpiexec -np {launch_ncpus} python3 {worktree}/tests/parallel_scaling_gravity/{script} \\
         {level} --lmax {lmax} --cache-phase $PHASE {extra} \\
         --out-dir {casedir} > {casedir}/run_$PHASE.out 2> {casedir}/run_$PHASE.err
-    echo "=== phase $PHASE exit $?: $(date) ==="
-    # What the cold phase left on each node, as an independent check on the
-    # cache counters in the sidecar.
-    mpiexec -n {nodes} --map-by ppr:1:node \\
-        bash -c 'echo "$(hostname) $PHASE cache files: $(find $PBS_JOBFS/pyop2 \
-$PBS_JOBFS/tsfc -type f 2>/dev/null | wc -l)"' \\
-        >> {casedir}/cache_files.txt
+    echo "=== phase $PHASE exit $? at $(date) ==="
+    # How many cache files each node is holding, as a check on the counters in
+    # the sidecar that does not go through PyOP2 at all. pbsdsh runs one task
+    # per node outside the container.
+    pbsdsh -- /bin/bash -c \\
+        'echo "$(hostname) files: $(find $PBS_JOBFS/pyop2 $PBS_JOBFS/tsfc \
+-type f 2>/dev/null | wc -l)"' \\
+        | sort -u | sed "s/^/$PHASE /" >> {casedir}/cache_files.txt
 done
 """
 
