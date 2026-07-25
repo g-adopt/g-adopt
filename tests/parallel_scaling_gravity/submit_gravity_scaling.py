@@ -156,6 +156,13 @@ source /etc/profile
 module use {module_use}
 module load {module}
 
+# Form processing at high truncation recurses to a depth that grows with the
+# number of mixed sub-fields, so the model lifts Python's recursion limit. Lift
+# the stack limit to match: on Python 3.11 pure-Python frames do not consume C
+# stack, but the traversals pass through C dispatch, and a job that dies of stack
+# exhaustion an hour into compilation is an expensive way to learn that.
+ulimit -s unlimited 2>/dev/null || ulimit -s 1048576 2>/dev/null || true
+
 export PYTHONPATH={worktree}:$PYTHONPATH
 export PYTHONDONTWRITEBYTECODE=1
 # One BLAS thread per rank; threaded BLAS underneath MPI would thrash the node

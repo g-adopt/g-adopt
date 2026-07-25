@@ -75,13 +75,54 @@ LAYERS = {4: 8, 5: 16, 6: 32, 7: 64}
 # PCFIELDSPLIT used to refuse more than 128 fields, and the mixed space carries
 # 1 + 2(L+1)^2 of them, which capped this model at L = 6. The shipped preset now
 # describes the two Schur blocks by index set (gadopt.DtNTwoBlockSchurPC), so the
-# field enumeration never runs and the coupled solve reaches any truncation. What
-# remains is cost, not architecture: each matrix-free application re-assembles
-# the boundary mode forms at O(L^4) and the per-process symbolic form processing
-# grows with the mode count too, which is what this study measures. The cap is
-# kept only so that a mistyped truncation fails immediately instead of after an
-# hour of form processing.
+# field enumeration never runs, and the second barrier - Python's recursion limit
+# during form processing, which stops L >= 15 - is lifted by
+# raise_recursion_limit below. What is left is cost, and it is worth recording
+# what this study measured rather than what was predicted: per-process symbolic
+# form processing grows with the mode count and dominates everything, while the
+# steady solve time came out close to linear in the mode count up to L = 10,
+# not the O(L^4) the boundary-assembly argument predicts. The cap is kept only so
+# that a mistyped truncation fails immediately instead of an hour into form
+# processing.
 MAX_COUPLED_L = 20
+
+
+def raise_recursion_limit(n_fields):
+    """Lift Python's recursion limit to what a mixed space this wide needs.
+
+    Form processing walks the mixed form with recursive traversals whose depth
+    grows with the number of sub-fields, and the gravitational Poisson mixed
+    space carries `1 + 2(L+1)^2` of them. Measured on this build: `L = 10`
+    (243 sub-fields) completes inside the default limit of 1000, while `L = 15`
+    (513) dies with `RecursionError: maximum recursion depth exceeded in
+    comparison` part-way through compiling the form. So the depth requirement is
+    roughly proportional to the field count and the default is simply too low
+    past about 250 fields; it is not a sign of runaway recursion.
+
+    This is why the truncation ceiling that used to be architectural, then
+    became a cost decision, is now neither: past `L = 14` on a two-boundary
+    shell the coupled solve needs this call to run at all. Raising the limit
+    here rather than inside `gadopt` is deliberate - the recursion limit is
+    interpreter-global state and a library has no business changing it under a
+    caller - but it does mean any other user of high truncations meets the same
+    wall and has to do the same thing.
+
+    The allowance is generous relative to the measured requirement rather than
+    tight, because the cost of being wrong is a run that dies an hour into form
+    processing. On Python 3.11 and later, deep pure-Python recursion does not
+    consume C stack per frame, so a high limit is far less dangerous than it
+    once was; the job script also lifts the stack limit as a second guard.
+
+    Args:
+      n_fields: Number of sub-fields in the mixed space.
+
+    Returns:
+      The limit now in force.
+    """
+    needed = 5000 + 50 * n_fields
+    if needed > sys.getrecursionlimit():
+        sys.setrecursionlimit(needed)
+    return sys.getrecursionlimit()
 
 
 def build_checkerboard_source(mesh, V, lmax):
@@ -441,6 +482,7 @@ def correctness_anchor(ref_level, lmax, out_dir=None):
     """
     if lmax > MAX_COUPLED_L:
         raise ValueError(f"anchor needs a coupled-reachable L<={MAX_COUPLED_L}")
+    raise_recursion_limit(1 + 2 * (lmax + 1) ** 2)
     mesh, V, boundary = build_shell(ref_level)
     rho, source_params = build_checkerboard_source(mesh, V, lmax)
     dtn = SphericalDtN(lmax)
@@ -552,8 +594,10 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
     psi = Function(V, name="potential")
     n = 2 * (lmax + 1) ** 2
 
+    recursion_limit = raise_recursion_limit(1 + n)
     log(f"level {ref_level}, L {lmax}: potential DOFs {V.dim()}, "
-        f"multipliers {n} (2 x (L+1)^2), cache phase {cache_phase or 'unset'}")
+        f"multipliers {n} (2 x (L+1)^2), cache phase {cache_phase or 'unset'}, "
+        f"recursion limit {recursion_limit}")
 
     t0 = time.perf_counter()
     rho, source_params = build_checkerboard_source(mesh, V, lmax)
@@ -582,10 +626,21 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
         # message in __cause__. Recording only str(exc) therefore turns a
         # diagnosable failure into a mystery, which it duly did the first time a
         # case failed here. Walk the whole chain and keep the deepest traceback.
+        #
+        # Every message is truncated hard, and that is not defensive
+        # boilerplate. A UFL exception raised while processing this form embeds
+        # the repr of the mixed function space, and at 513 subspaces one such
+        # message is megabytes; a chain of them serialised to JSON produced a
+        # 27.5 GB sidecar, which took longer to write than the run took to fail
+        # and had to be deleted by hand. The first 2000 characters carry the
+        # exception type and the actual message, which is all that was ever
+        # wanted from it.
+        limit = 2000
         chain, seen, err = [], set(), exc
-        while err is not None and id(err) not in seen:
+        while err is not None and id(err) not in seen and len(chain) < 20:
             seen.add(id(err))
-            chain.append(f"{type(err).__name__}: {err}")
+            text = f"{type(err).__name__}: {err}"
+            chain.append(text[:limit] + (" ...[truncated]" if len(text) > limit else ""))
             err = err.__cause__ or err.__context__
         deepest = exc
         while (deepest.__cause__ or deepest.__context__) is not None:
@@ -600,7 +655,7 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
             "failed": str(exc),
             "failure_chain": chain,
             "failure_traceback": "".join(traceback.format_exception(
-                type(deepest), deepest, deepest.__traceback__)),
+                type(deepest), deepest, deepest.__traceback__))[-20000:],
             "peak_memory_gb": peak_memory_gb(comm),
             "cache_stats": cache_statistics(),
             "cache_file_counts": cache_file_counts(comm),
@@ -736,6 +791,7 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
         "total_process_time": comm.allreduce(
             time.perf_counter() - process_start, op=MPI.MAX),
         "peak_memory_gb": peak_memory_gb(comm),
+        "recursion_limit": recursion_limit,
         "boundary_degree_power": spectrum,
         "boundary_excitation_ok": flags,
         "cache_stats": cache_stats,
