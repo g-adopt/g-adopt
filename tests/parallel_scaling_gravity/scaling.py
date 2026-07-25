@@ -33,9 +33,17 @@ def _pick(base_path, pattern, level, lmax):
 
 
 def get_coupled(level, lmax, base_path=None):
-    """Metrics for one coupled (level, L) case from its sidecar."""
+    """Metrics for one coupled (level, L) case from its sidecar.
+
+    The glob is deliberately loose at the tail: the scaling study runs each case
+    twice and suffixes the sidecar with its cache phase, while this layer's own
+    runs pass no phase and produce the bare name. Matching both means a study
+    results tree can be read by this layer instead of looking empty, and
+    `_pick`'s newest-wins rule then selects the warm phase, which is the one
+    whose iteration counts belong in a regression reference.
+    """
     base_path = Path(base_path) if base_path else Path()
-    with open(_pick(base_path, f"summary_level{level}_lmax{lmax}_iterative.json",
+    with open(_pick(base_path, f"summary_level{level}_lmax{lmax}_iterative*.json",
                     level, lmax)) as f:
         d = json.load(f)
     return {

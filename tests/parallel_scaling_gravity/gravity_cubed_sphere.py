@@ -4,8 +4,19 @@ One `(level, L)` case of the scaling study described in `SCALING-ANALYSIS.md`.
 It builds an extruded cubed-sphere shell, drives it with a two-bump
 spherical-harmonic checkerboard density (so every treated DtN mode on both
 boundaries is genuinely excited), solves with the iterative `GravitySolver`
-preset, and records the iteration counts, the per-degree boundary power
-spectrum, and the wall times into a JSON sidecar next to the log.
+preset, and records into a JSON sidecar next to the log: the iteration counts,
+the error against the closed-form potential, the per-degree boundary power
+spectrum, the wall times split into their construction, first-solve and
+steady-state parts, and the peak memory.
+
+The error against the closed form is the load-bearing correctness number, not a
+nicety. The source is band-limited to degree `L` and the DtN maps are exact for
+every mode they treat, so `analytic_gravity` gives the exact solution of the
+continuous problem this discretises, and the difference is discretisation error
+alone. That makes one quantity serve as both the correctness check - which
+matters because this solver has demonstrated that it can converge cleanly to a
+wrong answer in parallel - and the measure of how high a truncation a given
+mesh can actually carry.
 
 The solver bundle here fixes the two things the study needs that the shipped
 preset does not do on its own: the `fieldsplit_1` GMRES is run non-restarted
@@ -14,6 +25,13 @@ count above 30) and capped at `~1.2 n` (the guaranteed GMRES termination point
 plus slack, so a pathological corner fails fast and diagnosably rather than on
 walltime).
 
+Kernel-generation cost is measured by running the same case twice against a
+cache that is empty on the first invocation, labelled with `--cache-phase`.
+Three regimes come out of it, and they are genuinely different costs: the cold
+first solve pays C compilation and TSFC form compilation; the warm first solve
+in a fresh process still pays the per-process symbolic work that no on-disk
+cache can save; and a repeat solve in the same process pays neither.
+
 Run locally against this worktree with, e.g.
 
     PYTHONPATH=<worktree> <firedrake-python> gravity_cubed_sphere.py 4 --lmax 5
@@ -21,12 +39,15 @@ Run locally against this worktree with, e.g.
 
 import argparse
 import json
+import platform
+import resource
 import sys
 import time
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+from mpi4py import MPI
 
 # PETSc (initialised when gadopt imports petsc4py) scans sys.argv and warns
 # about our argparse flags as unknown options. Blank argv across the import so
@@ -34,8 +55,12 @@ import numpy as np
 _argv = sys.argv[:]
 sys.argv = sys.argv[:1]
 from gadopt import *  # noqa: E402
-from gadopt.spherical_harmonics import real_spherical_harmonic_numpy  # noqa: E402
 sys.argv = _argv
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from analytic_gravity import (  # noqa: E402
+    analytic_potential, checkerboard_mode_sums,
+)
 
 # Same shell as the Stokes scaling model, so mesh resolution and aspect ratio
 # are directly comparable.
@@ -48,11 +73,13 @@ LAYERS = {4: 8, 5: 16, 6: 32, 7: 64}
 # PCFIELDSPLIT used to refuse more than 128 fields, and the mixed space carries
 # 1 + 2(L+1)^2 of them, which capped this model at L = 6. The shipped preset now
 # describes the two Schur blocks by index set (gadopt.DtNTwoBlockSchurPC), so the
-# field enumeration never runs and the coupled solve reaches any truncation. The
-# cap that remains is a cost decision, not an architectural one: each matrix-free
-# application re-assembles the boundary mode forms at O(L^4), so the high-L cost
-# question stays with the wall-free capacitance routine (chunk 2).
-MAX_COUPLED_L = 10
+# field enumeration never runs and the coupled solve reaches any truncation. What
+# remains is cost, not architecture: each matrix-free application re-assembles
+# the boundary mode forms at O(L^4) and the per-process symbolic form processing
+# grows with the mode count too, which is what this study measures. The cap is
+# kept only so that a mistyped truncation fails immediately instead of after an
+# hour of form processing.
+MAX_COUPLED_L = 20
 
 
 def build_checkerboard_source(mesh, V, lmax):
@@ -68,7 +95,19 @@ def build_checkerboard_source(mesh, V, lmax):
 
     Built by nodal numpy evaluation (the codebase idiom for mode fields) rather
     than a symbolic `(lmax+1)^2`-term UFL sum, which would blow up the volume
-    quadrature estimate and the compiled kernel. Returns the density `Function`.
+    quadrature estimate and the compiled kernel.
+
+    Every order of a degree carries the same weight, so the angular part is
+    built from the per-degree sums `S_l = sum_m Y_lm`, which are returned
+    alongside the density and reused verbatim by the closed-form reference. A
+    reference that re-derived its own angular fields could disagree with the
+    source through a normalisation or sign convention; sharing them makes that
+    class of error impossible rather than unlikely.
+
+    Returns:
+      `(rho, params)` where `params` carries everything
+      `analytic_gravity.analytic_potential` needs to evaluate the exact
+      potential of this same density.
     """
     H = RMAX - RMIN
     r_out = RMAX - 0.12 * H          # bump centre just inside the outer boundary
@@ -87,19 +126,72 @@ def build_checkerboard_source(mesh, V, lmax):
     g_out = np.exp(-((r - r_out) / width) ** 2)
     g_in = np.exp(-((r - r_in) / width) ** 2)
 
+    weights_out = [(RMAX / r_out) ** (l + 1) for l in range(lmax + 1)]
+    weights_in = [(r_in / RMIN) ** l for l in range(lmax + 1)]
+    mode_sums = checkerboard_mode_sums(lmax, theta, phi)
+
     ang_out = np.zeros_like(r)
     ang_in = np.zeros_like(r)
     for l in range(lmax + 1):
-        a_l = (RMAX / r_out) ** (l + 1)
-        b_l = (r_in / RMIN) ** l
-        for m in range(-l, l + 1):
-            Y = real_spherical_harmonic_numpy(l, m, theta, phi)
-            ang_out += a_l * Y
-            ang_in += b_l * Y
+        ang_out += weights_out[l] * mode_sums[l]
+        ang_in += weights_in[l] * mode_sums[l]
 
     rho = Function(V, name="density")
     rho.dat.data[:] = g_out * ang_out + g_in * ang_in
-    return rho
+
+    params = {
+        "lmax": lmax, "rmin": RMIN, "rmax": RMAX, "r_out": r_out, "r_in": r_in,
+        "width": width, "weights_out": weights_out, "weights_in": weights_in,
+        "xyz": xyz, "mode_sums": mode_sums,
+    }
+    return rho, params
+
+
+def analytic_error(V, psi, params):
+    """Relative L2 and nodal errors of `psi` against the closed-form potential.
+
+    The mean-removed error is reported beside the plain one so that a constant
+    offset - the one thing a DtN nullspace could introduce - shows up as itself
+    instead of inflating the error and inviting the wrong diagnosis.
+
+    Args:
+      V: The CG1 space `psi` lives on.
+      psi: Computed potential.
+      params: Source parameters from `build_checkerboard_source`.
+
+    Returns:
+      Dict of error measures.
+    """
+    exact = Function(V, name="potential_exact")
+    exact.dat.data[:] = analytic_potential(
+        params["xyz"], params["lmax"], params["rmin"], params["rmax"],
+        params["r_out"], params["r_in"], params["width"],
+        params["weights_out"], params["weights_in"],
+        mode_sums=params["mode_sums"])
+
+    scale = norm(exact)
+    rel_l2 = float(norm(psi - exact) / scale) if scale > 0 else float(norm(psi - exact))
+
+    # Nodal maximum, reduced across ranks: an L2 norm can hide a defect confined
+    # to a few degrees of freedom, which is exactly what a boundary-condition or
+    # index-set error would look like.
+    local_max = float(np.max(np.abs(psi.dat.data_ro - exact.dat.data_ro))
+                      if psi.dat.data_ro.size else 0.0)
+    nodal_max = V.mesh().comm.allreduce(local_max, op=MPI.MAX)
+
+    shifted = Function(V).assign(psi - exact)
+    volume = assemble(Function(V).assign(1.0) * dx)
+    offset = float(assemble(shifted * dx) / volume)
+    shifted.dat.data[:] -= offset
+    rel_l2_demeaned = float(norm(shifted) / scale) if scale > 0 else float(norm(shifted))
+
+    return {
+        "analytic_relative_l2": rel_l2,
+        "analytic_relative_l2_demeaned": rel_l2_demeaned,
+        "analytic_nodal_max": nodal_max,
+        "analytic_mean_offset": offset,
+        "analytic_norm": float(scale),
+    }
 
 
 def solver_bundle(n, full_view=True):
@@ -219,6 +311,69 @@ def per_invocation_finals(stream):
     return [inv[-1][0] for inv in split_invocations(stream)]
 
 
+def peak_memory_gb(comm):
+    """Peak resident set size in GB, maximised over ranks.
+
+    `ru_maxrss` is in kibibytes on Linux and in bytes on macOS, which is a
+    silent factor of 1024 between the machine this is developed on and the one
+    it runs on.
+    """
+    local = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    local_gb = local / 1024**2 if platform.system() == "Linux" else local / 1024**3
+    return float(comm.allreduce(local_gb, op=MPI.MAX))
+
+
+def cache_statistics():
+    """Hit and miss counts of the PyOP2 and TSFC caches, per cache.
+
+    Only populated when `PYOP2_CACHE_INFO=1` is set in the environment, which
+    is what makes PyOP2 wrap its dict-like caches in the counting subclass. The
+    counts are what distinguish a genuinely cold run from one that quietly
+    found a populated cache directory, which is the whole basis of the
+    cold-versus-warm cost split: without them, "cold" is an assertion about the
+    filesystem rather than a measurement of what the process did.
+
+    Returns:
+      Dict keyed by `module.function [cache class]`, each a dict of hit, miss,
+      size, and where the cache lives. Empty if instrumentation is off.
+    """
+    try:
+        from pyop2.caching import cache_filter
+    except ImportError:
+        return {}
+
+    stats = {}
+    for entry in cache_filter():
+        hit, miss, size, _ = entry.get_stats()
+        if hit < 0 and miss < 0:
+            continue                       # uninstrumented cache: no counters
+        key = (f"{entry.func_module}.{entry.func_name} "
+               f"[{entry.cache_name}]")
+        record = stats.setdefault(
+            key, {"hit": 0, "miss": 0, "size": 0, "location": str(entry.cache_loc)})
+        record["hit"] += max(hit, 0)
+        record["miss"] += max(miss, 0)
+        record["size"] += max(size, 0)
+    return stats
+
+
+def cache_totals(stats):
+    """Aggregate hit and miss counts over the disk-backed caches only.
+
+    Memory caches hit on the second and later lookups within a process
+    regardless of what is on disk, so including them would blur exactly the
+    distinction being measured. A disk-cache miss is a kernel that had to be
+    generated.
+    """
+    hits = misses = 0
+    for key, record in stats.items():
+        if record["location"] == "Memory":
+            continue
+        hits += record["hit"]
+        misses += record["miss"]
+    return {"disk_cache_hits": hits, "disk_cache_misses": misses}
+
+
 def degree_power(boundary_coeffs):
     """Per-degree boundary power from a {mode_key: coeff} mapping.
 
@@ -264,7 +419,7 @@ def correctness_anchor(ref_level, lmax, out_dir=None):
     if lmax > MAX_COUPLED_L:
         raise ValueError(f"anchor needs a coupled-reachable L<={MAX_COUPLED_L}")
     mesh, V, boundary = build_shell(ref_level)
-    rho = build_checkerboard_source(mesh, V, lmax)
+    rho, source_params = build_checkerboard_source(mesh, V, lmax)
     dtn = SphericalDtN(lmax)
     bcs = {boundary.top: {"dtn": dtn}, boundary.bottom: {"dtn": dtn}}
     n = 2 * (lmax + 1) ** 2
@@ -297,35 +452,70 @@ def correctness_anchor(ref_level, lmax, out_dir=None):
         f"||direct - iterative|| / ||direct|| = {rel:.3e}, "
         f"max coeff diff = {coeff_diff:.3e}")
 
+    # Both presets against the closed form as well. Preset parity says the two
+    # paths agree; only this says they agree on the right answer.
+    against_exact = {
+        variant: analytic_error(V, psis[variant], source_params)
+        for variant in ("direct", "iterative")
+    }
+    for variant, err in against_exact.items():
+        log(f"  {variant} vs closed form: relative L2 "
+            f"{err['analytic_relative_l2']:.3e}")
+
     out_dir = Path(out_dir) if out_dir else Path.cwd()
     if mesh.comm.rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
         sidecar = out_dir / f"anchor_level{ref_level}_lmax{lmax}.json"
         with open(sidecar, "w") as f:
             json.dump({"level": ref_level, "lmax": lmax,
+                       "n_ranks": mesh.comm.size,
                        "relative_difference": rel,
-                       "max_coefficient_difference": coeff_diff}, f, indent=2)
+                       "max_coefficient_difference": coeff_diff,
+                       "against_closed_form": against_exact}, f, indent=2)
         log(f"wrote {sidecar}")
     return rel
 
 
 def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
-          out_dir=None, full_view=True, timed=None):
-    """Run one (level, L) case and write its JSON sidecar."""
+          out_dir=None, full_view=True, timed=None, cache_phase=None):
+    """Run one (level, L) case and write its JSON sidecar.
+
+    Args:
+      ref_level: Cubed-sphere refinement level.
+      lmax: DtN truncation.
+      variant: `iterative` or `direct` preset.
+      selfp: Use the approximate-Schur `selfp` fieldsplit_1 variant.
+      probe: Dump per-invocation fieldsplit_0 residual histories.
+      out_dir: Where the sidecar goes.
+      full_view: Include the full `ksp_view` / monitor bundle.
+      timed: Override the number of timed re-solves.
+      cache_phase: `cold` or `warm`, recorded in the sidecar and its filename so
+        the two invocations of one job do not overwrite each other.
+    """
     if lmax > MAX_COUPLED_L:
         raise ValueError(
-            f"L={lmax} exceeds the coupled-solve limit L<={MAX_COUPLED_L}: the "
-            f"mixed space would have {1 + 2 * (lmax + 1) ** 2} fields and "
-            "PCFIELDSPLIT caps at 128. Use the capacitance routine for the "
-            "high-L cost question instead of this coupled-solve model.")
+            f"L={lmax} exceeds this model's ceiling of L<={MAX_COUPLED_L}. The "
+            "128-field PCFIELDSPLIT wall that used to cap it at 6 is gone "
+            "(gadopt.DtNTwoBlockSchurPC describes the two Schur blocks by index "
+            f"set), so {1 + 2 * (lmax + 1) ** 2} fields would set up fine; the "
+            "ceiling is a cost guard, since both the O(L^4) boundary assembly "
+            "and the per-process symbolic form processing grow with the mode "
+            "count. Raise MAX_COUPLED_L deliberately if that is what you want.")
     nlayers = LAYERS[ref_level]
-    # Level 7 does a single timed solve (a 512-rank solve is expensive at any L);
-    # the probe (a second full solve) defaults off there for the same reason.
-    n_timed = timed if timed is not None else (1 if ref_level >= 7 else 3)
+    # Two timed solves at level 7: the steady-state cost is what the
+    # marginal-cost-per-mode reading rests on, so it wants more than one sample
+    # even at 512 ranks. The probe (a further full solve) stays off there.
+    n_timed = timed if timed is not None else (2 if ref_level >= 7 else 3)
     if probe is None:
         probe = ref_level < 7
 
+    process_start = time.perf_counter()
+    # Stages, so -log_view attributes cost to the phase that incurred it. The
+    # first solve is its own stage because it is the only one that pays kernel
+    # generation, and lumping it in with the timed solves is what would hide
+    # the number this study exists to measure.
     setup_stage = PETSc.Log.Stage("gravity_setup")
+    first_solve_stage = PETSc.Log.Stage("gravity_first_solve")
     solve_stage = PETSc.Log.Stage("gravity_solve")
 
     mesh2d = CubedSphereMesh(RMIN, refinement_level=ref_level, degree=2)
@@ -333,15 +523,18 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
                         layer_height=(RMAX - RMIN) / nlayers)
     mesh.cartesian = False
     boundary = get_boundary_ids(mesh)
+    comm = mesh.comm
 
     V = FunctionSpace(mesh, "CG", 1)
     psi = Function(V, name="potential")
     n = 2 * (lmax + 1) ** 2
 
     log(f"level {ref_level}, L {lmax}: potential DOFs {V.dim()}, "
-        f"multipliers {n} (2 x (L+1)^2)")
+        f"multipliers {n} (2 x (L+1)^2), cache phase {cache_phase or 'unset'}")
 
-    rho = build_checkerboard_source(mesh, V, lmax)
+    t0 = time.perf_counter()
+    rho, source_params = build_checkerboard_source(mesh, V, lmax)
+    source_time = comm.allreduce(time.perf_counter() - t0, op=MPI.MAX)
 
     extra = selfp_bundle(n) if selfp else solver_bundle(n, full_view=full_view)
     dtn = SphericalDtN(lmax)
@@ -350,13 +543,23 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
     out_dir = Path(out_dir) if out_dir else Path.cwd()
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = "selfp" if selfp else variant
+    phase_suffix = f"_{cache_phase}" if cache_phase else ""
 
     def write_sidecar(summary):
-        sidecar = out_dir / f"summary_level{ref_level}_lmax{lmax}_{tag}.json"
-        if mesh.comm.rank == 0:
+        sidecar = (out_dir
+                   / f"summary_level{ref_level}_lmax{lmax}_{tag}{phase_suffix}.json")
+        if comm.rank == 0:
             with open(sidecar, "w") as f:
                 json.dump(summary, f, indent=2)
             log(f"wrote {sidecar}")
+
+    def failure_record(exc):
+        return {
+            "level": ref_level, "lmax": lmax, "variant": tag,
+            "cache_phase": cache_phase, "n_multipliers": n,
+            "potential_dofs": V.dim(), "failed": str(exc),
+            "peak_memory_gb": peak_memory_gb(comm),
+        }
 
     t0 = time.perf_counter()
     with setup_stage:
@@ -365,22 +568,26 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
             solver_parameters=variant if not selfp else None,
             solver_parameters_extra=extra,
         )
-    construct_time = time.perf_counter() - t0
+    # Max over ranks throughout: the redundant symbolic work is per-process, so
+    # a mean would understate what the job actually waits for.
+    construct_time = comm.allreduce(time.perf_counter() - t0, op=MPI.MAX)
 
-    # Warm-up solve: triggers kernel compile and PC setup so the sub-KSPs exist.
+    # First solve: the only one that pays kernel generation. On a cold cache
+    # that is TSFC form compilation plus C compilation plus the per-process
+    # symbolic work; on a warm cache the first two are cache hits and the
+    # residue against a repeat solve is the part no cache can save.
     # The selfp variant may not compose with the matfree potential block; record
     # that as data rather than crashing before the sidecar is written.
     t0 = time.perf_counter()
     try:
-        solver.solve()
+        with first_solve_stage:
+            solver.solve()
     except Exception as exc:
         log(f"solve failed for variant {tag}: {exc}")
-        write_sidecar({
-            "level": ref_level, "lmax": lmax, "variant": tag,
-            "n_multipliers": n, "failed": str(exc),
-        })
+        write_sidecar(failure_record(exc))
         return None
-    warmup_time = time.perf_counter() - t0
+    warmup_time = comm.allreduce(time.perf_counter() - t0, op=MPI.MAX)
+    cache_after_first = cache_statistics()
     outer, streams = attach_monitors(solver)
 
     outer_counts, wall_times = [], []
@@ -392,10 +599,20 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
         t0 = time.perf_counter()
         with solve_stage:
             solver.solve()
-        wall_times.append(time.perf_counter() - t0)
+        wall_times.append(comm.allreduce(time.perf_counter() - t0, op=MPI.MAX))
         outer_counts.append(outer.getIterationNumber())
         f0_finals.extend(per_invocation_finals(streams["fieldsplit_0"]))
         f1_finals.extend(per_invocation_finals(streams["fieldsplit_1"]))
+
+    # Against the closed form. This is the correctness verdict for the case, and
+    # since the source is band-limited to L and the DtN maps are exact for every
+    # mode they treat, it is discretisation error with no truncation component -
+    # so it also reads as how much of this truncation the mesh can resolve.
+    errors = analytic_error(V, psi, source_params)
+    log(f"analytic error level={ref_level} L={lmax}: relative L2 "
+        f"{errors['analytic_relative_l2']:.3e}, nodal max "
+        f"{errors['analytic_nodal_max']:.3e}, mean offset "
+        f"{errors['analytic_mean_offset']:.3e}")
 
     # Boundary spectrum readback: the solved trace coefficients per mode.
     coeffs = solver.coefficients()
@@ -435,24 +652,45 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
                 json.dump({"fieldsplit_0_residual_histories": histories}, f)
             log(f"wrote probe {probe_file} ({len(histories)} invocations)")
 
-    write_sidecar({
+    steady_time = float(np.mean(wall_times)) if wall_times else None
+    cache_stats = cache_statistics()
+    summary = {
         "level": ref_level,
         "lmax": lmax,
         "variant": tag,
+        "cache_phase": cache_phase,
         "layers": nlayers,
         "potential_dofs": V.dim(),
         "n_multipliers": n,
+        "n_fields": 1 + n,
+        "n_ranks": comm.size,
         "n_timed": n_timed,
         "outer_iterations": outer_mean,
         "fieldsplit_0_iterations_per_invocation": f0_mean,
         "fieldsplit_1_iterations_mean": f1_mean,
         "fieldsplit_1_iterations_max": f1_max,
+        # Every time below is a max over ranks, in seconds.
+        "source_time": source_time,
         "construct_time": construct_time,
         "warmup_time": warmup_time,
         "wall_times": wall_times,
+        "steady_solve_time": steady_time,
+        # The generation cost that no on-disk cache removes: what the first
+        # solve pays over and above a repeat solve of the same operator.
+        "first_solve_overhead": (warmup_time - steady_time
+                                 if steady_time is not None else None),
+        "total_process_time": comm.allreduce(
+            time.perf_counter() - process_start, op=MPI.MAX),
+        "peak_memory_gb": peak_memory_gb(comm),
         "boundary_degree_power": spectrum,
         "boundary_excitation_ok": flags,
-    })
+        "cache_stats": cache_stats,
+        "cache_stats_after_first_solve": cache_after_first,
+    }
+    summary.update(errors)
+    summary.update(cache_totals(cache_stats))
+    write_sidecar(summary)
+    return summary
 
 
 if __name__ == "__main__":
@@ -471,6 +709,9 @@ if __name__ == "__main__":
                         help="override the number of timed re-solves")
     parser.add_argument("--anchor", action="store_true",
                         help="run the direct-vs-iterative correctness anchor instead")
+    parser.add_argument("--cache-phase", choices=["cold", "warm"], default=None,
+                        help="label this invocation's kernel-cache state; the "
+                             "study runs each case twice, cold then warm")
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()
 
@@ -479,4 +720,4 @@ if __name__ == "__main__":
     else:
         model(args.level, args.lmax, variant=args.variant, selfp=args.selfp,
               probe=args.probe, out_dir=args.out_dir, full_view=args.full_view,
-              timed=args.timed)
+              timed=args.timed, cache_phase=args.cache_phase)
