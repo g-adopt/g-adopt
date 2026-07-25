@@ -53,9 +53,48 @@ from firedrake.ufl_expr import extract_unique_domain
 
 from .solver_options_manager import ConfigType, SolverConfigurationMixin
 from .spherical_harmonics import real_spherical_harmonic
-from .utility import CombinedSurfaceMeasure, INFO, ensure_constant, log_level
+from .utility import CombinedSurfaceMeasure, DEBUG, INFO, ensure_constant, log_level
 
 __all__ = ["CylindricalDtN", "SphericalDtN", "GravitySolver"]
+
+
+direct_gravity_solver_parameters = {
+    "ksp_type": "preonly",
+    "pc_type": "lu",
+    "pc_factor_mat_solver_type": "mumps",
+}
+"""Direct solve for the psi (potential) block.
+
+MUMPS LU. Exact and robust, but the sparse factors of a 3-D volume operator
+suffer fill-in that outgrows the matrix, so this is the default only in 2-D
+(and for small 3-D problems selected explicitly). See `iterative_gravity_solver_parameters`
+for the scalable alternative.
+"""
+
+iterative_gravity_solver_parameters = {
+    "ksp_type": "cg",
+    "ksp_rtol": 1e-8,
+    "ksp_max_it": 1000,
+    "pc_type": "python",
+    "pc_python_type": "gadopt.SPDAssembledPC",
+    "assembled_pc_type": "gamg",
+    "assembled_mg_levels_pc_type": "sor",
+    "assembled_pc_gamg_threshold": 0.01,
+    "assembled_pc_gamg_square_graph": 100,
+    "assembled_pc_gamg_coarse_eq_limit": 1000,
+    "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+}
+"""Iterative solve for the psi (potential) block.
+
+Conjugate gradients preconditioned by algebraic multigrid (GAMG). The Robin
+shift makes the psi block strictly SPD, so `gadopt.SPDAssembledPC` sets the
+PETSc MAT_SPD flag (CG eigen-estimates in the Chebyshev and GAMG setup) and no
+near-nullspace is needed. These are the same parameters G-ADOPT's 3-D spherical
+Stokes solver uses for its velocity block, which inverts a strictly harder SPD
+operator on the same extruded cubed-sphere meshes at production scale. AMG has
+O(N) memory with no fill-in, so it replaces MUMPS as the default psi solver in
+3-D.
+"""
 
 
 DtNMode = namedtuple("DtNMode", ["key", "expr", "lam", "norm", "scale"])
@@ -232,10 +271,19 @@ class GravitySolver(SolverConfigurationMixin):
         a mesh-conforming shell by a conditional) whose exact integration
         removes the source-representation error from convergence studies
       solver_parameters:
-        Dictionary of PETSc solver options
+        Either a complete dictionary of PETSc solver options, or the string
+        "direct"/"iterative" to select a G-ADOPT default. Omitting it (None)
+        picks the default by dimension: "direct" in 2-D, "iterative" in 3-D,
+        mirroring the Stokes solver. The two presets differ only in how the psi
+        (potential) block is inverted - MUMPS versus CG + algebraic multigrid;
+        direct does not scale to large 3-D meshes. Passing a full dictionary
+        means you own the description of the two Schur blocks that the class
+        otherwise sets up.
       solver_parameters_extra:
         Dictionary of PETSc solver options used to update the default G-ADOPT
-        options
+        options. The safe way to tweak the default (e.g. override only the psi
+        block, via a `{"dtn": {"fieldsplit_0": ...}}` entry) while keeping the
+        Schur structure.
 
     ### Valid keys for boundary conditions
     | Condition |  Type  |                    Description                     |
@@ -267,7 +315,7 @@ class GravitySolver(SolverConfigurationMixin):
         gravitational_constant: float | Constant = 1.0,
         quad_degree: int | None = None,
         source_quad_degree: int | None = None,
-        solver_parameters: ConfigType | None = None,
+        solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
     ) -> None:
         self.solution = solution
@@ -457,16 +505,32 @@ class GravitySolver(SolverConfigurationMixin):
 
     def set_solver_options(
         self,
-        solver_preset: ConfigType | None,
+        solver_preset: ConfigType | str | None,
         solver_extras: ConfigType | None,
     ) -> None:
         """Sets PETSc solver options.
 
-        Matrices with R-space blocks cannot be assembled monolithically, so
-        with DtN multipliers present the default is a full Schur complement
-        eliminating onto the R fields: the PDE block is assembled and
-        factorised by MUMPS, and the tiny dense multiplier Schur complement is
-        handled by GMRES. Without multipliers a direct solve is used.
+        The psi (potential) block is the only thing that varies between the two
+        presets. Matrices with R-space blocks cannot be assembled
+        monolithically, so with DtN multipliers present both presets share a
+        full Schur complement eliminating onto the R fields: the psi block is
+        assembled and inverted (directly by MUMPS, or iteratively by CG + AMG),
+        and the tiny dense multiplier Schur complement is handled by GMRES.
+        Without multipliers the psi solver is applied to the whole assembled
+        system.
+
+        The split itself is set up by `gadopt.DtNTwoBlockSchurPC`, which
+        describes the two blocks to PETSc as index sets rather than as lists of
+        field numbers; that is what keeps the solve working past the 128-field
+        limit PETSc imposes on field enumeration, which one scalar R space per
+        angular mode otherwise crosses at a spherical truncation of L = 7 on a
+        two-boundary shell (L = 11 with a single DtN boundary). Its sub-solvers
+        are configured under the `dtn` entry.
+
+        A full solver-options dictionary is used verbatim. The strings "direct"
+        and "iterative" select a G-ADOPT preset; None picks one by dimension
+        (direct in 2-D, iterative in 3-D), mirroring the Stokes solver, so the
+        scalable path is the default at production scale.
         """
         if isinstance(solver_preset, Mapping):
             if (self.n_multipliers > 0
@@ -481,43 +545,107 @@ class GravitySolver(SolverConfigurationMixin):
             self.register_update_callback(self.set_solver)
             return
 
-        lu_parameters = {
-            "ksp_type": "preonly",
-            "pc_type": "lu",
-            "pc_factor_mat_solver_type": "mumps",
-        }
+        if solver_preset is not None and solver_preset not in ("direct", "iterative"):
+            raise ValueError(
+                f"solver_parameters must be a dictionary or one of 'direct', "
+                f"'iterative', got {solver_preset!r}.")
+        if solver_preset is None:
+            solver_preset = (
+                "direct" if self.mesh.topological_dimension == 2 else "iterative")
+
         if self.n_multipliers == 0:
-            self.add_to_solver_config(
-                {"mat_type": "aij", "snes_type": "ksponly", **lu_parameters})
+            # No DtN multipliers: the psi solver acts on the whole assembled
+            # system. GAMG wants the plain (unprefixed) options here, since
+            # there is no fieldsplit_0 AssembledPC to hand them to. This also
+            # means no SPDAssembledPC and hence no MAT_SPD flag - the eigen-
+            # estimates fall back to GMRES; benign, and not worth the
+            # AssembledPC indirection on a monolithic aij solve. Unlike the
+            # multiplier path there is no outer Krylov cleaning up the psi
+            # solve, so ksp_rtol here IS the final solution accuracy (the same
+            # situation as the Stokes preonly-outer path): tighten it if a
+            # no-multiplier 3-D config ever needs gradient-quality output.
+            base = {"mat_type": "aij", "snes_type": "ksponly"}
+            if solver_preset == "direct":
+                self.add_to_solver_config({**base, **direct_gravity_solver_parameters})
+            else:
+                self.add_to_solver_config({
+                    **base,
+                    "ksp_type": "cg",
+                    "ksp_rtol": 1e-8,
+                    "ksp_max_it": 1000,
+                    "pc_type": "gamg",
+                    "mg_levels_pc_type": "sor",
+                    "pc_gamg_threshold": 0.01,
+                    "pc_gamg_square_graph": 100,
+                    "pc_gamg_coarse_eq_limit": 1000,
+                    "pc_gamg_mis_k_minimum_degree_ordering": True,
+                })
+                if INFO >= log_level:
+                    self.add_to_solver_config({"ksp_converged_reason": None})
         else:
-            i_R = self._multiplier_offset
+            if solver_preset == "direct":
+                fieldsplit_0 = {
+                    "ksp_type": "preonly",
+                    "pc_type": "python",
+                    "pc_python_type": "firedrake.AssembledPC",
+                    "assembled": dict(direct_gravity_solver_parameters),
+                }
+            else:
+                fieldsplit_0 = dict(iterative_gravity_solver_parameters)
             self.add_to_solver_config({
                 "mat_type": "matfree",
                 "snes_type": "ksponly",
                 "ksp_type": "fgmres",
                 "ksp_rtol": 1e-11,
-                "pc_type": "fieldsplit",
-                "pc_fieldsplit_type": "schur",
-                "pc_fieldsplit_schur_fact_type": "full",
-                "pc_fieldsplit_0_fields": ",".join(map(str, range(i_R))),
-                "pc_fieldsplit_1_fields": ",".join(
-                    map(str, range(i_R, i_R + self.n_multipliers))),
-                "fieldsplit_0": {
-                    "ksp_type": "preonly",
-                    "pc_type": "python",
-                    "pc_python_type": "firedrake.AssembledPC",
-                    "assembled": lu_parameters,
-                },
-                "fieldsplit_1": {
-                    "ksp_type": "gmres",
-                    "pc_type": "none",
+                "pc_type": "python",
+                "pc_python_type": "gadopt.DtNTwoBlockSchurPC",
+                "dtn": {
+                    "pc_fieldsplit_schur_fact_type": "full",
+                    "fieldsplit_0": fieldsplit_0,
+                    "fieldsplit_1": {
+                        "ksp_type": "gmres",
+                        "ksp_rtol": 1e-6,
+                        "pc_type": "none",
+                    },
                 },
             })
             if INFO >= log_level:
                 self.add_to_solver_config({"ksp_converged_reason": None})
+            if DEBUG >= log_level:
+                self.add_to_solver_config({
+                    "dtn": {
+                        "fieldsplit_0": {"ksp_converged_reason": None},
+                        "fieldsplit_1": {"ksp_converged_reason": None},
+                    },
+                })
 
         self.add_to_solver_config(solver_extras)
+        self.warn_on_stale_fieldsplit_options()
         self.register_update_callback(self.set_solver)
+
+    def warn_on_stale_fieldsplit_options(self) -> None:
+        """Warns about fieldsplit options left at the top level of the preset.
+
+        The two Schur blocks used to be described to PETSc by field number, so
+        their sub-solvers sat directly under the solver options. They now live
+        inside `gadopt.DtNTwoBlockSchurPC` under its own `dtn` prefix, and a
+        `fieldsplit_0` entry passed at the top level of
+        `solver_parameters_extra` silently stops matching anything rather than
+        failing - the one way this change can bite an existing script.
+        """
+        if self.n_multipliers == 0:
+            return
+        stale = sorted(
+            key for key in self.solver_parameters
+            if key.startswith(("fieldsplit_", "pc_fieldsplit_")))
+        if stale:
+            warn(
+                f"Solver options {stale} sit at the top level, where the DtN "
+                "preset no longer reads them: the two Schur blocks are now "
+                "described by index sets inside gadopt.DtNTwoBlockSchurPC and "
+                "its sub-solvers live under the 'dtn' entry. Pass them as "
+                "solver_parameters_extra={'dtn': {'fieldsplit_0': ...}} "
+                "instead.")
 
     def set_solver(self) -> None:
         """Sets up the Firedrake variational problem and solver."""
