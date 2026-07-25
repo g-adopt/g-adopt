@@ -111,9 +111,26 @@ WALLTIME_BY_L = {
 }
 
 
+# Level 7 gets half again as long. Not because the arithmetic per core grows -
+# the ladder holds that fixed - but because communication does. At level 6 on 64
+# ranks, SFReduce and SFBcast inside the assembly parloops already account for
+# roughly half the solve time, against 1.5% at level 5 and nothing at level 4,
+# and the Real-field global reductions add a further term that grows with the
+# truncation. Level 7 runs eight times as many ranks over eight nodes, so its
+# solves are expected to be slower than the weak-scaling ideal, and a walltime
+# set from the lower levels would be set from the wrong regime.
+WALLTIME_MULTIPLIER = {7: 1.5}
+
+
 def walltime(level, lmax):
     """Walltime for one case, both phases included."""
-    return WALLTIME_BY_L[lmax]
+    base = WALLTIME_BY_L[lmax]
+    factor = WALLTIME_MULTIPLIER.get(level, 1.0)
+    if factor == 1.0:
+        return base
+    hours, minutes, seconds = (int(p) for p in base.split(":"))
+    total = int((hours * 3600 + minutes * 60 + seconds) * factor)
+    return "%02d:%02d:%02d" % (total // 3600, (total % 3600) // 60, total % 60)
 
 
 def resources(level):
