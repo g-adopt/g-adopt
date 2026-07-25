@@ -44,6 +44,7 @@ import platform
 import resource
 import sys
 import time
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -576,20 +577,50 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
             log(f"wrote {sidecar}")
 
     def failure_record(exc):
+        # PETSc reports any exception raised inside a Python callback - a custom
+        # preconditioner, say - as a bare "error code 101" and hides the real
+        # message in __cause__. Recording only str(exc) therefore turns a
+        # diagnosable failure into a mystery, which it duly did the first time a
+        # case failed here. Walk the whole chain and keep the deepest traceback.
+        chain, seen, err = [], set(), exc
+        while err is not None and id(err) not in seen:
+            seen.add(id(err))
+            chain.append(f"{type(err).__name__}: {err}")
+            err = err.__cause__ or err.__context__
+        deepest = exc
+        while (deepest.__cause__ or deepest.__context__) is not None:
+            nxt = deepest.__cause__ or deepest.__context__
+            if id(nxt) in (id(deepest),):
+                break
+            deepest = nxt
         return {
             "level": ref_level, "lmax": lmax, "variant": tag,
             "cache_phase": cache_phase, "n_multipliers": n,
-            "potential_dofs": V.dim(), "failed": str(exc),
+            "n_fields": 1 + n, "potential_dofs": V.dim(), "n_ranks": comm.size,
+            "failed": str(exc),
+            "failure_chain": chain,
+            "failure_traceback": "".join(traceback.format_exception(
+                type(deepest), deepest, deepest.__traceback__)),
             "peak_memory_gb": peak_memory_gb(comm),
+            "cache_stats": cache_statistics(),
+            "cache_file_counts": cache_file_counts(comm),
         }
 
     t0 = time.perf_counter()
-    with setup_stage:
-        solver = GravitySolver(
-            psi, rho, bcs=bcs,
-            solver_parameters=variant if not selfp else None,
-            solver_parameters_extra=extra,
-        )
+    try:
+        with setup_stage:
+            solver = GravitySolver(
+                psi, rho, bcs=bcs,
+                solver_parameters=variant if not selfp else None,
+                solver_parameters_extra=extra,
+            )
+    except Exception as exc:
+        # A failure here leaves no sidecar at all unless it is caught, and at
+        # high truncation construction is where minutes of symbolic work live,
+        # so losing the record of how far it got is expensive.
+        log(f"construction failed for variant {tag}: {exc}")
+        write_sidecar(failure_record(exc))
+        return None
     # Max over ranks throughout: the redundant symbolic work is per-process, so
     # a mean would understate what the job actually waits for.
     construct_time = comm.allreduce(time.perf_counter() - t0, op=MPI.MAX)
