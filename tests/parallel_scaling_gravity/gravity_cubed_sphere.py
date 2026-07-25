@@ -39,6 +39,7 @@ Run locally against this worktree with, e.g.
 
 import argparse
 import json
+import os
 import platform
 import resource
 import sys
@@ -357,6 +358,27 @@ def cache_statistics():
     return stats
 
 
+def cache_file_counts(comm):
+    """Files sitting in the kernel cache directories, maximised over ranks.
+
+    A second, independent reading of the same fact the hit/miss counters
+    report, arrived at without going through PyOP2 at all: a genuinely cold
+    phase starts with empty directories and a warm one does not. Worth the six
+    lines, because every instrument in this study that was trusted without a
+    second path to the same number has at some point turned out to be measuring
+    nothing.
+    """
+    counts = {}
+    for label, var in (("pyop2", "PYOP2_CACHE_DIR"),
+                       ("tsfc", "FIREDRAKE_TSFC_KERNEL_CACHE_DIR"),
+                       ("xdg", "XDG_CACHE_HOME")):
+        path = os.environ.get(var)
+        local = (sum(1 for p in Path(path).rglob("*") if p.is_file())
+                 if path and Path(path).is_dir() else 0)
+        counts[label] = int(comm.allreduce(local, op=MPI.MAX))
+    return counts
+
+
 def cache_totals(stats):
     """Aggregate hit and miss counts over the disk-backed caches only.
 
@@ -647,7 +669,8 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
         solver.solve()
         histories = split_invocations(streams["fieldsplit_0"])
         if mesh.comm.rank == 0:
-            probe_file = out_dir / f"probe_level{ref_level}_lmax{lmax}_{tag}.json"
+            probe_file = (out_dir
+                          / f"probe_level{ref_level}_lmax{lmax}_{tag}{phase_suffix}.json")
             with open(probe_file, "w") as f:
                 json.dump({"fieldsplit_0_residual_histories": histories}, f)
             log(f"wrote probe {probe_file} ({len(histories)} invocations)")
@@ -686,6 +709,7 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
         "boundary_excitation_ok": flags,
         "cache_stats": cache_stats,
         "cache_stats_after_first_solve": cache_after_first,
+        "cache_file_counts": cache_file_counts(comm),
     }
     summary.update(errors)
     summary.update(cache_totals(cache_stats))

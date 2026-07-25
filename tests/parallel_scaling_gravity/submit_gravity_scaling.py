@@ -183,14 +183,13 @@ for PHASE in cold warm; do
         {level} --lmax {lmax} --cache-phase $PHASE {extra} \\
         --out-dir {casedir} > {casedir}/run_$PHASE.out 2> {casedir}/run_$PHASE.err
     echo "=== phase $PHASE exit $? at $(date) ==="
-    # How many cache files each node is holding, as a check on the counters in
-    # the sidecar that does not go through PyOP2 at all. pbsdsh runs one task
-    # per node outside the container.
-    pbsdsh -- /bin/bash -c \\
-        'echo "$(hostname) files: $(find $PBS_JOBFS/pyop2 $PBS_JOBFS/tsfc \
--type f 2>/dev/null | wc -l)"' \\
-        | sort -u | sed "s/^/$PHASE /" >> {casedir}/cache_files.txt
 done
+# The independent check on the cache counters - how many files are actually
+# sitting in each cache directory - is taken inside the model, per rank and
+# maximised, and lands in the sidecar as cache_file_counts. Doing it here with
+# pbsdsh looked cheaper and produced an empty file with no error, which is the
+# characteristic failure of this whole area: an instrument that reports nothing
+# while exiting zero.
 """
 
 
