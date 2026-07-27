@@ -449,6 +449,18 @@ class GravitySolver(SolverConfigurationMixin):
         options. The safe way to tweak the default (e.g. override only the psi
         block, via a `{"dtn": {"fieldsplit_0": ...}}` entry) while keeping the
         Schur structure.
+      dtn_representation:
+        How the DtN terms are represented. "multiplier" (default) gives every
+        treated mode a scalar Real unknown constrained by a row of a mixed
+        system, which keeps every term in plain UFL. "lowrank" eliminates those
+        multipliers by hand, leaving one scalar space and a rank-n update to
+        the Robin-shifted stiffness applied in factored form; it solves the
+        same discrete system - measured agreement 5e-15 on potentials and
+        3e-15 on trace coefficients - and is dramatically faster at any
+        appreciable truncation, 480x on the first solve and 122x on a repeat
+        solve at 162 modes. Its derivative is hand-written in
+        `gadopt.dtn_adjoint` rather than taped; the portable adjoint tests pass
+        on it at unweakened tolerances. See `NOTES/bench/STEP7-VERDICT.md`.
 
     ### Valid keys for boundary conditions
     | Condition |  Type  |                    Description                     |
