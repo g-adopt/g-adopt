@@ -131,6 +131,21 @@ without the `AssembledPC` indirection because here `A` is already an assembled
 `aij` matrix and PETSc can be handed it directly as `Pmat`. `ksp_rtol` matches
 the multiplier path's OUTER tolerance, not its inner one: there is no outer
 Krylov cleaning up after this solve, so this rtol is the solution accuracy.
+
+Note when comparing iteration counts against the multiplier path: its
+`fieldsplit_0` runs at `ksp_rtol` 1e-8, so a comparison against this preset's
+1e-11 is not like-for-like. Pinned equal, both paths take 8 CG iterations.
+
+PETSc will report
+
+    Option left: name:-Gravity_lowrank_mg_levels_pc_type value: sor
+
+and it is a **false alarm**: the option is in effect. Interrogating the
+preconditioner directly shows the level smoother is `chebyshev/sor` as
+requested, and forcing anything else makes it worse (11 CG iterations as
+shipped, 15 with `chebyshev/jacobi`, 15 with `richardson/sor`). A genuinely
+unused option looks identical to this one, and both natural responses to the
+warning - "fixing" it, or discounting a comparison because of it - are wrong.
 """
 
 
@@ -1051,14 +1066,31 @@ class GravitySolver(SolverConfigurationMixin):
         `rho` and the sheet densities may have changed since construction;
         `A + B` cannot have, since every coefficient in it is geometry.
 
-        Strong conditions are lifted by hand. `assemble(L, bcs=...)` sets the
-        constrained entries but does **not** subtract the coupling of the
-        prescribed values into the free rows, so on its own it solves a
-        different problem - measured, a relative error of exactly 1.0 against
-        Firedrake's own linear solver on a plain Dirichlet Poisson problem,
-        which is what `LinearVariationalSolver` does internally and this path
-        cannot use. The lifting needs `A` only: the columns of `C` are zeroed
-        at constrained degrees of freedom, so `B` applied to a field supported
+        Strong conditions are lifted by hand, and **both** halves of that are
+        necessary. `assemble(L, bcs=...)` *zeroes* the constrained entries -
+        the homogeneous convention - rather than setting them to the
+        prescribed values, so the write-back below is not redundant tidying:
+        it is what makes the answer right. And it subtracts none of the
+        coupling of the prescribed values into the free rows. Measured against
+        Firedrake's own solver on a plain Dirichlet Poisson problem with no
+        DtN anywhere:
+
+            raw KSP, b = assemble(L, bcs=bcs)   relative error 1.0
+            fd.solve(A, w, b), same b           relative error 3.0e-16
+            the construction below              relative error 4.4e-16
+
+        Both the lifting and the value-setting live in Firedrake's `solve`
+        wrapper rather than in assembly. **Any Firedrake code that drives a
+        KSP directly has to do both by hand** - which is why the ordinary
+        idiom works everywhere else in this codebase and fails only here.
+
+        `lift` must be the ZERO EXTENSION of the boundary data, not the data
+        function itself: `action(a, g)` with `g` nonzero in the interior
+        over-subtracts by the interior block and gives a relative error of 1.0
+        again. The wrong version looks more natural.
+
+        The lifting needs `A` only: the columns of `C` are zeroed at
+        constrained degrees of freedom, so `B` applied to a field supported
         only there is zero.
         """
         rhs_form = self.rhs_form if rhs_form is None else rhs_form

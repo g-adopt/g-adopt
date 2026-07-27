@@ -41,7 +41,7 @@ from test_gravity_adjoint import (  # noqa: F401  (clean_tape is an autouse fixt
     real_scalar, rho_control_2d, rho_control2_2d, rho_control_3d,
     rho_control2_3d, rho_perturb_2d, rho_perturb_3d, tape_forward,
     taylor_first_order_ladder)
-from test_gravity_solver import annulus_mesh, shell_mesh_3d
+from test_gravity_solver import RMAX, annulus_mesh, shell_mesh_3d
 
 
 @pytest.fixture(scope="module")
@@ -374,3 +374,194 @@ def test_taylor_rho_submesh(submesh_pair):
     assert_replay_b2(rf, forward_submesh, m2, marked)
     assert np.isfinite(np.max(np.abs(rf.derivative().dat.data_ro)))
     assert_taylor_with_guards(rf, m, h, J)
+
+
+# ---------------------------------------------------------------------------
+# The rest of the portable subset
+# ---------------------------------------------------------------------------
+def test_reduced_functional_replay(mesh_2d):
+    """Replay at a new control equals a fresh solve there, and returns.
+
+    Also documents the same gap the multiplier path has: replay bypasses the
+    Python-level `check_net_mass`, so a net-mass control replays without
+    raising although a direct solve raises.
+    """
+    with stop_annotating():
+        m = rho_control_2d(mesh_2d)
+        m2 = rho_control2_2d(mesh_2d)
+
+    J, _, rf = tape_forward(forward_rho_2d, m)
+    assert abs(float(rf(m)) - float(J)) <= 1e-9 * abs(float(J))
+
+    with stop_annotating():
+        direct, _ = forward_rho_2d(m2)
+    value = float(rf(m2))
+    relative = abs(value - float(direct)) / abs(float(direct))
+    print(f"    [replay] rf(m2) {value:.8e} direct {float(direct):.8e} "
+          f"rel {relative:.2e}")
+    assert relative <= 1e-9
+
+    with stop_annotating():
+        Q = fd.FunctionSpace(mesh_2d, "CG", 1)
+        X = fd.SpatialCoordinate(mesh_2d)
+        r = fd.sqrt(fd.dot(X, X))
+        with_mass = fd.Function(Q).interpolate(fd.exp(-(((r - 1.7) / 0.15) ** 2)))
+    assert np.isfinite(float(rf(with_mass)))
+    with pytest.raises(NotImplementedError, match="Net mass"):
+        with stop_annotating():
+            forward_rho_2d(with_mass)
+
+
+def test_solution_assign_preserves_tape(mesh_2d):
+    """`solver.solution` and `mixed_solution` give the same gradient.
+
+    On the fast path `mixed_solution` is a plain Function on the potential
+    space rather than a mixed one, so `subfunctions[0]` is the object itself
+    and the extraction chain is shorter - which is exactly why it is worth
+    checking that the chain still carries the derivative.
+    """
+    with stop_annotating():
+        m = rho_control_2d(mesh_2d)
+
+    tape = get_working_tape()
+    tape.clear_tape()
+    continue_annotation()
+    with stop_annotating():
+        psi = fd.Function(fd.FunctionSpace(mesh_2d, "CG", 1))
+        solver = GravitySolver(
+            psi, m,
+            bcs={"top": {"dtn": CylindricalDtN(M=2)},
+                 "bottom": {"dtn": CylindricalDtN(M=2)}}, **LOW)
+    solver.solve()
+    J_solution = fd.assemble(solver.solution ** 2 * fd.dx)
+    J_mixed = fd.assemble(solver.mixed_solution.subfunctions[0] ** 2 * fd.dx)
+    pause_annotation()
+
+    g_solution = ReducedFunctional(J_solution, Control(m)).derivative()
+    g_mixed = ReducedFunctional(J_mixed, Control(m)).derivative()
+    assert abs(float(J_solution) - float(J_mixed)) <= 1e-14 * abs(float(J_mixed))
+    denominator = np.max(np.abs(g_mixed.dat.data_ro))
+    relative = np.max(np.abs(g_solution.dat.data_ro - g_mixed.dat.data_ro)) / denominator
+    print(f"    [assign] grad rel {relative:.3e}")
+    assert relative <= 1e-14
+
+
+def test_taylor_monopole_constraint_row_3d(mesh_3d):
+    """The degenerate `L = 0` exterior corner, which is a better test here.
+
+    With `alpha = 1` and `lam_0 = 1/R`, the weight `(lam_0 - alpha/R)` is
+    **exactly zero**, so on this path the monopole contributes nothing to `B`
+    at all and `c00` is a pure linear read-off of the potential. The test is
+    therefore that a gradient flows correctly through a trace coefficient whose
+    mode has zero weight in the operator - a different and slightly sharper
+    question than the multiplier path's version of it, which is about a
+    constraint row with a zero feedback row.
+    """
+    with stop_annotating():
+        Q = fd.FunctionSpace(mesh_3d, "CG", 1)
+        X = fd.SpatialCoordinate(mesh_3d)
+        r = fd.sqrt(fd.dot(X, X))
+        m = fd.Function(Q).interpolate(fd.exp(-(((r - 1.7) / 0.15) ** 2)))
+        h = fd.Function(Q).interpolate(fd.exp(-(((r - 1.6) / 0.2) ** 2)))
+
+    def forward(m_rho):
+        mesh = m_rho.function_space().mesh()
+        with stop_annotating():
+            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+            solver = GravitySolver(psi, m_rho,
+                                   bcs={"top": {"dtn": SphericalDtN(L=0)}}, **LOW)
+        solver.solve()
+        # The weight really is zero, which is the premise of this test.
+        assert abs(float(solver.mode_rows[0].weights[0])) < 1e-14
+        c = fd.assemble(solver.solution * fd.Constant(1.0) * fd.dx)
+        return c ** 2, solver
+
+    J, _, rf = tape_forward(forward, m)
+    assert_replay_b1(rf, m, J)
+    print(f"    [L=0 corner] J {float(J):.6e}")
+    assert_taylor_with_guards(rf, m, h, J)
+
+
+def test_gradient_matches_closed_form_sheet_2d():
+    """Physics-pinned: `dc/ds = 2 pi G a / m` for a sheet at radius `a`.
+
+    The only test here with an independent closed form behind the *value* of a
+    derivative rather than only its convergence rate, and it uses the trace
+    coefficient rather than an energy, so it pins the recovery expression too.
+    """
+    m_mode, a = 2, RMAX
+    mesh = annulus_mesh(n_azimuthal=192, dr=0.1)
+    with stop_annotating():
+        s = real_scalar(mesh, 1.0)
+        hs = real_scalar(mesh, 1.0)
+
+    tape = get_working_tape()
+    tape.clear_tape()
+    continue_annotation()
+    with stop_annotating():
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
+        X = fd.SpatialCoordinate(mesh)
+        phi = fd.atan2(X[1], X[0])
+        solver = GravitySolver(
+            psi, 0.0,
+            bcs={"top": {"dtn": CylindricalDtN(M=4), "sigma": s * fd.cos(m_mode * phi)},
+                 "bottom": {"dtn": CylindricalDtN(M=4)}}, **LOW)
+    solver.solve()
+    _, R = solver.boundary_geometry["top"]
+    c = fd.assemble(solver.solution * fd.cos(m_mode * phi) * solver.ds("top")) / (np.pi * R)
+    J = c ** 2
+    pause_annotation()
+
+    dcds = hs._ad_dot(ReducedFunctional(c, Control(s)).derivative())
+    analytic = 2 * np.pi * a / m_mode
+    relative = abs(dcds - analytic) / abs(analytic)
+    print(f"    [closed form] dc/ds {dcds:.6f} vs 2 pi a/m {analytic:.6f} "
+          f"rel {relative:.3e}")
+    assert relative <= 1e-3
+    # The nearest wrong closed form is O(1) away and must be excluded.
+    assert abs(dcds - 2 * np.pi * a / (m_mode + 1)) / abs(analytic) > 0.1
+
+    assert_taylor_with_guards(ReducedFunctional(J, Control(s)), s, hs, J)
+
+
+def test_taylor_at_a_truncation_the_multiplier_path_cannot_reach():
+    """The replacement for the field-enumeration-wall test.
+
+    The multiplier path's version of this exists because PETSc refuses to
+    enumerate more than 128 sub-fields, and it demonstrates that the gradient
+    survives past that wall. The wall does not exist here - there is one field
+    - so the index-set reasoning does not port. What ports is the *purpose*:
+    that the derivative exists at a truncation the shipped default solver
+    cannot practically reach, which is the capability this whole path is for.
+
+    `M = 35` gives 141 modes. Its own docstring records that the multiplier
+    version costs ~40 s of per-process symbolic form processing that no cache
+    can remove; on this path that term is gone, so this test is cheap and
+    there is no cost argument for omitting it.
+    """
+    mesh = annulus_mesh(n_azimuthal=96, dr=0.5)
+    with stop_annotating():
+        m = rho_control_2d(mesh)
+        h = rho_perturb_2d(mesh)
+
+    def forward(m_rho):
+        with stop_annotating():
+            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+            solver = GravitySolver(
+                psi, m_rho,
+                bcs={"top": {"dtn": CylindricalDtN(M=35)},
+                     "bottom": {"dtn": CylindricalDtN(M=35)}},
+                solver_parameters="iterative", **LOW)
+        solver.solve()
+        return fd.assemble(solver.solution ** 2 * fd.dx), solver
+
+    J, solver, rf = tape_forward(forward, m)
+    # Counted off the objects, never from a formula for the truncation.
+    n_modes = len(solver._multiplier_keys)
+    assert n_modes == 141
+    assert solver.n_multipliers == 0  # no fields to enumerate at all
+    assert_replay_b1(rf, m, J)
+    stats = assert_taylor_with_guards(rf, m, h, J)
+    print(f"    [past the wall] {n_modes} modes, rate {stats['rate']:.4f}, "
+          f"control {stats['rate0']:.4f}")
+    assert np.max(np.abs(rf.derivative().dat.data_ro)) > 0.0

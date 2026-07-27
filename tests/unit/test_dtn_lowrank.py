@@ -213,6 +213,7 @@ def test_recovered_coefficients_match_the_solver(geometry, annulus, shell):
 
     comm = mesh.comm
     worst_correct = worst_wrong = 0.0
+    worst_ratio = area_ratio = None
     for bc_id in ("top", "bottom"):
         side, radius = solver.boundary_geometry[bc_id]
         rows = rows_for(solver, bc_id)
@@ -225,16 +226,67 @@ def test_recovered_coefficients_match_the_solver(geometry, annulus, shell):
         wrong = np.array(comm.allreduce(
             rows.rows @ psi_local[rows.dofs]))
         modes = dict(solver.dtn_boundaries)[bc_id].modes(side, radius, solver.X)
+        analytic = (2 * np.pi * radius if mesh.geometric_dimension == 2
+                    else 4 * np.pi * radius ** 2)
+        area_ratio = rows.area / analytic
         for key, value, raw, mode in zip(rows.keys, recovered, wrong, modes):
             reference = solved[bc_id][key]
             worst_correct = max(worst_correct, abs(value - reference))
             worst_wrong = max(worst_wrong, abs(raw / mode.norm - reference))
+            # Ratio of the two MEASURED recoveries, not of their metadata:
+            # `value` comes through `rows.recovery`, `raw / mode.norm` does
+            # not, so this tests that `recovery` really is 1/(scale_k * A_h).
+            # Computed from the metadata instead it would be the tautology
+            # scale_k = norm_k / |boundary|_analytic, which is a different
+            # test and is `test_scale_matches_the_descriptors`.
+            if abs(value) > 1e-8:
+                ratio = (raw / mode.norm) / value
+                if (worst_ratio is None
+                        or abs(ratio - area_ratio) > abs(worst_ratio - area_ratio)):
+                    worst_ratio = ratio
 
     print(f"    [{geometry}] /(scale*A_h) {worst_correct:.3e}   "
-          f"/norm_k {worst_wrong:.3e}")
+          f"/norm_k {worst_wrong:.3e}   ratio {worst_ratio:.6f} vs "
+          f"A_h/A_analytic {area_ratio:.6f}")
     assert worst_correct <= 1e-12
-    # The wrong denominator must be visibly wrong, or this test proves nothing.
-    assert worst_wrong >= 1e3 * max(worst_correct, 1e-16)
+
+    # The negative control asserts the MECHANISM, not the magnitude. An
+    # assertion that `/norm_k` misses by some large factor is mesh-fragile:
+    # measured on this 2-D configuration at n_azimuthal 96 / 192 / 384 the
+    # ratio of wrong to correct is 3971 / 58 / 0.8, so it fails at one
+    # refinement and is vacuous at two - and it fails in the direction that
+    # looks like an improvement, so the obvious repair is to lower the
+    # threshold, which removes the guard.
+    #
+    # The two denominators differ by exactly `scale_k * A_h / norm_k =
+    # A_h / |boundary|_analytic`, so asserting THAT identity is
+    # mesh-independent and says more: it confirms the discrepancy really is
+    # the discrete-versus-analytic boundary measure rather than merely that
+    # it is large.
+    assert worst_ratio is not None, "no coefficient large enough to form a ratio"
+    # The discriminating power of this check is exactly the mesh's discrete
+    # area error, `|A_h/A_analytic - 1|`, because that is the whole difference
+    # between the two formulas. So the tolerance is scaled to it rather than
+    # fixed: a tenth of the deviation catches the wrong denominator, and on a
+    # mesh fine enough that the deviation reaches round-off the check becomes
+    # honestly uninformative instead of falsely reassuring.
+    deviation = abs(area_ratio - 1.0)
+    print(f"    [{geometry}] A_h/A_analytic - 1 = {deviation:.3e} "
+          f"(the discriminating power of the ratio check)")
+    if deviation > 1e-12:
+        assert abs(worst_ratio - area_ratio) <= 0.1 * deviation
+    else:
+        pytest.skip(
+            f"discrete area error {deviation:.2e} is at round-off, so the two "
+            "denominators are numerically indistinguishable on this mesh - a "
+            "property of the problem, not a gap in the suite")
+
+    # On a fine 2-D mesh no test can separate the two denominators, because
+    # they genuinely converge to each other - a property of the problem, not a
+    # gap in the suite. The 3-D arm is the load-bearing one: a degree-2 cubed
+    # sphere's area error falls slowly, so there the two stay far apart.
+    if geometry == "3d":
+        assert worst_wrong >= 1e3 * max(worst_correct, 1e-16)
 
 
 def test_scale_matches_the_descriptors(annulus, shell):

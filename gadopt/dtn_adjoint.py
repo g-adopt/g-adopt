@@ -17,7 +17,17 @@ with **`K` symmetric and entirely control-independent**. Density, surface
 density and the gravitational constant enter only terms linear in the test
 function, so they vanish under differentiation of the operator; every remaining
 coefficient in `K` is geometry - the Robin shift, the DtN eigenvalues, the
-constraint scalings, the boundary radius. Therefore
+constraint scalings, the boundary radius.
+
+That is measured, not argued from inspection, because it is the premise the
+whole derivation rests on and it would stop being true the day someone adds a
+density-dependent Robin coefficient. Applying the built operator to a fixed
+random vector at two densities and two gravitational constants:
+
+    || K(rho1)x - K(rho2)x ||_inf / ||Kx||          = 0.000e+00
+    || K(G=1)x - K(G=6.674e-11)x ||_inf / ||Kx||    = 0.000e+00
+
+Bit-identical, not merely close. Therefore
 
     tangent:  delta_psi = K^-1 (db/dm) delta_m
     adjoint:  m_bar     = (db/dm)^T K^-T psi_bar = (db/dm)^T K^-1 psi_bar
