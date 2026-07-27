@@ -447,3 +447,68 @@ def test_parallel_coefficients_are_rank_consistent(annulus):
         for bc_id in local:
             for key in local[bc_id]:
                 assert local[bc_id][key] == other[bc_id][key]
+
+
+# ---------------------------------------------------------------------------
+# Cross-mesh: density on a Submesh, potential on the parent
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def submesh_pair():
+    mesh = fd.UnitDiskMesh(refinement_level=3)
+    X = fd.SpatialCoordinate(mesh)
+    r = fd.sqrt(fd.dot(X, X))
+    DG0 = fd.FunctionSpace(mesh, "DG", 0)
+    indicator = fd.Function(DG0).interpolate(fd.conditional(r < 0.55, 1.0, 0.0))
+    marked = fd.RelabeledMesh(mesh, [indicator], [99])
+    return marked, fd.Submesh(marked, marked.topological_dimension, 99)
+
+
+def test_submesh_parity_and_the_mixed_space_disappearing(submesh_pair):
+    """The cross-mesh configuration, and the structural claim behind it.
+
+    The mixed space exists on the multiplier path for two reasons: one Real
+    field per mode, and a DG0 dummy whose only job is to make Firedrake set up
+    the cross-mesh entity maps, needed because the *bilinear* form has
+    arguments on two meshes. With the multipliers eliminated there is no
+    bilinear form spanning two meshes at all - only the linear source term
+    `4 pi G rho v dx` with `rho` on the submesh and `v` on the parent - so both
+    reasons go away together.
+
+    That is asserted rather than assumed, because it is the part of the plan
+    that was predicted from reading rather than measured: the multiplier path
+    carries 8 sub-spaces here (psi + dummy + 6 multipliers) and the fast path
+    carries one.
+    """
+    marked, submesh = submesh_pair
+    Xs = fd.SpatialCoordinate(submesh)
+    phis = fd.atan2(Xs[1], Xs[0])
+    rho = fd.Function(fd.FunctionSpace(submesh, "DG", 0)).interpolate(
+        fd.cos(2 * phis))
+
+    solvers, potentials = {}, {}
+    for representation in ("multiplier", "lowrank"):
+        psi = fd.Function(fd.FunctionSpace(marked, "CG", 2))
+        solver = GravitySolver(psi, rho, bcs={1: {"dtn": CylindricalDtN(M=3)}},
+                               dtn_representation=representation)
+        assert solver.cross_mesh
+        solver.mixed_solution.assign(0)
+        solver.solve()
+        solvers[representation], potentials[representation] = solver, psi
+
+    assert len(solvers["multiplier"].mixed_space) == 8
+    assert solvers["multiplier"].n_multipliers == 6
+    assert solvers["multiplier"]._multiplier_offset == 2  # psi, then the dummy
+    # No mixed space, no dummy, no multipliers.
+    assert solvers["lowrank"].mixed_space is solvers["lowrank"].solution_space
+    assert solvers["lowrank"].n_multipliers == 0
+
+    error = relative_l2_error(potentials["lowrank"], potentials["multiplier"],
+                              marked)
+    worst = max(
+        abs(solvers["multiplier"].coefficients()[b][k]
+            - solvers["lowrank"].coefficients()[b][k])
+        for b in solvers["multiplier"].coefficients()
+        for k in solvers["multiplier"].coefficients()[b])
+    print(f"    [submesh] psi {error:.3e}   coefficients {worst:.3e}")
+    assert error <= 1e-14
+    assert worst <= 1e-12
