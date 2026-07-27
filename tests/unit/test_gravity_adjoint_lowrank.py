@@ -565,3 +565,108 @@ def test_taylor_at_a_truncation_the_multiplier_path_cannot_reach():
     print(f"    [past the wall] {n_modes} modes, rate {stats['rate']:.4f}, "
           f"control {stats['rate0']:.4f}")
     assert np.max(np.abs(rf.derivative().dat.data_ro)) > 0.0
+
+
+def test_coefficient_taped_integral_taylor(mesh_2d):
+    """`coefficients()` is differentiable, and agrees with the integral form.
+
+    On the multiplier path the analogous test exists because reading a
+    coefficient through `float()` severs the tape, and the repair is to rebuild
+    it as a taped boundary integral. Here `coefficients()` is taped directly -
+    `c_k = u_k . psi / (scale_k * A_h)` is a linear functional of psi with a
+    constant vector - so both forms are available and must agree.
+
+    They are genuinely different routes: the taped `coefficients()` contracts
+    against the assembled row vector the low-rank operator was built from,
+    while the integral form re-assembles `psi e_k ds` symbolically. Agreement
+    of their gradients is therefore a statement about the recovery expression,
+    not about one implementation of it.
+
+    This test could not exist while `coefficients()` returned raw floats, and
+    its absence was consistent with that - nothing was ever red. Worth
+    remembering: a missing capability and its missing test hide each other.
+    """
+    with stop_annotating():
+        m = rho_control_2d(mesh_2d)
+        h = rho_perturb_2d(mesh_2d)
+
+    tape = get_working_tape()
+    tape.clear_tape()
+    continue_annotation()
+    with stop_annotating():
+        psi = fd.Function(fd.FunctionSpace(mesh_2d, "CG", 1))
+        solver = GravitySolver(
+            psi, m,
+            bcs={"top": {"dtn": CylindricalDtN(M=2)},
+                 "bottom": {"dtn": CylindricalDtN(M=2)}}, **LOW)
+    solver.solve()
+
+    c_recovered = solver.coefficients()["top"]["cos2"]
+    X = fd.SpatialCoordinate(mesh_2d)
+    phi = fd.atan2(X[1], X[0])
+    _, R = solver.boundary_geometry["top"]
+    c_integral = fd.assemble(
+        solver.mixed_solution * fd.cos(2 * phi) * solver.ds("top")) / (np.pi * R)
+    J_recovered = c_recovered ** 2
+    J_integral = c_integral ** 2
+    pause_annotation()
+
+    # Same value on the solution manifold, by construction.
+    assert abs(float(c_recovered) - float(c_integral)) <= 1e-8 * abs(float(c_integral))
+
+    rf_recovered = ReducedFunctional(J_recovered, Control(m))
+    rf_integral = ReducedFunctional(J_integral, Control(m))
+
+    g_recovered = rf_recovered.derivative()
+    g_integral = rf_integral.derivative()
+    denominator = np.max(np.abs(g_integral.dat.data_ro))
+    assert denominator > 0.0, "the integral-form gradient is identically zero"
+    relative = np.max(
+        np.abs(g_recovered.dat.data_ro - g_integral.dat.data_ro)) / denominator
+    print(f"    [taped coefficients] c {float(c_recovered):.6e} "
+          f"grad rel {relative:.3e}")
+    assert relative <= 1e-8
+
+    assert_replay_b1(rf_recovered, m, J_recovered)
+    assert_taylor_with_guards(rf_recovered, m, h, J_recovered)
+
+
+@pytest.mark.longtest
+def test_gradient_matches_closed_form_sheet_3d():
+    """3-D analogue of the closed-form sheet gradient: dc/ds = 4 pi G a/(2l+1).
+
+    Unit-test resolution rather than the coarse consistency meshes, because
+    this one checks a derivative against physics rather than against another
+    derivative, so the discretisation error is part of the budget.
+    """
+    l_mode, m_order, a = 2, 1, RMAX
+    mesh = shell_mesh_3d(refinement_level=2, dr=0.15)
+    with stop_annotating():
+        s = real_scalar(mesh, 1.0)
+        hs = real_scalar(mesh, 1.0)
+        X = fd.SpatialCoordinate(mesh)
+        Y = real_spherical_harmonic(l_mode, m_order, X)
+
+    tape = get_working_tape()
+    tape.clear_tape()
+    continue_annotation()
+    with stop_annotating():
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
+        solver = GravitySolver(
+            psi, 0.0,
+            bcs={"top": {"dtn": SphericalDtN(L=3), "sigma": s * Y},
+                 "bottom": {"dtn": SphericalDtN(L=3)}},
+            solver_parameters="iterative", **LOW)
+    solver.solve()
+    c = solver.coefficients()["top"][f"Y{l_mode},{m_order}"]
+    J = c ** 2
+    pause_annotation()
+
+    dcds = hs._ad_dot(ReducedFunctional(c, Control(s)).derivative())
+    analytic = 4 * np.pi * a / (2 * l_mode + 1)
+    relative = abs(dcds - analytic) / abs(analytic)
+    print(f"    [closed form 3d] dc/ds {dcds:.6f} vs 4 pi a/(2l+1) "
+          f"{analytic:.6f} rel {relative:.3e}")
+    assert relative <= 5e-3
+
+    assert_taylor_with_guards(ReducedFunctional(J, Control(s)), s, hs, J)

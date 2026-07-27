@@ -59,11 +59,11 @@ for free.
 import numpy as np
 import ufl
 from firedrake import Cofunction, Function, action, adjoint, assemble, derivative
-from pyadjoint import Block
+from pyadjoint import AdjFloat, Block
 from pyadjoint.tape import annotate_tape, get_working_tape, no_annotations
 
 __all__ = ["LowRankGravitySolveBlock", "TraceCoefficientBlock",
-           "annotate_lowrank_solve"]
+           "annotate_lowrank_solve", "taped_trace_coefficients"]
 
 
 class LowRankGravitySolveBlock(Block):
@@ -250,13 +250,12 @@ class TraceCoefficientBlock(Block):
     `c_bar * u_k / (scale_k A_h)` as a cofunction on the potential space.
     """
 
-    def __init__(self, solution, row, weight, value):
+    def __init__(self, solution, row, value):
         super().__init__()
         self.function_space = solution.function_space()
         self.row = row
-        self.weight = weight
-        self.add_dependency(solution.block_variable)
-        self.add_output(value.block_variable)
+        self.add_dependency(solution)
+        self.add_output(value.create_block_variable())
 
     def __str__(self):
         return "TraceCoefficientBlock"
@@ -337,6 +336,36 @@ def annotate_lowrank_solve(solver):
     block = LowRankGravitySolveBlock(solver, solution, dependencies)
     get_working_tape().add_block(block)
     block.get_outputs()[0].save_output()
+
+
+def taped_trace_coefficients(solver):
+    """`{bc_id: {key: AdjFloat}}`, differentiable when annotation is on.
+
+    Reading the coefficients off `psi.dat.data_ro` and returning `float()`
+    severs the tape by construction - it is the same sever that
+    `test_coefficient_float_severs_tape` documents as a defect on the
+    multiplier path. The trace spectrum *is* the geoid, which is the observable
+    an inversion of this solver most often targets, so on a path justified by
+    inversions it has to be differentiable.
+
+    The recovery weight comes from `rows.recovery`, the same array the forward
+    value uses, so the `1/(scale_k * A_h)` denominator exists in exactly one
+    place and cannot drift between the value and its derivative.
+    """
+    out = {}
+    comm = solver.mesh.comm
+    psi = solver.mixed_solution
+    psi_local = np.asarray(psi.dat.data_ro, dtype=float)
+    tape = get_working_tape() if annotate_tape() else None
+    for (bc_id, _), rows in zip(solver.dtn_boundaries, solver.mode_rows):
+        out[bc_id] = {}
+        for index, key in enumerate(rows.keys):
+            row = _SingleModeRow(rows, index, comm)
+            value = AdjFloat(comm.allreduce(float(row.local_dot(psi_local))))
+            if tape is not None:
+                tape.add_block(TraceCoefficientBlock(psi, row, value))
+            out[bc_id][key] = value
+    return out
 
 
 def _rhs_dependencies(solver):

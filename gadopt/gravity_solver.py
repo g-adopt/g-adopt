@@ -53,7 +53,7 @@ from firedrake.ufl_expr import extract_unique_domain
 
 from firedrake.petsc import PETSc
 
-from .dtn_adjoint import annotate_lowrank_solve
+from .dtn_adjoint import annotate_lowrank_solve, taped_trace_coefficients
 from .dtn_lowrank import (
     LowRankDtNOperator, apply_dirichlet_to_rows, build_boundary_mode_rows)
 from .solver_options_manager import ConfigType, SolverConfigurationMixin
@@ -1125,12 +1125,12 @@ class GravitySolver(SolverConfigurationMixin):
         """
         out = {bc_id: {} for bc_id, _ in self.dtn_boundaries}
         if self.dtn_representation == "lowrank":
-            psi_local = np.asarray(self.mixed_solution.dat.data_ro, dtype=float)
-            recovered = self.operator_context.coefficients(psi_local)
-            for (bc_id, _), rows, values in zip(
-                    self.dtn_boundaries, self.mode_rows, recovered):
-                out[bc_id] = dict(zip(rows.keys, (float(v) for v in values)))
-            return out
+            # Taped, not read off .dat.data_ro and float()ed: c_k is a linear
+            # functional of psi with a constant vector, so it is trivially
+            # differentiable, and the trace spectrum is the geoid rather than a
+            # diagnostic. The values are AdjFloat, which is a float subclass,
+            # so callers that only want a number are unaffected.
+            return taped_trace_coefficients(self)
         i_R = self._multiplier_offset
         for (bc_id, key), f in zip(
                 self._multiplier_keys, self.mixed_solution.subfunctions[i_R:]):
