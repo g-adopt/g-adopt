@@ -166,6 +166,44 @@ class TestSetup:
         with pytest.raises(ValueError, match="does not resolve"):
             solver.check_boundary_quadrature(rtol=1e-6)
 
+    def test_quadrature_check_sampling(self):
+        """`__init__` checks the extreme modes; "all" is still available.
+
+        The constructor used to assemble one boundary form per treated mode,
+        which is linear in the truncation. The sampled set is `2L + 2` modes
+        rather than `(L+1)^2`, so it is still linear but with a much smaller
+        constant, and it is a *proxy* rather than a bound - the worst mode is
+        not always at the highest degree. This pins its composition, since the
+        thing that must not happen quietly is the sample shrinking further.
+        """
+        mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
+        X = fd.SpatialCoordinate(mesh)
+
+        cylindrical = CylindricalDtN(M=6)
+        sampled = [m.key for m in cylindrical.check_modes("interior", 1.0, X)]
+        every = [m.key for m in cylindrical.modes("interior", 1.0, X)]
+        assert set(sampled) <= set(every)
+        assert {"cos6", "sin6", "mean"} <= set(sampled)
+        assert len(sampled) < len(every)
+
+        spherical = SphericalDtN(L=4)
+        X3 = fd.SpatialCoordinate(fd.UnitCubeMesh(1, 1, 1))
+        sampled = [m.key for m in spherical.check_modes("exterior", 1.0, X3)]
+        every = [m.key for m in spherical.modes("exterior", 1.0, X3)]
+        assert set(sampled) <= set(every)
+        assert set(sampled) == {"Y0,0"} | {f"Y4,{m}" for m in range(-4, 5)}
+        assert len(sampled) < len(every)
+
+        # Both settings agree on a configuration that resolves everything, and
+        # an unknown setting is rejected rather than silently treated as "all".
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+        solver = GravitySolver(
+            psi, 0.0, bcs={"top": {"dtn": CylindricalDtN(M=3)}})
+        assert solver.check_boundary_quadrature(sample="extremes") < 1e-8
+        assert solver.check_boundary_quadrature(sample="all") < 1e-8
+        with pytest.raises(ValueError, match="sample must be"):
+            solver.check_boundary_quadrature(sample="some")
+
     def test_monolithic_override_guard(self):
         """A full solver_parameters replacement requesting monolithic
         assembly is rejected: R-space blocks cannot assemble aij."""

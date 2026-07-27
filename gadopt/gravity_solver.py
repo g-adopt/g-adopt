@@ -146,6 +146,16 @@ class BaseDtN(abc.ABC):
           X: Coordinate vector of the mesh.
         """
 
+    def check_modes(self, side: str, R: float, X) -> list[DtNMode]:
+        """The subset of `modes` that `check_boundary_quadrature` samples.
+
+        Subclasses override this to return only the modes whose boundary
+        integrals bound the rest, and must *build* only those - filtering a
+        fully constructed table would save nothing, since building the table
+        is the cost. The default is every mode.
+        """
+        return self.modes(side, R, X)
+
 
 class CylindricalDtN(BaseDtN):
     r"""DtN map on a circular boundary of a 2-D (cylindrical) domain.
@@ -181,19 +191,36 @@ class CylindricalDtN(BaseDtN):
     def n_multipliers(self, side: str) -> int:
         return 2 * self.M + (1 if side == "interior" else 0)
 
-    def modes(self, side: str, R: float, X) -> list[DtNMode]:
+    def _mean_mode(self, R: float) -> DtNMode:
+        # The m = 0 mean multiplier undoing the Robin shift: the exact
+        # interior monopole condition is homogeneous Neumann (lam = 0).
+        return DtNMode("mean", 1.0, 0.0, 2 * np.pi * R, 1.0)
+
+    def _azimuthal_modes(self, m: int, R: float, X) -> list[DtNMode]:
         phi = atan2(X[1], X[0])
-        table = []
-        if side == "interior":
-            # The m = 0 mean multiplier undoing the Robin shift: the exact
-            # interior monopole condition is homogeneous Neumann (lam = 0).
-            table.append(DtNMode("mean", 1.0, 0.0, 2 * np.pi * R, 1.0))
+        lam = m / R
+        return [DtNMode(f"cos{m}", cos(m * phi), lam, np.pi * R, 0.5),
+                DtNMode(f"sin{m}", sin(m * phi), lam, np.pi * R, 0.5)]
+
+    def modes(self, side: str, R: float, X) -> list[DtNMode]:
+        table = [self._mean_mode(R)] if side == "interior" else []
         for m in range(1, self.M + 1):
-            lam = m / R
-            table.append(
-                DtNMode(f"cos{m}", cos(m * phi), lam, np.pi * R, 0.5))
-            table.append(
-                DtNMode(f"sin{m}", sin(m * phi), lam, np.pi * R, 0.5))
+            table.extend(self._azimuthal_modes(m, R, X))
+        return table
+
+    def check_modes(self, side: str, R: float, X) -> list[DtNMode]:
+        """The constant (where present), the lowest order and the highest.
+
+        `m = M` is the mode the boundary mesh and the quadrature rule are least
+        able to resolve, so it bounds the mode-dependent part of the deviation;
+        `m = 1` and the interior `mean` mode carry essentially none of it, so
+        what they report is the mesh's discrete boundary measure. Both parities
+        of each order are kept, since `cos` and `sin` sample the facets
+        differently.
+        """
+        table = [self._mean_mode(R)] if side == "interior" else []
+        for m in sorted({1, self.M} - {0}):
+            table.extend(self._azimuthal_modes(m, R, X))
         return table
 
 
@@ -227,15 +254,43 @@ class SphericalDtN(BaseDtN):
     def n_multipliers(self, side: str) -> int:
         return (self.L + 1) ** 2
 
+    def _mode(self, l: int, m: int, side: str, R: float, X) -> DtNMode:
+        lam = (l + 1) / R if side == "exterior" else l / R
+        return DtNMode(f"Y{l},{m}", real_spherical_harmonic(l, m, X),
+                       lam, R**2, 1.0 / (4.0 * np.pi))
+
     def modes(self, side: str, R: float, X) -> list[DtNMode]:
-        table = []
-        for l in range(self.L + 1):
-            lam = (l + 1) / R if side == "exterior" else l / R
-            for m in range(-l, l + 1):
-                table.append(
-                    DtNMode(f"Y{l},{m}", real_spherical_harmonic(l, m, X),
-                            lam, R**2, 1.0 / (4.0 * np.pi)))
-        return table
+        return [self._mode(l, m, side, R, X)
+                for l in range(self.L + 1) for m in range(-l, l + 1)]
+
+    def check_modes(self, side: str, R: float, X) -> list[DtNMode]:
+        """`Y_00` and the whole of degree `L`: `2L + 2` modes, not `(L+1)^2`.
+
+        `Y_00` is constant, so its boundary integral reports the mesh's
+        discrete boundary measure alone. The degree-`L` shell carries the
+        mode-dependent part, and is taken in full rather than at the three
+        orders `0, +-L`, because that shorter sample was measured to miss too
+        much. On the level-2 cubed-sphere shell the worst deviation over all
+        modes sits at `(3, -2)` for `L = 3` and `L = 5` and at `(6, 6)` for
+        `L = 8`; against those, `{(0,0), (L,0), (L,+-L)}` reports 0.68, 0.44
+        and 0.90 of the true worst, while the full degree-`L` shell reports
+        1.00, 0.97 and 0.93.
+
+        So this is a proxy, not a bound - no sample of size `O(L)` can be a
+        bound, since the worst mode is not always at the highest degree - and
+        `check_boundary_quadrature(sample="all")` remains the guarantee. What
+        the proxy is measured to give is the right order of magnitude, which is
+        what a constructor-time warning needs.
+
+        Not summed into a single form, which would look cheaper still: by the
+        addition theorem `sum_m Y_lm^2 = (2l+1)/4pi` exactly, so a whole
+        degree's sum of squares is a *constant*, integrated exactly by any rule
+        that gets the area right. Such a check would pass on a mesh resolving
+        none of its modes.
+        """
+        L = self.L
+        sampled = [(0, 0)] + [(L, m) for m in range(-L, L + 1) if L > 0]
+        return [self._mode(l, m, side, R, X) for l, m in sampled]
 
 
 class GravitySolver(SolverConfigurationMixin):
@@ -264,7 +319,9 @@ class GravitySolver(SolverConfigurationMixin):
         Integer denoting the quadrature degree applied on boundary integrals
         involving the DtN eigenfunctions; UFL's automatic estimate is
         unreliable for these, so it defaults to 2 * (max mode degree +
-        element degree) and is verified by `check_boundary_quadrature`
+        element degree) and is verified in `__init__` by
+        `check_boundary_quadrature` on the extreme modes (call it again with
+        `sample="all"` to check every one)
       source_quad_degree:
         Optional quadrature degree for the volume source term; useful when
         rho is an analytic UFL expression (e.g. an angular mode restricted to
@@ -338,7 +395,8 @@ class GravitySolver(SolverConfigurationMixin):
         self.set_boundary_geometry()
         self.set_function_spaces()
         self.set_form()
-        self.check_boundary_quadrature(rtol=1e-4, action="warn")
+        self.check_boundary_quadrature(rtol=1e-4, action="warn",
+                                       sample="extremes")
         self.set_solver_options(solver_parameters, solver_parameters_extra)
         self.set_solver()
 
@@ -688,19 +746,42 @@ class GravitySolver(SolverConfigurationMixin):
                 "itself; align the mesh with the density interfaces.")
 
     def check_boundary_quadrature(
-        self, rtol: float = 1e-8, action: str = "raise"
+        self, rtol: float = 1e-8, action: str = "raise",
+        sample: str = "all",
     ) -> float:
         """Verifies that boundary quadrature and mesh resolve the DtN modes.
 
         Checks the assembled boundary integral of every eigenfunction squared
         against its analytic normalisation and returns the worst relative
         deviation, raising (or warning, with action="warn") beyond rtol.
+
+        Args:
+          rtol: Relative deviation beyond which the check fails.
+          action: "raise" or "warn".
+          sample: "all" checks every treated mode - one assembled boundary form
+            each, so the cost is linear in the truncation's mode count.
+            "extremes" checks only the handful returned by the descriptor's
+            `check_modes`: in 3-D `Y_00` and degree `L` at orders `0` and
+            `+-L`, in 2-D the interior `mean` mode where there is one plus
+            orders `1` and `M`. That is what `__init__` uses, because the
+            unconditional full sweep costs about 0.08 s per mode and buys
+            little: the deviation is dominated by the mode-independent factor
+            (discrete boundary measure)/(analytic boundary measure), which the
+            constant mode reports on its own, and the remainder is largest for
+            the highest degree, which the extremes cover. Pass "all"
+            explicitly, as the tests do, when the guarantee has to hold for
+            every mode.
         """
+        if sample not in ("all", "extremes"):
+            raise ValueError(
+                f"sample must be 'all' or 'extremes', got {sample!r}.")
         worst, worst_key = 0.0, None
         for bc_id, dtn in self.dtn_boundaries:
             side, R = self.boundary_geometry[bc_id]
             dss = self.ds(bc_id)
-            for mode in dtn.modes(side, R, self.X):
+            table = (dtn.modes(side, R, self.X) if sample == "all"
+                     else dtn.check_modes(side, R, self.X))
+            for mode in table:
                 val = assemble(mode.expr**2 * dss)
                 dev = abs(val - mode.norm) / mode.norm
                 if dev > worst:
