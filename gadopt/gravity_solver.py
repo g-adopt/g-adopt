@@ -51,6 +51,10 @@ import numpy as np
 from firedrake import *
 from firedrake.ufl_expr import extract_unique_domain
 
+from firedrake.petsc import PETSc
+
+from .dtn_lowrank import (
+    LowRankDtNOperator, apply_dirichlet_to_rows, build_boundary_mode_rows)
 from .solver_options_manager import ConfigType, SolverConfigurationMixin
 from .spherical_harmonics import real_spherical_harmonic
 from .utility import CombinedSurfaceMeasure, DEBUG, INFO, ensure_constant, log_level
@@ -94,6 +98,38 @@ Stokes solver uses for its velocity block, which inverts a strictly harder SPD
 operator on the same extruded cubed-sphere meshes at production scale. AMG has
 O(N) memory with no fill-in, so it replaces MUMPS as the default psi solver in
 3-D.
+"""
+
+
+def _flatten_options(options, prefix=""):
+    """PETSc-style flat options from the nested G-ADOPT dictionary."""
+    flat = {}
+    for key, value in options.items():
+        if isinstance(value, Mapping):
+            flat.update(_flatten_options(value, prefix + key + "_"))
+        else:
+            flat[prefix + key] = value
+    return flat
+
+
+lowrank_gravity_solver_parameters = {
+    "ksp_type": "cg",
+    "ksp_rtol": 1e-11,
+    "ksp_max_it": 1000,
+    "pc_type": "gamg",
+    "mg_levels_pc_type": "sor",
+    "pc_gamg_threshold": 0.01,
+    "pc_gamg_square_graph": 100,
+    "pc_gamg_coarse_eq_limit": 1000,
+    "pc_gamg_mis_k_minimum_degree_ordering": True,
+}
+"""CG on `A + B`, algebraic multigrid built from the Robin-shifted `A` alone.
+
+The same GAMG settings the multiplier path gives its `fieldsplit_0`, applied
+without the `AssembledPC` indirection because here `A` is already an assembled
+`aij` matrix and PETSc can be handed it directly as `Pmat`. `ksp_rtol` matches
+the multiplier path's OUTER tolerance, not its inner one: there is no outer
+Krylov cleaning up after this solve, so this rtol is the solution accuracy.
 """
 
 
@@ -382,7 +418,13 @@ class GravitySolver(SolverConfigurationMixin):
         source_quad_degree: int | None = None,
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
+        dtn_representation: str = "multiplier",
     ) -> None:
+        if dtn_representation not in ("multiplier", "lowrank"):
+            raise ValueError(
+                f"dtn_representation must be 'multiplier' or 'lowrank', got "
+                f"{dtn_representation!r}.")
+        self.dtn_representation = dtn_representation
         self.solution = solution
         self.rho = ensure_constant(rho)
         self.bcs = bcs
@@ -401,8 +443,11 @@ class GravitySolver(SolverConfigurationMixin):
         self.set_boundary_conditions()
         self.set_measures(quad_degree, source_quad_degree)
         self.set_boundary_geometry()
-        self.set_function_spaces()
-        self.set_form()
+        if self.dtn_representation == "lowrank":
+            self.set_lowrank_operator()
+        else:
+            self.set_function_spaces()
+            self.set_form()
         self.check_boundary_quadrature(rtol=1e-4, action="warn",
                                        sample="extremes")
         self.set_solver_options(solver_parameters, solver_parameters_extra)
@@ -483,6 +528,7 @@ class GravitySolver(SolverConfigurationMixin):
         n = FacetNormal(self.mesh)
         r = sqrt(dot(self.X, self.X))
         self.boundary_geometry = {}  # bc_id -> (side, R)
+        self.boundary_area = {}  # bc_id -> discrete boundary measure A_h
 
         for bc_id, _ in self.dtn_boundaries:
             dss = self.ds(bc_id)
@@ -498,6 +544,12 @@ class GravitySolver(SolverConfigurationMixin):
                     f"{R:.4g}); the DtN map assumes a boundary of constant radius.")
             side = "exterior" if assemble(dot(n, self.X) * dss) > 0 else "interior"
             self.boundary_geometry[bc_id] = (side, R)
+            # The DISCRETE boundary measure. The low-rank elimination divides
+            # by scale_k * A_h, and using the analytic measure instead is wrong
+            # by the boundary-area error - 2.7e-07 on a cubed-sphere shell,
+            # mode-independent and converging, so it reads as a discretisation
+            # effect rather than as the wrong formula.
+            self.boundary_area[bc_id] = area
 
     def set_function_spaces(self) -> None:
         """Builds the internal mixed space: psi, cross-mesh dummy, multipliers.
@@ -569,6 +621,84 @@ class GravitySolver(SolverConfigurationMixin):
             DirichletBC(self.mixed_space.sub(0), val, bc_id)
             for bc_id, val in self.dirichlet_bcs]
 
+    def set_lowrank_operator(self) -> None:
+        """Builds the Robin-shifted stiffness, the right-hand side and `C`.
+
+        The multipliers are eliminated by hand (see `gadopt.dtn_lowrank`), so
+        there is no mixed space, no Schur complement and no matrix-free
+        operator: one scalar space, one assembled SPD matrix, and a rank-`n`
+        update applied in factored form. `mixed_solution` still exists and is
+        still the thing to reset before a timed solve, but it is now a plain
+        `Function` on the potential space rather than a mixed one.
+        """
+        V = self.solution_space
+        u, v = TrialFunction(V), TestFunction(V)
+        self.mixed_space = V
+        self.mixed_solution = Function(V)
+        self.n_multipliers = 0
+        self._multiplier_offset = 0
+        self._multiplier_keys = []
+
+        a = dot(grad(u), grad(v)) * self.dx
+        for bc_id, _ in self.dtn_boundaries:
+            _, R = self.boundary_geometry[bc_id]
+            a += (self.alpha / R) * u * v * self.ds(bc_id)
+
+        F = 4 * np.pi * self.G * self.rho * v * self.dx_rho
+        for bc_id, sigma in self.sigma_bcs:
+            F += 4 * np.pi * self.G * sigma * v * self.ds(bc_id)
+        for bc_id, flux in self.flux_bcs:
+            F += flux * v * self.ds(bc_id)
+
+        self.a_form, self.rhs_form = a, F
+        self.strong_bcs = [
+            DirichletBC(V, val, bc_id) for bc_id, val in self.dirichlet_bcs]
+
+        self.mode_rows = []
+        for bc_id, dtn in self.dtn_boundaries:
+            side, R = self.boundary_geometry[bc_id]
+            self.mode_rows.append(build_boundary_mode_rows(
+                V, self.ds(bc_id), dtn, side, R, self.alpha, self.quad_degree))
+            self._multiplier_keys.extend(
+                (bc_id, key) for key in self.mode_rows[-1].keys)
+        self.build_time = sum(rows.build_time for rows in self.mode_rows)
+
+        constrained = set()
+        for bc in self.strong_bcs:
+            constrained.update(np.asarray(bc.nodes, dtype=np.int64).tolist())
+        apply_dirichlet_to_rows(self.mode_rows, constrained)
+
+    def set_lowrank_solver(self) -> None:
+        """Drives a PETSc KSP directly: CG on `A + B`, preconditioned by `A`.
+
+        `NonlinearVariationalSolver` offers no hook to hand PETSc a custom
+        `Amat` while taking `Pmat` from a form, so this path owns its KSP. That
+        is also why the taped variational solve disappears here.
+
+        `ksp.setOperators(N, A)` with different `Amat` and `Pmat` is exactly the
+        paper's "build the multigrid on the stiffness alone"; our `A` is
+        Robin-shifted rather than `epsilon`-shifted, so it is SPD by
+        construction with nothing to tune.
+        """
+        self.A = assemble(self.a_form, bcs=self.strong_bcs, mat_type="aij")
+        petsc_A = self.A.petscmat
+        petsc_A.setOption(petsc_A.Option.SPD, True)
+
+        comm = self.mesh.comm
+        self.operator_context = LowRankDtNOperator(petsc_A, self.mode_rows, comm)
+        self.N = PETSc.Mat().createPython(
+            petsc_A.getSizes(), self.operator_context, comm=comm)
+        self.N.setUp()
+        self.N.setOption(PETSc.Mat.Option.SYMMETRIC, True)
+
+        self.ksp = PETSc.KSP().create(comm=comm)
+        self.ksp.setOperators(self.N, petsc_A)
+        self.ksp.setOptionsPrefix(self.name + "_lowrank_")
+        options = PETSc.Options()
+        for key, value in _flatten_options(self.solver_parameters).items():
+            options[self.name + "_lowrank_" + key] = value
+        self.ksp.setFromOptions()
+
     def set_solver_options(
         self,
         solver_preset: ConfigType | str | None,
@@ -618,6 +748,28 @@ class GravitySolver(SolverConfigurationMixin):
         if solver_preset is None:
             solver_preset = (
                 "direct" if self.mesh.topological_dimension == 2 else "iterative")
+
+        if self.dtn_representation == "lowrank":
+            # This path drives a PETSc KSP directly, so the options are plain
+            # KSP/PC options with no mat_type or snes_type: there is no
+            # Firedrake solver object to interpret those. "direct" inverts the
+            # PRECONDITIONER A by LU, not the operator A + B - the low-rank
+            # update is never assembled, so no direct method applies to it, and
+            # CG is still doing the work.
+            if solver_preset == "direct":
+                self.add_to_solver_config({
+                    "ksp_type": "cg", "ksp_rtol": 1e-11, "ksp_max_it": 1000,
+                    **{f"pc_{k}": v for k, v in (
+                        ("type", "lu"),
+                        ("factor_mat_solver_type", "mumps"))},
+                })
+            else:
+                self.add_to_solver_config(dict(lowrank_gravity_solver_parameters))
+            if INFO >= log_level:
+                self.add_to_solver_config({"ksp_converged_reason": None})
+            self.add_to_solver_config(solver_extras)
+            self.register_update_callback(self.set_solver)
+            return
 
         if self.n_multipliers == 0:
             # No DtN multipliers: the psi solver acts on the whole assembled
@@ -715,6 +867,9 @@ class GravitySolver(SolverConfigurationMixin):
 
     def set_solver(self) -> None:
         """Sets up the Firedrake variational problem and solver."""
+        if self.dtn_representation == "lowrank":
+            self.set_lowrank_solver()
+            return
         self.problem = NonlinearVariationalProblem(
             self.F, self.mixed_solution, bcs=self.strong_bcs)
         self.solver = NonlinearVariationalSolver(
@@ -807,8 +962,49 @@ class GravitySolver(SolverConfigurationMixin):
     def solve(self) -> None:
         """Solves the system and updates the solution function in place."""
         self.check_net_mass()
-        self.solver.solve()
+        if self.dtn_representation == "lowrank":
+            self._solve_lowrank()
+        else:
+            self.solver.solve()
         self.solution.assign(self.mixed_solution.subfunctions[0])
+
+    def _solve_lowrank(self) -> None:
+        """CG on `A + B` with the right-hand side reassembled each call.
+
+        `rho` and the sheet densities may have changed since construction;
+        `A + B` cannot have, since every coefficient in it is geometry.
+
+        Strong conditions are lifted by hand. `assemble(L, bcs=...)` sets the
+        constrained entries but does **not** subtract the coupling of the
+        prescribed values into the free rows, so on its own it solves a
+        different problem - measured, a relative error of exactly 1.0 against
+        Firedrake's own linear solver on a plain Dirichlet Poisson problem,
+        which is what `LinearVariationalSolver` does internally and this path
+        cannot use. The lifting needs `A` only: the columns of `C` are zeroed
+        at constrained degrees of freedom, so `B` applied to a field supported
+        only there is zero.
+        """
+        if self.strong_bcs:
+            lift = Function(self.solution_space)
+            for bc in self.strong_bcs:
+                bc.apply(lift)
+            b = assemble(self.rhs_form - action(self.a_form, lift))
+            # `bc.nodes` carries ghost entries too, while `dat.data_wo` is the
+            # owned block; the vector handed to the KSP is owned-only, so the
+            # ghosts are both unnecessary and out of range.
+            owned = self.solution_space.dof_dset.size
+            for bc in self.strong_bcs:
+                nodes = bc.nodes[bc.nodes < owned]
+                b.dat.data_wo[nodes] = lift.dat.data_ro[nodes]
+        else:
+            b = assemble(self.rhs_form)
+        with b.dat.vec_ro as rhs, self.mixed_solution.dat.vec as x:
+            self.ksp.solve(rhs, x)
+        if self.ksp.getConvergedReason() < 0:
+            raise RuntimeError(
+                f"The low-rank DtN solve did not converge: PETSc reason "
+                f"{self.ksp.getConvergedReason()} after "
+                f"{self.ksp.getIterationNumber()} iterations.")
 
     def coefficients(self) -> dict[int | str, dict[str, float]]:
         """Solved trace coefficients of every DtN boundary, keyed by marker.
@@ -817,8 +1013,15 @@ class GravitySolver(SolverConfigurationMixin):
         solved trace coefficients - the spectrum of psi on that boundary,
         i.e. the geoid coefficients when evaluated at the surface.
         """
-        i_R = self._multiplier_offset
         out = {bc_id: {} for bc_id, _ in self.dtn_boundaries}
+        if self.dtn_representation == "lowrank":
+            psi_local = np.asarray(self.mixed_solution.dat.data_ro, dtype=float)
+            recovered = self.operator_context.coefficients(psi_local)
+            for (bc_id, _), rows, values in zip(
+                    self.dtn_boundaries, self.mode_rows, recovered):
+                out[bc_id] = dict(zip(rows.keys, (float(v) for v in values)))
+            return out
+        i_R = self._multiplier_offset
         for (bc_id, key), f in zip(
                 self._multiplier_keys, self.mixed_solution.subfunctions[i_R:]):
             out[bc_id][key] = float(f)

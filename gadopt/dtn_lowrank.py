@@ -331,3 +331,102 @@ def _assert_against_reference(rows, modes, keys, descriptor, side, v, measure,
             f"otherwise the element's node variant has changed. Either way the "
             f"representation is no longer exact - rebuild with "
             f"force_reference=True, or fall back to the multiplier path.")
+
+
+class LowRankDtNOperator:
+    """`A + B` as a PETSc python `Mat`, with `B` applied in factored form.
+
+    `B = sum_k w_k u_k u_k^T` is dense on the boundary trace and is never
+    formed. One application is, per boundary,
+
+        y += C^T (W (C x))
+
+    with `C` the rank-local rows and `W` the diagonal of weights: two small
+    dense products against the boundary entries, and **one `Allreduce` of the
+    `k`-vector** in between. That is the paper's three-stage parallel algorithm
+    and the reason the rows are stored rank-locally rather than as a
+    distributed `k x N` matrix - a distributed `C` would put each row on one
+    rank, and since every row needs the whole boundary trace, `MatMult`'s
+    scatter would move `O(N_boundary)` words per row-owning rank instead of
+    `O(k)` words in total.
+
+    `A + B` is SPD even though individual weights are negative: `w_k` is
+    negative for any mode with `lam_k R < alpha`, which the interior `l = 0`
+    mean mode (`lam = 0`) always is. Writing
+
+        A + B = stiffness
+              + sum_k lam_k/(scale_k A_h) u_k u_k^T
+              + (alpha/R) ( M_boundary - sum_k u_k u_k^T/(scale_k A_h) )
+
+    the last bracket is PSD by **Bessel's inequality** applied to the
+    L^2(boundary)-orthogonal family `{e_k}`: it is the boundary mass form minus
+    the projection onto the treated modes, i.e. the energy of the untreated
+    tail. The middle sum is PSD because every `lam_k >= 0`. So the whole is the
+    exact DtN energy plus the untreated Robin, and CG is legitimate. The
+    orthogonality that argument needs is the same property
+    `check_boundary_quadrature` verifies mode by mode.
+
+    (With an interior boundary and no exterior one, constants sit in the
+    nullspace. That is the physics of a source-free core, not a defect.)
+    """
+
+    def __init__(self, assembled, mode_rows, comm):
+        self.assembled = assembled
+        self.mode_rows = list(mode_rows)
+        self.comm = comm
+        #: Counts applications, so a test can confirm the operator was
+        #: exercised rather than bypassed.
+        self.applications = 0
+
+    def mult(self, mat, x, y):
+        self.assembled.mult(x, y)
+        self._add_low_rank(x, y)
+        self.applications += 1
+
+    # Symmetric, so the transpose action is the same action. Stated rather than
+    # inherited: PETSc will use this for a transposed solve, and getting it
+    # wrong would show up only in the adjoint.
+    multTranspose = mult
+
+    def _add_low_rank(self, x, y):
+        xa = x.array_r
+        ya = y.array_w
+        for rows in self.mode_rows:
+            if rows.rows.size:
+                local = rows.rows @ xa[rows.dofs]
+            else:
+                local = np.zeros(len(rows.keys))
+            total = np.empty_like(local)
+            self.comm.Allreduce(local, total)
+            if rows.rows.size:
+                ya[rows.dofs] += rows.rows.T @ (rows.weights * total)
+
+    def coefficients(self, psi_local):
+        """Trace coefficients of every boundary, summed across ranks."""
+        out = []
+        for rows in self.mode_rows:
+            local = rows.coefficients(psi_local)
+            total = np.empty_like(local)
+            self.comm.Allreduce(local, total)
+            out.append(total)
+        return out
+
+
+def apply_dirichlet_to_rows(mode_rows, constrained_dofs):
+    """Zero the columns of `C` at strongly constrained degrees of freedom.
+
+    Not optional. `A` has its constrained rows and columns eliminated, so a `B`
+    that still couples to those dofs makes `A + B` inconsistent with `A` - the
+    operator would apply a boundary feedback through a degree of freedom whose
+    value is prescribed, and the result is not symmetric with the eliminated
+    `A` either.
+    """
+    constrained = np.asarray(sorted(constrained_dofs), dtype=np.int64)
+    if constrained.size == 0:
+        return
+    for rows in mode_rows:
+        if not rows.rows.size:
+            continue
+        mask = np.isin(rows.dofs, constrained)
+        if mask.any():
+            rows.rows[:, mask] = 0.0
