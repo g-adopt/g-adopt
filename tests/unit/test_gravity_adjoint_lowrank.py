@@ -619,12 +619,36 @@ def test_coefficient_taped_integral_taylor(mesh_2d):
 
     g_recovered = rf_recovered.derivative()
     g_integral = rf_integral.derivative()
+    recovered_norm = np.max(np.abs(g_recovered.dat.data_ro))
     denominator = np.max(np.abs(g_integral.dat.data_ro))
+    print(f"    [taped coefficients] c {float(c_recovered):.6e}  "
+          f"|grad via coefficients()| {recovered_norm:.6e}  "
+          f"|grad via integral| {denominator:.6e}")
+
+    # THE DISCRIMINATOR, and it is a mechanism check rather than a magnitude
+    # one. If coefficients() goes back to reading .dat.data_ro and returning
+    # float(), pyadjoint sees no dependency at all and this derivative is
+    # EXACTLY zero - not merely inaccurate.
+    #
+    # Verified by reverting the capability and measuring, rather than asserted:
+    # with the untaped implementation `c` comes back as a plain `float` and the
+    # gradient is 0.0 exactly, against 3.695499e-02 for the taped one. (The
+    # untaped version also trips the value assertion above, because a plain
+    # float cannot carry a tape at all - that is additional evidence, not a
+    # substitute for this line, since a version taped in name only would reach
+    # here.)
+    assert recovered_norm > 0.0, (
+        "the gradient through coefficients() is identically zero: the tape is "
+        "severed, so coefficients() is not differentiable")
     assert denominator > 0.0, "the integral-form gradient is identically zero"
+
+    # And the pair checks itself: one number comes from the capability, the
+    # other from a route that re-assembles the same quantity symbolically and
+    # therefore cannot use it. Agreement is possible only if the capability is
+    # real, so neither assertion is load-bearing on its own.
     relative = np.max(
         np.abs(g_recovered.dat.data_ro - g_integral.dat.data_ro)) / denominator
-    print(f"    [taped coefficients] c {float(c_recovered):.6e} "
-          f"grad rel {relative:.3e}")
+    print(f"    [taped coefficients] grad rel {relative:.3e}")
     assert relative <= 1e-8
 
     assert_replay_b1(rf_recovered, m, J_recovered)
