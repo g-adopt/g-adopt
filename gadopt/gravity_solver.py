@@ -53,6 +53,7 @@ from firedrake.ufl_expr import extract_unique_domain
 
 from firedrake.petsc import PETSc
 
+from .dtn_adjoint import annotate_lowrank_solve
 from .dtn_lowrank import (
     LowRankDtNOperator, apply_dirichlet_to_rows, build_boundary_mode_rows)
 from .solver_options_manager import ConfigType, SolverConfigurationMixin
@@ -1027,11 +1028,12 @@ class GravitySolver(SolverConfigurationMixin):
         self.check_net_mass()
         if self.dtn_representation == "lowrank":
             self._solve_lowrank()
+            annotate_lowrank_solve(self)
         else:
             self.solver.solve()
         self.solution.assign(self.mixed_solution.subfunctions[0])
 
-    def _solve_lowrank(self) -> None:
+    def _solve_lowrank(self, rhs_form=None) -> None:
         """CG on `A + B` with the right-hand side reassembled each call.
 
         `rho` and the sheet densities may have changed since construction;
@@ -1047,11 +1049,12 @@ class GravitySolver(SolverConfigurationMixin):
         at constrained degrees of freedom, so `B` applied to a field supported
         only there is zero.
         """
+        rhs_form = self.rhs_form if rhs_form is None else rhs_form
         if self.strong_bcs:
             lift = Function(self.solution_space)
             for bc in self.strong_bcs:
                 bc.apply(lift)
-            b = assemble(self.rhs_form - action(self.a_form, lift))
+            b = assemble(rhs_form - action(self.a_form, lift))
             # `bc.nodes` carries ghost entries too, while `dat.data_wo` is the
             # owned block; the vector handed to the KSP is owned-only, so the
             # ghosts are both unnecessary and out of range.
@@ -1060,7 +1063,7 @@ class GravitySolver(SolverConfigurationMixin):
                 nodes = bc.nodes[bc.nodes < owned]
                 b.dat.data_wo[nodes] = lift.dat.data_ro[nodes]
         else:
-            b = assemble(self.rhs_form)
+            b = assemble(rhs_form)
         with b.dat.vec_ro as rhs, self.mixed_solution.dat.vec as x:
             self.ksp.solve(rhs, x)
         if self.ksp.getConvergedReason() < 0:

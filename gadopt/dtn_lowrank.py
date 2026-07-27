@@ -248,6 +248,17 @@ def build_boundary_mode_rows(
     use_trace = supports_trace_build(mesh) and not force_reference
     trace_degree = quad_degree // 2 if use_trace else None
 
+    # A boundary can legitimately treat no modes at all: CylindricalDtN(M=0)
+    # on an exterior boundary is the degenerate pure-Robin condition, where the
+    # DtN term is the Robin shift itself and there is nothing to eliminate. The
+    # empty case has to be shaped correctly rather than collapsing to a
+    # 1-D array, or every later index is wrong.
+    n_dofs = solution_space.dof_dset.size
+    if not modes:
+        return BoundaryModeRows(
+            [], np.zeros((0, 0)), np.zeros(0, dtype=np.int64), np.zeros(0),
+            np.zeros(0), area, 0.0, 0.0, use_trace, trace_degree)
+
     start = time.perf_counter()
     if use_trace:
         rows, setup_time = _trace_build(mesh, v, measure, descriptor, side,
@@ -256,6 +267,7 @@ def build_boundary_mode_rows(
         symbolic = descriptor.modes(side, radius, SpatialCoordinate(mesh))
         rows = np.array([np.asarray(assemble(mode.expr * v * measure).dat.data_ro,
                                     dtype=float) for mode in symbolic])
+        rows = rows.reshape(len(symbolic), -1)
         setup_time = 0.0
     build_time = time.perf_counter() - start
 
@@ -299,7 +311,7 @@ def _trace_build(mesh, v, measure, descriptor, side, trace_degree, n_modes):
         # frozen halo, so this loop must not run inside one.
         g.dat.data[:] = values
         rows.append(np.asarray(assemble(form).dat.data_ro, dtype=float))
-    return np.array(rows), setup_time
+    return np.array(rows).reshape(n_modes, -1), setup_time
 
 
 def _assert_against_reference(rows, keys, descriptor, side, radius, v, measure,
