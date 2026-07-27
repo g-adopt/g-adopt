@@ -30,8 +30,15 @@ $\int_{S^2} Y_{lm}^2 \, d\Omega = 1$. Written this way the Condon-Shortley phase
 of the associated Legendre functions cancels against the phase of the real
 combination, so there is no $(-1)^m$ anywhere below; that cancellation is the
 one thing about this convention that a recursion can silently get wrong, and
-`tests/unit/test_dtn_tabulate.py` pins it against both
-`real_spherical_harmonic_numpy` and `scipy.special.sph_harm_y`.
+`tests/unit/test_dtn_tabulate.py` pins it against `scipy.special.sph_harm_y`.
+
+It is pinned against scipy *alone*, deliberately. `real_spherical_harmonic` and
+its numpy twin evaluate $d^m P_l/du^m$ by Horner from sympy-generated
+coefficients, which cancels catastrophically as the degree grows: measured
+against 50-digit `mpmath`, that path is off by 2.9e-10 at $l = 20$ and 1.6e-6 at
+$l = 30$, where this recursion and scipy both sit near 1e-14. Requiring
+agreement with the incumbent at high degree would therefore pin the less
+accurate of the two. See `NOTES/FINDING-HORNER-ACCURACY.md`.
 
 The 2-D counterpart is the same exercise on $\{\cos m\varphi, \sin m\varphi\}$
 by the complex-exponential (Chebyshev) recursion, and is included because the
