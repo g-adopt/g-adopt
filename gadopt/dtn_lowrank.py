@@ -200,21 +200,19 @@ def _tabulate(descriptor, side, points):
     return table
 
 
-def _validation_modes(descriptor, side, table_keys):
-    """Indices of the modes the build asserts itself on.
+def _validation_keys(descriptor):
+    """Keys of the modes the build asserts itself on.
 
     The highest degree, both azimuthal branches. Never the constant: any nodal
     interpolation reproduces a constant exactly whatever its node placement, so
     `Y_00` cannot see a node/quadrature mismatch at all - measured, it passes at
-    1.2e-16 on a build wrong by 8.3e-08 elsewhere.
+    1.2e-16 on a build wrong by 1.4e-10 elsewhere.
     """
     if descriptor.dim == 3:
         L = descriptor.L
-        wanted = [f"Y{L},{0}", f"Y{L},{L}", f"Y{L},{-L}"]
-    else:
-        M = descriptor.M
-        wanted = [f"cos{M}", f"sin{M}"]
-    return [table_keys.index(key) for key in wanted if key in table_keys]
+        return [f"Y{L},{0}", f"Y{L},{L}", f"Y{L},{-L}"]
+    M = descriptor.M
+    return [f"cos{M}", f"sin{M}"]
 
 
 def build_boundary_mode_rows(
@@ -240,8 +238,10 @@ def build_boundary_mode_rows(
     """
     mesh = solution_space.mesh()
     v = TestFunction(solution_space)
-    X = SpatialCoordinate(mesh)
-    modes = descriptor.modes(side, radius, X)
+    # Metadata only: building the n UFL expressions is the per-mode symbolic
+    # cost this path exists to remove, and the trace build never needs them.
+    # Only the handful of modes the self-assertion checks are built as UFL.
+    modes = descriptor.mode_metadata(side, radius)
     keys = [mode.key for mode in modes]
     area = assemble(1 * measure)
 
@@ -253,13 +253,14 @@ def build_boundary_mode_rows(
         rows, setup_time = _trace_build(mesh, v, measure, descriptor, side,
                                         trace_degree, len(modes))
     else:
+        symbolic = descriptor.modes(side, radius, SpatialCoordinate(mesh))
         rows = np.array([np.asarray(assemble(mode.expr * v * measure).dat.data_ro,
-                                    dtype=float) for mode in modes])
+                                    dtype=float) for mode in symbolic])
         setup_time = 0.0
     build_time = time.perf_counter() - start
 
     if use_trace:
-        _assert_against_reference(rows, modes, keys, descriptor, side, v,
+        _assert_against_reference(rows, keys, descriptor, side, radius, v,
                                   measure, mesh, trace_degree, rtol)
 
     # Drop the columns no mode touches: a mode is supported on the whole
@@ -301,22 +302,28 @@ def _trace_build(mesh, v, measure, descriptor, side, trace_degree, n_modes):
     return np.array(rows), setup_time
 
 
-def _assert_against_reference(rows, modes, keys, descriptor, side, v, measure,
+def _assert_against_reference(rows, keys, descriptor, side, radius, v, measure,
                               mesh, trace_degree, rtol):
-    """Check the fast build against the symbolic one on the sensitive modes."""
-    indices = _validation_modes(descriptor, side, keys)
-    if not indices:
+    """Check the fast build against the symbolic one on the sensitive modes.
+
+    Only these modes are ever built symbolically on the fast path, so the cost
+    is a fixed handful of assemblies per boundary rather than one per mode.
+    """
+    sampled = descriptor.modes_by_key(
+        _validation_keys(descriptor), side, radius, SpatialCoordinate(mesh))
+    if not sampled:
         return
+    indices = [keys.index(mode.key) for mode in sampled]
     scale = max(np.max(np.abs(rows[i])) for i in indices)
     if scale == 0.0:
         return
     worst, worst_key = 0.0, None
-    for i in indices:
+    for mode, i in zip(sampled, indices):
         reference = np.asarray(
-            assemble(modes[i].expr * v * measure).dat.data_ro, dtype=float)
+            assemble(mode.expr * v * measure).dat.data_ro, dtype=float)
         deviation = np.max(np.abs(rows[i] - reference)) / scale
         if deviation > worst:
-            worst, worst_key = deviation, keys[i]
+            worst, worst_key = deviation, mode.key
     if worst > rtol:
         raise RuntimeError(
             f"The tabulated DtN boundary build disagrees with the symbolic one "

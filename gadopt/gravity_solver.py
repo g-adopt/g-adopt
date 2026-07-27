@@ -182,6 +182,34 @@ class BaseDtN(abc.ABC):
           X: Coordinate vector of the mesh.
         """
 
+    def mode_metadata(self, side: str, R: float) -> list[DtNMode]:
+        """The mode table with `expr` left as None.
+
+        Everything the low-rank path needs about a mode except its symbolic
+        expression: the key, the DtN eigenvalue, the analytic normalisation and
+        the constraint-row scaling. Building the UFL expressions is the
+        expensive part - `real_spherical_harmonic` runs sympy per `(l, |m|)`
+        and emits an `O(l)`-deep tree - and the low-rank build gets its values
+        numerically from `gadopt.dtn_tabulate` instead, so constructing them
+        would reintroduce exactly the per-mode symbolic cost the path exists to
+        remove. Measured, that was about 0.015 s per mode, i.e. 13 s at
+        `L = 20`, hidden inside the constructor.
+
+        The default builds the full table and discards the expressions, which
+        is correct but pointless; subclasses override it.
+        """
+        return [mode._replace(expr=None) for mode in self.modes(side, R, None)]
+
+    def modes_by_key(self, keys, side: str, R: float, X) -> list[DtNMode]:
+        """Build only the named modes, with their UFL expressions.
+
+        Lets a caller that needs a fixed handful - the low-rank build's
+        self-assertion needs three - pay for three rather than for the `O(L)`
+        the sampled table would cost.
+        """
+        wanted = set(keys)
+        return [mode for mode in self.modes(side, R, X) if mode.key in wanted]
+
     def check_modes(self, side: str, R: float, X) -> list[DtNMode]:
         """The subset of `modes` that `check_boundary_quadrature` samples.
 
@@ -243,6 +271,24 @@ class CylindricalDtN(BaseDtN):
         for m in range(1, self.M + 1):
             table.extend(self._azimuthal_modes(m, R, X))
         return table
+
+    def mode_metadata(self, side: str, R: float) -> list[DtNMode]:
+        table = [self._mean_mode(R)] if side == "interior" else []
+        for m in range(1, self.M + 1):
+            lam = m / R
+            table.append(DtNMode(f"cos{m}", None, lam, np.pi * R, 0.5))
+            table.append(DtNMode(f"sin{m}", None, lam, np.pi * R, 0.5))
+        return table
+
+    def modes_by_key(self, keys, side: str, R: float, X) -> list[DtNMode]:
+        orders = sorted({int(key[3:]) for key in keys
+                         if key.startswith(("cos", "sin"))})
+        out = [self._mean_mode(R)] if "mean" in keys else []
+        for m in orders:
+            if 1 <= m <= self.M:
+                out.extend(mode for mode in self._azimuthal_modes(m, R, X)
+                           if mode.key in keys)
+        return out
 
     def check_modes(self, side: str, R: float, X) -> list[DtNMode]:
         """The constant (where present), the lowest order and the highest.
@@ -306,6 +352,23 @@ class SphericalDtN(BaseDtN):
     def modes(self, side: str, R: float, X) -> list[DtNMode]:
         return [self._mode(l, m, side, R, X)
                 for l in range(self.L + 1) for m in range(-l, l + 1)]
+
+    def mode_metadata(self, side: str, R: float) -> list[DtNMode]:
+        table = []
+        for l in range(self.L + 1):
+            lam = (l + 1) / R if side == "exterior" else l / R
+            for m in range(-l, l + 1):
+                table.append(DtNMode(f"Y{l},{m}", None, lam, R**2,
+                                     1.0 / (4.0 * np.pi)))
+        return table
+
+    def modes_by_key(self, keys, side: str, R: float, X) -> list[DtNMode]:
+        parsed = []
+        for key in keys:
+            l, m = (int(part) for part in key[1:].split(","))
+            if 0 <= l <= self.L and abs(m) <= l:
+                parsed.append(self._mode(l, m, side, R, X))
+        return parsed
 
     def check_modes(self, side: str, R: float, X) -> list[DtNMode]:
         """`Y_00` and the whole of degree `L`: `2L + 2` modes, not `(L+1)^2`.
