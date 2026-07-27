@@ -186,6 +186,16 @@ class TestSetup:
         assert {"cos6", "sin6", "mean"} <= set(sampled)
         assert len(sampled) < len(every)
 
+        # M = 0 is the degenerate pure-Robin case: no azimuthal mode is
+        # treated, so none may be checked. Sampling an m = 1 that the solver
+        # never assembles would let the constructor warn about a mode playing
+        # no part in the answer.
+        degenerate = CylindricalDtN(M=0)
+        for side in ("exterior", "interior"):
+            sampled = [m.key for m in degenerate.check_modes(side, 1.0, X)]
+            assert sampled == [m.key for m in degenerate.modes(side, 1.0, X)]
+        assert degenerate.check_modes("exterior", 1.0, X) == []
+
         spherical = SphericalDtN(L=4)
         X3 = fd.SpatialCoordinate(fd.UnitCubeMesh(1, 1, 1))
         sampled = [m.key for m in spherical.check_modes("exterior", 1.0, X3)]

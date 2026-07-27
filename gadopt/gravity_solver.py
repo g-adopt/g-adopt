@@ -211,15 +211,23 @@ class CylindricalDtN(BaseDtN):
     def check_modes(self, side: str, R: float, X) -> list[DtNMode]:
         """The constant (where present), the lowest order and the highest.
 
-        `m = M` is the mode the boundary mesh and the quadrature rule are least
-        able to resolve, so it bounds the mode-dependent part of the deviation;
-        `m = 1` and the interior `mean` mode carry essentially none of it, so
-        what they report is the mesh's discrete boundary measure. Both parities
-        of each order are kept, since `cos` and `sin` sample the facets
-        differently.
+        `m = M` is the order the boundary mesh and the quadrature rule are
+        least able to resolve; `m = 1` and the interior `mean` mode carry
+        essentially none of that, so what they report is the mesh's discrete
+        boundary measure. Both parities of each order are kept, since `cos` and
+        `sin` sample the facets differently.
+
+        On the straight-facet annulus these two are nearly the same number: the
+        spread of the deviation across all modes was measured at 1.02 to 1.03,
+        i.e. the geometric factor dominates completely. That is *not* true of
+        the curved spherical boundary - see `SphericalDtN.check_modes`.
+
+        `M = 0` is the degenerate pure-Robin case with no treated azimuthal
+        mode at all, and the sampled set must stay empty (bar the interior
+        mean) rather than fabricating an `m = 1` the solver never assembles.
         """
         table = [self._mean_mode(R)] if side == "interior" else []
-        for m in sorted({1, self.M} - {0}):
+        for m in sorted({m for m in (1, self.M) if 1 <= m <= self.M}):
             table.extend(self._azimuthal_modes(m, R, X))
         return table
 
@@ -759,18 +767,17 @@ class GravitySolver(SolverConfigurationMixin):
           rtol: Relative deviation beyond which the check fails.
           action: "raise" or "warn".
           sample: "all" checks every treated mode - one assembled boundary form
-            each, so the cost is linear in the truncation's mode count.
-            "extremes" checks only the handful returned by the descriptor's
-            `check_modes`: in 3-D `Y_00` and degree `L` at orders `0` and
-            `+-L`, in 2-D the interior `mean` mode where there is one plus
-            orders `1` and `M`. That is what `__init__` uses, because the
-            unconditional full sweep costs about 0.08 s per mode and buys
-            little: the deviation is dominated by the mode-independent factor
-            (discrete boundary measure)/(analytic boundary measure), which the
-            constant mode reports on its own, and the remainder is largest for
-            the highest degree, which the extremes cover. Pass "all"
-            explicitly, as the tests do, when the guarantee has to hold for
-            every mode.
+            each, so the cost is linear in the truncation's mode count. This is
+            the guarantee, and it is what the tests use.
+            "extremes" checks only the modes the descriptor's `check_modes`
+            returns, which is `O(L)` of them rather than `O(L^2)`; see that
+            method for the composition and for the measurements behind it.
+            `__init__` uses "extremes", because the full sweep costs about
+            0.08 s per mode unconditionally. It is a **proxy, not a bound** -
+            the worst mode is not always the highest one, and on a level-2
+            cubed sphere the sampled set was measured at 0.93 to 1.00 of the
+            true worst - so it is sized to give a constructor-time warning the
+            right order of magnitude, not to certify every mode.
         """
         if sample not in ("all", "extremes"):
             raise ValueError(
