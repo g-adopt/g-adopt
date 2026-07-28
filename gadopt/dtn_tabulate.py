@@ -1,12 +1,10 @@
 r"""Numerical tabulation of the DtN boundary eigenfunctions.
 
 `gadopt.spherical_harmonics.real_spherical_harmonic` builds one UFL expression
-per $(l, m)$, each a Horner evaluation of $d^{|m|} P_l / du^{|m|}$ whose
-coefficients come from sympy. That is the right representation for a form that
-has to be differentiated and taped, and the wrong one for evaluating every mode
-of a truncation at every boundary quadrature point: it costs $O(L^2)$ separate
-polynomial evaluations of average degree $2L/3$, i.e. $O(L^3)$ operations per
-point.
+per $(l, m)$. That is the right representation for a form that has to be
+differentiated and taped, and the wrong one for evaluating every mode of a
+truncation at every boundary quadrature point: it costs $O(L^2)$ separate
+evaluations of an $O(l)$-term recursion, i.e. $O(L^3)$ operations per point.
 
 This module evaluates *all* modes up to a truncation at once, in plain numpy,
 by the stable upward recursion in $l$ at fixed $m$ used throughout geodesy (and
@@ -32,13 +30,20 @@ combination, so there is no $(-1)^m$ anywhere below; that cancellation is the
 one thing about this convention that a recursion can silently get wrong, and
 `tests/unit/test_dtn_tabulate.py` pins it against `scipy.special.sph_harm_y`.
 
-It is pinned against scipy *alone*, deliberately. `real_spherical_harmonic` and
-its numpy twin evaluate $d^m P_l/du^m$ by Horner from sympy-generated
-coefficients, which cancels catastrophically as the degree grows: measured
-against 50-digit `mpmath`, that path is off by 2.9e-10 at $l = 20$ and 1.6e-6 at
-$l = 30$, where this recursion and scipy both sit near 1e-14. Requiring
-agreement with the incumbent at high degree would therefore pin the less
-accurate of the two. See `NOTES/FINDING-HORNER-ACCURACY.md`.
+It is pinned against scipy *alone*, deliberately, and the reason has changed.
+It used to be accuracy: `real_spherical_harmonic` evaluated $d^m P_l/du^m$ by
+Horner from sympy-generated coefficients, which cancels catastrophically as the
+degree grows - off by 2.9e-10 at $l = 20$ and 1.6e-6 at $l = 30$ against
+50-digit `mpmath`, where this recursion and scipy both sit near 1e-14 - so
+requiring agreement with it at high degree would have pinned the less accurate
+of the two. That defect is fixed (`NOTES/FINDING-HORNER-ACCURACY.md`).
+
+The reason it stays is now independence. Both modules take their recursion
+constants from `gadopt/associated_legendre.py`, so agreement between them
+cannot confirm the convention: a sign or a $\sqrt{2}$ wrong in the shared
+constants would move both by the same amount and every cross-check between
+them would still pass. Only an outside implementation can pin this, which is
+what scipy is here for.
 
 The 2-D counterpart is the same exercise on $\{\cos m\varphi, \sin m\varphi\}$
 by the complex-exponential (Chebyshev) recursion, and is included because the
@@ -52,6 +57,14 @@ after its optional leading `mean` mode.
 """
 
 import numpy as np
+
+from .associated_legendre import (
+    first_step,
+    recurrence_a,
+    recurrence_b,
+    sectoral_ratio,
+    sectoral_seed,
+)
 
 __all__ = [
     "spherical_index", "tabulate_real_spherical_harmonics",
@@ -109,6 +122,13 @@ def _normalised_legendre(
             a = sqrt((2l+1)(2l-1) / ((l-m)(l+m)))
             b = sqrt((2l+1)(l+m-1)(l-m-1) / ((2l-3)(l-m)(l+m)))
 
+    Those five constants come from `associated_legendre.py` rather than being
+    written out here, because `spherical_harmonics.py` runs the same recursion
+    on the sin-stripped functions to build its UFL expressions and the two
+    must not be able to drift apart. The loop structure stays local: this
+    function fuses every mode into one $O(L^2)$ pass on purpose, and calling a
+    single-mode routine from it would make it $O(L^3)$.
+
     Running it on $P_l^m$ and normalising afterwards would overflow near
     $l + m \approx 170$ (the factorials in $N_{lm}$); this form has no such
     limit.
@@ -117,16 +137,15 @@ def _normalised_legendre(
     sin_theta = np.asarray(sin_theta, dtype=float)
     P = np.zeros((L + 1, L + 1) + u.shape)
 
-    P[0, 0] = 1.0 / np.sqrt(4.0 * np.pi)
+    P[0, 0] = sectoral_seed(0)
     for m in range(1, L + 1):
-        P[m, m] = np.sqrt((2 * m + 1) / (2 * m)) * sin_theta * P[m - 1, m - 1]
+        P[m, m] = sectoral_ratio(m) * sin_theta * P[m - 1, m - 1]
     for m in range(L):
-        P[m + 1, m] = np.sqrt(2 * m + 3) * u * P[m, m]
+        P[m + 1, m] = first_step(m) * u * P[m, m]
     for m in range(L - 1):
         for l in range(m + 2, L + 1):
-            a = np.sqrt((2 * l + 1) * (2 * l - 1) / ((l - m) * (l + m)))
-            b = np.sqrt((2 * l + 1) * (l + m - 1) * (l - m - 1)
-                        / ((2 * l - 3) * (l - m) * (l + m)))
+            a = recurrence_a(l, m)
+            b = recurrence_b(l, m)
             P[l, m] = a * u * P[l - 1, m] - b * P[l - 2, m]
     return P
 

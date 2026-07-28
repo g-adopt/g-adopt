@@ -203,13 +203,27 @@ class BaseDtN(abc.ABC):
 
         Everything the low-rank path needs about a mode except its symbolic
         expression: the key, the DtN eigenvalue, the analytic normalisation and
-        the constraint-row scaling. Building the UFL expressions is the
-        expensive part - `real_spherical_harmonic` runs sympy per `(l, |m|)`
-        and emits an `O(l)`-deep tree - and the low-rank build gets its values
-        numerically from `gadopt.dtn_tabulate` instead, so constructing them
-        would reintroduce exactly the per-mode symbolic cost the path exists to
-        remove. Measured, that was about 0.015 s per mode, i.e. 13 s at
-        `L = 20`, hidden inside the constructor.
+        the constraint-row scaling. The low-rank build gets its values
+        numerically from `gadopt.dtn_tabulate`, so it has no use for the
+        expressions and does not build them.
+
+        That used to be a large saving and is now a small one, which is worth
+        recording rather than leaving as a stale rationale.
+        `real_spherical_harmonic` ran sympy once per `(l, |m|)` to generate
+        Horner coefficients; this docstring recorded about 0.015 s per mode,
+        i.e. 13 s at `L = 20`, hidden inside the constructor. It no longer runs
+        sympy at all - it builds an upward recursion from float constants - and
+        the cost has collapsed. Measured here, expression construction alone
+        for all 441 modes of `L = 20`: 0.088 s with the recursion (0.20
+        ms/mode) against 0.697 s for the pre-fix path with a cold sympy cache
+        (1.58 ms/mode) and 0.099 s warm.
+
+        Note that the 1.58 ms/mode I measure for the pre-fix path is an order
+        of magnitude below the 0.015 s recorded above, which I could not
+        reproduce; it may have been measured under different conditions. Either
+        way the conclusion is unchanged in direction and much weaker in size,
+        so skipping the expressions is now a tidiness argument rather than a
+        performance one.
 
         The default builds the full table and discards the expressions, which
         is correct but pointless; subclasses override it.

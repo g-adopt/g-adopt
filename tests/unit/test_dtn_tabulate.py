@@ -1,18 +1,24 @@
 """Convention tests for `gadopt.dtn_tabulate`.
 
 The tabulation exists to replace `real_spherical_harmonic`'s per-mode UFL
-Horner expressions inside the DtN machinery, so the only thing that can go
-wrong quietly is the convention: a sign, a `sqrt(2)`, or a Condon-Shortley
-phase that does not cancel changes what a trace coefficient *means* without
-changing any residual, any iteration count, or any accuracy test.
+expressions inside the DtN machinery, so the only thing that can go wrong
+quietly is the convention: a sign, a `sqrt(2)`, or a Condon-Shortley phase that
+does not cancel changes what a trace coefficient *means* without changing any
+residual, any iteration count, or any accuracy test.
 
 The convention is therefore pinned against **`scipy.special.sph_harm_y`
-alone**, for every `(l, m)` up to `L = 30`. The module this replaces is *not* a
-reference at high degree: its Horner evaluation of `d^m P_l/du^m` is off by
-2.9e-10 at `l = 20` and 1.6e-6 at `l = 30` against 50-digit mpmath, where both
-the recursion and scipy sit near 1e-14. The one test that compares against it
-records that gap rather than asserting the recursion matches it, and says so in
-its own docstring.
+alone**, for every `(l, m)` up to `L = 30`.
+
+That choice was originally forced: `real_spherical_harmonic` evaluated
+`d^m P_l/du^m` by Horner from its monomial coefficients and was off by 2.9e-10
+at `l = 20` and 1.6e-6 at `l = 30`, so requiring agreement with it at high
+degree would have pinned the less accurate of the two. That defect is fixed -
+it now runs the same upward recursion, from the shared constants in
+`gadopt/associated_legendre.py` - and the choice is kept for a different and
+better reason: the two paths now share those constants, so they are no longer
+independent enough to pin each other's convention. Only an outside
+implementation can do that. What they *can* do is bound each other, which is
+what `test_parity_ceiling_between_the_two_paths` now measures.
 """
 
 import numpy as np
@@ -223,50 +229,96 @@ def test_matches_mpmath_at_the_hardest_degree(directions):
         "the recursion, not the input representation, is the limit")
 
 
-def test_incumbent_horner_error_is_the_parity_ceiling(directions):
-    """Records how far the *incumbent* UFL construction is from scipy.
+def test_parity_ceiling_between_the_two_paths(directions):
+    """The ceiling that any tabulated-against-symbolic parity gate inherits.
 
-    This is a measurement, not a gate on the tabulation. Both routines are
-    exact in exact arithmetic; in floating point the sympy/Horner evaluation of
-    `d^m P_l / du^m` that `real_spherical_harmonic` and its numpy twin share
-    cancels catastrophically as the degree grows, while the normalised
-    recursion does not.
+    Two paths cannot agree with each other better than each agrees with the
+    truth, so every parity comparison in the fast-DtN work is bounded by this
+    number. It is pinned here, at `L = 20`, so that a change in either
+    implementation surfaces as a failure in this file rather than as a mystery
+    in a parity table somewhere downstream.
+
+    This test used to be called `test_incumbent_horner_error_is_the_parity_
+    ceiling`, and the ceiling used to be `real_spherical_harmonic`'s own error:
+    its Horner evaluation of `d^m P_l/du^m` cancelled catastrophically, giving
+    2.9e-10 at `l = 20` and 1.6e-6 at `l = 30` against 50-digit mpmath, so it
+    was the binding constraint by four to eight orders of magnitude and the
+    assertions were on it alone. That defect is fixed
+    (`NOTES/FINDING-HORNER-ACCURACY.md`); both paths now run the same upward
+    recursion and the ceiling has come down to ~1e-14, i.e. to the floor of
+    double precision for this quantity. The gates below are tightened
+    accordingly - from 1e-13 to 1e-14 below `l = 10`, and from 1e-9 to 1e-13 at
+    `l = 20`.
 
     **Neither printed column is an implementation's own error.** Both are
-    deviations from scipy, so both are bounded below by scipy's own error and
-    the recursion's column in particular charges it for scipy's rounding as
-    well as its own. Against 50-digit mpmath the true figures at `l = 20` are
-    5.2e-15 for the recursion, 9.0e-15 for scipy and 2.9e-10 for the incumbent;
-    at `l = 30`, 1.1e-14, 1.7e-14 and 1.6e-6. The recursion sits at scipy's
-    floor at both. See `NOTES/FINDING-HORNER-ACCURACY.md`.
+    deviations from scipy, which at these degrees is itself only good to about
+    1e-14, so each column charges its implementation for scipy's rounding as
+    well as its own. Only a 50-digit mpmath reference separates the three, and
+    that comparison lives in `tests/unit/test_spherical_harmonics_accuracy.py`
+    and `NOTES/bench/horner_accuracy.py` rather than here.
 
-    The assertion is on the incumbent, not on the recursion, because the number
-    that matters here is a ceiling the fast-DtN parity gates inherit: a
-    tabulated path cannot agree with the symbolic one to better than the
-    symbolic one agrees with the truth. Below `l = 10` that ceiling is under
-    `1e-13`, which is why the `1e-12` coefficient gate is meaningful there and
-    not above.
+    No ordering between the two columns is asserted. Not because the ordering
+    is noise - there is a real tendency - but because it is far too weak to
+    assert.
+
+    Protocol for the numbers below, stated in full so they can be checked
+    rather than taken: `theta ~ U(0.12, pi - 0.12)` and `phi ~ U(-pi, pi)` from
+    `numpy.random.default_rng(31337 + 911*k)` for sample `k`; points built as
+    `(sin t cos p, sin t sin p, cos t)`; the **generated** `theta, phi` passed
+    to `real_spherical_harmonic_numpy` and to the reference, and the **points**
+    passed to `tabulate_real_spherical_harmonics`, which is how this fixture
+    feeds the two paths; reference is 50-digit mpmath built from the defining
+    formula; the statistic is the worst deviation over all orders at `l = 20`.
+
+    On that protocol the symbolic path is the more accurate of the two in 19 of
+    30 samples of 10 points, 9 of 15 samples of 40 points, and 5 of 6 samples
+    of 150 points. So it wins more often than not, but the margin is small -
+    median ratio 1.09 to 1.15, individual samples spanning 0.55 to 2.54 - and
+    the tabulated path wins outright in a substantial minority. Across degrees
+    the tendency is visible at `l = 2` and `l = 5` and does not resolve at 10,
+    15 or 20, where three independent 100-point samples disagree in direction.
+
+    An ordering assertion would therefore be flaky. It is dropped for that
+    reason, and because the four absolute gates below supersede it: they bound
+    each column directly, which is what downstream parity comparisons actually
+    inherit.
+
+    One measurement trap, recorded because an earlier version of this docstring
+    fell into it and published the result. It carried a table showing the
+    tabulated path 70x to 457x worse near the poles, with a plausible mechanism
+    attached. That was an artefact of the harness, not a property of either
+    path: the harness recovered `theta = arccos(z/r)` from the points and
+    evaluated the reference at the recovered value. Near a pole that loses most
+    of `sin(theta)` - 2.6e-9 relative error at `theta = 1e-4`, and 5.2e-8 once
+    raised to the 20th power - so the reference and the symbolic path stayed
+    consistent with each other while the tabulation, which correctly takes
+    `sin(theta)` as `sqrt(x^2 + y^2)/r`, was charged for the whole difference.
+    Under the protocol above there is no near-pole amplification at all: the
+    ratio is 1.06 to 2.40 for colatitudes in `0.01 .. 0.25` and 1.30 to 1.37 in
+    `1e-4 .. 0.02`, indistinguishable from mid-latitude. It is the same trap
+    `_normalised_legendre` documents for the implementation, met in the
+    measurement instead.
     """
     theta, phi, points = directions
     table = tabulate_real_spherical_harmonics(L_MAX, points)
-    recursion, horner = {}, {}
+    tabulated, symbolic = {}, {}
     for k, (l, m) in enumerate(spherical_index(L_MAX)):
         reference = scipy_real_harmonic(l, m, theta, phi)
-        incumbent = real_spherical_harmonic_numpy(l, m, theta, phi)
-        recursion[l] = max(recursion.get(l, 0.0),
+        from_expression = real_spherical_harmonic_numpy(l, m, theta, phi)
+        tabulated[l] = max(tabulated.get(l, 0.0),
                            np.max(np.abs(table[k] - reference)))
-        horner[l] = max(horner.get(l, 0.0),
-                        np.max(np.abs(incumbent - reference)))
-    for l in sorted(horner):
-        print(f"    l={l:2d}  |recursion-scipy| {recursion[l]:.3e}   "
-              f"|incumbent-scipy| {horner[l]:.3e}")
+        symbolic[l] = max(symbolic.get(l, 0.0),
+                          np.max(np.abs(from_expression - reference)))
+    for l in sorted(symbolic):
+        print(f"    l={l:2d}  |tabulated-scipy| {tabulated[l]:.3e}   "
+              f"|symbolic-scipy| {symbolic[l]:.3e}")
 
-    # The recursion is uniformly the more accurate of the two above l = 6.
-    assert recursion[L_MAX] < horner[L_MAX]
-    # The ceiling the parity gates inherit, pinned so a change in either
-    # implementation shows up here rather than as a mystery in a parity table.
-    assert max(v for l, v in horner.items() if l <= 10) <= 1e-13
-    assert horner[L_MAX] <= 1e-9
+    # Headroom on each gate is a factor of 4 to 8; measured worst values are
+    # 2.554e-15 and 9.104e-15 below l = 10, and 1.210e-14 and 4.907e-14 at 20.
+    assert max(v for l, v in symbolic.items() if l <= 10) <= 1e-14
+    assert max(v for l, v in tabulated.items() if l <= 10) <= 5e-14
+    assert symbolic[L_MAX] <= 1e-13
+    assert tabulated[L_MAX] <= 3e-13
 
 
 def test_azimuthal_modes(directions):
