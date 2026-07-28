@@ -52,10 +52,13 @@ from firedrake import *
 from firedrake.ufl_expr import extract_unique_domain
 
 from firedrake.petsc import PETSc
+from mpi4py import MPI
 
 from .dtn_adjoint import annotate_lowrank_solve, taped_trace_coefficients
 from .dtn_lowrank import (
-    LowRankDtNOperator, apply_dirichlet_to_rows, build_boundary_mode_rows)
+    LowRankDtNOperator, apply_dirichlet_to_rows, boundary_facet_cellname,
+    build_boundary_mode_rows, supports_trace_build, tabulate_boundary_modes,
+    validation_keys)
 from .solver_options_manager import ConfigType, SolverConfigurationMixin
 from .spherical_harmonics import real_spherical_harmonic
 from .utility import CombinedSurfaceMeasure, DEBUG, INFO, ensure_constant, log_level
@@ -146,6 +149,92 @@ requested, and forcing anything else makes it worse (11 CG iterations as
 shipped, 15 with `chebyshev/jacobi`, 15 with `richardson/sor`). A genuinely
 unused option looks identical to this one, and both natural responses to the
 warning - "fixing" it, or discounting a comparison because of it - are wrong.
+"""
+
+
+QuadratureCalibration = namedtuple(
+    "QuadratureCalibration",
+    ["intercept", "slope", "max_distortion", "max_resolution"])
+"""The fitted rule, and the range of meshes it was fitted on.
+
+`intercept` and `slope` give `q = intercept + slope * (L h_max / R)`.
+`max_distortion` (`h_max / h_mean`) and `max_resolution` (`L h_max / R`) record
+how far the calibration set actually reached, so the solver can say when it is
+extrapolating instead of interpolating. Outside those the rule is a guess, and
+`GravitySolver.warn_on_quadrature_rule_limits` says so rather than pretending.
+
+Both bounds are the campaign's own maxima, and both must be read with
+`boundary_facet_scale`'s definition of `h_mean` - see the note there, because
+computing it the other way round understates the distortion and lets meshes the
+rule cannot integrate past the bound. The interval bound is 1.65 rather than the
+measured 1.621 so that the fitted rows themselves do not trip it; a rule that
+declares itself to be extrapolating on its own calibration data is a rule nobody
+will keep listening to.
+
+**A scalar bound cannot express the shape of the calibration set.** The 3-D
+campaign swept warp and refinement together, and `max_distortion` is the maximum
+over both, so a coarse mesh warped beyond anything measured can still report a
+distortion below a bound that a much finer, less warped mesh set. Measured, that
+leaves a residual: a level-2 shell at warp 0.20 with `L = 8` misses the 1e-8
+target by 1.9x while passing both bounds. Closing it properly needs a bound in
+the mesh-quality variable itself rather than in a scalar summary of it.
+"""
+
+QUADRATURE_RULE_COEFFICIENTS = {
+    "interval": QuadratureCalibration(6.0, 2.5, 1.65, 4.9),
+    "quadrilateral": QuadratureCalibration(8.0, 2.0, 1.9, 11.1),
+}
+r"""Calibrated `(intercept, slope)` of the boundary quadrature rule, by facet.
+
+The degree a boundary rule needs is set by how much of one oscillation falls
+inside one facet - `L h / R` - and not by `L`, which is what the incumbent
+default `2 (max_mode + element_degree)` uses. Keyed by the reference cell of a
+boundary facet rather than by dimension, because the requirement is a property
+of the rule on that cell: interval facets carry a plain Gauss rule, quadrilateral
+ones its tensor product.
+
+Measured on meshes chosen so that no facet-to-facet error cancellation survives
+- a composite Gauss rule on a *regular* boundary annihilates every harmonic but
+multiples of the facet count, which is worth ten orders on a uniform annulus and
+about one quadrature point on a pristine cubed sphere, and calibrating on those
+would ship a rule that under-integrates everywhere else. 45 3-D configurations
+and 30 2-D ones, target 1e-8 self-convergence, then confirmed against the
+integrand the solver actually assembles. Derivation, the intercept decision and
+the element-degree measurements are in `NOTES/FINDING-QUADRATURE-DEGREE-FORM.md`;
+the mechanism that invalidated the earlier calibration is in
+`NOTES/FINDING-QUADRATURE-CANCELLATION.md`.
+
+Simplex facets are deliberately absent: a collapsed Gauss-Jacobi rule on a
+triangle is not a tensor Gauss rule, so neither constant transfers, and an
+absent entry falls back to the incumbent default rather than guessing.
+"""
+
+QUADRATURE_ELEMENT_DEGREE_COST = 2
+"""Extra boundary degrees per element degree above CG1.
+
+Measured increments over 21 configurations: CG1 to CG2 gives
+`+2, +2, +2, 0, 0, +2, 0` and CG2 to CG3 gives `+2, 0, 0, +2, +2, 0, +2`. The
+envelope is +2 at both steps with no sign of growth. It has to be explicit
+rather than absorbed into the intercept: the CG1 margin does not cover it, and
+CG3 breaks the bare rule by two degrees on two of the seven meshes.
+"""
+
+
+QuadratureRuleReport = namedtuple(
+    "QuadratureRuleReport",
+    ["degree", "requested", "incumbent", "resolution", "distortion",
+     "calibration"])
+"""How `GravitySolver` arrived at its boundary quadrature degree.
+
+Fields:
+  degree: The degree actually used, i.e. `min(requested, incumbent)`.
+  requested: What the calibrated rule asked for, before the cap.
+  incumbent: `2 (max_mode + element_degree)`, the rule this replaced.
+  resolution: `max(L h_max / R)` over the DtN boundaries - oscillations per
+    facet, the variable the rule is written in.
+  distortion: `max(h_max / h_mean)`, how uneven the boundary facets are.
+  calibration: The `QuadratureCalibration` used, or None where the facet type
+    is uncalibrated and the incumbent was taken unchanged.
 """
 
 
@@ -417,7 +506,11 @@ class SphericalDtN(BaseDtN):
         bound, since the worst mode is not always at the highest degree - and
         `check_boundary_quadrature(sample="all")` remains the guarantee. What
         the proxy is measured to give is the right order of magnitude, which is
-        what a constructor-time warning needs.
+        what it is for. (It was sized for a constructor-time warning, which no
+        longer exists - `__init__` warns structurally instead and never
+        measures. On any mesh whose rule can be recovered, `sample="all"` costs
+        two assemblies rather than one per mode, so the proxy now earns its
+        keep only on simplex facets.)
 
         Not summed into a single form, which would look cheaper still: by the
         addition theorem `sum_m Y_lm^2 = (2l+1)/4pi` exactly, so a whole
@@ -454,11 +547,18 @@ class GravitySolver(SolverConfigurationMixin):
         Value of G in the chosen non-dimensionalisation
       quad_degree:
         Integer denoting the quadrature degree applied on boundary integrals
-        involving the DtN eigenfunctions; UFL's automatic estimate is
-        unreliable for these, so it defaults to 2 * (max mode degree +
-        element degree) and is verified in `__init__` by
-        `check_boundary_quadrature` on the extreme modes (call it again with
-        `sample="all"` to check every one)
+        involving the DtN eigenfunctions. UFL's automatic estimate is useless
+        for these - it adds a flat two degrees per elementary function, so
+        `cos(m phi)` estimates the same at m = 1 and m = 40 - and the degree is
+        therefore explicit. The default is mesh-aware: what decides whether a
+        rule resolves a mode is how much of one oscillation falls inside one
+        facet, `L h / R`, so the default follows that rather than the
+        truncation alone, and stops growing once the mesh resolves the mode.
+        See `default_quad_degree`. `__init__` warns for free when that rule is
+        capped or is extrapolating beyond the meshes it was calibrated on, but
+        does **not** measure whether the degree works - call
+        `check_boundary_quadrature` for that, and see
+        `warn_on_quadrature_rule_limits` for why it is not automatic
       source_quad_degree:
         Optional quadrature degree for the volume source term; useful when
         rho is an analytic UFL expression (e.g. an angular mode restricted to
@@ -553,8 +653,7 @@ class GravitySolver(SolverConfigurationMixin):
         else:
             self.set_function_spaces()
             self.set_form()
-        self.check_boundary_quadrature(rtol=1e-4, action="warn",
-                                       sample="extremes")
+        self.warn_on_quadrature_rule_limits()
         self.set_solver_options(solver_parameters, solver_parameters_extra)
         self.set_solver()
 
@@ -591,25 +690,206 @@ class GravitySolver(SolverConfigurationMixin):
                         raise ValueError(
                             f"Boundary {bc_id}: unknown condition '{bc_type}'.")
 
+    @staticmethod
+    def _scalar_degree(degree) -> int:
+        """Tensor-product elements report a (horizontal, vertical) tuple."""
+        return degree if isinstance(degree, int) else max(degree)
+
+    @property
+    def element_degree(self) -> int:
+        """Polynomial degree of the potential's element."""
+        return self._scalar_degree(self.solution_space.ufl_element().degree())
+
+    def geometry_probe_measure(self) -> Measure:
+        """A cheap boundary measure for sizing the real one.
+
+        The mesh-aware default needs the boundary's facet size and radius
+        before it can choose a degree, and those come from boundary integrals,
+        which need a measure. This is that measure, and it is not circular: its
+        integrands are the facet Jacobian and `|x|`, whose difficulty is set by
+        the coordinate element rather than by the truncation, and its results
+        only ever reach a `ceil`. `set_boundary_geometry` re-measures the radius
+        and the discrete boundary area at the *chosen* degree afterwards, so
+        nothing the solver uses numerically comes from this rule.
+        """
+        return self.surface_measure(2 * self._scalar_degree(
+            self.mesh.coordinates.function_space().ufl_element().degree()) + 4)
+
+    def surface_measure(self, degree: int) -> Measure:
+        """A boundary measure of the given degree, extruded or not."""
+        if self.mesh.extruded:
+            return CombinedSurfaceMeasure(self.mesh, degree)
+        return ds(domain=self.mesh, degree=degree)
+
+    def boundary_facet_scale(self, measure, bc_id) -> tuple[float, float, float]:
+        """`(h_max, h_mean, R)` of one boundary: facet scales and mean radius.
+
+        `h` is the facet's own measure in 2-D and the square root of its area
+        in 3-D - a facet *scale*, not its diameter, which for a quadrilateral
+        of side `s` would be `s sqrt(2)`. The distinction does not affect the
+        rule, because the constants in `QUADRATURE_RULE_COEFFICIENTS` were
+        calibrated against this same quantity, but the two are not the same
+        number and the difference is absorbed into the intercept.
+
+        `h_max` and not `h_mean`, because a mode is under-resolved on the worst
+        facet and one degree has to serve all of them.
+
+        The per-facet measure comes from a DG0 test function, whose entry for a
+        cell is the total measure of that cell's facets on this boundary. A cell
+        contributing two facets to the same marked boundary therefore reports
+        their sum and overstates `h`, which errs towards a richer rule.
+        """
+        areas = assemble(
+            TestFunction(FunctionSpace(self.mesh, "DG", 0)) * measure(bc_id))
+        owned = np.asarray(areas.dat.data_ro, dtype=float)
+        owned = owned[owned > 0.0]
+        # The facet scale is taken per facet and only then averaged -
+        # mean(sqrt(area)), never sqrt(mean(area)). The two differ by Jensen's
+        # inequality, always in the direction that makes a boundary look more
+        # uniform than it is, and `QUADRATURE_RULE_COEFFICIENTS.max_distortion`
+        # is read off the calibration campaign, which takes the former
+        # (`NOTES/bench/quad_rule.py:206`). Measured, the wrong order
+        # understated the distortion of a warped level-4 shell by 4.2% - 1.800
+        # against 1.879 - which was enough to hide meshes the rule cannot
+        # integrate behind a bound calibrated on meshes it can.
+        scales = np.sqrt(owned) if self.mesh.geometric_dimension == 3 else owned
+        comm = self.mesh.comm
+        h_max = comm.allreduce(float(scales.max()) if scales.size else 0.0,
+                               MPI.MAX)
+        h_total = comm.allreduce(float(scales.sum()), MPI.SUM)
+        facets = comm.allreduce(int(scales.size), MPI.SUM)
+
+        dss = measure(bc_id)
+        area = assemble(1 * dss)
+        if area <= 0.0 or facets == 0:
+            raise ValueError(f"DtN boundary {bc_id} has zero measure.")
+        radius = assemble(sqrt(dot(self.X, self.X)) * dss) / area
+        return h_max, h_total / facets, radius
+
+    def default_quad_degree(self) -> int:
+        r"""The mesh-aware boundary quadrature degree.
+
+            q = odd_ceil(a + b (L h_max / R) + 2 (element_degree - 1))
+
+        capped above by the incumbent `2 (max_mode + element_degree)`, so the
+        default never *costs* more than the one it replaces. That is a
+        statement about cost and not about accuracy: the cap is a `min`, so on
+        a boundary coarse enough for the rule to ask for more than the
+        incumbent the chosen degree is the incumbent, and integrates no better
+        than the code this replaces did. `check_boundary_quadrature` is what
+        makes that visible.
+
+        Odd because a degree-`q` rule uses `(q + 2) // 2` points per direction,
+        so `q` even and `q + 1` are the *same* rule and the odd one is exact to
+        one degree more; the incumbent is always even and pays for that every
+        time. Odd also preserves the low-rank path's `p = q // 2` node
+        coincidence, since `(q + 2) // 2 - 1 == q // 2` at either parity.
+
+        Falls back to the incumbent where there is nothing to size the rule
+        against - no DtN boundary at all - or where the facet type is
+        uncalibrated; see `QUADRATURE_RULE_COEFFICIENTS`.
+        """
+        return self.quadrature_rule_report().degree
+
+    def quadrature_rule_report(self) -> "QuadratureRuleReport":
+        """`default_quad_degree` with its workings, for the warnings to read.
+
+        Separated because the two things worth telling a user - that the cap
+        bound the degree, and that the mesh sits outside the range the rule was
+        calibrated on - are both by-products of choosing the degree and cost
+        nothing extra, whereas measuring whether the degree actually works is
+        expensive. See `warn_on_quadrature_rule_limits`.
+        """
+        element_degree = self.element_degree
+        max_mode = max(
+            (dtn.max_degree for _, dtn in self.dtn_boundaries), default=1)
+        incumbent = 2 * (max_mode + element_degree)
+
+        calibration = QUADRATURE_RULE_COEFFICIENTS.get(
+            boundary_facet_cellname(self.mesh))
+        if not self.dtn_boundaries or calibration is None:
+            return QuadratureRuleReport(
+                incumbent, incumbent, incumbent, 0.0, 1.0, calibration)
+
+        probe = self.geometry_probe_measure()
+        resolution, distortion = 0.0, 0.0
+        for bc_id, dtn in self.dtn_boundaries:
+            h_max, h_mean, radius = self.boundary_facet_scale(probe, bc_id)
+            resolution = max(resolution, dtn.max_degree * h_max / radius)
+            distortion = max(distortion, h_max / h_mean)
+
+        requested = int(np.ceil(
+            calibration.intercept + calibration.slope * resolution))
+        requested += QUADRATURE_ELEMENT_DEGREE_COST * (element_degree - 1)
+        if requested % 2 == 0:
+            requested += 1
+        return QuadratureRuleReport(
+            min(requested, incumbent), requested, incumbent, resolution,
+            distortion, calibration)
+
+    def warn_on_quadrature_rule_limits(self) -> None:
+        """Say when the default is outside what it was calibrated to do.
+
+        `__init__` deliberately does **not** measure whether the chosen degree
+        integrates the modes. It could - `check_boundary_quadrature` does it in
+        0.05 s - but only by building `HDiv Trace` spaces over the whole mesh,
+        and a trace space spans every facet rather than the boundary alone: at
+        degree 6 on a level-4 extruded cubed sphere that is 1.9 million dofs
+        against 13842 potential dofs. Firedrake caches the shared data on the
+        mesh, so the cost is retained rather than transient - measured, 404 MiB
+        held for the lifetime of the mesh, on a problem whose entire remaining
+        construction costs 251 MiB. Paying that on every construction, on the
+        multiplier path which otherwise builds no trace space at all, is worse
+        than the boundary-assembly cost this whole change exists to reduce.
+
+        So the constructor reports only what choosing the degree already told
+        it, which is free, and which happens to cover the two known ways the
+        rule can be wrong: the cap binding, and a mesh outside the calibration
+        set. Anything subtler needs the measurement, which is one call away and
+        is what the test suite uses.
+        """
+        report = getattr(self, "quad_rule_report", None)
+        if report is None or report.calibration is None:
+            return
+        advice = ("Call solver.check_boundary_quadrature() to measure whether "
+                  "the rule actually resolves the modes.")
+        # Compare rules, not degrees. A degree-q rule uses (q+2)//2 points, so
+        # capping an odd request down to the even incumbent below it changes
+        # nothing at all - it is the same rule - and warning about it would cry
+        # wolf on ordinary configurations. A level-2 shell at L=5 asks for 13
+        # and is capped to 12: seven points either way.
+        if (report.requested + 2) // 2 > (report.incumbent + 2) // 2:
+            warn(
+                f"The boundary quadrature rule asked for degree "
+                f"{report.requested} at L h_max/R = {report.resolution:.2f}, "
+                f"but the default is capped at the {report.incumbent} the "
+                f"previous rule would have given. This boundary is too coarse "
+                f"for this truncation: the degree is no worse than before, and "
+                f"no better. Refine the boundary, lower the truncation, or set "
+                f"quad_degree explicitly. " + advice)
+        elif (report.distortion > report.calibration.max_distortion
+                or report.resolution > report.calibration.max_resolution):
+            warn(
+                f"The boundary quadrature default is extrapolating: this mesh "
+                f"has h_max/h_mean = {report.distortion:.2f} and "
+                f"L h_max/R = {report.resolution:.2f}, against "
+                f"{report.calibration.max_distortion} and "
+                f"{report.calibration.max_resolution} in the set the rule was "
+                f"calibrated on. Degree {report.degree} may not be enough. "
+                + advice)
+
     def set_measures(
         self, quad_degree: int | None, source_quad_degree: int | None
     ) -> None:
         """Sets volume and surface measures, with explicit boundary quadrature."""
+        #: The rule's workings, or None when the caller named the degree and
+        #: there is consequently nothing for the solver to have an opinion on.
+        self.quad_rule_report = None
         if quad_degree is None:
-            element_degree = self.solution_space.ufl_element().degree()
-            if not isinstance(element_degree, int):
-                # Tensor-product elements on extruded meshes report a
-                # (horizontal, vertical) degree tuple.
-                element_degree = max(element_degree)
-            max_mode = max(
-                (dtn.max_degree for _, dtn in self.dtn_boundaries), default=1)
-            quad_degree = 2 * (max_mode + element_degree)
+            self.quad_rule_report = self.quadrature_rule_report()
+            quad_degree = self.quad_rule_report.degree
         self.quad_degree = quad_degree
-
-        if self.mesh.extruded:
-            self.ds = CombinedSurfaceMeasure(self.mesh, quad_degree)
-        else:
-            self.ds = ds(domain=self.mesh, degree=quad_degree)
+        self.ds = self.surface_measure(quad_degree)
 
         if self.cross_mesh:
             self.dx = Measure(
@@ -1013,51 +1293,204 @@ class GravitySolver(SolverConfigurationMixin):
                 "not conform to cell edges - a genuine accuracy problem in "
                 "itself; align the mesh with the density interfaces.")
 
+    def boundary_quadrature_rule(self, degree: int, bc_id):
+        """The boundary rule at `degree`, as `(weights * detJ, points)`.
+
+        `HDiv Trace` of degree `p` places its nodes at the `(p + 1)`-point
+        Gauss-Legendre points, and a measure of degree `q` uses `(q + 2) // 2`
+        of them, so at `p = q // 2` the nodes **are** the quadrature points.
+        Assembling a trace test function against the measure then returns
+        `w_i |J|_i` at node `i`, and interpolating the coordinates gives the
+        points: one assembly and one interpolation recover the entire rule,
+        after which every mode integral over that boundary is numpy.
+
+        This is the same undocumented FInAT property `gadopt.dtn_lowrank`
+        relies on, so it holds exactly where `supports_trace_build` does, and
+        callers must validate it rather than trust it - `check_boundary_
+        quadrature` does, against one assembled mode.
+
+        **One scalar trace space, never a vector one.** The coordinates are
+        interpolated component by component through a single reused `Function`
+        rather than through a `VectorFunctionSpace`. That is not a
+        micro-optimisation: a trace space spans every facet of the mesh, not
+        just the boundary, and Firedrake caches its shared data on the mesh, so
+        anything built here is retained for the mesh's lifetime. Measured on a
+        level-4 extruded cubed sphere - 13842 potential dofs - the vector
+        variant cost 923 MiB of retained memory against 251 MiB for the whole
+        rest of the constructor. Only the boundary entries are kept, so the
+        arrays returned are `O(boundary)` rather than `O(mesh)`.
+
+        Returns owned entries only; the caller reduces across ranks.
+        """
+        measure = self.surface_measure(degree)(bc_id)
+        trace = FunctionSpace(self.mesh, "HDiv Trace", degree // 2)
+        weights = np.asarray(
+            assemble(TestFunction(trace) * measure).dat.data_ro, dtype=float)
+        # Strictly positive on every facet the measure runs over - Gauss
+        # weights are positive and |detJ| does not vanish - and exactly zero on
+        # every other facet, which is what makes this the boundary selector.
+        carries = weights != 0.0
+        component = Function(trace)
+        points = np.empty((int(carries.sum()), self.mesh.geometric_dimension))
+        for axis in range(self.mesh.geometric_dimension):
+            component.interpolate(self.X[axis])
+            points[:, axis] = np.asarray(
+                component.dat.data_ro, dtype=float)[carries]
+        return weights[carries], points
+
+    #: Points per chunk when evaluating modes on a recovered boundary rule. The
+    #: tabulation is dense in (modes, points), so this bounds its footprint at
+    #: `n_modes * CHUNK` doubles regardless of boundary size or truncation.
+    _tabulation_chunk = 8192
+
+    def _mode_norms(self, bc_id, dtn, side, radius, degree, keys) -> np.ndarray:
+        """`integral e_k^2 ds` at `degree`, for the named modes, in `keys` order."""
+        if supports_trace_build(self.mesh):
+            weights, points = self.boundary_quadrature_rule(degree, bc_id)
+            order = {mode.key: i for i, mode
+                     in enumerate(dtn.mode_metadata(side, radius))}
+            wanted = [order[key] for key in keys]
+            local = np.zeros(len(keys))
+            for start in range(0, len(weights), self._tabulation_chunk):
+                block = slice(start, start + self._tabulation_chunk)
+                table = tabulate_boundary_modes(dtn, side, points[block])[wanted]
+                local += (table * table) @ weights[block]
+            # Owned entries only, so this is the exact global integral with
+            # nothing double counted - the same reduction the low-rank
+            # operator's coefficients() performs.
+            total = np.empty_like(local)
+            self.mesh.comm.Allreduce(local, total, MPI.SUM)
+            return total
+
+        measure = self.surface_measure(degree)(bc_id)
+        modes = {mode.key: mode for mode
+                 in dtn.modes_by_key(keys, side, radius, self.X)}
+        return np.array([assemble(modes[key].expr**2 * measure) for key in keys])
+
+    def _validate_recovered_rule(self, bc_id, dtn, side, radius, degree,
+                                 keys, values) -> None:
+        """Confirm the recovered rule reproduces one assembled mode integral.
+
+        The recovery rests on trace nodes coinciding with quadrature points,
+        which is a FInAT variant choice rather than a guarantee. If it lapsed,
+        the points would be misplaced while the weights still summed to the
+        boundary area, so a cheaper invariant would not catch it - and this
+        function is the backstop for the quadrature default, which makes
+        silently measuring the wrong thing the one failure that matters.
+
+        The mode is taken from `validation_keys` and never from the end of the
+        caller's list, which in the degenerate truncations is the constant:
+        `SphericalDtN(L=0)` samples only `Y0,0` and `CylindricalDtN(M=0)` on an
+        interior boundary only `mean`. A constant is reproduced exactly by any
+        nodal interpolation whatever its node placement, so validating on one
+        certifies nothing - measured elsewhere in this codebase, `Y0,0` passes
+        at 1.2e-16 on a build wrong by eight orders.
+        """
+        wanted = [key for key in validation_keys(dtn) if key in keys]
+        if not wanted:
+            return
+        key = wanted[0]
+        value = values[keys.index(key)]
+        sampled = dtn.modes_by_key([key], side, radius, self.X)
+        if not sampled:
+            return
+        reference = assemble(sampled[0].expr**2 * self.surface_measure(degree)(bc_id))
+        if abs(value - reference) > 1e-9 * abs(reference):
+            raise RuntimeError(
+                f"The recovered boundary quadrature rule disagrees with "
+                f"assembly by {abs(value - reference) / abs(reference):.3e} on "
+                f"mode {key} of boundary {bc_id} at degree {degree}. The "
+                f"recovery needs 'HDiv Trace' of degree {degree // 2} to place "
+                f"its nodes at the {degree // 2 + 1}-point Gauss-Legendre "
+                f"points, which this Firedrake no longer does; the same "
+                f"assumption underpins gadopt.dtn_lowrank's fast build.")
+
     def check_boundary_quadrature(
         self, rtol: float = 1e-8, action: str = "raise",
-        sample: str = "all",
+        sample: str = "all", reference_degree: int | None = None,
     ) -> float:
-        """Verifies that boundary quadrature and mesh resolve the DtN modes.
+        """Measures the boundary rule's own quadrature error, by self-convergence.
 
-        Checks the assembled boundary integral of every eigenfunction squared
-        against its analytic normalisation and returns the worst relative
-        deviation, raising (or warning, with action="warn") beyond rtol.
+        Differences the boundary integral of each eigenfunction squared at
+        `quad_degree` against the same integral at a richer degree on the same
+        mesh, and returns the worst relative difference, raising (or warning,
+        with action="warn") beyond rtol.
+
+        **It used to compare against the analytic normalisation, and that could
+        not see the variable it was named for.** The discrete boundary is not a
+        sphere - a degree-2 coordinate cubed sphere differs from one by an
+        amount no rule removes - so that comparison reported boundary
+        sphericity. Measured on a level-2 extruded cubed sphere with
+        `SphericalDtN(L=8)`, the old quantity moves from 2.328711e-05 at
+        `q = 12` to 2.328713e-05 at `q = 40` - flat to seven significant
+        figures across a four-fold change in the degree - while one refinement
+        level moves it to 4.976520e-07, nearly two orders.
+        Differencing two degrees on one mesh cancels the geometry error exactly,
+        because it is common to both, and leaves quadrature error alone: on the
+        same configuration the new quantity runs 1.5492e-05 at `q = 8` to
+        1.6221e-15 at `q = 20`, ten orders down to the round-off floor of the
+        assembled integral.
+        Sphericity is not thereby unchecked: `set_boundary_geometry` warns on
+        the rms radius deviation, which is the direct measurement of it.
+
+        This matters more than a tidy-up because `default_quad_degree` is a
+        calibrated formula whose margin on badly distorted meshes is thin, and
+        this is the only thing standing behind it.
 
         Args:
-          rtol: Relative deviation beyond which the check fails.
+          rtol: Relative difference beyond which the check fails.
           action: "raise" or "warn".
-          sample: "all" checks every treated mode - one assembled boundary form
-            each, so the cost is linear in the truncation's mode count. This is
-            the guarantee, and it is what the tests use.
-            "extremes" checks only the modes the descriptor's `check_modes`
-            returns, which is `O(L)` of them rather than `O(L^2)`; see that
-            method for the composition and for the measurements behind it.
-            `__init__` uses "extremes", because the full sweep costs about
-            0.08 s per mode unconditionally. It is a **proxy, not a bound** -
-            the worst mode is not always the highest one, and on a level-2
-            cubed sphere the sampled set was measured at 0.93 to 1.00 of the
-            true worst - so it is sized to give a constructor-time warning the
-            right order of magnitude, not to certify every mode.
+          sample: "all" checks every treated mode; this is the guarantee, and
+            it is what the tests use. "extremes" checks only the modes the
+            descriptor's `check_modes` returns, `O(L)` of them rather than
+            `O(L^2)`. It is a **proxy, not a
+            bound** - the worst mode is not always the highest one, and on a
+            level-2 cubed sphere the sampled set was measured at 0.93 to 1.00
+            of the true worst.
+            On meshes where the rule can be recovered (interval and
+            quadrilateral facets) the cost of either is two assemblies per
+            boundary per degree rather than one per mode, so "all" is nearly
+            free there and the distinction only bites on simplex facets.
+          reference_degree: Degree to difference against. Defaults to
+            `quad_degree + 8`, four more points per direction, which sits about
+            four orders below the degree under test - enough to certify a 1e-8
+            target. Measured against a far richer reference it under-reports by
+            nothing at all down to `q = 3`, and on a mesh whose self-convergence
+            genuinely floors it still tracks the truth to within 16%, erring
+            conservative.
         """
         if sample not in ("all", "extremes"):
             raise ValueError(
                 f"sample must be 'all' or 'extremes', got {sample!r}.")
+        if reference_degree is None:
+            reference_degree = self.quad_degree + 8
+
         worst, worst_key = 0.0, None
         for bc_id, dtn in self.dtn_boundaries:
-            side, R = self.boundary_geometry[bc_id]
-            dss = self.ds(bc_id)
-            table = (dtn.modes(side, R, self.X) if sample == "all"
-                     else dtn.check_modes(side, R, self.X))
-            for mode in table:
-                val = assemble(mode.expr**2 * dss)
-                dev = abs(val - mode.norm) / mode.norm
-                if dev > worst:
-                    worst, worst_key = dev, (bc_id, mode.key)
+            side, radius = self.boundary_geometry[bc_id]
+            keys = [mode.key for mode
+                    in (dtn.mode_metadata(side, radius) if sample == "all"
+                        else dtn.check_modes(side, radius, self.X))]
+            if not keys:
+                continue
+            values = self._mode_norms(
+                bc_id, dtn, side, radius, self.quad_degree, keys)
+            exact = self._mode_norms(
+                bc_id, dtn, side, radius, reference_degree, keys)
+            if supports_trace_build(self.mesh):
+                self._validate_recovered_rule(
+                    bc_id, dtn, side, radius, reference_degree, keys, exact)
+            for key, value, reference in zip(keys, values, exact):
+                deviation = abs(value - reference) / abs(reference)
+                if deviation > worst:
+                    worst, worst_key = deviation, (bc_id, key)
+
         if worst > rtol:
             message = (
-                f"Boundary quadrature/mesh does not resolve DtN mode "
-                f"{worst_key}: relative deviation {worst:.3e} > {rtol:.1e}. "
-                "Refine the boundary mesh or raise quad_degree.")
+                f"Boundary quadrature does not resolve DtN mode {worst_key}: "
+                f"self-convergence against degree {reference_degree} is "
+                f"{worst:.3e} > {rtol:.1e} at quad_degree={self.quad_degree}. "
+                "Raise quad_degree, or refine the boundary mesh.")
             if action == "warn":
                 warn(message)
             else:

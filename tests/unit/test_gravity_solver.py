@@ -157,12 +157,20 @@ class TestSetup:
             SphericalDtN(L=-1)
 
     def test_quadrature_check(self):
+        """A degree too low to resolve the modes is caught by the check.
+
+        `__init__` no longer measures this - it warns for free when the rule is
+        capped or extrapolating, but the measurement needs `HDiv Trace` spaces
+        over the whole mesh and is not worth a permanent 400 MiB on every
+        construction. See `GravitySolver.warn_on_quadrature_rule_limits`. So an
+        explicitly requested degree is honoured, and the check is what rejects
+        it.
+        """
         mesh = annulus_mesh(n_azimuthal=32, dr=0.25)
         psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-        with pytest.warns(UserWarning, match="does not resolve"):
-            solver = GravitySolver(
-                psi, 0.0, bcs={"top": {"dtn": CylindricalDtN(M=10)}},
-                quad_degree=1)
+        solver = GravitySolver(
+            psi, 0.0, bcs={"top": {"dtn": CylindricalDtN(M=10)}},
+            quad_degree=1)
         with pytest.raises(ValueError, match="does not resolve"):
             solver.check_boundary_quadrature(rtol=1e-6)
 

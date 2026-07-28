@@ -98,7 +98,8 @@ from .dtn_tabulate import (
     tabulate_azimuthal_modes, tabulate_real_spherical_harmonics)
 
 __all__ = ["BoundaryModeRows", "build_boundary_mode_rows",
-           "boundary_facet_cellname", "supports_trace_build"]
+           "boundary_facet_cellname", "supports_trace_build",
+           "tabulate_boundary_modes", "validation_keys"]
 
 
 def boundary_facet_cellname(mesh) -> str:
@@ -184,7 +185,7 @@ class BoundaryModeRows:
         return self.rows @ psi_local[self.dofs] * self.recovery
 
 
-def _tabulate(descriptor, side, points):
+def tabulate_boundary_modes(descriptor, side, points):
     """Mode values at `points`, in `descriptor.modes` order.
 
     The 2-D interior `mean` mode is the constant 1 and is not in the numerical
@@ -200,7 +201,7 @@ def _tabulate(descriptor, side, points):
     return table
 
 
-def _validation_keys(descriptor):
+def validation_keys(descriptor):
     """Keys of the modes the build asserts itself on.
 
     The highest degree, both azimuthal branches. Never the constant: any nodal
@@ -293,7 +294,8 @@ def _trace_build(mesh, v, measure, descriptor, side, trace_degree, n_modes):
     W = FunctionSpace(mesh, "HDiv Trace", trace_degree)
     Wv = VectorFunctionSpace(mesh, "HDiv Trace", trace_degree)
     nodes = Function(Wv).interpolate(SpatialCoordinate(mesh))
-    table = _tabulate(descriptor, side, np.asarray(nodes.dat.data_ro, dtype=float))
+    table = tabulate_boundary_modes(
+        descriptor, side, np.asarray(nodes.dat.data_ro, dtype=float))
     if table.shape[0] != n_modes:
         raise ValueError(
             f"tabulation produced {table.shape[0]} modes but the descriptor "
@@ -322,7 +324,7 @@ def _assert_against_reference(rows, keys, descriptor, side, radius, v, measure,
     is a fixed handful of assemblies per boundary rather than one per mode.
     """
     sampled = descriptor.modes_by_key(
-        _validation_keys(descriptor), side, radius, SpatialCoordinate(mesh))
+        validation_keys(descriptor), side, radius, SpatialCoordinate(mesh))
     if not sampled:
         return
     indices = [keys.index(mode.key) for mode in sampled]
@@ -381,9 +383,19 @@ class LowRankDtNOperator:
     L^2(boundary)-orthogonal family `{e_k}`: it is the boundary mass form minus
     the projection onto the treated modes, i.e. the energy of the untreated
     tail. The middle sum is PSD because every `lam_k >= 0`. So the whole is the
-    exact DtN energy plus the untreated Robin, and CG is legitimate. The
-    orthogonality that argument needs is the same property
-    `check_boundary_quadrature` verifies mode by mode.
+    exact DtN energy plus the untreated Robin, and CG is legitimate.
+
+    **That orthogonality is not what `check_boundary_quadrature` verifies**, and
+    this docstring used to claim it was. The argument needs the *off-diagonal*
+    `integral e_j e_k ds` to vanish; the check measures the diagonal, and
+    measures it by self-convergence in the quadrature degree. Those are
+    different quantities and the difference is not academic: the off-diagonal
+    Gram was measured at 1.9e-03 of the diagonal on a warped level-2 shell and
+    is **bit-identical at degree q and q+16**, i.e. it is the discrete boundary
+    not being a sphere and no quadrature degree removes it. Checking it would
+    put geometry error back into an instrument built to exclude it. Whether
+    that residual threatens the PSD argument in practice is open and predates
+    this code; see `NOTES/TODO-GRAVITY.md` A3.
 
     (With an interior boundary and no exterior one, constants sit in the
     nullspace. That is the physics of a source-free core, not a defect.)
