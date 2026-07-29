@@ -196,7 +196,8 @@ Both bounds are the campaign's own maxima, and both must be read with
 `boundary_facet_scale`'s definition of `h_mean` - see the note there, because
 computing it the other way round understates the distortion and lets meshes the
 rule cannot integrate past the bound. The interval bound is 1.65 rather than the
-measured 1.621 so that the fitted rows themselves do not trip it; a rule that
+measured 1.621, and the triangular ones 2.1 and 5.7 rather than the measured
+2.07 and 5.654, so that the fitted rows themselves do not trip them; a rule that
 declares itself to be extrapolating on its own calibration data is a rule nobody
 will keep listening to.
 
@@ -212,6 +213,7 @@ the mesh-quality variable itself rather than in a scalar summary of it.
 QUADRATURE_RULE_COEFFICIENTS = {
     "interval": QuadratureCalibration(6.0, 2.5, 1.65, 4.9),
     "quadrilateral": QuadratureCalibration(8.0, 2.0, 1.9, 11.1),
+    "triangle": QuadratureCalibration(9.0, 2.5, 2.1, 5.7),
 }
 r"""Calibrated `(intercept, slope)` of the boundary quadrature rule, by facet.
 
@@ -226,16 +228,37 @@ Measured on meshes chosen so that no facet-to-facet error cancellation survives
 - a composite Gauss rule on a *regular* boundary annihilates every harmonic but
 multiples of the facet count, which is worth ten orders on a uniform annulus and
 about one quadrature point on a pristine cubed sphere, and calibrating on those
-would ship a rule that under-integrates everywhere else. 45 3-D configurations
-and 30 2-D ones, target 1e-8 self-convergence, then confirmed against the
-integrand the solver actually assembles. Derivation, the intercept decision and
-the element-degree measurements are in `NOTES/FINDING-QUADRATURE-DEGREE-FORM.md`;
-the mechanism that invalidated the earlier calibration is in
+would ship a rule that under-integrates everywhere else. 45 quadrilateral
+configurations, 45 triangular ones and 30 interval ones, target 1e-8
+self-convergence, then confirmed against the integrand the solver actually
+assembles. Derivation, the intercept decision and the element-degree
+measurements are in `NOTES/FINDING-QUADRATURE-DEGREE-FORM.md`; the mechanism
+that invalidated the earlier calibration is in
 `NOTES/FINDING-QUADRATURE-CANCELLATION.md`.
 
-Simplex facets are deliberately absent: a collapsed Gauss-Jacobi rule on a
-triangle is not a tensor Gauss rule, so neither constant transfers, and an
-absent entry falls back to the incumbent default rather than guessing.
+**Triangles carry their own constants rather than the quadrilateral ones**,
+measured, not assumed: transferring the quadrilateral constants would have
+under-integrated 5 of the 45 measured triangular configurations, worst at
+`ms0.5 w0.2 L20` (needs 25, would be given 21), so the fitted rule is both
+taller and steeper (9 + 2.5 x against 8 + 2.0 x). **Why is not as settled as
+the fact.** All 5 failing rows are warped (`w0.1` or `w0.2`); none of the 15
+unwarped rows fails, and the warped rows' distortion (worst 2.07) exceeds
+anything in the quadrilateral set (1.88). A collapsed Gauss-Jacobi rule being
+weaker than a tensor rule at the same nominal degree is one explanation and
+the one this campaign was designed to test, but the calibration variable
+`x = L h_max/R` not capturing distortion (the open question in A8) is an
+equally consistent reading of the same 5 rows, and the data does not
+distinguish them. Do not transfer `(9, 2.5)` to a differently-distorted
+triangular family on the strength of the mechanism story alone. The set is
+unstructured gmsh tetrahedra at three mesh sizes and three warps; the
+campaign is `--simplex` in `NOTES/bench/quad_calibrate.py`, and the instrument
+that made it affordable is described in `NOTES/bench/quad_rule.py`.
+
+Read by the facet's reference cell, so this entry also governs an *extruded*
+triangular base cell - the icosahedral shell - which the calibration set does
+not contain. Neither fast instrument can measure that family (see
+`dtn_lowrank.boundary_facet_cellname`), so it is covered by a per-mode
+assembled spot check instead, `--icosahedral`.
 """
 
 QUADRATURE_ELEMENT_DEGREE_COST = 2
@@ -789,8 +812,10 @@ class GravitySolver(SolverConfigurationMixin):
         # inequality, always in the direction that makes a boundary look more
         # uniform than it is, and `QUADRATURE_RULE_COEFFICIENTS.max_distortion`
         # is read off the calibration campaign, which takes the former
-        # (`NOTES/bench/quad_rule.py:206`). Measured, the wrong order
-        # understated the distortion of a warped level-4 shell by 4.2% - 1.800
+        # (`NOTES/bench/quad_rule.geometry` - a name rather than a line
+        # number, since the file is gitignored and reshuffles under edits).
+        # Measured, the wrong order understated the distortion of a warped
+        # level-4 shell by 4.2% - 1.800
         # against 1.879 - which was enough to hide meshes the rule cannot
         # integrate behind a bound calibrated on meshes it can.
         scales = np.sqrt(owned) if self.mesh.geometric_dimension == 3 else owned
@@ -872,7 +897,14 @@ class GravitySolver(SolverConfigurationMixin):
         """Say when the default is outside what it was calibrated to do.
 
         `__init__` deliberately does **not** measure whether the chosen degree
-        integrates the modes. It could - `check_boundary_quadrature` does it in
+        integrates the modes, and the first reason is a convention rather than a
+        number: **G-ADOPT solvers do not compute in their constructors.** They
+        validate structurally and cheaply; anything that measures is an explicit
+        call the caller decides to make. That alone settles the placement, and
+        it does not become wrong if the measurement gets cheaper.
+
+        The cost happens to agree, and is recorded because it is what the
+        alternative would have cost. `check_boundary_quadrature` does it in
         0.05 s - but only by building `HDiv Trace` spaces over the whole mesh,
         and a trace space spans every facet rather than the boundary alone: at
         degree 6 on a level-4 extruded cubed sphere that is 1.9 million dofs

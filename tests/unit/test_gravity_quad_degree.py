@@ -350,18 +350,30 @@ class TestDefaultDegree:
         solver = build(annulus(96), CylindricalDtN(M=4), quad_degree=17)
         assert solver.quad_degree == 17
 
-    def test_uncalibrated_facets_fall_back_rather_than_guess(self):
-        """Triangular boundary facets have no calibrated constants.
+    def test_triangular_facets_carry_their_own_constants(self):
+        """A collapsed Gauss-Jacobi rule is not a tensor Gauss rule.
 
-        A collapsed Gauss-Jacobi rule on a triangle is not a tensor Gauss rule,
-        so neither the intercept nor the slope transfers, and the rule declines
-        to extrapolate. Silently reusing the quadrilateral constants there is
-        the failure this pins against.
+        Triangles were uncalibrated and fell back to the incumbent until A5
+        measured them. What must not happen is the *other* failure: reusing the
+        quadrilateral constants, which under-integrate 5 of the 45 measured
+        triangular configurations. So the two entries must stay distinct, and
+        the triangular rule must be the taller and steeper of the two.
         """
-        assert "triangle" not in QUADRATURE_RULE_COEFFICIENTS
-        descriptor = SphericalDtN(L=2)
+        triangle = QUADRATURE_RULE_COEFFICIENTS["triangle"]
+        quadrilateral = QUADRATURE_RULE_COEFFICIENTS["quadrilateral"]
+        assert triangle.intercept > quadrilateral.intercept
+        assert triangle.slope > quadrilateral.slope
+
+        descriptor = SphericalDtN(L=10)
         solver = build(icosahedral_shell(2), descriptor)
-        assert solver.quad_degree == incumbent(descriptor)
+        assert solver.quad_rule_report.calibration == triangle
+        # Pinned to the actual degree, not just "< incumbent": the
+        # quadrilateral constants would also clear that bar here
+        # (odd_ceil(8 + 2.0*2.162) = 13, still below the incumbent 22), so a
+        # bare inequality would not catch a silent revert to them.
+        assert solver.quad_degree == 15
+        assert solver.quad_degree < incumbent(descriptor)
+        assert solver.check_boundary_quadrature(sample="all") < TARGET
 
     def test_no_dtn_boundary_falls_back(self):
         """Nothing to size the rule against; behaviour must not change."""
