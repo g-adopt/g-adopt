@@ -2,6 +2,10 @@
 # a private research record, not part of the repository.
 NOTES/
 
+# Generated meshes. Rebuilt by demos/gravity/generate_*.py; 47 MB of them in
+# the gravity demos alone, and none has ever been tracked.
+*.msh
+
 *.pvd
 *.vtu
 *.pvtu
