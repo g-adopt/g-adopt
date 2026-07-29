@@ -1,13 +1,22 @@
 r"""Weak/stress-scaling model for the gravitational Poisson DtN solver.
 
-One `(level, L)` case of the scaling study described in `SCALING-ANALYSIS.md`.
-It builds an extruded cubed-sphere shell, drives it with a two-bump
-spherical-harmonic checkerboard density (so every treated DtN mode on both
-boundaries is genuinely excited), solves with the iterative `GravitySolver`
-preset, and records into a JSON sidecar next to the log: the iteration counts,
-the error against the closed-form potential, the per-degree boundary power
-spectrum, the wall times split into their construction, first-solve and
-steady-state parts, and the peak memory.
+One `(level, L, representation)` case of the scaling study described in
+`NOTES/SCALING-ANALYSIS.md`. It builds an extruded cubed-sphere shell, drives it
+with a two-bump spherical-harmonic checkerboard density (so every treated DtN
+mode on both boundaries is genuinely excited), solves with the iterative
+`GravitySolver` preset, and records into a JSON sidecar next to the log: the
+iteration counts, the error against the closed-form potential, the per-degree
+boundary power spectrum, the wall times split into their construction,
+first-solve and steady-state parts, the PETSc per-event performance record, and
+the peak memory.
+
+Both DtN representations are measured on the same case. `multiplier` promotes
+every treated mode to a scalar Real unknown eliminated by a Schur complement;
+`lowrank` eliminates them by hand and applies a rank-`n` update to the
+Robin-shifted stiffness. They solve the same discrete system, so every accuracy
+number below should agree between them to well under the discretisation error -
+which is what makes the wall-time difference a measurement of cost rather than
+of two different answers.
 
 The error against the closed form is the load-bearing correctness number, not a
 nicety. The source is band-limited to degree `L` and the DtN maps are exact for
@@ -18,12 +27,27 @@ matters because this solver has demonstrated that it can converge cleanly to a
 wrong answer in parallel - and the measure of how high a truncation a given
 mesh can actually carry.
 
-The solver bundle here fixes the two things the study needs that the shipped
-preset does not do on its own: the `fieldsplit_1` GMRES is run non-restarted
-(`ksp_gmres_restart = n`, since PETSc's default restart of 30 would censor every
-count above 30) and capped at `~1.2 n` (the guaranteed GMRES termination point
-plus slack, so a pathological corner fails fast and diagnosably rather than on
-walltime).
+On the multiplier path the solver bundle here fixes the two things the study
+needs that the shipped preset does not do on its own: the `fieldsplit_1` GMRES
+is run non-restarted (`ksp_gmres_restart = n`, since PETSc's default restart of
+30 would censor every count above 30) and capped at `~1.2 n` (the guaranteed
+GMRES termination point plus slack, so a pathological corner fails fast and
+diagnosably rather than on walltime). The low-rank path has no fieldsplit to
+configure and takes the shipped preset unchanged.
+
+**On comparing the two paths' iteration counts.** Do not. The shipped presets
+run the multiplier path as an outer FGMRES at `rtol` 1e-11 over a `fieldsplit_0`
+CG at 1e-8, and the low-rank path as a single CG at 1e-11 where that tolerance
+*is* the solution accuracy. So the delivered accuracy is comparable but "an
+iteration" means different things, and this study has already been bitten once
+by a comparison that reported "8 against 8, no change" while concealing a factor
+of fifteen, because it compared iterations per inner solve rather than
+preconditioner applications per gravity solve. The comparable quantity is
+`amg_applications_per_solve`, recorded below on both paths: the number of
+algebraic-multigrid V-cycles one gravity solve costs, summed over every inner
+invocation. Tolerances are recorded in the sidecar rather than assumed, and the
+independent evidence that the two paths deliver the same answer is that their
+errors against the closed form agree - `--parity` measures that directly.
 
 Kernel-generation cost is measured by running the same case twice against a
 cache that is empty on the first invocation, labelled with `--cache-phase`.
@@ -34,7 +58,8 @@ cache can save; and a repeat solve in the same process pays neither.
 
 Run locally against this worktree with, e.g.
 
-    PYTHONPATH=<worktree> <firedrake-python> gravity_cubed_sphere.py 4 --lmax 5
+    PYTHONPATH=<worktree> <firedrake-python> gravity_cubed_sphere.py 4 --lmax 5 \
+        --representation lowrank
 """
 
 import argparse
@@ -70,7 +95,14 @@ RMIN, RMAX = 1.22, 2.22
 
 # Isotropic refinement: the extrusion layer count doubles with the level in
 # lockstep with the horizontal refinement, holding cell shape fixed.
-LAYERS = {4: 8, 5: 16, 6: 32, 7: 64}
+#
+# Levels 2 and 3 are not part of the campaign ladder, which runs 4 to 7 and is
+# defined by `submit_gravity_scaling.LADDER`. They are here so the harness and
+# the parity gate can be exercised on a laptop in seconds: without them the only
+# way to run this file at all was to request the level-4 case, and a harness that
+# cannot be smoke-tested off the machine it deploys to gets debugged in the
+# queue.
+LAYERS = {2: 2, 3: 4, 4: 8, 5: 16, 6: 32, 7: 64}
 
 # PCFIELDSPLIT used to refuse more than 128 fields, and the mixed space carries
 # 1 + 2(L+1)^2 of them, which capped this model at L = 6. The shipped preset now
@@ -237,13 +269,26 @@ def analytic_error(V, psi, params):
     }
 
 
-def solver_bundle(n, full_view=True):
+def solver_bundle(n, representation="multiplier", full_view=True):
     """PETSc options bundle: full solver view plus the fieldsplit_1 fixes.
 
-    The sub-solver options sit under `dtn`, the options prefix of the
-    `gadopt.DtNTwoBlockSchurPC` that now describes the two Schur blocks; at the
-    top level they would no longer reach PETSc (and the solver says so).
+    On the multiplier path the sub-solver options sit under `dtn`, the options
+    prefix of the `gadopt.DtNTwoBlockSchurPC` that describes the two Schur
+    blocks; at the top level they would no longer reach PETSc (and the solver
+    says so).
+
+    The low-rank path has no fieldsplit and no `dtn` prefix - it drives one KSP
+    on `A + B` directly - so none of those keys apply and passing them would be
+    silently inert. It gets the view options alone, and takes the shipped
+    tolerance unchanged so that what is measured is the shipped preset.
     """
+    if representation == "lowrank":
+        if not full_view:
+            return {}
+        return {"ksp_view": None,
+                "ksp_monitor_true_residual": None,
+                "ksp_converged_reason": None}
+
     bundle = {
         "dtn": {
             "fieldsplit_1": {
@@ -275,6 +320,43 @@ def solver_bundle(n, full_view=True):
     return bundle
 
 
+def solver_tolerances(solver, representation):
+    """The tolerances actually in force, read back from PETSc.
+
+    Recorded rather than assumed. The two paths' shipped presets differ in where
+    the binding tolerance sits - an outer FGMRES over a looser inner CG on one,
+    a single CG whose tolerance is the solution accuracy on the other - so a
+    wall-time comparison that does not state them is not interpretable, and a
+    hard-coded record of them would drift silently the day a preset changes.
+    """
+    out = {"representation": representation}
+    if representation == "lowrank":
+        ksp = solver.ksp
+        out["ksp_rtol"] = float(ksp.getTolerances()[0])
+        out["binding_tolerance"] = out["ksp_rtol"]
+        out["note"] = ("single CG on A+B; this rtol IS the solution accuracy, "
+                       "there is no outer Krylov after it")
+        return out
+
+    outer = solver.solver.snes.getKSP()
+    out["outer_ksp_rtol"] = float(outer.getTolerances()[0])
+    out["binding_tolerance"] = out["outer_ksp_rtol"]
+    pc = outer.getPC()
+    if pc.getType() == "python":
+        pc = pc.getPythonContext().pc
+    try:
+        sub = pc.getFieldSplitSubKSP()
+        if len(sub) >= 1 and sub[0] is not None:
+            out["fieldsplit_0_ksp_rtol"] = float(sub[0].getTolerances()[0])
+        if len(sub) >= 2 and sub[1] is not None:
+            out["fieldsplit_1_ksp_rtol"] = float(sub[1].getTolerances()[0])
+    except PETSc.Error:
+        pass
+    out["note"] = ("outer FGMRES over an inner psi-block CG; the outer rtol is "
+                   "the solution accuracy and the inner one is not")
+    return out
+
+
 def selfp_bundle(n):
     """Second fieldsplit_1 configuration: approximate-Schur selfp + Jacobi.
 
@@ -294,33 +376,47 @@ def selfp_bundle(n):
     }
 
 
-def attach_monitors(solver):
-    """Per-invocation iteration collection off the fieldsplit sub-KSPs.
+def attach_monitors(solver, representation="multiplier"):
+    """Per-invocation iteration collection, from wherever this path keeps it.
 
     Returns (outer_ksp, collectors) where collectors is a dict of lists holding
-    the raw iteration-number stream of each fieldsplit sub-KSP; final
-    per-invocation counts are recovered by detecting the reset to iteration 0.
+    the raw iteration-number stream of each monitored KSP; final per-invocation
+    counts are recovered by detecting the reset to iteration 0.
 
-    The fieldsplit is one level down from the outer PC: the preset selects
-    `gadopt.DtNTwoBlockSchurPC`, whose Python context holds the PC that actually
-    carries the two index-set splits. Asking the outer PC for its sub-KSPs
-    instead raises, so reach through the context.
+    On the multiplier path the fieldsplit is one level down from the outer PC:
+    the preset selects `gadopt.DtNTwoBlockSchurPC`, whose Python context holds
+    the PC that actually carries the two index-set splits. Asking the outer PC
+    for its sub-KSPs instead raises, so reach through the context.
+
+    On the low-rank path there is no fieldsplit and no SNES: the solver owns a
+    PETSc KSP outright (`solver.ksp`), CG on `A + B` preconditioned by the
+    assembled `A`. Its iteration stream lands in `fieldsplit_0` - not a
+    misnomer worth avoiding, because that stream is defined by *what it counts*,
+    namely applications of the algebraic multigrid on the potential block, and
+    on this path every CG iteration is exactly one such application. Keeping the
+    key the same is what lets one summarizer read both paths.
 
     This raises rather than degrading to empty streams. Every iteration count
     the study reports comes from here, and a harness that returns nothing while
     exiting successfully would publish a scaling verdict measured from no data.
     """
     streams = {"fieldsplit_0": [], "fieldsplit_1": []}
-    outer = solver.solver.snes.getKSP()
-    pc = outer.getPC()
-    if pc.getType() == "python":
-        pc = pc.getPythonContext().pc
-    sub = pc.getFieldSplitSubKSP()
 
     def make(stream):
         def monitor(ksp, it, rnorm):
             stream.append((it, float(rnorm)))
         return monitor
+
+    if representation == "lowrank":
+        outer = solver.ksp
+        outer.setMonitor(make(streams["fieldsplit_0"]))
+        return outer, streams
+
+    outer = solver.solver.snes.getKSP()
+    pc = outer.getPC()
+    if pc.getType() == "python":
+        pc = pc.getPythonContext().pc
+    sub = pc.getFieldSplitSubKSP()
 
     # Schur fieldsplit exposes (A00 KSP, Schur KSP).
     if len(sub) >= 1 and sub[0] is not None:
@@ -328,6 +424,30 @@ def attach_monitors(solver):
     if len(sub) >= 2 and sub[1] is not None:
         sub[1].setMonitor(make(streams["fieldsplit_1"]))
     return outer, streams
+
+
+def amg_applications(stream):
+    """Multigrid V-cycles on the potential block in one gravity solve.
+
+    The one quantity that means the same thing on both paths, and the reason it
+    is computed rather than an iteration count reported: the multiplier path
+    invokes its potential-block CG once per application of the Schur complement,
+    so its cost is the *sum* over invocations, while the low-rank path invokes
+    one CG and its cost is that single count. Reporting "iterations" would give
+    both paths the same small number - measured, 8 against 8 - while the true
+    ratio was fifteen.
+
+    Each CG iteration applies the preconditioner once, so the summed final
+    iteration numbers are the V-cycle count.
+
+    Args:
+      stream: `(it, rnorm)` monitor stream covering exactly one gravity solve.
+
+    Returns:
+      Total preconditioner applications, or None for an empty stream.
+    """
+    finals = per_invocation_finals(stream)
+    return int(sum(finals)) if finals else None
 
 
 def split_invocations(stream):
@@ -364,6 +484,85 @@ def peak_memory_gb(comm):
     local = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     local_gb = local / 1024**2 if platform.system() == "Linux" else local / 1024**3
     return float(comm.allreduce(local_gb, op=MPI.MAX))
+
+
+# The PETSc events worth carrying in the sidecar, grouped by what they answer.
+# Not the whole registry: -log_view already writes that to a text file and it
+# stays the source of truth. These are the ones the study's questions turn on,
+# and having them as numbers rather than as a table to grep is what lets the
+# summarizer compare two paths without anyone re-reading a log.
+PETSC_EVENTS = (
+    # Where the time goes at the top level.
+    "SNESSolve", "KSPSolve", "KSPSetUp",
+    # Assembly: the cost the low-rank path exists to remove. On the multiplier
+    # path the matrix-free operator re-assembles the boundary forms on every
+    # Krylov application, so these counts scale with the mode count rather than
+    # with the mesh; on the low-rank path they should not move with L at all.
+    "MatAssemblyBegin", "MatAssemblyEnd", "MatMult", "MatSetValues",
+    "ParLoopExecute", "AssembleForm", "CreateFunctionSpace",
+    # Preconditioner: setup is once per operator, apply is per V-cycle.
+    "PCSetUp", "PCApply", "PCGAMGProlongator", "PCGAMGCoarsen",
+    # Communication. At level 6 on 64 ranks these already accounted for roughly
+    # half the solve time on the multiplier path, so a weak-scaling reading that
+    # does not separate them is reading two effects as one.
+    "VecScatterBegin", "VecScatterEnd", "SFBcastBegin", "SFBcastEnd",
+    "SFReduceBegin", "SFReduceEnd", "VecNorm", "VecDot", "VecAXPY",
+)
+
+
+def petsc_perf(stages):
+    """Per-event PETSc performance counters, per named stage.
+
+    `getPerfInfo` gives count, flops, time, message count, message volume and
+    reduction count for one event in one stage - the same six numbers
+    `-log_view` tabulates, taken directly rather than parsed back out of a text
+    table that has no stable format.
+
+    These are **rank-local**, deliberately. The maxima and means across ranks are
+    what `-log_view` prints and they are in the profile files; what a text table
+    cannot give is the per-rank spread, and load imbalance in the boundary
+    assembly is one of the things the L axis is expected to produce. The
+    summarizer reduces across ranks itself, from rank-local records it can also
+    report the spread of.
+
+    Events that this build never registers return a zero count and are dropped,
+    so the record carries what actually ran rather than a wall of zeros.
+
+    **The counters only exist if PETSc logging was switched on**, which happens
+    when `-log_view` is in `PETSC_OPTIONS` (the job script sets it) and does not
+    happen otherwise. So `logging_active` is reported alongside the events and
+    the caller must read it: without it, a run with logging off produces an empty
+    record that is indistinguishable from a run in which nothing was assembled,
+    and this study has been burnt more than once by an instrument that reports
+    nothing while exiting successfully. The events are the measurement; the flag
+    is the evidence the measurement was taken.
+
+    Args:
+      stages: Mapping of label to `PETSc.Log.Stage`.
+
+    Returns:
+      Dict with `logging_active` and, under `stages`, the nested
+      `{stage_label: {event_name: {counter: value}}}` record.
+    """
+    active = bool(PETSc.Log.isActive())
+    out = {}
+    for label, stage in stages.items():
+        events = {}
+        for name in PETSC_EVENTS:
+            try:
+                info = PETSc.Log.Event(name).getPerfInfo(stage.id)
+            except PETSc.Error:
+                continue
+            if not info or not info.get("count"):
+                continue
+            events[name] = {k: float(v) for k, v in info.items()}
+        if events:
+            out[label] = events
+    if active and not out:
+        log("WARNING: PETSc logging is active but no event carried a nonzero "
+            "count; the per-event record in this sidecar is empty and should "
+            "not be read as zero cost.")
+    return {"logging_active": active, "stages": out}
 
 
 def cache_statistics():
@@ -541,9 +740,96 @@ def correctness_anchor(ref_level, lmax, out_dir=None):
     return rel
 
 
+def representation_parity(ref_level, lmax, out_dir=None):
+    """Solve one case both ways and compare. The gate for the whole comparison.
+
+    A wall-time ratio between two representations is only a measurement if they
+    computed the same thing, and nothing else in this harness checks that: each
+    path's error against the closed form is bounded by the discretisation error,
+    which is around 1e-2 here, so both could be wrong by a thousand times the
+    Krylov tolerance and both accuracy tables would look fine. This compares the
+    two solutions against *each other*, where the scale is the tolerance rather
+    than the discretisation.
+
+    Both potentials are also reported against the closed form, because agreeing
+    with each other is not the same as being right - two paths through the same
+    wrong boundary operator would agree perfectly.
+
+    Run this in parallel as well as in serial. The low-rank path stores `C`
+    rank-locally and reduces the mode vector with one `Allreduce` between `C`
+    and `C^T`, so rank count is exactly the axis along which its distributed
+    assembly could be wrong, and a wrong answer there converges cleanly and
+    reports success. Everything published about that path so far was measured on
+    at most four ranks.
+
+    Returns:
+      Dict of the comparison, also written to a sidecar.
+    """
+    raise_recursion_limit(1 + 2 * (lmax + 1) ** 2)
+    mesh, V, boundary = build_shell(ref_level)
+    rho, source_params = build_checkerboard_source(mesh, V, lmax)
+    dtn = SphericalDtN(lmax)
+    bcs = {boundary.top: {"dtn": dtn}, boundary.bottom: {"dtn": dtn}}
+    n = 2 * (lmax + 1) ** 2
+
+    psis, coeffs, tols = {}, {}, {}
+    for representation in ("multiplier", "lowrank"):
+        psi = Function(V, name=f"potential_{representation}")
+        solver = GravitySolver(
+            psi, rho, bcs=bcs, solver_parameters="iterative",
+            solver_parameters_extra=solver_bundle(
+                n, representation, full_view=False),
+            dtn_representation=representation)
+        solver.solve()
+        psis[representation] = psi
+        coeffs[representation] = solver.coefficients()
+        tols[representation] = solver_tolerances(solver, representation)
+
+    diff = norm(psis["multiplier"] - psis["lowrank"])
+    scale = norm(psis["multiplier"])
+    rel = float(diff / scale) if scale > 0 else float(diff)
+
+    # The trace coefficients are the DtN-specific part, and the place a
+    # representation error would show first: the two paths compute them by
+    # genuinely different routes, one as solved unknowns of a mixed system and
+    # one as a linear functional of the potential.
+    coeff_diff = max(
+        (abs(coeffs["multiplier"][bc][k] - coeffs["lowrank"][bc][k])
+         for bc in coeffs["multiplier"] for k in coeffs["multiplier"][bc]),
+        default=0.0)
+
+    against_exact = {r: analytic_error(V, psis[r], source_params)
+                     for r in psis}
+
+    log(f"representation parity level={ref_level} L={lmax} on "
+        f"{mesh.comm.size} rank(s): ||multiplier - lowrank|| / ||multiplier|| "
+        f"= {rel:.3e}, max coeff diff = {coeff_diff:.3e}")
+    for representation, err in against_exact.items():
+        log(f"  {representation} vs closed form: relative L2 "
+            f"{err['analytic_relative_l2']:.3e}")
+
+    result = {
+        "level": ref_level, "lmax": lmax, "n_ranks": mesh.comm.size,
+        "n_modes": n,
+        "relative_difference": rel,
+        "max_coefficient_difference": coeff_diff,
+        "against_closed_form": against_exact,
+        "tolerances": tols,
+    }
+    out_dir = Path(out_dir) if out_dir else Path.cwd()
+    if mesh.comm.rank == 0:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        sidecar = out_dir / f"parity_level{ref_level}_lmax{lmax}.json"
+        with open(sidecar, "w") as f:
+            json.dump(result, f, indent=2)
+        log(f"wrote {sidecar}")
+    return result
+
+
 def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
-          out_dir=None, full_view=True, timed=None, cache_phase=None):
-    """Run one (level, L) case and write its JSON sidecar.
+          out_dir=None, full_view=True, timed=None, cache_phase=None,
+          representation="multiplier"):
+    """Run one (level, L, representation) case and write its JSON sidecar.
 
     Args:
       ref_level: Cubed-sphere refinement level.
@@ -556,7 +842,17 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
       timed: Override the number of timed re-solves.
       cache_phase: `cold` or `warm`, recorded in the sidecar and its filename so
         the two invocations of one job do not overwrite each other.
+      representation: `multiplier` or `lowrank` DtN representation.
     """
+    if representation not in ("multiplier", "lowrank"):
+        raise ValueError(f"representation must be 'multiplier' or 'lowrank', "
+                         f"got {representation!r}")
+    if selfp and representation == "lowrank":
+        raise ValueError(
+            "--selfp configures the multiplier path's fieldsplit_1 and has no "
+            "meaning on the low-rank path, which has no fieldsplit at all. "
+            "Silently ignoring it would report a selfp measurement that never "
+            "happened.")
     if lmax > MAX_COUPLED_L:
         raise ValueError(
             f"L={lmax} exceeds this model's ceiling of L<={MAX_COUPLED_L}. The "
@@ -594,22 +890,41 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
     psi = Function(V, name="potential")
     n = 2 * (lmax + 1) ** 2
 
-    recursion_limit = raise_recursion_limit(1 + n)
-    log(f"level {ref_level}, L {lmax}: potential DOFs {V.dim()}, "
-        f"multipliers {n} (2 x (L+1)^2), cache phase {cache_phase or 'unset'}, "
-        f"recursion limit {recursion_limit}")
+    # The recursion limit is a multiplier-path concern: it is form processing
+    # walking a mixed space of 1 + n sub-fields that needs the depth. The
+    # low-rank path has one scalar space and never builds that form, so raising
+    # the limit there would be cargo cult - and recording that it was raised
+    # would misattribute a cost it does not pay.
+    recursion_limit = (raise_recursion_limit(1 + n)
+                       if representation == "multiplier"
+                       else sys.getrecursionlimit())
+    log(f"level {ref_level}, L {lmax} [{representation}]: potential DOFs "
+        f"{V.dim()}, modes {n} (2 x (L+1)^2), cache phase "
+        f"{cache_phase or 'unset'}, recursion limit {recursion_limit}")
 
     t0 = time.perf_counter()
     rho, source_params = build_checkerboard_source(mesh, V, lmax)
     source_time = comm.allreduce(time.perf_counter() - t0, op=MPI.MAX)
 
-    extra = selfp_bundle(n) if selfp else solver_bundle(n, full_view=full_view)
+    extra = (selfp_bundle(n) if selfp
+             else solver_bundle(n, representation, full_view=full_view))
     dtn = SphericalDtN(lmax)
     bcs = {boundary.top: {"dtn": dtn}, boundary.bottom: {"dtn": dtn}}
 
     out_dir = Path(out_dir) if out_dir else Path.cwd()
     out_dir.mkdir(parents=True, exist_ok=True)
-    tag = "selfp" if selfp else variant
+    # Two names, deliberately distinct. `variant_label` says which solver preset
+    # ran and is what the summarizer filters on; `tag` additionally carries the
+    # representation and names files. Folding the representation into the
+    # variant instead - which this did briefly - makes every sidecar invisible
+    # to a summarizer looking for `variant == "iterative"`, and the symptom is
+    # an empty report rather than an error.
+    variant_label = "selfp" if selfp else variant
+    # The representation is part of the filename: both paths run the same
+    # (level, L) case in the same directory, and a name that did not separate
+    # them would have the second run silently overwrite the first - losing
+    # exactly the comparison this campaign exists to make.
+    tag = f"{variant_label}_{representation}"
     phase_suffix = f"_{cache_phase}" if cache_phase else ""
 
     def write_sidecar(summary):
@@ -649,9 +964,13 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
                 break
             deepest = nxt
         return {
-            "level": ref_level, "lmax": lmax, "variant": tag,
+            "level": ref_level, "lmax": lmax, "variant": variant_label,
+            "representation": representation,
             "cache_phase": cache_phase, "n_multipliers": n,
-            "n_fields": 1 + n, "potential_dofs": V.dim(), "n_ranks": comm.size,
+            # Mixed sub-fields the solver actually builds: the low-rank path
+            # eliminates every multiplier by hand and carries one scalar space.
+            "n_fields": 1 + n if representation == "multiplier" else 1,
+            "potential_dofs": V.dim(), "n_ranks": comm.size,
             "failed": str(exc),
             "failure_chain": chain,
             "failure_traceback": "".join(traceback.format_exception(
@@ -668,6 +987,7 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
                 psi, rho, bcs=bcs,
                 solver_parameters=variant if not selfp else None,
                 solver_parameters_extra=extra,
+                dtn_representation=representation,
             )
     except Exception as exc:
         # A failure here leaves no sidecar at all unless it is caught, and at
@@ -696,10 +1016,23 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
         return None
     warmup_time = comm.allreduce(time.perf_counter() - t0, op=MPI.MAX)
     cache_after_first = cache_statistics()
-    outer, streams = attach_monitors(solver)
+    outer, streams = attach_monitors(solver, representation)
+    tolerances = solver_tolerances(solver, representation)
+
+    # Operator applications, straight off the low-rank operator's own counter.
+    # It exists so a test can confirm the operator was exercised rather than
+    # bypassed, and it serves the same purpose here: an application count that
+    # did not move between two truncations would mean the L axis was not
+    # reaching the operator at all.
+    def operator_applications():
+        ctx = getattr(solver, "operator_context", None)
+        return None if ctx is None else int(ctx.applications)
+
+    apps_before = operator_applications()
 
     outer_counts, wall_times = [], []
     f0_finals, f1_finals = [], []
+    amg_per_solve = []
     for _ in range(n_timed):
         solver.mixed_solution.assign(0)     # zero the initial guess
         for s in streams.values():
@@ -709,8 +1042,19 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
             solver.solve()
         wall_times.append(comm.allreduce(time.perf_counter() - t0, op=MPI.MAX))
         outer_counts.append(outer.getIterationNumber())
+        # Per solve, not pooled: the multigrid cost of ONE gravity solve is the
+        # sum over that solve's inner invocations, and pooling the streams
+        # across the timed repeats would divide that sum by the repeat count and
+        # report a per-invocation mean instead - the very quantity that makes
+        # the two paths look identical.
+        amg_per_solve.append(amg_applications(streams["fieldsplit_0"]))
         f0_finals.extend(per_invocation_finals(streams["fieldsplit_0"]))
         f1_finals.extend(per_invocation_finals(streams["fieldsplit_1"]))
+
+    apps_after = operator_applications()
+    operator_apps_per_solve = (
+        None if apps_before is None or not n_timed
+        else (apps_after - apps_before) / n_timed)
 
     # Against the closed form. This is the correctness verdict for the case, and
     # since the source is band-limited to L and the DtN maps are exact for every
@@ -739,8 +1083,11 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
     f1_mean = float(np.mean(f1_finals)) if f1_finals else None
     f1_max = int(np.max(f1_finals)) if f1_finals else None
     outer_mean = float(np.mean(outer_counts)) if outer_counts else None
+    clean_amg = [a for a in amg_per_solve if a is not None]
+    amg_mean = float(np.mean(clean_amg)) if clean_amg else None
 
-    log(f"outer FGMRES {outer_mean}, fieldsplit_0 mean/invocation {f0_mean}, "
+    log(f"[{representation}] outer {outer_mean}, psi-block mean/invocation "
+        f"{f0_mean}, AMG applications per gravity solve {amg_mean}, "
         f"fieldsplit_1 mean {f1_mean} (max {f1_max}), "
         f"wall {np.mean(wall_times):.3f}s")
 
@@ -766,18 +1113,29 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
     summary = {
         "level": ref_level,
         "lmax": lmax,
-        "variant": tag,
+        "variant": variant_label,
+        "representation": representation,
         "cache_phase": cache_phase,
         "layers": nlayers,
         "potential_dofs": V.dim(),
+        # The mode count 2(L+1)^2 either way: it is the study's x-axis, and it
+        # is what both paths' cost is expected to scale with. Only the low-rank
+        # path does not turn it into unknowns, which `n_fields` records.
         "n_multipliers": n,
-        "n_fields": 1 + n,
+        "n_fields": 1 + n if representation == "multiplier" else 1,
         "n_ranks": comm.size,
         "n_timed": n_timed,
         "outer_iterations": outer_mean,
         "fieldsplit_0_iterations_per_invocation": f0_mean,
         "fieldsplit_1_iterations_mean": f1_mean,
         "fieldsplit_1_iterations_max": f1_max,
+        # THE cross-path iteration metric. See `amg_applications`: comparing
+        # anything else here compares two quantities that share a name and not a
+        # meaning.
+        "amg_applications_per_solve": amg_mean,
+        "amg_applications_per_solve_samples": clean_amg,
+        "operator_applications_per_solve": operator_apps_per_solve,
+        "tolerances": tolerances,
         # Every time below is a max over ranks, in seconds.
         "source_time": source_time,
         "construct_time": construct_time,
@@ -790,10 +1148,27 @@ def model(ref_level, lmax, variant="iterative", selfp=False, probe=None,
                                  if steady_time is not None else None),
         "total_process_time": comm.allreduce(
             time.perf_counter() - process_start, op=MPI.MAX),
+        # Boundary-operator build cost, low-rank path only. `build_time` is the
+        # whole mode-row build and `setup_time` the part of it independent of
+        # the mode count (the one compiled trace kernel), so the marginal
+        # per-mode cost is (build - setup)/n. They are recorded separately
+        # because they extrapolate differently, and a per-mode figure taken from
+        # build_time alone would carry the fixed setup into every mode.
+        "lowrank_build_time": getattr(solver, "build_time", None),
+        "lowrank_setup_time": (
+            sum(rows.setup_time for rows in solver.mode_rows)
+            if getattr(solver, "mode_rows", None) else None),
         "peak_memory_gb": peak_memory_gb(comm),
         "recursion_limit": recursion_limit,
         "boundary_degree_power": spectrum,
         "boundary_excitation_ok": flags,
+        # Rank-local PETSc counters per stage. The setup stage carries the
+        # assembly cost, the first-solve stage the kernel generation, the solve
+        # stage the steady state; keeping them apart is what lets assembly be
+        # read as its own axis rather than inferred from a total.
+        "petsc_perf": petsc_perf({"setup": setup_stage,
+                                  "first_solve": first_solve_stage,
+                                  "solve": solve_stage}),
         "cache_stats": cache_stats,
         "cache_stats_after_first_solve": cache_after_first,
         "cache_file_counts": cache_file_counts(comm),
@@ -818,6 +1193,12 @@ if __name__ == "__main__":
                         help="skip the full ksp_view/monitor bundle (faster local runs)")
     parser.add_argument("--timed", type=int, default=None,
                         help="override the number of timed re-solves")
+    parser.add_argument("--representation", choices=["multiplier", "lowrank"],
+                        default="multiplier",
+                        help="DtN representation to measure")
+    parser.add_argument("--parity", action="store_true",
+                        help="solve the case both ways and compare, instead of "
+                             "timing one of them")
     parser.add_argument("--anchor", action="store_true",
                         help="run the direct-vs-iterative correctness anchor instead")
     parser.add_argument("--cache-phase", choices=["cold", "warm"], default=None,
@@ -826,9 +1207,12 @@ if __name__ == "__main__":
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()
 
-    if args.anchor:
+    if args.parity:
+        representation_parity(args.level, args.lmax, out_dir=args.out_dir)
+    elif args.anchor:
         correctness_anchor(args.level, args.lmax, out_dir=args.out_dir)
     else:
         model(args.level, args.lmax, variant=args.variant, selfp=args.selfp,
               probe=args.probe, out_dir=args.out_dir, full_view=args.full_view,
-              timed=args.timed, cache_phase=args.cache_phase)
+              timed=args.timed, cache_phase=args.cache_phase,
+              representation=args.representation)

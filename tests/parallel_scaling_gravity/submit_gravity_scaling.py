@@ -87,18 +87,35 @@ LADDER = {
     7: {"launch": 512, "nodes": 8},
 }
 
-# The truncations: the set the level-4 record already covers, plus the three
-# this study adds. L = 15 and 20 are past anything the coupled solve has ever
-# run at, in three dimensions or two.
-COUPLED_L = [2, 3, 5, 6, 7, 10, 15, 20]
+# The truncations for this campaign. It stops at 10 deliberately: every earlier
+# number in this study was taken under a boundary quadrature default of
+# `2 (max_mode + element_degree)`, which has since been replaced by a mesh-aware
+# rule, and the degree that rule asks for differs from the old one by a factor of
+# several at these truncations. Nothing measured before is comparable, so this
+# campaign re-establishes the low-L base before spending anything on the corner.
+# L = 15, 20 and 30 come back once these rows are read.
+COUPLED_L = [2, 3, 5, 6, 7, 10]
+
+# Both DtN representations, on every case. The comparison is the point of the
+# campaign, so it is the grid rather than an option on it: a run that measured
+# one path would have to be repeated in full to learn anything about the other,
+# and the two paths must meet the same mesh, the same source and the same cache
+# state for the difference between them to be a measurement.
+REPRESENTATIONS = ["multiplier", "lowrank"]
 
 # Walltime per case, covering *both* invocations plus their timed solves.
-# Two costs drive it and they scale differently: the O(L^4) boundary assembly
-# per matrix-free application, worst at the coarsest level because per-rank
-# facet counts halve as the level rises, and the per-process symbolic form
-# processing, which is level-independent and paid redundantly by every rank.
-# These are stage-one estimates from a single-rank level-4 calibration; the
-# level 6 and 7 rows are revised from stage-one measurements before submission.
+# Two costs drive it on the multiplier path and they scale differently: the
+# O(L^4) boundary assembly per matrix-free application, worst at the coarsest
+# level because per-rank facet counts halve as the level rises, and the
+# per-process symbolic form processing, which is level-independent and paid
+# redundantly by every rank.
+#
+# These are the old campaign's numbers, and they are kept as the multiplier
+# path's allowance for one reason: they were measured under the *old* quadrature
+# default, which asked for a higher degree than the mesh-aware rule now does, so
+# as an upper bound they survive the change even though as an estimate they do
+# not. Erring long here costs queue time in the worst case; erring short costs
+# the run.
 WALLTIME_BY_L = {
     2: "01:00:00",
     3: "01:00:00",
@@ -106,9 +123,14 @@ WALLTIME_BY_L = {
     6: "01:00:00",
     7: "01:30:00",
     10: "02:00:00",
-    15: "03:00:00",
-    20: "05:00:00",
 }
+
+# The low-rank path's first solve is independent of the mode count and its steady
+# solve is one multigrid solve, so its walltime is not expected to move with L at
+# all. One hour everywhere is already generous by a wide margin - but it is a
+# guess, not a measurement, because nothing on this path has run past four ranks,
+# and the first campaign is what turns it into a measurement.
+LOWRANK_WALLTIME = "01:00:00"
 
 
 # Level 7 gets half again as long. Not because the arithmetic per core grows -
@@ -122,9 +144,10 @@ WALLTIME_BY_L = {
 WALLTIME_MULTIPLIER = {7: 1.5}
 
 
-def walltime(level, lmax):
+def walltime(level, lmax, representation="multiplier"):
     """Walltime for one case, both phases included."""
-    base = WALLTIME_BY_L[lmax]
+    base = (LOWRANK_WALLTIME if representation == "lowrank"
+            else WALLTIME_BY_L[lmax])
     factor = WALLTIME_MULTIPLIER.get(level, 1.0)
     if factor == 1.0:
         return base
@@ -225,7 +248,7 @@ export XDG_CACHE_HOME=$PBS_JOBFS/xdg-cache
 
 cd {casedir}
 
-for PHASE in cold warm; do
+for PHASE in {phases}; do
     export PETSC_OPTIONS="-log_view :{casedir}/profile_$PHASE.txt -options_left"
     echo "=== phase $PHASE begins $(date) ==="
     mpiexec -np {launch_ncpus} --map-by ppr:{per_node}:node \\
@@ -243,13 +266,23 @@ done
 """
 
 
-def case_dir(results_dir, kind, level, lmax):
-    return Path(results_dir) / kind / f"level_{level}" / f"lmax_{lmax}"
+def case_dir(results_dir, kind, level, lmax, representation=None):
+    """Directory for one case.
+
+    The representation is a directory level, not a filename suffix, because each
+    case writes a profile file and two run logs under names that carry no
+    representation of their own; putting the two paths in one directory would
+    have the second overwrite the first's `-log_view` output, which is the
+    source of truth for everything the sidecars summarise.
+    """
+    base = Path(results_dir) / kind / f"level_{level}" / f"lmax_{lmax}"
+    return base / representation if representation else base
 
 
-def write_script(results_dir, kind, level, lmax, script, extra, wall):
+def write_script(results_dir, kind, level, lmax, script, extra, wall,
+                 representation=None):
     res = resources(level)
-    cdir = case_dir(results_dir, kind, level, lmax)
+    cdir = case_dir(results_dir, kind, level, lmax, representation)
     cdir.mkdir(parents=True, exist_ok=True)
     resolved = cdir.resolve()
     if not str(resolved).startswith(("/scratch", "/g/data")):
@@ -257,26 +290,46 @@ def write_script(results_dir, kind, level, lmax, script, extra, wall):
               "/g/data); generate ON Gadi inside the deployment worktree, or "
               "these baked-in paths will be wrong when submitted.")
     # Short job name: older PBSPro caps -N at 15 characters.
-    prefix = {"coupled": "sv", "capacitance": "cap", "anchor": "an"}[kind]
-    jobname = f"g{prefix}{level}L{lmax}"
+    prefix = {"coupled": "sv", "capacitance": "cap", "anchor": "an",
+              "parity": "par"}[kind]
+    suffix = {"multiplier": "m", "lowrank": "r"}.get(representation or "", "")
+    jobname = f"g{prefix}{level}L{lmax}{suffix}"
+    # The cold/warm split measures what kernel caching removes, which is a cost
+    # question. The parity gate asks whether two representations agree, and the
+    # answer cannot depend on the cache, so running it twice would buy nothing
+    # and would have the second invocation overwrite the first's sidecar.
+    phases = "cold" if kind == "parity" else "cold warm"
     text = PBS_TEMPLATE.format(
         project=PROJECT, queue=QUEUE, walltime=wall, storage=STORAGE,
         jobname=jobname, module_use=MODULE_USE, module=MODULE,
         worktree=WORKTREE, casedir=str(resolved), script=script,
-        level=level, lmax=lmax, extra=extra, **res)
+        level=level, lmax=lmax, extra=extra, phases=phases, **res)
     path = cdir / "run.pbs"
     path.write_text(text)
     return path
 
 
-def build_cases(levels, truncations, capacitance, anchor):
-    """Yield (kind, level, lmax, script, extra, walltime) for every case."""
+def build_cases(levels, truncations, capacitance, anchor, parity=True,
+                representations=None):
+    """Yield (kind, level, lmax, script, extra, walltime, representation)."""
+    representations = representations or REPRESENTATIONS
+    # The parity gate first, and deliberately at the head of the list: it is
+    # what makes every wall time below a comparison rather than two unrelated
+    # numbers, and the low-rank path has never run past four ranks, so the one
+    # thing capable of invalidating the whole campaign is its behaviour under
+    # distribution. Cheap - one solve each way - and it fails loudly.
+    if parity:
+        for level in levels:
+            yield ("parity", level, 5, "gravity_cubed_sphere.py", "--parity",
+                   "00:30:00", None)
     for level in levels:
         for lmax in COUPLED_L:
             if truncations and lmax not in truncations:
                 continue
-            yield ("coupled", level, lmax, "gravity_cubed_sphere.py", "",
-                   walltime(level, lmax))
+            for representation in representations:
+                yield ("coupled", level, lmax, "gravity_cubed_sphere.py",
+                       f"--representation {representation}",
+                       walltime(level, lmax, representation), representation)
     # The direct-preset anchor. The closed-form error now covers every case, so
     # this is corroboration rather than the gate it once was: it says the
     # iterative preset agrees with a direct factorisation, where the analytic
@@ -285,7 +338,7 @@ def build_cases(levels, truncations, capacitance, anchor):
         for level in (4, 5):
             if level in levels and (not truncations or 5 in truncations):
                 yield ("anchor", level, 5, "gravity_cubed_sphere.py",
-                       "--anchor", walltime(level, 5))
+                       "--anchor", walltime(level, 5), None)
     # The wall-free capacitance diagnostic settled the L-cost question before
     # the 128-field wall was lifted and is not part of this study; kept behind a
     # flag so the rows can be regenerated without resurrecting the script.
@@ -296,16 +349,26 @@ def build_cases(levels, truncations, capacitance, anchor):
                     if truncations and lmax not in truncations:
                         continue
                     yield ("capacitance", level, lmax, "capacitance_gravity.py",
-                           "", "02:00:00")
+                           "", "02:00:00", None)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-dir", default="results")
+    # Stage one is levels 4 to 6, all of which fit on a single node. Level 7 is
+    # eight nodes and is held back on purpose: it is the rung where communication
+    # rather than arithmetic sets the time, so its walltime wants to be set from
+    # the level-6 measurement rather than from a guess, and none of the numbers
+    # this campaign re-establishes exist yet at any level.
     parser.add_argument("--levels", type=int, nargs="+",
-                        default=[4, 5, 6, 7], help="levels to include")
+                        default=[4, 5, 6], help="levels to include")
     parser.add_argument("--truncations", type=int, nargs="+", default=None,
                         help="restrict to these L values")
+    parser.add_argument("--representations", nargs="+", default=None,
+                        choices=REPRESENTATIONS,
+                        help="restrict to these DtN representations")
+    parser.add_argument("--no-parity", dest="parity", action="store_false",
+                        help="skip the multiplier-vs-lowrank parity gate")
     parser.add_argument("--anchor", action="store_true",
                         help="also generate the direct-vs-iterative anchor cases")
     parser.add_argument("--capacitance", action="store_true",
@@ -315,17 +378,18 @@ def main():
     args = parser.parse_args()
 
     written, total_su = [], 0.0
-    for kind, level, lmax, script, extra, wall in build_cases(
-            args.levels, args.truncations, args.capacitance, args.anchor):
+    for kind, level, lmax, script, extra, wall, representation in build_cases(
+            args.levels, args.truncations, args.capacitance, args.anchor,
+            parity=args.parity, representations=args.representations):
         path = write_script(args.results_dir, kind, level, lmax, script, extra,
-                            wall)
+                            wall, representation)
         res = resources(level)
         hours = sum(float(part) / 60**i
                     for i, part in enumerate(wall.split(":")))
         total_su += res["request_ncpus"] * hours * 2.0
         written.append((path, kind, level, lmax))
-        print(f"{'submit' if args.submit else 'wrote':>7}: {kind:>11} "
-              f"level {level} L {lmax:>2} "
+        print(f"{'submit' if args.submit else 'wrote':>7}: {kind:>8} "
+              f"{representation or '-':>10} level {level} L {lmax:>2} "
               f"({res['launch_ncpus']:>3} ranks on {res['nodes']} node(s), "
               f"{wall}) -> {path}")
         if args.submit:

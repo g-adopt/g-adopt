@@ -1,4 +1,1 @@
-level,lmax,fieldsplit_0_iterations,fieldsplit_1_iterations,outer_iterations
-4,2,7.05,7.5,2
-4,5,7.03,13,2
-4,6,7.10,13,2
+level,lmax,representation,amg_applications_per_solve,fieldsplit_0_iterations,fieldsplit_1_iterations,outer_iterations

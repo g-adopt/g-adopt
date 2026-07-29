@@ -228,6 +228,142 @@ def summarize_marginal_mode_cost(rows):
     return "\n".join(out)
 
 
+def summarize_representations(rows):
+    """The two DtN paths side by side: what each costs, and where the cost is.
+
+    Every table here is a ratio of multiplier to low-rank at the same
+    `(level, L)`, so a number above one means the low-rank path is cheaper by
+    that factor.
+
+    The iteration row is `amg_applications_per_solve` and not any of the
+    iteration counts beside it. On the multiplier path the potential block is
+    inverted once per application of the Schur complement, so one gravity solve
+    costs the sum over those invocations; on the low-rank path it is inverted
+    once. Comparing iterations-per-invocation instead compares two quantities
+    that share a name and not a meaning, and does so in the flattering
+    direction - measured on a toy case, 7.4 against 11, which reads as the fast
+    path being slower while it is in fact fifteen times cheaper.
+    """
+    if not rows:
+        return "No coupled-solve sidecars found."
+    by = {}
+    for r in rows:
+        by.setdefault((r["level"], r["lmax"]), {})[r.get("representation")] = r
+    paired = {k: v for k, v in by.items()
+              if "multiplier" in v and "lowrank" in v}
+    out = ["=== Multiplier against low-rank ===", ""]
+    unpaired = sorted(set(by) - set(paired))
+    if unpaired:
+        out.append("Cases with only one representation (no ratio possible): "
+                   + ", ".join(f"(lvl {lv}, L {L})" for lv, L in unpaired))
+        out.append("")
+    if not paired:
+        return "\n".join(out + ["No (level, L) case has both representations."])
+
+    def ratio_grid(label, key, fmt="{:.1f}x"):
+        lines = [label]
+        levels = sorted({lv for lv, _ in paired})
+        trunc = sorted({L for _, L in paired})
+        head = f"{'level':>6} |" + "".join(f"{f'L={t}':>12}" for t in trunc)
+        lines += [head, "-" * len(head)]
+        for lv in levels:
+            cells = []
+            for t in trunc:
+                pair = paired.get((lv, t))
+                if not pair:
+                    cells.append(f"{'-':>12}")
+                    continue
+                a, b = pair["multiplier"].get(key), pair["lowrank"].get(key)
+                if a in (None, 0) or b in (None, 0):
+                    cells.append(f"{'-':>12}")
+                else:
+                    cells.append(f"{fmt.format(a / b):>12}")
+            lines.append(f"{lv:>6} |" + "".join(cells))
+        return "\n".join(lines)
+
+    out.append(ratio_grid("steady solve time, multiplier / low-rank:",
+                          "steady_solve_time"))
+    out.append("")
+    out.append(ratio_grid("first (warm) solve, multiplier / low-rank:",
+                          "warmup_time"))
+    out.append("")
+    out.append(ratio_grid("construction time, multiplier / low-rank:",
+                          "construct_time"))
+    out.append("")
+    out.append(ratio_grid("AMG applications per gravity solve, "
+                          "multiplier / low-rank:", "amg_applications_per_solve"))
+    out.append("")
+    out.append(ratio_grid("peak memory, multiplier / low-rank:",
+                          "peak_memory_gb", fmt="{:.2f}x"))
+    out.append("")
+
+    # Assembly, straight off the PETSc counters. This is the mechanism the
+    # low-rank path exists to remove, so it is reported as counts rather than as
+    # a ratio: the interesting fact is not that one is larger but that one grows
+    # with the mode count and the other does not.
+    out.append("PyOP2 parloops per gravity solve (the assembly cost itself):")
+    head = f"{'level':>6} {'L':>4} |{'multiplier':>14}{'lowrank':>12}"
+    out.append(head)
+    out.append("-" * len(head))
+    for (lv, t) in sorted(paired):
+        cells = []
+        for rep in ("multiplier", "lowrank"):
+            r = paired[(lv, t)][rep]
+            perf = (r.get("petsc_perf") or {}).get("stages", {}).get("solve", {})
+            ev = perf.get("ParLoopExecute")
+            n_timed = r.get("n_timed") or 1
+            cells.append(f"{ev['count'] / n_timed:>12,.0f}" if ev
+                         else f"{'-':>12}")
+        out.append(f"{lv:>6} {t:>4} |  {cells[0]}{cells[1]}")
+    out.append("")
+
+    # Accuracy parity. The two paths discretise the same operator, so this is
+    # the check that the wall-time ratios above compare two computations of the
+    # same answer rather than two different answers.
+    out.append("relative L2 against the closed form, both paths "
+               "(they must agree; a difference here voids every ratio above):")
+    head = f"{'level':>6} {'L':>4} |{'multiplier':>14}{'lowrank':>14}{'rel. gap':>12}"
+    out.append(head)
+    out.append("-" * len(head))
+    worst = 0.0
+    for (lv, t) in sorted(paired):
+        a = paired[(lv, t)]["multiplier"].get("analytic_relative_l2")
+        b = paired[(lv, t)]["lowrank"].get("analytic_relative_l2")
+        if a is None or b is None:
+            continue
+        gap = abs(a - b) / a if a else float("inf")
+        worst = max(worst, gap)
+        out.append(f"{lv:>6} {t:>4} |{a:>14.4e}{b:>14.4e}{gap:>12.1e}")
+    out.append("")
+    out.append(f"worst relative gap in accuracy between the paths: {worst:.2e}"
+               + ("  [OK]" if worst < 1e-3 else
+                  "  [SUSPECT - the paths do not agree; treat the cost ratios "
+                  "as meaningless until this is explained]"))
+    return "\n".join(out)
+
+
+def summarize_parity(rows, tol=1e-9):
+    """The multiplier-vs-lowrank parity gate, including its rank count."""
+    if not rows:
+        return ("No parity sidecars found. Nothing has checked that the two "
+                "representations compute the same answer on this grid, and in "
+                "particular nothing has checked the low-rank path's "
+                "distributed assembly.")
+    out = ["=== Representation parity gate (multiplier vs low-rank) ==="]
+    for r in sorted(rows, key=lambda r: (r["level"], r["lmax"], r["n_ranks"])):
+        rel = r["relative_difference"]
+        verdict = "OK" if rel < tol else "FAIL"
+        out.append(f"  level {r['level']}, L {r['lmax']}, {r['n_ranks']:>4} "
+                   f"rank(s): rel diff {rel:.3e}, max coeff diff "
+                   f"{r['max_coefficient_difference']:.3e}  [{verdict}]")
+    if not any(r["n_ranks"] > 1 for r in rows):
+        out.append("  WARNING: every parity check here ran on one rank. The "
+                   "low-rank path stores C rank-locally and reduces with an "
+                   "Allreduce, so serial agreement says nothing about the "
+                   "distributed operator.")
+    return "\n".join(out)
+
+
 def summarize_capacitance(rows):
     if not rows:
         return "No capacitance sidecars found."
@@ -293,15 +429,35 @@ def main(results_dir):
     cold = [r for r in coupled if r.get("cache_phase") == "cold"]
     capacitance = _load(results_dir, "capacitance_*.json")
     anchor = _load(results_dir, "anchor_*.json")
+    parity = _load(results_dir, "parity_*.json")
 
-    print(summarize_coupled(warm))
+    # The parity gate leads, because every cost ratio downstream is conditional
+    # on it: two paths that do not compute the same answer have no comparable
+    # cost, and printing the ratios first invites them to be read before the
+    # thing that licenses them.
+    print(summarize_parity(parity))
     print()
-    print(summarize_accuracy(warm))
+    print(summarize_representations(warm))
     print()
-    print(summarize_kernel_cost(cold, warm))
-    print()
-    print(summarize_marginal_mode_cost(warm))
-    print()
+    # Grouped by representation from here down: these grids are keyed on
+    # (level, lmax) alone, so mixing both paths into one would silently show
+    # whichever sidecar the loader happened to reach last.
+    for representation in ("multiplier", "lowrank"):
+        subset = [r for r in warm if r.get("representation") == representation]
+        if not subset:
+            continue
+        cold_subset = [r for r in cold
+                       if r.get("representation") == representation]
+        print(f"########## representation: {representation} ##########")
+        print()
+        print(summarize_coupled(subset))
+        print()
+        print(summarize_accuracy(subset))
+        print()
+        print(summarize_kernel_cost(cold_subset, subset))
+        print()
+        print(summarize_marginal_mode_cost(subset))
+        print()
     if capacitance:
         print(summarize_capacitance(capacitance))
         print()
