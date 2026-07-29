@@ -31,7 +31,15 @@ def _load(results_dir, pattern):
 
 
 def _grid(rows, row_key, col_key, cell):
-    """Render a level x L grid from a list of dict rows."""
+    """Render a level x L grid from a list of dict rows.
+
+    A cell whose underlying metric is absent renders as `-` rather than raising.
+    That is not defensive padding: several metrics exist on one representation
+    and not the other - the low-rank path has no `fieldsplit_1` at all, so its
+    Schur iteration count is legitimately None - and a formatter that treats
+    "this path does not have that quantity" as an error makes the summarizer
+    unable to print the very comparison it exists for.
+    """
     rowvals = sorted({r[row_key] for r in rows})
     colvals = sorted({r[col_key] for r in rows})
     by = {(r[row_key], r[col_key]): r for r in rows}
@@ -42,7 +50,11 @@ def _grid(rows, row_key, col_key, cell):
         cells = []
         for cv in colvals:
             r = by.get((rv, cv))
-            cells.append(f"{cell(r):>{width}}" if r else f"{'-':>{width}}")
+            try:
+                text = cell(r) if r else "-"
+            except (TypeError, KeyError, ValueError):
+                text = "-"
+            cells.append(f"{text:>{width}}")
         lines.append(f"{rv:>6} |" + "".join(cells))
     return "\n".join(lines)
 
