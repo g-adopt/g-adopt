@@ -1,3 +1,7 @@
+# Working notes, plans, handovers and benchmark scratch. Local only - these are
+# a private research record, not part of the repository.
+NOTES/
+
 *.pvd
 *.vtu
 *.pvtu
