@@ -344,6 +344,37 @@ def _block_counts(tape):
     return Counter(type(b).__name__ for b in tape.get_blocks())
 
 
+def _solves_on(blocks, predicate):
+    """Solve blocks whose function space satisfies `predicate`.
+
+    Deliberately not keyed on the block class. Firedrake emits a
+    `SolveVarFormBlock` for `solve(a == L, u)` and a
+    `NonlinearVariationalSolveBlock` for a `LinearVariationalSolver` built by
+    hand, and which of those the enclosed-mass system uses is an
+    implementation detail that has already changed once - it is a *Real-space
+    solve* either way. The distinction that matters, and the one "a gravity
+    solve is one solve block" always meant, is the space being solved on.
+    """
+    out = []
+    for b in blocks:
+        space = getattr(b, "function_space", None)
+        if space is not None and predicate(space):
+            out.append(b)
+    return out
+
+
+def _real_space_solves(blocks):
+    """The enclosed-mass systems of the 2-D monopole datum."""
+    return _solves_on(
+        blocks,
+        lambda V: len(V) == 1 and V.ufl_element().family() == "Real")
+
+
+def _mixed_space_solves(blocks):
+    """The gravity solve itself, on the mixed potential/multiplier space."""
+    return _solves_on(blocks, lambda V: len(V) > 1)
+
+
 def _reaches(tape, source_outputs, target_bv):
     """Forward reachability on the tape DAG: does data from ``source_outputs``
     (a block's output block_variables) transitively flow into ``target_bv``?
@@ -417,23 +448,29 @@ def test_tape_structure(mesh_2d_mm, variant):
 
     solve_counts = Counter(type(b).__name__ for b in solve_blocks)
 
-    # Exactly one mixed solve block, whatever the multiplier count.
+    # Exactly one solve block on the MIXED space, whatever the multiplier
+    # count, and exactly one more: the one-by-one system on a Real space that
+    # defines the enclosed mass for the 2-D monopole datum. It is load-bearing
+    # - severing it is the 325% gradient error the datum exists to avoid - so
+    # it must reach J.
     assert solve_counts["NonlinearVariationalSolveBlock"] == 1
+    assert len(_mixed_space_solves(solve_blocks)) == 1
+    mass_solves = _real_space_solves(solve_blocks)
+    assert len(mass_solves) == 1
+    assert _reaches_objective(tape, mass_solves[0], J)
 
-    # check_net_mass assembles rho mass and |rho| scale: two AssembleBlocks.
-    # Neither reaches J (they feed only the terminal net-mass arithmetic), so
-    # neither can perturb dJ/dm - the "dangling but harmless" property.
+    # One 0-form AssembleBlock per solve, down from two: the enclosed mass has
+    # moved into the Real solve above, and what is left is `check_net_mass`
+    # assembling the |rho| scale for the leakage threshold. That one keeps the
+    # old "dangling but harmless" property - it feeds only terminal net-mass
+    # arithmetic and cannot perturb dJ/dm.
     solve_assembles = [
         b for b in solve_blocks if type(b).__name__ == "AssembleBlock"]
-    assert len(solve_assembles) == 2
-    for b in solve_assembles:
-        assert not _reaches_objective(tape, b, J)
+    assert len(solve_assembles) == 1
+    assert not _reaches_objective(tape, solve_assembles[0], J)
 
-    # The solve block itself DOES reach J (control -> psi -> J is live).
-    solve_block = next(
-        b for b in solve_blocks
-        if type(b).__name__ == "NonlinearVariationalSolveBlock")
-    assert _reaches_objective(tape, solve_block, J)
+    # The gravity solve block itself DOES reach J (control -> psi -> J is live).
+    assert _reaches_objective(tape, _mixed_space_solves(solve_blocks)[0], J)
 
     # solution.assign(subfunctions[0]) taped as SubfunctionBlock(s) + one
     # FunctionAssignBlock.
@@ -963,35 +1000,141 @@ def test_reduced_functional_replay(mesh_2d_mm):
     print(f"    [T10] rf(m2)={val2:.8e} direct={float(J_direct2):.8e} rel={rel:.2e}")
     assert rel <= 1e-9
 
-    # Documented gap G3 / pitfall P2: replay skips check_net_mass entirely.
-    # A net-mass control iterate replays fine, but a direct solve would raise.
+    # Documented gap G3 / pitfall P2, narrowed but NOT closed. It was: replay
+    # skipped the Python-level check_net_mass, so a net-mass iterate replayed
+    # while a direct solve raised. The monopole datum puts the enclosed mass on
+    # the tape, so for this configuration replay and a fresh solve now agree
+    # rather than one of them being tolerated - which is what is asserted here.
+    # What survives is the general property that a Python-level *refusal* is
+    # invisible to replay, and the new ValueError for a strong `psi` condition
+    # alongside nonzero mass inherits it exactly: an optimiser can walk into
+    # that region and be handed finite, wrong objectives. Recorded in
+    # NOTES/TODO-GRAVITY.md E5 rather than papered over here.
     with stop_annotating():
         Q = fd.FunctionSpace(mesh_2d_mm, "CG", 1)
         _, r, _ = _polar(mesh_2d_mm)
         m_mass = fd.Function(Q).interpolate(fd.exp(-(((r - 1.7) / 0.15) ** 2)))
-    val_mass = float(rf(m_mass))  # must NOT raise
-    assert np.isfinite(val_mass)
-    with pytest.raises(NotImplementedError, match="Net mass"):
+    val_mass = float(rf(m_mass))
+    with stop_annotating():
+        J_direct_mass, _ = forward_2d_mm(m_mass)
+    rel_mass = abs(val_mass - float(J_direct_mass)) / abs(float(J_direct_mass))
+    print(f"    [T10] net-mass control: replay {val_mass:.8e} "
+          f"direct {float(J_direct_mass):.8e} rel {rel_mass:.2e}")
+    assert rel_mass <= 1e-9
+
+
+# ---------------------------------------------------------------------------
+# T10b - the monopole channel, against a reference the tape cannot influence
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
+@pytest.mark.parametrize("control", ["rho", "sigma", "G"])
+def test_monopole_gradient_against_fresh_solves(representation, control):
+    """A central finite difference of *fresh* solves, not a Taylor test.
+
+    This is the one instrument that can see a severed mass channel, and the
+    reason it is here rather than a fourth Taylor test. `taylor_test` replays
+    the tape, so a frozen enclosed mass gives a map whose gradient is
+    self-consistent: both sides of the comparison omit the same channel and the
+    rate is 2.0000 while the gradient of the actual forward map is wrong by
+    325%. Rebuilding the solver per evaluation removes the tape from the
+    reference entirely.
+
+    All three right-hand-side controls, on both representations, because the
+    datum carries `rho` and `sigma` through the enclosed mass and `G` through
+    its own prefactor.
+    """
+    mesh = fd.UnitDiskMesh(refinement_level=2)
+    V = fd.FunctionSpace(mesh, "CG", 2)
+    Q = fd.FunctionSpace(mesh, "CG", 1)
+    X = fd.SpatialCoordinate(mesh)
+
+    def build(rho_value, sigma_value, g_value):
+        psi = fd.Function(V)
+        rho = fd.Function(Q).assign(rho_value)
+        sigma = fd.Function(Q).assign(sigma_value)
+        gravity = real_scalar(mesh, g_value)
+        solver = GravitySolver(
+            psi, rho,
+            bcs={1: {"dtn": CylindricalDtN(M=3), "sigma": sigma}},
+            gravitational_constant=gravity, solver_parameters="direct",
+            dtn_representation=representation)
+        return solver, psi, {"rho": rho, "sigma": sigma, "G": gravity}
+
+    with stop_annotating():
+        rho0 = fd.Function(Q).interpolate(1.0 + 0.3 * X[0])
+        sigma0 = fd.Function(Q).interpolate(0.4 + 0.2 * X[1])
+        direction = fd.Function(Q).interpolate(0.05 * (1.0 + X[1] ** 2))
+        g_direction = real_scalar(mesh, 0.1)
+
+    tape = get_working_tape()
+    tape.clear_tape()
+    continue_annotation()
+    solver, psi, controls = build(rho0, sigma0, 1.0)
+    solver.solve()
+    J = fd.assemble(psi ** 2 * fd.dx)
+    gradient = ReducedFunctional(J, Control(controls[control])).derivative()
+    pause_annotation()
+    step = direction if control != "G" else g_direction
+    adjoint = float(fd.assemble(fd.action(gradient, step)))
+    tape.clear_tape()
+
+    def objective_at(sign, epsilon):
         with stop_annotating():
-            forward_2d_mm(m_mass)
+            shift = sign * epsilon
+            fresh, fresh_psi, _ = build(
+                rho0 + shift * direction if control == "rho" else rho0,
+                sigma0 + shift * direction if control == "sigma" else sigma0,
+                1.0 + shift * 0.1 if control == "G" else 1.0)
+            fresh.solve()
+            return float(fd.assemble(fresh_psi ** 2 * fd.dx))
+
+    epsilon = 1e-5
+    difference = (objective_at(+1, epsilon)
+                  - objective_at(-1, epsilon)) / (2 * epsilon)
+    relative = abs(adjoint - difference) / abs(difference)
+    print(f"    [T10b] {representation}/{control}: adjoint {adjoint:.8e} "
+          f"fresh-solve FD {difference:.8e} rel {relative:.2e}")
+    assert relative < 1e-6
 
 
 # ---------------------------------------------------------------------------
-# T11 - check_net_mass hygiene: dangling but harmless  [P1]
+# T11 - which per-solve 0-form assembles are load-bearing  [P1]
 # ---------------------------------------------------------------------------
-class _QuietNetMassSolver(GravitySolver):
-    """CFG-2D-MM solver whose check_net_mass runs under stop_annotating(), so
-    its two 0-form assembles never touch the tape (variant B)."""
+class _QuietLeakageSolver(GravitySolver):
+    """CFG-2D-MM solver whose `check_net_mass` runs under stop_annotating().
+
+    That check assembles the |rho| scale for the leakage threshold and nothing
+    else, so suppressing it must remove one AssembleBlock and change nothing.
+    """
     def check_net_mass(self):
         with stop_annotating():
             super().check_net_mass()
 
 
-def _forward_2d_mm_quiet(m_rho):
+class _FrozenMassSolver(GravitySolver):
+    """CFG-2D-MM solver whose enclosed mass is frozen off the tape.
+
+    The failure the monopole datum's design exists to avoid, made reachable so
+    the suite can prove it detects it. J is untouched - `source_mass` ends up
+    holding the same number either way - so only the gradient can see it, and
+    only against a reference not computed from this tape. A Taylor test passes
+    at 2.0000 here.
+
+    The leakage check is re-run under annotation afterwards so that this
+    variant differs from the stock one in exactly one thing: whether the
+    enclosed mass is on the tape.
+    """
+    def update_total_mass(self):
+        with stop_annotating():
+            super().update_total_mass()
+        self.check_net_mass()
+
+
+def _forward_2d_mm_with(solver_class, m_rho):
     mesh = m_rho.function_space().mesh()
     with stop_annotating():
         psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-        solver = _QuietNetMassSolver(
+        solver = solver_class(
             psi, m_rho,
             bcs={"top": {"dtn": CylindricalDtN(M=2)},
                  "bottom": {"dtn": CylindricalDtN(M=2)}})
@@ -1000,40 +1143,73 @@ def _forward_2d_mm_quiet(m_rho):
     return J, solver
 
 
-def test_net_mass_blocks_dangling_harmless(mesh_2d_mm):
-    """The two check_net_mass 0-form assembles land on the tape (variant A) but
-    do not alter J or the gradient; wrapping check_net_mass in stop_annotating
-    (variant B) removes exactly those two AssembleBlocks and changes neither J
-    nor the gradient."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-
-    # Variant A (stock): construction under stop_annotating, so the only
-    # AssembleBlocks are the 2 net-mass ones plus the 1 objective.
+def _tape_and_gradient(forward, m):
     tape = get_working_tape()
     tape.clear_tape()
     continue_annotation()
-    J_a, _ = forward_2d_mm(m)
+    J, _ = forward(m)
     pause_annotation()
-    n_assemble_a = _block_counts(tape)["AssembleBlock"]
-    g_a = ReducedFunctional(J_a, Control(m)).derivative()
+    counts = _block_counts(tape)
+    counts["mass_solves"] = len(_real_space_solves(tape.get_blocks()))
+    return J, counts, ReducedFunctional(J, Control(m)).derivative()
 
-    # Variant B (quiet): check_net_mass under stop_annotating.
-    tape.clear_tape()
-    continue_annotation()
-    J_b, _ = _forward_2d_mm_quiet(m)
-    pause_annotation()
-    n_assemble_b = _block_counts(tape)["AssembleBlock"]
-    g_b = ReducedFunctional(J_b, Control(m)).derivative()
 
-    print(f"    [T11] AssembleBlocks A={n_assemble_a} B={n_assemble_b} "
-          f"J_A={float(J_a):.8e} J_B={float(J_b):.8e}")
-    assert n_assemble_a - n_assemble_b == 2
-    assert n_assemble_b == 1  # only the objective assemble remains
-    assert abs(float(J_a) - float(J_b)) <= 1e-15 * abs(float(J_a))
-    denom = np.max(np.abs(g_a.dat.data_ro))
-    rel = np.max(np.abs(g_a.dat.data_ro - g_b.dat.data_ro)) / denom
-    assert rel <= 1e-14, f"net-mass hygiene changed the gradient (rel {rel:.2e})"
+def test_which_net_mass_work_is_load_bearing(mesh_2d_mm):
+    """Of the two things `solve` does with the net mass, one matters.
+
+    Before the 2-D monopole datum, `check_net_mass` emitted two 0-form
+    assembles and both were dangling; this test asserted exactly that. Now the
+    enclosed mass is a Real-space solve that the datum reads, and only the
+    |rho| scale is still a diagnostic - so the two are separated here rather
+    than lumped together, and the load-bearing one is checked by *sabotage*:
+    freeze it off the tape and the gradient must move.
+
+    The control carries a monopole deliberately. `rho_control_2d` is
+    azimuthally pure, so its adjoint is pure `m = 2` and the boundary integral
+    the datum contracts against, `int lambda ds`, vanishes by orthogonality -
+    the channel is genuinely absent there and the sabotage would look harmless
+    for a reason that has nothing to do with whether it is wired up. Adding a
+    constant gives the objective something at `m = 0` to see.
+    """
+    with stop_annotating():
+        m = rho_control_2d(mesh_2d_mm)
+        m.assign(m + 0.5)
+
+    J_stock, c_stock, g_stock = _tape_and_gradient(forward_2d_mm, m)
+    J_quiet, c_quiet, g_quiet = _tape_and_gradient(
+        lambda rho: _forward_2d_mm_with(_QuietLeakageSolver, rho), m)
+    J_frozen, c_frozen, g_frozen = _tape_and_gradient(
+        lambda rho: _forward_2d_mm_with(_FrozenMassSolver, rho), m)
+
+    def gradient_change(other):
+        return (np.max(np.abs(g_stock.dat.data_ro - other.dat.data_ro))
+                / np.max(np.abs(g_stock.dat.data_ro)))
+
+    print(f"    [T11] AssembleBlocks {c_stock['AssembleBlock']}/"
+          f"{c_quiet['AssembleBlock']}/{c_frozen['AssembleBlock']} "
+          f"mass solves {c_stock['mass_solves']}/"
+          f"{c_quiet['mass_solves']}/{c_frozen['mass_solves']}; "
+          f"gradient change quiet={gradient_change(g_quiet):.2e} "
+          f"frozen={gradient_change(g_frozen):.2e}")
+
+    # Stock: the |rho| scale assemble and the objective, plus the mass solve.
+    assert c_stock["AssembleBlock"] == 2
+    assert c_stock["mass_solves"] == 1
+
+    # The leakage check is hygienic: one fewer assemble, same J, same gradient.
+    assert c_quiet["AssembleBlock"] == 1
+    assert c_quiet["mass_solves"] == 1
+    assert abs(float(J_quiet) - float(J_stock)) <= 1e-15 * abs(float(J_stock))
+    assert gradient_change(g_quiet) <= 1e-14
+
+    # The mass solve is not: same J to the last bit, different gradient.
+    assert c_frozen["AssembleBlock"] == 2
+    assert c_frozen["mass_solves"] == 0
+    assert abs(float(J_frozen) - float(J_stock)) <= 1e-15 * abs(float(J_stock))
+    assert gradient_change(g_frozen) > 1e-6, (
+        "freezing the enclosed mass off the tape did not move the gradient - "
+        "either the monopole datum is not wired to it, or this sabotage no "
+        "longer reaches the term it targets")
 
 
 # ---------------------------------------------------------------------------

@@ -162,7 +162,7 @@ class LowRankGravitySolveBlock(Block):
                 continue
             contribution = assemble(action(
                 derivative(self._form, self._in_form(coefficient)), perturbation))
-            rhs = contribution if rhs is None else rhs + contribution
+            rhs = _accumulate(rhs, contribution)
         if rhs is None:
             return None
         return self._solve_with(rhs)
@@ -210,7 +210,7 @@ class LowRankGravitySolveBlock(Block):
                 # An identically zero mixed derivative: UFL declines to form
                 # it rather than returning a zero form.
                 continue
-            out = contribution if out is None else out + contribution
+            out = _accumulate(out, contribution)
         return out
 
     # -- helpers -----------------------------------------------------------
@@ -312,6 +312,25 @@ class _SingleModeRow:
     def scatter_into(self, target, scale):
         if self.values.size:
             target[self.dofs] += scale * self.values
+
+
+def _accumulate(total, contribution):
+    """`total + contribution`, kept a `Cofunction` rather than a lazy sum.
+
+    Adding two `Cofunction`s in Firedrake yields a `FormSum`, which defers the
+    addition instead of performing it, and a `FormSum` is neither something
+    `_as_cofunction` can read nor something pyadjoint will accept as a
+    derivative value. `assemble` collapses it.
+
+    This matters only when **two or more dependencies are perturbed at once**,
+    which is why it went unnoticed: every earlier test perturbed one control.
+    The 2-D monopole datum makes it ordinary, since a perturbation of `rho`
+    reaches the right-hand side twice - directly, and through the enclosed
+    mass - so the tangent now has two contributions for a single control.
+    """
+    if total is None:
+        return contribution
+    return assemble(total + contribution)
 
 
 def _as_cofunction(value, function_space):

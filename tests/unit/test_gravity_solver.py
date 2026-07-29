@@ -233,13 +233,120 @@ class TestSetup:
                 solver_parameters={"mat_type": "aij", "ksp_type": "preonly",
                                    "pc_type": "lu"})
 
-    def test_net_mass_guard(self):
+    def test_net_mass_is_carried_not_refused(self):
+        """Nonzero 2-D net mass solves, and the enclosed mass is measured.
+
+        This used to assert a `NotImplementedError`: the monopole datum did not
+        exist, so the only safe thing was to refuse. It exists now, and what
+        was a restriction is a measurement.
+        """
         mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
         psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
         solver = GravitySolver(
             psi, 1.0, bcs={"top": {"dtn": CylindricalDtN(M=1)}})
-        with pytest.raises(NotImplementedError, match="Net mass"):
+        solver.solve()
+        area = fd.assemble(1 * solver.dx)
+        assert solver.total_enclosed_mass() == pytest.approx(area, rel=1e-12)
+
+    def test_monopole_absent_in_3d(self):
+        """3-D has no undetermined monopole, so none of this machinery engages."""
+        mesh = shell_mesh_3d(refinement_level=1, dr=0.5)
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+        solver = GravitySolver(
+            psi, 1.0, bcs={"top": {"dtn": SphericalDtN(L=1)}})
+        assert solver.monopole_boundaries == []
+        solver.solve()
+        assert solver.total_enclosed_mass() == 0.0
+
+    def test_two_exterior_dtn_boundaries_refused(self):
+        """"The enclosed mass" is not defined with two exterior boundaries."""
+        mesh = fd.UnitDiskMesh(refinement_level=1)
+        X = fd.SpatialCoordinate(mesh)
+        marker = fd.Function(
+            fd.FunctionSpace(mesh, "HDiv Trace", 0)
+        ).interpolate(fd.conditional(X[1] > 0, 1.0, 0.0))
+        relabelled = fd.RelabeledMesh(mesh, [marker], [77])
+        psi = fd.Function(fd.FunctionSpace(relabelled, "CG", 1))
+        with pytest.raises(ValueError, match="exterior DtN boundaries"):
+            GravitySolver(psi, 1.0,
+                          bcs={1: {"dtn": CylindricalDtN(M=1)},
+                               77: {"dtn": CylindricalDtN(M=1)}})
+
+    def test_flux_on_the_monopole_boundary_refused(self):
+        """A flux datum and the DtN monopole both set d psi/d n at m = 0."""
+        mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+        with pytest.raises(ValueError, match="double specification"):
+            GravitySolver(
+                psi, 1.0,
+                bcs={"top": {"dtn": CylindricalDtN(M=1),
+                             "flux": fd.Constant(0.1)}})
+
+    def test_dirichlet_with_net_mass_refused(self):
+        """Two anchors for one additive constant is an over-constraint.
+
+        Measured at 1.1555 relative error, identical at two refinements, so it
+        is refused rather than solved. Zero net mass is unaffected, which is
+        what keeps the existing strong-condition configurations working.
+        """
+        mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+        solver = GravitySolver(
+            psi, 1.0, bcs={"top": {"dtn": CylindricalDtN(M=1)},
+                           "bottom": {"psi": fd.Constant(0.0)}})
+        with pytest.raises(ValueError, match="over-constrained"):
             solver.solve()
+
+        # A genuinely zero-net-mass but NONZERO density must still solve. Not
+        # `rho = 0.0`: that gives psi identically zero and asserts nothing.
+        X = fd.SpatialCoordinate(mesh)
+        zero_mean = fd.Function(fd.FunctionSpace(mesh, "CG", 2)).interpolate(
+            fd.cos(2 * fd.atan2(X[1], X[0])))
+        psi_zero = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
+        GravitySolver(psi_zero, zero_mean,
+                      bcs={"top": {"dtn": CylindricalDtN(M=3)},
+                           "bottom": {"psi": fd.Constant(0.0)}}).solve()
+        assert np.sqrt(fd.assemble(psi_zero ** 2 * fd.dx)) > 1e-3
+
+    def test_leakage_threshold_is_scale_invariant(self):
+        """Rescaling rho must not change whether the Dirichlet gauge is refused.
+
+        The whole problem is linear in rho, so `rho` and `1e-3 * rho` pose the
+        same correctness question. An earlier `max(scale, 1.0)` floor made the
+        test absolute below scale 1, and `rho = 1e-9` was refused while
+        `rho = 1e-10` solved silently - and wrongly, its gradient moving with
+        the arbitrary Robin shift.
+        """
+        mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
+        for magnitude in (1.0, 1e-3, 1e-10):
+            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+            solver = GravitySolver(
+                psi, fd.Constant(magnitude),
+                bcs={"top": {"dtn": CylindricalDtN(M=1)},
+                     "bottom": {"psi": fd.Constant(0.0)}})
+            with pytest.raises(ValueError, match="over-constrained"):
+                solver.solve()
+
+    def test_leakage_warning_band(self):
+        """Nonzero-but-implausibly-small mass warns; a deliberate mass does not."""
+        mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
+        X = fd.SpatialCoordinate(mesh)
+        clean = fd.cos(2 * fd.atan2(X[1], X[0]))
+        Q = fd.FunctionSpace(mesh, "CG", 2)
+
+        def warned(rho_expr):
+            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
+            solver = GravitySolver(
+                psi, fd.Function(Q).interpolate(rho_expr),
+                bcs={"top": {"dtn": CylindricalDtN(M=1)}})
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                solver.solve()
+            return any("Net mass" in str(w.message) for w in caught)
+
+        assert warned(clean + 1e-6)      # leakage-sized
+        assert not warned(clean)         # genuinely zero-mean
+        assert not warned(fd.Constant(1.0))  # deliberate
 
     def _fieldsplit_0(self, solver):
         """The psi block sits under the 'dtn' subtree of DtNTwoBlockSchurPC."""
@@ -431,6 +538,178 @@ class TestCylindrical:
                   + r**m_mode * outer_integral(r_in, R2_SHELL))
         reference = (2 * np.pi / m_mode) * radial * fd.cos(m_mode * phi)
         assert relative_l2_error(psi, reference, mesh, degree=10) < 1e-4
+
+    @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
+    def test_monopole_uniform_disc(self, representation):
+        """The sharpest available check of the 2-D monopole datum.
+
+        A uniform disc has psi = -pi G rho (r^2 - R^2) in the solver's gauge,
+        a quadratic and therefore exact in CG2, so the only error left is the
+        polygonal boundary. Two assertions, not one: the L2 error converges,
+        and the boundary mean is the gauge itself - the latter is what would
+        catch a wrong coefficient in the new term, which the former would not.
+        """
+        errors, means = [], []
+        for refinement in (2, 3, 4):
+            mesh = fd.UnitDiskMesh(refinement_level=refinement)
+            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
+            solver = GravitySolver(
+                psi, 1.0, bcs={1: {"dtn": CylindricalDtN(M=3)}},
+                solver_parameters="direct",
+                dtn_representation=representation)
+            solver.solve()
+
+            X = fd.SpatialCoordinate(mesh)
+            reference = -np.pi * (fd.dot(X, X) - 1.0)
+            errors.append(relative_l2_error(psi, reference, mesh))
+            perimeter = fd.assemble(1 * solver.ds(1))
+            means.append(abs(fd.assemble(psi * solver.ds(1)) / perimeter))
+
+        # Second order in h, limited by the straight facets, not the scheme.
+        assert errors[0] < 2e-2
+        assert errors[-1] < 2e-3
+        for coarse, fine in zip(errors, errors[1:]):
+            assert fine < 0.35 * coarse
+        # The gauge follows the same geometry error down.
+        assert means[-1] < 1e-3
+        for coarse, fine in zip(means, means[1:]):
+            assert fine < 0.35 * coarse
+
+    @pytest.mark.parametrize("channel", ["density", "sheet", "flux"])
+    def test_monopole_counts_every_mass_channel(self, channel):
+        """Density, sheets and prescribed fluxes all enclose mass.
+
+        The flux case is the one the source note misses: a flux datum g on an
+        interior boundary implies a cavity mass int g ds / (4 pi G), and
+        omitting it costs a mesh-independent 85% error. Exact interior
+        solution, with the constant fixed by the solver's own gauge:
+
+            psi = -pi G rho r^2 + B ln r,
+            B = 2 pi G rho a^2 - 4 pi G sigma a - 2 G M_cavity.
+        """
+        sigma = 0.3 if channel == "sheet" else 0.0
+        cavity = 2.0 if channel == "flux" else 0.0
+
+        mesh = annulus_mesh(n_azimuthal=192, dr=0.05)
+        inner = ({"flux": fd.Constant(2 * cavity / RMIN)} if channel == "flux"
+                 else {"dtn": CylindricalDtN(M=3)})
+        if sigma:
+            inner["sigma"] = fd.Constant(sigma)
+
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
+        solver = GravitySolver(
+            psi, 1.0,
+            bcs={"top": {"dtn": CylindricalDtN(M=3)}, "bottom": inner},
+            solver_parameters="direct")
+        solver.solve()
+
+        expected_mass = (np.pi * (RMAX**2 - RMIN**2)
+                         + 2 * np.pi * RMIN * sigma + cavity)
+        assert solver.total_enclosed_mass() == pytest.approx(
+            expected_mass, rel=1e-6)
+
+        X = fd.SpatialCoordinate(mesh)
+        r = fd.sqrt(fd.dot(X, X))
+        log_coefficient = (2 * np.pi * RMIN**2 - 4 * np.pi * sigma * RMIN
+                           - 2 * cavity)
+        reference = -np.pi * r**2 + log_coefficient * fd.ln(r)
+        perimeter = fd.assemble(1 * solver.ds("top"))
+        reference -= fd.assemble(reference * solver.ds("top")) / perimeter
+
+        assert relative_l2_error(psi, reference, mesh) < 1e-6
+        assert abs(fd.assemble(psi * solver.ds("top")) / perimeter) < 1e-10
+
+    @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
+    def test_parallel_repeated_monopole_solves_are_stable(self, representation):
+        """The enclosed mass must not drift when a solver is re-used in parallel.
+
+        Guards a live Firedrake defect, and one this suite has already been
+        bitten by once: a *cached* `LinearVariationalSolver` whose right-hand
+        side carries a facet integral into a `Real` space returns the right
+        value on its first solve and garbage afterwards - measured 1.881574
+        then 0.0 alternating on two ranks, and 1.881574, -3.763149, 13.171020,
+        -37.631486 on four. The KSP converges either way, so the symptom is a
+        silently wrong potential, and only a repeated solve on more than one
+        rank can see it. `update_total_mass` therefore rebuilds its solve every
+        call; this is what stops that being quietly optimised away again.
+
+        Both mass channels that route through a facet integral are present -
+        a `sigma` sheet and a `flux` condition - because the volume term alone
+        is stable and would not have caught it.
+
+        Skipped rather than passed on a single rank: run it under mpiexec.
+        """
+        if fd.COMM_WORLD.size < 2:
+            pytest.skip("needs >= 2 MPI ranks; run under mpiexec")
+
+        sigma, cavity = 0.3, 2.0
+        mesh = annulus_mesh(n_azimuthal=64, dr=0.25)
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
+        solver = GravitySolver(
+            psi, 1.0,
+            bcs={"top": {"dtn": CylindricalDtN(M=3),
+                         "sigma": fd.Constant(sigma)},
+                 "bottom": {"flux": fd.Constant(2 * cavity / RMIN)}},
+            solver_parameters="direct", dtn_representation=representation)
+
+        masses, norms = [], []
+        for _ in range(4):
+            solver.mixed_solution.assign(0)
+            solver.solve()
+            masses.append(solver.total_enclosed_mass())
+            norms.append(np.sqrt(fd.assemble(psi ** 2 * fd.dx)))
+
+        expected = (np.pi * (RMAX**2 - RMIN**2)
+                    + 2 * np.pi * RMAX * sigma + cavity)
+        assert masses[0] == pytest.approx(expected, rel=1e-5)
+        for mass, norm in zip(masses[1:], norms[1:]):
+            assert mass == pytest.approx(masses[0], rel=1e-12)
+            assert norm == pytest.approx(norms[0], rel=1e-12)
+
+    def test_monopole_gauge_does_not_depend_on_the_robin_shift(self):
+        """The Robin term fixes the constant without contaminating the answer.
+
+        If the normalisation moved with alpha it would be a contribution to the
+        solution rather than a gauge choice, so this is the assertion that the
+        argument in the module docstring is the one actually implemented.
+
+        The cancellation is exact only where the discrete boundary length
+        matches `2 pi R`: the datum is applied as the constant `-2 G M / R`
+        while the `v = 1` relation weights it by the measured length, leaving
+        `(R/alpha) * 4 pi G M * (1 - A_h / 2 pi R) / A_h`. On straight facets
+        that residual is real and carries `1/alpha` - `UnitDiskMesh(2)` gives
+        boundary means of -2.24e-02, -1.12e-02 and -2.80e-03 at alpha = 0.5, 1
+        and 4 - so this mesh's degree-2 coordinates are the precondition for
+        the strong form of the claim, and it is asserted rather than assumed.
+        """
+        mesh = annulus_mesh(n_azimuthal=96, dr=0.1)
+        length = fd.assemble(1 * fd.ds_t(domain=mesh))
+        radius = fd.assemble(
+            fd.sqrt(fd.dot(*(2 * (fd.SpatialCoordinate(mesh),))))
+            * fd.ds_t(domain=mesh)) / length
+        assert abs(length / (2 * np.pi * radius) - 1.0) < 1e-9
+        solutions = []
+        for alpha in (0.5, 1.0, 3.0):
+            class ShiftedGravitySolver(GravitySolver):
+                pass
+            ShiftedGravitySolver.alpha = alpha
+
+            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
+            solver = ShiftedGravitySolver(
+                psi, 1.0,
+                bcs={"top": {"dtn": CylindricalDtN(M=3)},
+                     "bottom": {"dtn": CylindricalDtN(M=3)}},
+                solver_parameters="direct")
+            solver.solve()
+            perimeter = fd.assemble(1 * solver.ds("top"))
+            assert abs(fd.assemble(psi * solver.ds("top")) / perimeter) < 1e-9
+            solutions.append(psi.copy(deepcopy=True))
+
+        scale = np.sqrt(fd.assemble(solutions[0] ** 2 * fd.dx))
+        for other in solutions[1:]:
+            difference = np.sqrt(
+                fd.assemble((other - solutions[0]) ** 2 * fd.dx))
+            assert difference / scale < 1e-9
 
     def test_dirichlet_and_flux(self):
         """The 'psi' and 'flux' conditions reproduce a known harmonic.

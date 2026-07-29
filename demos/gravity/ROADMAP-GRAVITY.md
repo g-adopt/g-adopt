@@ -105,11 +105,18 @@ Key decisions, each recorded in GRAVITY-LESSONS-LEARNED.md part II:
   auto-detected) — needed for the extended/buffer configurations where the
   mantle fields live on a submesh of the gravity mesh (dynamic-topography
   case, avoiding high production L).
-- Not implemented, explicitly guarded: the 2D nonzero-net-mass monopole
-  datum (NotImplementedError from `check_net_mass`, which sums volume and
-  sheet mass); Cartesian geometry (a future `CartesianDtN` is a pure
-  addition); the coupled self-gravitating extraction (section 12,
-  deliberately deferred — `solver.F` and the mixed space are exposed).
+- The 2D nonzero-net-mass monopole datum is implemented on both DtN
+  representations: `∂ψ/∂n|_{m=0} = −2GM/R` on a 2-D exterior boundary, with
+  `M` summing volume, sheet and prescribed-flux (cavity) mass, and the
+  potential returned in the gauge `∮ψ ds = 0`. `check_net_mass` no longer
+  refuses; it warns about monopole leakage and refuses only the two gauges
+  that cannot exist (a strong `psi` condition alongside nonzero mass, and two
+  exterior DtN boundaries on one 2-D mesh). See `NOTES/PLAN-MONOPOLE-C0.md`.
+- Not implemented, explicitly guarded: Cartesian geometry (a future
+  `CartesianDtN` is a pure addition, and would reuse the same enclosed-mass
+  scalars for its own `n = 0` datum); the coupled self-gravitating extraction
+  (section 12, deliberately deferred — `solver.F` and the mixed space are
+  exposed).
 
 Validation: unit tests in `tests/unit/test_gravity_solver.py` and
 `tests/unit/test_spherical_harmonics.py` (17 tests, Firedrake utility
@@ -405,7 +412,11 @@ coefficients — a standard saddle structure, Schur-eliminable. For iterative
 solves, isolate the R-field in its own fieldsplit with `preonly`/`lu` (a
 2M×2M dense solve, microseconds) and precondition the ψ block with AMG as
 usual; the pattern is the `pc_fieldsplit_N_fields` nesting already worked
-out in ROAD-MAP-STOKES-COUPLE.md section 6.
+out in ROAD-MAP-STOKES-COUPLE.md section 6. (That pattern is what shipped,
+and it has since been replaced in `gadopt.GravitySolver`: describing the split
+by field number makes PETSc enumerate every scalar R sub-field and it refuses
+past 128 of them, so the two blocks are now described by index set instead.
+See `SOLVE-STRATEGIES.md`, "How the split is described to PETSc".)
 
 One genuine nullspace subtlety, worth knowing before it bites: the *modal*
 DtN terms annihilate constant traces (∫cos mφ ds = 0 for m ≥ 1), so with

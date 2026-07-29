@@ -17,8 +17,11 @@ Structurally exempt, because they are assertions *about the multiplier tape*
 rather than about the derivative: `test_tape_structure` (counts
 NonlinearVariationalSolveBlocks), `test_taylor_through_multiplier` (reads an R
 subfunction that does not exist here), `test_coefficient_float_severs_tape`
-(about `float()` on a multiplier), and `test_net_mass_blocks_dangling_harmless`
-(counts AssembleBlocks emitted by the multiplier path).
+(about `float()` on a multiplier), and
+`test_which_net_mass_assembles_are_load_bearing` (counts AssembleBlocks emitted
+by the multiplier path). `test_monopole_gradient_against_fresh_solves` is not
+exempt and is not duplicated either - it is parametrized over both
+representations where it is defined.
 
 Every test builds its own control objects. Sharing one control `Function`
 between two ReducedFunctionals silently cross-contaminates them - pyadjoint's
@@ -382,9 +385,11 @@ def test_taylor_rho_submesh(submesh_pair):
 def test_reduced_functional_replay(mesh_2d):
     """Replay at a new control equals a fresh solve there, and returns.
 
-    Also documents the same gap the multiplier path has: replay bypasses the
-    Python-level `check_net_mass`, so a net-mass control replays without
-    raising although a direct solve raises.
+    Includes a control with nonzero net mass, which used to be the gap this
+    test documented - replay bypassed the Python-level `check_net_mass`, so a
+    net-mass iterate replayed while a direct solve raised. The monopole datum
+    closed it: the mass is on the tape, so replay and a fresh solve agree
+    rather than one of them merely being tolerated.
     """
     with stop_annotating():
         m = rho_control_2d(mesh_2d)
@@ -406,10 +411,10 @@ def test_reduced_functional_replay(mesh_2d):
         X = fd.SpatialCoordinate(mesh_2d)
         r = fd.sqrt(fd.dot(X, X))
         with_mass = fd.Function(Q).interpolate(fd.exp(-(((r - 1.7) / 0.15) ** 2)))
-    assert np.isfinite(float(rf(with_mass)))
-    with pytest.raises(NotImplementedError, match="Net mass"):
-        with stop_annotating():
-            forward_rho_2d(with_mass)
+    replayed = float(rf(with_mass))
+    with stop_annotating():
+        fresh, _ = forward_rho_2d(with_mass)
+    assert abs(replayed - float(fresh)) <= 1e-9 * abs(float(fresh))
 
 
 def test_solution_assign_preserves_tape(mesh_2d):

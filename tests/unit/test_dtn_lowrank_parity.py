@@ -204,14 +204,30 @@ def test_parity_with_strong_bc(annulus):
     compare(annulus, results, label="strong bc")
 
 
-def test_net_mass_guard_survives(annulus):
-    """`check_net_mass` still runs from `solve()` on the fast path."""
-    psi = fd.Function(fd.FunctionSpace(annulus, "CG", 1))
+def test_monopole_datum_reaches_the_fast_path(annulus):
+    """The 2-D monopole datum runs from `solve()` on the fast path too.
+
+    It used to be `check_net_mass` refusing here. The datum replaced the
+    refusal, and the property worth guarding is the same one: the enclosed-mass
+    bookkeeping is driven from `solve`, so it cannot be silently skipped by the
+    representation that does not go through a variational solve.
+    """
+    psi = fd.Function(fd.FunctionSpace(annulus, "CG", 2))
     solver = GravitySolver(
         psi, 1.0, bcs={"top": {"dtn": CylindricalDtN(M=1)}},
-        dtn_representation="lowrank")
-    with pytest.raises(NotImplementedError, match="Net mass"):
-        solver.solve()
+        solver_parameters="direct", dtn_representation="lowrank")
+    assert solver.total_enclosed_mass() == 0.0  # not yet solved
+    solver.solve()
+    assert solver.total_enclosed_mass() == pytest.approx(
+        fd.assemble(1 * solver.dx), rel=1e-12)
+
+    # The mass being computed is not enough - it would still be computed if the
+    # datum were dropped from the form. The gauge is what says the term is in
+    # the residual: without it the boundary mean sits at the spurious
+    # 2 G M / alpha instead of zero.
+    perimeter = fd.assemble(1 * solver.ds("top"))
+    boundary_mean = fd.assemble(psi * solver.ds("top")) / perimeter
+    assert abs(boundary_mean) < 1e-9 * abs(solver.total_enclosed_mass())
 
 
 def test_accuracy_against_the_closed_form(annulus):

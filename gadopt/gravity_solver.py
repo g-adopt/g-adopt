@@ -36,6 +36,26 @@ through the flux jump $[(d psi)/(d r)] = -4 pi G sigma$, which reduces to the
 standard surface-source term $-4 pi G int sigma v \, ds$ with the DtN machinery
 unchanged.
 
+In 2-D the monopole needs one extra ingredient, because the exterior expansion
+carries a logarithmic branch $C_0 ln r$ whose coefficient the boundary trace
+does not determine. The DtN map is complete for every $m >= 1$ and blind at
+$m = 0$, so a 2-D exterior boundary additionally receives the flux datum
+
+$$
+  (d psi)/(d n)|_{m = 0} = -2 G M / R,
+$$
+
+with $M$ the total enclosed mass. That leaves the additive constant free -
+there is no "psi -> 0 at infinity" to fix it - and the Robin shift above fixes
+it for us: testing the residual with $v = 1$, the volume source and the datum
+cancel exactly and leave $oint psi \, ds = 0$ on the boundary. So the system
+stays nonsingular with no nullspace handling, and the potential is returned in
+the gauge $oint_{dB} psi \, ds = 0$, i.e. $psi = -2 G M ln(r/R)$ outside the
+sources. Only `grad psi` is gauge-independent; anyone comparing against a
+closed form that fixes the constant differently will see a constant offset.
+3-D has no analogue - the $l = 0$ exterior decays as $1/r$ and the trace map
+reproduces it exactly - so nonzero net mass has always been legal there.
+
 Users instantiate the `GravitySolver` class by providing a solution function,
 the density, and boundary conditions keyed by boundary marker, then call the
 `solve` method to update the solution.
@@ -65,6 +85,15 @@ from .utility import CombinedSurfaceMeasure, DEBUG, INFO, ensure_constant, log_l
 
 __all__ = ["CylindricalDtN", "SphericalDtN", "GravitySolver"]
 
+
+#: For the one-by-one systems on a `Real` space that define the enclosed-mass
+#: scalars. The operator is a nonzero number, so `preonly` + Jacobi is an exact
+#: solve rather than a preconditioning choice, and it must not inherit the
+#: gravity solver's own fieldsplit options.
+real_scalar_solver_parameters = {
+    "ksp_type": "preonly",
+    "pc_type": "jacobi",
+}
 
 direct_gravity_solver_parameters = {
     "ksp_type": "preonly",
@@ -535,6 +564,17 @@ class GravitySolver(SolverConfigurationMixin):
     extended-domain configuration, where psi extends beyond the region
     carrying the density); the cross-mesh coupling is set up automatically.
 
+    **The 2-D gauge.** A 2-D problem with an exterior DtN boundary and nonzero
+    net mass has a logarithmic far field and therefore no natural zero. The
+    solver returns the potential normalised so that its mean over that boundary
+    vanishes, i.e. `psi = -2 G M ln(r/R)` outside the sources with `M` the
+    total enclosed mass. Only `grad psi` is gauge-independent, so a closed-form
+    reference that fixes the constant some other way will disagree by an
+    offset that is not an error. Two configurations are refused rather than
+    solved in a gauge that cannot exist: a strong `psi` condition alongside a
+    nonzero enclosed mass, and more than one exterior DtN boundary on the same
+    2-D mesh. 3-D is unaffected throughout.
+
     Args:
       solution:
         Firedrake function for the potential, on a scalar function space
@@ -648,6 +688,7 @@ class GravitySolver(SolverConfigurationMixin):
         self.set_boundary_conditions()
         self.set_measures(quad_degree, source_quad_degree)
         self.set_boundary_geometry()
+        self.set_monopole_datum()
         if self.dtn_representation == "lowrank":
             self.set_lowrank_operator()
         else:
@@ -936,6 +977,124 @@ class GravitySolver(SolverConfigurationMixin):
             # effect rather than as the wrong formula.
             self.boundary_area[bc_id] = area
 
+    def set_monopole_datum(self) -> None:
+        """Prepares the 2-D exterior monopole flux datum; see the module docstring.
+
+        The enclosed mass is held in `Real` `Function`s rather than baked into
+        the form as numbers, and rather than promoted to unknowns with
+        constraint rows. Both alternatives were measured and both are worse: a
+        number severs the tape (§ `update_total_mass`), while an unknown costs
+        a field, a constraint row and a Schur dimension, and does not transfer
+        to the low-rank path at all, which has no multipliers. A `Real`
+        `Function` assigned from an assembled `AdjFloat` is differentiable *and*
+        is an ordinary UFL coefficient, so one expression serves both
+        representations and `gadopt.dtn_adjoint` picks it up with no new code.
+
+        Two scalars rather than one, because the flux conditions carry mass
+        whose contribution to the datum has no `G` in it - see `monopole_flux`.
+        """
+        #: The 2-D exterior DtN boundaries, which are the only ones whose
+        #: monopole the trace fails to determine. Empty in 3-D.
+        self.monopole_boundaries = [
+            bc_id for bc_id, _ in self.dtn_boundaries
+            if self.mesh.geometric_dimension == 2
+            and self.boundary_geometry[bc_id][0] == "exterior"]
+
+        self._real_space = None
+        self.mesh_volume = None
+        self.source_mass = None
+        self.cavity_flux = None
+        if not self.monopole_boundaries:
+            # Nothing is built in 3-D, not even the Real space and the volume
+            # assemble: "the 3-D path pays nothing for this" should be true of
+            # the code and not only of the per-solve cost.
+            return
+
+        if len(self.monopole_boundaries) > 1:
+            raise ValueError(
+                f"2-D mesh with {len(self.monopole_boundaries)} exterior DtN "
+                f"boundaries {self.monopole_boundaries}: the monopole datum "
+                "needs the mass enclosed by the exterior boundary, which is "
+                "not defined when there is more than one of them.")
+        clash = sorted(
+            {bc_id for bc_id, _ in self.flux_bcs}.intersection(
+                self.monopole_boundaries),
+            key=str)
+        if clash:
+            raise ValueError(
+                f"Boundary {clash[0]}: 'flux' and a 2-D exterior 'dtn' both "
+                "prescribe the m = 0 normal derivative there - the DtN map "
+                "through the enclosed mass, the flux condition directly - so "
+                "the two are a double specification of one quantity. Move the "
+                "flux condition to an interior boundary or drop it.")
+
+        self._real_space = FunctionSpace(self.mesh, "R", 0)
+        #: The measure the one-by-one system's operator assembles to; plain
+        #: `dx`, never `self.dx`, which in the cross-mesh case is intersected
+        #: with the density's mesh and is therefore a different number.
+        self.mesh_volume = assemble(Constant(1.0) * dx(domain=self.mesh))
+        #: `int rho dx + sum_sheets int sigma ds`, refreshed by `solve`.
+        self.source_mass = Function(self._real_space, name="source_mass")
+        #: `sum_flux int (d psi)/(d n) ds` over the prescribed-flux boundaries,
+        #: which is `4 pi G` times the mass they imply inside their cavities.
+        self.cavity_flux = Function(self._real_space, name="cavity_flux")
+
+    def enclosed_mass_forms(self) -> tuple:
+        """`(identity, mass, flux)`: the one-by-one systems on the Real space.
+
+        `mu` and `nu` are globally constant, so dividing the left-hand side by
+        `mesh_volume` - the value that same measure assembles to, from the same
+        measure - makes the system the identity, and `source_mass` holds the
+        mass its name claims rather than a mass per unit volume. See
+        `update_total_mass` for why the mass is routed through a solve at all,
+        and why the solve is rebuilt every time rather than cached.
+
+        `ensure_constant` is applied to the boundary values because a Python
+        `0.0` folds the whole integral away, and a right-hand side that folds
+        to nothing is not a linear form at all - which for a lone
+        `{"flux": 0.0}` condition meant a `ValueError` from deep inside
+        Firedrake rather than the zero it obviously means.
+        """
+        mu = TestFunction(self._real_space)
+        nu = TrialFunction(self._real_space)
+        identity = (nu / self.mesh_volume) * mu * dx(domain=self.mesh)
+
+        mass = self.rho * mu * self.dx_rho
+        for bc_id, sigma in self.sigma_bcs:
+            mass += ensure_constant(sigma) * mu * self.ds(bc_id)
+
+        flux = None
+        for bc_id, value in self.flux_bcs:
+            term = ensure_constant(value) * mu * self.ds(bc_id)
+            flux = term if flux is None else flux + term
+        return identity, mass, flux
+
+    def monopole_flux(self, bc_id):
+        """`(d psi)/(d n)` of the m = 0 mode on a 2-D exterior DtN boundary.
+
+        `-2 G M / R`, with `M` everything the boundary encloses: the volumetric
+        density, the sheets, and the cavities implied by prescribed-flux
+        boundaries. By Gauss the last of those is `int g ds / (4 pi G)` for a
+        flux datum `g`, whose `G` cancels against the `2 G` in front - so that
+        piece is written without `G` rather than as a `G/G`, which keeps it
+        exactly differentiable when the gravitational constant is itself a
+        control.
+
+        Returned as a flux rather than as a form so that both representations
+        can feed it through the same idiom they already use for the `flux`
+        boundary conditions, where the two sign conventions are visible side by
+        side (`set_form` builds a residual, `set_lowrank_operator` a
+        right-hand side).
+        """
+        _, R = self.boundary_geometry[bc_id]
+        flux = -2.0 * self.G * self.source_mass / R
+        if self.flux_bcs:
+            # Left out entirely rather than added as a term that is
+            # structurally zero, so that a configuration with no flux
+            # conditions does not carry a tape dependency that can never move.
+            flux -= self.cavity_flux / (2.0 * np.pi * R)
+        return flux
+
     def set_function_spaces(self) -> None:
         """Builds the internal mixed space: psi, cross-mesh dummy, multipliers.
 
@@ -1001,6 +1160,9 @@ class GravitySolver(SolverConfigurationMixin):
         for bc_id, flux in self.flux_bcs:
             F -= flux * v * self.ds(bc_id)
 
+        for bc_id in self.monopole_boundaries:
+            F -= self.monopole_flux(bc_id) * v * self.ds(bc_id)
+
         self.F = F
         self.strong_bcs = [
             DirichletBC(self.mixed_space.sub(0), val, bc_id)
@@ -1034,6 +1196,9 @@ class GravitySolver(SolverConfigurationMixin):
             F += 4 * np.pi * self.G * sigma * v * self.ds(bc_id)
         for bc_id, flux in self.flux_bcs:
             F += flux * v * self.ds(bc_id)
+
+        for bc_id in self.monopole_boundaries:
+            F += self.monopole_flux(bc_id) * v * self.ds(bc_id)
 
         self.a_form, self.rhs_form = a, F
         self.strong_bcs = [
@@ -1263,35 +1428,179 @@ class GravitySolver(SolverConfigurationMixin):
             options_prefix=self.name,
         )
 
-    def check_net_mass(self) -> None:
-        """Verifies the zero-net-mass assumption of 2-D exterior DtN maps.
+    def update_total_mass(self) -> None:
+        """Refreshes the enclosed-mass scalars the monopole datum reads.
 
-        The 2-D exterior monopole is logarithmic, so its flux is set by the
-        total enclosed mass (volumetric density plus boundary sheets) rather
-        than the boundary trace. The Robin-shifted map is exact for zero net
-        mass; the nonzero case would need the -2 G M / R flux datum, which is
-        not implemented.
+        Called from `solve` and not from `__init__`, so that the assembles and
+        the assigns land on the tape. That placement is the whole design: the
+        mass has to be differentiable without ever becoming an unknown.
+
+        **Do not freeze these as `float`s.** Doing so severs the channel in a
+        way no Taylor test can see: the taped map is then self-consistent, so
+        `taylor_test` converges at rate 2.0000 while the gradient of the actual
+        forward map is wrong - measured at 325% on both representations, the
+        adjoint returning 4.948 where a central difference of fresh solves gives
+        1.163. The instrument that catches it is a finite difference of *fresh
+        solves*, which is why the tests carry one.
+
+        **And do not reach for the obvious spelling either.** Getting an
+        assembled scalar into a form differentiably is narrower than it looks;
+        of the five ways to write it, two work. Measured on a stand-alone
+        problem whose right-hand side depends on the control only through the
+        scalar, against a reference gradient of 6.168:
+
+        | spelling                                   | adjoint | tangent |
+        | ------------------------------------------ | ------- | ------- |
+        | `Constant.assign(assemble(...))`           | **0.0** | fails   |
+        | `assemble(...).riesz_representation("l2")` | **0.0** | fails   |
+        | `Function(R).assign(assemble(...))`        | 6.168   | **fails** |
+        | `assemble(...).riesz_representation("L2")` | 6.168   | 6.168   |
+        | a small variational problem on `R`         | 6.168   | 6.168   |
+
+        The first two sever silently, which is the failure mode this whole item
+        exists to avoid. The third is the tempting one and is what the plan note
+        proposed: its adjoint is exact, because `assemble` of a 0-form returns
+        an `AdjFloat` and the assign is taped, but its *tangent* value arrives
+        as a bare `numpy.float64` that `derivative` rejects, so it fails the
+        TLM-adjoint dot-product identity while every Taylor test still passes.
+        The last two are equivalent - the `L2` Riesz map is a mass-matrix solve
+        and emits the same block - so the explicit one is written out, because
+        it says what it does without an argument about which volume factor
+        cancels which.
+
+        **The solve is rebuilt on every call, and must be.** Hoisting it into a
+        cached `LinearVariationalSolver` is the obvious optimisation - it saves
+        3.2 ms of the datum's 3.8 ms, since the one-by-one operator is a fixed
+        number - and it is wrong in parallel. A cached solver whose right-hand
+        side carries a *facet* integral into a `Real` space returns the correct
+        value on its first solve and garbage afterwards: measured on a unit
+        disc, `1.881574` then `0.0` alternating on two ranks, and
+        `1.881574, -3.763149, 13.171020, -37.631486` on four. The KSP still
+        converges, so the failure is a silently wrong potential in exactly the
+        configuration this item exists to enable - a mass sheet on a 2-D
+        exterior boundary, solved more than once, in parallel.
+
+        Every other spelling is stable at 1, 2 and 4 ranks: plain repeated
+        1-form assembly of the same form object, of a fresh one, assembly into
+        a pre-zeroed tensor, 0-form assembly, and the fresh solve used here.
+        Only the cached solver reuses whatever state is at fault. This looks
+        like a Firedrake defect rather than a misuse and is worth reporting
+        upstream, alongside the `R`-row reproducer `SOLVE-STRATEGIES.md`
+        already owes them.
+
+        A no-op outside 2-D, and in 2-D without an exterior DtN boundary, so
+        the 3-D path pays nothing for any of this.
         """
-        if self.mesh.geometric_dimension != 2:
-            return
-        if not any(self.boundary_geometry[bc_id][0] == "exterior"
-                   for bc_id, _ in self.dtn_boundaries):
+        if not self.monopole_boundaries:
             return
 
-        mass = assemble(self.rho * self.dx_rho)
+        identity, mass, flux = self.enclosed_mass_forms()
+        solve(identity == mass, self.source_mass,
+              solver_parameters=real_scalar_solver_parameters)
+        if flux is not None:
+            solve(identity == flux, self.cavity_flux,
+                  solver_parameters=real_scalar_solver_parameters)
+        self.check_net_mass()
+
+    def total_enclosed_mass(self) -> float:
+        """Everything the 2-D exterior DtN boundary encloses, as a number.
+
+        Density, sheets, and the cavity masses implied by prescribed-flux
+        boundaries. Valid after `solve`; zero when there is no such boundary,
+        which includes every 3-D configuration - there the scalars are never
+        built, because the 3-D `l = 0` exterior mode is determined by the trace
+        and needs none of this.
+
+        Diagnostic only - the differentiable quantities are `source_mass` and
+        `cavity_flux`, and reading a float off them is the sever documented in
+        `update_total_mass`.
+        """
+        if not self.monopole_boundaries:
+            return 0.0
+        return (self._real_value(self.source_mass)
+                + self._real_value(self.cavity_flux)
+                / (4.0 * np.pi * self._real_value(self.G)))
+
+    @staticmethod
+    def _real_value(value) -> float:
+        """A number from a `Constant`, a `Real` `Function` or a plain scalar.
+
+        `Real` data is replicated on every rank, so reading entry 0 is a local
+        operation that needs no reduction and agrees everywhere.
+        """
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(value.dat.data_ro[0])
+
+    def check_net_mass(self) -> None:
+        """Warns about monopole leakage, and refuses a doubly-anchored gauge.
+
+        This used to refuse any nonzero net mass in 2-D, because the monopole
+        datum did not exist. It does now (see the module docstring), so nonzero
+        mass is ordinary, and what is left is the check's second job: a density
+        that *should* integrate to zero but does not usually has DG0 leakage
+        from an interface that does not conform to cell edges, which is a
+        genuine accuracy problem whatever the boundary treatment.
+
+        "Nonzero" can no longer be the trigger for that, so the trigger is
+        "nonzero but implausibly small": a leaked monopole is a discretisation
+        residue a few orders above round-off, while a mass anyone meant to be
+        there sits far above the band. The band errs quiet - it will miss
+        leakage on a density whose own mass is genuinely tiny - which is the
+        right direction for a warning that would otherwise fire on every
+        legitimate nonzero-mass problem and teach users to filter it.
+
+        The refusal that replaces the old one is the gauge argument's caveat.
+        With a strong `psi` condition present, `v = 1` is not admissible, so
+        the Robin monopole relation and the Dirichlet condition become two
+        competing anchors for the same constant and the system is
+        over-constrained. Measured on an annulus, that costs 1.1555 relative
+        error, identical at two refinements - a real over-constraint, not a
+        convergence artefact - so it is refused rather than warned about.
+        """
+        if not self.monopole_boundaries:
+            return
+
         scale = assemble(abs(self.rho) * self.dx_rho)
         for bc_id, sigma in self.sigma_bcs:
-            mass += assemble(sigma * self.ds(bc_id))
-            scale += assemble(abs(sigma) * self.ds(bc_id))
-        if abs(mass) > 1e-8 * max(scale, 1.0):
-            raise NotImplementedError(
-                f"Net mass {mass:.3e} is nonzero: the 2-D exterior DtN "
-                "monopole requires the -2 G M / R flux datum, which is not "
-                "implemented. Use a zero-mean density or a 3-D formulation. "
-                "If the density should have zero net mass, this can also "
-                "indicate monopole leakage from density boundaries that do "
-                "not conform to cell edges - a genuine accuracy problem in "
-                "itself; align the mesh with the density interfaces.")
+            # `ensure_constant` for the same reason as in `enclosed_mass_forms`:
+            # a Python `0.0` folds `abs(sigma) * ds` away entirely, and
+            # assembling nothing raises `IndexError: tuple index out of range`
+            # from inside UFL rather than returning the zero it means.
+            scale += assemble(abs(ensure_constant(sigma)) * self.ds(bc_id))
+        mass = abs(self._real_value(self.source_mass))
+        # Against the density's own scale and nothing else. An earlier
+        # `max(scale, 1.0)` floor turned this into an absolute test below
+        # scale 1, so uniformly rescaling rho - a transformation the whole
+        # linear problem is invariant under - switched the refusal below off:
+        # rho = 1e-9 was refused and rho = 1e-10 solved silently and wrongly.
+        relative = mass / scale if scale > 0.0 else float(mass > 0.0)
+        # The flux conditions are user data rather than a discretised field, so
+        # they cannot leak; they can still anchor a monopole, hence the second
+        # term here and nowhere in the leakage band below.
+        anchored = relative > 1e-8 or self._real_value(self.cavity_flux) != 0.0
+
+        if anchored and self.dirichlet_bcs:
+            raise ValueError(
+                f"Net enclosed mass {self.total_enclosed_mass():.3e} is "
+                "nonzero on a 2-D mesh that has both an exterior DtN boundary "
+                f"and a strong 'psi' condition on boundary "
+                f"{self.dirichlet_bcs[0][0]}. The 2-D monopole datum fixes the "
+                "potential's additive constant through the Robin term, and the "
+                "Dirichlet condition fixes it again: the two anchors disagree "
+                "and the system is over-constrained. Drop one of them, or use "
+                "a zero-net-mass density.")
+
+        if 1e-8 < relative < 1e-4:
+            warn(
+                f"Net mass {self._real_value(self.source_mass):.3e} is "
+                f"{relative:.1e} of the density's own scale - nonzero, but too "
+                "small to look deliberate. This is the signature of monopole "
+                "leakage from a density interface that does not conform to "
+                "cell edges, which is an accuracy problem in its own right; "
+                "align the mesh with the density interfaces. If the mass is "
+                "meant to be there, ignore this.")
 
     def boundary_quadrature_rule(self, degree: int, bc_id):
         """The boundary rule at `degree`, as `(weights * detJ, points)`.
@@ -1499,7 +1808,7 @@ class GravitySolver(SolverConfigurationMixin):
 
     def solve(self) -> None:
         """Solves the system and updates the solution function in place."""
-        self.check_net_mass()
+        self.update_total_mass()
         if self.dtn_representation == "lowrank":
             self._solve_lowrank()
             annotate_lowrank_solve(self)

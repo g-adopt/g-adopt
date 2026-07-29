@@ -224,7 +224,8 @@ prototype:
 2. **The exterior 2D m = 0 stays excluded; the exterior 3D l = 0 is a
    genuine mode.** In 2D the exterior monopole is logarithmic (trace does
    not determine flux), so the mode list omits it and the Robin shift is
-   exact under zero net mass (guarded, see 7.3). In 3D the l = 0 exterior
+   exact under zero net mass. Nonzero net mass is supplied separately, as
+   the flux datum -2 G M / R (see 7.3). In 3D the l = 0 exterior
    decays as 1/r and belongs in the table with lambda = 1/R. At alpha = 1
    its feedback coefficient (lambda - alpha/R) vanishes — the pointwise
    Robin term alone is the exact monopole map — but the constraint row
@@ -322,11 +323,15 @@ in passess itself):
 
 Two corollaries worth remembering:
 
-- **The net-mass guard must include sheet mass.** The 2D exterior
-  monopole restriction applies to the TOTAL enclosed mass, volumetric plus
-  sheets; `check_net_mass` sums both and raises NotImplementedError
-  (relative 1e-8) rather than silently producing a wrong monopole. If it
-  fires on a density that should be zero-mean, suspect DG0 leakage from
+- **The monopole datum must include sheet mass, and flux-implied mass.**
+  The 2D exterior monopole is set by the TOTAL enclosed mass: volumetric,
+  plus sheets, plus the cavity mass `int g ds / (4 pi G)` implied by any
+  prescribed-flux boundary. The last of those was missed by the source
+  analysis and costs a mesh-independent 85% if omitted. `check_net_mass`
+  no longer refuses nonzero mass - the datum handles it - and warns only
+  in the band 1e-8 < |M|/scale < 1e-4, where a mass is nonzero but too
+  small to look deliberate. If it fires on a density that should be
+  zero-mean, suspect DG0 leakage from
   density boundaries that do not conform to cell edges — the original
   230%-error lesson — which is an accuracy problem in its own right.
 - **In 3D, nonzero total mass is legal and tested.** A uniform (Y_00)
@@ -423,9 +428,14 @@ itself (62 sheet tests among 397).
   before choosing production L. The scalar-R bookkeeping (vector-valued R
   Arguments still unsupported upstream) caps practical L at ~5, which is
   what the hybrid low-L-plus-buffer strategy assumed anyway.
-- **2D nonzero-net-mass monopole datum** (-2 G M / R flux): guarded by
-  NotImplementedError; the future implementation is one more R multiplier
-  (the solution-dependent monopole of roadmap section 12.3).
+- **2D nonzero-net-mass monopole datum** (-2 G M / R flux): implemented
+  on both DtN representations, with the enclosed mass carried in taped
+  `Real` functions rather than the R multiplier once envisaged, and the
+  potential returned in the gauge `int psi ds = 0` on the exterior
+  boundary. See `NOTES/PLAN-MONOPOLE-C0.md`. What remains open is the
+  *solution-dependent* monopole of roadmap section 12.3, where the
+  enclosed mass is a function of the Stokes unknowns and has to be
+  symbolic in a monolithic residual.
 - **Cartesian** (`CartesianDtN` for periodic boxes): a pure addition to
   the mode-table abstraction — cos/sin(k_n x), lambda = k_n both sides,
   plus the n = 0 sheet-mass datum.
