@@ -168,6 +168,17 @@ nothing and stay at machine zero. Boundary quadrature is set explicitly
 (default 2(M + degree)) and verified by `check_boundary_quadrature`,
 which asserts ∫cos²(mφ) ds = πR for all treated modes.
 
+That describes `gravity_dtn.py`'s own method and still does, accurately —
+the prototype is unchanged. But **the technique is now known not to
+measure what its name claims**, and a reader should not carry it
+forward: comparing against the analytic πR is dominated by the discrete
+boundary not being a circle, and on these uniform 2-D meshes it reads as
+round-off for a second reason (a composite Gauss rule on a *regular*
+boundary annihilates every harmonic but multiples of the facet count,
+worth ten orders here). Both the prototype's default and its check were
+superseded in `gadopt.GravitySolver`; see section 7 and
+`NOTES/FINDING-QUADRATURE-CANCELLATION.md`.
+
 ## 6. Open items part I did not cover
 
 (All of these are now done and recorded below or in `CLAUDE.md`, except
@@ -268,10 +279,26 @@ therefore follows the StokesSolver/EnergySolver contract exactly:
 - **Consistency of measured R with analytic constraint scales** (the
   adversarial reviewer's sharpest question): the hardcoded scales (1/2,
   1, 1/(4 pi)) with measured R are self-consistent because c_k is
-  *defined* by the constraint row, and `check_boundary_quadrature` bounds
-  the deviation of assemble(e_k^2 ds) from N_k — which for Y_lm doubles
-  as a discrete-orthonormality test for free. The measured R enters only
-  lambda and N.
+  *defined* by the constraint row. The measured R enters only lambda
+  and N.
+  This used to add "and `check_boundary_quadrature` bounds the deviation
+  of assemble(e_k^2 ds) from N_k — which for Y_lm doubles as a
+  discrete-orthonormality test for free". **That second half is no longer
+  true, and the reason it stopped being true is the more useful lesson.**
+  The deviation from N_k is dominated by the discrete boundary not being
+  a sphere, not by quadrature: on a level-2 extruded cubed sphere at
+  L = 8 it moves from 2.328711e-05 to 2.328713e-05 as the degree goes
+  from 12 to 40, while one refinement level moves it two orders. So it
+  bounded boundary sphericity while carrying a name and a docstring
+  claiming quadrature. `check_boundary_quadrature` now differences two
+  degrees on one mesh, which cancels the geometry error because it is
+  common to both, and its return value is a self-convergence rather than
+  a deviation from N_k. Sphericity is still measured, by the rms radius
+  warning in `set_boundary_geometry` above, which is the direct
+  instrument for it. The free orthonormality check is genuinely lost:
+  nothing now compares assemble(e_k^2 ds) against N_k, and folding it
+  back in would put geometry error into the one instrument built to
+  exclude it. See `NOTES/FINDING-QUADRATURE-CANCELLATION.md`.
 - **The mixed space is internal** (psi block + optional cross-mesh dummy +
   one scalar R field per mode): its size depends on the bcs, so it cannot
   predate the solver. The user's psi is assigned back after each solve,
@@ -410,14 +437,25 @@ Every recorded prototype number reproduces through the new class:
 | E7 3D orders | 2.0 / 3.0 (hand Robin) | 2.03, 1.92 / 3.00 via full modal SphericalDtN(L=2) |
 | 2D sheet outer m = 3 | 1.3737e-7 (prototype script) | 1.3737e-7 (bit-identical) |
 
-Test inventory: `tests/unit/test_gravity_solver.py` (13 tests: geometry
-inference, bcs validation, quadrature guard, monolithic-override guard,
-net-mass guard, sheets on both boundaries, volumetric shell, manufactured
-Dirichlet/flux, cross-mesh consistency, 3D sheet, 3D interior monopole)
-and `tests/unit/test_spherical_harmonics.py` (4 tests). All references
-are inline closed forms; no gmsh, no passess, ~45 s total — CI-safe. The
+Test inventory **as it stood at Step 7** (2026-07-21):
+`tests/unit/test_gravity_solver.py` (13 tests: geometry inference, bcs
+validation, quadrature guard, monolithic-override guard, net-mass guard,
+sheets on both boundaries, volumetric shell, manufactured Dirichlet/flux,
+cross-mesh consistency, 3D sheet, 3D interior monopole) and
+`tests/unit/test_spherical_harmonics.py` (4 tests). All references are
+inline closed forms; no gmsh, no passess, ~45 s total — CI-safe. The
 passess cross-checks stay in `demos/gravity/` and the passess suite
 itself (62 sheet tests among 397).
+
+Two of those entries have since been overtaken and the count with them.
+`test_gravity_solver.py` now collects 37, and the **net-mass guard is
+gone as a guard**: the 2-D monopole datum is implemented, so the tests
+that asserted a `NotImplementedError` now assert that the mass is
+carried. What is still refused is narrower — a strong `psi` condition
+alongside nonzero mass, and two exterior DtN boundaries on one 2-D mesh.
+The **quadrature guard** is likewise a different instrument now (section
+7 above). Dated rather than rewritten, because this section is a record
+of what Step 7 shipped; for the current inventory read the suite.
 
 ## 13. Open items after part II
 

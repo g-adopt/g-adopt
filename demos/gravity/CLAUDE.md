@@ -361,6 +361,15 @@ coefficients on both boundaries). Provide exactly one of:
 `quad_degree` defaults to `2*(M+degree)` — UFL's estimate for
 `cos(M*atan2)` is unreliable, so it is set explicitly and checked by
 `check_boundary_quadrature()` (asserts `integral cos(m phi)^2 ds = pi R`).
+Both of those still describe this class accurately; **both were superseded
+in `gadopt.GravitySolver` and should not be copied forward.** The default
+is `O(L)` in the truncation where the quantity that decides whether a rule
+resolves a mode is `L h / R`, which is the difference between an `O(L^4)`
+and an `O(L^2)` boundary build; and asserting against the analytic `pi R`
+measures how far the discrete boundary is from a circle, not whether the
+rule integrates. The replacements are a mesh-aware calibrated default and
+a self-convergence in the degree — see `NOTES/FINDING-QUADRATURE-DEGREE-FORM.md`
+and `NOTES/FINDING-QUADRATURE-CANCELLATION.md`.
 Solver defaults to the scalar-R Schur fieldsplit (Robin-shifted form).
 `.solve()` returns psi; `.coefficients()` returns the per-boundary trace
 Fourier coefficients (and the interior mean multiplier). SUPERSEDED as of
