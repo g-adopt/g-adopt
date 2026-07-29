@@ -172,11 +172,9 @@ That describes `gravity_dtn.py`'s own method and still does, accurately —
 the prototype is unchanged. But **the technique is now known not to
 measure what its name claims**, and a reader should not carry it
 forward: comparing against the analytic πR is dominated by the discrete
-boundary not being a circle, and on these uniform 2-D meshes it reads as
-round-off for a second reason (a composite Gauss rule on a *regular*
-boundary annihilates every harmonic but multiples of the facet count,
-worth ten orders here). Both the prototype's default and its check were
-superseded in `gadopt.GravitySolver`; see section 7 and
+boundary not being a circle, so it reports boundary shape rather than
+whether the rule integrates. Both the prototype's default and its check
+were superseded in `gadopt.GravitySolver`; see section 8 and
 `NOTES/FINDING-QUADRATURE-CANCELLATION.md`.
 
 ## 6. Open items part I did not cover
@@ -288,7 +286,8 @@ therefore follows the StokesSolver/EnergySolver contract exactly:
   The deviation from N_k is dominated by the discrete boundary not being
   a sphere, not by quadrature: on a level-2 extruded cubed sphere at
   L = 8 it moves from 2.328711e-05 to 2.328713e-05 as the degree goes
-  from 12 to 40, while one refinement level moves it two orders. So it
+  from 12 to 40, while one refinement level moves it nearly two orders
+  (2.33e-05 to 4.98e-07, a factor of 47). So it
   bounded boundary sphericity while carrying a name and a docstring
   claiming quadrature. `check_boundary_quadrature` now differences two
   degrees on one mesh, which cancels the geometry error because it is
@@ -454,7 +453,7 @@ that asserted a `NotImplementedError` now assert that the mass is
 carried. What is still refused is narrower — a strong `psi` condition
 alongside nonzero mass, and two exterior DtN boundaries on one 2-D mesh.
 The **quadrature guard** is likewise a different instrument now (section
-7 above). Dated rather than rewritten, because this section is a record
+8 above). Dated rather than rewritten, because this section is a record
 of what Step 7 shipped; for the current inventory read the suite.
 
 ## 13. Open items after part II

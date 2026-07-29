@@ -363,13 +363,17 @@ coefficients on both boundaries). Provide exactly one of:
 `check_boundary_quadrature()` (asserts `integral cos(m phi)^2 ds = pi R`).
 Both of those still describe this class accurately; **both were superseded
 in `gadopt.GravitySolver` and should not be copied forward.** The default
-is `O(L)` in the truncation where the quantity that decides whether a rule
-resolves a mode is `L h / R`, which is the difference between an `O(L^4)`
-and an `O(L^2)` boundary build; and asserting against the analytic `pi R`
-measures how far the discrete boundary is from a circle, not whether the
-rule integrates. The replacements are a mesh-aware calibrated default and
-a self-convergence in the degree — see `NOTES/FINDING-QUADRATURE-DEGREE-FORM.md`
-and `NOTES/FINDING-QUADRATURE-CANCELLATION.md`.
+is `O(M)` in the truncation where the quantity that decides whether a rule
+resolves a mode is `M h / R`, so it keeps buying degree after the mesh has
+stopped needing it; and asserting against the analytic `pi R` measures how
+far the discrete boundary is from a circle, not whether the rule
+integrates. The replacements are a mesh-aware calibrated default and a
+self-convergence in the degree — see
+`NOTES/FINDING-QUADRATURE-DEGREE-FORM.md` and
+`NOTES/FINDING-QUADRATURE-CANCELLATION.md`. (In the shipped solver the
+degree also sets the low-rank build's trace degree, where the same change
+takes that build from `O(L^4)` to `O(L^2)`; this class has no low-rank
+path, so that consequence is not one it shares.)
 Solver defaults to the scalar-R Schur fieldsplit (Robin-shifted form).
 `.solve()` returns psi; `.coefficients()` returns the per-boundary trace
 Fourier coefficients (and the interior mean multiplier). SUPERSEDED as of
