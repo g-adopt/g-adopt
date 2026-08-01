@@ -11,6 +11,7 @@ a relevant set of arguments and then call the `solve` method to request a solver
 """
 
 import abc
+import os
 from collections import defaultdict
 from collections.abc import Mapping
 from typing import Any
@@ -951,6 +952,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         *,
         dt: float,
         scaling_factor: float = 1,
+        condense_internal_variables: bool = False,
         **kwargs,
     ) -> None:
 
@@ -958,7 +960,33 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         # for SIPG terms in the viscosity term of momentum_equation.py
         # N.b. the potential for confusion as GIA modellers often use
         # mu to represent the shear modulus.
-        approximation.mu = approximation.effective_viscosity(dt)
+        #
+        # In the COUPLED solver the internal variables are independent
+        # unknowns, so the u-tangent of the stress carries the instantaneous
+        # mu0 rather than effective_viscosity(dt). Handing the Nitsche pair
+        # anything else makes the (u,u) block asymmetric by ~1.2% and CG an
+        # illegal Krylov method for it. See
+        # NOTES/FINDING-FREESLIP-NITSCHE-ASYMMETRY.md. Set
+        # GADOPT_COUPLED_NITSCHE_EFFVISC=1 to restore the old coefficient for
+        # comparison.
+        #
+        # **The choice flips back under static condensation**, and it flips for
+        # the same reason it moved in the first place. Condensing substitutes
+        # the backward-Euler update into the stress before differentiation, and
+        # that substitution takes the u-tangent from `mu0` to
+        #     sum_i eta_i / (tau_i + dt) = effective_viscosity(dt)
+        # exactly (the algebra is in the FINDING note). So a condensed coupled
+        # solver wants `effective_viscosity(dt)` and an uncondensed one wants
+        # `mu0`; using either coefficient in the other configuration
+        # reintroduces the same ~1.2% asymmetry, only with the opposite sign.
+        # This is why the flag is read here and not left to the caller.
+        self.condense_internal_variables = condense_internal_variables
+        if condense_internal_variables or (
+                os.environ.get("GADOPT_COUPLED_NITSCHE_EFFVISC") == "1"):
+            approximation.mu = approximation.effective_viscosity(dt)
+        else:
+            approximation.mu = getattr(
+                approximation, "mu0", None) or approximation.effective_viscosity(dt)
         self.scaling_factor = scaling_factor
 
         super().__init__(solution, approximation, dt=dt, theta=self._theta, **kwargs)

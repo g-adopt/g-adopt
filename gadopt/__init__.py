@@ -12,6 +12,16 @@ from .approximations import (
     TruncatedAnelasticLiquidApproximation,
 )
 from .diagnostics import *
+from .dtn_form import DtNGravityForm
+from .gia_gravity import (
+    FluidCore,
+    GIASpaceLayout,
+    RigidBodyAssembledPC,
+    SelfGravitatingGIASolver,
+    rigid_rotation_nullspace,
+    self_gravitating_gia_space,
+    selfgrav_dtn_iterative_solver_parameters,
+)
 from .gravity_solver import CylindricalDtN, GravitySolver, SphericalDtN
 from .level_set_tools import (
     LevelSetSolver,

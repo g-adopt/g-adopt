@@ -21,6 +21,34 @@ from .utility import CombinedSurfaceMeasure
 __all__ = ["Equation"]
 
 
+def normalise_intersect_measures(
+    intersect_measures: Iterable | fd.Measure | fd.MeshGeometry | None,
+) -> tuple[fd.Measure, ...]:
+    """Turns the `intersect_measures` argument into the tuple UFL expects.
+
+    A mesh is the convenient thing to write at the call site and a measure is
+    what UFL wants, so both are accepted and a mesh becomes that mesh's cell
+    measure -- the choice `GravitySolver.set_measures` makes for every
+    cross-mesh integral it builds. A bare mesh or measure is wrapped, since
+    coupling to a single other domain is the common case and a one-element
+    tuple is easy to forget.
+
+    Note that an intersected measure whose intersection turns out to be empty
+    does not raise: it assembles to zero (see `demos/gravity/spikes/`), so a
+    form built this way is worth checking against a known value once.
+    """
+    if intersect_measures is None:
+        return ()
+
+    if isinstance(intersect_measures, (fd.Measure, fd.MeshGeometry)):
+        intersect_measures = (intersect_measures,)
+
+    return tuple(
+        fd.Measure("cell", domain=item) if isinstance(item, fd.MeshGeometry) else item
+        for item in intersect_measures
+    )
+
+
 @dataclass
 class Equation:
     """Generates the UFL form for the sum of terms constituting an equation.
@@ -46,6 +74,15 @@ class Equation:
           where p is the polynomial degree of the trial space.
         scaling_factor:
           A constant factor used to rescale residual terms.
+        intersect_measures:
+          Other domains that must be admissible in this equation's integrals. Each
+          entry is a mesh or a UFL measure; a mesh is turned into that mesh's cell
+          measure. Omit it (the default) for a single-mesh equation, in which case
+          the measures below are built exactly as they always were. Supply it when
+          the equation couples a submesh to its parent, so that arguments living on
+          the other mesh -- a potential on the parent, a displacement on the mantle
+          submesh -- are accepted by terms integrating over this one. See
+          `GravitySolver.set_measures` for the same idiom applied by hand.
 
     """
 
@@ -58,12 +95,16 @@ class Equation:
     bcs: dict[int, dict[str, Any]] = field(default_factory=dict)
     quad_degree: InitVar[int | None] = None
     scaling_factor: Number | fd.Constant = 1
+    intersect_measures: InitVar[
+        Iterable[fd.Measure | fd.MeshGeometry] | fd.Measure | fd.MeshGeometry | None
+    ] = None
 
     def __post_init__(
         self,
         residual_terms: Callable | list[Callable],
         eq_attrs: dict[str, Any],
         quad_degree: int | None,
+        intersect_measures: Iterable | fd.Measure | fd.MeshGeometry | None,
     ) -> None:
         if not isinstance(residual_terms, Iterable):
             residual_terms = [residual_terms]
@@ -96,10 +137,27 @@ class Equation:
         self.mesh = self.trial_space.mesh()
         self.n = fd.FacetNormal(self.mesh)
 
+        self.intersect_measures = normalise_intersect_measures(intersect_measures)
+
         measure_kwargs = {"domain": self.mesh, "degree": quad_degree}
+        # Only pass the keyword when there is something to pass, so that the
+        # single-mesh path constructs the measures exactly as it always has.
+        if self.intersect_measures:
+            measure_kwargs["intersect_measures"] = self.intersect_measures
+
         self.dx = fd.dx(**measure_kwargs)
 
         if self.trial_space.extruded:
+            if self.intersect_measures:
+                # `CombinedSurfaceMeasure` builds its three measures itself and
+                # takes only a domain and a degree. Cross-mesh coupling arises
+                # from `Submesh`, which the extruded meshes do not use, so this
+                # is a gap rather than a restriction; widen the helper if it ever
+                # stops being one.
+                raise NotImplementedError(
+                    "`intersect_measures` is not supported on extruded meshes."
+                )
+
             # Create surface measures that treat the bottom and top boundaries similarly
             # to lateral boundaries. This way, integration using the ds and dS measures
             # occurs over both horizontal and vertical boundaries, and we can also use

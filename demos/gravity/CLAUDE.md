@@ -1,5 +1,17 @@
 # Gravity Poisson Equation with Submesh Coupling
 
+> On branch `sghelichkhani/selfgravity` the work has moved past gravity alone.
+> This document and `GRAVITY-LESSONS-LEARNED.md` remain the record of the
+> standalone Poisson/DtN development and are still accurate for it, but the
+> active design is `ROADMAP-GIA-SELFGRAV.md`: the shipped `GravitySolver`
+> coupled to the viscoelastic GIA solvers, with rotational feedback and a
+> time-varying geoid feeding sea level. One position below is superseded there —
+> the "DtN degree vs buffer" trade in `ROADMAP-GRAVITY.md` uses the wrong
+> exponent for the far-field residual, and §1.2 of the new road map corrects it.
+> The coupled solver now exists in 2-D and is verified; **"The monolithic
+> self-gravitating GIA solver" at the bottom of this file** is what to read if
+> that is what you are here for.
+
 ## What this directory contains
 
 A minimal working example that solves the gravitational Poisson equation on an extended disc mesh, with density sources restricted to a mantle submesh. The purpose is to validate the Firedrake submesh coupling machinery and the `intersect_measures` mechanism for the gravity equation that will eventually be coupled to viscoelastic GIA simulations.
@@ -104,9 +116,9 @@ Matches the G-ADOPT 2D cylindrical demo: rmin=1.22, rmax=2.22, D=1.0. Physical m
 - passess (at ~/Workplace/passess, added to sys.path)
 - MUMPS (for the direct LU solver; could switch to iterative)
 
-## What comes next
+## What came next
 
-This standalone Poisson test validates the submesh coupling for the gravity equation in isolation. The next step is coupling it to the momentum and viscoelastic internal variable equations as in Dale's `submesh_2way_coupling.py`, where the density perturbation rho1 = -u dot grad(rho) - rho div(u) comes from the displacement field and the gravitational potential feeds back as a body force -rho grad(psi) in the momentum equation.
+This standalone Poisson test validated the submesh coupling for the gravity equation in isolation, and the coupling to the momentum and viscoelastic internal variable equations has since been built: `gadopt/gia_gravity.py`, documented at the bottom of this file. Two things it changed about the sketch that used to stand here. The source is written as a divergence, `Lambda int rho_0 u . grad(v)`, and not as `-Lambda int rho_1 v` with jump terms, so every interface mass comes along automatically and discrete mass conservation is exact rather than `O(h^p)`. And the body force is `+rho_0 grad(psi)` with a **plus**, not `-rho grad(psi)`, because the shipped solver's psi is minus the Newtonian potential; the residual then carries its negative, since `momentum_equation.py` writes every term as if on the left-hand side.
 
 ---
 
@@ -381,3 +393,187 @@ Fourier coefficients (and the interior mean multiplier). SUPERSEDED as of
 generalises this class to 2D+3D, adds sheets/flux/Dirichlet through the
 bcs dictionary, and measures boundary orientation and radius from the
 mesh. This class stays as the validated 2D reference.
+
+---
+
+# The monolithic self-gravitating GIA solver
+
+Added 2026-07-30, on branch `sghelichkhani/selfgravity`. Everything above this
+line is the gravity-alone record and is still accurate for it. What follows is
+Track 2 of `ROADMAP-GIA-SELFGRAV.md`: the viscoelastic mechanics, the
+gravitational Poisson equation with its DtN treatment, and the rotational
+closure, solved together in one mixed space and one Newton solve. The 2-D
+prototype exists and has passed ten verification gates; the road map's §9.5
+records their numbers and §9.6 records what they do not establish.
+
+## What exists
+
+    gadopt/dtn_form.py                        DtNGravityForm, the boundary
+                                              treatment as a reusable form
+    gadopt/gia_gravity.py                     self_gravitating_gia_space,
+                                              SelfGravitatingGIASolver,
+                                              rigid_rotation_nullspace
+    demos/gravity/generate_selfgrav_annulus.py   the four-region parent mesh
+    demos/gravity/validate_selfgrav_annulus.py   its acceptance gate, and
+                                              `curve_mesh`
+    demos/gravity/selfgrav_gia_annulus.py     the driver
+    demos/gravity/spikes/gate_*.py            the verification gates
+    tests/unit/test_gia_gravity.py            37 structural tests
+    tests/unit/test_dtn_form.py               the extraction's own tests
+    tests/unit/test_self_gravity_terms.py     the two body-force terms
+    tests/unit/test_gravity_interior_sheet.py the interior-facet sheet
+
+`DtNGravityForm` is `GravitySolver`'s boundary mathematics moved out one class,
+with the same behaviour: every existing gravity test passes untouched behind a
+shim of read-only properties that return the form's own objects, so
+`solver.ds is solver.form.ds` and the two cannot drift. The 2-D monopole and
+enclosed-mass bookkeeping deliberately did **not** move; it is the only taped
+code in `GravitySolver` and it stays where its tests can reach it. The coupled
+solver reimplements the datum on its own terms instead, because in the coupled
+system the volume source contributes exactly zero mass and the sheets carry all
+of it.
+
+## The geometry, and its tags
+
+    0.5 Rc ---- inner (101/102/103 = mantle/inner/buffer) ---- 2 Re
+
+    r = 0.6019 --- inner --- 1.2037 --- mantle --- 2.2037 --- buffer --- 4.4074
+        |                      |                     |                     |
+     curve 5                curve 3               curve 2               curve 4
+    interior DtN         Rc, INTERIOR          Re, INTERIOR          exterior DtN
+                         facet of parent       facet of parent
+
+Non-dimensionalised by D = Re − Rc = 2891 km. The mantle is extracted as
+`Submesh(parent, 2, 101)`, straight off the gmsh cell tag — no `RelabeledMesh`,
+which is only needed when the mesh carries no cell label. Curves 2 and 3 are
+interior facets of the parent and *boundary* facets of the submesh, which is the
+entire point of the stack: every existing mechanics form and boundary condition
+works verbatim on the submesh, and only the two u↔ψ coupling terms are
+cross-mesh. Tags follow the 3-D convention of road map §1.5 so nothing is
+renamed on promotion.
+
+## How to run it
+
+Firedrake interpreter, `PYTHONPATH` at this worktree — the rules in the worktree
+`CLAUDE.md` apply in full.
+
+    PYTHONPATH=$(pwd) python demos/gravity/selfgrav_gia_annulus.py --gates
+
+    --dr 0.1          radial spacing through the mantle
+    --nazim 64        azimuthal cells, divisible by 4
+    --truncation 5    DtN truncation M on both boundaries
+    --dt 1.0          time step, in Maxwell times
+    --steps 1         1 is a single backward-Euler step; more runs to steady state
+    --rtol 1e-7       steady-state tolerance on the surface deflection
+    --fluid-limit     the configuration that HAS a fluid limit; see below
+    --lam-factor 1.0  scale Lambda, keeping B_mu
+    --no-nullspace    do not declare the rigid-rotation kernel
+    --no-rotation     drop the m_3 row
+    --gates           run G0 and V4
+    --output          two VTK files, one per mesh
+    --monitor         SNES and KSP convergence
+
+The verified relaxation, on the coarse mesh in about forty seconds:
+
+    --dr 0.2 --nazim 32 --truncation 3 --dt 0.5 --steps 300 \
+      --fluid-limit --lam-factor 0.25
+
+reaching Airy isostasy `zeta = -sigma_hat/rho_0` in 187 steps, −9.9955e-04
+against −1.0e-03.
+
+The gates are separate scripts in `demos/gravity/spikes/`, not in the driver:
+`gate_v1.py`, `gate_v2.py`, `gate_v3prime.py`, `gate_v7.py`, `gate_v8.py`,
+`gate_v9.py`. Each states its expected numbers before it runs them.
+
+## The traps
+
+Every one of these was found by paying for it. Most are silent.
+
+**Import `gadopt` before `from firedrake import *`.** Any script that reaches a
+G-ADOPT python PC only through a solver-options string —
+`pc_python_type: gadopt.DtNTwoBlockSchurPC` — makes PETSc import `gadopt`
+lazily at `SNESSetFromOptions` time, long after a UFL multifunction has run.
+Irksome's import-order guard fires, PETSc swallows it, and what you see is a
+bare `petsc4py.PETSc.Error: error code 101` out of `SNES.setFromOptions` with
+nothing in the traceback naming either package. One line at the top of the file
+fixes it.
+
+**Curve BOTH meshes.** `Submesh` does not inherit the parent's P2 coordinates,
+so a submesh of a curved parent is straight-sided and reports the polygon error,
+4.02e-04 relative on areas. `curve_mesh` on the submesh recovers the parent's
+accuracy to the same digits, and the cross-mesh entity maps survive `Mesh(X_p2)`
+— measured, 1.2e-08 against 4.02e-04 for a coupling-shaped integral. The error
+the un-recurved version makes is concentrated exactly at Rc and Re, which is
+where the interface mass sheets carrying the entire source live. `Submesh` does
+not inherit `cartesian` either, and `is_cartesian` raises `AttributeError` on a
+mesh that has none.
+
+**An intersected measure that finds nothing assembles to zero**, with no
+exception. And it is needed more often than the obvious rule suggests: in a
+mixed space spanning two meshes the *arguments* carry both domains, so every
+measure needs intersecting, including the parent-side Laplacian (which mentions
+no submesh field) and the internal-variable source (which mentions no parent
+field). The residual assembles happily without it; the failure arrives later,
+when `AssembledPC` inside `DtNTwoBlockSchurPC` extracts the non-`Real` sub-block
+and compiles that, again as `PETSc.Error: error code 101`, this time out of
+`PCApply`. Diagnosing it means pulling the block out with `ExtractSubBlock` and
+assembling its integrals one at a time. Intersecting the parent cell measure
+does *not* restrict it to the mantle, and `check_geometry` asserts that.
+
+**`ds` on an interior tag gives zero and a warning**, not an error — and so does
+`dS` on an exterior tag. Both `exterior_facets.unique_markers` and
+`interior_facets.unique_markers` return the whole physical-group label set
+regardless of which facets each holds, so the tag tells you nothing and the
+marker list cannot be trusted. A load sheet written the shipped exterior way is
+simply absent: the solve converges, the potential is missing the largest single
+term in the geoid, and no symmetry or Picard-consistency test looks, because a
+sheet is a right-hand side with no Jacobian contribution and two solvers sharing
+the form omit it identically. Hence the `interior_sigma` bc key, and hence
+`check_sheet_measures` raising at construction. Write interior-facet integrands
+with `avg`, never `'+'`: restriction sides are consistent only by gmsh's cell
+ordering.
+
+**`snes_atol = 1e-10` silently returns the zero solution for a small load.**
+`newton_stokes_solver_parameters` sets an *absolute* SNES tolerance. A
+configuration whose entire forcing is below it converges at iteration zero on
+every step and returns exactly 0.0 forever, reporting `SNES converged`, with no
+warning. This is a general trap for any gate that scales a load down to keep a
+problem linear, and it cost a full sweep. It has a live consequence too: near a
+steady state the per-step residual falls, and once it falls below 1e-10 the time
+loop freezes rather than converging.
+
+**A sheet amplitude that folds to UFL `Zero` raises a misleading error.**
+`sigma_hat * cos(2 phi)` at `sigma_hat = 0.0` is `Zero`, the enclosed-mass form
+then has no integrals, and `update_total_mass`'s `solve(identity == mass, ...)`
+raises `ValueError: Provided RHS is not a linear form` on the first step, from a
+traceback that names `firedrake/variational_solver.py` and nothing about sheets.
+Use a tiny nonzero amplitude, or guard the empty form.
+
+**Per-block symmetry measurements are serial, and an unguarded parallel run
+deadlocks.** `getNestSubMatrix(...).convert("dense")` builds a global dense
+block; at two ranks one rank fails its local comparison and the other waits in
+the next collective. Mark them serial. The parallel instrument is matfree
+`mult` against `multTranspose`, which is as sharp and gives one number with no
+block attribution.
+
+**Declaring a nullspace is not enough on this solver.** FGMRES is
+right-preconditioned, PETSc removes the kernel from the right-hand side but not
+from the preconditioner's output, and `DtNTwoBlockSchurPC` is nearly an exact
+inverse here — the outer solve converges in one iteration — so the answer *is*
+the preconditioner's output, kernel and all. `project_out_nullspace()` after
+each solve is what actually removes it.
+
+## The one physics trap
+
+**The production configuration has no fluid limit, and self-gravity is not
+why.** Stepped past a few Maxwell times the surface deflection grows
+exponentially, and so does a plain `CoupledInternalVariableSolver` on the same
+mantle with the same load and no coupling at all, at half the rate. The cause is
+the reference state: a uniform density in a constant gravity field is not a
+hydrostatic equilibrium, and the operator linearised about it has a growing
+mode with an e-folding time of about fifty Maxwell times — invisible over the
+ten a glacial cycle runs, fatal to a gate that steps to a hundred.
+`--fluid-limit` is the configuration that does relax: `g = 0` plus an explicit
+Airy restoring stress at Re. Road map §2.5 has the rest, including why the
+degree-one mode then goes unstable above `--lam-factor 0.8` and why projecting
+out a translation does not help.
