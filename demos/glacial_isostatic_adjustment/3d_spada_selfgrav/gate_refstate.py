@@ -35,7 +35,7 @@ from gadopt.spherical_harmonics import real_spherical_harmonic
 
 import generate_selfgrav_sphere as gen
 import reference_state as rs
-from validate_selfgrav_sphere import curve_mesh
+from validate_selfgrav_sphere import curve_mesh, provenance, tangle_census
 
 MESH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "refstate.msh")
@@ -50,7 +50,12 @@ def build_mesh(**kwargs):
     if COMM_WORLD.rank == 0:
         gen.generate(MESH_FILE, **kwargs)
     COMM_WORLD.barrier()
-    return curve_mesh(Mesh(MESH_FILE))
+    mesh = curve_mesh(Mesh(MESH_FILE))
+    # Every driver that builds a mesh says how tangled it is, in the arm that
+    # actually ran.  This one never untangles, so a nonzero count here is the
+    # unrepaired baseline the A/B needs on the other side.
+    tangle_census(mesh, "gate_refstate parent, untangle=False")
+    return mesh
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +372,7 @@ def gate_stability(mesh, g_surface, degrees=(1, 2, 3), dtn_degree=5, degree=2,
 
 def main():
     global MESH_FILE
+    provenance(os.path.basename(__file__))
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--configuration", default="coarse",
                     choices=list(gen.CONFIGURATIONS))

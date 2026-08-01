@@ -100,6 +100,9 @@ from gadopt import rigid_body_modes  # noqa: E402
 import generate_selfgrav_sphere as gen  # noqa: E402
 import reference_state as refstate  # noqa: E402
 import taboo_synthesis as taboo  # noqa: E402
+from validate_selfgrav_sphere import (curve_mesh,  # noqa: E402
+                                      provenance, tangle_census)
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -160,9 +163,19 @@ def curve(mesh, untangle=False):
     of tangled cells to the straight midpoints - 2 cells of 113 653 at
     `--coarse`. Kept as a switch so that "geometry" is eliminated by
     measurement rather than by the code being identical.
+
+    **Read A2's docstring before believing the switch does what it says.**
+    Measured there: the reset straightens the cells it targets and tangles two
+    of their neighbours instead, so the count does not fall, and at 4 ranks it
+    rises. Which is exactly why the value below is printed where `curve`
+    *receives* it and the tangle census is run on the result: neither the flag
+    nor the help text is evidence.
     """
+    # Printed here rather than at parse time, because "the flag was parsed" and
+    # "the flag reached the mesh" are different statements and this project has
+    # already shipped a run where only the first was true.
+    print(f"    curve(): untangle={untangle}")
     if untangle:
-        from validate_selfgrav_sphere import curve_mesh  # noqa: PLC0415
         return curve_mesh(mesh, untangle=True)
     X = SpatialCoordinate(mesh)
     r = sqrt(dot(X, X))
@@ -184,6 +197,13 @@ def build_meshes(configuration, reuse=True, h=None, untangle=False):
     sub = curve(Submesh(parent, 3, gen.CELL_MANTLE), untangle=untangle)
     sub.cartesian = False
     t_sub = time.perf_counter() - t0
+    # **The census, not the flag.** An A/B on the tangling repair is only an
+    # A/B if the two arms differ, and the only way to know that from a log is
+    # to count the tangled cells in the arm that ran. The repaired arm must
+    # show zero and the unrepaired arm at least one; anything else means the
+    # comparison is void and this line is where that becomes visible.
+    tangle_census(parent, f"parent, untangle={untangle}")
+    tangle_census(sub, f"mantle submesh, untangle={untangle}")
     return parent, sub, t_parent, t_sub
 
 
@@ -525,6 +545,231 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
 
 
 # --------------------------------------------------------------------------
+# rigid-rotation content, shared by both paths
+# --------------------------------------------------------------------------
+
+def rotation_content(u_, tag):
+    """|<u, e_i x x>| / (|e_i x x| |u|) for the three rotation generators.
+
+    `demos/gravity/CLAUDE.md`: declaring the nullspace is NOT enough on this
+    project's solvers. FGMRES is right-preconditioned, PETSc removes the kernel
+    from the right-hand side but not from the preconditioner's output, and when
+    the preconditioner is nearly an exact inverse the answer IS the
+    preconditioner's output, kernel and all. So the kernel has to be projected
+    out after the solve, and the projection's effect has to be *measured* --
+    hence this before/after pair rather than a claim that it worked.
+
+    It matters for V and CANNOT matter for U: a rigid rotation `omega x x` has
+    `u_r = 0` identically, so it is purely tangential, and it peaks 90 deg from
+    its axis. Nothing else on the candidate list has that asymmetry.
+
+    **The AFTER number is not expected to be zero, and reading it as "kernel
+    remaining" is wrong.** This is an *L2* overlap, taken through the mass
+    matrix; `VectorSpaceBasis.orthogonalize` (and hence
+    `project_out_nullspace`) calls PETSc's `MatNullSpace.remove`, which
+    projects in the **dof (l2)** inner product. Different inner products, so
+    the two do not agree and the residual is a measure of that disagreement
+    rather than of any surviving rotation. Measured on a P2 unit cube: adding
+    0.3, 3 and 30 times a rotation generator moves the BEFORE content from
+    0.157 to 1.13 and leaves the AFTER content at 1.7366e-02 in every case,
+    identical to 2.4e-14. So the sharp test is that AFTER does not move with
+    the amount of rotation injected, not that it is small.
+
+    Wrapped by the caller, not here: this is instrumentation and it does not
+    get to vote on whether the run succeeded.
+    """
+    mesh_ = u_.function_space().mesh()
+    Xd = SpatialCoordinate(mesh_)
+    dm = dx(domain=mesh_)
+    norm_u = sqrt(assemble(dot(u_, u_) * dm))
+    out = []
+    for gen_vec in (as_vector((0.0, -Xd[2], Xd[1])),
+                    as_vector((Xd[2], 0.0, -Xd[0])),
+                    as_vector((-Xd[1], Xd[0], 0.0))):
+        ng = sqrt(assemble(dot(gen_vec, gen_vec) * dm))
+        out.append(assemble(dot(u_, gen_vec) * dm) / (ng * norm_u))
+    print(f"    rigid-rotation content {tag}: "
+          + "  ".join(f"{v:+.3e}" for v in out)
+          + f"   (|u| = {norm_u:.6e})")
+    return out
+
+
+def l2_orthogonalise_rotations(u_):
+    """Remove the L2 projection of `u` onto the three rotation generators.
+
+    `assemble(dot(u, m) * dx) / assemble(dot(m, m) * dx)` per generator, then
+    subtract.  Returns a NEW `Function`; `u` is untouched, so the raw and the
+    corrected answer can both be reported and the effect measured rather than
+    assumed.
+
+    **Why this and not `project_out_nullspace`.** They are different inner
+    products. `VectorSpaceBasis.orthogonalize` calls PETSc `MatNullSpace.remove`,
+    which projects in the **dof (l2)** inner product; every quantity this
+    driver reports is an **L2** integral. Measured on a P2 unit cube: injecting
+    0.3, 3 and 30 times a rotation generator moves the L2 content from 0.157 to
+    1.13 and leaves the post-`orthogonalize` content at 1.7366e-02 in all four
+    cases, identical to 2.4e-14. So the l2 projection removes the kernel
+    exactly and the L2 residue never reaches zero, and the sharp test on it is
+    amplitude-independence, not smallness.
+
+    **Expected to change almost nothing here, and that is not a null result to
+    be surprised by.** A reviewer proposed this residue as the explanation for
+    the tangential deficit; it cannot be. The measured content is 3.937e-04 at
+    |u| = 6.053776e-06 (`NOTES/IMPL-LOG-SPADA-B1-ELASTIC.md:552-555`), so the
+    L2 rotational component is 2.38e-09 against a non-dimensional reference max
+    V of 7.16/2.891e6 = 2.48e-06 -- **three orders too small**. This is an
+    instrument correction. It is worth making because it is cheap and because
+    "we removed it and nothing moved" is a measurement, while "it is too small
+    to matter" is an argument.
+    """
+    V_ = u_.function_space()
+    mesh_ = V_.mesh()
+    dm = dx(domain=mesh_)
+    Xd = SpatialCoordinate(mesh_)
+    out = Function(V_).assign(u_)
+    for gen_vec in (as_vector((0.0, -Xd[2], Xd[1])),
+                    as_vector((Xd[2], 0.0, -Xd[0])),
+                    as_vector((-Xd[1], Xd[0], 0.0))):
+        m_ = Function(V_).interpolate(gen_vec)
+        denom = assemble(dot(m_, m_) * dm)
+        if denom > 0.0:
+            coeff = assemble(dot(out, m_) * dm) / denom
+            out.assign(out - coeff * m_)
+    return out
+
+
+def series_from(coeffs, theta, nmin=0, kind="P"):
+    """`series_at`/`dseries_at` restricted to degrees >= `nmin`.
+
+    **The model's series and the reference's do not span the same degrees, and
+    that is a defect, not a convention.** `series_at` sums from n = 0 and
+    `dseries_at` from n = 1 (`P[0] = 1`, `dP[1] = -sin theta`), while the load
+    is built over `range(2, nmax + 1)` and the reference over
+    `np.arange(2, nmax + 1)`. So any degree-0 or degree-1 content in the model
+    goes straight into U(0), U(180) and max V with **nothing on the reference
+    side to match it**.
+
+    ## Why this is the first thing to look at for the tangential anomaly
+
+    The recorded anomaly has two features, and only one of them has ever been
+    discussed: max V at 0.057 of reference, *and its peak at 71.5 deg instead
+    of 8.78*. A structural mis-partition of the radial/tangential response --
+    locking, the Nitsche pair -- scales V; it does not move the peak to
+    mid-latitudes. A peak in the 70s means the tangential field is dominated by
+    very low degree content.
+
+    The mechanism is a **soft mode, not a kernel**. With a fluid core instead
+    of `un = 0`, a rigid translation of the mantle costs no elastic energy and
+    is resisted only by the CMB buoyancy spring, stiffness ~ B_mu drho g. Only
+    the rigid *rotation* nullspace is declared. That is the eps/eps case the
+    trap list warns about: near-null because of the physics rather than by
+    construction, with forcing near-orthogonal to it for the same reason, so a
+    small stiffness does not imply small contamination. Consistent with the
+    earlier measurement that translation is not a kernel here
+    (`a(translation, w)/scale = 1.0e-02` against rotation's 8.3e-13) -- that IS
+    what a soft mode looks like.
+
+    And the earlier ruling that translation "contaminates U, not V" was half
+    right. `u = c zhat` has `u_r = c cos theta` **and**
+    `u_theta = -c sin theta`, and `-sin theta` is exactly `dP_1/dtheta`, so it
+    lands entirely in V_1 and peaks at 90 deg. Mixed with the genuine
+    degree-two response the peak lands in the 70s.
+
+    ## Pre-commitment, so that either outcome is informative
+
+    If the translation soft mode is the story: `|V_1|` dominates the series and
+    max V recomputed over n >= 2 moves from 0.057 toward **0.7-1.3**, with the
+    peak returning toward **9 deg**.
+
+    **Falsifier:** `V_1` negligible. Then the degree-one story is dead, both
+    the amplitude and the peak location survive, and a structural mis-partition
+    becomes the leading candidate -- while still not explaining the peak, which
+    would then need its own hypothesis.
+
+    Both the full-series and the n >= 2 values are reported. Neither replaces
+    the other: the full series is what the model actually predicts, the n >= 2
+    restriction is what the reference is comparable to.
+    """
+    c = np.array(coeffs, dtype=float, copy=True)
+    c[:nmin] = 0.0
+    return (series_at(c, theta) if kind == "P" else dseries_at(c, theta))
+
+
+def report_tangential(U_n, V_n, theta, theta_fine, Vf, imax, label="",
+                      N_n=None):
+    """max V raw and over n >= 2, the peak locations, and the degree-0/1 terms.
+
+    Wrapped by the caller; see `series_from` for what the numbers mean and what
+    was predicted before they were taken.
+
+    ## What the degree-0 and degree-1 terms mean, so a null is not a surprise
+
+    **`N_1` is the geocentre and is frame-dependent.** The reference is defined
+    without degrees 0 and 1 precisely to dispose of the frame question, so an
+    unmatched `N_1` here is a statement about which frame the discrete problem
+    settled into, not an error. It is printed because it is free and because a
+    large one would say the frame is not the one anybody assumed.
+
+    **`U_0` is the breathing mode, and it is expected to be small: `|U_0|/|U_2|`
+    below ~0.1.** A uniform radial expansion is *not* soft the way a
+    translation is -- it costs bulk energy at O(K), the CMB spring resists it
+    at O(B_mu drho g), and the load carries no degree-0 content at all. What
+    keeps it from being identically zero is that the eliminated fluid core has
+    no pressure degree of freedom, so degree-0 motion of the CMB is a genuine
+    degree of freedom of the reduced problem, and the exterior monopole term
+    closes a weak loop on it.
+
+    **Falsifier: `|U_0|/|U_2|` of order 1 or more.** That would not be noise.
+    It would be a defect in the monopole / core-mass budget, and it would be
+    the first 3-D measurement of that channel.
+    """
+    print(f"\n    TANGENTIAL / LOW-DEGREE DIAGNOSTIC {label}")
+    print("    Model series span n >= 0 (U) and n >= 1 (V); the reference and")
+    print("    the load span n >= 2. Degree 0 and 1 therefore enter the model's")
+    print("    numbers unmatched. Predicted, if the translation soft mode is")
+    print("    the story: |V_1| dominates, max V over n >= 2 rises toward")
+    print("    0.7-1.3 of reference and its peak returns toward 9 deg.")
+    print(f"      U_0 {U_n[0]:+.6e}   U_1 {U_n[1]:+.6e}")
+    print(f"      V_1 {V_n[1]:+.6e}   "
+          f"|V_1| / max|V_n, n>=2| = "
+          f"{abs(V_n[1]) / max(np.abs(V_n[2:]).max(), 1e-300):.4f}")
+    if N_n is not None:
+        print(f"      N_0 {N_n[0]:+.6e}   N_1 {N_n[1]:+.6e}"
+              f"   (N_1 is the geocentre: frame-dependent, not an error)")
+    # The breathing-mode ratio, with its falsifier stated in the docstring.
+    ratio_u0 = abs(U_n[0]) / max(abs(U_n[2]), 1e-300)
+    print(f"      |U_0| / |U_2| = {ratio_u0:.4f}   "
+          + ("expected < 0.1" if ratio_u0 < 0.1 else
+             "*** >= 0.1: see the falsifier in report_tangential's docstring; "
+             "of order 1 means the monopole/core-mass budget, not noise ***"))
+    for nmin, tag in ((1, "full series (n >= 1)"), (2, "n >= 2 only")):
+        vv = series_from(V_n, theta_fine, nmin=nmin, kind="dP")
+        j = int(np.argmax(vv))
+        print(f"      max V, {tag:<22s} {vv[j]:+10.4f} m   "
+              f"ratio {vv[j] / Vf[imax]:+7.4f}   at "
+              f"{np.rad2deg(theta_fine[j]):6.2f} deg  (ref "
+              f"{np.rad2deg(theta_fine[imax]):.2f})")
+    for nmin, tag in ((0, "full series (n >= 0)"), (2, "n >= 2 only")):
+        u0, u180 = series_from(U_n, theta, nmin=nmin, kind="P")
+        print(f"      U(0), U(180), {tag:<22s} {u0:+10.4f}  {u180:+10.4f} m")
+
+
+def diagnostic(fn, *args):
+    """Run a diagnostic and return a string on failure instead of raising.
+
+    `b4_polar_motion.diagnostic`, same contract and for the same reason: **a
+    diagnostic must never be able to kill the measurement it decorates.**
+    Three production runs were lost to instrumentation raising *after* the
+    physics had been computed.
+    """
+    try:
+        out = fn(*args)
+    except Exception as exc:  # noqa: BLE001 - the point is to swallow anything
+        return f"UNAVAILABLE ({type(exc).__name__}: {exc})"
+    return out
+
+
+# --------------------------------------------------------------------------
 # The units-and-magnitude check.  NOT B1.
 # --------------------------------------------------------------------------
 
@@ -600,15 +845,38 @@ def run_mechanics_only(nmax, nproj, sig_dim, ref, U_ref, Vf, imax,
           f"KSP its {solver.solver.snes.ksp.getIterationNumber()}")
 
     ds_sub = ds(gen.SURF_RE, domain=sub)
-    u_r = dot(u, Xm / rm)
-    U_n = project_surface(u_r, sub, nproj, ds_sub, interior=False,
-                          quad_degree=args.quad_degree) * D_M
-    e_theta = as_vector((Xm[2] * Xm[0], Xm[2] * Xm[1], -(Xm[0]**2 + Xm[1]**2)))
-    rho_cyl = sqrt(Xm[0]**2 + Xm[1]**2)
-    u_theta = dot(u, e_theta) / (rm * conditional(rho_cyl > 1e-12, rho_cyl,
-                                                  Constant(1e-12)))
-    V_n = project_surface(u_theta, sub, nproj, ds_sub, interior=False,
-                          basis="dP", quad_degree=args.quad_degree) * D_M
+
+    def project_both(u_field):
+        """(U_n, V_n) in metres for a given displacement field."""
+        e_th = as_vector((Xm[2] * Xm[0], Xm[2] * Xm[1],
+                          -(Xm[0]**2 + Xm[1]**2)))
+        rho_c = sqrt(Xm[0]**2 + Xm[1]**2)
+        u_th = dot(u_field, e_th) / (rm * conditional(
+            rho_c > 1e-12, rho_c, Constant(1e-12)))
+        return (project_surface(dot(u_field, Xm / rm), sub, nproj, ds_sub,
+                                interior=False,
+                                quad_degree=args.quad_degree) * D_M,
+                project_surface(u_th, sub, nproj, ds_sub, interior=False,
+                                basis="dP",
+                                quad_degree=args.quad_degree) * D_M)
+
+    U_n, V_n = project_both(u)
+    # Both, always: the effect of the correction is measured, not assumed.
+    # See `l2_orthogonalise_rotations` -- expected to move almost nothing, for
+    # a reason that is written down there and is worth checking rather than
+    # trusting.
+    u_orth = diagnostic(l2_orthogonalise_rotations, u)
+    if isinstance(u_orth, Function):
+        U_o, V_o = project_both(u_orth)
+        vr = dseries_at(V_n, theta_fine)
+        vo = dseries_at(V_o, theta_fine)
+        print(f"    max V raw           {vr.max():+10.4f} m at "
+              f"{np.rad2deg(theta_fine[int(np.argmax(vr))]):6.2f} deg")
+        print(f"    max V L2-orthog.    {vo.max():+10.4f} m at "
+              f"{np.rad2deg(theta_fine[int(np.argmax(vo))]):6.2f} deg   "
+              f"(change {abs(vo.max() - vr.max()) / max(abs(vr.max()), 1e-300):.3e})")
+    diagnostic(report_tangential, U_n, V_n, theta, theta_fine, Vf, imax,
+               "(mechanics only)")
 
     U0, U180 = series_at(U_n, theta)
     Vmod = dseries_at(V_n, theta_fine)
@@ -627,12 +895,22 @@ def run_mechanics_only(nmax, nproj, sig_dim, ref, U_ref, Vf, imax,
               for nn in range(nproj + 1))
     print(f"    axisymmetry residual {np.sqrt(max(total - axi, 0.0) / total):.4e}")
     print("\n    per-degree ratio (mechanics only, no self-gravity)")
-    hbar, _, _ = ref.love_time(0.0, nmax)
+    # **The per-degree V ratio has never been printed.** Without it there is no
+    # way to tell a wrong radial/tangential split (V_n uniformly off, U_n fine)
+    # from cancellation between individually sane degrees (both fine per degree,
+    # the sum wrong), and those two have different causes. `lbar` is the
+    # tangential Love number and V_n's basis is dP_n/dtheta, so the reference
+    # coefficient is the same `c` as for U with `lbar` in place of `hbar`.
+    hbar, lbar, _ = ref.love_time(0.0, nmax)
     n = np.arange(2, nmax + 1)
     c = 3.0 / taboo.RHO_BAR * sig_dim[2:nmax + 1] / (2 * n + 1)
+    print("        n      U_n model       U_n ref    ratio  "
+          "     V_n model       V_n ref    ratio")
     for i, nn in enumerate(n):
-        print(f"      n={nn:3d}  U_n {U_n[nn]:+.6e}  ref {c[i] * hbar[i]:+.6e}"
-              f"  ratio {U_n[nn] / (c[i] * hbar[i]):+7.4f}")
+        ur, vr_ = c[i] * hbar[i], c[i] * lbar[i]
+        print(f"      {nn:3d}  {U_n[nn]:+.6e}  {ur:+.6e} {U_n[nn] / ur:+7.4f}"
+              f"   {V_n[nn]:+.6e}  {vr_:+.6e} "
+              f"{V_n[nn] / vr_ if vr_ else float('nan'):+7.4f}")
 
 
 # --------------------------------------------------------------------------
@@ -695,6 +973,7 @@ def main():
     nmax = NMAX_OF[args.configuration] if args.nmax is None else args.nmax
     nproj = 2 * nmax if args.nproj is None else args.nproj
 
+    provenance(os.path.basename(__file__))
     print("B1 - the elastic snapshot, Spada et al. (2011) cap load at t = 0")
     print("  A SMOKE TEST ON ABSOLUTE MAGNITUDES, NOT A GATE.  nu = 0.28")
     print("  against an incompressible benchmark, so expect the U-family HIGH")
@@ -891,27 +1170,15 @@ def main():
     # at 71.5 deg instead of 8.78. Nothing else on the candidate list has that
     # asymmetry - compressibility, resolution, aliasing and a wrong e_theta all
     # move U and V together.
-    def rotation_content(tag):
-        u_ = solver.displacement
-        Vd = u_.function_space()
-        Xd = SpatialCoordinate(Vd.mesh())
-        norm_u = sqrt(assemble(dot(u_, u_) * dx(domain=Vd.mesh())))
-        out = []
-        for gen_vec in (as_vector((0.0, -Xd[2], Xd[1])),
-                        as_vector((Xd[2], 0.0, -Xd[0])),
-                        as_vector((-Xd[1], Xd[0], 0.0))):
-            dm = dx(domain=Vd.mesh())
-            ng = sqrt(assemble(dot(gen_vec, gen_vec) * dm))
-            out.append(assemble(dot(u_, gen_vec) * dm) / (ng * norm_u))
-        print(f"    rigid-rotation content {tag}: "
-              + "  ".join(f"{v:+.3e}" for v in out)
-              + f"   (|u| = {norm_u:.6e})")
-        return out
-
-    rotation_content("BEFORE project_out_nullspace")
+    # `rotation_content` is module level so the mechanics-only path uses the
+    # same instrument; it used to be defined here and only here, which is part
+    # of why that path was never measured.
+    diagnostic(rotation_content, solver.displacement,
+               "BEFORE project_out_nullspace")
     if solver.project_out_nullspace():
         print("    project_out_nullspace() removed a declared kernel")
-    rotation_content("AFTER  project_out_nullspace")
+    diagnostic(rotation_content, solver.displacement,
+               "AFTER  project_out_nullspace")
 
     # --- project the answer ---------------------------------------------
     u = solver.displacement
@@ -949,6 +1216,25 @@ def main():
     V_n *= D_M
     N_n *= D_M
 
+    # The same two instruments on the coupled answer. `u` here has already had
+    # `project_out_nullspace()` applied, which acts in l2; this removes the L2
+    # rotational residue, which is a different and smaller thing.
+    u_orth = diagnostic(l2_orthogonalise_rotations, u)
+    if isinstance(u_orth, Function):
+        u_th_o = dot(u_orth, e_theta) / (rm * conditional(
+            rho_cyl > 1e-12, rho_cyl, Constant(1e-12)))
+        V_o = project_surface(u_th_o, sub, nproj, ds_sub, interior=False,
+                              basis="dP", quad_degree=args.quad_degree) * D_M
+        vr = dseries_at(V_n, theta_fine)
+        vo = dseries_at(V_o, theta_fine)
+        print(f"  max V raw        {vr.max():+10.4f} m at "
+              f"{np.rad2deg(theta_fine[int(np.argmax(vr))]):6.2f} deg")
+        print(f"  max V L2-orthog. {vo.max():+10.4f} m at "
+              f"{np.rad2deg(theta_fine[int(np.argmax(vo))]):6.2f} deg   "
+              f"(change {abs(vo.max() - vr.max()) / max(abs(vr.max()), 1e-300):.3e})")
+    diagnostic(report_tangential, U_n, V_n, theta, theta_fine, Vf, imax,
+               "(coupled)", N_n)
+
     U0, U180 = series_at(U_n, theta)
     N0, N180 = series_at(N_n, theta)
     Vmod = dseries_at(V_n, theta_fine)
@@ -956,6 +1242,12 @@ def main():
 
     print()
     print("  the five numbers (model, reference at matched n_max, ratio)")
+    print("  LEGACY reconstruction: the model series span n >= 0 (U, N) and")
+    print("  n >= 1 (V) while the load and the reference span n >= 2, so these")
+    print("  carry unmatched degree-0 and degree-1 content. Printed for")
+    print("  continuity with the recorded -61.79 / +39.97 and so on. **The")
+    print("  n >= 2 block below is the one commensurate with the reference's")
+    print("  own definition; the legacy form is being retired.**")
     rows = [("U(0)", U0, U_ref[0]), ("N(0)", N0, N_ref[0]),
             ("U(180)", U180, U_ref[1]), ("N(180)", N180, N_ref[1])]
     for name, mod, refv in rows:
@@ -964,6 +1256,22 @@ def main():
     print(f"    max V   {Vmod[jmax]:+10.4f} m   {Vf[imax]:+10.4f} m   "
           f"ratio {Vmod[jmax] / Vf[imax]:+7.4f}   "
           f"at {np.rad2deg(theta_fine[jmax]):.2f} vs "
+          f"{np.rad2deg(theta_fine[imax]):.2f} deg")
+
+    print()
+    print("  THE FIVE NUMBERS FROM n >= 2 (commensurate with the reference)")
+    U0b, U180b = series_from(U_n, theta, nmin=2, kind="P")
+    N0b, N180b = series_from(N_n, theta, nmin=2, kind="P")
+    Vb = series_from(V_n, theta_fine, nmin=2, kind="dP")
+    jb = int(np.argmax(Vb))
+    for name, mod, refv in [("U(0)", U0b, U_ref[0]), ("N(0)", N0b, N_ref[0]),
+                            ("U(180)", U180b, U_ref[1]),
+                            ("N(180)", N180b, N_ref[1])]:
+        print(f"    {name:<7s} {mod:+10.4f} m   {refv:+10.4f} m   "
+              f"ratio {mod / refv:+7.4f}")
+    print(f"    max V   {Vb[jb]:+10.4f} m   {Vf[imax]:+10.4f} m   "
+          f"ratio {Vb[jb] / Vf[imax]:+7.4f}   "
+          f"at {np.rad2deg(theta_fine[jb]):.2f} vs "
           f"{np.rad2deg(theta_fine[imax]):.2f} deg")
 
     # Separates a wrong load from a wrong response: if the load's own degree-2

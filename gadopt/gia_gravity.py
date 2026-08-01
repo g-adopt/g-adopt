@@ -346,8 +346,31 @@ def selfgrav_dtn_iterative_solver_parameters(
              |   +- psi: SPDAssembledPC + GAMG   (GravitySolver's preset)
              +- block 1: GMRES on the Real block, pc_type none
 
-    **Measured: block-0 FGMRES flat at 3**, across `--coarse`, `--medium` and
-    `--fine` - 37x in dofs, up to 1.23e8 - with `condensed=True`.
+    **This preset carries no iteration count of its own, and the "flat at 3"
+    that used to stand here was another configuration's.**  That 3 was measured
+    in `demos/glacial_isostatic_adjustment/3d_spada_selfgrav/b2_probe.py`,
+    `--config cond`: an *algebraic* Schur split on the **uncondensed** space,
+    `-pc_fieldsplit_type schur` with `pc_fieldsplit_0_fields "1"` (`m`, inverted
+    exactly by `bjacobi`/ILU(0), which is exact on a block-diagonal matrix) and
+    `pc_fieldsplit_1_fields "0,2"` (`u` and `psi`).  The counter that read 3,
+    flat across `--coarse`, `--medium` and `--fine` - 3.35e6 to 1.23e8 dofs, 37x,
+    256 ranks - is `dtn_fieldsplit_0_ksp`, i.e. **the layer above that Schur
+    complement**, and it is the u-psi coupling alone precisely because `m` has
+    been eliminated below it.
+
+    This preset has no such layer.  With `condensed=True` there is no `m` field
+    to eliminate, so its `dtn_fieldsplit_0_ksp` *is* the `[u, psi]` sweep -
+    structurally `b2_probe`'s inner `dtn_fieldsplit_0_fieldsplit_1_ksp`, which
+    measured **174-388 at `--coarse`, 7-19 at `--medium`, 11-296 at `--fine`**:
+    non-monotone and large, because the difficulty did not go away when `m` was
+    eliminated, it moved down one level into a single-physics AMG problem on
+    A2's anisotropic lithosphere (`NOTES/HANDOVER-PETSC.md` §§1-2).
+
+    So: **budget against the 174-388 band, not against 3.**  A production
+    estimate built on the 3 is an estimate for a configuration this dictionary
+    does not implement.  The uncondensed alternative below was separately
+    measured at outer FGMRES 5 with a block-0 median of 9 (`--coarse`) and 10
+    (`--medium`).
 
     Two traps, both of which have already been paid for:
 
@@ -368,9 +391,10 @@ def selfgrav_dtn_iterative_solver_parameters(
 
     Args:
       condensed: whether the caller passes `condense_internal_variables=True`.
-        The internal variable is ~85 % of block 0, so condensing is what takes
-        its count to 3; when it is condensed there is no `m` field to sweep and
-        including one would index the splits wrongly. **Keep this argument and
+        The internal variable is ~85 % of block 0, so condensing is what makes
+        it affordable; when it is condensed there is no `m` field to sweep and
+        including one would index the splits wrongly.  (It is *not* what takes
+        any count in this preset to 3 - see the attribution above.) **Keep this argument and
         the solver's flag in step** - that is the whole reason it is an
         argument rather than an assumption.
       block0_rtol, outer_rtol, block0_max_it, snes_rtol: the tolerances.

@@ -74,7 +74,7 @@ from gadopt.gia_gravity import (FluidCore, SelfGravitatingGIASolver,
 import generate_selfgrav_sphere as gen
 import reference_state as rs
 from taboo_synthesis import cap_load
-from validate_selfgrav_sphere import curve_mesh
+from validate_selfgrav_sphere import curve_mesh, provenance, tangle_census
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -281,6 +281,15 @@ def build_meshes(configuration, path=None, untangle=True, curve=True):
     113 653 at `--coarse` (A2 addendum), which moves no integral but puts a
     negative-volume contribution into a stiffness matrix, and this is the first
     deliverable that assembles one.
+
+    **That default has never done what it says, and until now it could not run
+    in parallel at all.** `curve_mesh`'s repair loop called the collective
+    accessor `Dat.data_with_halos` once per *rank-local* tangled cell, so any
+    partition on which two ranks held different numbers of them hung rather
+    than failed: measured, `mpiexec -n 4` on `b4_sphere.msh` never returned.
+    That is fixed. What is not fixed is the repair itself -- it straightens the
+    cells it targets and tangles two neighbours instead, 2 -> 2 in serial and
+    2 -> 3 at 4 ranks. The census below is printed for exactly this reason.
     """
     path = path or os.path.join(HERE, "b4_sphere.msh")
     # Reuse an existing file rather than regenerating: gmsh is not collective,
@@ -291,6 +300,7 @@ def build_meshes(configuration, path=None, untangle=True, curve=True):
     if COMM_WORLD.rank == 0 and not os.path.exists(path):
         gen.generate(path, configuration=configuration)
     COMM_WORLD.barrier()
+    say(f"  build_meshes: curve={curve}  untangle={untangle}  file={path}")
     parent = Mesh(path)
     if curve:
         parent = curve_mesh(parent, untangle=untangle)
@@ -299,6 +309,12 @@ def build_meshes(configuration, path=None, untangle=True, curve=True):
     if curve:
         sub = curve_mesh(sub, untangle=untangle)
     sub.cartesian = False
+    # The count and the radii, in whichever arm actually ran. A repaired arm
+    # must read zero and an unrepaired arm at least one; equal counts mean the
+    # A/B is void, and this is where that becomes visible without anyone having
+    # to trust a flag.
+    tangle_census(parent, f"parent, curve={curve} untangle={untangle}")
+    tangle_census(sub, f"mantle submesh, curve={curve} untangle={untangle}")
     return parent, sub
 
 
@@ -674,6 +690,7 @@ def main():
                          "tolerance leaves the DtN constraint unsatisfied")
     args = ap.parse_args()
 
+    provenance(os.path.basename(__file__))
     say(f"B4 polar motion: {args.configuration}, C-A = "
         f"{C_MINUS_A[args.c_minus_a]:.6e} ({args.c_minus_a}), "
         f"feedback {not args.no_feedback}, fluid core "

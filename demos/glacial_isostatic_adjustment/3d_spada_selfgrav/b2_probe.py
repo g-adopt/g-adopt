@@ -70,6 +70,12 @@ def build_meshes_from(path):
     t0 = _time.perf_counter()
     sub = b1.curve(Submesh(parent, 3, b1.gen.CELL_MANTLE))
     sub.cartesian = False
+    # The census, in the arm that ran.  This probe never untangles, so these
+    # are the unrepaired counts; a solver-cost measurement taken on a mesh with
+    # inverted cells should say so in its own log.
+    from validate_selfgrav_sphere import tangle_census  # noqa: PLC0415
+    tangle_census(parent, "b2_probe parent, untangle=False")
+    tangle_census(sub, "b2_probe mantle submesh, untangle=False")
     return parent, sub, t_parent, _time.perf_counter() - t0
 
 
@@ -246,6 +252,8 @@ def multiplier_pc(name):
 
 
 def main():
+    from validate_selfgrav_sphere import provenance  # noqa: PLC0415
+    provenance(os.path.basename(__file__))
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="fs", choices=sorted(CONFIGS))
     p.add_argument("--configuration", default="coarse")

@@ -33,7 +33,10 @@ collective and all ranks writing one path is a race that usually produces a
 truncated file rather than an error.
 """
 import argparse
+import hashlib
+import json
 import os
+import subprocess
 import sys
 from warnings import warn
 
@@ -48,8 +51,108 @@ from generate_selfgrav_sphere import (
     CELL_BUFFER, CELL_INNER, CELL_MANTLE, RC, RE, R_INNER, R_OUTER, SURF_INNER,
     SURF_OUTER, SURF_RC, SURF_RE)
 
-MESH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "selfgrav_sphere.msh")
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
+
+MESH_FILE = os.path.join(HERE, "selfgrav_sphere.msh")
+
+
+def say(*a):
+    """Rank-0 print.  Everything this module prints is a collective quantity."""
+    if COMM_WORLD.rank == 0:
+        print(*a, flush=True)
+
+
+# `Report` is IMPORTED, not copied: `demos/gravity/validate_selfgrav_annulus.py`
+# is where it was written and where its own gate exercises it, and two copies
+# of a pass/fail bookkeeper is exactly the drift this file exists to catch.
+#
+# **The import is not free.** That module runs `sys.path.insert` for `passess`
+# and imports `scipy.integrate` at module scope, so this 3-D geometry gate now
+# depends on both even though it uses neither.  If that ever becomes a problem
+# on a machine without `passess`, move `Report` to a module of its own rather
+# than copying it back.
+sys.path.insert(0, os.path.join(REPO, "demos", "gravity"))
+import validate_selfgrav_annulus as _annulus  # noqa: E402
+from validate_selfgrav_annulus import Report  # noqa: E402,F401
+
+# `Report.check` resolves `print` in ITS OWN module's globals, so subclassing
+# cannot make it rank-0 and the report would otherwise repeat itself once per
+# rank -- 4 interleaved copies of a table whose every number is collective.
+# One rebinding, here, where the reason for it is visible.
+_annulus.print = say
+
+
+def provenance(label=""):
+    """Rank-0 banner naming the code that is about to run.
+
+    Repo HEAD, `git status --porcelain`, and `gadopt.__file__`.  Two of the
+    last three production failures were stale code on a remote machine that
+    nobody noticed, and a log that identifies its own code state ends that
+    class of failure.  `gadopt.__file__` is the one that actually bites in this
+    project: the editable install points at a *different worktree on a
+    different branch*, so `import gadopt` silently loads the wrong code unless
+    `PYTHONPATH` wins.
+
+    Wrapped end to end, `diagnostic`-style: a provenance banner that raises
+    would take down the run it exists to document.
+    """
+    if COMM_WORLD.rank != 0:
+        return
+    say(f"\n  provenance {label}".rstrip())
+    try:
+        head = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"],
+                              capture_output=True, text=True,
+                              timeout=30).stdout.strip()
+        branch = subprocess.run(
+            ["git", "-C", REPO, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=30).stdout.strip()
+        dirty = subprocess.run(["git", "-C", REPO, "status", "--porcelain"],
+                               capture_output=True, text=True,
+                               timeout=30).stdout.rstrip()
+        say(f"    HEAD      {head}  ({branch})")
+        if dirty:
+            say("    git status --porcelain:")
+            for line in dirty.splitlines():
+                say(f"      {line}")
+        else:
+            say("    git status --porcelain: clean")
+    except Exception as exc:  # noqa: BLE001 - a banner may not kill a run
+        say(f"    git UNAVAILABLE ({type(exc).__name__}: {exc})")
+    try:
+        say(f"    gadopt    {gadopt.__file__}")
+    except Exception as exc:  # noqa: BLE001
+        say(f"    gadopt    UNAVAILABLE ({type(exc).__name__}: {exc})")
+    say(f"    ranks     {COMM_WORLD.size}")
+
+
+def build_mesh(**kwargs):
+    """gmsh on rank 0 only; every rank then reads the same file.
+
+    gmsh is not collective and all ranks writing one path is a race that
+    usually produces a truncated file rather than an error.
+
+    **Same pattern as `gate_refstate.build_mesh`, deliberately not the same
+    return.**  That one hands back a curved `Mesh`; `geometry_stage` needs the
+    *straight* mesh and the curved one separately, and it needs the generator's
+    `(layout, stats)`, so those are broadcast instead.  If the two ever want to
+    be one function, this is the signature to converge on.
+
+    `reuse=True` skips regeneration when the file already exists.  gmsh's
+    tetrahedralisation is not reproducible across builds, so any comparison
+    between two runs -- rank counts, repaired versus not -- must be against one
+    file, not one configuration.
+    """
+    reuse = kwargs.pop("reuse", False)
+    out = None
+    if COMM_WORLD.rank == 0:
+        if reuse and os.path.exists(MESH_FILE):
+            out = (None, None)      # nothing regenerated, so no stats to hand back
+        else:
+            _, layout, stats = gen.generate(MESH_FILE, **kwargs)
+            out = (layout, stats)
+    COMM_WORLD.barrier()
+    return COMM_WORLD.bcast(out, root=0)
 
 
 def curve_mesh(linear_mesh, untangle=False):
@@ -128,6 +231,130 @@ def curve_mesh(linear_mesh, untangle=False):
     return mesh_c
 
 
+def tangled_cells(mesh_c, degree=3):
+    """Sign-changing cells of `mesh_c`, over ALL local cells INCLUDING halos.
+
+    Returns `(bad, owned)`: `bad` indexes `mesh_c.cell_set`'s local cell
+    numbering over its `total_size` cells, and `owned = mesh_c.cell_set.size`,
+    so `bad[bad < owned]` is the owned subset and `(bad < owned).sum()` summed
+    over ranks is the global count with no double counting.
+
+    **Reading detJ with halos is what makes a repair built on this
+    rank-consistent.**  `data_ro_with_halos` performs the forward halo exchange
+    (`pyop2/types/dat.py`: `global_to_local_begin/end` fire whenever
+    `halo_valid` is false), so a halo cell is judged on the *owner's* samples
+    rather than on a locally recomputed copy, and every rank holding a cell
+    reaches the same verdict from the same numbers.
+
+    See `min_jacobian` for why the test is `min(detJ) * max(detJ) <= 0` per
+    cell and not a sign test: Firedrake does not globally orient simplices, so
+    half of any mesh has negative detJ and a global minimum means nothing.
+    """
+    from firedrake import JacobianDeterminant  # noqa: PLC0415
+
+    W = FunctionSpace(mesh_c, "DG", degree)
+    detJ = Function(W).interpolate(JacobianDeterminant(mesh_c))
+    # Indexed through the map rather than by slicing the flat array, so the
+    # rows for halo cells are found wherever the DG numbering actually puts
+    # them instead of being assumed contiguous with the owned ones.
+    d = detJ.dat.data_ro_with_halos[W.cell_node_list]
+    return (np.where(d.min(axis=1) * d.max(axis=1) <= 0.0)[0],
+            mesh_c.cell_set.size)
+
+
+def illconditioned_on_tagged_facets(mesh, threshold=None, degree=3):
+    """Do the ill-conditioned cells actually own a facet on a tagged surface?
+
+    **This decides whether the distorted ring contaminates the sheet terms or
+    merely sits beside them, and it is measurable rather than arguable.**  The
+    two worst cells after untangling sit at r = 2.1810 and 2.1818, close to the
+    interfaces the mass sheets live on -- but "close to" is not "on", and the
+    sheet integrals are facet integrals.  A cell that owns no tagged facet
+    contributes to `dx` only.
+
+    Returns `(n_illconditioned, n_of_those_on_a_tagged_facet, {tag: count})`.
+    """
+    from firedrake import JacobianDeterminant  # noqa: PLC0415
+
+    # Resolved at call time, not as a default argument: the threshold is
+    # defined below with the panel it belongs to, and a default argument would
+    # bind it at import.
+    threshold = (MIN_JAC_RATIO_FOR_GATING if threshold is None else threshold)
+    W = FunctionSpace(mesh, "DG", degree)
+    d = Function(W).interpolate(
+        JacobianDeterminant(mesh)).dat.data_ro_with_halos[W.cell_node_list]
+    a = np.abs(d)
+    ratio = a.min(axis=1) / np.maximum(a.max(axis=1), 1e-300)
+    owned = mesh.cell_set.size
+    ill = set(int(c) for c in np.where(ratio < threshold)[0] if c < owned)
+
+    per_tag, on_tag = {}, set()
+    for kind in ("exterior_facets", "interior_facets"):
+        fs = getattr(mesh, kind, None)
+        if fs is None:
+            continue
+        try:
+            markers = np.asarray(fs.markers)
+        except Exception:  # noqa: BLE001 - a mesh may carry neither
+            continue
+        for tag in (SURF_RE, SURF_RC, SURF_OUTER, SURF_INNER):
+            if tag not in markers:
+                continue
+            try:
+                idx = fs.subset(int(tag)).indices
+                cells = np.atleast_2d(fs.facet_cell[idx]).ravel()
+            except Exception:  # noqa: BLE001
+                continue
+            hit = ill.intersection(int(c) for c in cells if c < owned)
+            if hit:
+                per_tag[int(tag)] = per_tag.get(int(tag), 0) + len(hit)
+                on_tag |= hit
+    comm = mesh.comm
+    return (comm.allreduce(len(ill)), comm.allreduce(len(on_tag)),
+            {t: comm.allreduce(n) for t, n in per_tag.items()})
+
+
+def tangle_census(mesh, label, degree=3):
+    """Print how many cells are tangled and at what radii, owned only.
+
+    The repaired arm of a mesh A/B must show zero and the unrepaired arm at
+    least one.  If both show the same number the A/B is void, and the log
+    should say so without anyone having to reason about which flag reached
+    which call.
+
+    Returns `(n_tangled, radii)` with `radii` the tangled cells' centroid radii
+    gathered across ranks (identical on every rank).
+    """
+    bad, owned = tangled_cells(mesh, degree=degree)
+    mine = bad[bad < owned]
+    X = SpatialCoordinate(mesh)
+    R0 = FunctionSpace(mesh, "DG", 0)
+    r = Function(R0).interpolate(sqrt(X[0]**2 + X[1]**2 + X[2]**2))
+    # `data_ro_with_halos` is `@mpi.collective`, so it is fetched here rather
+    # than inside the conditional below.  Reaching for it only on the ranks
+    # that have a tangled cell deadlocks -- which is what the first version of
+    # this function did, and it hung a 4-rank run for seven minutes before it
+    # was noticed.  Same hazard as the loop in `curve_mesh`; it is easy to
+    # write and gives no error when it fires.
+    rdat = r.dat.data_ro_with_halos
+    local = (rdat[R0.cell_node_list[mine].ravel()]
+             if mine.size else np.zeros(0))
+    radii = np.concatenate([np.asarray(a, dtype=float)
+                            for a in mesh.comm.allgather(local)])
+    n = int(radii.size)
+    if n == 0:
+        say(f"  tangle census [{label}]: 0 tangled cells "
+            f"of {mesh.comm.allreduce(owned)}")
+    else:
+        u = np.sort(radii)
+        say(f"  tangle census [{label}]: {n} tangled cells of "
+            f"{mesh.comm.allreduce(owned)}; centroid radii "
+            + ", ".join(f"{v:.6f}" for v in u[:12])
+            + (" ..." if n > 12 else "")
+            + f"   [min {u.min():.6f} max {u.max():.6f}]")
+    return n, radii
+
+
 def min_jacobian(mesh, degree=3):
     """Smallest Jacobian determinant sampled over the mesh, and where it is.
 
@@ -182,15 +409,24 @@ def cell_count(mesh, tag):
     return mesh.comm.allreduce(local)
 
 
-def geometry_stage(configuration, grade, litho_layers, quality=False):
+def geometry_stage(configuration, grade, litho_layers, quality=False,
+                   reuse=False, allow_tangled=False):
     ref = gen.analytic(litho_layers)
     say(f"\nGenerating: configuration={configuration} "
         f"({gen.CONFIGURATIONS[configuration]:.0f} km lateral), grade={grade}, "
         f"litho_layers={litho_layers}, ranks={COMM_WORLD.size}")
+    # `reuse` matters for the multi-rank run and is not a convenience: gmsh's
+    # tetrahedralisation is not reproducible across builds, so regenerating
+    # between rank counts compares two meshes and calls the difference a
+    # partition effect.
     layout, stats = build_mesh(configuration=configuration, grade=grade,
-                               litho_layers=litho_layers, quality=quality)
-    say(f"  h = {stats['h']:.6f} ({stats['h'] * gen.D_KM:.0f} km), "
-        f"{sum(stats['cells'].values())} tetrahedra")
+                               litho_layers=litho_layers, quality=quality,
+                               reuse=reuse)
+    if stats is None:
+        say(f"  reusing {MESH_FILE}; no generator statistics this run")
+    else:
+        say(f"  h = {stats['h']:.6f} ({stats['h'] * gen.D_KM:.0f} km), "
+            f"{sum(stats['cells'].values())} tetrahedra")
 
     rep = Report()
     parent = Mesh(MESH_FILE)
@@ -350,10 +586,23 @@ def geometry_stage(configuration, grade, litho_layers, quality=False):
                      ("curved submesh", sub_cc)]:
         ratio, tangled, ncells = min_jacobian(m)
         ok = tangled == 0
-        say(f"  [{'ok ' if ok else 'FAIL'}] {label:<20s} worst min|detJ|/max|detJ| "
+        # `allow_tangled` demotes this ONE check so that a deliberately-folded
+        # stage-1 arm can exercise the other twenty. It does not change what is
+        # measured or printed, and it is not the default: an unflagged run
+        # still exits 1 on a folded mesh, which is the behaviour that made this
+        # gate worth restoring.
+        flag = "ok " if ok else ("note" if allow_tangled else "FAIL")
+        say(f"  [{flag}] {label:<20s} worst min|detJ|/max|detJ| "
             f"{ratio:.6f}   tangled cells {tangled} of {ncells}")
-        if not ok:
+        if not ok and not allow_tangled:
             rep.failures.append(f"tangled elements in {label}")
+
+    # Where they sit, not just how many: a tangled cell at the deep interface
+    # and one in the lithosphere have different consequences for a per-degree
+    # error profile, and the count alone cannot tell them apart.
+    say("")
+    for label, m in [("curved parent", parent_c), ("curved submesh", sub_cc)]:
+        tangle_census(m, label)
 
     # --- cost.
     say("\nCell counts (owned, summed over ranks):")
@@ -365,7 +614,7 @@ def geometry_stage(configuration, grade, litho_layers, quality=False):
     say(f"    buffer {n[CELL_BUFFER]:8d}   "
         f"({n[CELL_BUFFER] / n[CELL_MANTLE]:.3f} of mantle)")
     say(f"    total  {sum(n.values()):8d}")
-    if quality and COMM_WORLD.rank == 0 and "quality" in stats:
+    if quality and COMM_WORLD.rank == 0 and stats and "quality" in stats:
         say("\nTetrahedron quality per shell "
             "(gamma = inradius/circumradius scaled, 1 = equilateral):")
         say(f"    {'r_in':>9} {'r_out':>9} {'cells':>8} {'gamma_min':>10} "
@@ -378,6 +627,217 @@ def geometry_stage(configuration, grade, litho_layers, quality=False):
     return rep.done("Geometry stage"), n
 
 
+def coordinate_rows(mesh):
+    """Owned coordinate rows, gathered and sorted lexicographically on rank 0.
+
+    **The geometry, measured directly instead of through an operator.**  The
+    round-one panel asserted integrals of `|detJ|` to 1e-12 and could not be
+    met: on a cell whose `detJ` changes sign the integrand is non-smooth, so
+    the integral pins the *position of the sign crossing* to roundoff, which
+    nothing guarantees.  The repair, by contrast, is a deterministic function
+    of the input coordinates, so the rank count must not change the output
+    coordinates **at all** -- and the coordinate multiset is partition-
+    independent by construction, since every node is owned exactly once.
+
+    Sorted lexicographically because the *numbering* is partition-dependent
+    while the multiset is not.  Ties are broken by the later columns, and exact
+    duplicate rows are impossible in a valid mesh.
+
+    Returns the `(nnodes, 3)` sorted array on rank 0 and `None` elsewhere.
+    """
+    c = mesh.coordinates
+    local = c.dat.data_ro[:c.function_space().dof_dset.size]
+    gathered = mesh.comm.gather(np.asarray(local, dtype=float), root=0)
+    if mesh.comm.rank != 0:
+        return None
+    allr = np.vstack(gathered)
+    return allr[np.lexsort((allr[:, 2], allr[:, 1], allr[:, 0]))]
+
+
+def coordinate_digest(mesh):
+    """`(sha256 of the sorted owned coordinates, n_rows)`, identical on all ranks.
+
+    The hash IS the bitwise test.  When it differs, `--coords-out` has the
+    arrays themselves so the disagreement can be quantified rather than merely
+    reported.
+    """
+    rows = coordinate_rows(mesh)
+    out = None
+    if mesh.comm.rank == 0:
+        out = (hashlib.sha256(np.ascontiguousarray(rows).tobytes()).hexdigest(),
+               int(rows.shape[0]))
+    return mesh.comm.bcast(out, root=0)
+
+
+#: Panel entries that integrate `|detJ|` over cells and are therefore only as
+#: reproducible as the worst-conditioned cell in the mesh.  **Report-only when
+#: the mesh cannot support them, fully gated when it can**, which is a demotion
+#: and not a deletion: the checks are right, their precondition is not always
+#: met.
+CONDITIONING_SENSITIVE = ("vol_mantle", "sub.vol", "min_jac_ratio")
+
+#: The predicate, and it is measured rather than guessed.  On `b4_sphere.msh`
+#: after untangling, the coordinates are bitwise identical across rank counts
+#: (the digests match) and the census is zero -- yet `vol_mantle` still moves by
+#: 2.91e-11 between 1 and 4 ranks.  Localised: of 79447 mantle cells, 47730
+#: differ bitwise between the two runs but all except **two** differ only in the
+#: last bit (largest 3.7e-18).  Those two carry 1.0928e-09 of the 1.0928e-09
+#: total.  They are cells 107270 and 108290, `min|detJ|/max|detJ|` = 0.0810 and
+#: 0.0582, volumes 2.25e-05 and 2.98e-05, at r = 2.1818 and 2.1810 -- the ring
+#: immediately outside the straightened patch, where straight nodes meet curved
+#: ones.  A tetrahedron that distorted computes its own volume to about five
+#: reproducible digits, because the local vertex ordering is partition-dependent
+#: and the evaluation cancels.  The comparison in the buffer, whose worst cell
+#: is at 0.97, is 1.8e-16 relative.
+#:
+#: So the demotion is triggered by the mesh's *conditioning*, not by tangling:
+#: 0.5 separates the two bad cells (0.058, 0.081) from the next worst (0.520)
+#: here by an order of magnitude.  A mesh that clears both conditions gets the
+#: full panel gated, which is the point of keeping the checks.
+MIN_JAC_RATIO_FOR_GATING = 0.5
+
+#: **The ring's irreproducibility is acceptable, and it is a floor, not an
+#: error bar.**  Recorded so nobody re-derives it: 1.09e-09 absolute on a
+#: mantle volume of 37.5, i.e. 2.91e-11 relative, against gate tolerances of
+#: 1e-02 to 1e-03 relative -- three or more orders below anything this project
+#: gates on.  What that number is *not* is the discretisation error of those
+#: cells.  A cell at min|detJ|/max|detJ| = 0.058 carries a genuine local
+#: geometry error far above its own run-to-run jitter; the jitter only bounds
+#: how reproducibly that error is committed.
+#:
+#: This is the strongest argument that the **generator predicate is the
+#: endpoint and the fixed-point untangler is the interim**: the untangler
+#: removes the folds and leaves the ring, while a generator that never emits a
+#: foldable cell leaves neither.
+
+
+def geometry_panel(untangle=True, quad_degree=8):
+    """A fixed panel for comparison ACROSS RANK COUNTS, on ONE mesh file.
+
+    Three kinds of entry, and they are gated differently on purpose:
+
+    * **the coordinate digest and the census** -- exact.  These are the real
+      gate.  The repair is a deterministic function of the coordinates, so a
+      differing digest means the ranks built different geometry, full stop; and
+      the census (count *and* the multiset of centroid radii) is the cheapest
+      statement of the same thing that a human can read.  The round-one failure
+      -- 3 tangled cells at 4 ranks against 2 at 1 -- is caught head-on here
+      rather than inferred from a volume.
+    * **surface integrals and the non-mantle volumes** -- 1e-12.  These passed
+      at 1e-15 in round one and cost nothing, so they stay.
+    * **the mantle volume and the min-Jacobian ratio** -- see
+      `TANGLE_SENSITIVE`.
+
+    Both meshes are in it because the submesh is re-curved separately.
+    """
+    panel = {}
+    parent = curve_mesh(Mesh(MESH_FILE), untangle=untangle)
+    parent.cartesian = False
+    sub = curve_mesh(Submesh(parent, 3, CELL_MANTLE), untangle=untangle)
+    sub.cartesian = False
+
+    for label, m in [("parent", parent), ("sub", sub)]:
+        digest, nrows = coordinate_digest(m)
+        panel[f"{label}.coords_sha256"] = digest
+        panel[f"{label}.coords_rows"] = float(nrows)
+        n, radii = tangle_census(m, f"{label}, untangle={untangle}")
+        panel[f"{label}.census_n"] = float(n)
+        panel[f"{label}.census_radii"] = sorted(float(v) for v in radii)
+
+    for name, tag in [("vol_mantle", CELL_MANTLE), ("vol_inner", CELL_INNER),
+                      ("vol_buffer", CELL_BUFFER)]:
+        panel[f"parent.{name}"] = assemble(
+            1 * dx(tag, domain=parent, degree=quad_degree))
+    panel["sub.vol"] = assemble(1 * dx(domain=sub, degree=quad_degree))
+
+    Xp, Xs = SpatialCoordinate(parent), SpatialCoordinate(sub)
+    for tag, label in [(SURF_OUTER, "2Re"), (SURF_INNER, "0.5Rc")]:
+        panel[f"parent.ds{tag}_{label}"] = assemble(
+            (1 + Xp[0]) * ds(tag, domain=parent, degree=quad_degree))
+    for tag, label in [(SURF_RE, "Re"), (SURF_RC, "Rc")]:
+        panel[f"parent.dS{tag}_{label}"] = assemble(
+            avg(1 + Xp[0]) * dS(tag, domain=parent, degree=quad_degree))
+        panel[f"sub.ds{tag}_{label}"] = assemble(
+            (1 + Xs[0]) * ds(tag, domain=sub, degree=quad_degree))
+
+    for label, m in [("parent", parent), ("sub", sub)]:
+        ratio, tangled, ncells = min_jacobian(m)
+        panel[f"{label}.min_jac_ratio"] = ratio
+        panel[f"{label}.cells"] = float(ncells)
+        n_ill, n_tag, per = illconditioned_on_tagged_facets(m)
+        panel[f"{label}.illcond_n"] = float(n_ill)
+        panel[f"{label}.illcond_on_tagged"] = float(n_tag)
+        panel[f"{label}.illcond_tags"] = {str(t): float(v)
+                                          for t, v in sorted(per.items())}
+    return panel, parent, sub
+
+
+def panel_report(panel, reference=None, rtol=1e-12):
+    """Print the panel and check it against a reference panel from another run.
+
+    Returns `(ok, n_report_only)`.  `ok` ignores the report-only entries by
+    design; they are printed with a `[rep]` flag and a reason so that a demoted
+    check cannot be mistaken for a passing one.
+    """
+    tangled = any(panel.get(f"{m}.census_n", 0.0) > 0 for m in ("parent", "sub"))
+    worst = min([panel.get(f"{m}.min_jac_ratio", 1.0)
+                 for m in ("parent", "sub")] or [1.0])
+    demote = tangled or worst < MIN_JAC_RATIO_FOR_GATING
+    why = ("census nonzero" if tangled else
+           f"worst min|detJ|/max|detJ| = {worst:.4f} < "
+           f"{MIN_JAC_RATIO_FOR_GATING}")
+    say(f"\nGeometry panel ({COMM_WORLD.size} ranks)"
+        + (f"   [{why}: the |detJ|-weighted entries are REPORT-ONLY, see "
+           "CONDITIONING_SENSITIVE]" if demote else
+           "   [mesh well conditioned: every entry gated]"))
+    if demote:
+        for label in ("parent", "sub"):
+            k = f"{label}.illcond_on_tagged"
+            if k in panel:
+                n_ill, n_tag, per = (panel[f"{label}.illcond_n"],
+                                     panel[k], panel.get(f"{label}.illcond_tags",
+                                                         {}))
+                say(f"    {label}: {int(n_ill)} cells below "
+                    f"min|detJ|/max|detJ| {MIN_JAC_RATIO_FOR_GATING}, of which "
+                    f"{int(n_tag)} own a facet on a tagged surface"
+                    + (f" {per}" if per else "")
+                    + ("  -> the ring sits BESIDE the sheets, not on them"
+                       if not n_tag else
+                       "  -> the ring TOUCHES a sheet surface"))
+    ok, n_rep = True, 0
+    for k in sorted(panel):
+        v = panel[k]
+        demoted = demote and any(t in k for t in CONDITIONING_SENSITIVE)
+        show = (v if isinstance(v, str) else
+                (f"[{len(v)}] " + ", ".join(f"{x:.6f}" for x in v[:6])
+                 if isinstance(v, list) else f"{v: .16e}"))
+        if reference is None or k not in reference:
+            say(f"  [ -- ] {k:<26s} {show}")
+            continue
+        b = reference[k]
+        if isinstance(v, (str, list)):
+            good, rel = (v == b), 0.0 if v == b else float("nan")
+        else:
+            rel = abs(v - b) / max(abs(b), 1e-300)
+            good = rel <= rtol
+        if demoted:
+            n_rep += 1
+            say(f"  [rep] {k:<26s} {show}   rel {rel:.2e}   "
+                f"(report-only: {why})")
+            continue
+        ok &= good
+        say(f"  [{'ok ' if good else 'FAIL'}] {k:<26s} {show}   rel {rel:.2e}")
+    if reference is not None:
+        missing = sorted(set(reference) - set(panel))
+        if missing:
+            ok = False
+            say(f"  [FAIL] entries missing from this run: {missing}")
+        say(f"\nPanel vs reference at rtol {rtol:.0e}: "
+            f"{'MATCH' if ok else 'MISMATCH'}"
+            + (f"   ({n_rep} entries report-only)" if n_rep else ""))
+    return ok, n_rep
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--configuration", default="coarse",
@@ -386,9 +846,54 @@ if __name__ == "__main__":
     ap.add_argument("--litho-layers", type=int, default=2)
     ap.add_argument("--quality", action="store_true")
     ap.add_argument("--mesh-file", default=MESH_FILE)
+    ap.add_argument("--panel", action="store_true",
+                    help="the rank-consistency panel instead of the full "
+                         "geometry stage; run it at two rank counts against "
+                         "ONE mesh file and compare with --panel-check")
+    ap.add_argument("--no-untangle", action="store_true",
+                    help="--panel arm without the tangling repair")
+    ap.add_argument("--coords-out", default=None,
+                    help="write the sorted owned coordinates as .npy, so a "
+                         "digest mismatch can be quantified rather than only "
+                         "reported")
+    ap.add_argument("--allow-tangled", action="store_true",
+                    help="the tangled-cell checks become notes rather than "
+                         "failures, so a deliberately-folded stage-1 arm can "
+                         "run the rest of the gate. Exit 1 stays the DEFAULT.")
+    ap.add_argument("--panel-out", default=None)
+    ap.add_argument("--panel-check", default=None)
+    ap.add_argument("--panel-rtol", type=float, default=1e-12)
+    ap.add_argument("--reuse-mesh", action="store_true",
+                    help="read an existing --mesh-file instead of regenerating; "
+                         "REQUIRED when comparing rank counts, because gmsh "
+                         "does not reproduce its tetrahedralisation")
     args = ap.parse_args()
     MESH_FILE = args.mesh_file
 
+    provenance(os.path.basename(__file__))
+
+    if args.panel:
+        if not os.path.exists(MESH_FILE):
+            build_mesh(configuration=args.configuration, grade=args.grade,
+                       litho_layers=args.litho_layers)
+        panel, parent_m, sub_m = geometry_panel(
+            untangle=not args.no_untangle)
+        ref = None
+        if args.panel_check:
+            with open(args.panel_check) as fh:
+                ref = json.load(fh)
+        good, _ = panel_report(panel, ref, rtol=args.panel_rtol)
+        if args.coords_out:
+            for label, m in (("parent", parent_m), ("sub", sub_m)):
+                rows = coordinate_rows(m)
+                if COMM_WORLD.rank == 0:
+                    np.save(f"{args.coords_out}.{label}.npy", rows)
+        if args.panel_out and COMM_WORLD.rank == 0:
+            with open(args.panel_out, "w") as fh:
+                json.dump(panel, fh, indent=1)
+        sys.exit(0 if good else 1)
+
     ok, _ = geometry_stage(args.configuration, args.grade, args.litho_layers,
-                           args.quality)
+                           args.quality, reuse=args.reuse_mesh,
+                           allow_tangled=args.allow_tangled)
     sys.exit(0 if ok else 1)
