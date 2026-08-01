@@ -65,6 +65,50 @@ If the ice is missing from the Poisson source, N(0°) = -4.2598 and
 N(180°) = -0.5571: a **sign reversal**, with U perfect. The gate asserts the
 sign and needs no tolerance.
 
+## The stage-1 geometry run plan, and its predictions
+
+**Written before any of these numbers existed.** The discipline that has caught
+every real error on this branch is committing to the expected value first, so
+this block is a record, not a summary. Three arms, in order:
+
+    A   curved, unrepaired          `--configuration coarse`
+    D   curved, fixed-point clean   `--untangle`
+    E   mechanics-only on D         `--untangle --mechanics-only`
+
+Arm B (curved, one-pass "repair") is **dropped**: that path only ever existed
+to isolate the deep folded cell when no clean arm was available, and A-vs-D
+supersedes it. The one-pass code is gone, so B is not runnable in any case.
+Arm C (`--no-curve`, uncurved) is **demoted to a follow-up**, to be run only if
+A-vs-D comes back ambiguous, where it separates the folds from the curving map
+itself.
+
+**A, the baseline.** `U_2 = 2.66 +- 0.1`; the per-degree ratio monotone,
+falling to ~1.70 by n = 20; `N_2 = 0.76 +- 0.02`.
+*Falsifier: anything outside those bands and everything stops.* A does not
+merely fail; it reopens the mesh-provenance question, and no comparison
+proceeds until that is settled.
+
+**D, the experiment.** `U_2` in **1.25-1.55**; per-degree spread <= 15%; and
+the compliance factor inferred from `U_2` agreeing with the one inferred from
+`N_2` to <= 15%. On the sideways channel: if V from the **n >= 2**
+reconstruction, after L2 orthogonalisation against the rotation generators,
+stays near **0.06** on D, then contamination, truncation *and* folds are all
+excluded at once, and the deficit is structural or resolution.
+
+**E on D.** 1.25-1.5 and flat against a no-gravity reference; 1.3-1.9
+shape-only against the self-gravitating one. The second is a **band, never
+scored pass/fail** - switching self-gravity off removes the stiffening of
+exactly the low degrees that dominate U(0), so E is an upper bound on B1 and
+not an estimate of it.
+
+**The branch nobody will want to face, written now so it cannot be reframed
+later.** If A reproduces its band and D *also* returns `U_2 > 2`, then geometry
+is dead as a class - folds, curving and conditioning together - and the next
+suspects are the coupling terms that carry the `B_mu` scale and are pinned by
+nothing in 3-D, **starting with the CMB spring magnitude**. That is the one
+physics difference consistent with the observed pattern: a geoid that is
+approximately right sitting beside a displacement that is badly wrong.
+
 Usage:
 
     PYTHONPATH=$(pwd):$(pwd)/demos/glacial_isostatic_adjustment/3d_spada_selfgrav \\
@@ -103,6 +147,30 @@ import taboo_synthesis as taboo  # noqa: E402
 from validate_selfgrav_sphere import (curve_mesh,  # noqa: E402
                                       provenance, tangle_census)
 
+# **The moments come from A3's leaf module, not from a literal and not from the
+# rotation driver.** `C_minus_A` had been hard-copied here as 2.362822e-01,
+# which is the *secondary* (prescribed) value; the primary, k_s-consistent one
+# is 2.4214e-01. Harmless in this driver because B1 runs with rotation off, but
+# a live copy of a constant whose mis-copying is a documented trap has already
+# fired once, and a second copy is a second chance to fire.
+#
+# **Importing the dict and picking a key would recreate that trap one
+# indirection deeper**, so the value is asserted below rather than trusted --
+# and the assertion is written to REJECT the secondary, not merely to accept
+# the primary. A test that only accepts the right answer is satisfied by any
+# implementation that happens to produce it.
+C_MINUS_A = refstate.C_MINUS_A
+C_NONDIM = refstate.C_NONDIM
+OMEGA_SQ = refstate.OMEGA_SQ
+C_MINUS_A_PRIMARY = refstate.C_MINUS_A_PRIMARY
+assert abs(C_MINUS_A_PRIMARY - 2.4214e-01) < 1e-6, (
+    f"C-A primary is {C_MINUS_A_PRIMARY!r}, expected the k_s-consistent "
+    "2.4214e-01")
+assert abs(C_MINUS_A_PRIMARY - C_MINUS_A["prescribed"]) > 1e-3, (
+    f"C-A primary {C_MINUS_A_PRIMARY!r} is indistinguishable from the "
+    f"SECONDARY prescribed value {C_MINUS_A['prescribed']!r}; the trap this "
+    "assertion exists to catch has fired")
+assert C_MINUS_A_PRIMARY is C_MINUS_A["ks"], "primary must be the ks entry"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -148,7 +216,7 @@ DT_ELASTIC = 1.0e-4              # Maxwell times; §9's elastic snapshot
 # geometry
 # --------------------------------------------------------------------------
 
-def curve(mesh, untangle=False):
+def curve(mesh, untangle=False, enabled=True):
     """Radial P2 remap. `Submesh` does not inherit the parent's coordinates.
 
     **This is A2's `validate_selfgrav_sphere.curve_mesh` at its default**, line
@@ -174,7 +242,15 @@ def curve(mesh, untangle=False):
     # Printed here rather than at parse time, because "the flag was parsed" and
     # "the flag reached the mesh" are different statements and this project has
     # already shipped a run where only the first was true.
-    print(f"    curve(): untangle={untangle}")
+    print(f"    curve(): enabled={enabled}  untangle={untangle}")
+    if not enabled:
+        # **Arm C, and it is the decisive arm of the geometry A/B.** The census
+        # measures ZERO tangled cells on the mesh as gmsh writes it, so this is
+        # a clean control -- not "less curved", but no folds at all, by
+        # construction rather than by repair. An A/B between curved-and-
+        # repaired and curved-and-not compares two geometries that were both
+        # made by this function; this one was not.
+        return mesh
     if untangle:
         return curve_mesh(mesh, untangle=True)
     X = SpatialCoordinate(mesh)
@@ -184,17 +260,19 @@ def curve(mesh, untangle=False):
     return Mesh(X_p2)
 
 
-def build_meshes(configuration, reuse=True, h=None, untangle=False):
+def build_meshes(configuration, reuse=True, h=None, untangle=False,
+                 curve_enabled=True):
     tag = configuration if h is None else f"h{h:g}"
     path = os.path.join(HERE, f"b1_{tag}.msh")
     if not (reuse and os.path.exists(path)):
         gen.generate(path, configuration=configuration, h=h)
     t0 = time.perf_counter()
-    parent = curve(Mesh(path), untangle=untangle)
+    parent = curve(Mesh(path), untangle=untangle, enabled=curve_enabled)
     parent.cartesian = False
     t_parent = time.perf_counter() - t0
     t0 = time.perf_counter()
-    sub = curve(Submesh(parent, 3, gen.CELL_MANTLE), untangle=untangle)
+    sub = curve(Submesh(parent, 3, gen.CELL_MANTLE), untangle=untangle,
+                enabled=curve_enabled)
     sub.cartesian = False
     t_sub = time.perf_counter() - t0
     # **The census, not the flag.** An A/B on the tangling repair is only an
@@ -202,8 +280,9 @@ def build_meshes(configuration, reuse=True, h=None, untangle=False):
     # to count the tangled cells in the arm that ran. The repaired arm must
     # show zero and the unrepaired arm at least one; anything else means the
     # comparison is void and this line is where that becomes visible.
-    tangle_census(parent, f"parent, untangle={untangle}")
-    tangle_census(sub, f"mantle submesh, untangle={untangle}")
+    tangle_census(parent, f"parent, curve={curve_enabled} untangle={untangle}")
+    tangle_census(sub, f"mantle submesh, curve={curve_enabled} "
+                       f"untangle={untangle}")
     return parent, sub, t_parent, t_sub
 
 
@@ -501,8 +580,13 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
 
     solver = SelfGravitatingGIASolver(
         z, approx, layout=layout, dt=DT_ELASTIC, bcs=bcs, fluid_core=core,
-        rotation_moments={"C": 72.226893, "C_minus_A": 2.362822e-01},
-        Omega_sq=1.566176e-03,
+        # A3's constants, imported. The literals that used to stand here were
+        # `C = 72.226893` (a rounded copy of 72.2269347) and
+        # `C_minus_A = 2.362822e-01`, which is the SECONDARY prescribed value;
+        # the primary is the k_s-consistent 2.4214e-01, i.e. `C_MINUS_A["ks"]`.
+        rotation_moments={"C": C_NONDIM,
+                          "C_minus_A": C_MINUS_A_PRIMARY},
+        Omega_sq=OMEGA_SQ,
         nullspace=nullspace, transpose_nullspace=nullspace, **solver_kwargs,
         # B2's coupled iterative solver, imported rather than pasted so the two
         # cannot drift. `--block0` still selects one of the two local
@@ -800,7 +884,9 @@ def run_mechanics_only(nmax, nproj, sig_dim, ref, U_ref, Vf, imax,
     print("  coupled answer, because self-gravity stiffens the low degrees")
     print("  that dominate U(0).  This is an upper bound, not B1.")
 
-    parent, sub, _, _ = build_meshes(args.configuration, h=args.h)
+    parent, sub, _, _ = build_meshes(args.configuration, h=args.h,
+                                     untangle=args.untangle,
+                                     curve_enabled=not args.no_curve)
     sigma_n = cap_sigma_hat(nmax)
     sigma_sub = load_field(sub, nmax, sigma_n)
 
@@ -831,18 +917,38 @@ def run_mechanics_only(nmax, nproj, sig_dim, ref, U_ref, Vf, imax,
               "assembled_pc_gamg_threshold": 0.01,
               "assembled_pc_gamg_square_graph": 100,
               "assembled_pc_gamg_coarse_eq_limit": 1000}
+    # One basis object, kept, because it is needed AFTER the solve as well as
+    # during it. `InternalVariableSolver` has no `project_out_nullspace()` of
+    # its own -- only `SelfGravitatingGIASolver` does -- so the projection is
+    # done here, explicitly, with the same `VectorSpaceBasis.orthogonalize`
+    # that `gadopt.gia_gravity` uses.
+    rbm = rigid_body_modes(V, rotational=True)
     solver = InternalVariableSolver(
         u, approx, dt=DT_ELASTIC, internal_variables=[m],
         bcs={gen.SURF_RE: {"normal_stress": B_MU * sigma_sub},
              gen.SURF_RC: {"un": 0.0}},
         solver_parameters=params,
-        nullspace=rigid_body_modes(V, rotational=True),
+        nullspace=rbm,
         transpose_nullspace=rigid_body_modes(V, rotational=True))
     print(f"    displacement dofs {V.dim()}")
     t0 = time.perf_counter()
     solver.solve()
     print(f"    solved in {time.perf_counter() - t0:.1f}s, "
           f"KSP its {solver.solver.snes.ksp.getIterationNumber()}")
+
+    # **Declaring the kernel is not projecting it out**, and this path declared
+    # and never projected -- so the tangential column below carried an
+    # arbitrary rotational component and nothing said so. Measured before and
+    # after rather than asserted: in the coupled run the content was 3.9e-04
+    # and the projection changed nothing, so a small number here is a result,
+    # not a reason to skip the step.
+    print("    rigid rotation is a kernel here: the load is a traction and "
+          "un = 0 at Rc pins")
+    print("    no rotation about the centre. FGMRES is right-preconditioned, "
+          "so it survives the solve.")
+    diagnostic(rotation_content, u, "BEFORE orthogonalize")
+    rbm.orthogonalize(u)
+    diagnostic(rotation_content, u, "AFTER  orthogonalize")
 
     ds_sub = ds(gen.SURF_RE, domain=sub)
 
@@ -950,9 +1056,22 @@ def main():
     p.add_argument("--quad-degrees", type=str,
                    default="20,30,40,50,60,80,100",
                    help="degrees tried by --quad-sweep")
+    p.add_argument("--no-curve", action="store_true",
+                   help="ARM C: skip the P2 isoparametric remap entirely, on "
+                        "parent and submesh. The mesh as gmsh writes it has a "
+                        "ZERO tangle census, so this is the clean geometric "
+                        "control -- the only arm whose folds were not made by "
+                        "curve(). Costs O(h^2) surface error; check_geometry "
+                        "refuses above 1% and the straight 0.5Rc DtN sphere "
+                        "sits at 7.7e-03, inside it.")
     p.add_argument("--untangle", action="store_true",
                    help="use A2's curve_mesh(untangle=True); resets the P2 "
-                        "edge nodes of the 2 tangled cells of 113653")
+                        "edge nodes of the 2 tangled cells of 113653. It is "
+                        "now actually wired to build_meshes -- it was parsed "
+                        "and never read -- but MEASURED IT DOES NOT UNTANGLE: "
+                        "it straightens those two cells and tangles two "
+                        "neighbours instead. Read the tangle census, not this "
+                        "text.")
     p.add_argument("--load-check", action="store_true",
                    help="the two assembles of handoff section 3; no solve")
     p.add_argument("--quad-sweep", action="store_true",
@@ -1021,7 +1140,9 @@ def main():
 
     # --- meshes ----------------------------------------------------------
     t0 = time.perf_counter()
-    parent, sub, t_parent, t_sub = build_meshes(args.configuration, h=args.h)
+    parent, sub, t_parent, t_sub = build_meshes(args.configuration, h=args.h,
+                                                untangle=args.untangle,
+                                     curve_enabled=not args.no_curve)
     # `num_cells()` is RANK-LOCAL. At 64 ranks the first run of this printed
     # "parent 2242 cells" for a 113 653-cell mesh and looked like the wrong
     # mesh had been read.
@@ -1069,7 +1190,9 @@ def main():
         # object passed in, so this verifies what the solver actually stored.
         # Degree-2 weighted, because a difference in shape rather than scale
         # would not show in the totals.
-        parent, sub, _, _ = build_meshes(args.configuration, h=args.h)
+        parent, sub, _, _ = build_meshes(args.configuration, h=args.h,
+                                         untangle=args.untangle,
+                                     curve_enabled=not args.no_curve)
         solver, z, layout, sigma_n, sigma_parent, sigma_sub = build_solver(
             parent, sub, nmax, dtn_degree=args.dtn_degree, ivdeg=args.ivdeg,
             block0=args.block0, condense=args.condense)
@@ -1110,7 +1233,9 @@ def main():
         # that decides), and the deviation from the exact sigma_n (which also
         # contains the CG2 interpolation error and therefore plateaus at a
         # nonzero floor rather than at zero).
-        parent, sub, _, _ = build_meshes(args.configuration, h=args.h)
+        parent, sub, _, _ = build_meshes(args.configuration, h=args.h,
+                                         untangle=args.untangle,
+                                     curve_enabled=not args.no_curve)
         sigma_n = cap_sigma_hat(nmax)
         f = load_field(sub, nmax, sigma_n)
         ds_sub = ds(gen.SURF_RE, domain=sub)

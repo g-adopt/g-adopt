@@ -85,6 +85,40 @@ INTERIOR_TAGS = {gen.SURF_RE, gen.SURF_RC, gen.SURF_D1, gen.SURF_D2,
 LAMBDA = 4 * np.pi * G_NEWTON * RHO_BAR * D_SCALE / G_BAR
 
 
+# ---------------------------------------------------------------------------
+# Rotation: the moments of the reference hydrostatic figure, and Omega^2.
+# ---------------------------------------------------------------------------
+# **These live here, in the leaf, because two drivers need them.**  They were
+# a literal in `b1_elastic.py` and a definition in `b4_polar_motion.py`, and
+# the literal was the *secondary* value, truncated.  Putting them in the
+# rotation driver and importing sideways would have made the elastic driver
+# depend on the polar-motion driver; both now import downward from here, which
+# is where `RHO_BAR`, `G_BAR`, `D_SCALE` and `LAMBDA` already come from.
+
+#: Non-dimensionalising constant for the moments of inertia, rho_bar D^5.
+RHO_D5 = RHO_BAR * D_SCALE**5
+
+#: C is common to both C-A choices; it matters to `m_3`, the rotation-rate
+#: change, and not at all to polar motion.
+C_NONDIM = 8.0394e37 / RHO_D5                       # 72.226935
+
+#: **The C-A choice, declared in advance.**  `ks` is PRIMARY.  The prescribed
+#: C - A = 2.63e35 implies k_s = 0.94334 against the 0.96672389 the benchmark's
+#: own rotation calculation demonstrably used -- 2.42% inconsistent, amplified
+#: by 1/(1 - k_T/k_s) to +3.6% at t = 0 and +7-12% by 20 kyr.  Handoff §2.2 and
+#: `NOTES/REVIEW-SPADA-B4-PRECOMMIT.md` §4.  Selecting the wrong key here
+#: recreates the trap one indirection deeper, so callers assert on the value.
+C_MINUS_A = {"ks": 2.6952e35 / RHO_D5,              # 0.24214001  <- USE THIS
+             "prescribed": 2.63e35 / RHO_D5}        # 0.23628236  secondary
+
+#: The primary choice, by name, so a caller cannot pick the wrong key silently.
+C_MINUS_A_PRIMARY = C_MINUS_A["ks"]
+
+#: Omega^2 non-dimensionalised, Omega = 7.292115e-5 rad/s.
+OMEGA_SQ = 7.292115e-5**2 * D_SCALE / G_BAR          # 1.5661757e-03
+
+
+
 def layers_nondim():
     """(r_outer, r_inner, rho) non-dimensional, outermost first."""
     return [(ro / (D_SCALE / 1e3), ri / (D_SCALE / 1e3), rho / RHO_BAR)

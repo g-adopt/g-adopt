@@ -155,7 +155,7 @@ def build_mesh(**kwargs):
     return COMM_WORLD.bcast(out, root=0)
 
 
-def curve_mesh(linear_mesh, untangle=False):
+def curve_mesh(linear_mesh, untangle=False, max_passes=8):
     """Remap to quadratic (P2) coordinates so mesh spheres become curved.
 
     The 2-D helper verbatim, which needs no change in 3-D: edge midpoints are
@@ -163,19 +163,56 @@ def curve_mesh(linear_mesh, untangle=False):
     whose vertices lie on a sphere becomes a quadratic arc on that sphere.  No
     origin guard is needed; r >= 0.5 Rc everywhere here.
 
-    **`untangle` is off by default and probably should not be.**  Curving
-    tangles a handful of cells on this mesh -- measured, 2 of 113 653 at
-    `--coarse` -- because it displaces a mid-edge node by ~h_lat^2/(8R), which
-    on the flattened tetrahedra bounding a sub-cell-thickness shell is a large
-    fraction of the element's smallest dimension.  With `untangle=True` those
-    cells have their P2 edge nodes reset to the straight midpoints, which
-    un-curves them locally and costs nothing measurable (2 cells out of
-    113 653 against area errors of 1e-05).  It is opt-in only so that the
-    numbers already reported for A2 and A3 remain reproducible; see
-    `NOTES/IMPL-LOG-SPADA-A2-MESH.md`.
-    """
-    from firedrake import JacobianDeterminant  # noqa: PLC0415
+    **`untangle` is off by default.**  Curving tangles a handful of cells on
+    this mesh -- measured, 2 of 113 653 at `--coarse` -- because it displaces a
+    mid-edge node by ~h_lat^2/(8R), which on the flattened tetrahedra bounding
+    a sub-cell-thickness shell is a large fraction of the element's smallest
+    dimension.  **The mesh as read from gmsh is clean**: the census measures
+    zero tangled cells on the straight parent, so every fold here is made by
+    this function.  It is opt-in so that the numbers already reported for A2
+    and A3 remain reproducible; see `NOTES/IMPL-LOG-SPADA-A2-MESH.md`.
 
+    ## What `untangle=True` does now, and the guarantee it carries
+
+    It marks the P2 nodes of every tangled cell, reduces the marks over the dof
+    star-forest so that every rank agrees on the marked set, resets the marked
+    nodes to the straight geometry, and **repeats to a fixed point**.
+
+    Two things make that terminate and terminate clean, and both are worth
+    stating because the version this replaces claimed a guarantee it did not
+    have ("reverting a cell's edge nodes can only improve its neighbours, never
+    tangle them further" -- measured false; the single pass straightened its
+    two targets and folded two neighbours ~400x worse in |detJ|):
+
+    1. **Termination.**  A marked node is never unmarked -- `mark` persists
+       across passes and the reset is re-applied in full each time -- so the
+       straightened set grows monotonically and is bounded by the node count.
+       Any pass that finds a tangled cell must mark at least one *new* node,
+       because a cell all of whose nodes are already straight cannot be tangled
+       (see 2).  So the marked set grows strictly while work remains.
+    2. **The fixed point is tangle-free by construction.**  At the fixed point
+       every tangled cell would have all nodes straight; an all-straight
+       tetrahedron is an affine map with constant `detJ`, so it is tangled only
+       if the straight mesh was.  That premise is *checked*, not assumed:
+       the straight geometry is censused first and this raises if it is dirty,
+       because the guarantee dies with it.
+
+    Measured cost: 2 to 4 passes, each spreading one ring outward.  A pass is
+    one `Mesh` rebuild plus one DG3 `detJ` interpolation, which is affordable at
+    build time now that the per-cell collective-call defect is gone.
+
+    **A residual tangle is a hard error, never a warning.**  A warned residual
+    is exactly how "untangled" came to mean "differently tangled" across this
+    project's record.
+
+    **This is a mitigation, not the endpoint.**  It produces straight-sided
+    patches, and it produces them at exactly the layer interfaces where |g_0|
+    jumps -- measured, the folds sit at r = 1.971979 (the 1.971982 density
+    interface) and at r = 2.191628 (inside the lithosphere).  Straightening
+    there trades an inverted cell for an O(h^2) geometry error on the surface
+    that carries the density contrast.  The route that does not make that trade
+    is to stop the generator producing foldable cells in the first place.
+    """
     X = SpatialCoordinate(linear_mesh)
     r = sqrt(X[0]**2 + X[1]**2 + X[2]**2)
     r_p1 = Function(FunctionSpace(linear_mesh, "CG", 1)).interpolate(r)
@@ -184,51 +221,81 @@ def curve_mesh(linear_mesh, untangle=False):
     if not untangle:
         return Mesh(X_p2)
 
+    from pyop2 import op2  # noqa: PLC0415
+
     # The straight geometry in the *same* space: edge nodes at true midpoints.
-    #
-    # **Detect once, correct once, verify once.**  An earlier version iterated
-    # up to five times, rebuilding `Mesh(X_p2)` on each pass so the next
-    # detection saw the corrected geometry.  Serially that is a second or two;
-    # on 104 MPI ranks each `Mesh` construction carries a large fixed collective
-    # cost and the loop spent **fifteen minutes** before the first solve, which
-    # is how it was found.  Correcting every tangled cell in one pass is
-    # equivalent in almost every case -- reverting a cell's edge nodes can only
-    # improve its neighbours, never tangle them further -- so the second pass
-    # exists to *verify*, and a residual is warned about rather than iterated
-    # away.
     X_straight = Function(V).interpolate(X)
-    nodes = V.cell_node_list
 
-    def tangled_cells(mesh_c):
-        W = FunctionSpace(mesh_c, "DG", 3)
-        detJ = Function(W).interpolate(JacobianDeterminant(mesh_c))
-        per_cell = W.finat_element.space_dimension()
-        owned = mesh_c.cell_set.size
-        d = detJ.dat.data_ro[:owned * per_cell].reshape(-1, per_cell)
-        return np.where(d.min(axis=1) * d.max(axis=1) <= 0.0)[0]
+    # The premise, checked rather than assumed.  Everything below rests on an
+    # all-straight cell not being tangled; if the file itself is folded that is
+    # false and the iteration would spend `max_passes` straightening the whole
+    # mesh and then raise anyway, with a misleading message.
+    straight_bad, straight_owned = tangled_cells(Mesh(X_straight))
+    n_straight = linear_mesh.comm.allreduce(
+        int((straight_bad < straight_owned).sum()))
+    if n_straight:
+        raise RuntimeError(
+            f"curve_mesh(untangle=True): the STRAIGHT geometry already has "
+            f"{n_straight} tangled cells. The fixed-point argument requires "
+            "an all-straight cell to be untangled, so it does not hold on this "
+            "mesh and no amount of straightening will converge. Fix the mesh.")
 
-    mesh_c = Mesh(X_p2)
-    bad = tangled_cells(mesh_c)
-    if mesh_c.comm.allreduce(int(bad.size)) == 0:
-        return mesh_c
-    # **`data_with_halos`, not `data`.**  `cell_node_list` indexes the local
-    # node numbering *including* halo nodes, while `dat.data` exposes only the
-    # owned ones -- so a cell touching the partition boundary indexes past the
-    # end.  In serial the two are the same array and the bug is invisible; in
-    # parallel it is intermittent, because it fires only when a *tangled* cell
-    # happens to own a halo node, which depends on the partition and so can
-    # differ between two otherwise identical builds in one job.  Reported as
-    # `IndexError: index 3267 is out of bounds for axis 0 with size 1914` on
-    # the third of three identical mesh builds.
-    for c in bad:
-        X_p2.dat.data_with_halos[nodes[c]] = \
-            X_straight.dat.data_ro_with_halos[nodes[c]]
-    mesh_c = Mesh(X_p2)
-    left = mesh_c.comm.allreduce(int(tangled_cells(mesh_c).size))
-    if left and COMM_WORLD.rank == 0:
-        warn(f"curve_mesh: {left} cells still tangled after one correction "
-             f"pass; the geometry is usable but not clean.")
-    return mesh_c
+    # `mark` is scalar CG2 on the same mesh, so it shares the vector space's
+    # node numbering exactly -- verified: `cell_node_list` is identical and
+    # `dof_dset.total_size` matches.  One scalar per node, 0 or 1, monotone.
+    Vs = FunctionSpace(linear_mesh, "CG", 2)
+    mark = Function(Vs)
+    mark.dat.data_with_halos[:] = 0.0
+    nodes = Vs.cell_node_list
+
+    for npass in range(1, max_passes + 1):
+        mesh_c = Mesh(X_p2)
+        bad, owned = tangled_cells(mesh_c)
+        n_tangled = mesh_c.comm.allreduce(int((bad < owned).sum()))
+        n_marked = mesh_c.comm.allreduce(
+            int((mark.dat.data_ro_with_halos[:Vs.dof_dset.size] > 0.5).sum()))
+        say(f"  curve_mesh(untangle=True): pass {npass}: {n_tangled} tangled "
+            f"cells, {n_marked} nodes already straight  "
+            f"[{mesh_c.comm.size} ranks]")
+        if n_tangled == 0:
+            return mesh_c
+
+        # Mark the nodes of the tangled cells this rank OWNS.  Owned-only is
+        # enough: every cell is owned by exactly one rank, and the reduction
+        # below carries the mark to whichever rank owns each node -- including
+        # a rank that does not hold the cell at all, which is the case the
+        # cell-halo approach could not reach.  Measured there: 3 of 20 nodes of
+        # the two folded cells were owned by a rank holding neither cell, so
+        # the next exchange restored them to the curved value.
+        mine = bad[bad < owned]
+        m_local = mark.dat.data_with_halos          # collective: unconditional
+        if mine.size:
+            m_local[nodes[mine].ravel()] = 1.0
+        del m_local
+        # Ghost marks -> owners, then owners -> ghosts.  `local_to_global`
+        # supports INC, MIN and MAX in this Firedrake (`firedrake/halo.py`
+        # asserts exactly that set); MAX is the natural op for a 0/1 mark and
+        # is idempotent, so a node marked twice is marked once.  INC on the
+        # same marks with a `> 0` test would be equivalent.
+        mark.dat.local_to_global_begin(op2.MAX)
+        mark.dat.local_to_global_end(op2.MAX)
+        sel = mark.dat.data_ro_with_halos > 0.5    # collective: broadcasts back
+
+        # Re-applied in FULL every pass, not incrementally: that is what makes
+        # a straightened node stay straight, which is what makes the marked set
+        # monotone, which is what makes this terminate.
+        x_write = X_p2.dat.data_with_halos
+        x_read = X_straight.dat.data_ro_with_halos
+        x_write[sel] = x_read[sel]
+        del x_write, x_read
+
+    raise RuntimeError(
+        f"curve_mesh(untangle=True): still tangled after {max_passes} passes. "
+        "Expected 2 to 4. Either the mesh is far worse than the ladder's, or "
+        "the fixed-point argument has been broken by an edit -- check that the "
+        "reset is re-applied in full each pass and that `mark` is never "
+        "cleared. This is deliberately an error and not a warning: a warned "
+        "residual is how 'untangled' came to mean 'differently tangled'.")
 
 
 def tangled_cells(mesh_c, degree=3):

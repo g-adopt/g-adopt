@@ -83,18 +83,15 @@ MU_BAR = 1e11                      # Pa
 T_BAR_YR = 316.8809                # yr, = eta_bar/mu_bar
 LAMBDA = rs.LAMBDA                 # 1.361324, measured in A3
 B_MU = rs.RHO_BAR * rs.G_BAR * rs.D_SCALE / MU_BAR      # 1.564037
-OMEGA_SQ = 7.292115e-5**2 * rs.D_SCALE / rs.G_BAR       # 1.566176e-03
 
-#: Non-dimensionalising constant for the moments of inertia, rho_bar D^5.
-RHO_D5 = rs.RHO_BAR * rs.D_SCALE**5
-
-#: C is common to both choices; only C-A is in dispute.  C matters to `m_3`
-#: (the rotation-rate change) and not at all to polar motion.
-C_NONDIM = 8.0394e37 / RHO_D5
-
-#: **The C-A choice, declared in advance.**  `ks` is primary.  See the module
-#: docstring and `NOTES/REVIEW-SPADA-B4-PRECOMMIT.md` §4.
-C_MINUS_A = {"ks": 2.6952e35 / RHO_D5, "prescribed": 2.63e35 / RHO_D5}
+# The rotation constants now live in A3's `reference_state`, the leaf both
+# drivers already import, rather than here.  Re-exported under the same names
+# so nothing that reads `b4_polar_motion.C_MINUS_A` breaks, but the definition
+# is in one place.
+OMEGA_SQ = rs.OMEGA_SQ                                 # 1.566176e-03
+RHO_D5 = rs.RHO_D5
+C_NONDIM = rs.C_NONDIM
+C_MINUS_A = rs.C_MINUS_A
 
 #: Mantle layers of M3-L70-V01, outermost first: (r_out, r_in, rho, mu, eta).
 #: Non-dimensional, handoff §2.2's table.  The lithosphere's infinite viscosity
@@ -482,6 +479,29 @@ DT_LADDER_YR = ((100.0, 10.0), (1000.0, 50.0), (10000.0, 100.0),
                 (20000.0, 500.0))
 
 
+def uniform_ladder(epochs_kyr, dt_yr):
+    """A one-segment ladder at a fixed dt, covering every requested epoch.
+
+    This is what `--dt-yr` drives.  The flag existed, was parsed, and was read
+    by nothing: `run_time_loop` called `time_ladder(epochs)` and therefore
+    always got `DT_LADDER_YR`, so the dt-halving check the module docstring
+    promises for `|mdot|` -- "it needs dt <~ 3 yr for 1%" -- could not be run
+    through the flag that claims to control it.
+
+    It stays **opt-in**, and that is the whole reason `--dt-yr` now defaults to
+    `None` rather than to 50.0.  Wiring the old default in would have replaced
+    the graded ladder with a uniform 50 yr everywhere: **400 steps to 20 kyr
+    against the ladder's 138** (measured, for the default epoch list), and a
+    *different* time-stepping error at every epoch -- the one thing the
+    ladder's docstring says must stay below the 4-8% trend in `R_m` that rows 6
+    and 7 use to tell a compliance error from a C-A error.
+    A dead flag is bad; a dead flag brought to life by silently changing the
+    default is worse.
+    """
+    t_end = max(e * 1000.0 for e in epochs_kyr) if epochs_kyr else 0.0
+    return ((t_end, dt_yr),)
+
+
 def time_ladder(epochs_kyr, ladder=DT_LADDER_YR):
     """(t_end_yr, dt_yr, [epochs landing on it]) segments covering the epochs.
 
@@ -614,13 +634,68 @@ def run_time_loop(parent, sub, args, epochs_kyr):
     """
     import time  # noqa: PLC0415
 
+    # **`--dt-yr` now reaches here.** `None` keeps the graded `DT_LADDER_YR`,
+    # which is the default and the calibrated one; a value overrides it with a
+    # single uniform segment, which is what a dt-halving check needs.
+    dt_yr_override = getattr(args, "dt_yr", None)
+    ladder = (DT_LADDER_YR if dt_yr_override is None
+              else uniform_ladder(epochs_kyr, dt_yr_override))
+    segments = time_ladder(epochs_kyr, ladder)
+    nsteps_total = sum(seg[3] for seg in segments)
+    dts = sorted({round(seg[2], 9) for seg in segments})
+    if dt_yr_override is None:
+        say(f"  time ladder: DT_LADDER_YR (graded, the calibrated one) "
+            f"{ladder}")
+    else:
+        # Explicit, because replacing the calibrated ladder silently is how a
+        # time-stepping error gets mistaken for the epoch trend in R_m that
+        # rows 6 and 7 use to tell a compliance error from a C-A error.
+        say(f"  *** THE GRADED LADDER HAS BEEN REPLACED: --dt-yr "
+            f"{dt_yr_override} gives one uniform segment {ladder} ***")
+        say(f"      DT_LADDER_YR would have been {DT_LADDER_YR}")
+    say(f"  segments {len(segments)}, distinct dt {dts} yr, "
+        f"{nsteps_total} steps total, epochs {sorted(epochs_kyr)} kyr")
+    if dt_yr_override is not None:
+        # **Uniform over the TESTED SEGMENT is what a halving check needs.**
+        # `time_ladder` cuts a segment at every requested epoch and then snaps
+        # dt so an integer number of steps lands on it, so asking for several
+        # epochs at once gives several *nearly* equal dt values rather than one.
+        # Measured: `--epochs 2 --dt-yr 3` gives one segment at 2.99850075 yr,
+        # while `--epochs 1 2 5 10 20 --dt-yr 3` gives four distinct values
+        # spanning 1.4e-03 relative. The first is a halving check; the second
+        # is four of them interleaved.
+        #
+        # The spread is reported always and refused only when it is material.
+        # A halving study should pass ONE `--epochs` value: measured, `--epochs
+        # 2` costs 80 steps at dt = 25 yr and 160 at 12.5, against 800 and 1600
+        # for the full 20 kyr -- which is the difference between a check that
+        # can be run and one that is only described.
+        spread = (max(dts) - min(dts)) / max(min(dts), 1e-300)
+        say(f"  --dt-yr uniformity over the tested segment: {len(dts)} "
+            f"distinct dt, relative spread {spread:.2e}"
+            + ("  (exact)" if len(dts) == 1 else
+               "  -- pass a single --epochs value for a clean halving check"))
+        if spread > 1e-3:
+            raise ValueError(
+                f"--dt-yr {dt_yr_override} realises {len(dts)} distinct step "
+                f"sizes {dts} spanning {spread:.2e} relative, which is not a "
+                "uniform ladder and so is not a step-halving check. Pass one "
+                "--epochs value.")
+    say(f"  quad_degree reaching the time-loop solvers: "
+        f"{getattr(args, 'quad_degree', None)}   (it reached the elastic "
+        f"solve already; it now reaches every epoch too)")
+
     results, z_prev = [], None
-    for t0, t1, dt_yr, nsteps, is_epoch in time_ladder(epochs_kyr):
+    for t0, t1, dt_yr, nsteps, is_epoch in segments:
         solver, z, layout = build_solver(
             parent, sub, dt=dt_yr / T_BAR_YR, nmax=args.nmax,
             truncation=args.truncation, c_minus_a=args.c_minus_a,
             feedback=not args.no_feedback,
             fluid_core=not args.no_fluid_core,
+            # **`--quad-degree` reached the elastic solve and not this one**,
+            # so an override applied to the t = 0 snapshot and silently not to
+            # any epoch after it -- two different quadratures in one table.
+            quad_degree=getattr(args, "quad_degree", None),
             solver_parameters=coupled_solver_parameters())
         if z_prev is not None:
             z.assign(z_prev)
@@ -658,7 +733,12 @@ def main():
                     choices=list(gen.CONFIGURATIONS))
     ap.add_argument("--epochs", type=float, nargs="+",
                     default=[0.0, 1.0, 2.0, 5.0, 10.0, 20.0])
-    ap.add_argument("--dt-yr", type=float, default=50.0)
+    ap.add_argument("--dt-yr", type=float, default=None,
+                    help="override DT_LADDER_YR with ONE uniform segment at "
+                         "this dt; this is what the |mdot| dt-halving check "
+                         "needs. Default None = the graded ladder, which is "
+                         "the calibrated one. (It used to default to 50.0 and "
+                         "be read by nothing.)")
     ap.add_argument("--elastic-dt-yr", type=float, default=0.03)
     ap.add_argument("--nmax", type=int, default=32)
     ap.add_argument("--truncation", type=int, default=5)
