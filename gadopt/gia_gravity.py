@@ -245,7 +245,37 @@ selfgrav_dtn_schur_solver_parameters = {
     "dtn_fieldsplit_0_assembled_pc_type": "lu",
     "dtn_fieldsplit_0_assembled_pc_factor_mat_solver_type": "mumps",
     "dtn_fieldsplit_1_ksp_type": "gmres",
+    # **A stopping test, because PETSc's generic default is not one here.**
+    # This was the only dictionary in the tree that left block 1 at PETSc's
+    # `rtol 1e-5` with no iteration cap, while the iterative preset, both of
+    # b1's paths, b4's and the B2 spike all pin it at 1e-4/200. Block 1 carries
+    # the 72 DtN multipliers the geoid is read from as well as the rotation
+    # scalars, and its rows span five orders of magnitude, so a generic
+    # relative tolerance on it means different things for different rows.
+    #
+    # **It was investigated as the cause of B4's 140x error and EXONERATED BY
+    # MEASUREMENT** - `max_it 3` (binding: every solve exiting DIVERGED_ITS at
+    # 6-8e-01 relative) and `rtol 1e-2` both return |m| = 0.0121270, identical
+    # to an `rtol 1e-12` control to seven digits, because block 1 is a
+    # preconditioner application inside a *flexible* outer Krylov and degrading
+    # it costs outer iterations (2 -> 25) rather than accuracy. **This change is
+    # not the fix for that; nobody should read it as one and stop looking.**
+    "dtn_fieldsplit_1_ksp_rtol": 1e-4,
+    "dtn_fieldsplit_1_ksp_max_it": 200,
     "dtn_fieldsplit_1_pc_type": "none",
+    # **Auditability, and it is not optional instrumentation.** GMRES stops on
+    # its recurrence estimate of the residual, not on a recomputed one; under
+    # loss of orthogonality that estimate can drift below the truth and the KSP
+    # reports CONVERGED_RTOL on a residual that has barely moved. The true
+    # residual monitor is the only thing that distinguishes that from real
+    # convergence after the fact, and a solve whose exit status cannot be
+    # audited afterwards is how a fortnight went into a defect that no log
+    # recorded. `snes_converged_reason` is here for the same reason: this
+    # system is linear, so anything other than one Newton step is a signal, and
+    # that signal was unreadable in every run this preset produced.
+    "ksp_converged_reason": None,
+    "ksp_monitor_true_residual": None,
+    "snes_converged_reason": None,
 }
 """**2-D ONLY. Do not use this in 3-D** - see `selfgrav_dtn_iterative_solver_parameters`.
 
