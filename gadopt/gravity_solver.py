@@ -709,6 +709,49 @@ class GravitySolver(SolverConfigurationMixin):
             options[self.name + "_lowrank_" + key] = value
         self.ksp.setFromOptions()
 
+    #: Preconditioners that belong to `SelfGravitatingGIASolver` and cannot
+    #: work here. Refused by NAME rather than left to fail inside PETSc,
+    #: following `SelfGravitatingGIASolver._check_block0_split_matches_layout`:
+    #: a configuration mistake whose only symptom is an opaque PETSc code is
+    #: exactly the class of failure that pattern exists to convert into a
+    #: sentence. This one is not exotic - it is the most likely misuse, because
+    #: the natural act on seeing the coupled system's multiplier block get a
+    #: speedup is to copy the three block-1 lines into a standalone solve.
+    _COUPLED_ONLY_PC_NAMES = ("DtNMultiplierDiagPC",)
+
+    def _refuse_coupled_only_preconditioners(self, config) -> None:
+        """Raises on a preconditioner that only `SelfGravitatingGIASolver` can use.
+
+        Scans the flattened options for a `pc_python_type` naming one of
+        `_COUPLED_ONLY_PC_NAMES`. Left to itself the misuse produces
+        `PETSc.Error: error code 101` - measured - which names neither the
+        preconditioner nor the reason, because PETSc flattens a Python
+        exception raised inside a python PC.
+        """
+        if not isinstance(config, Mapping):
+            return
+        for key, value in _flatten_options(config).items():
+            if not (isinstance(value, str) and key.endswith("pc_python_type")):
+                continue
+            if value.rsplit(".", 1)[-1] in self._COUPLED_ONLY_PC_NAMES:
+                raise ValueError(
+                    f"{key} = {value!r} is scoped to SelfGravitatingGIASolver "
+                    "and cannot be used with GravitySolver.\n"
+                    "Two independent reasons, neither of them fixable by "
+                    "options:\n"
+                    "  1. The block-1 rows differ. The coupled solver scales "
+                    "every DtN constraint row by theta_psi; GravitySolver "
+                    "leaves them unscaled, so the (c,c) diagonal that "
+                    "preconditioner inverts is wrong here by exactly that "
+                    "factor.\n"
+                    "  2. GravitySolver supplies no 'dtn_block1_diagonal' in "
+                    "its appctx, and wiring one would put an appctx-carried "
+                    "object on the path that owns the shipped, verified "
+                    "adjoint - while pyadjoint drops appctx from the kwargs of "
+                    "the adjoint solve (see DtNTwoBlockSchurPC).\n"
+                    "Leave block 1 at pc_type: 'none' here. The speedup you "
+                    "are copying belongs to the coupled system.")
+
     def set_solver_options(
         self,
         solver_preset: ConfigType | str | None,
@@ -738,6 +781,9 @@ class GravitySolver(SolverConfigurationMixin):
         (direct in 2-D, iterative in 3-D), mirroring the Stokes solver, so the
         scalable path is the default at production scale.
         """
+        self._refuse_coupled_only_preconditioners(solver_preset)
+        self._refuse_coupled_only_preconditioners(solver_extras)
+
         if isinstance(solver_preset, Mapping):
             if (self.n_multipliers > 0
                     and solver_preset.get("mat_type") in ("aij", "baij", "sbaij")):

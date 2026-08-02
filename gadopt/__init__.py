@@ -33,7 +33,9 @@ from .level_set_tools import (
 )
 from .limiter import VertexBasedP1DGLimiter
 from .nullspaces import create_stokes_nullspace, rigid_body_modes
-from .preconditioners import DtNTwoBlockSchurPC, FreeSurfaceMassInvPC, SPDAssembledPC
+from .preconditioners import (DtNMultiplierDiagPC,  # noqa: F401
+                              DtNTwoBlockSchurPC, FreeSurfaceMassInvPC,
+                              SPDAssembledPC)
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
     BoundaryNormalStressSolver,

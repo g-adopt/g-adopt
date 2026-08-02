@@ -962,6 +962,49 @@ class DtNGravityForm:
                 a += (mode.lam - self.alpha / R) * c * mode.expr * v * dss
         return a
 
+    def multiplier_diagonal(self) -> np.ndarray:
+        r"""The `(c_k, c_k)` entries of the constraint rows, read off the form.
+
+        **Exact, and free.** `boundary_bilinear` writes each constraint row as
+
+            (psi * mode.expr - mode.scale * c_k) * mu_k * ds
+
+        and `mu_k` is a `Real` test function, whose basis function is the
+        global constant one. So the `c_k` column of that row integrates to
+        `-mode.scale * A_h(bc_id)`, with `A_h` the **discrete** boundary measure
+        this class already stores in `boundary_area` -- the same discrete
+        measure the low-rank elimination divides by, for the reason recorded at
+        `set_boundary_geometry`. Nothing here is assembled and nothing asks for
+        a matrix diagonal, which is what makes it usable as a preconditioner on
+        a block where `MatGetDiagonal` is not available at all.
+
+        The block is genuinely diagonal in `c`: no row couples `c_k` to `c_j`
+        for `j != k`, because each mode contributes exactly one constraint row
+        and that row's only multiplier trial is its own.
+
+        Returned in `multiplier_keys` order, which is the order
+        `boundary_bilinear` consumed the `(trial, test)` pairs in and therefore
+        the caller's own sub-field ordering. **The row scaling is NOT applied**
+        -- a coupled solver multiplies the whole constraint row by its own
+        `theta_psi`, and that factor belongs to the solver, not to this form.
+
+        Raises:
+          RuntimeError: if the modal part was never built, so there is nothing
+            to describe.
+        """
+        if not self.multiplier_keys:
+            raise RuntimeError(
+                "multiplier_diagonal needs the modal constraint rows, but "
+                "`multiplier_keys` is empty - `boundary_bilinear` was called "
+                "without multipliers, so this form has no (c, c) block.")
+        scales = {}
+        for bc_id, dtn in self.dtn_boundaries:
+            side, R = self.boundary_geometry[bc_id]
+            for mode in dtn.modes(side, R, self.X):
+                scales[(bc_id, mode.key)] = float(mode.scale)
+        return np.array([-scales[key] * float(self.boundary_area[key[0]])
+                         for key in self.multiplier_keys])
+
     def boundary_source(self, v, extra_flux=None):
         """The boundary terms linear in the test function: sheets and fluxes.
 

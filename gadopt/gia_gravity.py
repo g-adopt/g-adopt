@@ -621,6 +621,23 @@ class GIASpaceLayout:
         """Every `Real` sub-field index, in space order."""
         return tuple(self.multipliers) + tuple(sorted(self.rotation.values()))
 
+    @property
+    def real_fields(self) -> tuple[int, ...]:
+        """Every `Real` sub-field index, multipliers then rotation, in order.
+
+        **The one place the `Real` block's composition is written down.**
+        Anything that needs to describe that block per row -- a diagonal
+        preconditioner, say -- must key off this rather than off position
+        within the contiguous run, so that an interleaved or rotation-first
+        layout becomes a *construction* error rather than something a count
+        check would wave through. `DtNTwoBlockSchurPC` separately requires the
+        run to be contiguous and last, and `block1_diagonal` asserts that this
+        tuple is exactly that run.
+        """
+        return tuple(self.multipliers) + tuple(
+            self.rotation[name] for name in self.rotation_names
+            if name in self.rotation)
+
     def rotation_slots(self) -> tuple[int | None, int | None, int | None]:
         """`(m1, m2, m3)` indices, `None` where the component does not exist.
 
@@ -2327,7 +2344,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             raise ValueError("Solver type must be 'direct' or 'iterative'.")
 
         self.refuse_stale_preconditioner()
-        self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
+        self.appctx = {"mu": self.approximation.mu / self.rho_continuity,
+                       "dtn_block1_diagonal": self.block1_diagonal()}
         self.add_to_solver_config(newton_stokes_solver_parameters)
         self.add_to_solver_config(selfgrav_dtn_schur_solver_parameters)
         if solver_extras:
@@ -2366,6 +2384,104 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         warning.
         """
         return self.form.check_boundary_quadrature(*args, **kwargs)
+
+    def block1_diagonal(self):
+        """The exact diagonal of the `Real` block, or `None` if there is none.
+
+        `DtNMultiplierDiagPC` reads this out of the appctx. Supplied
+        unconditionally, costs nothing to compute -- no assembly, no solves --
+        and **changes no default**: block 1 stays at `pc_type: none` in both
+        shipped presets, so this is inert unless a caller selects the
+        preconditioner by name.
+
+        Two contributions:
+
+        * the **multipliers**, `theta_psi * (-scale_k * A_h)`, from
+          `DtNGravityForm.multiplier_diagonal`, which derives the sign and
+          explains why the *discrete* boundary measure is the right one;
+        * the **rotation closure rows**, `theta_rot_i * K_i`, present only when
+          rotation is on -- one row in 2-D (`m_3` alone) and three in 3-D. Not
+          guessed: verified against the assembled diagonal to 1.5e-15 relative
+          on two machines and two rank counts, `+5.9313525844e-04` for the
+          polar-wander pair and `-1.7692384969e-01` for `m_3`, whose closure
+          sign is negative.
+
+        **`theta_psi` is read as the property, never recomputed.** At
+        `B_mu = 0` -- a supported configuration, and the one the null-coupling
+        gate uses -- `theta_psi` is floored through `_row_scale_B_mu`. A
+        reimplementation here as `scaling_factor * B_mu / Lambda` would give
+        zero, and this method would hand the preconditioner a diagonal of zeros
+        to divide by. Same for `_theta_rot`, which carries the same floor.
+
+        ## Order is not assumed, and the count is only the tripwire
+
+        The entries are built **keyed by sub-field index** off
+        `layout.multipliers` and `layout.rotation`, then placed by position
+        within `layout.real_fields`. An interleaved or rotation-first block
+        therefore cannot produce a wrongly-ordered diagonal; it produces a
+        failed assertion. That matters because the count check alone would wave
+        such a layout through, and *the missing block-0 guard cost this project
+        a week*.
+
+        The count check stays as the tripwire for a **foreign** `Real`
+        sub-field -- one added for something that is neither a multiplier nor a
+        rotation row, which no accounting here could describe. Today none
+        exists: `self_gravitating_gia_space` does
+        `spaces.extend([R] * (form.n_multipliers + n_rot))`, and the 2-D
+        monopole datum deliberately builds its `Real` space **outside** the
+        mixed space.
+
+        Returns `None` when the block is empty, so building a solver never
+        fails on account of a preconditioner nobody selected.
+
+        Raises:
+          RuntimeError: if the `Real` sub-fields are not exactly
+            `layout.real_fields`, in that order, as a contiguous trailing run.
+        """
+        form = getattr(self.layout, "gravity_form", None)
+        space = self.solution.function_space()
+        real_in_space = tuple(
+            i for i in range(len(space))
+            if space.sub(i).ufl_element().family() == "Real")
+        if not real_in_space:
+            return None
+
+        i_R = real_in_space[0]
+        expected = self.layout.real_fields
+        if expected != real_in_space or expected != tuple(
+                range(i_R, len(space))):
+            raise RuntimeError(
+                f"block1_diagonal cannot describe this space. The Real "
+                f"sub-fields are at {real_in_space}, the layout accounts for "
+                f"{expected}, and a contiguous trailing run would be "
+                f"{tuple(range(i_R, len(space)))}. The diagonal read requires "
+                "all three to agree: it assumes the Real block is exactly the "
+                "DtN multipliers followed by the rotation closure rows, in "
+                "that order and last. A Real field added for anything else, or "
+                "a reordering, invalidates it. Fix the accounting here before "
+                "using DtNMultiplierDiagPC on this configuration.")
+
+        by_index = {}
+        if form is not None and getattr(form, "multiplier_keys", None):
+            mult = float(self.theta_psi) * form.multiplier_diagonal()
+            if len(mult) != len(self.layout.multipliers):
+                raise RuntimeError(
+                    f"the form describes {len(mult)} multiplier rows but the "
+                    f"layout has {len(self.layout.multipliers)}.")
+            by_index.update(zip(self.layout.multipliers, mult))
+        for k, name in enumerate(self.layout.rotation_names):
+            idx = self.layout.rotation.get(name)
+            if idx is not None:
+                by_index[idx] = (float(self._theta_rot(k))
+                                 * float(self._closure_constant(k)))
+
+        missing = [i for i in expected if i not in by_index]
+        if missing:
+            raise RuntimeError(
+                f"no diagonal entry was derived for Real sub-fields {missing}; "
+                "they are in the layout but neither a multiplier nor a "
+                "rotation row described it.")
+        return np.array([by_index[i] for i in expected])
 
     def project_out_nullspace(self) -> bool:
         """Removes any declared kernel from the solution. Returns whether it did.
