@@ -7,8 +7,8 @@ from mpi4py import MPI
 import numpy as np
 
 
-_SIMILARITY_TOLERANCE = 1.0e-12
-_SIMILARITY_WORKING_SET_BYTES = 8 * 1024**2
+_HOMOTHETY_TOLERANCE_FACTOR = 512
+_HOMOTHETY_BLOCK_BYTES = 8 * 1024**2
 
 
 def _validate_degree(degree):
@@ -32,25 +32,96 @@ def _control_volume_space(mesh, degree):
     return fd.FunctionSpace(mesh, "CG", 1, variant="equispaced,iso(2)")
 
 
-def _similarity_scales(coordinate_data, comm):
-    """Return scale factors for layers that are translated/scaled copies.
+def _coordinate_block(
+    source_coordinate_data, source_vertical_degree, target_degree, start, stop
+):
+    """Return target-degree coordinate levels for a block of horizontal nodes."""
+    source_block = source_coordinate_data[start:stop]
+    if source_vertical_degree == target_degree:
+        return source_block
+    if source_vertical_degree == 2 and target_degree == 1:
+        return source_block[:, ::2, :]
+    if source_vertical_degree == 1 and target_degree == 2:
+        target_level_count = 2 * (source_block.shape[1] - 1) + 1
+        target_block = np.empty(
+            (source_block.shape[0], target_level_count, source_block.shape[2]),
+            dtype=source_block.dtype,
+        )
+        target_block[:, ::2, :] = source_block
+        target_block[:, 1::2, :] = 0.5 * (
+            source_block[:, :-1, :] + source_block[:, 1:, :]
+        )
+        return target_block
+    raise NotImplementedError(
+        "layerwise nodal control volumes require vertical coordinate degree 1 or 2"
+    )
 
-    A non-finite entry denotes a layer that is not a similarity transform of
-    the first layer and therefore needs an independent finite-element
-    assembly. Global moments and errors are used so every MPI rank makes the
-    same decision.
+
+def _coordinate_layer(
+    source_coordinate_data, source_vertical_degree, target_degree, level
+):
+    """Return one target-degree coordinate layer without building all layers."""
+    if source_vertical_degree == target_degree:
+        return source_coordinate_data[:, level, :]
+    if source_vertical_degree == 2 and target_degree == 1:
+        return source_coordinate_data[:, 2 * level, :]
+    if source_vertical_degree == 1 and target_degree == 2:
+        source_level, is_midpoint = divmod(level, 2)
+        if not is_midpoint:
+            return source_coordinate_data[:, source_level, :]
+        return 0.5 * (
+            source_coordinate_data[:, source_level, :]
+            + source_coordinate_data[:, source_level + 1, :]
+        )
+    raise NotImplementedError(
+        "layerwise nodal control volumes require vertical coordinate degree 1 or 2"
+    )
+
+
+def _homothety_scales(
+    source_coordinate_data, source_vertical_degree, target_degree, comm
+):
+    """Return scale factors for translated or homothetically scaled layers.
+
+    A non-finite entry denotes a layer that is not a translated homothetic
+    copy of the first layer to floating-point round-off and therefore needs an
+    independent finite-element assembly. Global moments and errors ensure that
+    every MPI rank makes the same decision.
     """
-    local_node_count, level_count, _ = coordinate_data.shape
+    local_node_count, source_level_count, geometric_dimension = (
+        source_coordinate_data.shape
+    )
+    if (source_level_count - 1) % source_vertical_degree:
+        raise RuntimeError("coordinate layout is inconsistent with its vertical degree")
+    layer_count = (source_level_count - 1) // source_vertical_degree
+    level_count = target_degree * layer_count + 1
     node_count = comm.allreduce(local_node_count, op=MPI.SUM)
     if node_count == 0:
         raise RuntimeError("cannot compute nodal measures on an empty mesh")
 
-    local_coordinate_sums = coordinate_data.sum(axis=0)
+    bytes_per_horizontal_row = (
+        level_count * geometric_dimension * source_coordinate_data.dtype.itemsize
+    )
+    rows_per_block = max(1, _HOMOTHETY_BLOCK_BYTES // bytes_per_horizontal_row)
+
+    local_coordinate_sums = np.zeros(
+        (level_count, geometric_dimension), dtype=source_coordinate_data.dtype
+    )
+    for start in range(0, local_node_count, rows_per_block):
+        stop = min(start + rows_per_block, local_node_count)
+        coordinate_block = _coordinate_block(
+            source_coordinate_data,
+            source_vertical_degree,
+            target_degree,
+            start,
+            stop,
+        )
+        local_coordinate_sums += coordinate_block.sum(axis=0)
     coordinate_sums = np.empty_like(local_coordinate_sums)
     comm.Allreduce(local_coordinate_sums, coordinate_sums, op=MPI.SUM)
     layer_centres = coordinate_sums / node_count
 
-    reference = coordinate_data[:, 0, :] - layer_centres[0]
+    reference = source_coordinate_data[:, 0, :] - layer_centres[0]
     local_denominator = np.einsum("ij,ij->", reference, reference)
     denominator = comm.allreduce(local_denominator, op=MPI.SUM)
 
@@ -60,27 +131,38 @@ def _similarity_scales(coordinate_data, comm):
         return scales
 
     local_reference_sum = reference.sum(axis=0)
-    local_numerators = np.einsum("ij,ilj->l", reference, coordinate_data)
+    local_numerators = np.zeros(level_count, dtype=source_coordinate_data.dtype)
+    for start in range(0, local_node_count, rows_per_block):
+        stop = min(start + rows_per_block, local_node_count)
+        coordinate_block = _coordinate_block(
+            source_coordinate_data,
+            source_vertical_degree,
+            target_degree,
+            start,
+            stop,
+        )
+        local_numerators += np.einsum(
+            "ij,ilj->l", reference[start:stop], coordinate_block
+        )
     local_numerators -= layer_centres @ local_reference_sum
     numerators = np.empty_like(local_numerators)
     comm.Allreduce(local_numerators, numerators, op=MPI.SUM)
     candidate_scales = numerators / denominator
-    geometric_dimension = coordinate_data.shape[2]
     local_errors = np.zeros((level_count, geometric_dimension))
     local_sizes = np.zeros_like(local_errors)
     local_reference_sizes = np.max(np.abs(reference), axis=0, initial=0.0)
 
-    # Process complete horizontal rows so reads are sequential, while keeping
-    # the temporary centred/residual arrays bounded on large 3-D meshes.
-    bytes_per_horizontal_row = (
-        level_count * geometric_dimension * coordinate_data.dtype.itemsize
-    )
-    rows_per_block = max(
-        1, _SIMILARITY_WORKING_SET_BYTES // bytes_per_horizontal_row
-    )
+    # Process complete horizontal rows so reads are sequential. Each principal
+    # coordinate/residual temporary is bounded by ``_HOMOTHETY_BLOCK_BYTES``.
     for start in range(0, local_node_count, rows_per_block):
         stop = min(start + rows_per_block, local_node_count)
-        residual = coordinate_data[start:stop].copy()
+        residual = _coordinate_block(
+            source_coordinate_data,
+            source_vertical_degree,
+            target_degree,
+            start,
+            stop,
+        ).copy()
         residual -= layer_centres[None, :, :]
         local_sizes = np.maximum(
             local_sizes, np.max(np.abs(residual), axis=0, initial=0.0)
@@ -102,15 +184,18 @@ def _similarity_scales(coordinate_data, comm):
     comm.Allreduce(local_errors, errors, op=MPI.MAX)
     comm.Allreduce(local_sizes, sizes, op=MPI.MAX)
 
-    # Deliberately do not use raw coordinate magnitudes in the tolerance: for
-    # a small mesh at a large offset that could hide a material deformation.
-    # A numerically ambiguous similarity safely falls back to assembly.
-    eps = np.finfo(coordinate_data.dtype).eps
-    roundoff = 64 * eps * sizes
-    similar = np.all(
-        errors <= _SIMILARITY_TOLERANCE * sizes + roundoff, axis=1
+    # Use a layer-wide extent so harmless round-off in a constant embedding
+    # coordinate does not reject a Cartesian layer. Raw coordinate magnitudes
+    # are deliberately excluded: they could hide deformation on a small mesh
+    # located far from the origin. Ambiguous cases safely fall back to assembly.
+    eps = np.finfo(source_coordinate_data.dtype).eps
+    layer_errors = np.max(errors, axis=1)
+    layer_sizes = np.max(sizes, axis=1)
+    homothetic = (
+        layer_errors
+        <= _HOMOTHETY_TOLERANCE_FACTOR * eps * layer_sizes
     )
-    scales[similar] = candidate_scales[similar]
+    scales[homothetic] = candidate_scales[homothetic]
     scales[0] = 1.0
     return scales
 
@@ -167,22 +252,24 @@ def layerwise_nodal_control_volumes(
     """Return horizontal control-volume measures at every node of an extruded mesh.
 
     Each horizontal nodal layer is treated as a manifold. The value at a node
-    is its share of that layer's measure: length in a 2-D domain and area in a
-    3-D domain. Thus, values in every layer sum to that layer's total length or
-    area. The actual coordinates of every layer are used, so the routine
-    handles Cartesian and radially extruded cylindrical or spherical meshes,
-    deformed meshes, and meshes loaded from checkpoints.
-    Translated or uniformly scaled layers reuse the first layer's assembly;
-    geometrically warped layers are detected and assembled independently.
+    is its share of the layer measure: length for a one-dimensional layer and
+    area for a two-dimensional layer. Thus, values in every layer sum to that
+    layer's total length or area. The actual coordinates of every layer are
+    used, so the routine handles Cartesian and radially extruded cylindrical
+    or spherical meshes with either increasing or decreasing radius, deformed
+    meshes, and meshes loaded from checkpoints. Layers that are translated or
+    homothetically scaled copies to floating-point round-off reuse the first
+    layer's assembly; geometrically warped layers are assembled independently.
 
     The layer total is the measure of its discrete finite-element geometry.
     On curved circle and sphere meshes this converges to, but is not silently
     renormalised to, the analytical ``2*pi*r`` or ``4*pi*r**2`` measure.
 
     This quantity is deliberately different from :func:`nodal_control_volumes`,
-    which integrates over the full-dimensional domain. The returned function
-    can be written directly, for example::
+    which integrates over the whole mesh. The returned function can be written
+    directly, for example::
 
+        from gadopt import VTKFile, layerwise_nodal_control_volumes
         cv_area_3d = layerwise_nodal_control_volumes(mesh)
         VTKFile("cv_area_3d.pvd").write(cv_area_3d)
 
@@ -223,36 +310,31 @@ def layerwise_nodal_control_volumes(
     coordinate_degree = mesh.coordinates.ufl_element().degree()
     if isinstance(coordinate_degree, tuple):
         horizontal_coordinate_degree = coordinate_degree[0]
+        source_vertical_degree = coordinate_degree[1]
     else:
         horizontal_coordinate_degree = coordinate_degree
-    coordinate_space = fd.VectorFunctionSpace(
-        mesh,
-        "CG",
-        horizontal_coordinate_degree,
-        vfamily="CG",
-        vdegree=degree,
+        source_vertical_degree = 1
+    source_level_count = source_vertical_degree * (mesh.layers - 1) + 1
+    source_coordinate_data = mesh.coordinates.dat.data_ro.reshape(
+        (-1, source_level_count, mesh.geometric_dimension)
     )
-    coordinates = fd.Function(coordinate_space).interpolate(mesh.coordinates)
 
     # Firedrake stores the vertical degree of freedom as the fastest-varying
     # index on an extruded mesh. ``mesh.layers`` counts vertices, not cells.
     level_count = degree * (mesh.layers - 1) + 1
-    coordinate_data = coordinates.dat.data_ro.reshape(
-        (-1, level_count, mesh.geometric_dimension)
-    )
 
     # Reconstruct a temporary horizontal manifold without lowering the source
-    # geometry order when the requested output is CG1.  A copied checkpoint
-    # mesh may no longer expose ``_base_mesh`` as a MeshGeometry, but its
-    # topology still retains the base MeshTopology needed by the space.
-    base_mesh = mesh._base_mesh
-    base_topology = (
+    # geometry order when the requested output is CG1. A reconstructed
+    # extruded MeshGeometry may retain only the base MeshTopology needed by
+    # the coordinate space.
+    base_mesh = getattr(mesh, "_base_mesh", None)
+    base_domain = (
         base_mesh if base_mesh is not None else getattr(mesh.topology, "_base_mesh", None)
     )
-    if base_topology is None:
+    if base_domain is None:
         raise ValueError("extruded mesh does not expose its base-mesh topology")
     base_coordinate_space = fd.VectorFunctionSpace(
-        base_topology,
+        base_domain,
         "CG",
         horizontal_coordinate_degree,
         dim=mesh.geometric_dimension,
@@ -261,31 +343,32 @@ def layerwise_nodal_control_volumes(
         topological_coordinates = fd.CoordinatelessFunction(
             base_coordinate_space, name="Layer coordinates"
         )
-        topological_coordinates.dat.data[:] = coordinate_data[:, 0, :]
+        topological_coordinates.dat.data[:] = _coordinate_layer(
+            source_coordinate_data, source_vertical_degree, degree, 0
+        )
         layer_mesh = fd.Mesh(topological_coordinates)
         layer_coordinates = layer_mesh.coordinates
     else:
         layer_coordinates = fd.Function(
             base_coordinate_space, name="Layer coordinates"
         )
-        layer_coordinates.dat.data[:] = coordinate_data[:, 0, :]
+        layer_coordinates.dat.data[:] = _coordinate_layer(
+            source_coordinate_data, source_vertical_degree, degree, 0
+        )
         layer_mesh = fd.Mesh(layer_coordinates)
     control_space = _control_volume_space(layer_mesh, degree)
     control_volume_form = fd.TestFunction(control_space) * fd.dx
 
     layer_dimension = layer_mesh.topological_dimension
-    similarity_scales = _similarity_scales(coordinate_data, mesh.comm)
+    homothety_scales = _homothety_scales(
+        source_coordinate_data, source_vertical_degree, degree, mesh.comm
+    )
 
     control_volumes = fd.assemble(control_volume_form)
     reference_values = control_volumes.dat.data_ro.copy()
 
-    # On the common similarity path, discard the potentially very large
-    # interpolated coordinate array before allocating the result.
-    all_layers_similar = np.all(np.isfinite(similarity_scales))
-    if all_layers_similar:
-        del coordinate_data
-        del coordinates
-
+    # Coordinate levels are streamed from the mesh, so no full target-degree
+    # coordinate copy overlaps the potentially large output allocation.
     result = fd.Function(output_space, name=name)
     result_data = result.dat.data.reshape((-1, level_count))
     if result_data.shape[0] != reference_values.shape[0]:
@@ -294,20 +377,23 @@ def layerwise_nodal_control_volumes(
             "matching horizontal nodal layouts."
         )
 
-    if all_layers_similar:
-        factors = np.abs(similarity_scales) ** layer_dimension
+    all_layers_homothetic = np.all(np.isfinite(homothety_scales))
+    if all_layers_homothetic:
+        factors = np.abs(homothety_scales) ** layer_dimension
         np.multiply(reference_values[:, None], factors[None, :], out=result_data)
         return result
 
     result_data[:, 0] = reference_values
 
     for level in range(1, level_count):
-        scale = similarity_scales[level]
+        scale = homothety_scales[level]
         if np.isfinite(scale):
             result_data[:, level] = reference_values * abs(scale) ** layer_dimension
             continue
 
-        layer_coordinates.dat.data[:] = coordinate_data[:, level, :]
+        layer_coordinates.dat.data[:] = _coordinate_layer(
+            source_coordinate_data, source_vertical_degree, degree, level
+        )
         fd.assemble(control_volume_form, tensor=control_volumes)
         result_data[:, level] = control_volumes.dat.data_ro
 

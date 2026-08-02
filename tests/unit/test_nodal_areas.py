@@ -71,14 +71,63 @@ def test_nodal_control_volume_degree(degree):
     assert np.isclose(_global_sum(volumes), 1.0)
 
 
+def _extruded_domain_mesh(geometry):
+    if geometry == "2d-cartesian":
+        base_mesh = fd.UnitIntervalMesh(3)
+        return fd.ExtrudedMesh(base_mesh, layers=2, layer_height=0.5)
+    if geometry == "3d-cartesian-prisms":
+        base_mesh = fd.UnitSquareMesh(2, 2)
+        return fd.ExtrudedMesh(base_mesh, layers=2, layer_height=0.5)
+    if geometry == "3d-cartesian-hexahedra":
+        base_mesh = fd.UnitSquareMesh(2, 2, quadrilateral=True)
+        return fd.ExtrudedMesh(base_mesh, layers=2, layer_height=0.5)
+    if geometry == "2d-cylindrical":
+        base_mesh = fd.CircleManifoldMesh(12, radius=1.2, degree=2)
+        return fd.ExtrudedMesh(
+            base_mesh, layers=2, layer_height=0.5, extrusion_type="radial"
+        )
+    if geometry == "3d-spherical":
+        base_mesh = fd.CubedSphereMesh(1.2, refinement_level=1, degree=2)
+        return fd.ExtrudedMesh(
+            base_mesh, layers=2, layer_height=0.5, extrusion_type="radial"
+        )
+    raise ValueError(f"Unknown geometry: {geometry}")
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize(
+    "geometry",
+    [
+        "2d-cartesian",
+        "3d-cartesian-prisms",
+        "3d-cartesian-hexahedra",
+        "2d-cylindrical",
+        "3d-spherical",
+    ],
+)
+def test_nodal_control_volumes_on_extruded_mesh(geometry, degree):
+    mesh = _extruded_domain_mesh(geometry)
+    volumes = nodal_control_volumes(mesh, degree=degree)
+
+    expected = fd.assemble(fd.Constant(1) * fd.dx(domain=mesh))
+    assert np.isclose(_global_sum(volumes), expected, rtol=1.0e-12)
+    assert _global_min(volumes) > 0.0
+
+
 def _extruded_mesh(geometry):
     if geometry == "2d-cartesian":
         base_mesh = fd.IntervalMesh(3, 2.0)
         mesh = fd.ExtrudedMesh(base_mesh, layers=2, layer_height=0.5)
         expected = np.full(5, 2.0)
         tolerance = 1.0e-13
-    elif geometry == "3d-cartesian":
-        base_mesh = fd.RectangleMesh(2, 3, 2.0, 3.0, quadrilateral=True)
+    elif geometry in ("3d-cartesian", "3d-cartesian-prisms"):
+        base_mesh = fd.RectangleMesh(
+            2,
+            3,
+            2.0,
+            3.0,
+            quadrilateral=geometry == "3d-cartesian",
+        )
         mesh = fd.ExtrudedMesh(base_mesh, layers=2, layer_height=0.5)
         expected = np.full(5, 6.0)
         tolerance = 1.0e-13
@@ -195,6 +244,7 @@ def _record_control_volume_assemblies(monkeypatch):
     [
         "2d-cartesian",
         "3d-cartesian",
+        "3d-cartesian-prisms",
         "2d-cylindrical",
         "3d-spherical",
         "3d-spherical-decreasing-radius",
@@ -211,8 +261,9 @@ def test_layerwise_nodal_control_volume_sums(geometry, monkeypatch):
     assert _global_min(areas) > 0.0
 
     if not mesh.cartesian:
-        # All layers are homothetic. This checks the circumference/radius or
-        # area/radius-squared scaling independently of geometric approximation.
+        # All layers are homothetic. This checks circumference proportional
+        # to radius or area proportional to radius squared, independently of
+        # the curved-geometry approximation.
         np.testing.assert_allclose(sums / sums[0], expected / expected[0], rtol=1.0e-12)
 
 
@@ -221,6 +272,63 @@ def test_linear_layerwise_nodal_control_volumes():
     areas = layerwise_nodal_control_volumes(mesh, degree=1)
 
     np.testing.assert_allclose(_layer_sums(areas, degree=1), 2.0)
+
+
+def test_cartesian_fast_path_ignores_constant_coordinate_roundoff(monkeypatch):
+    mesh = fd.ExtrudedMesh(
+        fd.UnitIntervalMesh(100), layers=4, layer_height=0.1
+    )
+    assemblies = _record_control_volume_assemblies(monkeypatch)
+
+    areas = layerwise_nodal_control_volumes(mesh)
+
+    assert len(assemblies) == 1
+    np.testing.assert_allclose(_layer_sums(areas), 1.0, rtol=1.0e-13)
+
+
+def test_horizontal_dof_mapping_by_physical_coordinate():
+    base_mesh = fd.UnitIntervalMesh(4)
+    x = fd.SpatialCoordinate(base_mesh)[0]
+    base_mesh.coordinates.interpolate(fd.as_vector([x + 0.2 * x**2]))
+    mesh = fd.ExtrudedMesh(base_mesh, layers=2, layer_height=0.3)
+
+    base_areas = nodal_control_volumes(base_mesh)
+    base_coordinate_space = fd.VectorFunctionSpace(base_mesh, "CG", 2)
+    base_coordinates = fd.Function(base_coordinate_space).interpolate(
+        fd.SpatialCoordinate(base_mesh)
+    )
+    local_coordinate_areas = {
+        round(float(coordinate), 14): float(area)
+        for coordinate, area in zip(
+            base_coordinates.dat.data_ro, base_areas.dat.data_ro, strict=True
+        )
+    }
+    coordinate_areas = {}
+    for rank_coordinate_areas in mesh.comm.allgather(local_coordinate_areas):
+        coordinate_areas.update(rank_coordinate_areas)
+
+    areas = layerwise_nodal_control_volumes(mesh)
+    level_count = 2 * (mesh.layers - 1) + 1
+    output_coordinate_space = fd.VectorFunctionSpace(mesh, "CG", 2)
+    output_coordinates = fd.Function(output_coordinate_space).interpolate(
+        mesh.coordinates
+    )
+    output_coordinate_data = output_coordinates.dat.data_ro.reshape(
+        (-1, level_count, mesh.geometric_dimension)
+    )
+    expected_horizontal_areas = np.array(
+        [
+            coordinate_areas[round(float(coordinate), 14)]
+            for coordinate in output_coordinate_data[:, 0, 0]
+        ]
+    )
+
+    actual_areas = areas.dat.data_ro.reshape((-1, level_count))
+    np.testing.assert_allclose(
+        actual_areas,
+        np.broadcast_to(expected_horizontal_areas[:, None], actual_areas.shape),
+        rtol=1.0e-13,
+    )
 
 
 def test_linear_areas_preserve_quadratic_spherical_geometry():
