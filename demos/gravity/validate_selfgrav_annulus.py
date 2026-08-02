@@ -84,8 +84,24 @@ from generate_selfgrav_annulus import (
     CELL_BUFFER, CELL_INNER, CELL_MANTLE, CURVE_INNER, CURVE_OUTER, CURVE_RC,
     CURVE_RE, RC, RE, R_OUTER)
 
-sys.path.insert(0, os.path.expanduser("~/Workplace/passess"))
-from passess.polar import PoissonPolar2D  # noqa: E402
+def _poisson_polar_2d():
+    """Import `passess`'s closed-form solution, lazily and at the point of use.
+
+    **This import is deliberately not at module scope, and the reason cost a
+    production job.** `passess` is a local checkout at `~/Workplace/passess`; it
+    is not installed in the Firedrake venv and it does not exist on Gadi at all.
+    Only `epsilon_stage` needs it. But `validate_selfgrav_sphere` imports
+    `Report` from this module so that there is one definition of it rather than
+    two, and a module-scope import made a 3-D *geometry* gate depend on a 2-D
+    analytic Poisson library it never calls. The first cluster run of the
+    displacement campaign died in the import, before a single line of physics.
+
+    Keep any dependency that is not available everywhere this module is
+    *imported from* out of module scope, however convenient it is to read.
+    """
+    sys.path.insert(0, os.path.expanduser("~/Workplace/passess"))
+    from passess.polar import PoissonPolar2D
+    return PoissonPolar2D
 
 #: Rewritten by every stage, so two runs of this script must not share it -
 #: hence `--mesh-file`.  Under MPI only rank 0 writes; gmsh is not collective.
@@ -438,6 +454,7 @@ so cannot resolve eps below about 1e-4 on their own.
           f"{'abs M=%d' % M_untreated:>10s} {'abs M=m':>10s}")
 
     rows = []
+    PoissonPolar2D = _poisson_polar_2d()
     for m in modes:
         analytic = PoissonPolar2D(m=m, rho_m=rho_m, r1=r1, r2=r2, gamma=gamma)
         ref_ufl = shell_potential_ufl(X, m, rho_m, r1, r2, gamma)

@@ -17,3 +17,8 @@ NOTES/
 *.ipynb
 __pycache__/
 .doit.db.db
+
+ARCHIVE-DO-NOT-READ.tar.gz
+
+# Reference benchmark data, obtained from elsewhere - never tracked here.
+WSCOTT-2023/

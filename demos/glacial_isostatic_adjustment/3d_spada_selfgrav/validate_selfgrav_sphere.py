@@ -875,14 +875,26 @@ def panel_report(panel, reference=None, rtol=1e-12):
     for k in sorted(panel):
         v = panel[k]
         demoted = demote and any(t in k for t in CONDITIONING_SENSITIVE)
-        show = (v if isinstance(v, str) else
-                (f"[{len(v)}] " + ", ".join(f"{x:.6f}" for x in v[:6])
-                 if isinstance(v, list) else f"{v: .16e}"))
+        # `dict` and `list` entries are compared exactly, not numerically, so
+        # they must survive the formatter too. An earlier version formatted
+        # everything that was not a str or a list with `{: .16e}` and died on
+        # the per-tag dict with `TypeError: unsupported format string passed to
+        # dict.__format__` -- after the panel had been computed and the verdict
+        # printed. A report that cannot print its own result is not a gate.
+        if isinstance(v, str):
+            show = v
+        elif isinstance(v, dict):
+            show = "{}" if not v else ", ".join(f"{k}:{int(x)}"
+                                                for k, x in sorted(v.items()))
+        elif isinstance(v, list):
+            show = f"[{len(v)}] " + ", ".join(f"{x:.6f}" for x in v[:6])
+        else:
+            show = f"{v: .16e}"
         if reference is None or k not in reference:
             say(f"  [ -- ] {k:<26s} {show}")
             continue
         b = reference[k]
-        if isinstance(v, (str, list)):
+        if isinstance(v, (str, list, dict)):
             good, rel = (v == b), 0.0 if v == b else float("nan")
         else:
             rel = abs(v - b) / max(abs(b), 1e-300)
