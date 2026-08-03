@@ -54,7 +54,12 @@ def test_nodal_control_volumes_sum_to_domain_measure(geometry):
     volumes = nodal_control_volumes(mesh, name="Control-volume measure")
 
     expected = fd.assemble(fd.Constant(1) * fd.dx(domain=mesh))
-    assert np.isclose(_global_sum(volumes), expected, rtol=1.0e-5)
+    # On curved degree-two manifolds, the P1-iso-P2 subcell geometry and
+    # Firedrake's curved-coordinate quadrature are slightly different
+    # approximations to the same measure. Affine meshes should agree to
+    # round-off; curved manifolds converge to within the geometric error.
+    tolerance = 1.0e-5 if geometry.endswith("manifold") else 1.0e-12
+    assert np.isclose(_global_sum(volumes), expected, rtol=tolerance)
     assert _global_min(volumes) > 0.0
     assert volumes.name() == "Control-volume measure"
 
@@ -137,13 +142,22 @@ def _extruded_mesh(geometry):
         radii = np.linspace(1.2, 2.2, 5)
         expected = 2 * np.pi * radii
         tolerance = 5.0e-5
-    elif geometry in ("3d-spherical", "3d-spherical-decreasing-radius"):
+    elif geometry in (
+        "3d-spherical",
+        "3d-spherical-decreasing-radius",
+        "3d-spherical-icosahedral",
+    ):
         decreasing_radius = geometry.endswith("decreasing-radius")
         base_radius = 2.2 if decreasing_radius else 1.2
         layer_height = -0.5 if decreasing_radius else 0.5
-        base_mesh = fd.CubedSphereMesh(
-            base_radius, refinement_level=1, degree=2
-        )
+        if geometry.endswith("icosahedral"):
+            base_mesh = fd.IcosahedralSphereMesh(
+                radius=base_radius, refinement_level=1, degree=2
+            )
+        else:
+            base_mesh = fd.CubedSphereMesh(
+                base_radius, refinement_level=1, degree=2
+            )
         mesh = fd.ExtrudedMesh(
             base_mesh,
             layers=2,
@@ -167,8 +181,8 @@ def _layer_sums(function, degree=2):
     return mesh.comm.allreduce(local_sums, op=MPI.SUM)
 
 
-def _independently_assembled_layer_values(mesh, degree=2):
-    """Assemble every layer separately, without the production fast path."""
+def _assemble_each_layer_reference(mesh, degree=2):
+    """Assemble every layer separately, bypassing the homothety fast path."""
     coordinate_degree = mesh.coordinates.ufl_element().degree()
     horizontal_coordinate_degree = (
         coordinate_degree[0]
@@ -246,6 +260,7 @@ def _record_control_volume_assemblies(monkeypatch):
         "2d-cylindrical",
         "3d-spherical",
         "3d-spherical-decreasing-radius",
+        "3d-spherical-icosahedral",
     ],
 )
 def test_layerwise_nodal_control_volume_sums(geometry, monkeypatch):
@@ -290,21 +305,6 @@ def test_horizontal_dof_mapping_by_physical_coordinate():
     base_mesh.coordinates.interpolate(fd.as_vector([x + 0.2 * x**2]))
     mesh = fd.ExtrudedMesh(base_mesh, layers=2, layer_height=0.3)
 
-    base_areas = nodal_control_volumes(base_mesh)
-    base_coordinate_space = fd.VectorFunctionSpace(base_mesh, "CG", 2)
-    base_coordinates = fd.Function(base_coordinate_space).interpolate(
-        fd.SpatialCoordinate(base_mesh)
-    )
-    local_coordinate_areas = {
-        round(float(coordinate), 14): float(area)
-        for coordinate, area in zip(
-            base_coordinates.dat.data_ro, base_areas.dat.data_ro, strict=True
-        )
-    }
-    coordinate_areas = {}
-    for rank_coordinate_areas in mesh.comm.allgather(local_coordinate_areas):
-        coordinate_areas.update(rank_coordinate_areas)
-
     areas = layerwise_nodal_control_volumes(mesh)
     level_count = 2 * (mesh.layers - 1) + 1
     output_coordinate_space = fd.VectorFunctionSpace(mesh, "CG", 2)
@@ -314,6 +314,20 @@ def test_horizontal_dof_mapping_by_physical_coordinate():
     output_coordinate_data = output_coordinates.dat.data_ro.reshape(
         (-1, level_count, mesh.geometric_dimension)
     )
+    global_coordinates = np.unique(
+        np.concatenate(
+            mesh.comm.allgather(output_coordinate_data[:, 0, 0])
+        )
+    )
+    spacings = np.diff(global_coordinates)
+    global_areas = np.empty_like(global_coordinates)
+    global_areas[0] = spacings[0] / 2
+    global_areas[-1] = spacings[-1] / 2
+    global_areas[1:-1] = (spacings[:-1] + spacings[1:]) / 2
+    coordinate_areas = {
+        round(float(coordinate), 14): area
+        for coordinate, area in zip(global_coordinates, global_areas, strict=True)
+    }
     expected_horizontal_areas = np.array(
         [
             coordinate_areas[round(float(coordinate), 14)]
@@ -331,7 +345,7 @@ def test_horizontal_dof_mapping_by_physical_coordinate():
 
 def test_linear_areas_preserve_quadratic_spherical_geometry():
     mesh, _, _ = _extruded_mesh("3d-spherical")
-    expected_values = _independently_assembled_layer_values(mesh, degree=1)
+    expected_values = _assemble_each_layer_reference(mesh, degree=1)
 
     areas = layerwise_nodal_control_volumes(mesh, degree=1)
     actual_values = areas.dat.data_ro.reshape(expected_values.shape)
@@ -348,11 +362,16 @@ def test_linear_areas_preserve_quadratic_spherical_geometry():
 
 @pytest.mark.parametrize(
     "geometry",
-    ["2d-cylindrical", "3d-spherical", "3d-spherical-decreasing-radius"],
+    [
+        "2d-cylindrical",
+        "3d-spherical",
+        "3d-spherical-decreasing-radius",
+        "3d-spherical-icosahedral",
+    ],
 )
-def test_similarity_fast_path_matches_independent_assemblies(geometry):
+def test_homothety_fast_path_matches_layer_assemblies(geometry):
     mesh, _, _ = _extruded_mesh(geometry)
-    expected_values = _independently_assembled_layer_values(mesh)
+    expected_values = _assemble_each_layer_reference(mesh)
 
     areas = layerwise_nodal_control_volumes(mesh)
     actual_values = areas.dat.data_ro.reshape(expected_values.shape)
@@ -386,7 +405,7 @@ def test_warped_layers_are_assembled_independently(
         )
     )
 
-    expected_values = _independently_assembled_layer_values(mesh)
+    expected_values = _assemble_each_layer_reference(mesh)
     assemblies = _record_control_volume_assemblies(monkeypatch)
     areas = layerwise_nodal_control_volumes(mesh)
     actual_values = areas.dat.data_ro.reshape(expected_values.shape)
@@ -411,7 +430,7 @@ def test_large_coordinate_offset_cannot_hide_layer_deformation(warped, monkeypat
         horizontal_coordinate = 1.0e12 + x * (1 + 0.1 * z)
     mesh.coordinates.interpolate(fd.as_vector([horizontal_coordinate, z]))
 
-    expected_values = _independently_assembled_layer_values(mesh)
+    expected_values = _assemble_each_layer_reference(mesh)
     assemblies = _record_control_volume_assemblies(monkeypatch)
     areas = layerwise_nodal_control_volumes(mesh)
     actual_values = areas.dat.data_ro.reshape(expected_values.shape)
@@ -419,6 +438,30 @@ def test_large_coordinate_offset_cannot_hide_layer_deformation(warped, monkeypat
     np.testing.assert_allclose(actual_values, expected_values, rtol=1.0e-12)
     if warped:
         assert len(assemblies) == 5
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_quadratic_vertical_coordinate_layout(degree):
+    source_mesh = fd.ExtrudedMesh(
+        fd.UnitIntervalMesh(4), layers=2, layer_height=0.5
+    )
+    coordinate_space = fd.VectorFunctionSpace(
+        source_mesh, "CG", 1, vfamily="CG", vdegree=2
+    )
+    x, z = fd.SpatialCoordinate(source_mesh)
+    coordinates = fd.Function(coordinate_space).interpolate(
+        fd.as_vector([x * (1 + 0.2 * z**2), z])
+    )
+    mesh = fd.Mesh(coordinates)
+
+    areas = layerwise_nodal_control_volumes(mesh, degree=degree)
+    level_count = degree * (mesh.layers - 1) + 1
+    heights = np.linspace(0.0, 1.0, level_count)
+
+    assert mesh.coordinates.ufl_element().degree() == (1, 2)
+    np.testing.assert_allclose(
+        _layer_sums(areas, degree=degree), 1 + 0.2 * heights**2, rtol=1.0e-12
+    )
 
 
 def test_layerwise_areas_on_mesh_with_only_base_topology():
@@ -463,3 +506,12 @@ def test_nodal_control_volume_validation():
     periodic_mesh = fd.ExtrudedMesh(fd.UnitIntervalMesh(2), layers=3, periodic=True)
     with pytest.raises(ValueError, match="require non-periodic extrusion"):
         layerwise_nodal_control_volumes(periodic_mesh)
+
+    hedgehog_mesh = fd.ExtrudedMesh(
+        fd.CircleManifoldMesh(8, radius=1.2, degree=2),
+        layers=2,
+        layer_height=0.5,
+        extrusion_type="radial_hedgehog",
+    )
+    with pytest.raises(NotImplementedError, match="discontinuous horizontal"):
+        layerwise_nodal_control_volumes(hedgehog_mesh)

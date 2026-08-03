@@ -1,4 +1,8 @@
-"""Utilities for assigning control-volume measures to mesh nodes."""
+"""Positive nodal measures for whole meshes and layers of extruded meshes.
+
+Degree-two measures use Firedrake's P1-iso-P2 construction: linear basis
+functions on a uniformly refined macro mesh share the nodal layout of CG2.
+"""
 
 from operator import index
 
@@ -6,6 +10,8 @@ import firedrake as fd
 from mpi4py import MPI
 import numpy as np
 
+
+__all__ = ["nodal_control_volumes", "layerwise_nodal_control_volumes"]
 
 _HOMOTHETY_TOLERANCE_FACTOR = 512
 _HOMOTHETY_BLOCK_BYTES = 8 * 1024**2
@@ -200,6 +206,46 @@ def _homothety_scales(
     return scales
 
 
+def _build_layer_mesh(mesh, horizontal_coordinate_degree, first_layer_coordinates):
+    """Build a horizontal mesh using the first extruded coordinate layer."""
+    # Firedrake currently has no public base-topology accessor. Prefer the
+    # base MeshGeometry retained by a normal ExtrudedMesh, then fall back to
+    # the base MeshTopology retained when a mesh is reconstructed from its
+    # coordinate field. Keeping this private-API boundary here makes it easy
+    # to update if Firedrake adds a public accessor.
+    base_mesh = getattr(mesh, "_base_mesh", None)
+    base_domain = (
+        base_mesh if base_mesh is not None else getattr(mesh.topology, "_base_mesh", None)
+    )
+    if base_domain is None:
+        raise ValueError("extruded mesh does not expose its base-mesh topology")
+
+    base_coordinate_space = fd.VectorFunctionSpace(
+        base_domain,
+        "CG",
+        horizontal_coordinate_degree,
+        dim=mesh.geometric_dimension,
+    )
+    if base_mesh is None:
+        coordinates = fd.CoordinatelessFunction(
+            base_coordinate_space, name="Layer coordinates"
+        )
+    else:
+        coordinates = fd.Function(
+            base_coordinate_space, name="Layer coordinates"
+        )
+
+    coordinate_data = coordinates.dat.data
+    if coordinate_data.shape != first_layer_coordinates.shape:
+        raise NotImplementedError(
+            "layerwise nodal control volumes do not support discontinuous "
+            "horizontal coordinate layouts, such as radial-hedgehog extrusion"
+        )
+    coordinate_data[:] = first_layer_coordinates
+    layer_mesh = fd.Mesh(coordinates)
+    return layer_mesh, layer_mesh.coordinates
+
+
 def nodal_control_volumes(mesh, degree=2, name="Nodal control volume"):
     """Return the domain measure associated with every continuous-Galerkin node.
 
@@ -242,6 +288,9 @@ def nodal_control_volumes(mesh, degree=2, name="Nodal control volume"):
             "nodal layouts."
         )
 
+    # Firedrake's CG2 and equispaced P1-iso-P2 spaces deliberately share raw
+    # node ordering; the shape check above guards the corresponding local
+    # layout before copying values without interpolation.
     result.dat.data[:] = control_volumes.dat.data_ro
     return result
 
@@ -293,7 +342,9 @@ def layerwise_nodal_control_volumes(
         If ``mesh`` is not a non-periodically extruded mesh or ``degree`` is
         unsupported.
     NotImplementedError
-        If ``mesh`` has a variable number of layers.
+        If ``mesh`` has a variable number of layers, vertical coordinate
+        degree other than 1 or 2, or a discontinuous horizontal coordinate
+        layout such as radial-hedgehog extrusion.
     """
     degree = _validate_degree(degree)
     if not mesh.extruded or mesh.layers is None:
@@ -321,41 +372,21 @@ def layerwise_nodal_control_volumes(
 
     # Firedrake stores the vertical degree of freedom as the fastest-varying
     # index on an extruded mesh. ``mesh.layers`` counts vertices, not cells.
+    # The CG output and P1-iso-P2 control spaces also share horizontal node
+    # ordering; regression tests cover the supported Firedrake cell layouts.
     level_count = degree * (mesh.layers - 1) + 1
 
     # Reconstruct a temporary horizontal manifold without lowering the source
     # geometry order when the requested output is CG1. A reconstructed
     # extruded MeshGeometry may retain only the base MeshTopology needed by
     # the coordinate space.
-    base_mesh = getattr(mesh, "_base_mesh", None)
-    base_domain = (
-        base_mesh if base_mesh is not None else getattr(mesh.topology, "_base_mesh", None)
-    )
-    if base_domain is None:
-        raise ValueError("extruded mesh does not expose its base-mesh topology")
-    base_coordinate_space = fd.VectorFunctionSpace(
-        base_domain,
-        "CG",
+    layer_mesh, layer_coordinates = _build_layer_mesh(
+        mesh,
         horizontal_coordinate_degree,
-        dim=mesh.geometric_dimension,
+        _coordinate_layer(
+            source_coordinate_data, source_vertical_degree, degree, 0
+        ),
     )
-    if base_mesh is None:
-        topological_coordinates = fd.CoordinatelessFunction(
-            base_coordinate_space, name="Layer coordinates"
-        )
-        topological_coordinates.dat.data[:] = _coordinate_layer(
-            source_coordinate_data, source_vertical_degree, degree, 0
-        )
-        layer_mesh = fd.Mesh(topological_coordinates)
-        layer_coordinates = layer_mesh.coordinates
-    else:
-        layer_coordinates = fd.Function(
-            base_coordinate_space, name="Layer coordinates"
-        )
-        layer_coordinates.dat.data[:] = _coordinate_layer(
-            source_coordinate_data, source_vertical_degree, degree, 0
-        )
-        layer_mesh = fd.Mesh(layer_coordinates)
     control_space = _control_volume_space(layer_mesh, degree)
     control_volume_form = fd.TestFunction(control_space) * fd.dx
 
