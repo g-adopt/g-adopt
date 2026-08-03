@@ -1,7 +1,8 @@
 """Positive nodal measures for whole meshes and layers of extruded meshes.
 
-Degree-two measures use Firedrake's P1-iso-P2 construction: linear basis
-functions on a uniformly refined macro mesh share the nodal layout of CG2.
+Degree-one layer measures are assembled on horizontal facets. Degree-two
+measures use Firedrake's P1-iso-P2 construction: linear basis functions on a
+uniformly refined macro mesh share the nodal layout of CG2.
 """
 
 from operator import index
@@ -246,6 +247,40 @@ def _build_layer_mesh(mesh, horizontal_coordinate_degree, first_layer_coordinate
     return layer_mesh, layer_mesh.coordinates
 
 
+def _linear_layerwise_nodal_control_volumes(mesh, name):
+    """Assemble CG1 nodal measures directly on horizontal mesh facets."""
+    output_space = fd.FunctionSpace(mesh, "CG", 1)
+    test = fd.TestFunction(output_space)
+
+    # ``avg`` is essential even though the test space is continuous: the two
+    # restrictions address the same global DOFs and their sum would count an
+    # interior horizontal facet twice. On a periodic extrusion, ``dS_h`` also
+    # includes the identified top/bottom interface; adding ``ds_b`` and
+    # ``ds_t`` would count that periodic layer two more times.
+    facet_form = fd.avg(test) * fd.dS_h
+    if not mesh.extruded_periodic:
+        facet_form += test * (fd.ds_b + fd.ds_t)
+
+    facet_measures = fd.assemble(facet_form)
+    result = fd.Function(output_space, name=name)
+    # The assembled Cofunction and result are the dual and primal views of the
+    # same FunctionSpace, so their local DOF ordering is identical.
+    result.dat.data[:] = facet_measures.dat.data_ro
+    return result
+
+
+def _validate_horizontal_coordinate_continuity(mesh):
+    """Reject extruded coordinate fields discontinuous in the base direction."""
+    coordinate_element = mesh.coordinates.ufl_element()
+    scalar_coordinate_element = coordinate_element.sub_elements[0]
+    horizontal_coordinate_element = scalar_coordinate_element.factor_elements[0]
+    if not horizontal_coordinate_element.sobolev_space <= fd.H1:
+        raise NotImplementedError(
+            "layerwise nodal control volumes require continuous horizontal "
+            "coordinate geometry and do not support radial-hedgehog extrusion"
+        )
+
+
 def nodal_control_volumes(mesh, degree=2, name="Nodal control volume"):
     """Return the domain measure associated with every continuous-Galerkin node.
 
@@ -306,13 +341,20 @@ def layerwise_nodal_control_volumes(
     layer's total length or area. The actual coordinates of every layer are
     used, so the routine handles Cartesian and radially extruded cylindrical
     or spherical meshes with either increasing or decreasing radius, deformed
-    meshes, and meshes loaded from checkpoints. Layers that are translated or
-    homothetically scaled copies to floating-point round-off reuse the first
-    layer's assembly; geometrically warped layers are assembled independently.
+    meshes, and meshes loaded from checkpoints.
 
     The layer total is the measure of its discrete finite-element geometry.
     On curved circle and sphere meshes this converges to, but is not silently
     renormalised to, the analytical ``2*pi*r`` or ``4*pi*r**2`` measure.
+
+    Degree-one measures are assembled directly on the horizontal facets of the
+    extruded mesh. This uses Firedrake's finite-element geometry at its full
+    coordinate degree and supports periodic extrusion. Degree-two measures also
+    include horizontal levels through cell interiors and reconstruct each
+    level as a temporary manifold. Translated or homothetically scaled levels
+    reuse the first level's assembly; warped levels are assembled independently.
+    This degree-two path currently supports horizontal coordinate degree one or
+    two and vertical coordinate degree one or two on non-periodic extrusions.
 
     This quantity is deliberately different from :func:`nodal_control_volumes`,
     which integrates over the whole mesh. The returned function can be written
@@ -339,21 +381,27 @@ def layerwise_nodal_control_volumes(
     Raises
     ------
     ValueError
-        If ``mesh`` is not a non-periodically extruded mesh or ``degree`` is
-        unsupported.
+        If ``mesh`` is not extruded, ``degree`` is unsupported, or degree-two
+        measures are requested on a periodically extruded mesh.
     NotImplementedError
-        If ``mesh`` has a variable number of layers, vertical coordinate
-        degree other than 1 or 2, or a discontinuous horizontal coordinate
-        layout such as radial-hedgehog extrusion.
+        If ``mesh`` has a variable number of layers or discontinuous horizontal
+        coordinate geometry such as radial-hedgehog extrusion. For degree-two
+        output, also if the vertical or horizontal coordinate degree is other
+        than 1 or 2.
     """
     degree = _validate_degree(degree)
     if not mesh.extruded or mesh.layers is None:
         raise ValueError("layerwise nodal control volumes require an extruded mesh")
-    if mesh.extruded_periodic:
-        raise ValueError("layerwise nodal control volumes require non-periodic extrusion")
+    _validate_horizontal_coordinate_continuity(mesh)
     if mesh.variable_layers:
         raise NotImplementedError(
             "layerwise nodal control volumes do not support variable-layer meshes"
+        )
+    if degree == 1:
+        return _linear_layerwise_nodal_control_volumes(mesh, name)
+    if mesh.extruded_periodic:
+        raise ValueError(
+            "degree-two layerwise nodal control volumes require non-periodic extrusion"
         )
 
     output_space = fd.FunctionSpace(mesh, "CG", degree)
@@ -365,6 +413,11 @@ def layerwise_nodal_control_volumes(
     else:
         horizontal_coordinate_degree = coordinate_degree
         source_vertical_degree = 1
+    if horizontal_coordinate_degree not in (1, 2):
+        raise NotImplementedError(
+            "degree-two layerwise nodal control volumes require horizontal "
+            "coordinate degree 1 or 2"
+        )
     source_level_count = source_vertical_degree * (mesh.layers - 1) + 1
     source_coordinate_data = mesh.coordinates.dat.data_ro.reshape(
         (-1, source_level_count, mesh.geometric_dimension)
@@ -376,10 +429,9 @@ def layerwise_nodal_control_volumes(
     # ordering; regression tests cover the supported Firedrake cell layouts.
     level_count = degree * (mesh.layers - 1) + 1
 
-    # Reconstruct a temporary horizontal manifold without lowering the source
-    # geometry order when the requested output is CG1. A reconstructed
-    # extruded MeshGeometry may retain only the base MeshTopology needed by
-    # the coordinate space.
+    # Reconstruct temporary degree-two horizontal levels without lowering the
+    # source geometry order. A reconstructed extruded MeshGeometry may retain
+    # only the base MeshTopology needed by the coordinate space.
     layer_mesh, layer_coordinates = _build_layer_mesh(
         mesh,
         horizontal_coordinate_degree,

@@ -287,6 +287,109 @@ def test_linear_layerwise_nodal_control_volumes():
     np.testing.assert_allclose(_layer_sums(areas, degree=1), 2.0)
 
 
+@pytest.mark.parametrize("geometry_degree", [1, 2, 3, 4])
+@pytest.mark.parametrize("layer_height", [0.5, -0.5])
+def test_linear_layerwise_areas_use_full_curved_geometry(
+    geometry_degree, layer_height
+):
+    base_radius = 1.2 if layer_height > 0 else 2.2
+    base_mesh = fd.CircleManifoldMesh(
+        16, radius=base_radius, degree=geometry_degree
+    )
+    mesh = fd.ExtrudedMesh(
+        base_mesh,
+        layers=2,
+        layer_height=layer_height,
+        extrusion_type="radial",
+    )
+
+    areas = layerwise_nodal_control_volumes(mesh, degree=1)
+    radii = np.linspace(base_radius, base_radius + 2 * layer_height, mesh.layers)
+    area_data = areas.dat.data_ro.reshape((-1, mesh.layers))
+    radial_factors = radii / base_radius
+    expected_layer_sums = np.array(
+        [
+            fd.assemble(fd.Constant(1) * fd.ds_b(domain=mesh)),
+            fd.assemble(fd.Constant(1) * fd.dS_h(domain=mesh)),
+            fd.assemble(fd.Constant(1) * fd.ds_t(domain=mesh)),
+        ]
+    )
+
+    np.testing.assert_allclose(
+        area_data,
+        area_data[:, :1] * radial_factors[None, :],
+        rtol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        _layer_sums(areas, degree=1), expected_layer_sums, rtol=1.0e-9
+    )
+    geometry_tolerance = {1: 1.0e-2, 2: 5.0e-5, 3: 1.0e-6, 4: 1.0e-8}
+    np.testing.assert_allclose(
+        expected_layer_sums,
+        2 * np.pi * radii,
+        rtol=geometry_tolerance[geometry_degree],
+    )
+    assert _global_min(areas) > 0.0
+
+
+def test_linear_layerwise_areas_on_periodic_extrusion():
+    base_mesh = fd.UnitIntervalMesh(4)
+    x = fd.SpatialCoordinate(base_mesh)[0]
+    base_mesh.coordinates.interpolate(fd.as_vector([x + 0.2 * x**2]))
+    mesh = fd.ExtrudedMesh(
+        base_mesh, layers=3, layer_height=0.25, periodic=True
+    )
+
+    areas = layerwise_nodal_control_volumes(mesh, degree=1)
+    level_count = mesh.layers - 1
+    area_data = areas.dat.data_ro.reshape((-1, level_count))
+    coordinate_space = fd.VectorFunctionSpace(mesh, "CG", 1)
+    coordinates = fd.Function(coordinate_space).interpolate(mesh.coordinates)
+    coordinate_data = coordinates.dat.data_ro.reshape(
+        (-1, level_count, mesh.geometric_dimension)
+    )
+    global_coordinates = np.unique(
+        np.concatenate(mesh.comm.allgather(coordinate_data[:, 0, 0]))
+    )
+    spacings = np.diff(global_coordinates)
+    global_weights = np.empty_like(global_coordinates)
+    global_weights[0] = spacings[0] / 2
+    global_weights[-1] = spacings[-1] / 2
+    global_weights[1:-1] = (spacings[:-1] + spacings[1:]) / 2
+    coordinate_weights = {
+        round(float(coordinate), 14): weight
+        for coordinate, weight in zip(
+            global_coordinates, global_weights, strict=True
+        )
+    }
+    expected_weights = np.array(
+        [
+            coordinate_weights[round(float(coordinate), 14)]
+            for coordinate in coordinate_data[:, 0, 0]
+        ]
+    )
+
+    np.testing.assert_allclose(
+        area_data,
+        np.broadcast_to(expected_weights[:, None], area_data.shape),
+        rtol=1.0e-13,
+    )
+    assert _global_min(areas) > 0.0
+
+
+@pytest.mark.parametrize("geometry_degree", [3, 4])
+def test_quadratic_layerwise_areas_reject_high_order_geometry(geometry_degree):
+    base_mesh = fd.CircleManifoldMesh(
+        16, radius=1.2, degree=geometry_degree
+    )
+    mesh = fd.ExtrudedMesh(
+        base_mesh, layers=2, layer_height=0.5, extrusion_type="radial"
+    )
+
+    with pytest.raises(NotImplementedError, match="horizontal coordinate degree"):
+        layerwise_nodal_control_volumes(mesh, degree=2)
+
+
 def test_cartesian_fast_path_ignores_constant_coordinate_roundoff(monkeypatch):
     mesh = fd.ExtrudedMesh(
         fd.UnitIntervalMesh(100), layers=4, layer_height=0.1
@@ -343,20 +446,81 @@ def test_horizontal_dof_mapping_by_physical_coordinate():
     )
 
 
+@pytest.mark.parametrize("quadrilateral", [False, True])
+def test_quadratic_horizontal_and_vertical_coordinate_ordering(quadrilateral):
+    topology_mesh = fd.UnitSquareMesh(2, 2, quadrilateral=quadrilateral)
+    x, y = fd.SpatialCoordinate(topology_mesh)
+    base_coordinate_space = fd.VectorFunctionSpace(topology_mesh, "CG", 2)
+    base_coordinates = fd.Function(base_coordinate_space).interpolate(
+        fd.as_vector([x + 0.13 * x * y, y + 0.07 * x**2])
+    )
+    base_mesh = fd.Mesh(base_coordinates)
+
+    base_areas = nodal_control_volumes(base_mesh)
+    base_output_coordinate_space = fd.VectorFunctionSpace(base_mesh, "CG", 2)
+    base_output_coordinates = fd.Function(
+        base_output_coordinate_space
+    ).interpolate(base_mesh.coordinates)
+    local_coordinate_areas = {
+        tuple(np.round(coordinate, 14)): area
+        for coordinate, area in zip(
+            base_output_coordinates.dat.data_ro,
+            base_areas.dat.data_ro,
+            strict=True,
+        )
+    }
+    coordinate_areas = {}
+    for rank_coordinate_areas in base_mesh.comm.allgather(local_coordinate_areas):
+        coordinate_areas.update(rank_coordinate_areas)
+
+    source_mesh = fd.ExtrudedMesh(base_mesh, layers=2, layer_height=0.5)
+    coordinate_space = fd.VectorFunctionSpace(
+        source_mesh, "CG", 2, vfamily="CG", vdegree=2
+    )
+    coordinates = fd.Function(coordinate_space).interpolate(
+        source_mesh.coordinates
+    )
+    mesh = fd.Mesh(coordinates)
+
+    areas = layerwise_nodal_control_volumes(mesh)
+    level_count = 2 * (mesh.layers - 1) + 1
+    output_coordinate_space = fd.VectorFunctionSpace(mesh, "CG", 2)
+    output_coordinates = fd.Function(output_coordinate_space).interpolate(
+        mesh.coordinates
+    )
+    output_coordinate_data = output_coordinates.dat.data_ro.reshape(
+        (-1, level_count, mesh.geometric_dimension)
+    )
+    expected_horizontal_areas = np.array(
+        [
+            coordinate_areas[tuple(np.round(coordinate[:2], 14))]
+            for coordinate in output_coordinate_data[:, 0, :]
+        ]
+    )
+    actual_areas = areas.dat.data_ro.reshape((-1, level_count))
+
+    assert mesh.coordinates.ufl_element().degree() == (2, 2)
+    np.testing.assert_allclose(
+        actual_areas,
+        np.broadcast_to(expected_horizontal_areas[:, None], actual_areas.shape),
+        rtol=1.0e-12,
+    )
+
+
 def test_linear_areas_preserve_quadratic_spherical_geometry():
     mesh, _, _ = _extruded_mesh("3d-spherical")
-    expected_values = _assemble_each_layer_reference(mesh, degree=1)
-
     areas = layerwise_nodal_control_volumes(mesh, degree=1)
-    actual_values = areas.dat.data_ro.reshape(expected_values.shape)
-
-    np.testing.assert_allclose(actual_values, expected_values, rtol=1.0e-12)
-    discrete_base_area = fd.assemble(fd.Constant(1) * fd.dx(domain=mesh._base_mesh))
     radii = np.linspace(1.2, 2.2, 3)
+    radial_factors = (radii / radii[0]) ** 2
+    area_data = areas.dat.data_ro.reshape((-1, radii.size))
+
     np.testing.assert_allclose(
-        _layer_sums(areas, degree=1),
-        discrete_base_area * (radii / radii[0]) ** 2,
+        area_data,
+        area_data[:, :1] * radial_factors[None, :],
         rtol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        _layer_sums(areas, degree=1), 4 * np.pi * radii**2, rtol=2.0e-3
     )
 
 
@@ -507,11 +671,12 @@ def test_nodal_control_volume_validation():
     with pytest.raises(ValueError, match="require non-periodic extrusion"):
         layerwise_nodal_control_volumes(periodic_mesh)
 
-    hedgehog_mesh = fd.ExtrudedMesh(
-        fd.CircleManifoldMesh(8, radius=1.2, degree=2),
-        layers=2,
-        layer_height=0.5,
-        extrusion_type="radial_hedgehog",
-    )
-    with pytest.raises(NotImplementedError, match="discontinuous horizontal"):
-        layerwise_nodal_control_volumes(hedgehog_mesh)
+    for degree in (1, 2):
+        hedgehog_mesh = fd.ExtrudedMesh(
+            fd.CircleManifoldMesh(8, radius=1.2, degree=degree),
+            layers=2,
+            layer_height=0.5,
+            extrusion_type="radial_hedgehog",
+        )
+        with pytest.raises(NotImplementedError, match="continuous horizontal"):
+            layerwise_nodal_control_volumes(hedgehog_mesh, degree=degree)
