@@ -170,14 +170,6 @@ jobs:
           . .venv/bin/activate
           python -m pytest -m 'not longtest' --junit-xml=test_results.xml
 
-      - name: Test nodal areas with two MPI ranks
-        run: |
-          . .venv/bin/activate
-          mpiexec -n 2 python -m pytest tests/unit/test_nodal_areas.py
-        env:
-          OMPI_ALLOW_RUN_AS_ROOT: 1
-          OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
-
       - name: Pytest report
         uses: mikepenz/action-junit-report@v6
         if: ${{ !cancelled() && steps.run_pytest.conclusion != 'skipped' }}

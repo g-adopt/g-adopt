@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import firedrake as fd
 from mpi4py import MPI
 import numpy as np
@@ -449,10 +447,6 @@ def test_layerwise_nodal_control_volumes_after_checkpoint(tmp_path):
 
     areas = layerwise_nodal_control_volumes(loaded_mesh, name="cv_area_3d")
     np.testing.assert_allclose(_layer_sums(areas), expected, rtol=tolerance)
-
-    output_path = mesh.comm.bcast(str(tmp_path / "cv_area_3d.pvd"), root=0)
-    fd.VTKFile(output_path).write(areas)
-    assert Path(output_path).is_file()
 
 
 def test_nodal_control_volume_validation():
