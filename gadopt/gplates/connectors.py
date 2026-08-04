@@ -42,7 +42,7 @@ from .sources import Source
 # Interpolation config
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class InterpolationConfig:
     """Spherical kNN-interpolation knobs.
 
@@ -62,6 +62,12 @@ class InterpolationConfig:
     boundary is encoded by zero-thickness halo seeds, the threshold
     degenerates into a pathological-query guard and the actual roll-off
     length is controlled by ``gaussian_sigma`` instead.
+
+    Frozen, and EVERY FIELD MUST STAY HASHABLE. ``ScalarFieldConnector`` keys
+    the shared interpolation-geometry cache on this object by value, so a
+    field holding a list, dict or set would make the config unhashable and the
+    cache insertion would raise. Frozen also means ``__post_init__``
+    validation cannot be bypassed by assigning to a field after construction.
     """
 
     kernel: str = "idw"
@@ -251,7 +257,18 @@ class ScalarFieldConnector:
         # (source cloud, target coords, cfg) — not on the gathered property —
         # so it is identical across every output sharing this source at a given
         # age. Build it once and cache it on the source; siblings reuse it.
-        key = (hash(target_coords.tobytes()), id(self.interpolation))
+        # The config half of the key is the config itself, by value:
+        # InterpolationConfig is frozen, so it hashes on its fields. It used to
+        # be `id(config)`, which is unique only among LIVE objects — a config
+        # that has been garbage collected frees its address for the next
+        # allocation, so an identity key could silently hand a new config the
+        # geometry built for an old one, with the wrong kernel or bandwidth and
+        # no error. By value is also the honest key, since the geometry depends
+        # on nothing else: two configs holding the same numbers should share one
+        # build. The coords half is a content HASH rather than the content, so
+        # it is collidable in principle; at 2^-64 that is not worth addressing,
+        # but it is not the same guarantee.
+        key = (hash(target_coords.tobytes()), self.interpolation)
         bundle = self.source.get_or_build_geometry(
             key, lambda: self._interp_geometry(source_xyz, target_coords)
         )
