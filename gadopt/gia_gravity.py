@@ -150,11 +150,8 @@ import numpy as np
 from firedrake import *
 from ufl import Form
 
-from firedrake.dmhooks import get_function_space
-from firedrake.preconditioners.assembled import AssembledPC
-
 from .approximations import BaseGIAApproximation
-from .nullspaces import rigid_body_modes
+from .preconditioners import RigidBodyAssembledPC
 from .dtn_form import DtNGravityForm
 from .equations import Equation
 from .gravity_solver import real_scalar_solver_parameters
@@ -165,7 +162,7 @@ from .momentum_equation import (
     self_gravity_term,
 )
 from .scalar_equation import mass_term, sink_term, source_term
-from .solver_options_manager import ConfigType
+from .solver_options_manager import ConfigType, gamg_parameters
 from .stokes_integrators import (
     CoupledInternalVariableSolver,
     newton_stokes_solver_parameters,
@@ -308,54 +305,32 @@ avoids.
 """
 
 
-#: GAMG settings shared by the displacement and potential blocks.
-_GAMG = {
-    "pc_type": "gamg",
-    "mg_levels_pc_type": "sor",
-    "pc_gamg_threshold": 0.01,
-    "pc_gamg_square_graph": 100,
-    "pc_gamg_coarse_eq_limit": 1000,
-    "pc_gamg_mis_k_minimum_degree_ordering": True,
-}
+# The GAMG settings for the displacement and potential blocks used to be a
+# sixth literal copy of the six that `gadopt.solver_options_manager` now owns --
+# the same ones the Stokes velocity block and `GravitySolver` use. The sweep
+# builder below calls `gamg_parameters("assembled_")` directly.
 
 
 def _prefixed(d, prefix):
     return {prefix + k: v for k, v in d.items()}
 
 
-class RigidBodyAssembledPC(AssembledPC):
-    """`AssembledPC` that builds the near-nullspace from its OWN block.
-
-    **A `near_nullspace` supplied on the outer mixed space never reaches GAMG
-    here, and nothing says so.** Firedrake composes the basis onto the outer
-    space's field index sets and `PCFIELDSPLIT` reads it back by querying those
-    index sets. `DtNTwoBlockSchurPC` registers *merged* index sets of its own,
-    and the nested split inside block 0 builds fresh ones from a sub-DM, so the
-    query matches nothing and the modes are silently dropped: no error, no
-    warning, and the only symptom is GAMG coarsening an elasticity block on
-    smoothed aggregation alone.
-
-    The fix is to stop relying on propagation. This subclass asks its own DM
-    for its own function space, builds the rigid modes there *after*
-    `AssembledPC` has assembled the block, and hangs them on the assembled
-    matrix where GAMG will actually look.
-
-    Lives here rather than in `preconditioners.py` only because that file was
-    under concurrent edit when this was packaged; it belongs there.
-    """
-
-    def initialize(self, pc):
-        super().initialize(pc)
-        V = get_function_space(pc.getDM()).collapse()
-        basis = rigid_body_modes(
-            V, rotational=True, translations=list(range(V.value_size)))
-        self.P.petscmat.setNearNullSpace(basis.nullspace())
+# `RigidBodyAssembledPC` now lives in `gadopt.preconditioners`, alongside
+# `SPDAssembledPC` and the `DtNTwoBlockSchurPC` whose merged index sets are the
+# reason it has to exist. It was defined here only because that file was under
+# concurrent edit when it was packaged. It is imported at the top of this
+# module and stays in `__all__`, so `gadopt.RigidBodyAssembledPC` and
+# `gadopt.gia_gravity.RigidBodyAssembledPC` both still resolve -- which matters
+# because every caller reaches it through the *string*
+# `"gadopt.RigidBodyAssembledPC"` in a solver-options dictionary, and a broken
+# name there surfaces as `PETSc.Error: error code 101` naming nothing.
 
 
 def selfgrav_dtn_iterative_solver_parameters(
     *, condensed: bool = True, block0_rtol: float = 1e-2,
     outer_rtol: float = 1e-6, block0_max_it: int = 60,
     snes_rtol: float = 1e-4,
+    u_pc: str = "gadopt.RigidBodyAssembledPC",
 ) -> dict:
     r"""The 3-D configuration that works, and the only one that does.
 
@@ -432,6 +407,21 @@ def selfgrav_dtn_iterative_solver_parameters(
         which the mechanics rows dominate; rows scaled by `Omega_sq = 1.566e-3`
         are converged to correspondingly fewer digits, which is a live question
         for the rotational closure.
+      u_pc: the preconditioner on the displacement split. The default builds
+        the rigid-body near-nullspace on the block itself; see
+        `gadopt.RigidBodyAssembledPC` for why a `near_nullspace` declared on
+        the outer mixed space never reaches GAMG here. **The only reason to
+        pass `"firedrake.AssembledPC"` is to reproduce a run that predates
+        that class**, which is a measurement of the defect and not a
+        configuration - a driver that names it is silently coarsening the
+        elasticity block with no rigid modes.
+
+    Every sub-KSP reports `ksp_converged_reason`. That is not optional
+    instrumentation: block 0 and block 1 are preconditioner applications inside
+    a flexible outer Krylov, so degrading either costs outer iterations rather
+    than accuracy, and the only way to see which one degraded is its own exit
+    status. The per-split lines are also the whole of B2's cost model - block-0
+    applications per solve are read from them and from nowhere else.
     """
     p = {
         "mat_type": "matfree",
@@ -454,6 +444,7 @@ def selfgrav_dtn_iterative_solver_parameters(
         "dtn_fieldsplit_0_ksp_type": "fgmres",
         "dtn_fieldsplit_0_ksp_rtol": block0_rtol,
         "dtn_fieldsplit_0_ksp_max_it": block0_max_it,
+        "dtn_fieldsplit_0_ksp_converged_reason": None,
         "dtn_fieldsplit_0_pc_type": "fieldsplit",
         "dtn_fieldsplit_0_pc_fieldsplit_type": "multiplicative",
 
@@ -461,13 +452,15 @@ def selfgrav_dtn_iterative_solver_parameters(
         "dtn_fieldsplit_1_ksp_type": "gmres",
         "dtn_fieldsplit_1_ksp_rtol": 1e-4,
         "dtn_fieldsplit_1_ksp_max_it": 200,
+        "dtn_fieldsplit_1_ksp_converged_reason": None,
         "dtn_fieldsplit_1_pc_type": "none",
     }
 
     def inner(pc_python, extra=None):
         d = {"ksp_type": "preonly", "pc_type": "python",
-             "pc_python_type": pc_python}
-        d.update(_prefixed(extra or _GAMG, "assembled_"))
+             "pc_python_type": pc_python, "ksp_converged_reason": None}
+        d.update(_prefixed(extra, "assembled_") if extra
+                 else gamg_parameters("assembled_"))
         return d
 
     # (field index in the mixed space, options). Order IS the sweep order:
@@ -476,12 +469,12 @@ def selfgrav_dtn_iterative_solver_parameters(
     # the space has no `m` field and the indices shift, which is why this list
     # is built rather than written out.
     if condensed:
-        sweep = [(0, inner("gadopt.RigidBodyAssembledPC")),
+        sweep = [(0, inner(u_pc)),
                  (1, inner("gadopt.SPDAssembledPC"))]
     else:
         sweep = [(1, inner("firedrake.AssembledPC",
                            {"pc_type": "bjacobi", "sub_pc_type": "ilu"})),
-                 (0, inner("gadopt.RigidBodyAssembledPC")),
+                 (0, inner(u_pc)),
                  (2, inner("gadopt.SPDAssembledPC"))]
     # `field_index` and not `field`: `dataclasses.field` is imported above and
     # a loop variable would shadow it.
@@ -2356,30 +2349,121 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         solver_preset: ConfigType | str | None,
         solver_extras: ConfigType | None,
     ) -> None:
-        """PETSc options; the default is the two-block DtN Schur split.
+        """PETSc options; both presets are two-block DtN Schur splits.
 
-        `"direct"` and the default both give
-        `selfgrav_dtn_schur_solver_parameters`, and they give the same thing
-        deliberately: with `Real` blocks in the space there *is* no monolithic
-        direct solve to fall back on, and a preset called "direct" that quietly
-        gave something else would be worse than one that is honest about it. The
-        LU lives on block 0 of the Schur split.
+        `"direct"` gives `selfgrav_dtn_schur_solver_parameters` and `"iterative"`
+        gives `selfgrav_dtn_iterative_solver_parameters`, and **the default is
+        chosen by dimension** - direct in 2-D, iterative in 3-D - mirroring
+        `GravitySolver` and `StokesSolverBase`, so the scalable path is what a
+        caller who states nothing gets at production scale.
+
+        "Direct" is honest rather than literal: with `Real` blocks in the space
+        there *is* no monolithic direct solve to fall back on, so the LU lives
+        on block 0 of the Schur split and the multiplier complement is still
+        taken by GMRES.
+
+        **This method used to hand every caller the direct preset**, including
+        in 3-D and including when asked for `"iterative"` - which the string was
+        accepted for and then ignored. The iterative dictionary existed and was
+        exported, but nothing in this class could reach it, so every 3-D driver
+        pasted its own copy; that is how four copies came to exist and how two
+        of them drifted. The direct preset's own docstring says "2-D ONLY. Do
+        not use this in 3-D" and "has no 3-D successor", which was true of the
+        preset and false of the class.
+
+        `condensed` is taken from the layout rather than from the caller, so the
+        block-0 sweep cannot disagree with the space it acts on - the mismatch
+        `_check_block0_split_matches_layout` exists to catch is unreachable on
+        this path by construction.
 
         A `Mapping` is honoured verbatim, through the base class.
         """
+        # **The appctx is built on EVERY path, including the `Mapping` one, and
+        # that placement is the fix for a defect rather than tidiness.** It
+        # used to be built only after the `Mapping` early return below, so a
+        # caller who passed their own dictionary got an appctx without
+        # `dtn_block1_diagonal` -- and every 3-D driver passes a dictionary
+        # (`b1_elastic.condensed_solver_parameters`,
+        # `b4_polar_motion.coupled_solver_parameters`, the B2 probe). So the
+        # shipped `DtNMultiplierDiagPC` was **unreachable from every driver
+        # that would use it**: naming it produced a bare
+        # `PETSc.Error: error code 101`, with the real cause only in the
+        # `_loud` line above it.
+        #
+        # Measured, job 175339746 (coarse, condensed, `--mult-pc gadopt_diag`):
+        # `ValueError: DtNMultiplierDiagPC needs the block-1 diagonal in the
+        # appctx`, once per rank, then 101. The one recorded number for that
+        # preconditioner (111 -> 48) came from the probe's *own* copy in
+        # `b2_pc.py`, which takes its diagonal from a module global -- so the
+        # shipped class had never run in 3-D at all.
+        #
+        # Building it unconditionally costs nothing: `block1_diagonal` does no
+        # assembly and no solves, and returns `None` when the space has no
+        # `Real` fields. It changes no default -- both presets still run block
+        # 1 at `pc_type: none`, so the entry is inert unless a caller names the
+        # preconditioner.
+        #
+        # This is also the argument for the design rule the successor obeys: a
+        # preconditioner that reads its data off the operator has no such
+        # failure mode, and the dense-complement arm of the same job ran
+        # unmodified.
+        #
+        # **The entry is ADDED to the base class's appctx, never used to build
+        # one before calling it.** `StokesSolverBase.set_solver_options`
+        # *assigns* `self.appctx = {"mu": ...}` as its first statement
+        # (`stokes_integrators.py:375`), so anything set beforehand is
+        # discarded. A first attempt at this fix built the dictionary above the
+        # `Mapping` branch and was silently undone by exactly that line -- the
+        # retry (job 175340812) failed identically, with the remote md5
+        # confirming the fixed file was the one that ran. Set it after every
+        # path that can reach the base class, and read it back rather than
+        # rebuilding it, so the `"mu"` entry keeps whatever the base class
+        # decided it should be.
+        # The string/None path below never reaches a base class, so it may have
+        # no `appctx` at all; the `Mapping` path always has one by the time
+        # this runs. Handle both rather than assuming either.
+        def _attach_block1_diagonal():
+            if getattr(self, "appctx", None) is None:
+                self.appctx = {
+                    "mu": self.approximation.mu / self.rho_continuity}
+            self.appctx["dtn_block1_diagonal"] = self.block1_diagonal()
+
         if isinstance(solver_preset, Mapping):
             super().set_solver_options(solver_preset, solver_extras)
+            _attach_block1_diagonal()
             return
         if solver_preset not in (None, "direct", "iterative"):
             raise ValueError("Solver type must be 'direct' or 'iterative'.")
 
+        # Deliberately NOT moved above the `Mapping` branch: its own docstring
+        # names "pass an explicit solver_parameters dictionary" as the escape
+        # hatch for a caller whose preconditioner does handle a state-dependent
+        # Jacobian, so the dictionary path is exactly where the refusal must
+        # not fire.
         self.refuse_stale_preconditioner()
-        self.appctx = {"mu": self.approximation.mu / self.rho_continuity,
-                       "dtn_block1_diagonal": self.block1_diagonal()}
+
+        if solver_preset is None:
+            solver_preset = (
+                "direct" if self.mesh.topological_dimension == 2
+                else "iterative")
+
+        # Added first so the preset wins every key it names. That ordering is
+        # load-bearing for one key in particular: `newton_stokes_solver_
+        # parameters` sets an ABSOLUTE `snes_atol` of 1e-10, and a configuration
+        # whose entire forcing is smaller than that converges at iteration zero
+        # and returns exactly 0.0 on every step, reporting SNES converged. The
+        # iterative preset sets 1e-15 and so overrides it; the direct one does
+        # not name the key and so inherits the trap, which is recorded in
+        # `demos/gravity/CLAUDE.md` and is not fixed here.
         self.add_to_solver_config(newton_stokes_solver_parameters)
-        self.add_to_solver_config(selfgrav_dtn_schur_solver_parameters)
+        if solver_preset == "direct":
+            self.add_to_solver_config(selfgrav_dtn_schur_solver_parameters)
+        else:
+            self.add_to_solver_config(selfgrav_dtn_iterative_solver_parameters(
+                condensed=self.layout.condensed))
         if solver_extras:
             self.add_to_solver_config(solver_extras)
+        _attach_block1_diagonal()
         self.register_update_callback(self.set_solver)
 
     def refuse_stale_preconditioner(self) -> None:

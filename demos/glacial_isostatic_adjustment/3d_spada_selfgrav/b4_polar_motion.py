@@ -69,6 +69,7 @@ from firedrake import MixedVectorSpaceBasis
 from gadopt import rigid_body_modes
 from gadopt.gia_gravity import (FluidCore, SelfGravitatingGIASolver,
                                 rigid_rotation_nullspace,
+                                selfgrav_dtn_iterative_solver_parameters,
                                 self_gravitating_gia_space)
 
 import generate_selfgrav_sphere as gen
@@ -119,85 +120,59 @@ def say(*a):
 # ---------------------------------------------------------------------------
 # B2's coupled iterative solver
 # ---------------------------------------------------------------------------
-#: GAMG settings, verbatim from `demos/gravity/spikes/gate_b2_solver.py`.
-GAMG = {"pc_type": "gamg", "mg_levels_pc_type": "sor",
-        "pc_gamg_threshold": 0.01, "pc_gamg_square_graph": 100,
-        "pc_gamg_coarse_eq_limit": 1000,
-        "pc_gamg_mis_k_minimum_degree_ordering": True}
+#: `--u-pc` choice -> the `pc_python_type` string it selects. `assembled` is
+#: the pre-2026-08-02 behaviour and carries NO near-nullspace; see
+#: `coupled_solver_parameters`.
+U_PC = {"rigid": "gadopt.RigidBodyAssembledPC",
+        "assembled": "firedrake.AssembledPC"}
 
 
 def coupled_solver_parameters(block0_rtol=1e-2, outer_rtol=1e-6,
-                              block0_max_it=60):
-    """B2's dictionary, reproduced here so a queue job is self-contained.
+                              block0_max_it=60,
+                              u_pc=U_PC["rigid"]):
+    """`gadopt.selfgrav_dtn_iterative_solver_parameters`, uncondensed.
 
-    Source of truth is `demos/gravity/spikes/gate_b2_solver.py` and
-    `NOTES/IMPL-LOG-SPADA-B2-SOLVER.md`; measured mesh-independent at nu = 0.49,
-    outer FGMRES 5 at both rungs with block-0 median 9 (`--coarse`) and 10
-    (`--medium`) across a 5.2x increase in cells.
+    This was a fourth hand-copy of that dictionary -- "reproduced here so a
+    queue job is self-contained", which a library import already is -- and the
+    copy carried a defect the others did not.
 
-    **`fieldsplit_N_` indexes the SPLIT, not the field**, and B2 records that
-    getting it backwards cost a run: the sweep order is `m, u, psi` while the
-    mixed space orders `u = 0, m = 1, psi = 2`, so the prefixes are derived from
-    the sweep's position rather than written by hand.  Doing it by hand puts
-    GAMG on the DG1 tensor block and `bjacobi/ilu` on the displacement, which
-    does not raise, does not warn, and surfaces only as block-0 hitting its cap.
+    **B4 ran the displacement block on plain `firedrake.AssembledPC`, so the
+    rigid-body modes never reached GAMG.**  `near_nullspace_basis` below builds
+    them and `build_solver` passes them as `near_nullspace=`, and underneath
+    `DtNTwoBlockSchurPC` that argument is silently discarded: Firedrake
+    composes the basis onto the outer space's field index sets and
+    `PCSetUp_FieldSplit` reads it back by querying those, while the
+    preconditioner registers merged index sets of its own and the nested split
+    inside block 0 builds fresh ones from a sub-DM, so the query matches
+    nothing.  No error, no warning.  `gadopt.RigidBodyAssembledPC` exists
+    precisely for this and builds the modes on the block itself; B1 and the B2
+    spike both use it and B4 never got it.
+
+    **This changes B4's preconditioning and therefore its iteration counts.**
+    It should not change its answers -- a preconditioner cannot move a
+    converged solve, and the outer FGMRES is flexible -- but B4's polar-motion
+    magnitude is under investigation and no number from it should be compared
+    across this change without saying so.  `--u-pc assembled` restores the old
+    behaviour exactly, which is the only honest way to reproduce a pre-existing
+    B4 result.
+
+    Everything else is the library's, including the sweep, which is built from
+    a list because `fieldsplit_N_` indexes the SPLIT and not the field: the
+    sweep order is `m, u, psi` while the mixed space orders `u = 0, m = 1,
+    psi = 2`, and writing the prefixes by hand puts GAMG on the DG1 tensor
+    block and `bjacobi/ilu` on the displacement, which does not raise, does not
+    warn, and surfaces only as block 0 hitting its cap.
+
+    Block 1 stays at `pc_type: none`; the two obvious alternatives are dead for
+    reasons that are properties of the route rather than of the object, and
+    `gadopt.DtNMultiplierDiagPC` is the opt-in replacement.  Note that the
+    sub-DM half of the old comment here is **out of date**: `DtNTwoBlockSchurPC`
+    now threads a sub-DM onto the multiplier KSP as well, which is what makes
+    any `PCBase` subclass usable there at all.
     """
-    def prefixed(d, pre):
-        return {pre + k: v for k, v in d.items()}
-
-    def inner(pc_python, extra=None):
-        d = {"ksp_type": "preonly", "pc_type": "python",
-             "pc_python_type": pc_python, "ksp_converged_reason": None}
-        d.update(prefixed(extra or GAMG, "assembled_"))
-        return d
-
-    p = {
-        "mat_type": "matfree",
-        "snes_type": "newtonls", "snes_linesearch_type": "l2",
-        "snes_max_it": 100, "snes_atol": 1e-15, "snes_rtol": 1e-4,
-        "snes_converged_reason": None,
-        "ksp_type": "fgmres", "ksp_rtol": outer_rtol, "ksp_max_it": 200,
-        "ksp_converged_reason": None,
-        "pc_type": "python", "pc_python_type": "gadopt.DtNTwoBlockSchurPC",
-        "dtn_pc_fieldsplit_schur_fact_type": "full",
-        "dtn_fieldsplit_0_ksp_type": "fgmres",
-        "dtn_fieldsplit_0_ksp_rtol": block0_rtol,
-        "dtn_fieldsplit_0_ksp_max_it": block0_max_it,
-        "dtn_fieldsplit_0_ksp_converged_reason": None,
-        "dtn_fieldsplit_0_pc_type": "fieldsplit",
-        "dtn_fieldsplit_0_pc_fieldsplit_type": "multiplicative",
-        "dtn_fieldsplit_1_ksp_type": "gmres", "dtn_fieldsplit_1_ksp_rtol": 1e-4,
-        "dtn_fieldsplit_1_ksp_max_it": 200,
-        "dtn_fieldsplit_1_ksp_converged_reason": None,
-        # **`none`, and both alternatives fail in a way that names neither
-        # itself nor `Real`.**  B2's measured results are all at multiplier PC
-        # `none` -- unpreconditioned GMRES on the 75 Real -- and the two
-        # obvious improvements are both blocked in `DtNTwoBlockSchurPC`:
-        #
-        # * `jacobi` needs `MatGetDiagonal`, which on a matfree block goes
-        #   through TSFC's `diagonal=True` path and cannot handle `Real`
-        #   arguments.  Presents as `error code 101` out of `SNES.solve`
-        #   wrapping `error code 63` from `MatCreateSubMatrix_Python`.
-        # * `AssembledPC` (+ `lu`) needs an appctx, which it resolves through
-        #   the sub-KSP's DM -- and `DtNTwoBlockSchurPC` threads a sub-DM onto
-        #   **block 0 only** (`preconditioners.py`: `ksp_potential, _ =
-        #   inner.getFieldSplitSchurGetSubKSP()`).  Block 1 has no DM, so
-        #   `get_appctx` returns `None` and it dies with
-        #   `AttributeError: 'NoneType' object has no attribute 'appctx'`
-        #   buried under another `error code 101`.
-        #
-        # Both are `gadopt/preconditioners.py` limitations rather than
-        # configuration mistakes; see the PETSc round-2 task.
-        "dtn_fieldsplit_1_pc_type": "none",
-    }
-    sweep = [(1, inner("firedrake.AssembledPC",
-                       {"pc_type": "bjacobi", "sub_pc_type": "ilu"})),
-             (0, inner("firedrake.AssembledPC")),
-             (2, inner("gadopt.SPDAssembledPC"))]
-    for split, (field, opts) in enumerate(sweep):
-        p[f"dtn_fieldsplit_0_pc_fieldsplit_{split}_fields"] = str(field)
-        p.update(prefixed(opts, f"dtn_fieldsplit_0_fieldsplit_{split}_"))
-    return p
+    return selfgrav_dtn_iterative_solver_parameters(
+        condensed=False, block0_rtol=block0_rtol, outer_rtol=outer_rtol,
+        block0_max_it=block0_max_it, u_pc=u_pc)
 
 
 def near_nullspace_basis(Z, layout):
@@ -696,7 +671,14 @@ def run_time_loop(parent, sub, args, epochs_kyr):
             # so an override applied to the t = 0 snapshot and silently not to
             # any epoch after it -- two different quadratures in one table.
             quad_degree=getattr(args, "quad_degree", None),
-            solver_parameters=coupled_solver_parameters())
+            # **`--ksp-rtol` and `--u-pc` reached the elastic snapshot and not
+            # this loop**, the same shape of defect as the `--quad-degree` one
+            # above: the t = 0 row of the table would be solved to one
+            # tolerance with one preconditioner and every epoch after it to
+            # another, with nothing in the log saying so. Both defaults are
+            # unchanged, so connecting them moves no existing number.
+            solver_parameters=coupled_solver_parameters(
+                outer_rtol=args.ksp_rtol, u_pc=U_PC[args.u_pc]))
         if z_prev is not None:
             z.assign(z_prev)
         say(f"  {t0 / 1000:7.3f} -> {t1 / 1000:7.3f} kyr   dt {dt_yr:7.2f} yr"
@@ -757,6 +739,16 @@ def main():
                          "Omega_sq = 1.57e-03, so the rotation rows sit three "
                          "orders below the dominant ones and a tolerance set "
                          "by those can under-resolve them without failing")
+    ap.add_argument("--u-pc", default="rigid", choices=["rigid", "assembled"],
+                    help="preconditioner on the displacement split. 'rigid' "
+                         "(gadopt.RigidBodyAssembledPC) builds the rigid-body "
+                         "near-nullspace on the block itself, which is the "
+                         "only way it reaches GAMG underneath "
+                         "DtNTwoBlockSchurPC. 'assembled' is plain "
+                         "firedrake.AssembledPC, i.e. NO near-nullspace - "
+                         "every B4 number recorded before this flag existed "
+                         "was measured that way, so it is here to reproduce "
+                         "them and for nothing else")
     ap.add_argument("--no-curve", action="store_true",
                     help="skip the P2 isoparametric correction")
     ap.add_argument("--quad-degree", type=int, default=None)
@@ -801,8 +793,9 @@ def main():
         parent, sub, dt=dt, nmax=args.nmax, truncation=args.truncation,
         c_minus_a=args.c_minus_a, feedback=not args.no_feedback,
         fluid_core=not args.no_fluid_core, quad_degree=args.quad_degree,
-        solver_parameters=(coupled_solver_parameters(outer_rtol=args.ksp_rtol)
-                           if args.solver == "b2" else None),
+        solver_parameters=(coupled_solver_parameters(
+            outer_rtol=args.ksp_rtol, u_pc=U_PC[args.u_pc])
+            if args.solver == "b2" else None),
         solver_parameters_extra=extra)
 
     say(f"\n  fluid-core sheet reaches inertia_form: "

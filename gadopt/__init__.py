@@ -36,7 +36,8 @@ from .nullspaces import create_stokes_nullspace, rigid_body_modes
 from .preconditioners import (DtNMultiplierDiagPC,  # noqa: F401
                               DtNTwoBlockSchurPC, FreeSurfaceMassInvPC,
                               SPDAssembledPC)
-from .solver_options_manager import DeleteParam
+from .solver_options_manager import (GAMG_PARAMETERS, DeleteParam,
+                                     gamg_parameters)
 from .stokes_integrators import (
     BoundaryNormalStressSolver,
     CoupledInternalVariableSolver,

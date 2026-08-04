@@ -105,35 +105,19 @@ from firedrake import (
     sqrt,
 )
 from firedrake.petsc import PETSc
-from firedrake.preconditioners.assembled import AssembledPC
-from firedrake.dmhooks import get_function_space
+from gadopt import RigidBodyAssembledPC as _RigidBodyAssembledPC
+from gadopt.solver_options_manager import GAMG_PARAMETERS
 
 
-class RigidBodyAssembledPC(AssembledPC):
-    """`AssembledPC` that builds the near-nullspace from its OWN block.
-
-    **A `near_nullspace` supplied on the outer mixed space never reaches GAMG
-    here, and nothing says so.** Firedrake composes the basis onto the outer
-    space's field index sets and `PCFIELDSPLIT` reads it back by querying those
-    index sets (`fieldsplit.c:721`). `DtNTwoBlockSchurPC` registers *merged*
-    index sets of its own, and the nested split inside block 0 builds fresh
-    ones from a sub-DM, so the query matches nothing and the modes are silently
-    dropped. No error, no warning, no effect - which is why the counts recorded
-    in this log's first round were obtained with GAMG coarsening the elasticity
-    block on smoothed aggregation alone.
-
-    The fix is to stop relying on propagation: this subclass asks its own DM
-    for its own function space and builds the six rigid modes there, after
-    `AssembledPC` has assembled the block, and hangs them on the assembled
-    matrix where GAMG will actually look.
-    """
-
-    def initialize(self, pc):
-        super().initialize(pc)
-        V = get_function_space(pc.getDM()).collapse()
-        basis = rigid_body_modes(
-            V, rotational=True, translations=list(range(V.value_size)))
-        self.P.petscmat.setNearNullSpace(basis.nullspace())
+#: This spike is where `RigidBodyAssembledPC` was found and first written. It
+#: has since been promoted to `gadopt.preconditioners`, and the local copy is
+#: gone rather than kept in sync: two identical definitions of a preconditioner
+#: reached by *string* from an options dictionary is precisely the arrangement
+#: in which one of them quietly stops matching the other. The name stays bound
+#: here so that `u_pc="__main__.RigidBodyAssembledPC"` - this module's own
+#: default, and what every recorded B2 measurement was taken with - still
+#: resolves when the spike is run as a script.
+RigidBodyAssembledPC = _RigidBodyAssembledPC
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPADA = os.path.normpath(os.path.join(
@@ -202,14 +186,12 @@ def rss_gb():
 # ---------------------------------------------------------------------------
 # the options dictionary
 # ---------------------------------------------------------------------------
-GAMG = {
-    "pc_type": "gamg",
-    "mg_levels_pc_type": "sor",
-    "pc_gamg_threshold": 0.01,
-    "pc_gamg_square_graph": 100,
-    "pc_gamg_coarse_eq_limit": 1000,
-    "pc_gamg_mis_k_minimum_degree_ordering": True,
-}
+#: `gadopt.solver_options_manager.GAMG_PARAMETERS`, imported rather than
+#: copied. This spike's recorded measurements were taken with these exact six
+#: values, and they are the shipped ones; if the library's ever change, this
+#: spike's numbers stop being reproducible, and that is a fact worth having
+#: surface as a changed result rather than hiding behind a stale local copy.
+GAMG = dict(GAMG_PARAMETERS)
 
 
 def _prefixed(d, prefix):

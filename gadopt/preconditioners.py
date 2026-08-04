@@ -7,7 +7,9 @@ import sys
 import firedrake as fd
 import numpy as np
 from ufl.indexed import Indexed
+from firedrake.dmhooks import get_function_space
 from firedrake.petsc import PETSc
+from .nullspaces import rigid_body_modes
 from .utility import InteriorBC
 
 
@@ -69,6 +71,48 @@ class SPDAssembledPC(fd.AssembledPC):
         super().initialize(pc)
         mat = self.P.petscmat
         mat.setOption(mat.Option.SPD, True)
+
+
+class RigidBodyAssembledPC(fd.AssembledPC):
+    """`AssembledPC` that builds the near-nullspace from its OWN block.
+
+    **A `near_nullspace` supplied on the outer mixed space never reaches GAMG
+    underneath `DtNTwoBlockSchurPC`, and nothing says so.** Firedrake composes
+    the basis onto the outer space's field index sets and `PCFIELDSPLIT` reads
+    it back by querying those index sets
+    (`src/ksp/pc/impls/fieldsplit/fieldsplit.c:721`, in `PCSetUp_FieldSplit`).
+    `DtNTwoBlockSchurPC` registers *merged* index sets of its own, and the
+    nested split inside block 0 builds fresh ones from a sub-DM, so the query
+    matches nothing and the modes are silently dropped: no error, no warning,
+    and the only symptom is GAMG coarsening an elasticity block on smoothed
+    aggregation alone.
+
+    The fix is to stop relying on propagation. This subclass asks its own DM
+    for its own function space, builds the rigid modes there *after*
+    `AssembledPC` has assembled the block, and hangs them on the assembled
+    matrix where GAMG will actually look.
+
+    Select it by name on whichever split holds the displacement::
+
+        "dtn_fieldsplit_0_fieldsplit_0_pc_python_type":
+            "gadopt.RigidBodyAssembledPC",
+
+    **Naming `firedrake.AssembledPC` there instead is not a milder choice, it
+    is the defect**: the block still assembles, the solve still converges, and
+    the near-nullspace the caller declared is simply absent from GAMG's setup.
+    """
+
+    def initialize(self, pc: PETSc.PC):
+        """Initialises the preconditioner.
+
+        Args:
+          pc: PETSc preconditioner.
+        """
+        super().initialize(pc)
+        V = get_function_space(pc.getDM()).collapse()
+        basis = rigid_body_modes(
+            V, rotational=True, translations=list(range(V.value_size)))
+        self.P.petscmat.setNearNullSpace(basis.nullspace())
 
 
 class DtNTwoBlockSchurPC(fd.PCBase):

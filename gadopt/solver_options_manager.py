@@ -49,6 +49,67 @@ class DeleteParam:
     pass
 
 
+GAMG_PARAMETERS = {
+    "pc_type": "gamg",
+    "mg_levels_pc_type": "sor",
+    "pc_gamg_threshold": 0.01,
+    "pc_gamg_square_graph": 100,
+    "pc_gamg_coarse_eq_limit": 1000,
+    "pc_gamg_mis_k_minimum_degree_ordering": True,
+}
+"""G-ADOPT's algebraic multigrid settings, in one place.
+
+Every SPD block G-ADOPT hands to GAMG uses these: the Stokes velocity block,
+the gravitational potential block, the coupled self-gravitating solver's
+displacement and potential splits, and the low-rank DtN operator's
+Robin-shifted stiffness.
+
+They were **six literals in three library modules**, and measured identical in
+all six -- duplication without drift. Two driver copies made eight. The one
+that had *actually* drifted was in a driver and had gone unnoticed:
+`b1_elastic`'s mechanics-only arm wrote five of the six out by hand and omitted
+`pc_gamg_mis_k_minimum_degree_ordering`, so it aggregated in a different order
+from the coupled solve it exists to be compared against. A missing GAMG option
+is a different preconditioner, not an error, so nothing said so.
+
+Two of the settings are also not guessable from their keys:
+
+**`pc_gamg_square_graph` is a deprecated alias for
+`pc_gamg_aggressive_coarsening`, and it counts LEVELS rather than being a
+boolean** (PETSc `src/ksp/pc/impls/gamg/agg.c:379-386`). So `100` does not mean
+"on", it means "use aggressive coarsening on up to 100 levels", i.e. on every
+level there will ever be. Anyone reading it as a boolean and setting it to `1`
+is changing the coarsening schedule, not tidying a value.
+
+**`mg_levels_pc_type: sor` is measured rather than conventional.** On the
+low-rank gravity path, `chebyshev/sor` as shipped takes 11 CG iterations
+against 15 for `chebyshev/jacobi` and 15 for `richardson/sor`.
+
+Apply with `gamg_parameters(prefix)` rather than by hand: the same six settings
+are needed bare, under `assembled_` (behind `AssembledPC`/`SPDAssembledPC`) and
+under `fieldsplit_0_assembled_`, and writing the prefix out is how a set of
+options comes to be attached to the wrong block.
+"""
+
+
+def gamg_parameters(prefix: str = "") -> dict:
+    """`GAMG_PARAMETERS` with every key prefixed.
+
+    Arguments:
+      prefix: string prepended to each key, e.g. `"assembled_"` when the block
+        is inverted behind `AssembledPC` or `SPDAssembledPC`, or
+        `"fieldsplit_0_assembled_"` when it also sits inside a fieldsplit.
+        The default returns the settings unprefixed, for a preconditioner
+        applied directly to an assembled operator.
+
+    Returns:
+      A fresh dictionary, so a caller may mutate it without reaching every
+      other caller -- which a shared module-level constant would otherwise
+      invite.
+    """
+    return {prefix + key: value for key, value in GAMG_PARAMETERS.items()}
+
+
 # Type alias
 ConfigType = Mapping[str, Union[str | float | None | type[DeleteParam], "ConfigType"]]
 _InternalConfigType = Mapping[str, Union[str | float | None, "_InternalConfigType"]]

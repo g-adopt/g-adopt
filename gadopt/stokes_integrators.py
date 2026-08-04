@@ -25,7 +25,8 @@ from .equations import Equation
 from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .scalar_equation import mass_term, sink_term, source_term
-from .solver_options_manager import SolverConfigurationMixin, ConfigType
+from .solver_options_manager import (SolverConfigurationMixin, ConfigType,
+                                     gamg_parameters)
 from .utility import (
     DEBUG,
     INFO,
@@ -50,12 +51,7 @@ iterative_stokes_solver_parameters = {
         "ksp_max_it": 1000,
         "pc_type": "python",
         "pc_python_type": "gadopt.SPDAssembledPC",
-        "assembled_pc_type": "gamg",
-        "assembled_mg_levels_pc_type": "sor",
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
-        "assembled_pc_gamg_coarse_eq_limit": 1000,
-        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+        **gamg_parameters("assembled_"),
     },
     "fieldsplit_1": {
         "ksp_type": "fgmres",
@@ -152,13 +148,8 @@ coupled_gia_solver_parameters = {
     "fieldsplit_0_ksp_type": "cg",
     "fieldsplit_0_pc_type": "python",
     "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
-    "fieldsplit_0_assembled_pc_type": "gamg",
-    "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
     "fieldsplit_0_ksp_rtol": 1e-5,
-    "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
-    "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
-    "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
-    "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+    **gamg_parameters("fieldsplit_0_assembled_"),
     "fieldsplit_1_ksp_type": "cg",
     "fieldsplit_1_pc_type": "python",
     "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",

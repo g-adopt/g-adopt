@@ -18,6 +18,7 @@ import time
 import gadopt  # noqa: F401  BEFORE firedrake
 from firedrake import COMM_WORLD  # noqa: E402
 from firedrake.petsc import PETSc  # noqa: E402
+from gadopt.solver_options_manager import GAMG_PARAMETERS  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -44,14 +45,9 @@ def rss_gb():
     return COMM_WORLD.allreduce(peak, op=MPI.SUM)
 
 
-GAMG = {
-    "pc_type": "gamg",
-    "mg_levels_pc_type": "sor",
-    "pc_gamg_threshold": 0.01,
-    "pc_gamg_square_graph": 100,
-    "pc_gamg_coarse_eq_limit": 1000,
-    "pc_gamg_mis_k_minimum_degree_ordering": True,
-}
+#: `gadopt.solver_options_manager.GAMG_PARAMETERS`, imported rather than
+#: copied; this was one of eight copies of the same six settings.
+GAMG = dict(GAMG_PARAMETERS)
 
 
 def build_meshes_from(path):
@@ -194,6 +190,22 @@ def condensed_schur(inner_rtol=1e-2, inner_maxit=300, schur_fact="full"):
 
 
 CONFIGS = {
+    # **The shipped 3-D preset, with nothing of block 0 overridden.** Every
+    # other entry here writes its own `dtn_fieldsplit_0_*` sweep, which was
+    # right while the library shipped no 3-D configuration at all; it now
+    # ships `selfgrav_dtn_iterative_solver_parameters`, and a probe that
+    # overrides block 0 measures a configuration nobody runs. This entry is
+    # the empty dictionary so that the library's own sweep survives, which is
+    # the only way to measure a block-1 preconditioner against the numbers the
+    # default will actually produce.
+    #
+    # It is also the **only** entry compatible with `--condense`: the sweep
+    # builders below are written for the three-field `m, u, psi` space and
+    # `pc_fieldsplit_N_fields` indexes the SPLIT rather than the field, so on
+    # the two-field condensed space they mis-assign the blocks silently -
+    # GAMG onto the wrong block, no error, no warning, and the only symptom is
+    # block 0 hitting its iteration cap. `main` refuses the combination.
+    "preset": {},
     # the shipped 2-D default, the working baseline
     "lu": LU,
     # the recorded failure, with instruments on
@@ -242,6 +254,16 @@ MULT_PC = {
     "dense": {"dtn_fieldsplit_1_pc_type": "python",
               "dtn_fieldsplit_1_pc_python_type":
                   "b2_pc.DtNMultiplierDenseSchurPC"},
+    # **The shipped class, which is not the same object as `diag` above.**
+    # `b2_pc.DtNMultiplierDiagPC` takes its diagonal from a module-level global
+    # the driver fills in; `gadopt.DtNMultiplierDiagPC` takes it from the
+    # solver's appctx, which `SelfGravitatingGIASolver` supplies. They should
+    # agree to the last bit and an arm run against each is how that is
+    # established -- so both are kept, named apart, rather than one silently
+    # standing in for the other.
+    "gadopt_diag": {"dtn_fieldsplit_1_pc_type": "python",
+                    "dtn_fieldsplit_1_pc_python_type":
+                        "gadopt.DtNMultiplierDiagPC"},
 }
 
 
@@ -264,6 +286,15 @@ def main():
     p.add_argument("--dtn-degree", type=int, default=5)
     p.add_argument("--nmax", type=int, default=None)
     p.add_argument("--ivdeg", type=int, default=1)
+    p.add_argument("--solves", type=int, default=0,
+                   help="timed solves AFTER the warm-up one. These are a real "
+                        "march at fixed dt, so they measure what a timestep in "
+                        "a segment costs once the preconditioner is built. "
+                        "0 keeps the historic single-solve behaviour.")
+    p.add_argument("--condense", action="store_true",
+                   help="statically condense the internal variables, which is "
+                        "the 3-D production configuration. Only legal with "
+                        "--config preset; see CONFIGS['preset'].")
     p.add_argument("--outer-rtol", type=float, default=1e-8)
     p.add_argument("--outer-maxit", type=int, default=100)
     p.add_argument("--mult-pc", default="jacobi")
@@ -285,6 +316,17 @@ def main():
                    help="key=value appended to solver_parameters_extra")
     args = p.parse_args()
 
+    if args.condense and args.config != "preset":
+        raise SystemExit(
+            f"--condense is only valid with --config preset, not "
+            f"{args.config!r}. Condensation removes the `m` field, so the "
+            "two-field block 0 is swept by "
+            "`selfgrav_dtn_iterative_solver_parameters(condensed=True)`; "
+            "every other CONFIGS entry writes a three-field sweep by hand and "
+            "`pc_fieldsplit_N_fields` indexes the SPLIT rather than the field, "
+            "so the blocks would be mis-assigned with no error and no warning. "
+            "Refused here rather than discovered from an iteration cap.")
+
     if args.block0_only:
         args.outer_maxit = 1
         args.mult_maxit = 1
@@ -292,7 +334,8 @@ def main():
     nmax = b1.NMAX_OF[args.configuration] if args.nmax is None else args.nmax
 
     log(f"=== b2_probe  config={args.config}  mesh={args.configuration}  "
-        f"L={args.dtn_degree}  ranks={COMM_WORLD.size}")
+        f"L={args.dtn_degree}  ranks={COMM_WORLD.size}  "
+        f"mult_pc={args.mult_pc}  condense={args.condense}")
 
     t0 = time.perf_counter()
     if args.mesh:
@@ -343,9 +386,24 @@ def main():
                     extra[k] = v
 
     t0 = time.perf_counter()
+    # **`block0` must be None on the `preset` config, and this is not cosmetic.**
+    # `b1.build_solver(block0=...)` merges `BLOCK0[block0]` into the extras
+    # ahead of everything else, and `BLOCK0["lu"]` sets block 0 to
+    # `preonly` + `AssembledPC` + MUMPS. Every other CONFIGS entry then
+    # overwrites those four keys with its own sweep, so the "lu" passed here
+    # has been dead for every arm ever run -- but `preset` is deliberately
+    # empty, so it would NOT overwrite them and block 0 would silently be a
+    # direct solve. Measured, on the first three arms of this campaign
+    # (jobs 175338676-8): every `dtn_fieldsplit_0_` line read
+    # `CONVERGED_ITS iterations 1`, the signature of `preonly`, and the wall
+    # times of all three arms were flat at 370-390 s because 72 extra block-0
+    # "solves" were back-substitutions against one factorisation. The counts
+    # were real and internally consistent; they simply belonged to a
+    # configuration nobody ships.
     solver, z, layout, *_ = b1.build_solver(
         parent, sub, nmax, dtn_degree=args.dtn_degree, ivdeg=args.ivdeg,
-        block0="lu", declare_nullspace=args.nullspace,
+        block0=(None if args.config == "preset" else "lu"),
+        declare_nullspace=args.nullspace, condense=args.condense,
         solver_parameters_extra=extra)
     t_build = time.perf_counter() - t0
     dims = {"u": z.subfunctions[layout.displacement].function_space().dim(),
@@ -363,17 +421,66 @@ def main():
     if args.setup_only:
         return
 
-    t0 = time.perf_counter()
+    # **The first solve is not the cost of a solve, and reporting one number
+    # for both is how the amortisation question stayed open.**
+    # `tests/parallel_scaling_gravity/gravity_cubed_sphere.py` settled this on
+    # the gravity-alone problem and this mirrors it: one warm-up solve, then
+    # `--solves` further solves timed individually, so `warmup_time`,
+    # `steady_solve_time` and `first_solve_overhead` are separable. On the
+    # gravity-alone campaign the first solve in a process cost 78 s against a
+    # steady 7 s -- an order of magnitude -- so a single-solve measurement of
+    # anything that amortises is uninterpretable.
+    #
+    # Two differences from that campaign, both deliberate:
+    #
+    # * The repeats are a genuine **march**: `solution_old` is updated by
+    #   `StokesSolverBase.solve`, so solve `k+1` starts from step `k`'s state
+    #   exactly as a time-loop segment does. The campaign zeroed the initial
+    #   guess to make its repeats identical; here the question is what a
+    #   *timestep* costs, and at fixed `dt` the Jacobian is constant while the
+    #   right-hand side is not. Per-solve numbers are printed rather than
+    #   averaged so a trend stays visible instead of being hidden in a mean.
+    # * The markers below let the block-0 and block-1 `converged_reason` lines
+    #   be attributed to a solve by position in the log, which is where the
+    #   sweep counts come from. That is cheaper than reaching through
+    #   `DtNTwoBlockSchurPC` for the sub-KSPs to attach monitors, and it cannot
+    #   go stale against a change in the preconditioner's internals.
+    #
+    # The metric those markers feed is the **sum of block-0 iterations**, not
+    # the number of block-0 invocations. Same lesson as `amg_applications`:
+    # invocation counts made the dense complement look worse than the diagonal
+    # at medium (89 against 42) while it used fewer multigrid sweeps
+    # (635 against 547), because its 72 build solves carry boundary-localised
+    # right-hand sides and converge in about four iterations against fourteen.
     failed = None
-    try:
-        solver.solve()
-    except Exception as exc:                       # noqa: BLE001
-        failed = repr(exc)
-    t_solve = time.perf_counter() - t0
+    solve_times = []
+    for k in range(1 + max(args.solves, 0)):
+        label = "WARMUP" if k == 0 else f"TIMED {k}"
+        log(f"=== SOLVE BEGIN {label} ===")
+        t0 = time.perf_counter()
+        try:
+            solver.solve()
+        except Exception as exc:                   # noqa: BLE001
+            failed = repr(exc)
+            log(f"=== SOLVE END {label} FAILED ===")
+            break
+        dt_solve = time.perf_counter() - t0
+        solve_times.append(dt_solve)
+        log(f"=== SOLVE END {label} t={dt_solve:.2f}s ===")
+
+    t_solve = solve_times[0] if solve_times else 0.0
+    if len(solve_times) > 1:
+        steady = solve_times[1:]
+        mean_steady = sum(steady) / len(steady)
+        log(f"  TIMING warmup={solve_times[0]:.2f}s  "
+            f"steady_mean={mean_steady:.2f}s  "
+            f"first_solve_overhead={solve_times[0] - mean_steady:.2f}s  "
+            f"steady_samples={['%.2f' % s for s in steady]}")
     snes = solver.solver.snes
 
     log(f"  RSS after solve {rss_gb():.2f} GB summed over ranks")
     log(f"  RESULT config={args.config} mesh={args.configuration} "
+        f"mult_pc={args.mult_pc} condense={args.condense} "
         f"t_solve={t_solve:.1f}s snes_its={snes.getIterationNumber()} "
         f"snes_reason={snes.getConvergedReason()} "
         f"ksp_its={snes.ksp.getIterationNumber()} "

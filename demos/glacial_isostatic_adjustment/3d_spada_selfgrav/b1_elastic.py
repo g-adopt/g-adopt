@@ -126,9 +126,10 @@ from firedrake import (Constant, Function, FunctionSpace, Mesh,  # noqa: E402
                        VectorFunctionSpace, as_vector, assemble, avg,
                        conditional, dot, ds, dx, sqrt)
 from gadopt import (CompressibleInternalVariableApproximation,  # noqa: E402
-                    SphericalDtN)
+                    SphericalDtN, gamg_parameters)
 from gadopt.gia_gravity import (FluidCore, SelfGravitatingGIASolver,  # noqa: E402
                                 rigid_rotation_nullspace,
+                                selfgrav_dtn_iterative_solver_parameters,
                                 self_gravitating_gia_space)
 
 # B2's solver, imported read-only rather than pasted so the two cannot drift.
@@ -424,63 +425,39 @@ def dseries_at(coeffs, theta):
 
 def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
                                 block0_max_it=200,
-                                u_pc="gate_b2_solver.RigidBodyAssembledPC"):
-    """B2's dictionary with the block-0 sweep rewritten for `[u, psi]`.
+                                u_pc="gadopt.RigidBodyAssembledPC"):
+    """`gadopt.selfgrav_dtn_iterative_solver_parameters`, condensed.
 
-    `gate_b2_solver.solver_parameters` is documented as "the uncondensed
-    three-field block-0 sweep" and hard-codes `fields "1","0","2"` for
-    `m, u, psi`. **Condensation removes `m` from the mixed space entirely**
+    **This used to be a hand-copy of that dictionary and the comment above the
+    import claimed it was imported "so the two cannot drift". It was pasted,
+    and it had drifted** - `block0_max_it` 200 against the library's 60, and a
+    `u_pc` naming `gate_b2_solver`'s copy of `RigidBodyAssembledPC` rather than
+    the shipped one. Four copies of this dictionary existed across the library
+    and three drivers; this is now a thin wrapper that names only the two
+    values B1 genuinely wants different from the library defaults, so a reader
+    can see the whole of the difference in one place.
+
+    Both remaining differences are B1's own, deliberately:
+
+    * `outer_rtol` 1e-8 rather than 1e-6, so that solver tolerance is excluded
+      as an explanation for any deficit in the displacement comparison - the
+      handover records six orders of `ksp_rtol` changing nothing beyond the
+      last digit, and this is what makes that statement checkable;
+    * `block0_max_it` 200 rather than 60, because A2's anisotropic lithosphere
+      puts the condensed `[u, psi]` sweep in the 174-388 band and a cap of 60
+      would bind on every application.
+
+    Condensation removes `m` from the mixed space entirely
     (`self_gravitating_gia_space`: `spaces = [V] + [] + [Psi]`), so the fields
-    become `u = 0, psi = 1` and there is no field 2. Reusing the three-field
-    sweep under condensation would put GAMG on the wrong block and silently
-    mis-split, which is the exact failure mode B2's own docstring records
-    costing it a run.
-
-    Only the sweep is rewritten; the inner preconditioners are B2's, unchanged
-    - `RigidBodyAssembledPC` on `u` (fully qualified, see below) and
-    `SPDAssembledPC` on `psi`. Tuning the `[u, psi]` diagonal blocks is the
-    PETSc round-three task's, not this one's.
+    are `u = 0, psi = 1` and there is no field 2; `condensed=True` is what
+    selects that sweep. Getting it backwards puts GAMG on the wrong block and
+    silently mis-splits, which is the failure B2's docstring records costing it
+    a run - and `SelfGravitatingGIASolver._check_block0_split_matches_layout`
+    now refuses the mismatch rather than letting it run to the cap.
     """
-    from gate_b2_solver import GAMG, _prefixed
-    p = {
-        "mat_type": "matfree",
-        "snes_type": "newtonls",
-        "snes_linesearch_type": "l2",
-        "snes_max_it": 100,
-        "snes_atol": 1e-15,
-        "snes_rtol": 1e-4,
-        "snes_converged_reason": None,
-        "ksp_type": "fgmres",
-        "ksp_rtol": outer_rtol,
-        "ksp_max_it": 200,
-        "ksp_converged_reason": None,
-        "pc_type": "python",
-        "pc_python_type": "gadopt.DtNTwoBlockSchurPC",
-        "dtn_pc_fieldsplit_schur_fact_type": "full",
-        "dtn_fieldsplit_0_ksp_type": "fgmres",
-        "dtn_fieldsplit_0_ksp_rtol": block0_rtol,
-        "dtn_fieldsplit_0_ksp_max_it": block0_max_it,
-        "dtn_fieldsplit_0_ksp_converged_reason": None,
-        "dtn_fieldsplit_0_pc_type": "fieldsplit",
-        "dtn_fieldsplit_0_pc_fieldsplit_type": "multiplicative",
-        "dtn_fieldsplit_1_ksp_type": "gmres",
-        "dtn_fieldsplit_1_ksp_rtol": 1e-4,
-        "dtn_fieldsplit_1_ksp_max_it": 200,
-        "dtn_fieldsplit_1_ksp_converged_reason": None,
-        "dtn_fieldsplit_1_pc_type": "none",
-    }
-
-    def inner(pc_python):
-        d = {"ksp_type": "preonly", "pc_type": "python",
-             "pc_python_type": pc_python, "ksp_converged_reason": None}
-        d.update(_prefixed(GAMG, "assembled_"))
-        return d
-
-    for split, (field, opts) in enumerate([(0, inner(u_pc)),
-                                           (1, inner("gadopt.SPDAssembledPC"))]):
-        p[f"dtn_fieldsplit_0_pc_fieldsplit_{split}_fields"] = str(field)
-        p.update(_prefixed(opts, f"dtn_fieldsplit_0_fieldsplit_{split}_"))
-    return p
+    return selfgrav_dtn_iterative_solver_parameters(
+        condensed=True, outer_rtol=outer_rtol, block0_rtol=block0_rtol,
+        block0_max_it=block0_max_it, u_pc=u_pc)
 
 
 BLOCK0 = {
@@ -614,13 +591,15 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                                #   ModuleNotFoundError: No module named
                                #   '__main__.RigidBodyAssembledPC'
                                # from PCPythonSetType_PYTHON, surfacing as a
-                               # bare `error code 101` out of PCApply. Naming
-                               # the module explicitly is the fix, and it also
-                               # makes the near-nullspace actually reach the
+                               # bare `error code 101` out of PCApply. The
+                               # class now ships in gadopt, so name it there:
+                               # one implementation, and a string that resolves
+                               # from any entry point. It is also what makes
+                               # the near-nullspace actually reach the
                                # displacement block, which a
                                # MixedVectorSpaceBasis on the outer space does
                                # not (see the near_nullspace comment above).
-                               u_pc="gate_b2_solver.RigidBodyAssembledPC",
+                               u_pc="gadopt.RigidBodyAssembledPC",
                                block0_max_it=block0_max_it))),
         solver_parameters_extra=({**BLOCK0[block0],
                                   **(solver_parameters_extra or {})}
@@ -908,15 +887,19 @@ def run_mechanics_only(nmax, nproj, sig_dim, ref, U_ref, Vf, imax,
     # branch of `viscosity_term` adds a Nitsche pair that is *not* symmetric
     # (NOTES/FINDING-FREESLIP-NITSCHE-ASYMMETRY.md), so CG fails here with
     # DIVERGED_INDEFINITE_PC at 277 iterations - measured, not anticipated.
+    # **This dictionary had drifted, and it is the only place in the tree that
+    # had.** It wrote five of the six shipped GAMG settings out by hand and
+    # omitted `pc_gamg_mis_k_minimum_degree_ordering`, so arm E aggregated in a
+    # different order from every other path in the project - the coupled solve
+    # it is meant to be compared against included. Nothing said so, because a
+    # missing GAMG option is a different preconditioner and not an error. It
+    # now takes the shared settings, which is the whole point of their having
+    # one definition.
     params = {"mat_type": "matfree", "snes_type": "ksponly",
               "ksp_type": "fgmres", "ksp_rtol": 1e-10, "ksp_max_it": 5000,
               "ksp_converged_reason": None,
               "pc_type": "python", "pc_python_type": "firedrake.AssembledPC",
-              "assembled_pc_type": "gamg",
-              "assembled_mg_levels_pc_type": "sor",
-              "assembled_pc_gamg_threshold": 0.01,
-              "assembled_pc_gamg_square_graph": 100,
-              "assembled_pc_gamg_coarse_eq_limit": 1000}
+              **gamg_parameters("assembled_")}
     # One basis object, kept, because it is needed AFTER the solve as well as
     # during it. `InternalVariableSolver` has no `project_out_nullspace()` of
     # its own -- only `SelfGravitatingGIASolver` does -- so the projection is

@@ -91,7 +91,8 @@ from .dtn_form import (  # noqa: F401 - re-exported; see the note below
     CylindricalDtN, DtNGravityForm, DtNMode, QuadratureCalibration,
     QuadratureRuleReport, SphericalDtN)
 from .dtn_lowrank import LowRankDtNOperator, apply_dirichlet_to_rows
-from .solver_options_manager import ConfigType, SolverConfigurationMixin
+from .solver_options_manager import (ConfigType, SolverConfigurationMixin,
+                                     gamg_parameters)
 from .utility import DEBUG, INFO, ensure_constant, log_level
 
 # The boundary treatment, the DtN descriptors and the calibrated quadrature
@@ -131,12 +132,7 @@ iterative_gravity_solver_parameters = {
     "ksp_max_it": 1000,
     "pc_type": "python",
     "pc_python_type": "gadopt.SPDAssembledPC",
-    "assembled_pc_type": "gamg",
-    "assembled_mg_levels_pc_type": "sor",
-    "assembled_pc_gamg_threshold": 0.01,
-    "assembled_pc_gamg_square_graph": 100,
-    "assembled_pc_gamg_coarse_eq_limit": 1000,
-    "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+    **gamg_parameters("assembled_"),
 }
 """Iterative solve for the psi (potential) block.
 
@@ -183,12 +179,7 @@ lowrank_gravity_solver_parameters = {
     "ksp_type": "cg",
     "ksp_rtol": 1e-11,
     "ksp_max_it": 1000,
-    "pc_type": "gamg",
-    "mg_levels_pc_type": "sor",
-    "pc_gamg_threshold": 0.01,
-    "pc_gamg_square_graph": 100,
-    "pc_gamg_coarse_eq_limit": 1000,
-    "pc_gamg_mis_k_minimum_degree_ordering": True,
+    **gamg_parameters(),
 }
 """CG on `A + B`, algebraic multigrid built from the Robin-shifted `A` alone.
 
@@ -847,12 +838,7 @@ class GravitySolver(SolverConfigurationMixin):
                     "ksp_type": "cg",
                     "ksp_rtol": 1e-8,
                     "ksp_max_it": 1000,
-                    "pc_type": "gamg",
-                    "mg_levels_pc_type": "sor",
-                    "pc_gamg_threshold": 0.01,
-                    "pc_gamg_square_graph": 100,
-                    "pc_gamg_coarse_eq_limit": 1000,
-                    "pc_gamg_mis_k_minimum_degree_ordering": True,
+                    **gamg_parameters(),
                 })
                 if INFO >= log_level:
                     self.add_to_solver_config({"ksp_converged_reason": None})
