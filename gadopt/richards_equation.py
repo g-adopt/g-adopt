@@ -136,12 +136,24 @@ def richards_gravity_term(
     $$
     \int_\Omega K \frac{\partial \phi}{\partial z} dx
     - \int_{\mathcal{I}} \text{jump}(\phi) \cdot (q_n^+ - q_n^-) dS
+    - \int_{\partial \Omega_D} \phi \, K \, \nabla z \cdot n \, ds
     $$
 
     where $q_n = 0.5(q \cdot n - |q \cdot n|)$ is the upwinded flux and
     $q = K \nabla z$ is the gravity-driven flux. The negative part selects the
     upstream trace of $K$ from the cell *above* the facet: gravity-driven
     information propagates downward, so the upwind side is the upper cell.
+
+    The last integral runs over boundaries carrying a weakly imposed Dirichlet
+    head. There, the total flux is $K \nabla(h + z)$, but the Nitsche
+    consistency term supplied by ``scalar_equation.diffusion_term`` is built
+    from $h$ alone, so its gravity half has to be contributed here. Without it
+    the scheme is inconsistent on those boundaries: the residual retains a
+    spurious $\int_{\partial \Omega_D} \phi \, K \, \nabla z \cdot n \, ds$,
+    which is precisely the free-drainage flux that should be crossing them.
+    Flux boundaries and unspecified boundaries need no such term — for those,
+    carrying no gravity boundary integral is exactly the right natural
+    condition — so this is applied only on the Dirichlet path.
 
     Args:
         eq: G-ADOPT Equation instance
@@ -182,6 +194,21 @@ def richards_gravity_term(
 
         # Add upwind flux term
         F -= jump(eq.test) * (q_n('+') - q_n('-')) * eq.dS
+
+    # Gravity half of the flux on weakly imposed Dirichlet head boundaries.
+    # `scalar_equation.diffusion_term` keys those off 'q' (RichardsSolver
+    # translates the user-facing 'h' in `set_boundary_conditions`), and its
+    # consistency term carries K grad(h).n only, so the K grad(z).n part is
+    # added here to complete the total flux. K is taken from the interior
+    # trace, which makes the pair a single Nitsche treatment of the potential
+    # h + z, and is identical to what setting `reference_for_diffusion = z`
+    # on the diffusion term would produce. Deliberately outside the DG branch
+    # above: it applies wherever a weak Dirichlet head exists, though in
+    # practice RichardsSolver only generates those for discontinuous spaces
+    # (continuous ones get a strong DirichletBC instead).
+    for bc_id, bc in eq.bcs.items():
+        if 'q' in bc:
+            F -= eq.test * K * dot(k, eq.n) * eq.ds(bc_id)
 
     return F
 
