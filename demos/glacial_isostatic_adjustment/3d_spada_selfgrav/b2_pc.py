@@ -10,6 +10,7 @@ import numpy as np
 from firedrake.dmhooks import get_function_space
 from firedrake.petsc import PETSc
 from firedrake.preconditioners.assembled import AssembledPC
+from firedrake.preconditioners.base import PCBase
 
 from gadopt.nullspaces import rigid_body_modes
 
@@ -82,7 +83,7 @@ class RigidBodyAssembledPC(AssembledPC):
 # differentiate anything on the `Real` space.
 
 
-class _RealBlockPCBase:
+class _RealBlockPCBase(PCBase):
     """Shared plumbing for the two multiplier preconditioners.
 
     The multiplier block is tiny - 72 `Real` fields at L = 5, 75 with rotation -
@@ -90,7 +91,26 @@ class _RealBlockPCBase:
     size is `n` there and 0 elsewhere. Both preconditioners therefore do their
     linear algebra in numpy on every rank redundantly, which for a 75x75 problem
     is free and avoids needing a parallel dense solver at all.
+
+    **Inherits `PCBase` so the expensive setup happens once, not every solve.**
+    PETSc calls `setUp` on a python PC whenever the KSP re-runs its setup, which
+    in a timestepping loop is every step; `PCBase.setUp` guards that, dispatching
+    to `initialize` the first time and `update` thereafter. Subclasses put their
+    build in `initialize`. Overriding `setUp` directly - which an earlier version
+    of `DtNMultiplierDenseSchurPC` did - rebuilds the whole complement every
+    timestep, turning a build-once ~3x into a measured 1.3x (STEP0-BLOCK1-PC.md).
     """
+
+    def initialize(self, pc):
+        raise NotImplementedError
+
+    def update(self, pc):
+        """Nothing to rebuild: the coupled Jacobian is constant across the run.
+
+        Same argument that makes `DtNTwoBlockSchurPC.update` a no-op - the
+        operator formed once stays the right object, so both the diagonal and
+        the dense complement are built in `initialize` and never touched again.
+        """
 
     def _gather(self, comm, vec, n_global):
         buf = np.zeros(n_global)
@@ -131,7 +151,7 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
     small for a boundary stood off to 2 Re and smaller for higher modes.
     """
 
-    def setUp(self, pc):
+    def initialize(self, pc):
         diag = _DIAGONAL.get("value")
         if diag is None:
             raise ValueError(
@@ -160,11 +180,18 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     on. No Firedrake assembly is involved anywhere, which is why this works
     where all four options-file routes above do not.
 
+    The build runs in `initialize`, so it happens **once for the whole run**, not
+    once per timestep - see `_RealBlockPCBase`. An earlier version put it in a
+    `setUp` override, which PETSc re-invokes on every solve, and that rebuild was
+    the entire reason this arm measured 1.3x against the diagonal's 2.0x when its
+    honest build-once value is ~3.0x (STEP0-BLOCK1-PC.md).
+
     **Correctness conditions, and the second is not what the design assumed.**
 
     - The coupled Jacobian must be constant across the run. It is, by the same
       argument that makes `DtNTwoBlockSchurPC.update` a no-op, so the complement
-      formed once stays the right object.
+      formed once stays the right object - which is exactly what licenses
+      building it in `initialize` and never rebuilding.
     - S must be *linear*, and it is only as linear as the block-0 solve inside
       it. With `dtn_fieldsplit_0_ksp_type: preonly` that solve is a fixed linear
       operator and the complement is exact to roundoff. With an iterative
@@ -177,7 +204,7 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
       the exact complement inherits the operator's own symmetry structure.
     """
 
-    def setUp(self, pc):
+    def initialize(self, pc):
         A, _ = pc.getOperators()
         n = A.getSizes()[0][1]
         comm = pc.comm.tompi4py()
