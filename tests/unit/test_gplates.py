@@ -11,29 +11,11 @@ from gadopt.gplates import (
     ensure_reconstruction,
     ConnectorFactory,
     LithosphereConnectorFactory,
-    PolygonConnectorFactory,
     PointCloudSource,
     QuinticOutput,
     GeothermERFOutput,
 )
-from gtrack import LithosphereCloudSource
-
-
-def _lith_producer(gplates_connector, plate_files, continental_data):
-    """Build a gtrack LithosphereCloudSource for the factory-mechanics tests.
-
-    Construction is lazy — no reconstruction I/O until the first at_age — so
-    this succeeds without downloaded data as long as the source is not driven.
-    """
-    return LithosphereCloudSource(
-        rotation_files=gplates_connector.rotation_filenames,
-        topology_files=gplates_connector.topology_filenames,
-        continental_polygons=plate_files.continental_polygons,
-        static_polygons=plate_files.static_polygons,
-        continental_data=continental_data,
-        age_to_property=half_space_cooling,
-        oldest_age=gplates_connector.oldest_age,
-    )
+from gtrack.age_sources import AgeCloudSource
 
 
 def test_connector_no_longer_carries_polygon_kwargs():
@@ -56,7 +38,7 @@ def test_connector_no_longer_carries_polygon_kwargs():
     assert PlateModelFiles().static_polygons is None
 
 
-def test_obtain_muller_2022_se():
+def test_ensure_reconstruction_downloads_muller_2022_se():
     gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
     plate_reconstruction_files_with_path = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
 
@@ -68,7 +50,7 @@ def test_obtain_muller_2022_se():
             assert Path(file_path).exists(), f"{file_path} does not exist."
 
 
-def test_gplates(write_pvd=False):
+def test_velocity_reconstruction_regression(write_pvd=False):
     gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
 
     # Set up geometry:
@@ -130,58 +112,60 @@ def test_gplates(write_pvd=False):
 
 
 # =============================================================================
-# Age Validation Tests
+# Factory mechanics
 # =============================================================================
-
-def half_space_cooling(age_myr):
-    """Convert seafloor age (Myr) to lithospheric thickness (km)."""
-    age_sec = np.maximum(age_myr, 0) * 3.15576e13
-    return np.minimum(2.32 * np.sqrt(1e-6 * age_sec) / 1e3, 150.0)
-
-
-@pytest.fixture
-def plate_model_with_polygons():
-    """Create pyGplatesConnector for testing the indicator/geotherm path."""
-    gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
-    muller_files = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
-
-    return pyGplatesConnector(
-        rotation_filenames=muller_files["rotation_filenames"],
-        topology_filenames=muller_files["topology_filenames"],
-        oldest_age=200,
-    )
-
-
-@pytest.fixture
-def plate_files():
-    """Polygon file paths for the indicator/geotherm sources."""
-    gplates_data_path = Path(__file__).resolve().parents[2] / "demos/mantle_convection/gplates_global"
-    muller_files = ensure_reconstruction("Muller 2022 SE v1.2", gplates_data_path)
-    return PlateModelFiles(
-        continental_polygons=muller_files.get("continental_polygons"),
-        static_polygons=muller_files.get("static_polygons"),
-    )
-
-
-@pytest.fixture
-def synthetic_data():
-    """Create synthetic thickness data for testing."""
-    latlon = np.array([[0, 0], [10, 10], [20, 20], [30, 30]])
-    values = np.array([100, 150, 200, 180])
-    return (latlon, values)
-
-
-@pytest.fixture
-def test_coords():
-    """Create test coordinates."""
-    return np.array([[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]])
-
-
+#
+# ConnectorFactory only does bookkeeping — the single-source/single-output
+# guards, inheritance through the setters, and forwarding of the connector-level
+# parameters. That logic is producer-agnostic, so these tests use a fake
+# producer and a stand-in connector rather than a real gtrack
+# LithosphereCloudSource: the factory never drives the producer, so there is no
+# reconstruction to download. Age validation is covered data-free in
+# test_sources.py, and the end-to-end path with a REAL producer is the
+# reconstruction-backed regression in test_connectors.py (indicator/geotherm)
+# plus test_velocity_reconstruction_regression above (velocity).
+#
 # Checkpoint discovery moved into gtrack (CheckpointPolicy) with the ocean
 # tracker; it is exercised by gtrack's own suite. gadopt no longer owns it.
 
 
+class _FakeProducer:
+    """Minimal gtrack ``AgeCloudSource`` for the factory tests: satisfies the
+    protocol (provides / monotonic_backward / at_age / validate_age) so
+    PointCloudSource accepts it, with no reconstruction data. ``provides``
+    carries both ``thickness`` and ``age`` so a QuinticOutput indicator and a
+    GeothermERFOutput geotherm both pass the connector's requires<=provides
+    check. ``at_age`` raises: the factory-mechanics tests must never drive it."""
+
+    provides = frozenset({"thickness", "age"})
+    monotonic_backward = False
+
+    def at_age(self, age):
+        raise AssertionError("factory-mechanics tests must not drive the producer")
+
+    def validate_age(self, age):
+        pass
+
+
+class _DummyGplates:
+    """Stand-in for pyGplatesConnector: the factory tests store it on the source
+    but never touch its time API."""
+
+    oldest_age = 100.0
+    delta_t = 1.0
+
+    def ndtime2age(self, ndtime):
+        return float(ndtime) * 100.0
+
+    def age2ndtime(self, age):
+        return age / 100.0
+
+
 class TestConnectorFactory:
+    def test_fake_producer_satisfies_the_protocol(self):
+        # If this fails, every factory test that wraps it is testing nothing.
+        assert isinstance(_FakeProducer(), AgeCloudSource)
+
     def test_cannot_construct_source_without_class(self):
         factory = ConnectorFactory()
         with pytest.raises(
@@ -197,7 +181,7 @@ class TestConnectorFactory:
         ):
             _ = factory.indicator
 
-    def test_exception_on_default_source(self):
+    def test_indicator_raises_when_source_class_set_but_source_not_constructed(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
         with pytest.raises(
             RuntimeError,
@@ -205,41 +189,23 @@ class TestConnectorFactory:
         ):
             _ = factory.indicator
 
-    def test_constructed_source(
-        self, plate_model_with_polygons, plate_files, synthetic_data
-    ):
+    def test_constructed_source(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
+        factory.construct_source(_FakeProducer(), _DummyGplates())
 
         assert isinstance(factory.source, PointCloudSource)
 
-    def test_inherited_source(
-        self, plate_model_with_polygons, plate_files, synthetic_data
-    ):
+    def test_inherited_source(self):
         factory1 = ConnectorFactory(source_class=PointCloudSource)
         factory2 = ConnectorFactory()
-        factory1.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
+        factory1.construct_source(_FakeProducer(), _DummyGplates())
         factory2.source = factory1.source
         assert factory1.source is factory2.source
 
-    def test_strictly_single_source(
-        self, plate_model_with_polygons, plate_files, synthetic_data
-    ):
+    def test_strictly_single_source(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
-        source = PointCloudSource(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
+        factory.construct_source(_FakeProducer(), _DummyGplates())
+        source = PointCloudSource(_FakeProducer(), _DummyGplates())
         with pytest.raises(RuntimeError, match="This factory already has a Source!"):
             factory.source = source
 
@@ -280,31 +246,21 @@ class TestConnectorFactory:
         assert isinstance(factory.geotherm_output, GeothermERFOutput)
         assert factory.geotherm_output.kappa == 2e-6
 
-    def test_geotherm_requires_geotherm_output(
-        self, plate_model_with_polygons, plate_files, synthetic_data
-    ):
+    def test_geotherm_requires_geotherm_output(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
+        factory.construct_source(_FakeProducer(), _DummyGplates())
         with pytest.raises(
             RuntimeError,
             match="A geotherm_output must be either constructed or connected in order to construct the geotherm",
         ):
             _ = factory.geotherm
 
-    def test_indicator_and_geotherm_share_source(
-        self, plate_model_with_polygons, plate_files, synthetic_data
-    ):
+    def test_indicator_and_geotherm_share_source(self):
         """The whole point of the factory: both connectors hold the same
         Source instance, so the forward-only ocean tracker advances once per
         age no matter which connector updates first."""
         factory = LithosphereConnectorFactory()
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
+        factory.construct_source(_FakeProducer(), _DummyGplates())
         factory.construct_output()
         factory.construct_geotherm()
 
@@ -313,9 +269,7 @@ class TestConnectorFactory:
         assert isinstance(factory.indicator.output, QuinticOutput)
         assert isinstance(factory.geotherm.output, GeothermERFOutput)
 
-    def test_connector_params_forwarded(
-        self, plate_model_with_polygons, plate_files, synthetic_data
-    ):
+    def test_connector_params_forwarded(self):
         """Typed connector-level parameters reach every connector the
         factory creates."""
         from gadopt.gplates import MeshConfig, InterpolationConfig
@@ -325,10 +279,7 @@ class TestConnectorFactory:
         factory = LithosphereConnectorFactory(
             mesh=mesh_cfg, interpolation=interp_cfg, gc_collect_frequency=3
         )
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
+        factory.construct_source(_FakeProducer(), _DummyGplates())
         factory.construct_output()
         factory.construct_geotherm()
 
@@ -339,163 +290,11 @@ class TestConnectorFactory:
         assert factory.indicator.interpolation is interp_cfg
         assert factory.geotherm.interpolation is interp_cfg
 
-    def test_default_output_raises_exception(
-        self, plate_model_with_polygons, plate_files, synthetic_data
-    ):
+    def test_indicator_raises_when_output_not_constructed(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
+        factory.construct_source(_FakeProducer(), _DummyGplates())
         with pytest.raises(
             RuntimeError,
             match="An output must be either constructed or connected in order to construct the indicator",
         ):
             _ = factory.indicator
-
-
-class TestLithosphereConnectorAgeValidation:
-    """Test age validation in LithosphereConnector."""
-
-    def test_valid_age_works(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
-        """Test that valid ages within bounds work correctly."""
-        factory = LithosphereConnectorFactory()
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
-        factory.construct_output()
-
-        # Valid age within bounds
-        ndtime = plate_model_with_polygons.age2ndtime(100)
-        result = factory.indicator.get_indicator(test_coords, ndtime)
-
-        assert result.shape == (len(test_coords),)
-        assert np.all(np.isfinite(result))
-
-    def test_age_older_than_oldest_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
-        """Test that requesting age > oldest_age raises ValueError."""
-        factory = LithosphereConnectorFactory()
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
-        factory.construct_output()
-
-        # Age older than oldest_age (200 Ma)
-        ndtime = plate_model_with_polygons.age2ndtime(250)
-
-        with pytest.raises(ValueError, match="older than the plate model's oldest age"):
-            factory.indicator.get_indicator(test_coords, ndtime)
-
-    def test_negative_age_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
-        """Test that requesting negative age (future) raises ValueError."""
-        factory = LithosphereConnectorFactory()
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
-        factory.construct_output()
-
-        # Negative age (in the future)
-        ndtime = plate_model_with_polygons.age2ndtime(-10)
-
-        with pytest.raises(ValueError, match="negative.*future"):
-            factory.indicator.get_indicator(test_coords, ndtime)
-
-    def test_backward_step_raises_error(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
-        """Test that going backward in ocean tracker raises ValueError."""
-        factory = LithosphereConnectorFactory()
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
-        factory.construct_output()
-
-        # First step forward to 50 Ma
-        ndtime_50 = plate_model_with_polygons.age2ndtime(50)
-        factory.indicator.get_indicator(test_coords, ndtime_50)
-
-        # Now try to go backward to 150 Ma (should fail)
-        ndtime_150 = plate_model_with_polygons.age2ndtime(150)
-
-        with pytest.raises(ValueError, match="cannot rewind"):
-            factory.indicator.get_indicator(test_coords, ndtime_150)
-
-    def test_forward_steps_work(self, plate_model_with_polygons, plate_files, synthetic_data, test_coords):
-        """Test that sequential forward steps (decreasing age) work."""
-        factory = LithosphereConnectorFactory()
-        factory.construct_source(
-            _lith_producer(plate_model_with_polygons, plate_files, synthetic_data),
-            plate_model_with_polygons,
-        )
-        factory.construct_output()
-
-        # Sequential forward steps (decreasing age)
-        for age in [150, 100, 50, 0]:
-            ndtime = plate_model_with_polygons.age2ndtime(age)
-            result = factory.indicator.get_indicator(test_coords, ndtime)
-            assert result.shape == (len(test_coords),)
-
-
-class TestPolygonConnectorAgeValidation:
-    """Test age validation in PolygonConnector."""
-
-    @pytest.fixture
-    def polygon_connector(self, plate_model_with_polygons, plate_files, synthetic_data):
-        """Create PolygonConnector for testing."""
-        craton_shapefile = (
-            Path(__file__).resolve().parents[2]
-            / "demos/mantle_convection/gplates_lithosphere"
-            / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2/shapes_cratons.shp"
-        )
-
-        if not craton_shapefile.exists():
-            pytest.skip("Craton shapefile not available")
-
-        factory = PolygonConnectorFactory()
-        factory.construct_source(
-            gplates_connector=plate_model_with_polygons,
-            polygons=str(craton_shapefile),
-            thickness_data=synthetic_data,
-            plate_files=plate_files,
-        )
-        factory.construct_output()
-        return factory.indicator
-
-    def test_valid_age_works(self, polygon_connector, test_coords, plate_model_with_polygons):
-        """Test that valid ages within bounds work correctly."""
-        ndtime = plate_model_with_polygons.age2ndtime(100)
-        result = polygon_connector.get_indicator(test_coords, ndtime)
-
-        assert result.shape == (len(test_coords),)
-        assert np.all(np.isfinite(result))
-
-    def test_age_older_than_oldest_raises_error(self, polygon_connector, test_coords, plate_model_with_polygons):
-        """Test that requesting age > oldest_age raises ValueError."""
-        ndtime = plate_model_with_polygons.age2ndtime(250)
-
-        with pytest.raises(ValueError, match="older than the plate model's oldest age"):
-            polygon_connector.get_indicator(test_coords, ndtime)
-
-    def test_negative_age_raises_error(self, polygon_connector, test_coords, plate_model_with_polygons):
-        """Test that requesting negative age (future) raises ValueError."""
-        ndtime = plate_model_with_polygons.age2ndtime(-10)
-
-        with pytest.raises(ValueError, match="negative.*future"):
-            polygon_connector.get_indicator(test_coords, ndtime)
-
-    def test_any_order_works(self, polygon_connector, test_coords, plate_model_with_polygons):
-        """Test that PolygonConnector allows any age order (unlike LithosphereConnector)."""
-        # PolygonConnector uses rotation only, so any order should work
-
-        # First go to 50 Ma
-        ndtime_50 = plate_model_with_polygons.age2ndtime(50)
-        polygon_connector.get_indicator(test_coords, ndtime_50)
-
-        # Then go back to 150 Ma (should work for PolygonConnector)
-        ndtime_150 = plate_model_with_polygons.age2ndtime(150)
-        result = polygon_connector.get_indicator(test_coords, ndtime_150)
-
-        assert result.shape == (len(test_coords),)
-        assert np.all(np.isfinite(result))
