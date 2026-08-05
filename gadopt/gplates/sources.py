@@ -52,7 +52,7 @@ class Source(ABC):
     Subclasses expose a ``provides`` set listing the property keys —
     EXCLUDING "xyz" — that ``prepare(age)`` returns. Coordinates are always
     present in the returned dict under ``"xyz"`` and are never listed in
-    ``provides`` (F2); it names only the interpolable channels, so a consumer
+    ``provides``; it names only the interpolable channels, so a consumer
     can iterate it to know which ``get_property`` calls will succeed. This
     matches gtrack's ``AgeCloudSource.provides``. ``provides`` is declared here
     as an abstract property, which a subclass may satisfy either with a read-only
@@ -73,7 +73,7 @@ class Source(ABC):
     def provides(self) -> frozenset[str]:
         """The property keys (EXCLUDING 'xyz') that prepare(age) returns.
 
-        'xyz' is always in the returned dict but is never listed here (F2):
+        'xyz' is always in the returned dict but is never listed here:
         ``provides`` names the interpolable channels only, matching gtrack's
         ``AgeCloudSource.provides``.
         """
@@ -215,15 +215,15 @@ class PointCloudSource(Source):
 
     ``provides`` is delegated verbatim to the producer (it already excludes
     'xyz', which this class adds to the prepared dict). Age validation is
-    F19-safe on every rank in two parts. The forward-only floor for a
+    collective-safe on every rank in two parts. The forward-only floor for a
     ``monotonic_backward`` producer is enforced directly, using the
     rank-coherent per-age cache — gadopt owns that state, the producer's floor
     reads rank-0-only ``_last_walked_age``. Every other limit the producer
     enforces (a declared ``walk_start_age``, its own ``oldest_age``) is
     evaluated by ``producer.validate_age`` on rank 0 and its VERDICT broadcast,
     so all ranks raise together: a producer that rejects an in-range age must
-    not raise on rank 0 alone inside the collective in ``prepare``, which per
-    F19 is a hang, not a traceback.
+    not raise on rank 0 alone inside the collective in ``prepare``, which would
+    be a hang, not a traceback.
 
     Args:
         producer: any object satisfying gtrack's ``AgeCloudSource`` protocol
@@ -244,7 +244,7 @@ class PointCloudSource(Source):
     ):
         # Reject anything that is not a producer at construction, on every rank
         # (no I/O), so a wiring mistake fails identically everywhere rather than
-        # deadlocking later inside a collective (F19). runtime_checkable checks
+        # deadlocking later inside a collective. runtime_checkable checks
         # for the presence of the protocol members.
         if not isinstance(producer, AgeCloudSource):
             raise TypeError(
@@ -285,7 +285,7 @@ class PointCloudSource(Source):
         # collective here: evaluate on root, broadcast the verdict, and raise on
         # every rank together. Without this, a producer that rejects an in-range
         # age would raise on rank 0 alone inside the bcast in prepare — an MPI
-        # deadlock, not a traceback (F19). Broadcasting a plain message rather
+        # deadlock, not a traceback. Broadcasting a plain message rather
         # than the exception keeps the reduction picklable and the raise
         # coherent regardless of the producer's exception type.
         message = None
@@ -300,7 +300,7 @@ class PointCloudSource(Source):
 
     def _compute_sources(self, age: float) -> dict[str, np.ndarray]:
         cloud = self.producer.at_age(age)
-        # F23: PointCloud.xyz / get_property return gtrack's internal arrays by
+        # PointCloud.xyz / get_property return gtrack's internal arrays by
         # reference. The returned dict becomes the shared per-age _cached_dict,
         # held across the next at_age, so these copies are load-bearing
         # ownership boundaries, not defensive duplication.
