@@ -34,12 +34,16 @@ from gtrack import (
 )
 from gtrack.config import TracerConfig
 
-
-# Mirrored in tests/unit/test_connectors.py.
-OLDEST_AGE = 120
-LITH_N_POINTS = 2000
-POLYGON_N_POINTS = 3000
-TEST_AGES = (100, 50, 0)
+# Shared with tests/unit/test_connectors.py so the reference and the test that
+# loads it cannot disagree on the fixture configuration (this script's own
+# directory is on sys.path when it is run directly).
+from regression_config import (
+    OLDEST_AGE,
+    LITH_N_POINTS,
+    POLYGON_N_POINTS,
+    TEST_AGES,
+    REGRESSION_LAYER_HEIGHTS,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GPLATES_GLOBAL = REPO_ROOT / "demos/mantle_convection/gplates_global"
@@ -59,19 +63,6 @@ def load_continental_data():
         lonlat = f["lonlat"][:]
         values = f["values"][:]
     return np.column_stack([lonlat[:, 1], lonlat[:, 0]]), values
-
-
-# Radial layer heights, bottom (CMB) to top (surface), summing to 1.0.
-#
-# Graded rather than uniform. The indicator outputs are one-sided steps whose
-# base tracks a lithospheric thickness of order 100 km, i.e. 0.035 in mesh
-# units. With four uniform 0.25 layers no node ever falls inside the
-# lithosphere: the field reads exactly 1 at the surface node and exactly 0 at
-# the next node down at every age, so the reduced integrals do not move with
-# the reconstruction and the regression asserts nothing. These heights put
-# nodes at roughly 0, 29, 87 and 202 km depth, which straddle the base and
-# make the integrals genuinely age-sensitive.
-REGRESSION_LAYER_HEIGHTS = (0.60, 0.25, 0.08, 0.04, 0.02, 0.01)
 
 
 def make_mesh():
