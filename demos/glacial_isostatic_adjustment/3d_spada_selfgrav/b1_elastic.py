@@ -483,7 +483,8 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  drop_ice_from_poisson=False, solver_parameters=None,
                  solver_parameters_extra=None, ivdeg=1, block0=None,
                  near_nullspace=True, declare_nullspace=True,
-                 outer_rtol=1e-10, block0_max_it=200, condense=False):
+                 outer_rtol=1e-10, block0_max_it=200, condense=False,
+                 cmb_buoyancy="core", rigid_core=False):
     sigma_n = cap_sigma_hat(nmax)
     sigma_parent = load_field(parent, nmax, sigma_n)
     sigma_sub = load_field(sub, nmax, sigma_n)
@@ -517,6 +518,11 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
         self_gravity_number=LAMBDA)
 
     bcs = {gen.SURF_RE: {"normal_stress": B_MU * sigma_sub}}
+    if rigid_core:
+        # The rigid-core discriminator: pin the radial displacement at the CMB
+        # instead of the fluid-core traction. `un = 0` and a FluidCore cannot
+        # both live on Rc, so the solver takes `fluid_core=None` below.
+        bcs[gen.SURF_RC] = {"un": 0.0}
     solver_kwargs = {}
     if near_nullspace:
         # **This is currently INERT, and deliberately left in place.**
@@ -544,9 +550,14 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                 for i in range(len(Z))])
     # `rho_mantle=None` takes `approximation.density`, which is right for a
     # layered rho_0: the mechanics mesh has only mantle cells, so the facet
-    # trace at Rc is already the mantle value.
-    core = FluidCore(boundary=gen.SURF_RC, rho_core=RHO_CORE,
-                     g=refstate.gravity_exact_ufl(Constant(gen.RC)))
+    # trace at Rc is already the mantle value. `cmb_buoyancy` selects the spring
+    # coefficient: "core" (default, correct) or "contrast" (old, 7.3x too soft,
+    # for the baseline arm of the discriminator). `rigid_core` replaces the core
+    # entirely with `un = 0`, so there is no FluidCore in that arm.
+    core = None if rigid_core else FluidCore(
+        boundary=gen.SURF_RC, rho_core=RHO_CORE,
+        g=refstate.gravity_exact_ufl(Constant(gen.RC)),
+        buoyancy_density=cmb_buoyancy)
 
     # The rigid rotation is a kernel of the whole coupled operator here: the
     # core is a fluid one, the surface carries a traction, and nothing fixes a
@@ -1070,6 +1081,14 @@ def main():
                         "own magnitude while the coupled solver is blocked")
     p.add_argument("--nproj", type=int, default=None,
                    help="degrees projected out of the answer; default 2 n_max")
+    p.add_argument("--cmb-buoyancy", choices=["core", "contrast"],
+                   default="core",
+                   help="CMB buoyancy spring density: 'core' (default, correct "
+                        "rho_core) or 'contrast' (old rho_core-rho_0, 7.3x too "
+                        "soft) - the baseline arm of the CMB discriminator")
+    p.add_argument("--rigid-core", action="store_true",
+                   help="replace the fluid core with un=0 at Rc (rigid-core "
+                        "discriminator arm; no FluidCore, no buoyancy spring)")
     args = p.parse_args()
 
     nmax = NMAX_OF[args.configuration] if args.nmax is None else args.nmax
@@ -1142,7 +1161,8 @@ def main():
         ivdeg=args.ivdeg, block0=args.block0,
         outer_rtol=args.outer_rtol, block0_max_it=args.block0_max_it,
         near_nullspace=not args.no_near_nullspace, condense=args.condense,
-        declare_nullspace=not args.no_declare_nullspace)
+        declare_nullspace=not args.no_declare_nullspace,
+        cmb_buoyancy=args.cmb_buoyancy, rigid_core=args.rigid_core)
     print(f"  solver built in {time.perf_counter() - t0:.1f}s; "
           f"mixed space {z.function_space().dim()} dofs in "
           f"{len(z.subfunctions)} fields")

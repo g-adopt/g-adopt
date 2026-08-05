@@ -1895,6 +1895,41 @@ class TestFluidCore:
         assert np.abs(upsi).max() > 0.0
         assert np.abs(upsi - psiu.T).max() == 0.0
 
+    def test_the_spring_carries_rho_core_not_the_contrast(self, meshes):
+        """The buoyancy (u,u) block scales as `rho_core`, not the contrast.
+
+        The prestress volume term supplies the mantle's `-0.5 rho_0 g u_r^2`
+        half at the CMB (measured to 2.9e-15,
+        `scratchpad/cmb_prestress_check.py`), so `fluid_core_energy`'s spring
+        must carry `rho_core` ALONE for the assembled net to be the physical
+        contrast. `buoyancy_density="contrast"` is the old, 7.3x-too-soft
+        coefficient, kept only for baselines. With `rho_core=3`, `rho_mantle=1`
+        the isolated block's core:contrast ratio is exactly `3 : (3-1)` = 1.5;
+        every geometric and `B_mu`/`g_0` factor cancels in the ratio.
+        """
+        def spring_quadratic(mode):
+            solver, z, layout = self.build_fluid(
+                meshes, rho_core=3.0, rho_mantle=1.0, buoyancy_density=mode)
+            X = fd.SpatialCoordinate(layout.mechanics_mesh)
+            z.subfunctions[layout.displacement].interpolate(
+                X / fd.sqrt(fd.dot(X, X)))         # radial u; psi stays zero
+            fc = solver.fluid_core_residual()
+            # z^T J z with psi(z)=0 isolates the (u,u) buoyancy block.
+            return fd.assemble(fd.action(
+                fd.action(fd.derivative(fc, z), z), z))
+
+        core = spring_quadratic("core")
+        contrast = spring_quadratic("contrast")
+        assert core / contrast == pytest.approx(3.0 / 2.0, rel=1e-4)
+
+    def test_buoyancy_density_rejects_an_unknown_mode(self, meshes):
+        """A typo in the switch must fail loudly, not silently pick a default.
+
+        The residual is assembled at construction, so the raise fires there.
+        """
+        with pytest.raises(ValueError, match="'core' or 'contrast'"):
+            self.build_fluid(meshes, buoyancy_density="nonsense")
+
     def test_the_measure_is_the_cmb_circle(self, meshes):
         """`2 pi Rc`, measured on the facets the condition actually integrates.
 

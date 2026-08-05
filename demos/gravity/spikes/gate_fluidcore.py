@@ -1,10 +1,29 @@
 """FC - the fluid core at the CMB, its four gates, each number stated first.
 
+    !!! STALE AS OF 2026-08-05 - THE CENTRAL PREMISE IS INVERTED, NEEDS REWORK.
+    The CMB buoyancy spring was corrected from the contrast `(rho_core - rho_0)`
+    to `rho_core` alone (see `FluidCore` docstring and
+    `scratchpad/cmb_prestress_check.py`): the prestress VOLUME term already
+    supplies the mantle half `-0.5 rho_0 g u_r^2` at the CMB, measured to
+    2.9e-15. This gate isolates the `fluid_core_energy` block (`derivative(fc)`)
+    WITHOUT the volume term, so with the fix that isolated block now equals
+    `B_mu rho_core g = 3.249855` (STIFFNESS_CORE_ONLY), not `1.744945`. Two
+    assertions below therefore now test the OLD, wrong coefficient and FAIL:
+      - FC-1 (3) magnitude, which expects 1.744945; and
+      - FC-1 (1) contrast-zero "transparency" (rho_core=rho_0 => block vanishes),
+        which was only true for the contrast - with `rho_core` the block is
+        transparent only in COMBINATION with the volume term.
+    The physical net stiffness 1.744945 is real but is `volume(-rho_0) +
+    spring(rho_core)`; a correct rework must assemble the NET (u,u) CMB block
+    (prestress volume term + fluid_core_energy) and assert 1.744945 and net
+    transparency on THAT. The transpose/sign/nullspace gates are unaffected.
+    Until reworked, this gate enforces the bug it was written to protect.
+
 `gadopt.gia_gravity.FluidCore` replaces the legacy `un = 0` with a real core:
 one energy on the CMB facet,
 
     E = c B_mu int_Rc [ rho_core (u.n) psi
-                        + 0.5 (rho_core - rho_0) g_0 (u.n)^2 ] ds
+                        + 0.5 rho_core g_0 (u.n)^2 ] ds
 
 whose variation supplies the traction, the mass sheet and the interface
 buoyancy at once. The gates below are written against the pre-implementation

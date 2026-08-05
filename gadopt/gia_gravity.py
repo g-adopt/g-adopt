@@ -55,7 +55,7 @@ and, with a `FluidCore`, the variation of one CMB energy added to the first
 and third of those:
 
     F   += c d/dz int_Rc B_mu [ rho_core (u.n) psi
-                                + 0.5 (rho_core - rho_0) g_0 (u.n)^2 ] ds
+                                + 0.5 rho_core g_0 (u.n)^2 ] ds
 
 with `c` the solver's `scaling_factor`, `K = (C-A, C-A, C)` and
 `s = (+1, +1, -1)` - the `m_3` closure `m_3 = -dI_33/C` has a different
@@ -508,7 +508,7 @@ class FluidCore:
     Everything is the variation of one energy on the CMB facet,
     `SelfGravitatingGIASolver.fluid_core_energy`:
 
-        E = B_mu [ rho_core (u.n) psi + 0.5 (rho_core - rho_0) g_0 (u.n)^2 ] ds
+        E = B_mu [ rho_core (u.n) psi + 0.5 rho_core g_0 (u.n)^2 ] ds
 
     with `n` the **mantle's outward facet normal**, which at its inner boundary
     points *inward*, so `dot(u, n) = -u_r` there. `vertical_component(u)` - the
@@ -518,42 +518,57 @@ class FluidCore:
     1e-16 (the two factors then use different vectors and agree only to the
     angle between the facet normal and the analytic radial).
 
-    **The buoyancy half carries the full density contrast and not the core's
-    density alone**, which is a correction to what the design documents said
-    first. The universal interface form is
-    `tau = +B_mu (rho_below - rho_above) g (u.n)` at *both* interfaces; at Re it
-    reduces to `+B_mu rho_0 g u_r`, which is what the 2-D driver writes by hand
-    and whose sign is anchored to a measurement (the opposite one diverges at
-    37 % per step). Nothing in the volume terms supplies the mantle-side half at
-    the CMB:
+    **The buoyancy half carries `rho_core` alone, NOT the density contrast
+    `(rho_core - rho_0)`.** This is a correction (2026-08-05) to what the design
+    documents *and this docstring* said in between: the spring is the exact
+    parallel of the `psi` half, which always correctly used the core's full
+    density on top of a mantle half the volume terms supply automatically. The
+    "contrast" reasoning below is preserved only long enough to name why it is
+    wrong, because it is intuitive and cost time twice.
 
-    - `hydrostatic_prestress_advection_and_buoyancy_term` leaves, on integration
-      by parts, a boundary contribution
-      `0.5 B_mu oint rho_0 [(u.n)(w.gv) - (gv.u)(w.n)] ds` which is *pointwise*
-      zero whenever the normal is parallel to gravity - measured against the
-      shipped UFL at a ratio of 1.8e-11, so it is a cancellation and not an
-      approximation;
-    - `CompressibleInternalVariableApproximation.hydrostatic_prestress_advection`
-      returns literally `0`, so a `free_surface` condition contributes nothing
-      at all in the class this system uses.
+    The claim that "nothing in the volume terms supplies the mantle-side half at
+    the CMB" is FALSE, and was measured false.
+    `hydrostatic_prestress_advection_and_buoyancy_term`, evaluated on a
+    divergence-free radial field, equals a pure boundary integral
 
-    The *sheet* half is different: the divergence-form Poisson source does
-    supply its mantle side. Integrating `-B_mu int rho_0 u.grad(psi) dx` by
-    parts leaves `-B_mu oint rho_0 (u.n) psi ds` on the whole submesh boundary,
-    i.e. an automatic sheet `sigma_auto = rho_0 (u.n)`, which at Rc is
-    `-rho_0 u_r` - the mantle vacating the shell a rising CMB sweeps out. The
-    physical total is `(rho_core - rho_0) u_r`, so the missing piece is exactly
-    `+rho_core u_r` and the energy above carries the core's density alone in the
-    `psi` term. That asymmetry between the two halves is real and is the single
-    most confusing thing about this condition.
+        a_vol(u, u) = B_mu oint rho_0 (u.n)(g_0 u_r) ds
+
+    to relative residual 2.9e-15: it supplies `-0.5 rho_0 g_0 u_r^2` at Rc and
+    `+0.5 rho_0 g_0 u_r^2` at Re (the free-surface spring b1 relies on and adds
+    no explicit term for - the control that proves the mechanism). The earlier
+    "1.8e-11 cancellation" measured the *antisymmetric* combination
+    `[(u.n)(w.gv) - (gv.u)(w.n)]`, which is identically zero at `(u, u)` whether
+    or not `n || g` - the wrong quantity. The surviving *symmetric* boundary
+    term is the spring, and it is the mantle half. Reproduce:
+    `scratchpad/cmb_prestress_check.py`, assembly only, no solve.
+
+    So the volume term already contributes `-0.5 rho_0 g_0 u_r^2` at the CMB; the
+    physical interface stiffness is `+0.5 (rho_core - rho_0) g_0 u_r^2`; the
+    explicit spring must therefore supply the remainder
+    `+0.5 rho_core g_0 u_r^2` - the core's density alone. Written with the
+    contrast, the assembled net is `0.5 (rho_core - 2 rho_0)`, only 13.8 % of
+    physical (7.3x too soft) for the Spada model.
+
+    The *sheet* half is the exact parallel and was always right: the
+    divergence-form Poisson source supplies its mantle side. Integrating
+    `-B_mu int rho_0 u.grad(psi) dx` by parts leaves `-B_mu oint rho_0 (u.n) psi
+    ds` on the whole submesh boundary, an automatic sheet `sigma_auto = rho_0
+    (u.n)`, which at Rc is `-rho_0 u_r`. The physical total is `(rho_core -
+    rho_0) u_r`, so the missing piece is `+rho_core u_r` and the `psi` energy
+    carries the core's density alone. The buoyancy half now matches it.
 
     ## Magnitudes, for the Spada M3-L70-V01 model
 
-    `(10750 - 4978) x 10.457 = 60357.8 Pa/m`, **positive and therefore
-    stabilising** (heavy below light), and 2.0249 times the surface contrast's
-    `3037 x 9.815 = 29808.2`. Non-dimensionally, with `rho/rhobar`, `g/gbar` and
-    `B_mu = 1.564037`, the CMB stiffness is **1.744945**; written with
-    `rho_core` alone it would be 3.249855, high by a factor 1.8624.
+    Net physical CMB interface stiffness `(10750 - 4978) x 10.457 = 60357.8
+    Pa/m`, **positive and therefore stabilising** (heavy below light), and
+    2.0249 times the surface contrast's `3037 x 9.815 = 29808.2`.
+    Non-dimensionally, with `rho/rhobar`, `g/gbar` and `B_mu = 1.564037`, that
+    net stiffness is **1.744945** - but it is the sum of `-0.5 rho_0 g` (the
+    volume term) and `+0.5 rho_core g` (this spring), so the SPRING coefficient
+    this class writes is `rho_core g = 3.249855`, not the net. The old code
+    wrote the net `(rho_core - rho_0) g` as the spring and assembled
+    `(rho_core - 2 rho_0) g` in total. `buoyancy_density="contrast"` restores
+    that old (wrong) coefficient for baseline runs; default `"core"` is correct.
 
     Attributes:
       boundary: the CMB facet tag, as seen from the *mechanics* mesh, where it
@@ -567,12 +582,18 @@ class FluidCore:
         `rho_0` is the mantle value by construction.
       g: the reference gravity at the interface. `None` takes
         `approximation.g`.
+      buoyancy_density: which density the buoyancy spring carries. `"core"`
+        (default, correct) writes `rho_core`; `"contrast"` writes the old,
+        7.3x-too-soft `(rho_core - rho_mantle)` and exists only to reproduce
+        pre-2026-08-05 baseline numbers. See the class docstring for the
+        measurement.
     """
 
     boundary: int | str
     rho_core: Any
     rho_mantle: Any = None
     g: Any = None
+    buoyancy_density: str = "core"
 
 
 @dataclass(frozen=True)
@@ -1474,7 +1495,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         r"""The CMB energy whose variation is the whole fluid-core condition.
 
             c B_mu int_Rc [ rho_core (u.n) psi
-                            + 0.5 (rho_core - rho_0) g_0 (u.n)^2 ] ds
+                            + 0.5 rho_core g_0 (u.n)^2 ] ds
 
         **One energy and not three additions**, which is what makes the three
         blocks it produces - `(u, psi)`, `(psi, u)` and `(u, u)` - symmetric by
@@ -1529,7 +1550,21 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # `+B_mu rho_core (u.n) psi` once expanded, and the minus is the same
         # one every sheet carries into the scaled potential row.
         E = -B_mu * self.fluid_core_sheet() * psi_face * dss
-        E += 0.5 * B_mu * (rho_core - rho_mantle) * g0 * un * un * dss
+        # The spring carries `rho_core` ALONE (default). The prestress volume
+        # term already supplies the mantle half `-0.5 rho_0 g u_r^2` at the CMB
+        # (measured to 2.9e-15 relative, `scratchpad/cmb_prestress_check.py`), so
+        # the net becomes `0.5 (rho_core - rho_0) g u_r^2` = the physical contrast
+        # spring. Writing the contrast HERE double-counts the mantle half and is
+        # 7.3x too soft; `buoyancy_density="contrast"` restores it for baselines.
+        if fc.buoyancy_density == "contrast":
+            spring_rho = rho_core - rho_mantle
+        elif fc.buoyancy_density == "core":
+            spring_rho = rho_core
+        else:
+            raise ValueError(
+                f"FluidCore.buoyancy_density must be 'core' or 'contrast', "
+                f"not {fc.buoyancy_density!r}")
+        E += 0.5 * B_mu * spring_rho * g0 * un * un * dss
         return self.scaling_factor * E
 
     def fluid_core_rotational_traction(self) -> Form:

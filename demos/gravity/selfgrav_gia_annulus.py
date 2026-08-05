@@ -186,11 +186,16 @@ def build_solver(parent, sub, *, dt=1.0, truncation=5, rotation=True,
     - `g = 0` in the approximation, which removes the volume prestress term
       entirely and with it the non-hydrostatic reference state;
     - an explicit Airy restoring stress `B_mu rho_0 g_s u_r` at Re, which is the
-      weight of the deflected surface mass sheet. A *uniform* `rho_0` has no
-      gradient, so no volume term can supply it, and
-      `CompressibleInternalVariableApproximation.hydrostatic_prestress_advection`
-      returns 0 on the grounds that it is absorbed into the volume term - which
-      for uniform density absorbs it into nothing.
+      weight of the deflected surface mass sheet. It is needed here **because
+      `g = 0` has deleted the prestress volume term** - not because a uniform
+      `rho_0` "has no gradient". That earlier reasoning was wrong and is the
+      same mistake that once put the *contrast* into the 3-D CMB spring: the
+      prestress volume term supplies boundary springs through integration by
+      parts, `oint rho_0 (u.n)(g u_r)`, with **no** `grad(rho_0)` in it, so it
+      would supply this Airy term automatically at any `g != 0`. With `g = 0`
+      the term vanishes and the hand-written stress is the whole of it, with
+      nothing to double-count. See `gadopt.gia_gravity.FluidCore` for the
+      measured 3-D version of exactly this bookkeeping.
 
     The fluid limit is then Airy isostasy, `zeta = -sigma_hat / rho_0`, which is
     exactly what road-map V9b asserts, and it is reached: measured
