@@ -19,15 +19,15 @@ allreduced before any collective work runs.
 
 Source/Output pairing is validated at construction: ``output.requires`` must be
 a subset of ``source.provides``; mismatches fail immediately with a clear error
-rather than silently dropping the missing key. This one check now also rules
-out the known-bad polygon pairing that once needed a dedicated cross-check — a
-polygon source provides ``masked_thickness`` (depth times membership), so a
-`QuinticOutput` requiring plain ``thickness`` fails the subset check outright,
-and so would any user output reading ``thickness`` as a depth off such a source.
+rather than silently dropping the missing key. This also rules out the bad
+polygon pairing structurally — a polygon source provides ``masked_thickness``
+(depth times membership), so a `QuinticOutput` requiring plain ``thickness``
+fails the subset check outright, as would any user output reading ``thickness``
+as a depth off such a source.
 
 The check lives here rather than on `ConnectorFactory` because the factory is
-only one route to a connector; anything placed there is bypassed by
-constructing a `ScalarFieldConnector` directly, which demos and user scripts do.
+only one route to a connector; constructing a `ScalarFieldConnector` directly
+(as demos and user scripts do) would bypass a check placed there.
 """
 
 from __future__ import annotations
@@ -43,8 +43,8 @@ from .interpolation import InterpolationConfig, SphericalKNNInterpolator
 from .outputs import MeshConfig, OutputStrategy
 from .sources import Source
 
-# ``InterpolationConfig`` now lives in ``interpolation.py`` alongside the
-# interpolator that consumes it; it is re-exported here so existing imports of
+# ``InterpolationConfig`` lives in ``interpolation.py`` alongside the
+# interpolator that consumes it; re-exported here so existing imports of
 # ``gadopt.gplates.connectors.InterpolationConfig`` keep resolving.
 __all__ = ["ScalarFieldConnector", "InterpolationConfig"]
 
@@ -90,16 +90,10 @@ class ScalarFieldConnector:
         interpolation: InterpolationConfig | None = None,
         gc_collect_frequency: int | None = 10,
     ):
-        # Validate the pairing of source and output. This subset check is now
-        # the whole guard against the known-bad polygon pairing: a polygon
-        # source provides ``masked_thickness`` (depth times membership), not
-        # ``thickness``, so a ``QuinticOutput`` — which requires ``thickness``
-        # and would read the product as a plain depth, painting the entire
-        # exterior surface — fails here outright. The old zero_outside /
-        # isinstance(QuinticOutput) cross-check is gone: the channel name makes
-        # the mistake unspellable rather than merely caught, and it catches a
-        # user's own thickness-reading output too, which the type check never
-        # could.
+        # Validate the source/output pairing. A polygon source provides
+        # ``masked_thickness``, not ``thickness``, so a ``QuinticOutput`` (which
+        # requires ``thickness``) is rejected here, structurally — see the
+        # module docstring.
         if not output.requires <= source.provides:
             missing = output.requires - source.provides
             raise ValueError(
@@ -118,9 +112,8 @@ class ScalarFieldConnector:
         self.output = output
         self.mesh = mesh or MeshConfig()
         self.interpolation = interpolation or InterpolationConfig()
-        # The interpolator owns the geometry math; the config half of the cache
-        # key stays ``self.interpolation`` (by value), so a config that has
-        # been collected cannot silently hand a new one an old geometry.
+        # The interpolator owns the geometry math; the config is the by-value
+        # half of the geometry cache key (see _compute).
         self._interpolator = SphericalKNNInterpolator(self.interpolation)
         self.gc_collect_frequency = gc_collect_frequency
 
