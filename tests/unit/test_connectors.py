@@ -20,6 +20,7 @@ Three groups:
 """
 
 import gc
+import sys
 from pathlib import Path
 import pickle
 
@@ -72,10 +73,18 @@ CONTINENTAL_DATA = GPLATES_FIELDS / "continental_lithospheric_thickness_mesh.h5"
 CRATON_SHAPEFILE = GPLATES_FIELDS / "Craton_Boundaries_Inferred.shp"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
-OLDEST_AGE = 120
-LITH_N_POINTS = 2000
-POLYGON_N_POINTS = 3000
-TEST_AGES = (100, 50, 0)
+# The regression fixture's configuration lives in one place — data/
+# regression_config.py — imported here and by the generator that builds the
+# pickle, so the two cannot silently disagree on the numbers the reference
+# values are computed from.
+sys.path.insert(0, str(DATA_DIR))
+from regression_config import (  # noqa: E402
+    OLDEST_AGE,
+    LITH_N_POINTS,
+    POLYGON_N_POINTS,
+    TEST_AGES,
+    REGRESSION_LAYER_HEIGHTS,
+)
 
 
 def _require_data():
@@ -762,12 +771,6 @@ def poly_source(plate_model, plate_files):
         ),
     )
     return PointCloudSource(producer, plate_model)
-
-
-# Must match generate_expected_connectors.py — see the note there for why the
-# radial spacing is graded rather than uniform (a uniform coarse mesh puts no
-# node inside the lithosphere, and the regression stops depending on age).
-REGRESSION_LAYER_HEIGHTS = (0.60, 0.25, 0.08, 0.04, 0.02, 0.01)
 
 
 @pytest.fixture(scope="module")
