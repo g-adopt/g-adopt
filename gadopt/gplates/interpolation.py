@@ -19,7 +19,7 @@ fraction of a node's queried neighbours that fall within the distance
 threshold, in [0, 1]; ``too_far`` is its zero case — a node with no neighbour
 inside the threshold, i.e. the nearest source seed is farther than the
 threshold. ``too_far`` is what the built-in outputs read; ``coverage`` is the
-finer-grained companion (D3), added to the same read-only bundle for outputs
+finer-grained companion, added to the same read-only bundle for outputs
 and diagnostics that want a graded "how well is this node covered" rather than
 the boolean. Both are defined in the ``k == 1`` and ``k > 1`` branches alike.
 """
@@ -120,11 +120,10 @@ def _angle_to_chord(angle: float) -> float:
     Returns:
         The chord length, ``2·sin(angle/2)`` — except at ``π``, which returns
         infinity. ``2·sin(π/2)`` is exactly 2.0, but a float64 chord between
-        two near-antipodal unit vectors comes out marginally *above* 2.0
-        (measured 2.0000000000000004 through this code path), so a strict
-        ``>`` against 2.0 would flag a node whose nearest source happens to sit
-        almost opposite it. Callers pass ``π`` to mean "disable this test";
-        infinity is that intent, exactly.
+        two near-antipodal unit vectors comes out marginally *above* 2.0, so a
+        strict ``>`` against 2.0 would flag a node whose nearest source happens
+        to sit almost opposite it. Callers pass ``π`` to mean "disable this
+        test"; infinity is that intent, exactly.
     """
     if angle >= np.pi:
         return np.inf
@@ -173,7 +172,7 @@ class SphericalKNNInterpolator:
         within the chord threshold) alongside ``too_far`` (the coverage-is-zero
         case, computed from the nearest neighbour). Both are defined in the
         ``k == 1`` branch too, so a consumer never has to special-case the
-        single-neighbour bundle (F16).
+        single-neighbour bundle.
         """
         cfg = self.config
         epsilon = 1e-10

@@ -17,9 +17,9 @@ rather than silently dropping the missing key.
 
 The radial primitive shared by every indicator output is ``radial_quintic_step``,
 a ONE-SIDED quintic smoothstep: exactly 1 from the surface down to the region
-base, decaying to exactly 0 over one transition width BELOW the base. Unlike
-the symmetric tanh kernel it replaced, the transition never straddles the base,
-so the surface value stays faithful — exactly 1 wherever the region has any
+base, decaying to exactly 0 over one transition width BELOW the base. Because
+it is one-sided, the transition never straddles the base, so the surface value
+stays faithful — exactly 1 wherever the region has any
 thickness — and the field is exactly 0 below base + width (no asymptotic tail).
 The 0.5-crossing therefore sits at base + width/2 in depth, not at the base.
 
@@ -129,8 +129,8 @@ def radial_quintic_step(r_target, base_r, width_nondim):
     ends, so the field is C^2 across the junctions.
 
     The transition sits entirely BELOW the base: a node at the base itself
-    reads exactly 1 (the tanh kernel this replaced read 0.5 there), and the
-    0.5-crossing is at ``base_r - width_nondim / 2``. All radii are in
+    reads exactly 1, and the 0.5-crossing is at ``base_r - width_nondim / 2``.
+    All radii are in
     non-dimensional mesh units. ``base_r`` may be a scalar (fixed base depth)
     or a per-node array (variable base depth read from the thickness channel).
     """
