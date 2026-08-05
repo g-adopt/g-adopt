@@ -146,35 +146,31 @@ class TestRequiresProvidesContract:
     connector validates this against the Source's provides set at
     construction time."""
 
-    def test_lith_thickness_only_pairing_allowed(self):
-        # A lithosphere source provides {"thickness","age"} (xyz is implicit
-        # and never listed); QuinticOutput requires {"thickness"}.
-        src = _DummySource({"thickness", "age"})
-        ScalarFieldConnector(src, QuinticOutput())  # must not raise
+    @pytest.mark.parametrize(
+        "provides, output",
+        [
+            # A lithosphere source provides {"thickness","age"} (xyz is implicit
+            # and never listed); QuinticOutput requires {"thickness"}.
+            (frozenset({"thickness", "age"}), QuinticOutput()),
+            # GeothermLinearOutput requires only {"thickness"}.
+            (frozenset({"thickness", "age"}), GeothermLinearOutput()),
+            # A source that genuinely provides a ``thickness`` channel pairs
+            # with QuinticOutput; the guard against the polygon case is the
+            # channel NAME (masked_thickness), exercised in TestChannelNameGuard.
+            (frozenset({"thickness", "membership"}),
+             QuinticOutput(default_thickness_km=0.0)),
+            (frozenset({"thickness", "membership"}), GeothermLinearOutput()),
+        ],
+    )
+    def test_pairing_allowed(self, provides, output):
+        ScalarFieldConnector(_DummySource(provides), output)  # must not raise
 
-    def test_lith_with_linear_geotherm_allowed(self):
-        # GeothermLinearOutput requires only {"thickness"} — a polygon-style
-        # output paired against a lithosphere-style source is allowed.
-        src = _DummySource({"thickness", "age"})
-        ScalarFieldConnector(src, GeothermLinearOutput())
-
-    def test_polygon_with_erf_geotherm_raises(self):
-        # A polygon source provides {"masked_thickness","membership"} — missing
-        # the "age" that GeothermERFOutput needs.
+    def test_missing_channel_raises(self):
+        # GeothermERFOutput needs "age"; this source provides only
+        # {"thickness","membership"}, so requires<=provides rejects the pairing.
         src = _DummySource({"thickness", "membership"})
         with pytest.raises(ValueError, match="age"):
             ScalarFieldConnector(src, GeothermERFOutput())
-
-    def test_quintic_allowed_on_a_source_that_provides_thickness(self):
-        # A source that genuinely provides a ``thickness`` channel pairs with
-        # QuinticOutput; the guard against the polygon case is now the channel
-        # name (masked_thickness), exercised in TestChannelNameGuard.
-        src = _DummySource({"thickness", "membership"})
-        ScalarFieldConnector(src, QuinticOutput(default_thickness_km=0.0))
-
-    def test_polygon_with_linear_geotherm_allowed(self):
-        src = _DummySource({"thickness", "membership"})
-        ScalarFieldConnector(src, GeothermLinearOutput())
 
 
 class TestConnectorConstruction:
@@ -235,14 +231,16 @@ class TestGcCollectDefault:
             conn.get_indicator(target, conn.source.age2ndtime(float(age)))
         return calls["n"]
 
-    def test_interval_collects_every_nth(self, monkeypatch):
-        assert self._drive(monkeypatch, frequency=3, n_calls=9) == 3
-
-    def test_none_never_collects(self, monkeypatch):
-        assert self._drive(monkeypatch, frequency=None, n_calls=5) == 0
-
-    def test_one_collects_every_call(self, monkeypatch):
-        assert self._drive(monkeypatch, frequency=1, n_calls=4) == 4
+    @pytest.mark.parametrize(
+        "frequency, n_calls, expected_collects",
+        [
+            (3, 9, 3),      # collect every Nth call
+            (None, 5, 0),   # None disables the connector-level collect entirely
+            (1, 4, 4),      # collect on every call
+        ],
+    )
+    def test_collect_cadence(self, monkeypatch, frequency, n_calls, expected_collects):
+        assert self._drive(monkeypatch, frequency, n_calls) == expected_collects
 
 
 class TestResultCacheKey:
