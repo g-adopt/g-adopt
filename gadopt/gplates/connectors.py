@@ -71,10 +71,10 @@ class InterpolationConfig:
     ``__post_init__`` validation.
     """
 
-    kernel: str = "idw"
-    k_neighbors: int = 50
-    distance_threshold: float = 0.1
-    gaussian_sigma: float = 0.04
+    kernel: str = "idw"  # Inverse Distance Weighting
+    k_neighbors: int = 50  # Number of nearest neighbors to consider
+    distance_threshold: float = 0.1  # Distance threshold in radians
+    gaussian_sigma: float = 0.04  # Sigma, only for Gaussian kernel
 
     def __post_init__(self):
         valid_kernels = ("idw", "gaussian")
