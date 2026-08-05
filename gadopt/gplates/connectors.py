@@ -63,11 +63,12 @@ class InterpolationConfig:
     degenerates into a pathological-query guard and the actual roll-off
     length is controlled by ``gaussian_sigma`` instead.
 
-    Frozen, and EVERY FIELD MUST STAY HASHABLE. ``ScalarFieldConnector`` keys
-    the shared interpolation-geometry cache on this object by value, so a
-    field holding a list, dict or set would make the config unhashable and the
-    cache insertion would raise. Frozen also means ``__post_init__``
-    validation cannot be bypassed by assigning to a field after construction.
+    Note: This dataclass is frozen, so every field must also be hashable.
+    ``ScalarFieldConnector`` uses this object by value as the key for the
+    shared interpolation-geometry cache, so a list, dict, or set field would
+    make the config unhashable and cause cache insertion to fail. Freezing the
+    dataclass also prevents post-construction assignment from bypassing
+    ``__post_init__`` validation.
     """
 
     kernel: str = "idw"
