@@ -17,81 +17,36 @@ on every rank — no collective is needed there. The connector cache decision
 differs per rank (the target buffer differs with partitioning) and is
 allreduced before any collective work runs.
 
-Source/Output pairing is validated at construction: ``output.requires`` must
-be a subset of ``source.provides``. Mismatches (e.g. PolygonSource paired
-with GeothermERFOutput, which needs ``"age"``) fail immediately with a clear
-error rather than silently dropping the missing key.
+Source/Output pairing is validated at construction: ``output.requires`` must be
+a subset of ``source.provides``; mismatches fail immediately with a clear error
+rather than silently dropping the missing key. This one check now also rules
+out the known-bad polygon pairing that once needed a dedicated cross-check — a
+polygon source provides ``masked_thickness`` (depth times membership), so a
+`QuinticOutput` requiring plain ``thickness`` fails the subset check outright,
+and so would any user output reading ``thickness`` as a depth off such a source.
+
+The check lives here rather than on `ConnectorFactory` because the factory is
+only one route to a connector; anything placed there is bypassed by
+constructing a `ScalarFieldConnector` directly, which demos and user scripts do.
 """
 
 from __future__ import annotations
 
 import gc
 import weakref
-from dataclasses import dataclass
 
 import numpy as np
 from mpi4py import MPI
-from scipy.spatial import cKDTree
 
 from ..utility import log, DEBUG
+from .interpolation import InterpolationConfig, SphericalKNNInterpolator
 from .outputs import MeshConfig, OutputStrategy
 from .sources import Source
 
-
-# ---------------------------------------------------------------------------
-# Interpolation config
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class InterpolationConfig:
-    """Spherical kNN-interpolation knobs.
-
-    The interpolation step normalises both source and target points to the
-    unit sphere, builds a cKDTree over sources, queries ``k_neighbors``
-    nearest neighbours per target node, and computes a weighted average
-    using either inverse-distance (``"idw"``) or Gaussian (``"gaussian"``)
-    weights.
-
-    Target nodes whose nearest source seed is farther than
-    ``distance_threshold`` (in radians on the unit sphere) are flagged as
-    ``too_far`` and handled by the OutputStrategy (which decides whether
-    to fill with a default thickness, switch to mantle temperature, etc).
-
-    Defaults: 0.1 rad ≈ 640 km — generous; tighten to e.g. 0.02 rad
-    (~127 km) for sharper boundaries. For polygon sources where the
-    boundary is encoded by zero-thickness halo seeds, the threshold
-    degenerates into a pathological-query guard and the actual roll-off
-    length is controlled by ``gaussian_sigma`` instead.
-
-    Note: This dataclass is frozen, so every field must also be hashable.
-    ``ScalarFieldConnector`` uses this object by value as the key for the
-    shared interpolation-geometry cache, so a list, dict, or set field would
-    make the config unhashable and cause cache insertion to fail. Freezing the
-    dataclass also prevents post-construction assignment from bypassing
-    ``__post_init__`` validation.
-    """
-
-    kernel: str = "idw"  # Inverse Distance Weighting
-    k_neighbors: int = 50  # Number of nearest neighbors to consider
-    distance_threshold: float = 0.1  # Distance threshold in radians
-    gaussian_sigma: float = 0.04  # Sigma, only for Gaussian kernel
-
-    def __post_init__(self):
-        valid_kernels = ("idw", "gaussian")
-        if self.kernel not in valid_kernels:
-            raise ValueError(
-                f"kernel must be one of {valid_kernels}, got '{self.kernel}'"
-            )
-        if self.k_neighbors < 1:
-            raise ValueError(f"k_neighbors must be at least 1, got {self.k_neighbors}")
-        if self.distance_threshold <= 0:
-            raise ValueError(
-                f"distance_threshold must be positive, got {self.distance_threshold}"
-            )
-        if self.gaussian_sigma <= 0:
-            raise ValueError(
-                f"gaussian_sigma must be positive, got {self.gaussian_sigma}"
-            )
+# ``InterpolationConfig`` now lives in ``interpolation.py`` alongside the
+# interpolator that consumes it; it is re-exported here so existing imports of
+# ``gadopt.gplates.connectors.InterpolationConfig`` keep resolving.
+__all__ = ["ScalarFieldConnector", "InterpolationConfig"]
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +58,9 @@ class ScalarFieldConnector:
     varying scalar field on a mesh.
 
     Construction validates ``output.requires <= source.provides``; this
-    catches the obvious mis-pairings (e.g. PolygonSource + GeothermERFOutput,
-    which needs ``"age"``) at the point of wiring rather than at the first
-    ``get_indicator`` call.
+    catches the obvious mis-pairings (e.g. a polygon source, which has no
+    ``"age"`` channel, paired with a GeothermERFOutput that needs it) at the
+    point of wiring rather than at the first ``get_indicator`` call.
 
     Two consumers (e.g. an indicator and a geotherm) that share the same
     Source instance see a single, coherent advance of the source's
@@ -135,7 +90,16 @@ class ScalarFieldConnector:
         interpolation: InterpolationConfig | None = None,
         gc_collect_frequency: int | None = 10,
     ):
-        # Validate the pairing of source and output
+        # Validate the pairing of source and output. This subset check is now
+        # the whole guard against the known-bad polygon pairing: a polygon
+        # source provides ``masked_thickness`` (depth times membership), not
+        # ``thickness``, so a ``QuinticOutput`` — which requires ``thickness``
+        # and would read the product as a plain depth, painting the entire
+        # exterior surface — fails here outright. The old zero_outside /
+        # isinstance(QuinticOutput) cross-check is gone: the channel name makes
+        # the mistake unspellable rather than merely caught, and it catches a
+        # user's own thickness-reading output too, which the type check never
+        # could.
         if not output.requires <= source.provides:
             missing = output.requires - source.provides
             raise ValueError(
@@ -154,6 +118,10 @@ class ScalarFieldConnector:
         self.output = output
         self.mesh = mesh or MeshConfig()
         self.interpolation = interpolation or InterpolationConfig()
+        # The interpolator owns the geometry math; the config half of the cache
+        # key stays ``self.interpolation`` (by value), so a config that has
+        # been collected cannot silently hand a new one an old geometry.
+        self._interpolator = SphericalKNNInterpolator(self.interpolation)
         self.gc_collect_frequency = gc_collect_frequency
 
         # Result cache: keyed on (age, identity of the target_coords buffer).
@@ -267,82 +235,14 @@ class ScalarFieldConnector:
         # by-value config half.
         key = self._construct_cache_key(target_coords)
         bundle = self.source.get_or_build_geometry(
-            key, lambda: self._interp_geometry(source_xyz, target_coords)
+            key, lambda: self._interpolator.geometry(source_xyz, target_coords)
         )
 
         prop_keys = sorted(self.output.requires)
         interpolated = {
-            k: self._interp_gather(bundle, sources_dict[k]) for k in prop_keys
+            k: SphericalKNNInterpolator.gather(bundle, sources_dict[k])
+            for k in prop_keys
         }
         return self.output.compute(
             interpolated, r_target, bundle["too_far"], self.mesh
         )
-
-    def _interp_geometry(
-        self,
-        source_xyz: np.ndarray,
-        target_coords: np.ndarray,
-    ) -> dict:
-        """Build the spherical kNN interpolation geometry over a source cloud.
-
-        Normalises both clouds to the unit sphere, builds a cKDTree over the
-        source points and queries the ``k`` nearest neighbours per target node,
-        then precomputes the (normalised) blend weights. The returned bundle is
-        the part of the interpolation that is independent of the gathered
-        property, so it can be shared across every output sharing this source.
-
-        The bundle must be treated read-only by ``_interp_gather`` — its arrays
-        are shared across sibling outputs.
-        """
-        cfg = self.interpolation
-        epsilon = 1e-10
-
-        r_source = np.linalg.norm(source_xyz, axis=1)
-        unit_source = source_xyz / np.maximum(r_source[:, np.newaxis], epsilon)
-
-        r_target = np.linalg.norm(target_coords, axis=1)
-        unit_target = target_coords / np.maximum(r_target[:, np.newaxis], epsilon)
-
-        tree = cKDTree(unit_source)
-        k = min(cfg.k_neighbors, len(source_xyz))
-        dists, idx = tree.query(unit_target, k=k)
-
-        if k == 1:
-            too_far = dists > cfg.distance_threshold
-            return {"k1": True, "idx": idx, "too_far": too_far}
-
-        exact_match = dists[:, 0] < epsilon
-        too_far = dists[:, 0] > cfg.distance_threshold
-
-        if cfg.kernel == "gaussian":
-            weights = np.exp(-dists**2 / (2 * cfg.gaussian_sigma**2))
-        else:
-            weights = 1.0 / np.maximum(dists, epsilon)
-
-        weight_sums = weights.sum(axis=1, keepdims=True)
-        weights /= np.maximum(weight_sums, epsilon)
-
-        return {
-            "k1": False,
-            "idx": idx,
-            "too_far": too_far,
-            "exact_match": exact_match,
-            "weights": weights,
-        }
-
-    @staticmethod
-    def _interp_gather(bundle: dict, prop: np.ndarray) -> np.ndarray:
-        """Gather one property through a prebuilt geometry bundle.
-
-        Reads the bundle strictly read-only (its arrays are shared across
-        sibling outputs); only the freshly-allocated result array is written.
-        """
-        idx = bundle["idx"]
-        if bundle["k1"]:
-            return prop[idx].copy()
-
-        weights = bundle["weights"]
-        exact_match = bundle["exact_match"]
-        interpolated = np.sum(weights * prop[idx], axis=1)
-        interpolated[exact_match] = prop[idx[exact_match, 0]]
-        return interpolated

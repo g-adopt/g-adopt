@@ -1,13 +1,43 @@
-from .connectors import ScalarFieldConnector, InterpolationConfig
+from .connectors import ScalarFieldConnector
+from .interpolation import InterpolationConfig, SphericalKNNInterpolator
 from .gplates import (
     GplatesScalarFunction,
     GplatesVelocityFunction,
-    PlateModelFiles,
     ensure_reconstruction,
     pyGplatesConnector,
+    PlateModelFiles,
 )
-from .outputs import MeshConfig, OutputStrategy
-from .sources import Source
+from .outputs import (
+    DataBase,
+    DeblendedBase,
+    FixedBase,
+    GeothermERFOutput,
+    GeothermLinearOutput,
+    IndicatorOutput,
+    LateralFractionOutput,
+    MaskedGeothermLinearOutput,
+    MembershipAmplitude,
+    MeshConfig,
+    NoAmplitude,
+    OutputStrategy,
+    MaskedQuinticOutput,
+    QuinticOutput,
+    QuinticStep,
+    TaperedAmplitude,
+    continental_linear,
+    ocean_erf_normalized,
+    radial_quintic_step,
+)
+from .sources import (
+    CloudDataType,
+    PointCloudSource,
+    Source,
+)
+from .factories import (
+    ConnectorFactory,
+    LithosphereConnectorFactory,
+    PolygonConnectorFactory,
+)
 
 __all__ = [
     # Firedrake function wrappers
@@ -20,8 +50,34 @@ __all__ = [
     # Connector + config
     "ScalarFieldConnector",
     "InterpolationConfig",
+    "SphericalKNNInterpolator",
     "MeshConfig",
-    # Abstract source / output contracts
+    # Sources
     "Source",
+    "PointCloudSource",
+    "CloudDataType",
+    # Outputs
     "OutputStrategy",
+    "IndicatorOutput",
+    "MaskedQuinticOutput",
+    "QuinticOutput",
+    "GeothermERFOutput",
+    "GeothermLinearOutput",
+    "MaskedGeothermLinearOutput",
+    "LateralFractionOutput",
+    # Composable indicator parts
+    "QuinticStep",
+    "FixedBase",
+    "DataBase",
+    "DeblendedBase",
+    "NoAmplitude",
+    "MembershipAmplitude",
+    "TaperedAmplitude",
+    "ocean_erf_normalized",
+    "continental_linear",
+    "radial_quintic_step",
+    # Factories
+    "ConnectorFactory",
+    "LithosphereConnectorFactory",
+    "PolygonConnectorFactory",
 ]
