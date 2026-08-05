@@ -414,11 +414,6 @@ class TestMaskedQuinticOutput:
         h = np.asarray(thickness_km, dtype=float)
         return {"membership": m, "masked_thickness": m * h}
 
-    def test_requires_masked_thickness_and_membership(self):
-        assert MaskedQuinticOutput().requires == frozenset(
-            {"masked_thickness", "membership"}
-        )
-
     def test_validation_rejects_bad_args(self):
         with pytest.raises(ValueError, match="width_km must be positive"):
             MaskedQuinticOutput(width_km=0.0)
@@ -679,9 +674,6 @@ class TestIndicatorOutput:
 # ---------------------------------------------------------------------------
 
 class TestGeothermERFOutput:
-    def test_requires_thickness_and_age(self):
-        assert GeothermERFOutput().requires == frozenset({"thickness", "age"})
-
     def test_validation_rejects_nonpositive_kappa(self):
         with pytest.raises(ValueError, match="kappa must be positive"):
             GeothermERFOutput(kappa=0.0)
@@ -740,9 +732,6 @@ class TestGeothermERFOutput:
 
 
 class TestGeothermLinearOutput:
-    def test_requires_only_thickness(self):
-        assert GeothermLinearOutput().requires == frozenset({"thickness"})
-
     def test_too_far_is_mantle(self):
         # Outside the polygon region (too_far=True), the output is 1.0
         # (mantle temperature).
@@ -778,11 +767,6 @@ class TestMaskedGeothermLinearOutput:
         m = np.asarray(membership, dtype=float)
         h = np.asarray(thickness_km, dtype=float)
         return {"membership": m, "masked_thickness": m * h}
-
-    def test_requires_masked_thickness_and_membership(self):
-        assert MaskedGeothermLinearOutput().requires == frozenset(
-            {"masked_thickness", "membership"}
-        )
 
     def test_deblended_profile_is_independent_of_membership(self):
         # The defect this fixes: at a fixed depth inside the region, T_norm must
@@ -853,12 +837,6 @@ class TestLateralFractionOutput:
     Its defining property is the absence of any radial dependence: the result
     is identical for any r_target.
     """
-
-    def test_requires_only_membership(self):
-        # It reads the source's own membership channel rather than a
-        # duplicated source carrying a constant in the thickness slot, so it
-        # is guaranteed consistent with an indicator built from that source.
-        assert LateralFractionOutput().requires == frozenset({"membership"})
 
     def test_no_radial_dependence(self):
         # Same interpolated membership, wildly different r_target -> identical.
@@ -941,3 +919,28 @@ class TestQuinticOutputFixedBase:
         interp = {"thickness": thickness.copy()}
         out.compute(interp, np.full(2, mesh.r_outer), np.array([True, False]), mesh)
         np.testing.assert_array_equal(interp["thickness"], thickness)
+
+
+# ---------------------------------------------------------------------------
+# The public ``requires`` contract of every concrete output, side by side.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "output, expected",
+    [
+        (MaskedQuinticOutput(), frozenset({"masked_thickness", "membership"})),
+        (GeothermERFOutput(), frozenset({"thickness", "age"})),
+        (GeothermLinearOutput(), frozenset({"thickness"})),
+        (MaskedGeothermLinearOutput(), frozenset({"masked_thickness", "membership"})),
+        # LateralFractionOutput reads the source's own membership channel rather
+        # than a duplicated source carrying a constant in the thickness slot, so
+        # it stays consistent with an indicator built from that source.
+        (LateralFractionOutput(), frozenset({"membership"})),
+    ],
+)
+def test_output_requires_contract(output, expected):
+    """Each concrete output declares the source channels it reads via its
+    class-level ``requires`` set; the connector validates this against a
+    source's ``provides``. IndicatorOutput's *computed* union is covered
+    separately in TestIndicatorOutput.test_requires_is_the_union_of_the_parts."""
+    assert output.requires == expected
