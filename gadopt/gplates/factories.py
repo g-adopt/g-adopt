@@ -252,10 +252,9 @@ class ConnectorFactory:
             raise RuntimeError(
                 "An output must be either constructed or connected in order to construct the indicator"
             )
-        # The zero-outside / QuinticOutput cross-check lives in
-        # ScalarFieldConnector.__init__, not here: this factory is only one
-        # route to a connector, and a caller constructing one directly would
-        # bypass a check placed at this level.
+        # The source/output pairing check lives in ScalarFieldConnector.__init__,
+        # not here: this factory is only one route to a connector, and a caller
+        # constructing one directly would bypass a check placed at this level.
         return ScalarFieldConnector(
             self._source,
             self._output,
