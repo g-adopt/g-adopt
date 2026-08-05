@@ -20,15 +20,24 @@ from .utility import is_continuous, normal_is_continuous
 def advection_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     r"""Scalar advection term (non-conservative): u \dot \div(q)."""
     advective_velocity_scaling = getattr(eq, "advective_velocity_scaling", 1)
+    conservative = getattr(eq, "conservative", False)
     u = advective_velocity_scaling * eq.u
 
     if hasattr(eq, "su_nubar"):  # SU(PG) à la Donea & Huerta (2003)
+        if conservative:
+            raise NotImplementedError(
+                "Conservative advection with SU stabilisation is not implemented."
+            )
+
         phi = eq.test + eq.su_nubar / (dot(u, u) + 1e-12) * dot(u, grad(eq.test))
 
         # The advection term is not integrated by parts so there are no boundary terms
         F = phi * dot(u, grad(trial)) * eq.dx
     else:
-        F = -trial * div(eq.test * u) * eq.dx
+        if conservative:
+            F = -trial * dot(u, grad(eq.test)) * eq.dx
+        else:
+            F = -trial * div(eq.test * u) * eq.dx
         F += trial * dot(eq.n, u) * eq.test * eq.ds  # Boundary term in the weak form
 
         if not (is_continuous(eq.trial_space) and normal_is_continuous(eq.u)):
@@ -152,7 +161,7 @@ def mass_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
 
 advection_term.required_attrs = {"u"}
-advection_term.optional_attrs = {"advective_velocity_scaling", "su_nubar"}
+advection_term.optional_attrs = {"advective_velocity_scaling", "su_nubar", "conservative"}
 diffusion_term.required_attrs = {"diffusivity"}
 diffusion_term.optional_attrs = {"reference_for_diffusion", "interior_penalty"}
 mass_term.required_attrs = set()
