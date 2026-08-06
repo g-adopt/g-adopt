@@ -1900,7 +1900,7 @@ class TestFluidCore:
 
         The prestress volume term supplies the mantle's `-0.5 rho_0 g u_r^2`
         half at the CMB (measured to 2.9e-15,
-        `scratchpad/cmb_prestress_check.py`), so `fluid_core_energy`'s spring
+        `NOTES/measurements/cmb_prestress_check.py`), so `fluid_core_energy`'s spring
         must carry `rho_core` ALONE for the assembled net to be the physical
         contrast. `buoyancy_density="contrast"` is the old, 7.3x-too-soft
         coefficient, kept only for baselines. With `rho_core=3`, `rho_mantle=1`

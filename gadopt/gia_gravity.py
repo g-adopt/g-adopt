@@ -540,7 +540,7 @@ class FluidCore:
     `[(u.n)(w.gv) - (gv.u)(w.n)]`, which is identically zero at `(u, u)` whether
     or not `n || g` - the wrong quantity. The surviving *symmetric* boundary
     term is the spring, and it is the mantle half. Reproduce:
-    `scratchpad/cmb_prestress_check.py`, assembly only, no solve.
+    `NOTES/measurements/cmb_prestress_check.py`, assembly only, no solve.
 
     So the volume term already contributes `-0.5 rho_0 g_0 u_r^2` at the CMB; the
     physical interface stiffness is `+0.5 (rho_core - rho_0) g_0 u_r^2`; the
@@ -1552,7 +1552,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         E = -B_mu * self.fluid_core_sheet() * psi_face * dss
         # The spring carries `rho_core` ALONE (default). The prestress volume
         # term already supplies the mantle half `-0.5 rho_0 g u_r^2` at the CMB
-        # (measured to 2.9e-15 relative, `scratchpad/cmb_prestress_check.py`), so
+        # (measured to 2.9e-15 relative, `NOTES/measurements/cmb_prestress_check.py`), so
         # the net becomes `0.5 (rho_core - rho_0) g u_r^2` = the physical contrast
         # spring. Writing the contrast HERE double-counts the mantle half and is
         # 7.3x too soft; `buoyancy_density="contrast"` restores it for baselines.

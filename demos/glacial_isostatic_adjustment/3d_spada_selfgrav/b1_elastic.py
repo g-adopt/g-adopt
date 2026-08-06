@@ -484,7 +484,8 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  solver_parameters_extra=None, ivdeg=1, block0=None,
                  near_nullspace=True, declare_nullspace=True,
                  outer_rtol=1e-10, block0_max_it=200, condense=False,
-                 cmb_buoyancy="core", rigid_core=False):
+                 cmb_buoyancy="core", rigid_core=False,
+                 bulk_shear_ratio=BULK_SHEAR_RATIO):
     sigma_n = cap_sigma_hat(nmax)
     sigma_parent = load_field(parent, nmax, sigma_n)
     sigma_sub = load_field(sub, nmax, sigma_n)
@@ -514,7 +515,7 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
 
     approx = CompressibleInternalVariableApproximation(
         bulk_modulus=mu, density=rho, shear_modulus=[mu], viscosity=[eta],
-        bulk_shear_ratio=BULK_SHEAR_RATIO, g=g_of_r, B_mu=B_MU,
+        bulk_shear_ratio=bulk_shear_ratio, g=g_of_r, B_mu=B_MU,
         self_gravity_number=LAMBDA)
 
     bcs = {gen.SURF_RE: {"normal_stress": B_MU * sigma_sub}}
@@ -1089,6 +1090,11 @@ def main():
     p.add_argument("--rigid-core", action="store_true",
                    help="replace the fluid core with un=0 at Rc (rigid-core "
                         "discriminator arm; no FluidCore, no buoyancy spring)")
+    p.add_argument("--bulk-shear-ratio", type=float, default=BULK_SHEAR_RATIO,
+                   help="K/mu everywhere; default 1.9394 (nu=0.28). Large values "
+                        "(100->nu=0.495, 1000->nu=0.4998) approach the "
+                        "incompressible benchmark, but P2 displacement-only "
+                        "mechanics VOLUMETRICALLY LOCKS as nu->0.5")
     args = p.parse_args()
 
     nmax = NMAX_OF[args.configuration] if args.nmax is None else args.nmax
@@ -1103,6 +1109,11 @@ def main():
     print("  the mechanics BC but not the Poisson sheet, so it is degenerate")
     print("  with compressibility in all five numbers.")
     print()
+    _r = args.bulk_shear_ratio
+    _nu = (3 * _r - 2) / (2 * (3 * _r + 1))
+    print(f"  bulk_shear_ratio {_r}  =>  nu = {_nu:.4f}"
+          + ("  (near-incompressible; watch for volumetric locking)"
+             if _r > 10 else ""))
     print(f"  configuration {args.configuration}   n_max {nmax}   "
           f"projection to n {nproj}   DtN L {args.dtn_degree}")
     print(f"  B_mu {B_MU:.6f}   Lambda {LAMBDA:.6f}   "
@@ -1162,7 +1173,8 @@ def main():
         outer_rtol=args.outer_rtol, block0_max_it=args.block0_max_it,
         near_nullspace=not args.no_near_nullspace, condense=args.condense,
         declare_nullspace=not args.no_declare_nullspace,
-        cmb_buoyancy=args.cmb_buoyancy, rigid_core=args.rigid_core)
+        cmb_buoyancy=args.cmb_buoyancy, rigid_core=args.rigid_core,
+        bulk_shear_ratio=args.bulk_shear_ratio)
     print(f"  solver built in {time.perf_counter() - t0:.1f}s; "
           f"mixed space {z.function_space().dim()} dofs in "
           f"{len(z.subfunctions)} fields")

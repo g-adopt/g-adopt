@@ -3,7 +3,7 @@
     !!! STALE AS OF 2026-08-05 - THE CENTRAL PREMISE IS INVERTED, NEEDS REWORK.
     The CMB buoyancy spring was corrected from the contrast `(rho_core - rho_0)`
     to `rho_core` alone (see `FluidCore` docstring and
-    `scratchpad/cmb_prestress_check.py`): the prestress VOLUME term already
+    `NOTES/measurements/cmb_prestress_check.py`): the prestress VOLUME term already
     supplies the mantle half `-0.5 rho_0 g u_r^2` at the CMB, measured to
     2.9e-15. This gate isolates the `fluid_core_energy` block (`derivative(fc)`)
     WITHOUT the volume term, so with the fix that isolated block now equals
