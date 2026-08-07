@@ -71,6 +71,7 @@ log(f"# {'ratio':>9} {'nu':>7} | " + " | ".join(f"{k:>24}" for k in PCS))
 
 
 def run(ratio, pc_python):
+    log(f"\n{'#' * 78}\n# SOLVE  ratio={ratio}  pc={pc_python}\n{'#' * 78}")
     approx = CompressibleInternalVariableApproximation(
         bulk_modulus=mu, density=rho, shear_modulus=[mu], viscosity=[eta],
         bulk_shear_ratio=ratio, g=b1.refstate.gravity_exact_ufl(rm), B_mu=b1.B_MU)
@@ -79,6 +80,14 @@ def run(ratio, pc_python):
     params = {
         "mat_type": "matfree", "snes_type": "ksponly",
         "ksp_type": "fgmres", "ksp_rtol": 1e-8, "ksp_max_it": MAX_IT,
+        # PETSc view/monitor: the full solver tree (GAMG levels, smoothers, and
+        # -- for the two gadopt PCs -- the near-nullspace attached to the block),
+        # the per-iteration true residual, and why the solve stopped. Printed for
+        # every (ratio, PC) so the three preconditioners can be told apart in the
+        # log and the near-nullspace enrichment confirmed present.
+        "ksp_monitor_true_residual": None,
+        "ksp_converged_reason": None,
+        "ksp_view": None,
         "pc_type": "python", "pc_python_type": pc_python,
         **gamg_parameters("assembled_"),
     }
