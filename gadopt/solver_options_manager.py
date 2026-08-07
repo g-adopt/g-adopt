@@ -110,6 +110,102 @@ def gamg_parameters(prefix: str = "") -> dict:
     return {prefix + key: value for key, value in GAMG_PARAMETERS.items()}
 
 
+def nearly_incompressible_mg_parameters(
+    prefix: str = "",
+    *,
+    coarse: str = "gamg",
+    coarse_rtol: float = 1e-2,
+    patch_construct_dim: int = 0,
+    levels_ksp_max_it: int = 2,
+) -> dict:
+    r"""Geometric-multigrid options robust to a large bulk/shear ratio.
+
+    The companion to `NearlyIncompressibleAssembledPC` for the part of the
+    near-incompressibility problem a near-nullspace cannot reach: the *slope*.
+    Enriching GAMG's near-nullspace with the divergence-free modes
+    (`gadopt.NearlyIncompressibleAssembledPC`) lowers the iteration count by a
+    constant factor but leaves the $\sqrt{\lambda/\mu}$ growth in place, because
+    smoothed-aggregation transfers do not preserve the divergence-free space.
+    Bending that curve needs a multigrid whose *smoother* captures the
+    divergence-free near-kernel on every level, and the standard choice is a
+    vertex-star patch relaxation (Arnold-Falk-Winther / Schoberl). Patches are
+    built from the mesh topology, so this is a **geometric** multigrid: the
+    solver's mesh must be the finest of a `MeshHierarchy` (an
+    `ExtrudedMeshHierarchy` / semi-coarsened hierarchy on the production mesh).
+
+    The coarse level is the one part that need not be geometric. With
+    ``coarse="gamg"`` it is solved by `NearlyIncompressibleAssembledPC` itself --
+    GAMG with the divergence-free near-nullspace -- iterated to ``coarse_rtol``.
+    Both the enrichment *and* the iteration are needed: the coarse operator
+    inherits the same near-incompressible ill-conditioning, so a single plain
+    GAMG V-cycle on it stalls and the whole solve diverges at high ratio
+    (measured). ``coarse="lu"`` uses a direct coarse solve instead, a little
+    stronger but not flexible about coarse size. This composition -- patch
+    smoothers over a GAMG-preconditioned coarse solve -- is what keeps the
+    hierarchy shallow, which is why it also serves as the radial semi-coarsening
+    multigrid the anisotropic lithosphere wants (IDEA.md B2).
+
+    Measured on a 2-D box in the physically relevant band (K/mu ~ 1e2-1e4, where
+    the coupled solver diverges today): 2-3x fewer iterations than the enriched
+    GAMG alone, and no divergence through 1e4. Full ratio-independence needs a
+    deeper hierarchy than a toy carries; the production extruded hierarchy is
+    where that is established, on Gadi.
+
+    The patch relaxation is multiplicative with a symmetrised sweep and dense LU
+    sub-solves, wrapped in a Chebyshev Krylov smoother (``levels_ksp_max_it``
+    sweeps). The outer Krylov must be flexible -- FGMRES -- because the coarse
+    Krylov makes the preconditioner nonlinear; set that on the solver, not here.
+
+    Arguments:
+      prefix: string prepended to every key, e.g. `"fieldsplit_0_assembled_"`
+        when the block sits inside a fieldsplit behind `AssembledPC`.
+      coarse: `"gamg"` (flexible, GAMG + divergence-free near-nullspace) or
+        `"lu"` (direct).
+      coarse_rtol: relative tolerance of the coarse Krylov when `coarse="gamg"`.
+      patch_construct_dim: topological dimension the star patches are built
+        around; 0 is vertex stars.
+      levels_ksp_max_it: Chebyshev smoothing sweeps per level.
+
+    Returns:
+      A fresh options dict, prefixed.
+    """
+    patch = {
+        "pc_patch_construct_type": "star",
+        "pc_patch_construct_dim": patch_construct_dim,
+        "pc_patch_local_type": "multiplicative",
+        "pc_patch_symmetrise_sweep": True,
+        "pc_patch_sub_mat_type": "seqdense",
+        "pc_patch_save_operators": True,
+        "sub_ksp_type": "preonly",
+        "sub_pc_type": "lu",
+    }
+
+    params = {
+        "pc_type": "mg",
+        "mg_levels_ksp_type": "chebyshev",
+        "mg_levels_ksp_max_it": levels_ksp_max_it,
+        "mg_levels_pc_type": "python",
+        "mg_levels_pc_python_type": "firedrake.PatchPC",
+        **{"mg_levels_patch_" + k: v for k, v in patch.items()},
+    }
+
+    if coarse == "lu":
+        params["mg_coarse_pc_type"] = "lu"
+    elif coarse == "gamg":
+        params.update({
+            "mg_coarse_ksp_type": "gmres",
+            "mg_coarse_ksp_rtol": coarse_rtol,
+            "mg_coarse_ksp_max_it": 200,
+            "mg_coarse_pc_type": "python",
+            "mg_coarse_pc_python_type": "gadopt.NearlyIncompressibleAssembledPC",
+            **gamg_parameters("mg_coarse_assembled_"),
+        })
+    else:
+        raise ValueError('coarse must be "gamg" or "lu"')
+
+    return {prefix + key: value for key, value in params.items()}
+
+
 # Type alias
 ConfigType = Mapping[str, Union[str | float | None | type[DeleteParam], "ConfigType"]]
 _InternalConfigType = Mapping[str, Union[str | float | None, "_InternalConfigType"]]

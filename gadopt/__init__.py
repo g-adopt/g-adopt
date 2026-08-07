@@ -32,12 +32,14 @@ from .level_set_tools import (
     min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
-from .nullspaces import create_stokes_nullspace, rigid_body_modes
+from .nullspaces import (create_stokes_nullspace, near_incompressible_modes,
+                         rigid_body_modes, solenoidal_modes)
 from .preconditioners import (DtNMultiplierDiagPC,  # noqa: F401
                               DtNTwoBlockSchurPC, FreeSurfaceMassInvPC,
-                              SPDAssembledPC)
+                              NearlyIncompressibleAssembledPC, SPDAssembledPC)
 from .solver_options_manager import (GAMG_PARAMETERS, DeleteParam,
-                                     gamg_parameters)
+                                     gamg_parameters,
+                                     nearly_incompressible_mg_parameters)
 from .stokes_integrators import (
     BoundaryNormalStressSolver,
     CoupledInternalVariableSolver,

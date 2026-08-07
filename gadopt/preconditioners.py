@@ -9,7 +9,7 @@ import numpy as np
 from ufl.indexed import Indexed
 from firedrake.dmhooks import get_function_space
 from firedrake.petsc import PETSc
-from .nullspaces import rigid_body_modes
+from .nullspaces import near_incompressible_modes, rigid_body_modes
 from .utility import InteriorBC
 
 
@@ -112,6 +112,81 @@ class RigidBodyAssembledPC(fd.AssembledPC):
         V = get_function_space(pc.getDM()).collapse()
         basis = rigid_body_modes(
             V, rotational=True, translations=list(range(V.value_size)))
+        self.P.petscmat.setNearNullSpace(basis.nullspace())
+
+
+class NearlyIncompressibleAssembledPC(fd.AssembledPC):
+    r"""`AssembledPC` seeding GAMG with rigid-body *and* divergence-free modes.
+
+    The compressible internal-variable stress carries a volumetric penalty
+    $\lambda\int(\nabla\cdot u)(\nabla\cdot v)$ with $\lambda =
+    "bulk_shear_ratio"\times"bulk_modulus"$ (`approximations.py`,
+    `InternalVariableApproximation.stress`). As the ratio grows -- towards the
+    incompressible limit, and equally at any large $dt/\tau$, where the
+    eliminated internal variable leaves the shear stiffness incremental while
+    the volumetric one is untouched -- the operator's slow modes migrate into
+    the **divergence-free** space. GAMG coarsens the slow modes onto whatever
+    near-nullspace it is given, and the six rigid-body modes
+    (`RigidBodyAssembledPC`) do not span that space, so smoothed aggregation
+    stalls: measured on the coupled 3-D solve as `DIVERGED_ITS` at
+    $K/\mu = 100$ and a walltime kill at $K/\mu = 1000$.
+
+    This subclass hands GAMG `near_incompressible_modes` -- the rigid modes plus
+    the low-degree divergence-free fields -- built from its *own* block after
+    assembly, for the same reason `RigidBodyAssembledPC` does: a `near_nullspace`
+    declared on an outer mixed space never reaches a nested GAMG (see that
+    class). It is a strict superset of `RigidBodyAssembledPC`; where a plain
+    `firedrake.AssembledPC` is used on the displacement block with no
+    near-nullspace at all, it is a superset of that too.
+
+    The number of divergence-free fields is set by the highest polynomial
+    degree they carry, read as an integer PETSc option under this PC's prefix,
+    with the candidates then filtered so only those still solenoidal on the
+    actual (possibly curved) mesh survive -- see `near_incompressible_modes`::
+
+        "..._solenoidal_max_degree": 1      # the default (before filtering)
+        "..._solenoidal_divfree_tol": 1e-8  # relative L2 divergence cut
+
+    Degree 1 already spans the complete space of linear divergence-free fields;
+    raising it saturates GAMG's aggregates and can drive a `DIVERGED_NANORINF`
+    unless the aggregate size is raised too -- see `near_incompressible_modes`.
+
+    A finite mode set cannot span the whole (infinite-dimensional)
+    divergence-free space, so this is expected to *reduce* rather than remove
+    the ratio penalty; it is the cheap, adjoint-safe probe that bounds how much
+    of the near-incompressibility failure is a missing near-nullspace as opposed
+    to genuine saddle-point ill-conditioning, before committing to an
+    augmented-Lagrangian block solve or a mixed (u, p) reformulation. Being a
+    preconditioner only, it changes no residual and so leaves the taped adjoint
+    untouched.
+
+    Select it by name on whichever block holds the displacement, e.g. the
+    single-field segregated solve::
+
+        "pc_type": "python",
+        "pc_python_type": "gadopt.NearlyIncompressibleAssembledPC",
+
+    or the displacement split of the coupled solver, in place of
+    `gadopt.RigidBodyAssembledPC`.
+    """
+
+    _default_max_degree = 1
+    _default_divfree_tol = 1e-8
+
+    def initialize(self, pc: PETSc.PC):
+        """Initialises the preconditioner.
+
+        Args:
+          pc: PETSc preconditioner.
+        """
+        super().initialize(pc)
+        V = get_function_space(pc.getDM()).collapse()
+        opts = PETSc.Options(pc.getOptionsPrefix() or "")
+        max_degree = opts.getInt("solenoidal_max_degree", self._default_max_degree)
+        divfree_tol = opts.getReal("solenoidal_divfree_tol", self._default_divfree_tol)
+        basis = near_incompressible_modes(
+            V, max_degree=max_degree, divfree_tol=divfree_tol
+        )
         self.P.petscmat.setNearNullSpace(basis.nullspace())
 
 
