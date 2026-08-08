@@ -40,7 +40,10 @@ from gadopt import (CompressibleInternalVariableApproximation,  # noqa: E402
 
 CONFIG = sys.argv[1] if len(sys.argv) > 1 else "coarse"
 NMAX = int(sys.argv[2]) if len(sys.argv) > 2 else b1.NMAX_OF[CONFIG]
-MAX_IT = int(sys.argv[3]) if len(sys.argv) > 3 else 2000
+MAX_IT = int(sys.argv[3]) if len(sys.argv) > 3 else 5000
+# Optional explicit mesh path (a b2_genmesh low-anisotropy mesh); when given,
+# CONFIG is used only for the load degree, not for choosing the mesh.
+MESH = sys.argv[4] if len(sys.argv) > 4 else None
 
 RATIOS = [1.9394, 100.0, 1000.0]
 PCS = {
@@ -55,7 +58,21 @@ def log(msg):
         print(msg, flush=True)
 
 
-parent, sub, _, _ = b1.build_meshes(CONFIG, curve_enabled=True)
+def build_meshes_from(path):
+    """B1's build_meshes against an explicit .msh -- the same read, curve,
+    Submesh, curve steps in the same order, so the fixture matches b2_probe."""
+    from firedrake import Mesh, Submesh
+    parent = b1.curve(Mesh(path))
+    parent.cartesian = False
+    sub = b1.curve(Submesh(parent, 3, b1.gen.CELL_MANTLE))
+    sub.cartesian = False
+    return parent, sub
+
+
+if MESH is not None:
+    parent, sub = build_meshes_from(MESH)
+else:
+    parent, sub, _, _ = b1.build_meshes(CONFIG, curve_enabled=True)
 sigma_sub = b1.load_field(sub, NMAX, b1.cap_sigma_hat(NMAX))
 rho = b1.layered(sub, 2, "density")
 mu = b1.layered(sub, 3, "shear_modulus")
@@ -65,7 +82,8 @@ rm = sqrt(dot(SpatialCoordinate(sub), SpatialCoordinate(sub)))
 V = VectorFunctionSpace(sub, "CG", 2)
 S = TensorFunctionSpace(sub, "DG", 1)
 
-log(f"# b1_pc_sweep  config={CONFIG}  nmax={NMAX}  u-dofs={V.dim()}  "
+log(f"# b1_pc_sweep  config={CONFIG}  nmax={NMAX}  "
+    f"mesh={MESH or CONFIG}  u-dofs={V.dim()}  "
     f"ranks={COMM_WORLD.size}  max_it={MAX_IT}")
 log(f"# {'ratio':>9} {'nu':>7} | " + " | ".join(f"{k:>24}" for k in PCS))
 
